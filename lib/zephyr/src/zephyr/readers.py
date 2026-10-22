@@ -553,7 +553,6 @@ def load_file(
     logger.info("Loading file: %s", spec.path)
 
     read_format = _resolve_read_format(spec)
-    requested_columns = spec.columns
 
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)
@@ -567,15 +566,13 @@ def load_file(
 
     if not include_file_paths:
         return records
-    return flat_map_reader(records, partial(_with_file_path, spec.path, file_path_column, requested_columns))
+    return flat_map_reader(records, partial(_with_file_path, spec.path, file_path_column))
 
 
-def _with_file_path(path: str, file_path_column: str, columns: list[str] | None, record: dict) -> tuple[dict]:
+def _with_file_path(path: str, file_path_column: str, record: dict) -> tuple[dict]:
     if file_path_column in record:
         raise RuntimeError(f"Cannot add file path column '{file_path_column}': key already exists in record")
     record[file_path_column] = path
-    if columns is not None:
-        record = {column: record[column] for column in columns if column in record}
     return (record,)
 
 
@@ -610,26 +607,18 @@ def load_file_batch(
     is_parquet = spec.format == "parquet" or (spec.format == "auto" and spec.path.endswith(".parquet"))
     if not is_parquet:
         raise RuntimeError(f"load_file_batch only supports Parquet files, got: {spec.path}")
-    requested_columns = spec.columns
     if include_file_paths and spec.columns is not None:
         spec = _strip_injected_file_path_column(spec, file_path_column)
     batches = load_parquet_batch(spec)
     if not include_file_paths:
         return batches
-    return flat_map_reader(
-        batches, partial(_batch_with_file_path, spec.path, file_path_column, requested_columns), rows_per_item=len
-    )
+    return flat_map_reader(batches, partial(_batch_with_file_path, spec.path, file_path_column), rows_per_item=len)
 
 
-def _batch_with_file_path(
-    path: str, file_path_column: str, columns: list[str] | None, batch: pa.RecordBatch
-) -> tuple[pa.RecordBatch]:
+def _batch_with_file_path(path: str, file_path_column: str, batch: pa.RecordBatch) -> tuple[pa.RecordBatch]:
     if file_path_column in batch.schema.names:
         raise RuntimeError(f"Cannot add file path column '{file_path_column}': column already exists in batch schema")
-    batch = batch.append_column(file_path_column, pa.array([path] * len(batch), type=pa.string()))
-    if columns is not None:
-        batch = batch.select(columns)
-    return (batch,)
+    return (batch.append_column(file_path_column, pa.array([path] * len(batch), type=pa.string())),)
 
 
 def load_zip_members(source: str | InputFileSpec, pattern: str = "*") -> Reader[dict]:
