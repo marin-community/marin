@@ -193,8 +193,8 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    change with the baseline using the promised regression or measurement.
    Measure added I/O or materialization on representative input sizes and
    relate local measurements to the whole workflow. Passing existing tests
-   alone does not establish the improvement. Use `update-docs` when guidance
-   changes and `commit` to publish a PR with `agent-generated` and `nightshift`
+   alone does not establish the improvement. Update the nearest docs when guidance
+   changes and use `manage-pr` to publish a PR with `agent-generated` and `nightshift`
    labels. Do not merge it or file issues for unselected candidates.
 
 Publish the report in the session's Loom channel with message kind `result`:
