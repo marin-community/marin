@@ -584,25 +584,15 @@ class JaggedArrayStore:
         num_rows = await self.num_rows_async()
         offsets_futs: list = []
 
-        zero_pos = None
-
         with ts.Batch():
             for index in indices:
                 if index >= num_rows or index < 0:
                     raise IndexError("Index out of bounds")
-                offsets = self.offsets[index : index + 2].read()
-                offsets_futs.append(offsets)
+                offsets_futs.append(self.offsets[index : index + 2].read())
 
-                if index == 0:
-                    zero_pos = len(offsets_futs) - 1
-
-        offsets = await asyncio.gather(*[fut for fut in offsets_futs])
-        offsets = [(offset[0], offset[-1]) for offset in offsets]
-
-        if zero_pos is not None:
-            offsets[zero_pos] = (0, offsets[zero_pos][1])
-
-        return offsets
+        offsets = await asyncio.gather(*offsets_futs)
+        # The first offset slot holds the number of rows, so row 0 starts at 0 wherever it appears in the batch.
+        return [(0 if index == 0 else offset[0], offset[-1]) for index, offset in zip(indices, offsets, strict=True)]
 
     async def _bounds_for_rows_async(self, start, stop):
         offsets = await self.offsets[start : stop + 1].read()

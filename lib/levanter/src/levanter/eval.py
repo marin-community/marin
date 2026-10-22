@@ -65,6 +65,8 @@ class EvalResult:
     tag_macro_losses: dict[str, float]  # per tag average-per-token loss
     tag_micro_losses: dict[str, float]  # per tag total loss, for "parent" tags
     total_eval_loading_time: float
+    total_tokens: float
+    tag_token_counts: dict[str, float]
     micro_bpb: Optional[float] = None
     macro_bpb: Optional[float] = None
     tag_macro_bpb: Optional[dict[str, float]] = None
@@ -448,7 +450,10 @@ def construct_log_dict(evaluator, eval_result, total_time, prefix):
         _join_prefix(prefix, "loss"): eval_result.micro_avg_loss,
         _join_prefix(prefix, "loading_time"): eval_result.total_eval_loading_time,
         _join_prefix(prefix, "total_time"): total_time,
+        _join_prefix(prefix, "tokens"): eval_result.total_tokens,
     }
+    for tag, count in eval_result.tag_token_counts.items():
+        log_dict[_join_prefix(prefix, tag) + "/tokens"] = count
     logger.info(f"{prefix} loss: {eval_result.micro_avg_loss:.3f}")
     has_tags = len(evaluator.dataset.tag_to_index) > 1  # 1 tag means there's no difference between micro and macro
     if has_tags:
@@ -651,6 +656,8 @@ class TaggedEvaluator(Generic[Ex, M]):
             tag_macro_loss,
             tag_micro_loss,
             iterator.total_time,
+            float(state.token_avg_loss.total),
+            {tag: float(total_tokens_per_tag_cpu[index]) for tag, index in self.dataset.tag_to_index.items()},
             micro_bpb,
             macro_avg_bpb,
             tag_macro_bpb,

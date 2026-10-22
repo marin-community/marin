@@ -34,7 +34,10 @@ from levanter.data.text.datasets import LmDataConfig
 from levanter.eval_harness import LmEvalHarnessConfig
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
+from levanter.models.loss import next_token_loss_weight
+from levanter.metrics import Metric, ReductionType
 from levanter.optim.config import AdamConfig, OptimizerConfig
+from levanter.plateau import PlateauDroppingConfig, PlateauTrainer, plateau_training_loss
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import trainables_only
 from levanter.training_control import TrainingDashboard
@@ -64,6 +67,10 @@ class TrainLmConfig:
     # TODO: atm you have to at least specify a levanter model config with the same type as the hf checkpoint
 
     z_loss_weight: float = 0.0
+    plateau_dropping: PlateauDroppingConfig | None = None
+    """If set, drop tokens whose training loss has plateaued from the loss (see levanter.plateau)."""
+    context_pad_token_id: int | None = None
+    """If set, log ``context_tokens``: per row, the positions up to its last token that is not this padding id."""
 
     hf_save_path: Optional[str] = None
     hf_upload: Optional[str] = None
@@ -147,6 +154,31 @@ def _load_lm_model_from_configured_source(
     return model
 
 
+def lm_training_loss(model: LmHeadModel, example: LmExample, *, logsumexp_weight: float = 0.0, key=None):
+    """Return the LM objective and token totals for weighted training-loss reporting."""
+    loss = model.compute_next_token_loss(example, key=key, logsumexp_weight=logsumexp_weight)
+    position = example.tokens.resolve_axis(model.Pos.name)
+    weights = next_token_loss_weight(position, example.loss_weight)
+    count = hax.sum(hax.broadcast_axis(weights, example.tokens.axes)).scalar()
+    return loss, {
+        "loss_sum": Metric.from_value(loss.scalar() * count, ReductionType.SUM),
+        "supervised_tokens": Metric.from_value(count, ReductionType.SUM),
+    }
+
+
+def counting_context_tokens(loss_function, pad_token_id: int):
+    """Add a ``context_tokens`` metric to a training loss: per row, the positions up to its last non-padding token."""
+
+    def loss_with_context(model: LmHeadModel, example: LmExample, *args, **kwargs):
+        loss, metrics = loss_function(model, example, *args, **kwargs)
+        position = example.tokens.resolve_axis(model.Pos.name)
+        filled = hax.where(example.tokens != pad_token_id, hax.arange(position) + 1, 0)
+        context = hax.sum(hax.max(filled, axis=position)).scalar()
+        return loss, {**metrics, "context_tokens": Metric.from_value(context, ReductionType.SUM)}
+
+    return loss_with_context
+
+
 def main(config: TrainLmConfig):
     tokenizer = config.data.the_tokenizer
 
@@ -201,15 +233,25 @@ def main(config: TrainLmConfig):
     levanter.trainer.initialize(config)
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
 
-    def loss_function(model: LmHeadModel, example: LmExample, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+    if config.plateau_dropping is None:
+        loss_function = functools.partial(lm_training_loss, logsumexp_weight=config.z_loss_weight)
+    elif config.z_loss_weight:
+        raise ValueError("Plateau dropping measures plain cross-entropy; set z_loss_weight to 0")
+    else:
+        loss_function = functools.partial(plateau_training_loss, config=config.plateau_dropping)
+    if config.context_pad_token_id is not None:
+        loss_function = counting_context_tokens(loss_function, config.context_pad_token_id)
+    if config.plateau_dropping is None:
+        trainer = Trainer(config.trainer, optimizer, loss_function)
+    else:
+        trainer = PlateauTrainer(config.trainer, optimizer, loss_function)
 
     # Using the trainer as a context manager does 3 things:
     # 1. Sets the device mesh
     # 2. Sets the axis mapping (for fsdp)
     # 3. Sets the global metrics tracker
     with (
-        Trainer(config.trainer, optimizer, loss_function) as trainer,
+        trainer,
         TrainingDashboard(config, trainer.request_checkpoint, config.trainer.id or "unknown"),
     ):
         # randomness in jax is tightly controlled by "keys" which are the states of the random number generators

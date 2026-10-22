@@ -1,6 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import math
 import tempfile
 
@@ -456,6 +457,20 @@ async def test_get_batch_out_of_order():
 
     for idx, result in zip(indices, batch):
         expected_data = await builder.get_item_async(idx)
+        assert np.array_equal(result, expected_data)
+
+
+def test_get_batch_repeats_the_first_row():
+    # A loader that wraps around a short dataset asks for row 0 more than once in one batch.
+    async def read():
+        builder = await create_builder_with_data(
+            tempfile.TemporaryDirectory().name, num_sequences=10, sequence_length=50
+        )
+        indices = [0, 9, 0, 3, 0]
+        return await builder.get_batch(indices), [await builder.get_item_async(index) for index in indices]
+
+    batch, expected = asyncio.run(read())
+    for result, expected_data in zip(batch, expected, strict=True):
         assert np.array_equal(result, expected_data)
 
 

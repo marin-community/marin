@@ -359,6 +359,8 @@ def test_cb_tagged_evaluate_dedupes_force_and_logs_ema(caplog):
                 tag_macro_losses={},
                 tag_micro_losses={},
                 total_eval_loading_time=0.0,
+                total_tokens=1.0,
+                tag_token_counts={"base": 1.0},
             )
 
     logger_name = "test.cb_tagged_evaluate"
