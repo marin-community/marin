@@ -61,7 +61,7 @@ from skyrl_train.distributed.step_policy import (
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 
 from skyrl_train import hf_model_io
-from skyrl_train.hf_release_export import ReleaseExportOptions, finalize_grug_release
+from skyrl_train.hf_release_export import ReleaseExportOptions, finalize_hf_release
 from marin_hf_release import ReleasePolicy, canonical_grug_config
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 
@@ -524,7 +524,10 @@ class MegatronStrategy(DistributedStrategy):
     ) -> None:
         if release_options is not None:
             ReleasePolicy(release_options.precision)
-            canonical_grug_config(self.hf_config.to_dict())
+            if self.hf_config.model_type == "grug_moe":
+                canonical_grug_config(self.hf_config.to_dict())
+                if release_options.eos_token_ids is None:
+                    raise ValueError("Grug HF release requires explicit or source generation EOS IDs")
         materialize_megatron_params(model.actor_module)
         # Create checkpoint directory if it doesn't exist.
         rank_zero = self.is_rank_0()
@@ -549,7 +552,7 @@ class MegatronStrategy(DistributedStrategy):
                 if release_options is None:
                     self.save_hf_configs(self.hf_config, work_dir, tokenizer)
                 else:
-                    finalize_grug_release(Path(work_dir), self.hf_config.to_dict(), tokenizer, release_options)
+                    finalize_hf_release(Path(work_dir), self.hf_config, tokenizer, release_options)
                 self.log(f"Successfully saved HF config and tokenizer to {output_dir}")
 
         # The Ray caller waits for every rank result; no collective needs to span artifact publication.

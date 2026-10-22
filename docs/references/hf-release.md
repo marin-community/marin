@@ -36,6 +36,14 @@ aliases and writes one canonical name per field, retaining its architecture
 schema version. The exporter does not add stop or suppression tokens while
 serializing metadata.
 
+SkyRL validates other supported Transformers causal language models against
+the state-dict names and shapes declared by their HF model class. It reads
+generation metadata from a local, pinned Hub, or cloud source directory when
+available. For these non-Grug models, the tokenizer EOS ID supplies the
+generation EOS list if the request and source metadata omit it. Grug requires
+an explicit or source generation EOS list so an additional end-of-turn token
+cannot silently disappear.
+
 The release validator checks safetensors headers against expected tensor names,
 shapes, and dtypes, plus index coverage and byte totals. It checks tokenizer,
 config, and generation metadata before writing `hf_release_manifest.json`.

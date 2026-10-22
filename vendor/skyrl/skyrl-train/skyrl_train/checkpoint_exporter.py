@@ -4,20 +4,21 @@ from __future__ import annotations
 
 import os
 import hashlib
+import json
 from io import BytesIO
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 
 import ray
 import torch
-from omegaconf import DictConfig
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group, remove_placement_group
 from transformers import GenerationConfig, PreTrainedTokenizerBase
 
 from marin_hf_release import POLICY_VERSION, PrecisionMode, ReleasePolicy, generation_metadata
 
 from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY, policy_export_path
-from marinskyrl.resource_locator import is_hugging_face_repo_id
+from marinskyrl.resource_locator import is_hugging_face_repo_id, join_resource_path
 from marinskyrl.speculative_decoding import is_hugging_face_commit
 from skyrl_train import hf_model_io
 from skyrl_train.hf_release_export import ReleaseExportOptions
@@ -165,15 +166,21 @@ class CheckpointExporter:
             raise ValueError("HF release source model must be pinned to a 40-character commit")
         eos_token_ids = self._plan.eos_token_ids
         controls = {}
-        if is_pinned or os.path.isdir(self._plan.model_path):
-            source_eos, source_controls = generation_metadata(GenerationConfig.from_pretrained(
+        source_generation = None
+        if io.is_cloud_path(self._plan.model_path):
+            generation_path = join_resource_path(self._plan.model_path, "generation_config.json")
+            if io.exists(generation_path):
+                with io.open_file(generation_path, "r") as source:
+                    source_generation = json.load(source)
+        elif is_pinned or os.path.isfile(os.path.join(self._plan.model_path, "generation_config.json")):
+            source_generation = GenerationConfig.from_pretrained(
                 self._plan.model_path, revision=revision if is_pinned else None
-            ).to_diff_dict())
+            ).to_diff_dict()
+        if source_generation is not None:
+            source_eos, source_controls = generation_metadata(source_generation)
             if eos_token_ids is None:
                 eos_token_ids = source_eos
             controls = source_controls
-        if eos_token_ids is None:
-            raise ValueError("checkpoint HF release needs explicit EOS IDs or source generation metadata")
         controls.update(self._plan.generation_controls or {})
         return ReleaseExportOptions(
             precision=policy.mode,
@@ -214,6 +221,12 @@ def checkpoint_export_plan(cfg: DictConfig) -> CheckpointExportPlan:
         raise ValueError("checkpoint_export.checkpoint_path is required")
     if not export_root:
         raise ValueError("checkpoint_export.export_root is required")
+    eos_token_ids = export_cfg.get("eos_token_ids")
+    generation_controls = export_cfg.get("generation_controls")
+    if isinstance(eos_token_ids, ListConfig):
+        eos_token_ids = OmegaConf.to_container(eos_token_ids, resolve=True)
+    if isinstance(generation_controls, DictConfig):
+        generation_controls = OmegaConf.to_container(generation_controls, resolve=True)
     return CheckpointExportPlan(
         step=step,
         checkpoint_path=str(checkpoint_path).rstrip("/"),
@@ -222,8 +235,8 @@ def checkpoint_export_plan(cfg: DictConfig) -> CheckpointExportPlan:
         model_revision=cfg.trainer.policy.model.get("revision"),
         release_precision=str(export_cfg.get("release_precision", "preserve")),
         release_policy_version=int(export_cfg.get("release_policy_version", POLICY_VERSION)),
-        eos_token_ids=export_cfg.get("eos_token_ids"),
-        generation_controls=export_cfg.get("generation_controls"),
+        eos_token_ids=eos_token_ids,
+        generation_controls=generation_controls,
         chat_template=export_cfg.get("chat_template"),
     )
 

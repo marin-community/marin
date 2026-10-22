@@ -1,17 +1,25 @@
 import os
+import json
+from dataclasses import replace
+from io import StringIO
 from pathlib import Path
 
 import pytest
 import torch
 from omegaconf import OmegaConf
+from safetensors.torch import save_file
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import AutoModelForCausalLM, PreTrainedTokenizerBase, PreTrainedTokenizerFast, Qwen2Config
 
 from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers
 from skyrl_train.hf_export_schema import HFUploadMode
-from skyrl_train.hf_model_io import verify_hf_model_export
-from skyrl_train.hf_release_export import ReleaseExportOptions
+from skyrl_train.hf_model_io import local_hf_model_dir, verify_hf_model_export
+from skyrl_train.hf_release_export import ReleaseExportOptions, finalize_hf_release
 from marin_hf_release import PrecisionMode
 from skyrl_train.hf_publisher import HuggingFacePublisher
 from skyrl_train.hf_export import read_hf_export_request
+from skyrl_train.io import io as checkpoint_exporter_io
 from skyrl_train.trainer import RayPPOTrainer
 
 
@@ -30,7 +38,9 @@ class FakePolicyExportWorkers:
     def load_model_checkpoint(self, checkpoint_path: str) -> None:
         self.checkpoint_path = checkpoint_path
 
-    def save_hf_model(self, export_path: str, tokenizer: object, release_options: ReleaseExportOptions) -> None:
+    def save_hf_model(
+        self, export_path: str, tokenizer: PreTrainedTokenizerBase, release_options: ReleaseExportOptions
+    ) -> None:
         self.export_path = export_path
         self.tokenizer = tokenizer
         self.release_options = release_options
@@ -89,6 +99,28 @@ class FakePublisher:
 
     def publish(self, export_path: str, step: int) -> None:
         self.calls.append((export_path, step))
+
+
+class TinyQwenExportWorkers:
+    def __init__(self, config: Qwen2Config):
+        self.config = config
+        self.release_options = None
+
+    def initialize(self, _model_path: str) -> None:
+        pass
+
+    def load_model_checkpoint(self, _checkpoint_path: str) -> None:
+        pass
+
+    def save_hf_model(self, export_path: str, tokenizer: object, release_options: ReleaseExportOptions) -> None:
+        self.release_options = release_options
+        model = AutoModelForCausalLM.from_config(self.config)
+        with local_hf_model_dir(export_path) as directory:
+            save_file(model.state_dict(), Path(directory) / "model.safetensors")
+            finalize_hf_release(Path(directory), self.config, tokenizer, release_options)
+
+    def close(self) -> None:
+        pass
 
 
 def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
@@ -159,6 +191,51 @@ def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path):
     assert workers.release_options.eos_token_ids == [1]
     assert workers.release_options.source_step == 12
     assert workers.closed
+
+
+@pytest.mark.parametrize(("source_generation", "expected_eos"), [(True, [1, 2]), (False, [1])])
+def test_checkpoint_exporter_releases_non_grug_s3_source_without_explicit_eos(
+    tmp_path, monkeypatch, source_generation, expected_eos
+):
+    config = Qwen2Config(
+        vocab_size=5,
+        hidden_size=8,
+        intermediate_size=16,
+        num_hidden_layers=1,
+        num_attention_heads=1,
+        num_key_value_heads=1,
+        max_position_embeddings=16,
+        bos_token_id=0,
+        eos_token_id=1,
+    )
+    raw = Tokenizer(WordLevel({"[BOS]": 0, "[EOS]": 1, "[EOT]": 2, "hello": 3, "[UNK]": 4}, unk_token="[UNK]"))
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=raw, bos_token="[BOS]", eos_token="[EOS]", unk_token="[UNK]")
+    plan = replace(_plan(tmp_path), model_path="s3://test-bucket/qwen-source", eos_token_ids=None)
+    source_generation_path = "s3://test-bucket/qwen-source/generation_config.json"
+    original_exists = checkpoint_exporter_io.exists
+    original_open_file = checkpoint_exporter_io.open_file
+
+    def source_exists(path):
+        if path == source_generation_path:
+            return source_generation
+        return original_exists(path)
+
+    monkeypatch.setattr(checkpoint_exporter_io, "exists", source_exists)
+    monkeypatch.setattr(
+        checkpoint_exporter_io,
+        "open_file",
+        lambda path, mode: StringIO('{"eos_token_id": [1, 2]}')
+        if path == source_generation_path
+        else original_open_file(path, mode),
+    )
+    workers = TinyQwenExportWorkers(config)
+
+    result = CheckpointExporter(plan, workers, tokenizer).run()
+
+    verify_hf_model_export(result.export_path, require_release_manifest=True)
+    assert workers.release_options.eos_token_ids == ([1, 2] if source_generation else None)
+    generation = json.loads((Path(result.export_path) / "generation_config.json").read_text())
+    assert generation["eos_token_id"] == expected_eos
 
 
 def test_checkpoint_exporter_rejects_a_mismatched_checkpoint_marker(tmp_path):

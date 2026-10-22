@@ -12,7 +12,7 @@ from marin_hf_release import PrecisionMode
 from marin_hf_release.validation import read_safetensors_header_specs
 from skyrl_train import hf_model_io
 from skyrl_train.hf_model_io import local_hf_model_dir, verify_hf_model_export
-from skyrl_train.hf_release_export import ReleaseExportOptions, finalize_grug_release
+from skyrl_train.hf_release_export import ReleaseExportOptions, finalize_hf_release
 from skyrl_train.models.grug_moe import GrugMoeConfig, GrugMoeForCausalLM
 
 
@@ -60,7 +60,7 @@ def test_grug_bridge_release_preserves_router_bias_and_logits(tmp_path, precisio
     )
     with local_hf_model_dir(str(tmp_path)) as directory:
         save_file(model.state_dict(), Path(directory) / "model.safetensors")
-        finalize_grug_release(Path(directory), config.to_dict(), tokenizer, options)
+        finalize_hf_release(Path(directory), config, tokenizer, options)
 
     verify_hf_model_export(str(tmp_path), require_release_manifest=True)
     headers = read_safetensors_header_specs(tmp_path / "model.safetensors")

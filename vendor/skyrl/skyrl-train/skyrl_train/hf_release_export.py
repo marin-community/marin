@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 from safetensors.torch import load_file, save_file
-from transformers import PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedTokenizerBase
 
 from marin_hf_release import (
     PrecisionMode,
@@ -46,9 +46,12 @@ class ReleaseExportOptions:
     chat_template: str | None
 
 
-def _expected_grug_shapes(config: dict[str, object]) -> dict[str, tuple[int, ...]]:
+def _expected_hf_shapes(config: PretrainedConfig, canonical: dict[str, object]) -> dict[str, tuple[int, ...]]:
     with torch.device("meta"):
-        model = GrugMoeForCausalLM(GrugMoeConfig(**config))
+        if config.model_type == "grug_moe":
+            model = GrugMoeForCausalLM(GrugMoeConfig(**canonical))
+        else:
+            model = AutoModelForCausalLM.from_config(config)
     return {name: tuple(tensor.shape) for name, tensor in model.state_dict().items()}
 
 
@@ -61,7 +64,7 @@ def _bridge_tensor_specs(root: Path, expected_shapes: dict[str, tuple[int, ...]]
             tensors[name] = spec
     if tensors.keys() != expected_shapes.keys():
         raise ValueError(
-            f"Bridge tensor names differ from Grug schema: "
+            f"Bridge tensor names differ from model schema: "
             f"missing={sorted(expected_shapes.keys() - tensors.keys())[:5]}, "
             f"extra={sorted(tensors.keys() - expected_shapes.keys())[:5]}"
         )
@@ -103,17 +106,19 @@ def _write_index(root: Path) -> None:
     )
 
 
-def finalize_grug_release(
+def finalize_hf_release(
     root: Path,
-    config: dict[str, object],
+    config: PretrainedConfig,
     tokenizer: PreTrainedTokenizerBase,
     options: ReleaseExportOptions,
 ) -> ReleaseRequest:
-    """Validate and complete a Grug release after Bridge writes its HF shards."""
-    canonical = canonical_grug_config(config)
+    """Validate and complete a supported HF release after Bridge writes its shards."""
+    is_grug = config.model_type == "grug_moe"
+    canonical = canonical_grug_config(config.to_dict()) if is_grug else config.to_dict()
     policy = ReleasePolicy(options.precision)
-    expected = _expected_grug_shapes(canonical)
-    specs = grug_tensor_specs(canonical, _bridge_tensor_specs(root, expected))
+    expected = _expected_hf_shapes(config, canonical)
+    bridge_specs = _bridge_tensor_specs(root, expected)
+    specs = grug_tensor_specs(canonical, bridge_specs) if is_grug else bridge_specs
     for name, spec in specs.items():
         policy.target_dtype(name, spec)
     scalar_dtype = policy.config_dtype(specs)
@@ -134,8 +139,9 @@ def finalize_grug_release(
         "chat_template": tokenizer.chat_template,
         "special_token_ids": tokenizer_special_token_ids(tokenizer),
     }
-    metadata, generation = resolve_metadata(explicit, checkpoint, {}, require_chat_template=True)
-    assert metadata.chat_template is not None
+    if not is_grug and tokenizer.eos_token_id is not None:
+        checkpoint["eos_token_ids"] = [tokenizer.eos_token_id]
+    metadata, generation = resolve_metadata(explicit, checkpoint, {}, require_chat_template=is_grug)
     canonical["eos_token_id"] = metadata.eos_token_id
     if metadata.bos_token_id is not None:
         canonical["bos_token_id"] = metadata.bos_token_id
@@ -143,7 +149,9 @@ def finalize_grug_release(
         canonical["pad_token_id"] = metadata.special_token_ids["pad_token"]
     request = ReleaseRequest(
         policy=policy,
-        schema_id=f"grug-moe-v{canonical['grugmoe_artifact_schema_version']}",
+        schema_id=(
+            f"grug-moe-v{canonical['grugmoe_artifact_schema_version']}" if is_grug else f"{config.model_type}-hf-v1"
+        ),
         tensors=specs,
         config=canonical,
         generation=generation,
@@ -158,14 +166,17 @@ def finalize_grug_release(
     persist_request(root, request)
     _rewrite_precision(root, specs, policy)
     _write_index(root)
-    tokenizer.chat_template = metadata.chat_template
+    if metadata.chat_template is not None:
+        tokenizer.chat_template = metadata.chat_template
     tokenizer.save_pretrained(root)
     normalize_fast_tokenizer_metadata(root)
     tokenizer_config_path = root / "tokenizer_config.json"
     tokenizer_config = json.loads(tokenizer_config_path.read_text())
-    tokenizer_config["chat_template"] = metadata.chat_template
+    if metadata.chat_template is not None:
+        tokenizer_config["chat_template"] = metadata.chat_template
     tokenizer_config_path.write_text(json.dumps(tokenizer_config, sort_keys=True, indent=2) + "\n")
-    (root / "chat_template.jinja").write_text(metadata.chat_template)
+    if metadata.chat_template is not None:
+        (root / "chat_template.jinja").write_text(metadata.chat_template)
     (root / "config.json").write_text(json.dumps(canonical, sort_keys=True, indent=2) + "\n")
     (root / "generation_config.json").write_text(json.dumps(generation, sort_keys=True, indent=2) + "\n")
     hashes = validate_release_weights(root, specs, policy)
