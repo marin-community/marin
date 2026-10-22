@@ -13,31 +13,36 @@ from __future__ import annotations
 import ast
 import runpy
 from pathlib import Path
+from typing import NamedTuple
 
 import yaml
 from eval.contracts.benchmark_metadata import SourceMetric, resolve_metric_metadata
 from eval.sources import SOURCES
 from eval.task import TaskManager as CustomTaskManager
 from lm_eval.tasks import TaskManager as LMEvalTaskManager
-from policy_metric_map import POLICY_METRICS_2026_10_16, PolicyMetric
+from policy_metric_map import POLICY_METRICS_2026_10_16, PolicyMechanism, PolicyMetric
 
 CAMPAIGN = Path(__file__).resolve().parent
 ROOT = CAMPAIGN.parents[3]
+EVALCHEMY_CONFIGS = CAMPAIGN / "evalchemy-configs"
+HARBOR_CONFIGS = CAMPAIGN / "harbor-configs"
 MRCR_CONTEXT_VARIANTS = frozenset({"mrcr-32k", "mrcr-65k"})
 
 
+class ResolvedMetric(NamedTuple):
+    evaluator_metric: str
+    record_metric: str
+    available_source_names: frozenset[str]
+
+
 def _campaign_config_names() -> set[str]:
-    evalchemy = CAMPAIGN / "evalchemy-configs"
-    harbor = CAMPAIGN / "harbor-configs"
     return {
-        *(path.stem for path in evalchemy.glob("*.yaml") if path.stem not in MRCR_CONTEXT_VARIANTS),
-        *(path.stem for path in harbor.glob("*.yaml")),
+        *(path.stem for path in EVALCHEMY_CONFIGS.glob("*.yaml") if path.stem not in MRCR_CONTEXT_VARIANTS),
+        *(path.stem for path in HARBOR_CONFIGS.glob("*.yaml")),
     }
 
 
-def _evalchemy_metric(
-    metric: PolicyMetric, custom: CustomTaskManager, lm_eval: LMEvalTaskManager
-) -> tuple[str, str, frozenset[str]]:
+def _evalchemy_metric(metric: PolicyMetric, custom: CustomTaskManager, lm_eval: LMEvalTaskManager) -> ResolvedMetric:
     assert metric.task is not None
     if metric.task in SOURCES:
         benchmark = custom.get_benchmark(metric.task)
@@ -69,7 +74,7 @@ def _evalchemy_metric(
         kind_overrides=kind_overrides,
     )
     source = next(item.source_name for item in metrics if item.name == primary)
-    return source, primary, frozenset(item.source_name for item in metrics)
+    return ResolvedMetric(source, primary, frozenset(item.source_name for item in metrics))
 
 
 def _sotopia_score_fields() -> set[str]:
@@ -101,13 +106,13 @@ def main() -> None:
     harbor = harbor_factory("policy-example", n_benchmark=1, n_attempted=1)
 
     for name, metric in expected.items():
-        if metric.mechanism == "evalchemy":
-            config = yaml.safe_load((CAMPAIGN / "evalchemy-configs" / f"{name}.yaml").read_text())
+        if metric.mechanism == PolicyMechanism.EVALCHEMY:
+            config = yaml.safe_load((EVALCHEMY_CONFIGS / f"{name}.yaml").read_text())
             if config["tasks"] != [metric.task]:
                 raise ValueError(f"{name}: configured task differs from metric map")
-            source, record, available = _evalchemy_metric(metric, custom, lm_eval)
-            actual = source, record
-            if name != "cruxeval" and metric.published_metric not in available:
+            resolved = _evalchemy_metric(metric, custom, lm_eval)
+            actual = resolved.evaluator_metric, resolved.record_metric
+            if name != "cruxeval" and metric.published_metric not in resolved.available_source_names:
                 raise ValueError(f"{name}: publication metric {metric.published_metric!r} is not declared")
         else:
             actual = harbor.metrics[0].source_name, harbor.primary_metric

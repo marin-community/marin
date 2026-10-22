@@ -17,12 +17,18 @@ PIQA's pinned task reports both `acc` and `acc_norm`; evaluator metadata selects
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
+
+
+class PolicyMechanism(StrEnum):
+    EVALCHEMY = "evalchemy"
+    HARBOR = "harbor"
 
 
 @dataclass(frozen=True)
 class PolicyMetric:
-    mechanism: str
+    mechanism: PolicyMechanism
     task: str | None
     evaluator_metric: str
     record_metric: str
@@ -30,11 +36,11 @@ class PolicyMetric:
 
 
 def _evalchemy(task: str, evaluator: str, record: str, published: str | None = None) -> PolicyMetric:
-    return PolicyMetric("evalchemy", task, evaluator, record, published or evaluator)
+    return PolicyMetric(PolicyMechanism.EVALCHEMY, task, evaluator, record, published or evaluator)
 
 
 def _harbor(published: str = "reward") -> PolicyMetric:
-    return PolicyMetric("harbor", None, "reward", "reward", published)
+    return PolicyMetric(PolicyMechanism.HARBOR, None, "reward", "reward", published)
 
 
 POLICY_METRICS_2026_10_16: Mapping[str, PolicyMetric] = MappingProxyType(
