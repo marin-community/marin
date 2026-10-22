@@ -71,22 +71,34 @@ def read_manifest_paths(root: Path) -> tuple[str, ...]:
     )
 
 
-def _module_bundle_paths(root: Path) -> set[Path]:
+def _module_bundle_paths(root: Path, distribution_name: str | None = None) -> set[Path]:
     project = tomllib.loads((root / "pyproject.toml").read_text())
     paths: set[Path] = set()
     workspace = root.parents[1].resolve()
-    for source in project.get("tool", {}).get("uv", {}).get("sources", {}).values():
+    for name, source in project.get("tool", {}).get("uv", {}).get("sources", {}).items():
+        if distribution_name is not None and name != distribution_name:
+            continue
         if not isinstance(source, dict) or "path" not in source:
             continue
         module = (root / source["path"]).resolve()
         relative = module.relative_to(workspace)
         metadata = tomllib.loads((module / "pyproject.toml").read_text())
         paths.add(relative / "pyproject.toml")
+        assets = []
         readme = metadata["project"].get("readme")
         if readme is not None:
-            paths.add(relative / (readme if isinstance(readme, str) else readme["file"]))
-        for package in metadata["tool"]["hatch"]["build"]["targets"]["wheel"]["packages"]:
-            paths.update(path.relative_to(workspace) for path in (module / package).rglob("*") if path.is_file())
+            assets.append(readme if isinstance(readme, str) else readme["file"])
+        build = metadata["tool"]["hatch"]["build"]
+        wheel = build["targets"]["wheel"]
+        assets.extend(wheel["packages"])
+        assets.extend(wheel.get("force-include", {}))
+        assets.extend(hook["path"] for hook in build.get("hooks", {}).values() if "path" in hook)
+        for asset in assets:
+            original = (module / asset).resolve()
+            if original.is_dir():
+                paths.update(path.relative_to(workspace) for path in original.rglob("*") if path.is_file())
+            else:
+                paths.add(original.relative_to(workspace))
     return paths
 
 
@@ -176,7 +188,7 @@ def local_module_source(distribution_name: str, installed_root: Path, expected_s
     module = (source.root / configured["path"]).resolve()
     if installed_root.resolve() != module:
         raise ValueError(f"Installed {distribution_name} does not come from the selected module source")
-    paths = sorted(path for path in _bundle_paths(source.root) if path.is_relative_to(module.relative_to(workspace)))
+    paths = sorted(set(_bundle_paths(source.root)) & _module_bundle_paths(source.root, distribution_name))
     files = tuple(RuntimeBundleFile(path=path.as_posix(), sha256=_sha256(workspace / path)) for path in paths)
     return LauncherSource(root=module, digest=_files_digest(files))
 

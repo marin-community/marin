@@ -30,12 +30,12 @@ dependencies = [
     "langdetect==1.0.9",
     "loguru",
     "marin-finelog",
-    "marin-finestore>=0.2.202.dev39324959133",
-    "marin-iris>=0.2.202.dev39324959133",
+    "marin-finestore",
+    "marin-iris",
     "marin-iris-native",
-    "marin-rigging[secrets]>=0.2.202.dev39324959133",
+    "marin-rigging[secrets,prometheus]",
     "marin-rolloutengine",
-    "marin-shellbox[daytona,shellsim]>=0.2.202.dev39324959133",
+    "marin-shellbox[daytona,shellsim]",
     "ninja",
     "nvidia-ml-py",
     "omegaconf",
@@ -146,7 +146,7 @@ dev = [
     { include-group = "analysis" },
     "litellm",
     "marin-shellbox[shellsim]",
-    "marin-rigging[prometheus]>=0.2.123.dev35633925924",
+    "marin-rigging[prometheus]",
     "marin-style @ git+https://github.com/marin-community/marin-style@727f180cd423246ca1a6164163a5883cda5bf52b",
     "prometheus-client",
     "pytest>=8.4",
@@ -183,8 +183,6 @@ no-build-isolation-package = [
     "transformer-engine-torch",
 ]
 override-dependencies = [
-    "marin-shellbox[daytona,shellsim]==0.2.202.dev39324959133",
-    "marin-rigging[secrets,prometheus]==0.2.202.dev39324959133",
     # Megatron Bridge declares this native extension but does not import or use it.
     "fast-hadamard-transform ; sys_platform == 'never'",
     "nvidia-resiliency-ext ; sys_platform == 'never'",
@@ -210,9 +208,14 @@ transformer-engine = [{ requirement = "torch", match-runtime = true }, "build_to
 transformer-engine-torch = [{ requirement = "torch", match-runtime = true }, "build_tools", "ninja"]
 
 [tool.uv.sources]
-marin-verifyit = { path = "../../lib/verifyit", editable = true }
-marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
+marin-finelog = { path = "../../lib/finelog", editable = true }
+marin-finestore = { path = "../../lib/finestore", editable = true }
+marin-iris = { path = "../../lib/iris", editable = true }
+marin-rigging = { path = "../../lib/rigging", editable = true }
 marin-rolloutengine = { path = "../../lib/rolloutengine", editable = true }
+marin-shellbox = { path = "../../lib/shellbox", editable = true }
+marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
+marin-verifyit = { path = "../../lib/verifyit", editable = true }
 langdetect = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/langdetect-1.0.9-py3-none-any.whl" }
 pycosat = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
 torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
