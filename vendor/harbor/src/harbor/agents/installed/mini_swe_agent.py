@@ -6,8 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from upath import UPath
-
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
@@ -37,13 +35,12 @@ from harbor.models.trajectories import (
 )
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.logger import logger
-
+from upath import UPath
 
 _HOSTED_VLLM_PREFIX = "hosted_vllm/"
 _MODEL_DIRECTORY = "/opt/harbor-mini-swe"
 _K2_HORIZON_MODEL_FORMAT = "k2_horizon"
 _MCP_VERSION = "2.3.0"
-_LITELLM_VERSION = "1.103.5"
 
 
 def _normalize_content(raw_content: Any) -> str:
@@ -421,10 +418,10 @@ class MiniSweAgent(BaseInstalledAgent):
                     raise ValueError(
                         f"Mini-SWE model_info.{key} must be a positive integer"
                     )
-            pythonpath = self._extra_env.get("PYTHONPATH", "")
-            self._extra_env["PYTHONPATH"] = (
-                f"{_MODEL_DIRECTORY}:{pythonpath}" if pythonpath else _MODEL_DIRECTORY
-            )
+        pythonpath = self._extra_env.get("PYTHONPATH", "")
+        self._extra_env["PYTHONPATH"] = (
+            f"{_MODEL_DIRECTORY}:{pythonpath}" if pythonpath else _MODEL_DIRECTORY
+        )
         self._config_yaml: str | None = None
         if config_file:
             self._config_yaml = Path(config_file).read_text()
@@ -469,27 +466,24 @@ class MiniSweAgent(BaseInstalledAgent):
             environment,
             command=(
                 "set -euo pipefail; "
-                "curl -LsSf https://astral.sh/uv/0.7.13/install.sh | sh && "
+                "curl -LsSf https://astral.sh/uv/0.13.1/install.sh | sh && "
                 'if ! grep -q \'export PATH="$HOME/.local/bin:$PATH"\' "$HOME/.bashrc" 2>/dev/null; then'
                 '  echo \'export PATH="$HOME/.local/bin:$PATH"\' >> "$HOME/.bashrc";'
                 " fi && "
                 'source "$HOME/.local/bin/env" && '
                 f"uv tool install mini-swe-agent{version_spec} --with mcp=={_MCP_VERSION} "
-                f"--with litellm=={_LITELLM_VERSION} && "
+                "--excludes <(echo litellm) && "
                 '"$(uv tool dir)/mini-swe-agent/bin/python" '
                 "-c 'from mcp.types import CacheableResult' && "
                 "mini-swe-agent --help"
             ),
         )
-        if self._model_info is not None:
-            await self.exec_as_root(environment, command=f"mkdir -p {_MODEL_DIRECTORY}")
-            for source in (
-                Path(__file__).with_name("mini_swe_model.py"),
-                Path(__file__).parents[2] / "llms" / "vllm_tokenization.py",
-            ):
-                await environment.upload_file(
-                    source, f"{_MODEL_DIRECTORY}/{source.name}"
-                )
+        await self.exec_as_root(environment, command=f"mkdir -p {_MODEL_DIRECTORY}")
+        for source in (
+            Path(__file__).with_name("mini_swe_model.py"),
+            Path(__file__).parents[2] / "llms" / "vllm_tokenization.py",
+        ):
+            await environment.upload_file(source, f"{_MODEL_DIRECTORY}/{source.name}")
 
     @property
     def _mini_swe_agent_trajectory_path(self) -> PurePosixPath:
@@ -610,6 +604,7 @@ class MiniSweAgent(BaseInstalledAgent):
                             f"Unset API variable for model {self.model_alias}. "
                             f"Please set {api_key_var} or MSWEA_API_KEY environment variable"
                         )
+                env["MSWEA_API_KEY"] = os.environ[api_key_vars[0]]
             except ValueError as e:
                 raise ValueError(
                     f"Unable to determine API key for model {self.model_alias}: {e}. "
@@ -618,10 +613,6 @@ class MiniSweAgent(BaseInstalledAgent):
 
         if self._api_base is not None:
             env["OPENAI_API_BASE"] = self._api_base
-            if self.model_alias.startswith(_HOSTED_VLLM_PREFIX):
-                # LiteLLM's hosted_vllm provider does not consult the generic
-                # OpenAI base URL; it reads this provider-specific variable.
-                env["HOSTED_VLLM_API_BASE"] = self._api_base
         elif "OPENAI_API_BASE" in os.environ:
             env["OPENAI_API_BASE"] = os.environ["OPENAI_API_BASE"]
 
@@ -630,11 +621,7 @@ class MiniSweAgent(BaseInstalledAgent):
 
         # Write custom config into the container if provided
         # Mini-SWE replaces its default config list when any -c is supplied.
-        config_flags = (
-            "-c mini.yaml --agent-class minisweagent.agents.default.DefaultAgent "
-            if self._model_info is not None
-            else ""
-        )
+        config_flags = "-c mini.yaml --agent-class minisweagent.agents.default.DefaultAgent -c model.model_class=mini_swe_model.OpenAIModel "
         if self._config_yaml:
             config_path = "/tmp/mswea-config/custom.yaml"
             heredoc_marker = f"MSWEA_CONFIG_EOF_{uuid.uuid4().hex[:8]}"

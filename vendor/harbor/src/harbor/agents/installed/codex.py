@@ -5,8 +5,6 @@ from pathlib import Path, PurePosixPath
 from time import monotonic
 from typing import Any, Literal
 
-from upath import UPath
-
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
@@ -35,6 +33,7 @@ from harbor.models.trial.paths import EnvironmentPaths
 from harbor.trial.errors import AgentTimeoutError
 from harbor.utils.env import parse_bool_env_value
 from harbor.utils.trajectory_utils import format_trajectory_json
+from upath import UPath
 
 
 class Codex(BaseInstalledAgent):
@@ -231,12 +230,12 @@ class Codex(BaseInstalledAgent):
                 timestamp=timestamp,
                 source=source,
                 message=text,
-                reasoning_content=reasoning
-                if source == "agent" and reasoning
-                else None,
-                model_name=self.model_alias
-                if source == "agent" and self.model_alias
-                else None,
+                reasoning_content=(
+                    reasoning if source == "agent" and reasoning else None
+                ),
+                model_name=(
+                    self.model_alias if source == "agent" and self.model_alias else None
+                ),
                 extra=extra if extra else None,
             )
 
@@ -311,32 +310,24 @@ class Codex(BaseInstalledAgent):
         completion_tokens: int | None,
         cached_tokens: int | None,
     ) -> float | None:
-        """Compute total cost in USD from token counts via LiteLLM's pricing table.
+        """Compute total cost in USD from token counts via explicit model_info prices.
 
         Codex CLI's session JSONL never includes a cost field, so we apply
-        LiteLLM's per-token rates to the aggregated counts ourselves. Returns
+        configured per-token rates to the aggregated counts ourselves. Returns
         None when the model is missing from the table — caller should leave
         cost_usd unset rather than report a misleading $0.
         """
         if not self.model_alias:
             return None
 
-        try:
-            import litellm
-        except ImportError:
-            self.logger.debug("litellm not available; leaving codex cost_usd as None")
-            return None
+        pricing = self._model_info
 
-        pricing: dict[str, Any] | None = None
-        for key in (self.model_alias, self.model_alias.split("/", 1)[-1]):
-            entry = litellm.model_cost.get(key)
-            if entry:
-                pricing = entry
-                break
-
-        if pricing is None:
+        if (
+            pricing is None
+            or not {"input_cost_per_token", "output_cost_per_token"} <= pricing.keys()
+        ):
             self.logger.debug(
-                "No LiteLLM pricing entry for model '%s'; leaving codex "
+                "No model_info pricing entry for model '%s'; leaving codex "
                 "cost_usd as None",
                 self.model_alias,
             )
@@ -462,9 +453,11 @@ class Codex(BaseInstalledAgent):
                         "timestamp": timestamp,
                         "role": payload.get("role", "user"),
                         "text": text,
-                        "reasoning": pending_reasoning
-                        if payload.get("role") == "assistant"
-                        else None,
+                        "reasoning": (
+                            pending_reasoning
+                            if payload.get("role") == "assistant"
+                            else None
+                        ),
                     }
                 )
                 pending_reasoning = None
@@ -598,7 +591,7 @@ class Codex(BaseInstalledAgent):
             overall_tokens = total_usage.get("total_tokens")
 
             # Codex CLI does not include cost in token_count events, so fall
-            # back to LiteLLM's pricing table when the field is absent. Use
+            # back to explicit model_info prices when the field is absent. Use
             # explicit `is None` checks so a legitimate $0 cost reported by
             # the CLI isn't mistaken for a missing field.
             total_cost_usd = info.get("total_cost")

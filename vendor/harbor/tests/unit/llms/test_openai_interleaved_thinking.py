@@ -1,10 +1,9 @@
 import pytest
-
-from harbor.llms.lite_llm import LiteLLM
+from harbor.llms.openai_llm import OpenAILLM
 
 
 @pytest.mark.asyncio
-async def test_litellm_sends_reasoning_content_in_messages():
+async def test_openai_sends_reasoning_content_in_messages():
     captured_kwargs = {}
 
     async def fake_chat(completion_kwargs):
@@ -22,11 +21,10 @@ async def test_litellm_sends_reasoning_content_in_messages():
             "usage": {"prompt_tokens": 10, "completion_tokens": 5},
         }
 
-    llm = LiteLLM(model_name="test-model")
+    llm = OpenAILLM(model_name="test-model")
     # Transport-agnostic (message building happens before dispatch); patch both
-    # the AsyncOpenAI and litellm-fallback seams so the route doesn't matter.
+    # the async OpenAI transport seam.
     llm._acreate_chat_raw = fake_chat  # type: ignore[assignment]
-    llm._acreate_chat_litellm = fake_chat  # type: ignore[assignment]
 
     message_history = [
         {"role": "user", "content": "First message"},
@@ -63,7 +61,7 @@ async def test_hosted_vllm_replays_reasoning_in_the_field_vllm_reads():
             "usage": {"prompt_tokens": 10, "completion_tokens": 5},
         }
 
-    llm = LiteLLM(
+    llm = OpenAILLM(
         model_name="hosted_vllm/test-model",
         api_base="http://localhost/v1",
         model_info={

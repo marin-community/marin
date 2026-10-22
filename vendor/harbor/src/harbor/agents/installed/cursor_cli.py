@@ -4,8 +4,6 @@ import shlex
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Union
 
-from pydantic import BaseModel, Field, TypeAdapter, ValidationError
-
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
@@ -24,6 +22,7 @@ from harbor.models.trajectories import (
     Trajectory,
 )
 from harbor.utils.trajectory_utils import format_trajectory_json
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 
 class CursorSystemEvent(BaseModel):
@@ -212,6 +211,10 @@ class CursorCli(BaseInstalledAgent):
         ),
     ]
 
+    def __init__(self, *args, model_info: dict[str, Any] | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._model_info = model_info
+
     @staticmethod
     def name() -> str:
         return AgentName.CURSOR_CLI.value
@@ -357,7 +360,7 @@ class CursorCli(BaseInstalledAgent):
         )
 
     def _resolve_pricing_rates(self) -> tuple[dict[str, float], str] | None:
-        """Resolve per-token rates from built-in Cursor pricing or LiteLLM."""
+        """Resolve per-token rates from built-in Cursor pricing or model_info."""
         if not self.model_alias:
             return None
 
@@ -365,24 +368,12 @@ class CursorCli(BaseInstalledAgent):
         if builtin is not None:
             return builtin, "cursor_pricing"
 
-        try:
-            import litellm
-        except ImportError:
-            self.logger.debug(
-                "litellm not available and no built-in pricing for model '%s'; "
-                "leaving cursor-cli cost_usd as None",
-                self.model_alias,
-            )
-            return None
+        pricing = self._model_info
 
-        pricing: dict[str, Any] | None = None
-        for key in (self.model_alias, self.model_alias.split("/", 1)[-1]):
-            entry = litellm.model_cost.get(key)
-            if entry:
-                pricing = entry
-                break
-
-        if pricing is None:
+        if (
+            pricing is None
+            or not {"input_cost_per_token", "output_cost_per_token"} <= pricing.keys()
+        ):
             self.logger.debug(
                 "No pricing entry for model '%s'; leaving cursor-cli cost_usd as None",
                 self.model_alias,
@@ -405,7 +396,7 @@ class CursorCli(BaseInstalledAgent):
                 "cache_read": cache_read_rate,
                 "cache_write": cache_write_rate,
             },
-            "litellm",
+            "model_info",
         )
 
     def _compute_cost_from_usage_totals(
@@ -413,7 +404,7 @@ class CursorCli(BaseInstalledAgent):
     ) -> tuple[float, str] | None:
         """Estimate USD cost from token usage when the CLI omits dollar cost.
 
-        Uses built-in Cursor/Composer rates first, then LiteLLM's pricing table.
+        Uses built-in Cursor/Composer rates first, then explicit model_info prices.
         Returns None rather than $0 when pricing is unavailable.
         """
         resolved = self._resolve_pricing_rates()

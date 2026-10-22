@@ -10,6 +10,26 @@ GAIA, BFCL, and Aider. Trials can run in Daytona or another Harbor-supported san
 See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
 matrix. This page documents Harbor-specific configuration and output behavior.
 
+Harbor uses the OpenAI SDK for inference. In Terminus agent kwargs, set
+`llm_backend="openai"` and supply an OpenAI-compatible `api_base` for providers
+other than OpenAI. Set `model_info.max_input_tokens` and
+`model_info.max_output_tokens` for context and output limits. Optional
+`input_cost_per_token` and `output_cost_per_token` fields specify USD per token.
+Harbor does not look up limits or prices in a model registry. Agent CLI-reported
+costs and built-in prices for Cursor models remain available. Otherwise,
+CLI-agent cost estimates remain unset when `model_info` omits prices.
+
+LiteLLM is excluded from installation in the workspace and standalone evaluation
+environments, including as a transitive dependency. Mini-SWE uses Harbor's OpenAI
+model adapter. The recording proxy translates Anthropic Messages and OpenAI
+Responses tool histories to the configured Chat Completions endpoint. It retains
+token IDs and log probabilities when the serving backend returns them.
+
+Aider, SWE-agent, OpenHands, and OpenHands SDK installation is blocked because
+those harnesses require LiteLLM. Use Mini-SWE or Terminus instead. NeMo's
+LiteLLM backend is also unavailable; use its OpenAI backend with a compatible
+endpoint.
+
 ## Run a benchmark
 
 Use a model and evaluation name from `experiments/evaluation/models.py` and

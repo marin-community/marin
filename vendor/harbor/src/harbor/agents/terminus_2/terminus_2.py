@@ -4,26 +4,18 @@ import json
 import math
 import os
 import shlex
+import threading as _threading
 import time
 import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
 
-from upath import UPath
-
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    retry_if_not_exception_type,
-    stop_after_attempt,
-)
-
-from harbor_config.stop_reason import AgentStopReason
-
+import httpx
+import tiktoken
 from harbor.agents.base import (
     BaseAgent,
     TurnCapExhaustedError,
@@ -41,9 +33,9 @@ from harbor.agents.terminus_2.tmux_session import (
     TmuxSession,
 )
 from harbor.context_management import (
+    MESSAGES_PER_TURN,
     ContextManagedResponse,
     ContextWindowManager,
-    MESSAGES_PER_TURN,
     trim_latest_turn,
 )
 from harbor.environments.base import BaseEnvironment
@@ -53,12 +45,12 @@ from harbor.llms.base import (
     ContextLengthExceededError,
     ContextManagementInfrastructureError,
     LLMBackend,
-    LLMResponse,
     LLMRequestTimeoutError,
+    LLMResponse,
     OutputLengthExceededError,
 )
 from harbor.llms.chat import Chat, assistant_message_from_response
-from harbor.llms.lite_llm import LiteLLM
+from harbor.llms.openai_llm import OpenAILLM
 from harbor.llms.vllm_tokenization import shared_async_tokenize_client, tokenize_url
 from harbor.models.agent.context import AgentContext
 from harbor.models.agent.name import AgentName
@@ -77,19 +69,17 @@ from harbor.models.trajectories import (
 )
 from harbor.utils.artifact_writer import get_artifact_writer
 from harbor.utils.trajectory_utils import format_trajectory_json
+from harbor_config.stop_reason import AgentStopReason
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+)
+from upath import UPath
 
-
-# Shared, process-wide httpx client for the per-turn vLLM `/tokenize` probe in
-# `_count_total_tokens`. A live py-spy on the CoreWeave RL path (v0g) caught the
-# coordinator event loop repeatedly inside `httpx.Client(...)` -> `ssl.py
-# create_default_context` — i.e. every proactive-summarization check built a
-# BRAND-NEW client and a fresh SSL context per call, on the loop thread. The
-# SSL-context construction is the expensive part; reusing one pooled client
-# (httpx.Client is safe to share across threads for issuing requests) removes
-# that per-call cost and keeps connections warm. Created lazily under a lock.
-import threading as _threading
-
-_TOKENIZE_HTTP_CLIENT: "httpx.Client | None" = None  # noqa: F821 (httpx imported lazily)
+# Reuse the HTTP connection pool across trials and token-counting threads.
+_TOKENIZE_HTTP_CLIENT: httpx.Client | None = None
 _TOKENIZE_HTTP_CLIENT_LOCK = _threading.Lock()
 
 
@@ -107,33 +97,12 @@ def _get_shared_tokenize_client(timeout: float = 10.0) -> "httpx.Client":  # noq
     """
     global _TOKENIZE_HTTP_CLIENT
     if _TOKENIZE_HTTP_CLIENT is None:
-        import httpx
-
         with _TOKENIZE_HTTP_CLIENT_LOCK:
             if _TOKENIZE_HTTP_CLIENT is None:
                 _TOKENIZE_HTTP_CLIENT = httpx.Client(timeout=timeout)
     return _TOKENIZE_HTTP_CLIENT
 
 
-# Output-token budget reserved for context-summarization subagent calls.
-#
-# Proactive summarization fires when the context is already nearly full
-# (free_tokens < proactive_summarization_threshold), so without an explicit
-# output reservation the summary completion runs out of room, returns
-# finish_reason=="length", and lite_llm raises OutputLengthExceededError —
-# which previously degraded the agent to a no-LLM "instruction + last 1000
-# chars" fallback (measured: 59% of summarizing trials, reward 0.19 vs 0.82).
-#
-# Before any summary call we unwind the input so context_limit - input_tokens >=
-# RESERVED_SUMMARY_OUTPUT and pass that reserve as an explicit max_tokens. Clean
-# summaries are ~573 completion tokens, so 4096 is generous. A thinking-enabled
-# model can spend the whole reserve on reasoning tokens, though, so on truncation
-# the retry grows the reserve up to the model's output limit. If the model also
-# exhausts that legal maximum, the recovery boundary creates a bounded handoff
-# from the partial completion and a conversation excerpt instead of failing the
-# trial.
-# See agent_logs/2026-06-18_919285_summarization_timing_divedive.md and
-# agent_logs/2026-07-31_escalation-harbor-terminus2-context-budget-failure.md.
 RESERVED_SUMMARY_OUTPUT = 4096
 _MAX_RESERVED_SUMMARY_OUTPUT = 16384
 _OVERLONG_SUMMARY_MAX_BYTES = 32768
@@ -324,7 +293,7 @@ class Terminus2(BaseAgent):
         temperature: float | None,
         collect_rollout_details: bool,
         llm_kwargs: dict | None,
-        # LiteLLM-specific args
+        # OpenAILLM-specific args
         api_base: str | None,
         session_id: str | None,
         max_thinking_tokens: int | None,
@@ -340,11 +309,11 @@ class Terminus2(BaseAgent):
             temperature: Sampling temperature, if explicitly configured.
             collect_rollout_details: Whether to collect token IDs and logprobs.
             llm_kwargs: Additional kwargs passed to the LLM constructor.
-            api_base: Base URL for LiteLLM API endpoint.
-            session_id: Session ID for LiteLLM.
-            max_thinking_tokens: Max thinking tokens for LiteLLM extended thinking.
-            reasoning_effort: Reasoning effort level for LiteLLM.
-            model_info: Model info dict for LiteLLM custom models.
+            api_base: Base URL for OpenAILLM API endpoint.
+            session_id: Session ID for OpenAILLM.
+            max_thinking_tokens: Max thinking tokens for OpenAILLM extended thinking.
+            reasoning_effort: Reasoning effort level for OpenAILLM.
+            model_info: Model info dict for OpenAILLM custom models.
             use_responses_api: Whether to use the Responses API.
 
         Returns:
@@ -362,8 +331,8 @@ class Terminus2(BaseAgent):
             constructor_kwargs["temperature"] = temperature
 
         match backend_value:
-            case LLMBackend.LITELLM.value:
-                return LiteLLM(
+            case LLMBackend.OPENAI.value:
+                return OpenAILLM(
                     model_name=model_name,
                     api_base=api_base,
                     collect_rollout_details=collect_rollout_details,
@@ -396,10 +365,12 @@ class Terminus2(BaseAgent):
         parser_name: str = "json",
         api_base: str | None = None,
         temperature: float | None = None,
-        reasoning_effort: Literal[
-            "none", "minimal", "low", "medium", "high", "xhigh", "max", "default"
-        ]
-        | None = None,
+        reasoning_effort: (
+            Literal[
+                "none", "minimal", "low", "medium", "high", "xhigh", "max", "default"
+            ]
+            | None
+        ) = None,
         collect_rollout_details: bool = False,
         session_id: str | None = None,
         enable_summarize: bool = True,
@@ -415,7 +386,7 @@ class Terminus2(BaseAgent):
         interleaved_thinking: bool = False,
         suppress_max_turns_warning: bool = False,
         use_responses_api: bool = False,
-        llm_backend: LLMBackend | str = LLMBackend.LITELLM,
+        llm_backend: LLMBackend | str = LLMBackend.OPENAI,
         llm_kwargs: dict | None = None,
         llm_call_kwargs: dict[str, Any] | None = None,
         extra_body: dict[str, Any] | str | None = None,
@@ -447,7 +418,7 @@ class Terminus2(BaseAgent):
             max_thinking_tokens: Maximum thinking tokens for Anthropic extended thinking mode.
                 Minimum value is 1024. (default: None)
             model_info: Optional dict containing model information for custom models.
-                Used to register the model with litellm. Common fields include:
+                Explicit limits and pricing for the model. Common fields include:
                 - max_input_tokens: Maximum input tokens (context length)
                 - max_output_tokens: Maximum output tokens
                 - input_cost_per_token: Cost per input token (optional)
@@ -473,19 +444,19 @@ class Terminus2(BaseAgent):
             tmux_pane_height: Starting tmux pane height (maps to `tmux -y`, default: 40)
             enable_episode_logging: Whether to write per-turn ``episode-N/{debug,prompt,
                 response}`` files under ``logs_dir``. ``debug.json`` is the FULL raw
-                litellm request+response (incl. the whole message history, MBs and
-                growing) written by the synchronous litellm ``logger_fn``. When
+                raw request+response (incl. the whole message history, MBs and
+                growing) written by the synchronous episode logger. When
                 ``logs_dir`` is a remote path (gs://, s3://), each per-turn write is a
                 blocking object-store upload that stalls the shared rollout event loop.
                 DEFAULT False (off): RL training does NOT read these — logprobs/token_ids
                 come from ``rollout_details`` and the trajectory from ``trajectory.json``,
                 both written independently. Set True only for local debugging. (default: False)
             interleaved_thinking: Whether to include reasoning content in chat history
-                and send to litellm in next round's conversation (default: False)
+                and send to the model in next round's conversation (default: False)
             suppress_max_turns_warning: Whether to suppress the warning about artificially
                 limiting max_turns (default: False)
-            llm_backend: LLM backend to use. Use LLMBackend.LITELLM or "litellm".
-                (default: LLMBackend.LITELLM)
+            llm_backend: LLM backend to use. Use LLMBackend.OPENAI or "openai".
+                (default: LLMBackend.OPENAI)
             llm_kwargs: Additional kwargs to pass to the LLM constructor.
                 (default: None)
             llm_call_kwargs: Extra kwargs to forward to LLM calls (e.g., extra_body).
@@ -614,9 +585,9 @@ class Terminus2(BaseAgent):
             None  # Track handoff prompt to include as user step
         )
         self._subagent_metrics = SubagentMetrics()  # Track subagent metrics separately
-        self._subagent_rollout_details: list[
-            RolloutDetail
-        ] = []  # Track rollout details for each subagent
+        self._subagent_rollout_details: list[RolloutDetail] = (
+            []
+        )  # Track rollout details for each subagent
         self._enable_summarize = (
             enable_summarize  # Toggle for proactive and context limit summarization
         )
@@ -659,7 +630,7 @@ class Terminus2(BaseAgent):
                 "Model info is required when using hosted_vllm models. "
                 "Please set `model_info` in your Terminus 2 configuration with "
                 "`max_input_tokens`, `max_output_tokens`, and cost fields. "
-                "Falling back to LiteLLM defaults, which may cause context or pricing issues."
+                "Falling back to OpenAILLM defaults, which may cause context or pricing issues."
             )
         return None
 
@@ -821,7 +792,7 @@ class Terminus2(BaseAgent):
     ) -> EpisodeLoggingPaths:
         # Default OFF: no per-turn episode-N/{debug,prompt,response} writes. This
         # returns all-None so `_query_llm` skips prompt/response writes AND the
-        # per-call raw request+response `debug.json` is never written (LiteLLM.call
+        # per-call raw request+response `debug.json` is never written (OpenAILLM.call
         # only writes the episode log when logging_path is not None) — eliminating
         # the synchronous, multi-MB, object-store `debug.json` write that otherwise
         # blocks the shared rollout event loop on every LLM call. RL training is
@@ -851,14 +822,14 @@ class Terminus2(BaseAgent):
 
         Prefers vLLM's `/tokenize` endpoint so the count matches what
         vLLM applies at serve time (same BPE, same chat template). Falls
-        back to `litellm.utils.token_counter` when no vLLM api_base is
+        back to the local tiktoken estimate when no vLLM api_base is
         available — e.g. an OpenAI-hosted backend.
 
         ``extra_messages`` (e.g. a summary prompt appended to the retained
         history only for the request) are included in the count so budget
         accounting matches the real request size.
 
-        Why: litellm's counter disagrees with vLLM by exactly +1 token
+        Why: the local estimate disagrees with vLLM by exactly +1 token
         on long, near-budget chat-template renders for unknown HF repos
         (e.g. laion finetunes), manifesting as `VLLMValidationError:
         32769 input tokens` rejections that churn Ray ObjectRefs and
@@ -899,7 +870,7 @@ class Terminus2(BaseAgent):
 
         Returns ``None`` when the model isn't served by a vLLM ``api_base``
         (e.g. an OpenAI-hosted backend), in which case the caller falls back to
-        the litellm counter. Shared verbatim by the sync (``_count_total_tokens``)
+        the local token counter. Shared verbatim by the sync (``_count_total_tokens``)
         and truly-async (``_acount_total_tokens``) paths so the request shape /
         `/v1`-stripping stays identical.
 
@@ -930,13 +901,21 @@ class Terminus2(BaseAgent):
         chat: Chat,
         extra_messages: list[dict[str, Any]] | None = None,
     ) -> int:
-        """litellm's local (CPU-bound) token counter — the `/tokenize` fallback."""
-        from litellm.utils import token_counter
+        """Local tiktoken estimate — the `/tokenize` fallback."""
 
         messages = list(chat.messages)
         if extra_messages:
             messages.extend(extra_messages)
-        return token_counter(model=self.model_alias, messages=messages)
+        try:
+            encoding = tiktoken.encoding_for_model(self.model_alias.split("/", 1)[-1])
+        except KeyError:
+            raise ValueError(
+                "Token counting requires a vLLM endpoint for this model"
+            ) from None
+        return 3 + sum(
+            3 + sum(len(encoding.encode(str(value))) for value in message.values())
+            for message in messages
+        )
 
     async def _acount_total_tokens(
         self,
@@ -954,7 +933,7 @@ class Terminus2(BaseAgent):
         off the loop via ``asyncio.to_thread``. But ``to_thread`` routes through
         the DEFAULT ``ThreadPoolExecutor`` (bounded ~min(32, cpu+4) threads): at
         169-concurrency the 169 per-turn probes SERIALIZE ~32-wide AND contend
-        the same default executor litellm's ``acompletion`` uses for its
+        the same default executor blocking work uses for its
         ``run_in_executor(None, ...)`` request preamble — so a live py-spy on the
         round-3 image (v0i) still showed the loop saturation-bursty (~1/3 TDP).
 
@@ -982,10 +961,6 @@ class Terminus2(BaseAgent):
             except Exception:
                 pass
 
-        # Fallback path only (probe failed / no vLLM api_base). litellm's
-        # token_counter is local CPU (GIL-bound) — keep it off the loop so the
-        # degraded path can't stall dispatch either. This fallback is rare, so
-        # its use of the default pool is not a concurrency concern.
         return await asyncio.to_thread(
             self._token_counter_fallback, chat, extra_messages
         )
@@ -1752,7 +1727,7 @@ so ask everything you need to know."""
           inference engine. This is the same exception type that ``_query_llm`` would
           re-raise on the post-overflow path, so the downstream rollback/mask handling
           is unchanged; we simply avoid the wasted overflow request (and the
-          inference-engine validation error + litellm async-logging churn it triggers,
+          inference-engine validation error + async logging churn it triggers,
           which leaks file descriptors at high concurrency).
         - When ``enable_summarize=True``: behaves as before, summarizing once the
           ``_proactive_summarization_threshold`` is crossed.
@@ -2303,9 +2278,9 @@ so ask everything you need to know."""
                             prompt_tokens=chat.total_input_tokens - tokens_before_input,
                             completion_tokens=chat.total_output_tokens
                             - tokens_before_output,
-                            cached_tokens=cache_tokens_used
-                            if cache_tokens_used > 0
-                            else None,
+                            cached_tokens=(
+                                cache_tokens_used if cache_tokens_used > 0 else None
+                            ),
                             cost_usd=step_cost if step_cost > 0 else None,
                             prompt_token_ids=llm_response.prompt_token_ids,
                             completion_token_ids=llm_response.completion_token_ids,
@@ -2382,9 +2357,9 @@ so ask everything you need to know."""
                         prompt_tokens=chat.total_input_tokens - tokens_before_input,
                         completion_tokens=chat.total_output_tokens
                         - tokens_before_output,
-                        cached_tokens=cache_tokens_used
-                        if cache_tokens_used > 0
-                        else None,
+                        cached_tokens=(
+                            cache_tokens_used if cache_tokens_used > 0 else None
+                        ),
                         cost_usd=step_cost if step_cost > 0 else None,
                         prompt_token_ids=llm_response.prompt_token_ids,
                         completion_token_ids=llm_response.completion_token_ids,
@@ -2592,15 +2567,6 @@ so ask everything you need to know."""
                 original_instruction=instruction,
             )
         except asyncio.CancelledError:
-            # The trial timed out: `asyncio.wait_for(agent.run(...))` in
-            # trial._execute_agent cancelled us. Historically this branch reaped
-            # LiteLLM's detached async_success_handler logging tasks (which held
-            # the trial's Ray ObjectRefs via their closures → reference_count.cc
-            # SIGABRT, Perlmutter 53509359). The completion transport is now
-            # openai.AsyncOpenAI (no litellm LoggingWorker / detached callback
-            # tasks), so there are no orphan background tasks to reap — the
-            # cancellation simply propagates as AgentTimeoutError with an empty
-            # rollout, semantics unchanged.
             raise
         finally:
             # Always capture metrics and rollout details even if the agent times out or errors
@@ -2706,9 +2672,9 @@ so ask everything you need to know."""
                         prompt_tokens=usage_info.prompt_tokens,
                         completion_tokens=usage_info.completion_tokens,
                         cached_tokens=usage_info.cache_tokens,
-                        cost_usd=usage_info.cost_usd
-                        if usage_info.cost_usd > 0
-                        else None,
+                        cost_usd=(
+                            usage_info.cost_usd if usage_info.cost_usd > 0 else None
+                        ),
                         prompt_token_ids=response.prompt_token_ids,
                         completion_token_ids=response.completion_token_ids,
                         logprobs=response.logprobs,
