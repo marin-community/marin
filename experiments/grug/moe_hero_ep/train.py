@@ -820,7 +820,8 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
     varies several-fold, and every layer waits for the busiest shard at its next collective. The loss is a
     mean over all tokens and the router statistics are global sums, so every token still enters the
     objective; only which assignments exceed expert capacity can change. Expert capacity drops a shard's
-    later tokens first, so rows keep their loaded order within a shard rather than a cost order.
+    later tokens first, so rows keep their loaded order within a shard rather than a cost order. This
+    spreads drops over rows of all costs only because the loader shuffles rows within a batch.
     Batches without segment ids are returned as is.
     """
     segment_ids = batch.attn_mask.segment_ids
