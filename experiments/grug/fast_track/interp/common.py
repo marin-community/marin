@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 SIZE = "d512"
 # The 8-minute Belay d512 (Ckpt 1 at 2760 steps) and the 8821-step 171-TPP ladder rung, by study tag.
 CHECKPOINTS = {
+    "tn-d512-ckpt1-rno": "s3://marin-us-east-02a/marin/grug/tn-d512-ckpt1-rno/2026.09.25/checkpoints/step-2760",
     "lc1-l171-d512": "s3://marin-us-east-02a/marin/grug/lc1-l171-d512/2026.09.25/checkpoints/step-8821",
 }
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/interp-belay-d512"
@@ -65,7 +66,7 @@ PALOMA_SETS = (
 )
 # Sequences the run trained on: 8821 steps x 128. Analysis train samples come from beyond them (unseen tokens of the
 # same document-shuffled cache).
-TRAINED_SEQUENCES = 8821 * 128
+TRAINED_SEQUENCES = 8821 * 128  # the longer run's; the 2760-step run saw a prefix of it
 MP = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
 
 
