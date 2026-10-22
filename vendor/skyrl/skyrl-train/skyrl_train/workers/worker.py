@@ -5,6 +5,7 @@ import logging
 import os
 import socket
 from typing import Dict, Optional, Type, List, Any, Callable
+from skyrl_train.checkpoint_schedule import FULL_OPTIMIZER_STATE, OptimizerStateMode
 from skyrl_train.utils.progress import configure_progress, tqdm
 from marinskyrl.runtime_options import R3Transport
 from collections import defaultdict
@@ -1503,7 +1504,9 @@ class CriticWorkerBase(Worker):
             status["raw_grad_norm"] = grad_norm
         return status
 
-    def save_checkpoint(self, ckpt_dir: str, tokenizer=None, optimizer_state: str = "full"):
+    def save_checkpoint(
+        self, ckpt_dir: str, tokenizer=None, optimizer_state: OptimizerStateMode = FULL_OPTIMIZER_STATE
+    ):
         upload = self.strategy.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,

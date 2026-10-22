@@ -18,6 +18,7 @@ from skyrl_train.checkpoint_schedule import (
     FULL_OPTIMIZER_STATE,
     MASTER_ONLY_OPTIMIZER_STATE,
     OPTIMIZER_STATE_MARKER,
+    OptimizerStateMode,
     master_only_optimizer_state,
 )
 from skyrl_train.distributed.strategy import DistributedStrategy
@@ -324,10 +325,12 @@ class MegatronStrategy(DistributedStrategy):
         client_state: dict = {},
         tag=None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
-        optimizer_state: str = "full",
+        optimizer_state: OptimizerStateMode = FULL_OPTIMIZER_STATE,
     ):
         if optimizer_state not in (FULL_OPTIMIZER_STATE, MASTER_ONLY_OPTIMIZER_STATE):
-            raise ValueError(f"optimizer_state must be {FULL_OPTIMIZER_STATE} or {MASTER_ONLY_OPTIMIZER_STATE}")
+            raise ValueError(
+                f"optimizer_state must be {FULL_OPTIMIZER_STATE.value} or {MASTER_ONLY_OPTIMIZER_STATE.value}"
+            )
         # Extract base model.
         model: List[nn.Module] = model.actor_module
         materialize_megatron_params(model)
@@ -360,7 +363,7 @@ class MegatronStrategy(DistributedStrategy):
             )
             if optimizer_state == MASTER_ONLY_OPTIMIZER_STATE:
                 # Keep the FP32 master records that weight analysis reads; drop the
-                # moment states a resume would need (C4/C8 checkpoint schedules).
+                # moment states a resume would need.
                 optimizer_sharded_state = master_only_optimizer_state(optimizer_sharded_state)
             sharded_state_dict["optimizer"] = optimizer_sharded_state
             if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
@@ -416,7 +419,7 @@ class MegatronStrategy(DistributedStrategy):
                     torch.save({"client_state": client_state, "tag": tag}, f)
                 marker_path = os.path.join(work_dir, OPTIMIZER_STATE_MARKER)
                 with io.open_file(marker_path, "w") as f:
-                    f.write(json.dumps({"optimizer_state": optimizer_state}))
+                    f.write(json.dumps({"optimizer_state": optimizer_state.value}))
 
         dist.barrier()
         ckpt_base.async_calls.close()

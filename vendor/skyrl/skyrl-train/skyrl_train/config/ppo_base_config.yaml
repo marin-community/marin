@@ -309,7 +309,7 @@ trainer:
   max_ckpts_to_keep: -1
   callbacks: null
   ckpt_interval: 5
-  # Explicit checkpoint schedule (C4): weight-checkpoint steps, and the subset whose
+  # Explicit checkpoint schedule: weight-checkpoint steps, and the subset whose
   # checkpoints carry the full optimizer state. Empty lists follow ckpt_interval and
   # keep the optimizer in every checkpoint.
   checkpoint_steps: []

@@ -1,4 +1,4 @@
-"""FP32 master export: the rounded masters are the BF16 HF export, byte for byte (C8).
+"""FP32 master export: the rounded masters are the BF16 HF export, byte for byte.
 
 The weight metrics read FP32 master records out of distributed checkpoints. This gate
 exports one tiny Grug checkpoint twice through the standard checkpoint-export path —

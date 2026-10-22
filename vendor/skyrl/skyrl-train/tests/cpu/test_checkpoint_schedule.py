@@ -1,4 +1,4 @@
-"""Explicit checkpoint schedules and the masters-only optimizer filter (C4/C8)."""
+"""Explicit checkpoint schedules and the masters-only optimizer filter."""
 
 import pytest
 from omegaconf import OmegaConf
