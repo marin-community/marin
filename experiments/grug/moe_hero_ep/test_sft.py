@@ -273,6 +273,7 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
                         for actual, expected in zip(jax.tree.leaves(params),
                                                      jax.tree.leaves(expected_state.params), strict=True):
                             np.testing.assert_array_equal(actual, expected)
+                        assert schedule == sft  # Original checkpoint identity survives horizon extension.
                         calls.append(update)
                         if update == 2 and interrupted:
                             raise RuntimeError("interrupted acquisition")
@@ -295,7 +296,12 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
                     assert not (telemetry / "update-000002.json").exists()
                     interrupted = False
                     recovered_queue = pending_acquisition(runtime, int(resumed.step))
-                    reports = complete_acquisition(runtime, frozen, resumed, mesh, recovered_queue)
+                    # A later segment may extend the schedule before finishing an
+                    # inherited diagnostic queue. Restore each old checkpoint
+                    # with its original schedule; never repeat gradient updates.
+                    extended_runtime = dataclasses.replace(runtime,
+                        sft=dataclasses.replace(sft,num_steps=sft.num_steps+2),resume_sft_config=sft)
+                    reports = complete_acquisition(extended_runtime, frozen, resumed, mesh, recovered_queue)
                     assert len(reports) == 2 and calls == [1,2,2]
                     assert (telemetry / "update-000001.json").read_bytes() == first_report
                     assert json.loads((telemetry / "update-000002.json").read_text())["update"] == 2

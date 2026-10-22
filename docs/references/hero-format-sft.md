@@ -28,6 +28,301 @@ The JSON inputs follow their source schemas:
 and [ContextExtensionConfig](https://github.com/marin-community/marin/blob/main/experiments/grug/moe_hero_ep/context_extension.py).
 Use measured evaluations and reviewed limits when filling these records.
 
+## Completed exploratory experiment
+
+[Issue #10428](https://github.com/marin-community/marin/issues/10428) records the
+completed 2026-10-22 campaign and its failures. The LR-aware average of source
+steps 282000, 288000 and 294000 used coefficients 0.232123642, 0.499105160 and
+0.268771198. On the identical fixed 59-sequence C4 panel, aggregate next-token
+cross-entropy was 2.130703034 for A (step 294000) and 2.109083774 for B (the
+three-checkpoint average), a relative reduction of 1.01465%. The panel raw SHA256
+was `e1c77e834b636f2889595751b10b3061c0d4583824aa5144808cba7a0bd4b880`. This does not reproduce the optimizer trajectory or establish the
+quality benefits of a retrained cooldown.
+
+After donor initialization, compact LoRA plus vocabulary training completed
+64 total updates. The first eight updates span recovery segments; the longer
+segment restored full compact state at update 8 and performed 56 additional
+updates. Its linear schedule horizon extended from 8 to 64 while preserving
+Adam, schedule counts, seed and deterministic data position. The first resumed
+learning rate therefore rose relative to the earlier short cooldown tail.
+A fresh 64-update run has a different learning-rate history.
+
+| Setting | Executed value |
+| --- | --- |
+| Source context | 16,384; no YaRN |
+| Training batch and mesh | 64 sequences; expert64/context1/replica1 |
+| LoRA | Rank 16, alpha 16; attention and shared dense projections |
+| Vocabulary deltas | Five selected input rows and output columns |
+| Adam peak learning rates | Adapters 1e-4; vocabulary 1e-5 |
+| Warmup and seed | 2 updates; 20261021 |
+| Cumulative processed-token cap | 8,388,608 for smoke; 67,108,864 after extension |
+| Compact checkpoint cadence | Every update, including full Adam and counters |
+| Numerical abort bounds | Loss 20, gradient norm 1000, router z-loss 100 |
+
+Those abort bounds are numerical limits, not quality criteria. The final
+cumulative counts were 65,975,980 processed and 42,664,754 supervised tokens.
+On a fixed training-source teacher-forced EOT diagnostic, mean NLL changed from
+3.3814 at step 8 to 0.4288 at step 64 and top-1 matches from 1/16 to 14/16.
+These are EOT-token diagnostics, not average sequence NLL or held-out quality.
+
+The separate 100-response qualitative panel contains 40 math tasks, 40 Python
+tasks and 20 fixed-history follow-ups. All responses ended with EOT; none hit
+the 2,048-token cap. Median length was 113.5 tokens and maximum length 496.
+Manual review found 33 correct final math answers, four wrong, two incomplete
+and one ambiguous reference. One correct final answer contradicted an earlier
+number. Of the code implementations, 32 appeared plausible by static inspection
+and eight had functional defects; generated code was not executed. Eighteen
+fixed-history replies clearly met their request, one lost track of possession,
+and one had a borderline item-count issue depending on whether drawing supplies
+count as a kit or separate physical items.
+
+No literal role continuation or pathological repetition was observed. One math
+reply contained a stray closing thinking marker, and one code reply emitted an
+end/start-of-text pair before EOT. EOT termination therefore does not establish
+clean serialization. These results support provisional capacity measurements on
+the intended RL backend. Full held-out/native format/content evaluation,
+independent merge and serving parity, and long-context behavior remain
+unresolved. Native full-prefix sampler timings do not measure serving throughput.
+
+## Reproduce the exploratory campaign
+
+The completed campaign used a separately authorized exploratory path. It did
+not complete the formal quality-qualified pilot workflow described later in this
+page. `sft_campaign` retains optimizer/counter/data state and explicit numerical
+bounds without fabricating that qualification. The original completed SFT and
+rollout model implementation was commit
+`4d97008b7e7626fe9eb517c196988741b48cd6a6`; construction used
+`2416e9d797b0fbbb23327105618c56f823d42844` and the matched A/B evaluator used
+`47c6a090cfb6c5d875079264fa25cbf3bf20d737`. The public campaign and rollout
+entrypoints bind a new repetition to the clean commit containing these modules.
+Record that full commit in each request and receipt. Do not label a repetition
+at a different revision as a byte-for-byte replay of the original execution.
+
+First follow the inventory, averaging, donor and data procedures below. The
+executed data selection was the first 6,000 scanned training rows from the
+existing `HuggingFaceH4/no_robots` catalog adapter at full Hub revision
+`e6f9a4ac5c37faeb744ba9ecf0473184d7f8105b`, weight 1.0. Use tokenizer
+`marin-community/marin-tokenizer` at revision
+`a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2`, held-out fraction 0.2, split seed
+20261019 and maximum length 16,384. Preparation produced 4,806 training and
+1,186 held-out conversations and 1,385,205 non-padding training tokens. Keep the
+source revision and emitted JSONL hashes; an `in_pretraining=false` declaration
+does not establish absence from pretraining. Build the training-source
+acquisition panel with `build_acquisition_panel(..., max_examples=16)` and the
+five selected token IDs. Retain its digest separately from held-out panels.
+
+Write a `BaseReference` JSON record from C's actual checkpoint metadata and
+ancestry, then construct the initial request using the public dataclass. The
+following example reads caller-supplied small metadata files; it does not read
+model arrays. `prepared/` is the output of `format_data` above.
+
+```python
+import json
+import subprocess
+from pathlib import Path
+
+import draccus
+from fray.types import GpuConfig, ResourceConfig
+
+from experiments.grug.moe_hero_ep.averaging import read_prepared_provenance
+from experiments.grug.moe_hero_ep.format_eval import AcquisitionPanel
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
+from experiments.grug.moe_hero_ep.sft import BaseReference, SftConfig
+from experiments.grug.moe_hero_ep.sft_campaign import SftCampaign
+
+reference = draccus.decode(BaseReference, json.loads(Path("base-reference.json").read_text()))
+prepared = read_prepared_provenance(reference.checkpoint, reference.metadata_digest)
+manifest = json.loads(Path("prepared/manifest.json").read_text())
+acquisition = AcquisitionPanel.model_validate_json(Path("acquisition.json").read_text())
+campaign = SftCampaign(
+    name="hero-format-smoke-reproduction", version="2026.10.21",
+    source_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+    reference=reference, model=draccus.decode(GrugModelConfig, prepared["model"]),
+    sft=SftConfig(16, 16.0, (128006, 128007, 128002, 128003, 128009),
+                  1e-4, 1e-5, 8, 2, 20261021),
+    data_root="prepared", data_manifest="prepared/manifest.json",
+    data_manifest_digest=manifest["manifest_digest"],
+    acquisition_panel="acquisition.json", acquisition_panel_digest=acquisition.panel_digest,
+    cache_prefix="local-chat-cache", output_root="FRESH_REMOTE_SMOKE_ROOT",
+    resources=ResourceConfig(cpu=120, ram="890g", disk="1t",
+                             device=GpuConfig(variant="GB200", count=4), replicas=16),
+    batch_size=64, expert_axis_size=64, context_axis_size=1, replica_axis_size=1,
+    max_processed_tokens=8388608,
+    maximum_metrics=(("loss", 20.0), ("gradient_norm", 1000.0),
+                     ("train/router/router_z_loss", 100.0)),
+)
+Path("smoke-local-cache.json").write_text(json.dumps(draccus.encode(campaign), indent=2) + "\n")
+```
+
+Replace `FRESH_REMOTE_SMOKE_ROOT` with a fresh artifact destination. Publish the
+prepared JSONL, manifest, acquisition panel and request metadata where every
+worker can read them; update the request's paths to those locations. Build chat
+caches on CPU under a local prefix, then publish the completed cache prefix with
+`uv run fsutil verified-copy LOCAL_PREFIX REMOTE_PREFIX` and preserve the
+verification manifest. Change `cache_prefix` to that published prefix before
+reviewing the launch request. Keep `version`, data bytes and template unchanged
+between segments so their cache fingerprint stays fixed. GPU workers require a
+completed matching cache and never invoke tokenization.
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.sft_campaign \
+  smoke-local-cache.json --build-caches
+uv run python -m experiments.grug.moe_hero_ep.sft_campaign \
+  smoke.json --review smoke-review.json
+```
+
+The reviewed request must point to the published metadata/data/cache paths.
+To reproduce the extension, publish the exact eight-update request bytes at an
+immutable location accessible to workers. After the smoke succeeds, construct
+the next request from that same published request. `SMOKE_REQUEST_URI` and
+`FRESH_REMOTE_LONG_ROOT` below are caller-supplied artifact locations.
+
+```python
+import dataclasses
+import hashlib
+import json
+from pathlib import Path
+
+import draccus
+
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+from experiments.grug.moe_hero_ep.sft_campaign import (
+    RecoveryParent, latest_completed_checkpoint, read_campaign,
+)
+
+smoke, raw = read_campaign("SMOKE_REQUEST_URI")
+selected = latest_completed_checkpoint(smoke)
+if selected is None or selected["step"] != 8:
+    raise ValueError("The eight-update parent must be complete before extending its schedule")
+parent = RecoveryParent(
+    request_uri="SMOKE_REQUEST_URI",
+    request_sha256=hashlib.sha256(raw).hexdigest(), request_digest=digest(json.loads(raw)),
+    **{key: selected[key] for key in ("path", "step", "metadata_digest", "counters")},
+)
+long = dataclasses.replace(
+    smoke, name="hero-format-long-reproduction", output_root="FRESH_REMOTE_LONG_ROOT",
+    sft=dataclasses.replace(smoke.sft, num_steps=64),
+    max_processed_tokens=67108864, recovery_parent=parent,
+)
+Path("long.json").write_text(json.dumps(draccus.encode(long), indent=2) + "\n")
+```
+
+Review `long.json` with `sft_campaign --review` before submission. Preserve the
+remaining fields, including `version`. Preparation rejects changed data, base,
+peak learning rates, warmup, packing or optimizer settings. Own later completed
+checkpoints take precedence on native preemption recovery; unfinished diagnostic
+queues survive even when all gradient updates have finished.
+
+Use the shared `format_job.LaunchConfig` for either worker. Its request SHA256
+pins the exact worker bytes copied as `request.json`. Set the source revision to
+the clean committed checkout, the resources above, four processes per task,
+and the selected controller/placement. The SFT command is
+`["python", "-m", "experiments.grug.moe_hero_ep.sft_campaign", "request.json", "--worker"]`.
+Copy the model's `moe_implementation` and `remat_mode`, the request's output root
+and published cache prefix into the launch record. Standard Iris mounted
+credentials are inherited; never put credential values in requests or receipts.
+A matching current Iris client/controller is required. For example, bind the
+reviewed eight-update request to a direct GPU controller as follows; use
+`long.json` for the later segment and a fresh receipt for every submission.
+
+```python
+import hashlib
+import json
+from pathlib import Path
+
+import draccus
+
+from experiments.grug.moe_hero_ep.format_job import LaunchConfig
+from experiments.grug.moe_hero_ep.sft_campaign import read_campaign
+
+campaign, raw = read_campaign("smoke.json")
+launch = LaunchConfig(
+    name=campaign.name, source_revision=campaign.source_revision,
+    controller_cluster="GPU_CLUSTER", resources=campaign.resources,
+    processes_per_task=4,
+    command=("python", "-m", "experiments.grug.moe_hero_ep.sft_campaign", "request.json", "--worker"),
+    request_path="smoke.json", request_sha256=hashlib.sha256(raw).hexdigest(),
+    output_root=campaign.output_root, moe_implementation=campaign.model.moe_implementation,
+    remat_mode=campaign.model.remat_mode, cache_prefix=campaign.cache_prefix,
+)
+Path("launch.json").write_text(json.dumps(draccus.encode(launch), indent=2) + "\n")
+```
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.format_job launch.json
+# After inspecting the dry-run and authorizing this specific run:
+uv run python -m experiments.grug.moe_hero_ep.format_job launch.json \
+  --submit --receipt fresh-receipt.json
+```
+
+The launcher defaults to interactive priority, six hours per task, 24 hours
+scheduling, ten preemption retries and zero application-failure retries. It
+refuses existing output/receipt/job identities. A pending receipt after a lost
+submission response requires job inspection, not a second submission. Use the
+[Iris monitoring workflow](https://github.com/marin-community/marin/blob/main/.agents/skills/use-iris/SKILL.md)
+to verify all ranks, restore, finite telemetry and completed checkpoints.
+
+At successful completion, the SFT worker automatically runs `export_sft`, merging
+LoRA and vocabulary deltas into ordinary BF16 weights while preserving routing
+control state. It writes both `adapters/step-64` (full compact Adam/state) and
+`export/step-64` (ordinary native weights), then `handoff.json`. There is no
+additional training or separate merge job. Resolve the successful
+`completions/<leaderUID>.json` record and download that small JSON as
+`downloaded-completion.json`. Build the native sampling inputs from its handoff:
+
+```python
+import json
+from pathlib import Path
+
+import draccus
+from rigging.filesystem.storage_path import StoragePath
+
+from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Checkpoint, digest
+from experiments.grug.moe_hero_ep.sft_campaign import read_campaign
+
+long, _ = read_campaign("long.json")
+handoff = json.loads(Path("downloaded-completion.json").read_text())["handoff"]
+metadata = json.loads((StoragePath(handoff["native_checkpoint"]) / "metadata.json").read_text())
+if digest(metadata) != handoff["native_metadata_digest"] or handoff["step"] != 64:
+    raise ValueError("Native export differs from the completed handoff")
+checkpoint = Checkpoint(
+    uri=handoff["native_checkpoint"], metadata_digest=handoff["native_metadata_digest"],
+    step=64, run_id=long.name, timestamp=metadata["timestamp"],
+)
+Path("checkpoint.json").write_text(checkpoint.model_dump_json(indent=2) + "\n")
+Path("model.json").write_text(json.dumps(draccus.encode(long.model), indent=2) + "\n")
+```
+
+Prepare the frozen panel, replacing `IMPLEMENTATION_COMMIT` with the same clean
+commit used for the sampling launch:
+
+```bash
+uv run python -m experiments.grug.moe_hero_ep.rollout_sanity prepare \
+  --checkpoint checkpoint.json --source-model model.json \
+  --source-revision IMPLEMENTATION_COMMIT --target-cluster GPU_CLUSTER \
+  --destination FRESH_REMOTE_ROLLOUT_ROOT \
+  --train-jsonl prepared/train.jsonl --heldout-jsonl prepared/heldout.jsonl \
+  --output fresh-rollout-preparation
+```
+
+Use a separate `LaunchConfig` with the prepared rollout request and worker command
+`["python", "-m", "experiments.grug.moe_hero_ep.rollout_sanity", "run", "request.json"]`.
+Its model/runtime fields must describe the explicit dropless evaluation model,
+not the capacity-limited training model. The worker verifies 64 GPU processes,
+restores once, and saves ordered 64/36 waves with the original per-case seeds,
+temperature 0.7 and 2,048-token cap. The source architecture stays 16K; physical
+padding is 4,096 because every prompt plus its full cap fits. Generation uses
+full-prefix recomputation without a KV cache. It does not establish serving
+throughput, capacity-limited expert64 behavior or 16K runtime coverage.
+
+Resolve `completions/*.json` to the actual `attempts/<leaderUID>` directory.
+Verify its manifest, request, checkpoint, panel and raw file hashes. Prefer the
+hash-bound `transcripts.json` derived view for local review; only probability
+payloads are omitted, while original samples remain remote. Inspect every
+response against the frozen references and their ambiguity notes. Treat cap
+hits as unfinished/censored separately from role leakage, repetition or content
+errors. The references support manual review; no generated code is executed.
+
 ## Checkpoint inventory and placement
 
 Use `experiments.grug.moe_hero_ep.format_inventory` to inventory permanent

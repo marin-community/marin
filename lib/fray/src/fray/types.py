@@ -171,6 +171,7 @@ TpuType = Literal[
 TpuFamily = Literal["v4", "v5e", "v5p", "v6e"]
 
 GpuType = Literal[
+    "GB200",
     "A10",
     "A100-40G",
     "A100-80G",
@@ -444,11 +445,11 @@ class ResourceConfig:
     # Region state: UNSET (None, default) inherits the parent job's region; PINNED (a
     # region list) restricts to those regions; ANY ([ANY_REGION]) runs anywhere without
     # inheriting.
-    regions: Sequence[str] | None = None
+    regions: list[str] | tuple[str, ...] | None = None
     zone: str | None = None
     target_cluster: str | None = None
     replicas: int = 1
-    device_alternatives: Sequence[str] | None = None
+    device_alternatives: list[str] | tuple[str, ...] | None = None
     image: str | None = None
     container_profile: str | None = None
 

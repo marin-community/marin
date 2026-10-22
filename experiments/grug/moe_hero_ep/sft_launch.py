@@ -348,16 +348,20 @@ def complete_acquisition(
                 raise ValueError("Finalized acquisition report differs from its exact core telemetry")
             completed.append(str(output))
             continue
-        if TypeAdapter(SftConfig).validate_python(core["sft_config"]) != config.sft:
-            raise ValueError("Unfinished acquisition changed its exact SFT schedule")
-        state = restore_sft_checkpoint(core["checkpoint"], final_state, config.reference, config.sft, mesh)
+        saved_schedule = TypeAdapter(SftConfig).validate_python(core["sft_config"])
+        if (
+            saved_schedule.num_steps > config.sft.num_steps
+            or dataclasses.replace(saved_schedule, num_steps=config.sft.num_steps) != config.sft
+        ):
+            raise ValueError("Unfinished acquisition changed more than its cumulative schedule horizon")
+        state = restore_sft_checkpoint(core["checkpoint"], final_state, config.reference, saved_schedule, mesh)
         if (
             int(state.step) != core["update"]
             or int(state.processed_tokens) != core["processed_tokens_total"]
             or int(state.supervised_tokens) != core["supervised_tokens_total"]
         ):
             raise ValueError("Acquisition checkpoint differs from the measured update counters")
-        diagnostic = config.diagnostic(frozen, state.params, config.sft, int(state.step))
+        diagnostic = config.diagnostic(frozen, state.params, saved_schedule, int(state.step))
         if (
             diagnostic["panel_digest"] != config.acquisition_panel_digest
             or diagnostic["cases"] <= 0
