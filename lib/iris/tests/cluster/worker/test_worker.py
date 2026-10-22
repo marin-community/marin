@@ -6,6 +6,7 @@
 import hashlib
 import json
 import socket
+import struct
 import subprocess as sp
 import threading
 import zipfile
@@ -18,6 +19,7 @@ from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.egress import parse_egress_rule
 from iris.cluster.log_keys import worker_log_key
 from iris.cluster.runtime.docker import EGRESS_NETWORK, DockerRuntime
 from iris.cluster.runtime.types import (
@@ -35,6 +37,7 @@ from iris.cluster.runtime.types import (
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
 from iris.cluster.types import Entrypoint, JobName, WellKnownAttribute
+from iris.cluster.worker.egress_dns import EgressDnsFilters, HostResolver
 from iris.cluster.worker.port_allocator import PortAllocator
 from iris.cluster.worker.service import WorkerServiceImpl
 from iris.cluster.worker.worker import Worker, WorkerConfig
@@ -850,12 +853,13 @@ def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_sto
         (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
         (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
         (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, NETWORK_MODE_HOST),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_ALLOWLIST, NETWORK_MODE_HOST),
     ],
 )
 def test_egress_policy_selects_the_docker_network(
     mock_worker, mock_runtime, monkeypatch, tmp_path, profile, egress, network_mode
 ):
-    """Only CLUSTER uses the host network; INTERNET joins the filtered egress network once bootstrap installed it."""
+    """CLUSTER and ALLOWLIST use the host network; INTERNET joins the filtered egress network once installed."""
     resolv_conf = tmp_path / "resolv.conf"
     resolv_conf.write_text("nameserver 8.8.8.8\n")
     monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(resolv_conf))
@@ -867,6 +871,47 @@ def test_egress_policy_selects_the_docker_network(
     task.thread.join(timeout=15.0)
 
     assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
+
+
+def _dns_refuses(address: tuple[str, int], name: str) -> bool:
+    labels = b"".join(bytes([len(label)]) + label.encode() for label in name.split("."))
+    query = struct.pack("!HHHHHH", 7, 0x0100, 1, 0, 0, 0) + labels + b"\x00" + struct.pack("!HH", 1, 1)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(5)
+        sock.sendto(query, address)
+        return sock.recv(512)[3] & 0x0F == 5  # RCODE REFUSED
+
+
+def test_allowlist_task_resolves_through_its_own_dns_filter_until_it_finishes(mock_bundle_store, mock_runtime, tmp_path):
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    egress_dns = EgressDnsFilters(tmp_path / "egress-dns", ["pypi.org"], HostResolver("127.0.0.1"), port=port)
+    config = WorkerConfig(
+        port=0, poll_interval=Duration.from_seconds(0.1), cache_dir=tmp_path / "cache", default_task_image="mock-image"
+    )
+    worker = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime, egress_dns=egress_dns)
+    seen = {}
+
+    def create_container(container_config):
+        nameserver = container_config.resolv_conf.read_text().split()[1]
+        seen["network_mode"] = container_config.network_mode
+        seen["resolv_conf"] = container_config.resolv_conf
+        seen["refuses_unlisted"] = _dns_refuses((nameserver, port), "exfil.attacker.example")
+        return create_mock_container_handle()
+
+    mock_runtime.create_container.side_effect = create_container
+    request = create_run_task_request()
+    request.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
+    request.egress_allow.append(parse_egress_rule("api.example.com"))
+
+    task = worker.get_task(worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
+    assert seen["network_mode"] == NETWORK_MODE_HOST
+    assert seen["refuses_unlisted"]
+    assert not seen["resolv_conf"].exists()
 
 
 def test_docker_worker_refuses_internet_egress_without_the_host_filter(mock_worker, mock_runtime, monkeypatch, tmp_path):

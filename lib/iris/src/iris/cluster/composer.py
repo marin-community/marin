@@ -131,7 +131,10 @@ def make_task_backend(
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),
                 priority_class_names=pod_priority_classes,
-                egress_allowlist=kp.egress_allowlist.model_copy(deep=True) if kp.egress_allowlist else None,
+                # Kubernetes enforces ALLOWLIST only through Cilium.
+                egress_allowlist=(
+                    config.defaults.egress_allowlist.model_copy(deep=True) if kp.cilium is not None else None
+                ),
             ),
             node_health=kp.node_health,
             task_event_table=task_event_table,
@@ -142,6 +145,7 @@ def make_task_backend(
             descriptor=descriptor,
             stub_factory=RpcWorkerStubFactory(),
             autoscaler=autoscaler,
+            egress_allowlist_default=config.defaults.egress_allowlist.default,
         )
     raise ValueError(
         "IrisClusterConfig.provider must be set. Add either:\n"
@@ -180,6 +184,7 @@ def build_base_worker_config(
     worker_config.platform = config.platform.model_copy(deep=True)
     worker_config.storage_prefix = storage_prefix
     worker_config.task_outputs = config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None
+    worker_config.egress_allow = list(config.defaults.egress_allowlist.allow)
     if auth_token:
         worker_config.auth_token = auth_token
     return worker_config

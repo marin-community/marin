@@ -685,9 +685,8 @@ enum ContainerProfile {
 // runs without the Kubernetes log-shipping and output-upload sidecars.
 enum EgressPolicy {
   // Resolved by the controller that runs the job: INTERNET for a SANDBOX job;
-  // ALLOWLIST on a Kubernetes cluster whose allowlist is the default, except for
-  // GPU jobs with more than one task; CLUSTER otherwise. A child job that sets
-  // neither a policy nor rules inherits its parent's.
+  // ALLOWLIST on a cluster whose allowlist is the default; CLUSTER otherwise. A
+  // child job that sets neither a policy nor rules inherits its parent's.
   EGRESS_POLICY_UNSPECIFIED = 0;
   // The cluster network: the node's host network where configured, the
   // controller, workers and other tasks. Not allowed for SANDBOX.
@@ -698,11 +697,12 @@ enum EgressPolicy {
   EGRESS_POLICY_INTERNET = 2;
   // No network beyond DNS on Kubernetes; loopback only on Docker workers.
   EGRESS_POLICY_NONE = 3;
-  // Kubernetes only. The controller, finelog and other tasks in the Iris
-  // namespace, cluster nodes, and the domains and networks on the cluster's
-  // allowlist and the job's egress_allow rules. Everything else is denied. The
-  // pod runs on the pod network, so it gets no InfiniBand devices. Not allowed
-  // for SANDBOX.
+  // The cluster's internal services, and the domains and networks on the
+  // cluster's allowlist and the job's egress_allow rules. Kubernetes denies
+  // everything else, except for GPU jobs with more than one task, which keep
+  // host networking for InfiniBand and run unrestricted. Docker workers refuse
+  // DNS lookups of other names but do not filter connections. Not allowed for
+  // SANDBOX.
   EGRESS_POLICY_ALLOWLIST = 4;
 }
 

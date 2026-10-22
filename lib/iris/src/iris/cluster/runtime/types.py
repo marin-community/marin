@@ -100,6 +100,8 @@ class ContainerConfig:
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
     network_mode: str = NETWORK_MODE_HOST
+    # Host file mounted read-only at /etc/resolv.conf; None keeps the runtime's default.
+    resolv_conf: Path | None = None
     workdir_host_path: Path | None = None
     output_host_path: Path | None = None
     task_id: str | None = None

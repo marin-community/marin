@@ -912,10 +912,12 @@ class K8sControllerProvider:
         role = self._kubectl.get_json(K8sResource.CLUSTER_ROLES, role_name)
         if role is None:
             missing.append(f"ClusterRole/{role_name}")
-        elif config.kubernetes_provider.egress_allowlist is not None and not any(
+        elif config.kubernetes_provider.cilium is not None and not any(
             "ciliumnetworkpolicies" in rule.get("resources", []) for rule in role.get("rules", [])
         ):
-            missing.append(f"ClusterRole/{role_name} rule for cilium.io ciliumnetworkpolicies (egress_allowlist)")
+            missing.append(
+                f"ClusterRole/{role_name} rule for cilium.io ciliumnetworkpolicies (kubernetes_provider.cilium)"
+            )
         if self._kubectl.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, role_name) is None:
             missing.append(f"ClusterRoleBinding/{role_name}")
 
@@ -1036,7 +1038,7 @@ class K8sControllerProvider:
         """Create the policies for pods off the cluster network, one per egress policy.
 
         INTERNET and NONE get NetworkPolicies. ALLOWLIST gets the namespace-wide
-        CiliumNetworkPolicy when ``kubernetes_provider.egress_allowlist`` is set.
+        CiliumNetworkPolicy when ``kubernetes_provider.cilium`` is set.
         Never deleted on stop: they select only labeled pods, and removing one
         while such a pod runs would reconnect it to the controller or, for
         ALLOWLIST, cut it off from everything.
@@ -1044,9 +1046,13 @@ class K8sControllerProvider:
         service_cidr = config.kubernetes_provider.service_cidr
         for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
             self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
-        allowlist = config.kubernetes_provider.egress_allowlist
-        if allowlist is not None:
-            self._kubectl.apply_json(allowlist_policy_manifest(self._namespace, allowlist))
+        cilium = config.kubernetes_provider.cilium
+        if cilium is not None:
+            self._kubectl.apply_json(
+                allowlist_policy_manifest(
+                    self._namespace, config.defaults.egress_allowlist.allow, cilium.egress_endpoints
+                )
+            )
 
     # -- Deployment readiness --------------------------------------------------
 

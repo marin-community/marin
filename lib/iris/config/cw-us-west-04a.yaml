@@ -86,15 +86,9 @@ kubernetes_provider:
   cache_max_age:
     seconds: 604800
   controller_address: http://iris-ci-controller-svc.iris-ci.svc.cluster.local:10000
-  # New jobs default to EGRESS_POLICY_ALLOWLIST (see docs/container-profiles.md).
-  egress_allowlist:
-    default: true
-    allow:
-      - cwlota.com
-      - "*.cwlota.com"
-      - cwobject.com
-      - "*.cwobject.com"
-    endpoints:
+  # Enforce EGRESS_POLICY_ALLOWLIST with CiliumNetworkPolicies.
+  cilium:
+    egress_endpoints:
       # LOTA answers cwlota.com from a node-local pod, which domain rules cannot reach.
       - namespace: cw-object-storage
         labels: {app.kubernetes.io/name: lota}
@@ -126,6 +120,14 @@ defaults:
     # differs per node/region, so an exact-match pin (=enpXsYnpZ) is fragile and was
     # silently unmatched by the current task image's NCCL build, breaking bootstrap.
     NCCL_SOCKET_IFNAME: "^ibs,ibp,lo,docker,veth,cilium,lxc"
+  # New jobs default to EGRESS_POLICY_ALLOWLIST (see docs/container-profiles.md).
+  egress_allowlist:
+    default: true
+    allow:
+      - cwlota.com
+      - "*.cwlota.com"
+      - cwobject.com
+      - "*.cwobject.com"
   worker:
     docker_image: ghcr.io/marin-community/iris-worker:latest
     port: 10001

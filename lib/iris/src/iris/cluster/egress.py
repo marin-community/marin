@@ -6,7 +6,7 @@
 A rule names one destination, a DNS name, a one-label wildcard pattern or a
 CIDR network, and optionally the TCP ports it admits. Users write rules as
 strings (``iris job run --egress-allow``, ``IrisClient.submit(egress_allow=)``,
-``kubernetes_provider.egress_allowlist.allow``); :func:`parse_egress_rule`
+``defaults.egress_allowlist.allow``); :func:`parse_egress_rule`
 turns one into a ``job_pb2.EgressRule``, and the controller re-validates every
 rule it receives with :func:`validate_egress_rule`.
 
@@ -67,8 +67,9 @@ BASE_EGRESS_ALLOWLIST: tuple[str, ...] = (
     "*.wandb.ai",
 )
 
-# Upper bound on a job's own rules. Each rule becomes a selector in the job's
-# CiliumNetworkPolicy; a job needing more should use the cluster network.
+# Upper bound on a job's own rules, and on the cluster's. Each rule becomes a
+# selector in a CiliumNetworkPolicy; a job needing more should use the cluster
+# network.
 MAX_EGRESS_RULES = 64
 
 _DNS_LABEL = re.compile(r"^[a-z0-9_]([a-z0-9_-]{0,61}[a-z0-9_])?$")
@@ -133,6 +134,11 @@ def format_egress_rule(rule: job_pb2.EgressRule) -> str:
 
 def is_domain_pattern(domain: str) -> bool:
     return _WILDCARD in domain.split(".")
+
+
+def rule_domains(rules: Iterable[job_pb2.EgressRule]) -> list[str]:
+    """The distinct domains and patterns of ``rules``, in order."""
+    return list(dict.fromkeys(rule.domain for rule in rules if rule.WhichOneof("destination") == "domain"))
 
 
 def _split_ports(text: str) -> tuple[str, list[int]]:

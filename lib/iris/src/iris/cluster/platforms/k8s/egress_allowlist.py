@@ -9,8 +9,8 @@ other egress. Ingress is not restricted.
 
 - ``iris-egress-allowlist``, one per Iris namespace, applied at
   ``iris cluster start``: DNS, every pod in the namespace (controller, finelog,
-  other tasks), cluster nodes, the configured ``endpoints``, and Iris's base
-  allowlist plus the cluster's ``allow`` rules.
+  other tasks), cluster nodes, ``kubernetes_provider.cilium.egress_endpoints``,
+  and Iris's base allowlist plus ``defaults.egress_allowlist.allow``.
 - ``<pod>-egress``, one per task attempt whose job has its own rules, applied
   by the controller before the pod and deleted with the pod's other
   resources.
@@ -25,8 +25,8 @@ endpoint rule even when reached by name.
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 
-from iris.cluster.config import EgressAllowlistConfig
-from iris.cluster.egress import BASE_EGRESS_ALLOWLIST, is_domain_pattern, parse_egress_rules
+from iris.cluster.config import EgressEndpointsConfig
+from iris.cluster.egress import BASE_EGRESS_ALLOWLIST, is_domain_pattern, parse_egress_rules, rule_domains
 from iris.cluster.platforms.k8s.constants import EGRESS_LABEL
 from iris.cluster.runtime.sandbox import TaskNetwork
 from iris.rpc import job_pb2
@@ -47,18 +47,26 @@ _CLUSTER_DOMAIN_PATTERNS = tuple("*." * depth + "cluster.local" for depth in ran
 _NODE_ENTITIES = ("host", "remote-node")
 
 
-def allowlist_policy_manifest(namespace: str, allowlist: EgressAllowlistConfig) -> dict:
-    """The namespace-wide policy every ALLOWLIST pod in ``namespace`` receives."""
-    rules = parse_egress_rules([*BASE_EGRESS_ALLOWLIST, *allowlist.allow])
-    endpoints = [{}]
-    for target in allowlist.endpoints:
+def allowlist_policy_manifest(
+    namespace: str,
+    allow: Sequence[str],
+    endpoints: Sequence[EgressEndpointsConfig],
+) -> dict:
+    """The namespace-wide policy every ALLOWLIST pod in ``namespace`` receives.
+
+    ``allow`` holds the cluster's rules, which add to Iris's base allowlist, and
+    ``endpoints`` the pods outside ``namespace`` that tasks may reach.
+    """
+    rules = [*parse_egress_rules(BASE_EGRESS_ALLOWLIST), *parse_egress_rules(allow)]
+    selectors: list[dict] = [{}]
+    for target in endpoints:
         labels = {_NAMESPACE_LABEL: target.namespace}
         labels.update({f"k8s:{key}": value for key, value in target.labels.items()})
-        endpoints.append({"matchLabels": labels})
+        selectors.append({"matchLabels": labels})
     egress = [
-        _dns_section([*_CLUSTER_DOMAIN_PATTERNS, *_domains(rules)]),
+        _dns_section([*_CLUSTER_DOMAIN_PATTERNS, *rule_domains(rules)]),
         *_destination_sections(rules),
-        {"toEndpoints": endpoints},
+        {"toEndpoints": selectors},
         {"toEntities": list(_NODE_ENTITIES)},
     ]
     return _policy(ALLOWLIST_POLICY_NAME, namespace, {EGRESS_LABEL: TaskNetwork.ALLOWLIST.value}, egress)
@@ -76,7 +84,7 @@ def task_policy_manifest(
 ) -> dict:
     """The policy adding a job's own ``rules`` to the pod that ``pod_labels`` select."""
     egress = list(_destination_sections(rules))
-    domains = _domains(rules)
+    domains = rule_domains(rules)
     if domains:
         egress.insert(0, _dns_section(domains))
     selector = {EGRESS_LABEL: TaskNetwork.ALLOWLIST.value, **pod_labels}
@@ -90,10 +98,6 @@ def _policy(name: str, namespace: str, selector: Mapping[str, str], egress: list
         "metadata": {"name": name, "namespace": namespace},
         "spec": {"endpointSelector": {"matchLabels": dict(selector)}, "egress": egress},
     }
-
-
-def _domains(rules: Iterable[job_pb2.EgressRule]) -> list[str]:
-    return list(dict.fromkeys(rule.domain for rule in rules if rule.WhichOneof("destination") == "domain"))
 
 
 def _name_selector(domain: str) -> dict:

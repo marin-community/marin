@@ -31,7 +31,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSeriali
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
-from iris.cluster.egress import parse_egress_rule
+from iris.cluster.egress import parse_egress_rules
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
@@ -471,6 +471,8 @@ class WorkerConfig(_Config):
     storage_prefix: str = ""  # task-artifact prefix; empty disables profile upload
     task_outputs: TaskOutputPolicy | None = None
     auth_token: str = ""  # worker→controller bearer token; empty when auth disabled
+    # The cluster's additions to the base egress allowlist (defaults.egress_allowlist.allow).
+    egress_allow: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -543,12 +545,38 @@ class AutoscalerConfig(_Config):
     scale_down_delay: DurationField = Field(default_factory=lambda: Duration.from_seconds(600))
 
 
+class EgressAllowlistConfig(_Config):
+    """The cluster's ``EGRESS_POLICY_ALLOWLIST`` settings.
+
+    An ALLOWLIST task reaches Iris's base allowlist
+    (``iris.cluster.egress.BASE_EGRESS_ALLOWLIST``), ``allow``, its job's own
+    rules, and the cluster's internal services. Kubernetes enforces this with
+    Cilium policies (see ``KubernetesProviderConfig.cilium``). Docker workers
+    filter only DNS: names outside the allowlist do not resolve, but
+    connections to literal addresses are not blocked.
+    """
+
+    # Resolve an UNSPECIFIED egress policy to ALLOWLIST for every job except
+    # SANDBOX jobs and, on Kubernetes, GPU jobs with more than one task, which
+    # keep host networking for InfiniBand.
+    default: bool = False
+    # Cluster additions to the base allowlist, in egress rule syntax.
+    allow: list[str] = Field(default_factory=list)
+
+    @field_validator("allow")
+    @classmethod
+    def _valid_rules(cls, value: list[str]) -> list[str]:
+        parse_egress_rules(value)  # ValueError on a malformed rule — fail at load
+        return value
+
+
 class DefaultsConfig(_Config):
     ssh: SshConfig = Field(default_factory=SshConfig)
     autoscaler: AutoscalerConfig = Field(default_factory=AutoscalerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     task_env: dict[str, str] = Field(default_factory=dict)  # injected into every task
     inject_env: list[str] = Field(default_factory=list)  # operator-shell var names
+    egress_allowlist: EgressAllowlistConfig = Field(default_factory=EgressAllowlistConfig)
 
     @model_validator(mode="after")
     def _propagate_task_env(self) -> DefaultsConfig:
@@ -693,29 +721,12 @@ class EgressEndpointsConfig(_Config):
     labels: dict[str, str] = Field(default_factory=dict)  # empty selects every pod in the namespace
 
 
-class EgressAllowlistConfig(_Config):
-    """Enables ``EGRESS_POLICY_ALLOWLIST`` on a Kubernetes cluster whose CNI is Cilium.
+class CiliumConfig(_Config):
+    """The cluster runs Cilium; Iris enforces ``EGRESS_POLICY_ALLOWLIST`` with CiliumNetworkPolicies."""
 
-    An ALLOWLIST task reaches DNS, every pod in the Iris namespace (controller,
-    finelog, other tasks), cluster nodes, Iris's base allowlist
-    (``iris.cluster.egress.BASE_EGRESS_ALLOWLIST``), ``allow``,
-    ``endpoints`` and its job's own rules.
-    """
-
-    # Resolve an UNSPECIFIED egress policy to ALLOWLIST for every job except
-    # SANDBOX jobs and GPU jobs with more than one task, which keep host
-    # networking for InfiniBand.
-    default: bool = False
-    # Cluster additions to the base allowlist, in egress rule syntax.
-    allow: list[str] = Field(default_factory=list)
-    endpoints: list[EgressEndpointsConfig] = Field(default_factory=list)
-
-    @field_validator("allow")
-    @classmethod
-    def _valid_rules(cls, value: list[str]) -> list[str]:
-        for rule in value:
-            parse_egress_rule(rule)  # ValueError on a malformed rule — fail at load
-        return value
+    # In-cluster pods outside the Iris namespace that ALLOWLIST tasks may reach.
+    # Domain rules cannot admit them, even when a task addresses them by name.
+    egress_endpoints: list[EgressEndpointsConfig] = Field(default_factory=list)
 
 
 class KubernetesProviderConfig(_Config):
@@ -732,9 +743,10 @@ class KubernetesProviderConfig(_Config):
     # carrier-grade NAT and link-local ranges, which sandbox internet egress
     # already excludes.
     service_cidr: str = ""
-    egress_allowlist: EgressAllowlistConfig | None = None
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
+    # Absent on a cluster without Cilium, which then rejects EGRESS_POLICY_ALLOWLIST.
+    cilium: CiliumConfig | None = None
 
     @field_validator("service_cidr")
     @classmethod
@@ -902,6 +914,15 @@ def _validate_provider_platform_compat(config: IrisClusterConfig) -> None:
             "kubernetes_provider.controller_address is required. Task pods need it to fetch "
             "bundles from the controller. Set it to the in-cluster service URL, e.g. "
             "http://iris-controller-svc.<namespace>.svc.cluster.local:<port>"
+        )
+
+
+def _validate_egress_allowlist(config: IrisClusterConfig) -> None:
+    kubernetes = config.kubernetes_provider
+    if config.defaults.egress_allowlist.default and kubernetes is not None and kubernetes.cilium is None:
+        raise ValueError(
+            "defaults.egress_allowlist.default requires kubernetes_provider.cilium: Kubernetes clusters "
+            "enforce the allowlist with CiliumNetworkPolicies"
         )
 
 
@@ -1133,6 +1154,7 @@ def validate_config(config: IrisClusterConfig) -> None:
     _validate_cluster_name(config)
     _validate_peers(config)
     _validate_provider_platform_compat(config)
+    _validate_egress_allowlist(config)
     _validate_accelerator_types(config)
     validate_scale_group_resources(config.scale_groups)
     _validate_slice_templates(config)

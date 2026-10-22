@@ -17,10 +17,13 @@ from pathlib import Path
 import pytest
 from iris.cluster.config import (
     AuthConfig,
+    CiliumConfig,
     ControllerVmConfig,
     CoreweaveControllerConfig,
     CoreweavePlatformConfig,
     CoreweaveSliceConfig,
+    EgressAllowlistConfig,
+    EgressEndpointsConfig,
     EndpointSpec,
     IrisClusterConfig,
     KubernetesProviderConfig,
@@ -35,6 +38,7 @@ from iris.cluster.config import (
     resolve_principal_references,
 )
 from iris.cluster.controller.auth import create_controller_auth
+from iris.cluster.egress import BASE_EGRESS_ALLOWLIST
 from iris.cluster.platforms.k8s.constants import DEFAULT_TASK_CACHE_DIR
 from iris.cluster.platforms.k8s.controller import (
     _CONTROLLER_CPU_REQUEST,
@@ -70,6 +74,7 @@ from iris.cluster.platforms.types import (
     Labels,
 )
 from iris.cluster.types import AcceleratorType
+from iris.cluster.worker.egress_dns import DomainAllowlist
 from rigging.timing import Duration
 
 
@@ -1196,6 +1201,50 @@ def test_start_controller_creates_one_network_policy_per_egress_policy(service_c
         _DNS_RULE,
         {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
     ]
+
+
+@pytest.mark.parametrize("cilium", [False, True])
+def test_start_controller_creates_the_allowlist_policy_only_on_cilium_clusters(cilium):
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.defaults.egress_allowlist = EgressAllowlistConfig(allow=["cwlota.com", "*.cwlota.com"])
+    if cilium:
+        lota = EgressEndpointsConfig(namespace="cw-object-storage", labels={"app.kubernetes.io/name": "lota"})
+        cluster_config.kubernetes_provider.cilium = CiliumConfig(egress_endpoints=[lota])
+    _seed_prerequisites(k8s, cluster_config)
+
+    provider.start_controller(cluster_config)
+
+    policy = k8s.get_json(K8sResource.CILIUM_NETWORK_POLICIES, "iris-egress-allowlist")
+    if not cilium:
+        # A cluster without Cilium has no CiliumNetworkPolicy resource to create.
+        assert policy is None
+        return
+    spec = policy["spec"]
+    sections = spec["egress"]
+    fqdns = {next(iter(name.values())) for section in sections for name in section.get("toFQDNs", [])}
+    lookups = DomainAllowlist(
+        [
+            next(iter(name.values()))
+            for section in sections
+            for port in section.get("toPorts", [])
+            for name in port.get("rules", {}).get("dns", [])
+        ],
+        (),
+    )
+    endpoints = [selector for section in sections for selector in section.get("toEndpoints", [])]
+
+    assert spec["endpointSelector"] == {"matchLabels": {"iris.egress": "allowlist"}}
+    assert fqdns == {*BASE_EGRESS_ALLOWLIST, "cwlota.com", "*.cwlota.com"}
+    assert all(lookups.allows(domain.replace("*", "bucket")) for domain in fqdns)
+    assert not lookups.allows("attacker.example")
+    # In-cluster names resolve, including the search-list candidates glibc tries before an absolute name.
+    assert lookups.allows("iris-controller-svc.iris.svc.cluster.local")
+    assert lookups.allows("pypi.org.iris.svc.cluster.local")
+    assert {} in endpoints  # every pod in the Iris namespace
+    assert {
+        "matchLabels": {"k8s:io.kubernetes.pod.namespace": "cw-object-storage", "k8s:app.kubernetes.io/name": "lota"}
+    } in endpoints
 
 
 @pytest.mark.parametrize("change", ["health_config", "literal_endpoint", "injected_credential"])

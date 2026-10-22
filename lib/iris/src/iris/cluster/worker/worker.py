@@ -43,6 +43,7 @@ from iris.cluster.types import AcceleratorType, AttemptUid, CapacityType, JobNam
 from iris.cluster.types import TaskAttempt as TaskAttemptId
 from iris.cluster.worker.auth import worker_token_provider
 from iris.cluster.worker.dashboard import WorkerDashboard
+from iris.cluster.worker.egress_dns import EgressDnsFilters
 from iris.cluster.worker.env_probe import (
     EnvironmentProvider,
     HardwareProbe,
@@ -92,6 +93,8 @@ class WorkerConfig:
     storage_prefix: str = ""
     task_outputs: TaskOutputPolicy | None = None
     auth_token: str = ""
+    # The cluster's additions to the base egress allowlist, in egress rule syntax.
+    egress_allow: list[str] = field(default_factory=list)
 
 
 def worker_config_from_wire(
@@ -133,6 +136,7 @@ def worker_config_from_wire(
         storage_prefix=wire.storage_prefix,
         task_outputs=wire.task_outputs.model_copy(deep=True) if wire.task_outputs is not None else None,
         auth_token=wire.auth_token,
+        egress_allow=list(wire.egress_allow),
     )
 
 
@@ -151,8 +155,10 @@ class Worker:
         log_client: LogClient | None = None,
         profile_interval: Duration = Duration.from_seconds(600),
         profile_duration_seconds: int = DEFAULT_PROFILE_DURATION_SECONDS,
+        egress_dns: EgressDnsFilters | None = None,
     ):
         self._config = config
+        self._egress_dns = egress_dns
         self._profile_interval = profile_interval
         self._profile_duration_seconds = profile_duration_seconds
 
@@ -388,6 +394,7 @@ class Worker:
                 poll_interval_seconds=self._config.poll_interval.to_seconds(),
                 task_outputs=self._config.task_outputs,
                 task_env=self._config.task_env,
+                egress_dns=self._egress_dns,
             )
 
             with self._lock:
@@ -460,6 +467,8 @@ class Worker:
         if self._log_client is not None:
             self._log_client.close()
         self._bundle_store.close()
+        if self._egress_dns is not None:
+            self._egress_dns.close()
 
     def _run_lifecycle(self, stop_event: threading.Event) -> None:
         """Main lifecycle: register, serve, reset, repeat.
@@ -771,6 +780,7 @@ class Worker:
             log_client=self._log_client,
             poll_interval_seconds=self._config.poll_interval.to_seconds(),
             task_outputs=self._config.task_outputs,
+            egress_dns=self._egress_dns,
         )
 
         with self._lock:

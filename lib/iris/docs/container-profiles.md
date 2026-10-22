@@ -8,7 +8,7 @@ in [`job.proto`](../src/iris/rpc/job.proto):
 |---|---|---|
 | `CONTAINER_PROFILE_RESTRICTED` | `--container-profile CONTAINER_PROFILE_RESTRICTED` | Hardened: drops all Linux capabilities, blocks privilege escalation, keeps the default seccomp profile. No profiling cap. For untrusted/sandboxed workloads. |
 | `CONTAINER_PROFILE_DEFAULT` | default (or `--container-profile CONTAINER_PROFILE_DEFAULT`) | `SYS_PTRACE` for profiling (plus `SYS_RESOURCE` on TPU). The everyday training/eval pod. |
-| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / k8s `runtimeClassName: gvisor`). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address or task token; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only. See [Sandbox jobs](#sandbox-jobs). |
+| `CONTAINER_PROFILE_SANDBOX` | `--container-profile CONTAINER_PROFILE_SANDBOX` | For model-controlled workloads. Runs the whole container under the gVisor runtime (docker `--runtime=runsc` / k8s `runtimeClassName: gvisor`). The task receives only the job's own `env_vars` and Iris task identity: no cluster `task_env`, injected secrets, or object-store keys; no controller address or task token; no node-shared caches; no Kubernetes service account token. Its [egress policy](#egress-policy) defaults to `INTERNET` and cannot be `CLUSTER` or `ALLOWLIST`. The submitting client sends no workspace bundle and copies nothing from its own environment or a parent job's. **Not elevated.** CPU-only. See [Sandbox jobs](#sandbox-jobs). |
 | `CONTAINER_PROFILE_DOCKER_ACCESS` | `--container-profile CONTAINER_PROFILE_DOCKER_ACCESS` | DEFAULT **plus** the host docker socket (`/var/run/docker.sock`) — lets the container drive the host Docker daemon to build images or run sibling containers. **Elevated.** |
 | `CONTAINER_PROFILE_PRIVILEGED` | `--container-profile CONTAINER_PROFILE_PRIVILEGED` | Full `--privileged` / `securityContext.privileged` with broad capabilities. Needed to run nested runtimes inside the container (e.g. a gVisor `runsc` sandbox). **Elevated.** |
 
@@ -141,13 +141,89 @@ decides what its network reaches.
 | Policy | Reaches | Default for |
 |---|---|---|
 | `EGRESS_POLICY_CLUSTER` | the cluster network: the controller, workers, other tasks and, where configured, the node's host network | every profile but `SANDBOX`, which rejects it |
+| `EGRESS_POLICY_ALLOWLIST` | the cluster's internal services and an [allowlist](#allowlist) of external destinations | every profile but `SANDBOX`, which rejects it, on a cluster that sets `defaults.egress_allowlist.default` |
 | `EGRESS_POLICY_INTERNET` | public IPv4 addresses and DNS | `SANDBOX` |
 | `EGRESS_POLICY_NONE` | DNS on Kubernetes; loopback only on Docker workers | |
+
+The controller resolves an unspecified policy when it accepts a job. A child
+job takes its parent's policy and allowlist rules, so a job tree that opted
+out with `--egress-policy cluster`, or added rules, keeps that choice. A root
+job takes the cluster's default. A job forwarded to a federation peer is
+resolved by the peer.
 
 `INTERNET` and `NONE` reach neither the controller, finelog, worker RPC ports,
 other tasks nor the cloud metadata server. A task under either cannot launch
 child jobs, register endpoints, or fetch anything from the controller,
 whatever its profile.
+
+### Allowlist
+
+An `ALLOWLIST` task stays a cluster citizen: it receives the cluster env and
+task token, reaches the controller, finelog and other tasks, and launches child
+jobs. Outside the cluster it reaches only:
+
+- Iris's base allowlist, `BASE_EGRESS_ALLOWLIST` in `iris.cluster.egress`:
+  package indexes (PyPI, PyTorch, NVIDIA, npm, conda, crates, Debian and
+  Ubuntu), GitHub, Hugging Face, Google Cloud APIs and Artifact Registry, and
+  Weights & Biases;
+- the cluster's additions in `defaults.egress_allowlist.allow`, such as its
+  object store;
+- the job's own rules.
+
+The allowlist limits accidental and casual exfiltration. It is not a hard
+barrier: an allowlisted service such as GitHub or Cloud Storage can carry data
+out, and Docker workers enforce only DNS (see [Docker workers](#docker-workers)).
+
+A job adds destinations with `--egress-allow`, repeatable, or
+`IrisClient.submit(egress_allow=[...])`. Rules imply `ALLOWLIST`, and the
+controller rejects them under any other policy. A job may carry at most 64.
+
+```bash
+iris job run --egress-allow api.openai.com:443 --egress-allow 203.0.113.0/24 -- python eval.py
+```
+
+A rule is `DEST[:PORT[,PORT...]]`:
+
+| Rule | Admits |
+|---|---|
+| `api.openai.com` | that name, every port |
+| `*.openai.com:443` | any name one label below `openai.com`, TCP 443 only; not `openai.com` itself or `a.b.openai.com` |
+| `*.*.cdn.example.com` | names exactly two labels below `cdn.example.com` |
+| `203.0.113.0/24`, `203.0.113.7` | that network or address |
+| `[2001:db8::/32]:443` | an IPv6 network, with ports in brackets |
+
+Domains are lowercase, `*` stands for exactly one whole label and only in the
+leftmost labels, and a pattern needs two fixed labels (`*.com` is rejected).
+Networks must have their host bits clear, and `0.0.0.0/0` is rejected; use
+`--egress-policy cluster` instead. A port list restricts TCP; a rule without
+ports admits every port and protocol.
+
+Practical guidance:
+
+- Prefer exact names over patterns, and list both a service's apex and
+  `*.` form when it uses both.
+- A service often redirects to a CDN or storage host under another name. List
+  that name too; a failing download names the host it could not resolve.
+- Add CIDR rules only for services reached by address. Kubernetes clusters
+  admit a domain rule's addresses only after the task resolves the name.
+- An unlisted name fails at once with `Temporary failure in name resolution`
+  (`socket.gaierror`, `curl: (6)`). An unlisted address times out.
+- If a job needs arbitrary internet access, run it with
+  `--egress-policy cluster`; its children inherit that.
+
+Operators configure the allowlist in the cluster config:
+
+```yaml
+defaults:
+  egress_allowlist:
+    default: true          # unspecified jobs get ALLOWLIST
+    allow: [cwlota.com, "*.cwlota.com"]
+kubernetes_provider:
+  cilium:                  # required on Kubernetes; see below
+    egress_endpoints:
+      - namespace: cw-object-storage
+        labels: {app.kubernetes.io/name: lota}
+```
 
 ### Docker workers
 
@@ -155,6 +231,16 @@ whatever its profile.
 `--network none`, which leaves only loopback; setup scripts that download
 packages fail. Exec and file transfer go through `docker exec` and work under
 both.
+
+`ALLOWLIST` runs the container with `--network host`, like `CLUSTER`, and
+filters only its DNS. The worker runs a resolver for each task on its own
+loopback address in `127.53.0.0/16` and mounts a `resolv.conf` naming it. The
+resolver forwards allowlisted names, names under the host's search domains,
+`*.internal` and reverse lookups to the host's resolver, and answers every
+other name `REFUSED`. CIDR rules and port lists have no effect: every address
+is reachable, so a task that connects to a literal address or queries another
+resolver is not restricted. A restarted worker restores the resolvers of the
+containers it adopts.
 
 `INTERNET` runs the container on the `iris-egress` bridge network. A bridge
 container reaches the VPC and the GCE metadata server (`169.254.169.254`)
@@ -200,6 +286,34 @@ logs are therefore not in finelog, and `/iris/outputs` is not archived. Docker
 workers ship logs and upload outputs from the worker process, outside the
 container, so both keep working there.
 
+Kubernetes enforces `ALLOWLIST` with Cilium. A cluster without
+`kubernetes_provider.cilium` rejects `ALLOWLIST` jobs and cannot make the
+allowlist its default. The controller's ClusterRole needs the
+`cilium.io/ciliumnetworkpolicies` rule from `CLUSTER_ROLE_RULES`, which the
+Pulumi program applies; `iris cluster start` reports it missing otherwise.
+
+An `ALLOWLIST` pod keeps its sidecars, drops host networking and carries the
+label `iris.egress: allowlist`. `iris cluster start` creates the
+CiliumNetworkPolicy `iris-egress-allowlist`, which admits:
+
+- DNS to `kube-system`, through Cilium's DNS proxy, for cluster names and
+  allowlisted names. The proxy answers every other name `REFUSED`.
+- the base and cluster allowlist as `toFQDNs` selectors;
+- every pod in the Iris namespace, and the pods `cilium.egress_endpoints`
+  selects. `toFQDNs` admits only addresses outside the cluster, so an
+  in-cluster service, such as CoreWeave's node-local LOTA cache behind
+  `cwlota.com`, needs an endpoint selector even when addressed by name;
+- cluster nodes (`host` and `remote-node` entities), on every port.
+
+A job with its own rules also gets a policy `<pod>-egress` for each pod,
+applied before the pod and deleted with it. Cilium admits the union of both
+policies. Ingress is not restricted.
+
+A GPU job with more than one task keeps host networking under `ALLOWLIST`,
+because NCCL needs the node's InfiniBand devices. Pod policy does not apply to
+host-network pods, so such a job runs unrestricted. Inspect drops with
+`cilium-dbg monitor --type drop` in the node's Cilium agent pod.
+
 ## Task tokens
 
 A controller with auth enabled gives every task outside `SANDBOX` a token in
@@ -221,7 +335,7 @@ The controller still trusts its network. Every production cluster lists the
 private address ranges in `auth.trusted_cidrs`, and the controller
 authenticates a caller from those ranges that presents no token as the
 anonymous admin (`CidrAuthenticator` in `rigging.server_auth`). Until those
-ranges are narrowed, a task with `CLUSTER` egress that drops its token can
+ranges are narrowed, a task with `CLUSTER` or `ALLOWLIST` egress that drops its token can
 still submit jobs with any container profile and, since the anonymous admin
 passes the owner check on `ExecInContainer`, run commands in any task on the
 cluster. This is why `SANDBOX` rejects `CLUSTER`.

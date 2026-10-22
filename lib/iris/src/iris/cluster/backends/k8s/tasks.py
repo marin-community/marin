@@ -840,6 +840,21 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
+def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
+    """Whether the task pod joins its node's network, when the cluster enables host networking.
+
+    CLUSTER pods do. So do ALLOWLIST pods of a GPU job with more than one task:
+    NCCL needs the node's InfiniBand devices, and since host networking
+    bypasses pod policy, their allowlist goes unenforced. Legacy gVisor needs
+    the CNI-created interface and routes for cluster egress.
+    """
+    if not config.host_network or run_req.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
+        return False
+    if network is TaskNetwork.CLUSTER:
+        return True
+    return network is TaskNetwork.ALLOWLIST and run_req.num_tasks > 1 and get_gpu_count(run_req.resources.device) > 0
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -858,12 +873,9 @@ def _build_pod_manifest(
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
     service_account = config.service_account if isolation.include_service_account else ""
-    # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
-    host_network = (
-        config.host_network
-        and isolation.network is TaskNetwork.CLUSTER
-        and run_req.container_profile != job_pb2.CONTAINER_PROFILE_GVISOR
-    )
+    host_network = _uses_host_network(config, run_req, isolation.network)
+    # Pod policy does not apply to a host-network pod, so it is on the cluster network whatever its policy.
+    network = TaskNetwork.CLUSTER if host_network else isolation.network
 
     # User env vars as base, then iris system env vars override.
     iris_env = build_common_iris_env(
@@ -994,8 +1006,8 @@ def _build_pod_manifest(
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
-    if isolation.network is not TaskNetwork.CLUSTER:
-        labels[EGRESS_LABEL] = isolation.network.value
+    if network is not TaskNetwork.CLUSTER:
+        labels[EGRESS_LABEL] = network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -2488,27 +2500,17 @@ class K8sTaskProvider:
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
         if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST and self.pods.egress_allowlist is None:
             return (
-                "Egress policy allowlist is not enabled on this cluster (kubernetes_provider.egress_allowlist); "
-                "use --egress-policy cluster"
+                "Egress policy allowlist needs Cilium, which this cluster does not configure "
+                "(kubernetes_provider.cilium); use --egress-policy cluster"
             )
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
         return validate_coreweave_credentials(request.environment.env_vars)
 
     def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
-        """ALLOWLIST when the cluster's allowlist is the default, else the profile's default.
-
-        GPU jobs with more than one task keep the cluster network: host
-        networking carries their InfiniBand traffic, and it bypasses pod policy.
-        """
+        """ALLOWLIST when the cluster's allowlist is the default, else the profile's default."""
         allowlist = self.pods.egress_allowlist
-        multi_host_gpu = get_gpu_count(request.resources.device) > 0 and request.replicas > 1
-        if (
-            allowlist is None
-            or not allowlist.default
-            or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
-            or multi_host_gpu
-        ):
+        if allowlist is None or not allowlist.default or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
         return job_pb2.EGRESS_POLICY_ALLOWLIST
 
@@ -2797,7 +2799,7 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
-        if run_req.egress_allow:
+        if run_req.egress_allow and manifest["metadata"]["labels"].get(EGRESS_LABEL) == TaskNetwork.ALLOWLIST.value:
             # Before the pod, so its first connections already see the job's rules.
             self.kubectl.apply_json(
                 task_policy_manifest(

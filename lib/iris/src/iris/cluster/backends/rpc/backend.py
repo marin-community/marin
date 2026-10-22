@@ -165,6 +165,8 @@ class RpcTaskBackend:
     # composer at construction after it builds the autoscaler from the provider
     # bundle; None for clusters with no scale groups, where capacity calls are no-ops.
     autoscaler: Autoscaler | None = None
+    # Resolve an UNSPECIFIED egress policy to ALLOWLIST (defaults.egress_allowlist.default).
+    egress_allowlist_default: bool = False
     # One shared scheduler instance reused across cycles; the controller supplies
     # the complete per-tick workspace.
     _scheduler: Scheduler = field(default_factory=Scheduler, init=False, repr=False)
@@ -323,14 +325,15 @@ class RpcTaskBackend:
         )
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
-        if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST:
-            return (
-                "Egress policy allowlist needs a Kubernetes cluster with an egress allowlist; this cluster "
-                "runs Docker workers. Use --egress-policy cluster or internet, or submit to a CoreWeave cluster."
-            )
         return None
 
     def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
+        """ALLOWLIST when the cluster's allowlist is the default, else the profile's default.
+
+        Workers enforce ALLOWLIST only on DNS (see ``iris.cluster.worker.egress_dns``).
+        """
+        if self.egress_allowlist_default and request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+            return job_pb2.EGRESS_POLICY_ALLOWLIST
         return resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:

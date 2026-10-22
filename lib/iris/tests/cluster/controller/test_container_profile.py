@@ -10,15 +10,21 @@ profile is persisted on ``job_config`` and stamped onto each dispatched
 ``RunTaskRequest``.
 """
 
+from collections.abc import Sequence
+
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.bundle import BundleStore
+from iris.cluster.config import EgressAllowlistConfig
 from iris.cluster.controller import reads
 from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.egress import format_egress_rule, parse_egress_rules
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
 from iris.testing.controller import (
@@ -26,7 +32,7 @@ from iris.testing.controller import (
     make_controller_state,
     make_test_entrypoint,
 )
-from iris.testing.k8s import k8s_backend_descriptor
+from iris.testing.k8s import k8s_backend_descriptor, pod_config
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 
 PRIVILEGED = job_pb2.CONTAINER_PROFILE_PRIVILEGED
@@ -68,7 +74,7 @@ def _as(role: str, user_id: str, fn, *args, **kwargs):
 
 
 def _launch(
-    name: str, profile: int, egress: int = job_pb2.EGRESS_POLICY_UNSPECIFIED
+    name: str, profile: int, egress: int = job_pb2.EGRESS_POLICY_UNSPECIFIED, rules: Sequence[str] = ()
 ) -> controller_pb2.Controller.LaunchJobRequest:
     return controller_pb2.Controller.LaunchJobRequest(
         name=name,
@@ -78,6 +84,7 @@ def _launch(
         resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
         container_profile=profile,
         egress_policy=egress,
+        egress_allow=parse_egress_rules(rules),
     )
 
 
@@ -210,14 +217,83 @@ def test_egress_policy_resolved_and_stored(service, state, profile, requested, r
 
 
 @pytest.mark.parametrize(
-    ("profile", "egress", "message"),
+    ("profile", "egress", "rules", "message"),
     [
-        pytest.param(SANDBOX, job_pb2.EGRESS_POLICY_CLUSTER, "cannot use egress policy cluster", id="sandbox-cluster"),
-        pytest.param(DEFAULT, 99, "Unknown egress policy", id="unknown"),
+        pytest.param(
+            SANDBOX, job_pb2.EGRESS_POLICY_CLUSTER, (), "cannot use egress policy cluster", id="sandbox-cluster"
+        ),
+        pytest.param(
+            SANDBOX, job_pb2.EGRESS_POLICY_ALLOWLIST, (), "cannot use egress policy allowlist", id="sandbox-allowlist"
+        ),
+        pytest.param(
+            DEFAULT, job_pb2.EGRESS_POLICY_CLUSTER, ("pypi.org",), "require egress policy allowlist", id="rules-cluster"
+        ),
+        pytest.param(DEFAULT, 99, (), "Unknown egress policy", id="unknown"),
     ],
 )
-def test_egress_policy_rejected(service, profile, egress, message):
+def test_egress_policy_rejected(service, profile, egress, rules, message):
     with pytest.raises(ConnectError) as exc:
-        _as("user", "alice", service.launch_job, _launch("/alice/job", profile, egress), None)
+        _as("user", "alice", service.launch_job, _launch("/alice/job", profile, egress, rules), None)
     assert exc.value.code == Code.INVALID_ARGUMENT
     assert message in str(exc.value.message)
+
+
+def _stored_rules(state, job_id: JobName) -> list[str]:
+    with state._db.read_snapshot() as snap:
+        template = snap.caches[RunTemplatesProjection].get(snap, job_id)
+    assert template is not None
+    return [format_egress_rule(rule) for rule in template.egress_allow]
+
+
+def test_egress_rules_select_allowlist_and_reach_the_run_request(service, state):
+    job_id = JobName.from_wire("/alice/job")
+    _as("user", "alice", service.launch_job, _launch(job_id.to_wire(), DEFAULT, rules=["api.openai.com:443"]), None)
+
+    assert _stored_egress(state, job_id) == (job_pb2.EGRESS_POLICY_ALLOWLIST, job_pb2.EGRESS_POLICY_ALLOWLIST)
+    assert _stored_rules(state, job_id) == ["api.openai.com:443"]
+
+
+@pytest.fixture
+def allowlist_default_service(service):
+    """The service in front of a Kubernetes backend whose cluster defaults to the allowlist."""
+    backend = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=InMemoryK8sService(namespace="iris"),
+        pods=pod_config(egress_allowlist=EgressAllowlistConfig(default=True)),
+    )
+    service._controller.backend.default_egress_policy.side_effect = backend.default_egress_policy
+    yield service
+    backend.close()
+
+
+@pytest.mark.parametrize(
+    ("profile", "resolved"),
+    [
+        pytest.param(DEFAULT, job_pb2.EGRESS_POLICY_ALLOWLIST, id="default"),
+        pytest.param(SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, id="sandbox"),
+    ],
+)
+def test_cluster_allowlist_default_applies_to_every_job_but_a_sandbox(
+    allowlist_default_service, state, profile, resolved
+):
+    _as("user", "alice", allowlist_default_service.launch_job, _launch("/alice/job", profile), None)
+
+    assert _stored_egress(state, JobName.from_wire("/alice/job")) == (resolved, resolved)
+
+
+@pytest.mark.parametrize(
+    ("parent_egress", "parent_rules"),
+    [
+        pytest.param(job_pb2.EGRESS_POLICY_CLUSTER, (), id="opted-out"),
+        pytest.param(job_pb2.EGRESS_POLICY_UNSPECIFIED, ("api.openai.com:443", "203.0.113.0/24"), id="extra-rules"),
+    ],
+)
+def test_child_job_inherits_its_parents_egress(allowlist_default_service, state, parent_egress, parent_rules):
+    """A tree that opted out of the allowlist, or added rules, keeps that choice in every child."""
+    service = allowlist_default_service
+    _as("user", "alice", service.launch_job, _launch("/alice/parent", DEFAULT, parent_egress, parent_rules), None)
+    _as("user", "alice", service.launch_job, _launch("/alice/parent/child", DEFAULT), None)
+
+    parent, child = JobName.from_wire("/alice/parent"), JobName.from_wire("/alice/parent/child")
+    assert _stored_egress(state, child) == _stored_egress(state, parent)
+    assert _stored_rules(state, child) == list(parent_rules)
