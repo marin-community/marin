@@ -22,8 +22,9 @@ import gzip
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 Message = dict[str, Any]
 
@@ -132,8 +133,6 @@ def _default_render_lengths(messages: list[Message]) -> dict[str, int]:
     """Rendered token lengths per family, through the pinned real tokenizers."""
     from transformers import AutoTokenizer  # noqa: PLC0415 - deferred: heavy at import time
 
-    from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
-
     lengths = {}
     for family in _LENGTH_FILTER_FAMILIES:
         repo, revision = _FAMILY_TOKENIZER_REVISIONS[family]
@@ -228,11 +227,11 @@ def build_manifest(
     render_lengths: Callable[[list[Message]], dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Convert every source in stage order and write ``manifest.json``."""
-    from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, template_sha256
-
     entries = []
     for spec in sorted(STAGE0_SOURCES, key=lambda source: STAGE_ORDER.index(source.name)):
-        entries.append(convert_source(spec, output_dir, max_rows=max_rows, load_dataset=load_dataset, render_lengths=render_lengths))
+        entries.append(
+            convert_source(spec, output_dir, max_rows=max_rows, load_dataset=load_dataset, render_lengths=render_lengths)
+        )
     manifest = {
         "stage_order": list(STAGE_ORDER),
         "sources": entries,
