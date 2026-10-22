@@ -6,7 +6,6 @@ import os
 from concurrent.futures import Future
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -108,6 +107,7 @@ def test_nested_preflight_can_grade_with_only_explicit_child_credentials(kind, l
             "dataset_uids": {"uid": "task"},
             "tasks": [{"task_id": "task", "evaluation_family": "calendar", "contract_id": "contract"}],
             "model_manifest_identity": "manifest",
+            "runtime_tree_hash": "fixture-runtime",
             "protocol": {},
             "pairing_contract_field": "source_contract_id",
         }
@@ -200,7 +200,6 @@ def test_periodic_comparison_persists_fixed_pairing_and_coverage_before_return(
 
     monkeypatch.setattr(comparison, "run_inventory", trained)
     monkeypatch.setattr(comparison, "runtime_operation", read_saved_results)
-    monkeypatch.setattr(comparison, "SkyRLRuntime", lambda: SimpleNamespace(source_digest="fixture-runtime"))
     artifact = comparison.comparison_step(
         comparison.Initializer.SFT,
         version="2026.10.22",

@@ -22,7 +22,8 @@ class BaselineIdentity:
     family_counts: dict[str, int]
     evaluation_recipe: dict
     recovery_policy: dict
-    runtime_source_digest: str
+    runtime_tree_hash: str
+    runtime_lock_sha256: str
     scoring_source_sha256: str
 
     @property

@@ -19,7 +19,8 @@ def baseline_identity():
         family_counts={"calendar": 20, "structural": 20},
         evaluation_recipe={"generator": {"temperature": 0, "max_new_tokens": 8192}},
         recovery_policy={"per_answer_timeout": 600, "total_timeout": 900},
-        runtime_source_digest="d" * 64,
+        runtime_tree_hash="d" * 12,
+        runtime_lock_sha256="1" * 64,
         scoring_source_sha256="e" * 64,
     )
 
@@ -36,7 +37,8 @@ def baseline_identity():
         {"family_counts": {"calendar": 19, "structural": 20}},
         {"evaluation_recipe": {"generator": {"temperature": 0, "max_new_tokens": 4096}}},
         {"recovery_policy": {"per_answer_timeout": 60, "total_timeout": 900}},
-        {"runtime_source_digest": "f" * 64},
+        {"runtime_tree_hash": "f" * 12},
+        {"runtime_lock_sha256": "f" * 64},
         {"scoring_source_sha256": "f" * 64},
     ],
 )

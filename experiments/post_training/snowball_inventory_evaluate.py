@@ -38,7 +38,6 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLRunConfig,
-    SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
     run_skyrl,
@@ -341,7 +340,10 @@ def run_recoverable_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
         )(config)
     preflight = json.loads(preflight_path.read_text())
     prepared = replace(config.launch, launch_config_yaml=preflight["launch_config_yaml"])
-    completed = runtime_operation("generation-state", {"launch_config_yaml": prepared.launch_config_yaml})
+    completed = runtime_operation(
+        "generation-state",
+        {"launch_config_yaml": prepared.launch_config_yaml, "runtime_tree_hash": preflight["runtime_tree_hash"]},
+    )
     if not completed["complete"]:
         # A coordinator crash cannot silently spend another inference job on this artifact.
         conditional_object(prefix_join(config.output_path, "generation-started.json")).write(
@@ -430,7 +432,6 @@ def recoverable_evaluation_step(
                 recoverable_evaluation_recipe(max_new_tokens, judge_base_url=judge_base_url, judge_model=judge_model),
                 sort_keys=False,
             ),
-            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 model,
                 tokenizer_uri,
@@ -581,7 +582,6 @@ def main(
             name=name,
             version=version,
             config_yaml=yaml.safe_dump(evaluation_recipe(max_new_tokens), sort_keys=False),
-            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(model, TOKENIZER_MODEL, TOKENIZER_REVISION, relative_path=relative_path),
             train_data=(),
             validation_data=(ArtifactDataSource(panel, relative_path="validation.parquet"),),

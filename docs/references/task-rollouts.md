@@ -53,7 +53,7 @@ The engine resolves two registries by key:
 | `harnesses` | `TaskRolloutSpec.harness` | The `Harness` that runs the model side of the task |
 
 No harness is registered by default. Register the shell harness under the name that your specs use, for
-example `RolloutEngine(machine_factories, {"shellbox": ToolHarness(command_timeout=30)})`.
+example `RolloutEngine(machine_factories, {"shellbox": ShellHarness(command_timeout=30)})`.
 Harness options, such as the shell tool's name and command timeout, belong to the registered harness:
 register one harness for each configuration, and select it with `TaskRolloutSpec.harness`.
 A machine selection of `None` supplies no machine.
@@ -196,7 +196,7 @@ block ends:
 
 ```python
 async with task_machine(task, factory, runtime, cleanup_timeout=30) as machine:
-    rollout = await harness_rollout(ToolHarness(command_timeout=30), task, model, machine=machine, limits=limits)
+    rollout = await harness_rollout(ShellHarness(command_timeout=30), task, model, machine=machine, limits=limits)
 ```
 
 ### Step harness
@@ -262,9 +262,12 @@ engine = RolloutEngine(machine_factories, {"agent": AgentHarness(run_agent)})
 
 ### Shell harness
 
-`ToolHarness(*, command_timeout, shell_tool=ShellToolConfig(), tools={})` from `rolloutengine.harness.tools` serves a
-shell tool on the task machine and host tools from tool providers, and ends on a final response.
+`ShellHarness(*, command_timeout, output_limit_bytes=DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, shell_tool=ShellToolConfig(),
+tools={})` from `rolloutengine.harness.shell` serves a shell tool on the task machine and host tools from tool providers,
+and ends on a final response.
 `command_timeout` must be `None` or positive and finite.
+`output_limit_bytes` is the most bytes of stdout, and of stderr, that one shell-tool command returns to the model. It
+must be positive, and its default is the machine output limit, 1 MiB.
 The shell harness exposes `shell(command: string)` when the task declares the shell capability.
 Each command runs through `bash -c`. Files persist between commands; shell variables do not.
 TaskSpec can own the shell interface when its prompt names a particular tool. Declare the
@@ -287,12 +290,12 @@ provider contracts require a registered tool provider or another harness.
 ### Tool providers
 
 A tool provider serves host tools for one action interface. Register providers with the shell harness,
-`ToolHarness(command_timeout=30, tools={"checker:v1": provider})`; the key matches
+`ShellHarness(command_timeout=30, tools={"checker:v1": provider})`; the key matches
 `ProviderRequirement.action_interface` in `environment_requirements.tool_providers`.
 No provider is registered by default.
 
 ```python
-from rolloutengine.harness.tools import ToolCallResult, ToolContext
+from rolloutengine.harness.shell import ToolCallResult, ToolContext
 
 
 class Checker:
@@ -336,7 +339,7 @@ The shell harness's check rejects these tasks before machine acquisition:
 A task can declare a provider's tool in `interaction_tools` to fix its definition; the shell harness advertises it once.
 
 For tasks that declare only the shell capability, the harness supplies the interface.
-Pass `shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd")` to `ToolHarness`
+Pass `shell_tool=ShellToolConfig(name="terminal", command_parameter="cmd")` to `ShellHarness`
 to advertise `terminal(cmd)`. Import `ShellToolConfig` from `taskcompendium.runtime.shell`;
 curation's `ShellFactory` accepts the same option. An explicit task binding takes precedence.
 Collisions with final-answer tools are rejected before machine acquisition.
@@ -359,9 +362,11 @@ flowchart LR
 
 RolloutEngine and curation share call decoding, execution, and JSON observations: stdout,
 stderr, exit code, reason, and separate stdout/stderr truncation flags. Each stream holds at most
-the machine output limit, 1 MiB in RolloutEngine; output past it is lost, and its truncation flag is set.
+the machine output limit, 1 MiB in RolloutEngine, or the lower `ShellHarness.output_limit_bytes`; output past it is
+lost, and its truncation flag is set.
 The engine does not keep the rest: a model that expects long output redirects it to a file in the
-workspace and reads it with later commands, and a harness that wants a safety net provides one. The harness
+workspace and reads it with later commands. A harness that runs an agent for its results can set a lower
+`output_limit_bytes` as a safety net, so that one large output cannot fill the agent's context. The harness
 advertises the tools its environment supplies. Trajectories retain the chosen names and call
 IDs. Graders consume the resulting submission independently of the tool interface.
 
@@ -450,7 +455,7 @@ No end event is emitted when a token-contract error or cancellation propagates.
 | --- | --- |
 | Machine `startup_timeout` | Machine creation, resource upload, setup commands, and the explicit execution-user probe |
 | `model_turn_timeout` | One model request |
-| `ToolHarness(command_timeout=...)` | Each shell-tool command, including separate calls within one model turn |
+| `ShellHarness(command_timeout=...)` | Each shell-tool command, including separate calls within one model turn |
 | `tool_turn_timeout` | The time from a model turn to the harness's next request or its end, including its tool operations; a cancelled request starts it again |
 | `total_turn_timeout` | The time from the harness's first request to its end, across all turns in one attempt |
 | `attempt_timeout` | Task startup, the harness, and final verification |
@@ -631,7 +636,7 @@ the task holds the work. A task with `NoGrader` gets an unavailable grade. An `A
 It sets `model`, `messages`, `stream`, and `n` itself. A response without `usage` is a model failure.
 
 ```python
-engine = RolloutEngine({}, {"agent": ToolHarness(command_timeout=None, tools={"lookup/v1": lookup})})
+engine = RolloutEngine({}, {"agent": ShellHarness(command_timeout=None, tools={"lookup/v1": lookup})})
 spec = TaskRolloutSpec(
     task=task, harness="agent", task_machine=None, verifier_machine=None, limits=limits, trace=TraceMode.MESSAGES
 )
@@ -648,7 +653,7 @@ judge connection.
 ## Use
 
 The task's `answer_format` controls final-answer extraction and model-visible submission instructions.
-`rolloutengine.harness.tools.task_prompt(task, shell_tool, provider_tools)` renders the first prompt: the public messages, with the format's instruction and tools for text, number, JSON, and native-action answers.
+`rolloutengine.harness.shell.task_prompt(task, shell_tool, provider_tools)` renders the first prompt: the public messages, with the format's instruction and tools for text, number, JSON, and native-action answers.
 
 Construct a `TaskRolloutSpec`, and check it with `RolloutEngine.check` before you start a batch. The
 [rollout tests](https://github.com/marin-community/marin/blob/main/lib/rolloutengine/tests/test_rollout.py) contain executable examples.
@@ -656,14 +661,14 @@ One engine serves every attempt; each run passes its model:
 
 ```python
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.tools import ToolHarness
+from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import GradedRollout, Model, TaskRolloutSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 
 engine = RolloutEngine(
     {"docker": DockerMachineFactory(), "shellsim": ShellSimMachineFactory()},
-    {"shellbox": ToolHarness(command_timeout=30)},
+    {"shellbox": ShellHarness(command_timeout=30)},
 )
 
 

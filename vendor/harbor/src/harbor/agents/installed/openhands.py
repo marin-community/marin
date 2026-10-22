@@ -161,9 +161,9 @@ class OpenHands(BaseInstalledAgent):
             return None
 
         # Sanity check: there should be exactly one session
-        assert len(session_dirs) == 1, (
-            f"Expected exactly 1 session, found {len(session_dirs)}"
-        )
+        assert (
+            len(session_dirs) == 1
+        ), f"Expected exactly 1 session, found {len(session_dirs)}"
         return session_dirs[0]
 
     def _extract_version_and_metadata(
@@ -456,15 +456,15 @@ class OpenHands(BaseInstalledAgent):
                 total_cost_usd = event["llm_metrics"].get("accumulated_cost", 0)
 
                 final_metrics = FinalMetrics(
-                    total_prompt_tokens=total_prompt_tokens
-                    if total_prompt_tokens > 0
-                    else None,
-                    total_completion_tokens=total_completion_tokens
-                    if total_completion_tokens > 0
-                    else None,
-                    total_cached_tokens=total_cached_tokens
-                    if total_cached_tokens > 0
-                    else None,
+                    total_prompt_tokens=(
+                        total_prompt_tokens if total_prompt_tokens > 0 else None
+                    ),
+                    total_completion_tokens=(
+                        total_completion_tokens if total_completion_tokens > 0 else None
+                    ),
+                    total_cached_tokens=(
+                        total_cached_tokens if total_cached_tokens > 0 else None
+                    ),
                     total_cost_usd=total_cost_usd if total_cost_usd > 0 else None,
                 )
                 break
@@ -697,15 +697,15 @@ class OpenHands(BaseInstalledAgent):
 
         # Build final metrics
         final_metrics = FinalMetrics(
-            total_prompt_tokens=total_prompt_tokens
-            if total_prompt_tokens > 0
-            else None,
-            total_completion_tokens=total_completion_tokens
-            if total_completion_tokens > 0
-            else None,
-            total_cached_tokens=total_cached_tokens
-            if total_cached_tokens > 0
-            else None,
+            total_prompt_tokens=(
+                total_prompt_tokens if total_prompt_tokens > 0 else None
+            ),
+            total_completion_tokens=(
+                total_completion_tokens if total_completion_tokens > 0 else None
+            ),
+            total_cached_tokens=(
+                total_cached_tokens if total_cached_tokens > 0 else None
+            ),
             total_cost_usd=total_cost_usd if total_cost_usd > 0 else None,
         )
 
@@ -787,37 +787,8 @@ class OpenHands(BaseInstalledAgent):
             self.logger.debug("No final_metrics found in trajectory")
 
     async def install(self, environment: BaseEnvironment) -> None:
-        await self.exec_as_root(
-            environment,
-            command="apt-get update && apt-get install -y curl git build-essential tmux",
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-        )
-        # Create /opt/openhands-venv owned by the agent user
-        agent_user = environment.default_user or "root"
-        await self.exec_as_root(
-            environment,
-            command=f"mkdir -p /opt/openhands-venv && chown {agent_user}:{agent_user} /opt/openhands-venv",
-        )
-        # Build install command with version logic
-        if self._git_version:
-            install_cmd = f"uv pip install git+https://github.com/All-Hands-AI/OpenHands.git@{self._git_version}"
-        elif self._version:
-            install_cmd = f"uv pip install openhands-ai=={self._version}"
-        else:
-            install_cmd = "uv pip install openhands-ai"
-        await self.exec_as_agent(
-            environment,
-            command=(
-                "set -euo pipefail; "
-                "curl -LsSf https://astral.sh/uv/install.sh | sh && "
-                'if [ -f "$HOME/.local/bin/env" ]; then source "$HOME/.local/bin/env"; fi && '
-                f"uv python install {self._python_version} && "
-                f"uv venv /opt/openhands-venv --python {self._python_version} && "
-                "source /opt/openhands-venv/bin/activate && "
-                "export SKIP_VSCODE_BUILD=true && "
-                f"{install_cmd} && "
-                "/opt/openhands-venv/bin/python -m openhands.core.main --version"
-            ),
+        raise RuntimeError(
+            "This agent requires blocked dependency LiteLLM; use mini-swe-agent or terminus-2"
         )
 
     def _build_mcp_config_toml(self) -> str | None:
@@ -947,7 +918,6 @@ class OpenHands(BaseInstalledAgent):
             env["LLM_API_VERSION"] = llm_api_version
 
         # Pass model_info token limits to OpenHands (critical for hosted_vllm models)
-        # Without these, OpenHands uses LiteLLM defaults which may be too restrictive
         if self._model_info:
             if self._model_info.get("max_input_tokens"):
                 env["LLM_MAX_INPUT_TOKENS"] = str(self._model_info["max_input_tokens"])
