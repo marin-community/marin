@@ -1013,6 +1013,8 @@ def build_eval_bloom(
         value is not None for value in best_effort_parameters
     ):
         raise ValueError("best-effort eval manifest path and corpus version must be set together")
+    if best_effort_required_tasks and best_effort_eval_manifest_path is None:
+        raise ValueError("best-effort required tasks need a best-effort eval manifest")
     if best_effort_eval_manifest_path is not None:
         assert best_effort_eval_corpus_version is not None
         eval_paths.extend(

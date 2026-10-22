@@ -703,6 +703,14 @@ def _lmh_task_names() -> list[str]:
     return sorted(names - DECON_EXCLUDED_EVAL_TASKS)
 
 
+def _missing_required_lmh_tasks(task_leaves: dict[str, list[str]], failed: list[tuple[str, str]]) -> list[str]:
+    """Return required tasks that did not load or have a failed leaf task."""
+    failed_names = {name for name, _ in failed}
+    return [
+        task for task in REQUIRED_LMH_TASKS if not task_leaves.get(task) or failed_names.intersection(task_leaves[task])
+    ]
+
+
 def _prepare_lmh() -> dict[str, Any]:
     """Build and seal the LMH manifest for one eval-corpus version."""
     manifest_path = f"{_output_root()}/{LMH_MANIFEST_RELATIVE}"
@@ -811,10 +819,7 @@ def _prepare_lmh() -> dict[str, Any]:
         for n, reason in failed:
             logger.info("  FAIL lmh/%s: %s", n, reason)
 
-    failed_names = {n for n, _ in failed}
-    missing_required = [
-        task for task in REQUIRED_LMH_TASKS if not task_leaves.get(task) or failed_names.intersection(task_leaves[task])
-    ]
+    missing_required = _missing_required_lmh_tasks(task_leaves, failed)
     if missing_required:
         raise ValueError(f"required lm-eval tasks did not load: {missing_required}; the FAIL lines above give reasons")
 
