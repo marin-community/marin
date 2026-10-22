@@ -6,7 +6,7 @@ the adversary trials."""
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -20,7 +20,16 @@ from taskcompendium.models import AnswerType, PlainText, Source
 from verifyit.spec import ExactSpec
 
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
-from taskforge.llm.client import Completion, FinishReason, ModelClient, StructuredResult, ToolCall, Usage
+from taskforge.llm.client import (
+    Completion,
+    FinishReason,
+    ModelClient,
+    ModelRequestRejected,
+    ModelUnavailable,
+    StructuredResult,
+    ToolCall,
+    Usage,
+)
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
@@ -37,6 +46,7 @@ from taskforge.stage40_build_with_program.step_store import (
 from taskforge.stage50_validate.adversary import AdversaryMode, AdversaryPolicy, Claim, ClaimKind
 from taskforge.stage50_validate.control_drafts import CONTROLS_STEP
 from taskforge.stage50_validate.controls import ControlVerdict
+from taskforge.stage50_validate.outcome import Cause
 from taskforge.stage50_validate.round import (
     EarlyDecision,
     LoweringStatus,
@@ -131,7 +141,7 @@ def adversary_policy(k: int, submissions: int = 3, mode: AdversaryMode = Adversa
     )
 
 
-def round_context(tmp_path: Path, modify_rounds_left: int = 0) -> ValidationContext:
+def round_context(tmp_path: Path, modify_rounds_left: int = 0, validation_retries: int = 0) -> ValidationContext:
     return ValidationContext(
         workpiece_id=WORKPIECE,
         round=0,
@@ -139,6 +149,7 @@ def round_context(tmp_path: Path, modify_rounds_left: int = 0) -> ValidationCont
         proposal=parse(PROPOSAL),
         store_root=str(tmp_path / "store"),
         modify_rounds_left=modify_rounds_left,
+        validation_retries=validation_retries,
     )
 
 
@@ -191,6 +202,28 @@ class SolverModel:
             await self.release.wait()
         message = {"role": "assistant", "content": "42"}
         return ModelTurn(message, (), (), None, "stop", text="42")
+
+
+@dataclass
+class FailingTrials:
+    """A solver whose attempts of each trial in ``errors`` raise its error, and whose other attempts reply ``42``.
+
+    It records each attempt's step.
+    """
+
+    errors: Mapping[str, Callable[[], Exception]]
+    steps: list[str] = field(default_factory=list)
+
+    def for_step(self, step: str) -> Model:
+        self.steps.append(step)
+        error = self.errors.get(step.split("/")[1])
+
+        async def answer(request: ModelRequest) -> ModelTurn:
+            if error is not None:
+                raise error()
+            return ModelTurn({"role": "assistant", "content": "42"}, (), (), None, "stop", text="42")
+
+        return answer
 
 
 @dataclass
@@ -665,3 +698,54 @@ async def test_without_a_modify_round_left_a_violated_control_waits_for_every_tr
     assert {c.id: c.verdict for c in result.controls}[VIOLATED_CONTROL] is ControlVerdict.VIOLATED
     violated_ended = next(e.ended for e in ledger.entries if e.step == signal.step)
     assert all(e.ended >= violated_ended for e in ledger.entries if e.step.startswith("solver/"))
+
+
+UNAVAILABLE = {"0": lambda: ModelUnavailable("the hold ran out", ())}
+"""Trial 0 fails for a retryable cause on every attempt."""
+
+
+async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cause_with_a_full_budget(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    fake_glm.stream(content=controls_reply("41"))
+    settings = round_settings(ledger, k=3)
+    errors = {**UNAVAILABLE, "2": lambda: ModelRequestRejected(400, "invalid tools", ())}
+    first = await validate_round(
+        built_draft(tmp_path / "store"),
+        round_context(tmp_path),
+        settings,
+        FailingTrials(errors),
+        glm_client,
+        UncalledClient(),
+    )
+    assert first.solver is not None
+    assert [(t.status, t.cause) for t in first.solver.trials] == [
+        (TrialStatus.UNGRADED, Cause.MODEL_UNAVAILABLE),
+        (TrialStatus.GRADED, None),
+        (TrialStatus.UNGRADED, Cause.MODEL_REJECTED),
+    ]
+    assert first.solver.trials[0].attempt_file.endswith("solver/0/attempt-1.json")
+
+    retried = round_context(tmp_path, validation_retries=1)
+    solver = FailingTrials(UNAVAILABLE)
+    again = await validate_round(
+        built_draft(tmp_path / "store"), retried, settings, solver, UncalledClient(), UncalledClient()
+    )
+
+    assert solver.steps == ["solver/0/2", "solver/0/3"]
+    assert again.solver is not None and again.solver.trials[1:] == first.solver.trials[1:]
+    assert again.solver.trials[0].attempt_file.endswith("solver/0/attempt-3.json")
+    trial_dir = retried.round_dir / Path(again.solver.trials[0].attempt_file).parent
+    assert sorted(path.name for path in trial_dir.iterdir()) == [f"attempt-{n}.json" for n in range(4)]
+    assert again.controls == first.controls
+
+    # The same retry relaunched finds every budget spent and runs nothing.
+    unchanged = await validate_round(
+        built_draft(tmp_path / "store"),
+        retried,
+        settings,
+        SolverModel(allowed=frozenset()),
+        UncalledClient(),
+        UncalledClient(),
+    )
+    assert unchanged == again

@@ -69,6 +69,7 @@ from taskforge.stage40_build_with_program.run import (
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage50_validate.evidence import RewardStats
+from taskforge.stage50_validate.outcome import Cause
 from taskforge.stage50_validate.round import (
     VALIDATION_FILE,
     Lowering,
@@ -812,7 +813,7 @@ async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     rounds = tmp_path / "workpieces" / WORKPIECE / "rounds"
     first, second = (
-        ValidationContext(WORKPIECE, number, rounds / str(number), PROPOSAL, str(tmp_path / STORE_DIR), left)
+        ValidationContext(WORKPIECE, number, rounds / str(number), PROPOSAL, str(tmp_path / STORE_DIR), left, 0)
         for number, left in ((0, 1), (1, 0))
     )
     assert validate_once.contexts == [first, second, second]
@@ -827,6 +828,39 @@ async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds
         ("decided", 1),
         ("terminal", 1),
     ]
+
+
+class GradedOnRetry:
+    """A validate function whose first pass leaves one solver trial ungraded for a retryable cause and whose later
+    passes grade it, recording each context."""
+
+    def __init__(self) -> None:
+        self.contexts: list[ValidationContext] = []
+
+    async def __call__(self, draft: TaskDraft, context: ValidationContext) -> ValidationResult:
+        self.contexts.append(context)
+        result = passing_result(context)
+        if context.validation_retries > 0:
+            return result
+        assert result.solver is not None
+        ungraded = TrialResult("3", TrialStatus.UNGRADED, None, Cause.MODEL_UNAVAILABLE, "solver/3/attempt-1.json")
+        stats = RewardStats(graded=3, mean_reward=2 / 3, solved=2, timed_out=0, candidate_code_errors=0)
+        solver = SolverEvidence((*result.solver.trials[:3], ungraded), stats, {Cause.MODEL_UNAVAILABLE: 1})
+        return replace(result, solver=solver)
+
+
+async def test_a_retry_followed_by_a_graded_rerun_accepts_the_workpiece_within_its_validation_retries(tmp_path):
+    validate_retried = GradedOnRetry()
+    log = InMemoryEventLog()
+
+    stages = replace(STAGES, validate=validate_retried)
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+
+    assert BUDGET.max_validation_retries == 1
+    assert exits(log) == [*ACCEPTED_EXITS[:5], ("decided", "retry"), *ACCEPTED_EXITS[4:]]
+    assert [context.validation_retries for context in validate_retried.contexts] == [0, 1]
+    retry = log.events()[5]
+    assert (retry.attrs["cause"], retry.attrs["count"]) == (Cause.MODEL_UNAVAILABLE, "1")
 
 
 async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings(tmp_path):

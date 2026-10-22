@@ -499,8 +499,9 @@ passes them to every build with its model, sampling policy and model digest.
 
 The validate stage calls `StageFunctions.validate(draft, context)` with the round's
 `ValidationContext`: the workpiece id, the round, the round directory, the proposal the round built,
-the step store, and the MODIFY rounds left, `max_modify_rounds` less the `Modify` decisions already
-followed. It returns a `ValidationResult`, which the coordinator writes to `validation.json`. The
+the step store, the MODIFY rounds left, `max_modify_rounds` less the `Modify` decisions already
+followed, and `validation_retries`, the review `Retry` decisions followed (`WorkpieceState.retries`, the
+count `max_validation_retries` bounds). It returns a `ValidationResult`, which the coordinator writes to `validation.json`. The
 caller's function closes over what the coordinator does not own, the host's `ValidationSettings` and
 the trial models, as `validate_round(draft, context, settings, solver, controls, adversary)` takes them.
 The review stage reads the result back from `validation.json` (`load_validation`) and calls
@@ -622,7 +623,8 @@ one `CONTROL` trial named by its id.
 `stage50_validate.round.validate_round(draft, context, settings, solver_model, controls_model,
 adversary_model)` runs one validation round from these parts as a graph of units. `context`, a
 `ValidationContext`, is what the stage coordinator knows of the round: the workpiece id, the round, its
-directory, the proposal it built, the step store and the MODIFY rounds the workpiece has left.
+directory, the proposal it built, the step store, the MODIFY rounds the workpiece has left and the review
+`Retry` decisions it has followed back into validation (`validation_retries`).
 `settings`, a `ValidationSettings`, is the validating host's: engine, deadlines, the solver trials `k`,
 retries and backoff, the control writer's sampling, the adversary policy and the ledger. Lowering
 (`preflight`) and control writing start together; each of the `settings.k` solver trials starts once the
@@ -650,8 +652,11 @@ a relaunch runs only the units whose files are missing:
 `<draft>` is `content_hash.digest` of the draft's task, `<task>` the `trials.task_digest` of the
 lowered spec as the round's trials run it, and `<controls>` `content_hash.digest` of the control set,
 so no file of another task, lowered spec or control set counts as done. A trial is done when its
-last attempt is graded, failed for a cause that is not retryable, or used its retries; otherwise it
-resumes at the next attempt with the retries it has left. Attempt files are written whole or not at
+last attempt is graded, failed for a cause that is not retryable, or used its retries: it holds
+`(max_retries + 1) * (validation_retries + 1)` attempts, one full budget for the first validation and
+for each review `Retry` since. Otherwise it resumes at the next attempt with the retries left in the
+current budget. A `Retry` therefore reruns exactly the trials and control replays that ended ungraded
+for a retryable cause, each with a full budget, numbering its attempts after the files on disk. Attempt files are written whole or not at
 all, and an attempt cancelled in flight writes none, so a cancelled trial runs again instead of
 counting as ungraded. The result is read back from the unit files (`trials.attempt_outcome`) and
 holds every decision input without the rollouts: the lowering's status
