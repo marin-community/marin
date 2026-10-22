@@ -266,7 +266,7 @@ def trial_record(spec: TaskRolloutSpec, command_timeout: float) -> dict[str, Jso
     - ``limits``: the effective ``RolloutLimits``;
     - ``command_timeout``: the timeout of one shell command.
 
-    Each value is its model's JSON dump. The harness name, which is always ``draft.SHELL_HARNESS``, and the
+    Each value is its model's JSON dump. The harness name, which is always ``draft.TOOL_HARNESS``, and the
     trace, which is always ``MESSAGES``, are not in it, so the digest does not follow the shape of the
     engine's ``TaskRolloutSpec``.
     """
