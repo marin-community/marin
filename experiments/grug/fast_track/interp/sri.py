@@ -62,7 +62,7 @@ CONTEXT_LEFT = 24
 TRUNC_LENGTHS = (2, 3, 4, 8, 16, 64, 256, 1024)
 SWAP_PREFIXES = (" M", " T", " A", " P", " s", "F")
 N0 = (5, 304, 0)
-SRI_ROWS, HONG_ROWS, LOS_ROWS, RANDOM_ROWS = 480, 120, 120, 64
+SRI_ROWS, HONG_ROWS, LOS_ROWS, RANDOM_ROWS = 1200, 120, 120, 64
 RANDOM_EVERY = 400
 ABLATE_TOP = 10
 
@@ -614,7 +614,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", required=True)
-    parser.add_argument("--scan-train", type=int, default=40000, help="unseen train sequences to scan at most")
+    parser.add_argument("--scan-train", type=int, default=200000, help="unseen train sequences to scan at most")
     parser.add_argument("--scan-chunk", type=int, default=512)
     parser.add_argument("--swap-batches", type=int, default=24)
     args = parser.parse_args()
@@ -777,6 +777,21 @@ def main() -> None:
             configs.append((f"L{li}.attn:mean", "sri+rand", sub(li, forward.SUB_ATTN, "mean")))
         configs.append(("L5.shared:mean", "sri+rand", sub(5, forward.SUB_SHARED, "mean")))
         configs.append(("L5.ve:zero", "all", base._replace(sub_mult=base.sub_mult.at[5, forward.SUB_VE].set(0.0))))
+        # The two routes together: the n0 / E304 unit path and the L5 copy path (VE, whole attention, L3 induction).
+        no_ve = base.sub_mult.at[5, forward.SUB_VE].set(0.0)
+        configs.append(("n0+L5.ve:zero", "sri+rand", units([N0], "zero")._replace(sub_mult=no_ve)))
+        configs.append(("E304+L5.ve:zero", "sri+rand", expert(5, 304, "zero")._replace(sub_mult=no_ve)))
+        no_attn = base.sub_mult.at[5, forward.SUB_ATTN].set(0.0)
+        configs.append(
+            ("n0:zero+L5.attn:mean", "sri+rand", units([N0], "zero")._replace(sub_mult=no_attn, sub_mean=sub_mean))
+        )
+        configs.append(
+            (
+                "n0:zero+L3.h0:mean",
+                "sri+rand",
+                units([N0], "zero")._replace(head_mult=base.head_mult.at[3, 0].set(0.0), head_mean=head_mean),
+            )
+        )
         configs.append(
             (
                 "L5.ve:mean",
