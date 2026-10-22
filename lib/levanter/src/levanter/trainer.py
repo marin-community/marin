@@ -538,6 +538,7 @@ class Trainer:
         # so we avoid running them when they're not needed
         # this results in two compiles, but the cost of the second compile is worth it
         hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+        batch = self._step_inputs(batch)
 
         self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
@@ -560,6 +561,7 @@ class Trainer:
             if self.config.crash_on_inf and jnp.isinf(loss):
                 raise RuntimeError("Loss is Inf")
 
+            metrics = self._step_metrics(result)
             info = StepInfo(result.new_state, loss, step_time(), _event_handler=self.hooks.emit_event)
 
             with capture_time() as hook_time:
@@ -568,10 +570,18 @@ class Trainer:
                     self.hooks.run_jit_hooks_outside_step(info, result.hook_infos)
 
             # Log metrics from loss function and throughput metrics
-            metrics_to_log = {**result.loss_metrics, "throughput/hook_time": hook_time()}
+            metrics_to_log = {**metrics, "throughput/hook_time": hook_time()}
             levanter.tracker.log(metrics_to_log, step=info.step)
 
         return info
+
+    def _step_inputs(self, batch: tuple) -> tuple:
+        """The arguments the compiled step receives after the state. Subclasses may add per-step inputs."""
+        return batch
+
+    def _step_metrics(self, result: TrainStepResult[S]) -> dict[str, Any]:
+        """Loss metrics to log for a step, read before the step's hooks run. Subclasses may consume some."""
+        return dict(result.loss_metrics)
 
     def training_steps(self, state: S, train_loader) -> typing.Iterator[StepInfo[S]]:
         """
