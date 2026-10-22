@@ -178,9 +178,7 @@ def snowball_stage0() -> SnowballStage0:
             wandb_project="marin_moe_sft",
         )
 
-    spec1 = stage_spec(
-        "s1-chat", STAGE_ORDER[0], ConvertedCheckpointModel(conversion=base_conversion)
-    )
+    spec1 = stage_spec("s1-chat", STAGE_ORDER[0], ConvertedCheckpointModel(conversion=base_conversion))
     step1 = sft_step(spec1, train_resources())
 
     spec2 = stage_spec(
