@@ -14,9 +14,13 @@ back from the file through ``loader.load_program_source``. A revision carries no
 an author that revises its own program reads the ``PROGRAM_FILE`` it wrote. ``static_author``
 turns a program written by hand into an author returning no source.
 
-A ``MODIFY`` revision may carry a ``VerificationChange``, which swaps the task's verifier kind. The
-caller passes ``change.revise(proposal)`` to the author and the build of that round and every later
-one, so each reader of ``proposal.header.verification`` sees the revised kind.
+An author answering a ``MODIFY`` revision may swap the task's verifier kind, and returns the swap as
+``AuthoredProgram.verification_change``. Such a call receives the proposal as declared, with the change
+already in force, if any, on the revision; the author starts from ``change.revise(proposal)`` and may
+keep, replace or undo the change. Every other call receives the proposal the build checks (the revised
+one after a swap) and returns no change, so a build or author failure cannot change the kind. The caller
+builds that round and every later one with ``change.revise(proposal)`` and the change, until a later
+``MODIFY`` answer replaces or undoes it.
 """
 
 from collections.abc import Mapping
@@ -87,8 +91,9 @@ class VerificationChange:
 class Revision:
     """The change requested of the next round's author, with ``detail`` explaining it.
 
-    Only a ``MODIFY`` revision may carry a ``verification_change``: a swap answers findings, so a
-    build or author failure cannot escape a grader by changing its kind.
+    Only a ``MODIFY`` revision may carry a ``verification_change``, the change in force on the declared
+    proposal, which the author starts from: a swap answers findings, so a build or author failure cannot
+    escape a grader by changing its kind.
     """
 
     kind: RevisionKind
@@ -105,11 +110,14 @@ class AuthoredProgram:
     """A program from an author, with ``source`` holding the Python text defining it.
 
     ``source`` is ``None`` for a program defined in Python, as ``static_author`` hands back,
-    because the coordinator then has no text to write.
+    because the coordinator then has no text to write. ``verification_change`` is the swap of the
+    verifier kind the program is built under, relative to the proposal the author received, or ``None``
+    for that proposal's own kind; only an author answering a ``MODIFY`` revision returns one.
     """
 
     program: RLEnvBuildProgram
     source: str | None
+    verification_change: VerificationChange | None
 
 
 class Author(Protocol):
@@ -136,12 +144,14 @@ def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
 
 
 def static_author(program: RLEnvBuildProgram) -> Author:
-    """Return an author that hands back ``program``, with no source, for every proposal, revision and state."""
-    authored = AuthoredProgram(program, None)
+    """Return an author that hands back ``program``, with no source, for every proposal, revision and state.
+
+    It keeps the revision's verification change unchanged and never chooses one.
+    """
 
     async def author(
         proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
     ) -> AuthoredProgram:
-        return authored
+        return AuthoredProgram(program, None, None if revision is None else revision.verification_change)
 
     return author

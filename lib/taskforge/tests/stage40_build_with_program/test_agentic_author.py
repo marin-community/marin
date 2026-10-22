@@ -27,9 +27,9 @@ from taskforge.llm.client import Completion, FinishReason, StructuredResult, Too
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import complete_structured, response_format
-from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage10_proposal.model import TaskProposal, Verification
 from taskforge.stage30_author import load_process
-from taskforge.stage30_author.author import Revision, RevisionKind, program_manifest
+from taskforge.stage30_author.author import Revision, RevisionKind, VerificationChange, program_manifest
 from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
 from taskforge.stage40_build_with_program import agentic_author as aa
 from taskforge.stage40_build_with_program.agentic_author import (
@@ -47,7 +47,7 @@ from taskforge.stage40_build_with_program.context import BuildExpired, BuildInfr
 from taskforge.stage40_build_with_program.glm_author import AUTHOR_DIR, GlmAuthor
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.program_sdk import load_program, sdk_exports
-from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft, run_build
+from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, TaskDraft, load_draft, run_build
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage40_build_with_program.template import standard
@@ -109,6 +109,8 @@ CONFIG = AgenticAuthorConfig(
 CALL_IDS = itertools.count()
 STRUCTURED_REPAIRS = 1
 FAILURE = Revision(RevisionKind.BUILD_FAILURE, "fixtures: KeyError 'rows'")
+FINDINGS = Revision(RevisionKind.MODIFY, "the grader leaves the reply's format unenforced")
+TO_ANSWER_IN_BOX = VerificationChange(Verification.CODE, Verification.ANSWER_IN_BOX, "the answer is one number")
 SCHEDULING = BuildInfrastructureFailure(InfrastructureCause.SCHEDULING_TIMEOUT, "the machine factory gave up waiting")
 NO_FACTORY = BuildInfrastructureFailure(InfrastructureCause.NO_FACTORY, "this host has no docker machine factory")
 ALWAYS = 1_000
@@ -183,15 +185,20 @@ async def in_process_loader(source: str) -> ProgramManifest:
     return ProgramManifest.model_validate(program_manifest(load_program(source)))
 
 
-def session_build(
-    root: Path, model: ScriptedModel, services: RLEnvBuildServices, proposal: TaskProposal, round_no: int
-) -> SessionBuild:
+def session_build(root: Path, model: ScriptedModel, services: RLEnvBuildServices, round_no: int) -> SessionBuild:
     """In-process builds on ``root/store``, recording their spans to the session ledger under ``root``."""
     store = str(root / "store")
     ledger = session_ledger(root)
     build_services = replace(services, ledger=ledger)
 
-    async def builder(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+    async def builder(
+        source: str,
+        run_dir: Path,
+        *,
+        invalidate: frozenset[str],
+        proposal: TaskProposal,
+        verification_change: VerificationChange | None,
+    ) -> TaskDraft:
         program = load_program(source)
         return await run_build(
             program,
@@ -205,6 +212,7 @@ def session_build(
             round_no,
             research=ResearchRequirement.OFF,
             invalidate=invalidate,
+            verification_change=verification_change,
         )
 
     return SessionBuild(builder, store, model, SAMPLING, services, ledger.path_for(WORKPIECE), in_process_loader)
@@ -220,7 +228,7 @@ def author(services, proposal, ledger):
     async def run(
         workpiece_dir: Path, model: ScriptedModel, round_no: int = 0, revision: Revision | None = None
     ) -> AuthorOutcome:
-        build = session_build(workpiece_dir.parent, model, services, proposal, round_no)
+        build = session_build(workpiece_dir.parent, model, services, round_no)
         return await author_round(
             CONFIG, model, LLMPolicy(), ledger, build, workpiece_dir, WORKPIECE, round_no, proposal, revision
         )
@@ -245,6 +253,18 @@ def tool_outputs(model: ScriptedModel) -> list[str]:
     return [str(m["content"]) for m in model.requests[-1].messages if m["role"] == "tool"]
 
 
+def offered_tools(model: ScriptedModel) -> set[str]:
+    """The names of the tools the session's first request offered."""
+    tools = model.requests[0].fields["tools"]
+    assert isinstance(tools, list)
+    return {tool["function"]["name"] for tool in tools}
+
+
+def declaring_code(proposal: TaskProposal) -> TaskProposal:
+    """``proposal`` declaring code verification, which ``PROGRAM``'s exact-match grader does not implement."""
+    return replace(proposal, header=replace(proposal.header, verification=Verification.CODE))
+
+
 def tool_texts(model: ScriptedModel) -> list[str]:
     """Every tool result any request of the session carried."""
     return [str(m["content"]) for request in model.requests for m in request.messages if m["role"] == "tool"]
@@ -259,11 +279,21 @@ class HostFailingBuilder:
     failures: int
     calls: int = 0
 
-    async def __call__(self, source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+    async def __call__(
+        self,
+        source: str,
+        run_dir: Path,
+        *,
+        invalidate: frozenset[str],
+        proposal: TaskProposal,
+        verification_change: VerificationChange | None,
+    ) -> TaskDraft:
         self.calls += 1
         if self.calls <= self.failures:
             raise BuildInfrastructureFailure(self.failure.cause, self.failure.message)
-        return await self.builder(source, run_dir, invalidate=invalidate)
+        return await self.builder(
+            source, run_dir, invalidate=invalidate, proposal=proposal, verification_change=verification_change
+        )
 
 
 def step_statuses(path: Path) -> list[tuple[str, str]]:
@@ -452,7 +482,7 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
         answer("still nothing"),
         answer("done"),
     )
-    build = replace(session_build(workpiece.parent, model, services, proposal, 0), loader=bounded)
+    build = replace(session_build(workpiece.parent, model, services, 0), loader=bounded)
 
     outcome = await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
 
@@ -470,7 +500,7 @@ async def test_a_loader_child_the_host_killed_ends_the_round_as_infrastructure(
     monkeypatch.setattr(load_process, "MODULE", "taskforge.no_such_loader")
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel(turn(("run_loader", {"path": "program.py"})), answer("done"))
-    build = replace(session_build(tmp_path, model, services, proposal, 0), loader=aa.load_in_child)
+    build = replace(session_build(tmp_path, model, services, 0), loader=aa.load_in_child)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
         await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
@@ -490,7 +520,7 @@ async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
         turn(("run_build", {"path": "program.py"})),
         turn(("submit", {"path": "program.py", "notes": "n"})),
     )
-    build = session_build(tmp_path, model, services, proposal, 0)
+    build = session_build(tmp_path, model, services, 0)
     flaky = HostFailingBuilder(build.builder, SCHEDULING, failures=1)
 
     outcome = await author_round(
@@ -508,7 +538,7 @@ async def test_a_container_proposal_on_a_host_without_an_image_builder_ends_befo
     container = declaring(proposal, None)
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel()
-    build = session_build(tmp_path, model, services, container, 0)
+    build = session_build(tmp_path, model, services, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
         await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, container, None)
@@ -531,7 +561,7 @@ async def test_a_build_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
         turn(("run_build", {"path": "program.py"})),
         turn(("submit", {"path": "program.py", "notes": "n"})),
     )
-    build = session_build(tmp_path, model, services, proposal, 0)
+    build = session_build(tmp_path, model, services, 0)
     failing = HostFailingBuilder(build.builder, failure, failures=ALWAYS)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
@@ -570,7 +600,7 @@ async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
         turn(("run_grade_candidate", {"reply": "41"})),
         turn(("submit", {"path": "program.py", "notes": "n"})),
     )
-    build = session_build(tmp_path, model, services, proposal, 0)
+    build = session_build(tmp_path, model, services, 0)
 
     with pytest.raises(BuildInfrastructureFailure) as raised:
         await author_round(
@@ -588,7 +618,7 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
 ):
     builds: list[Path] = []
 
-    async def expiring(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+    async def expiring(source: str, run_dir: Path, **build: object) -> TaskDraft:
         builds.append(run_dir)
         raise BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "grader")
 
@@ -598,7 +628,7 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
         turn(("run_build", {"path": "program.py"})),
         turn(("submit", {"path": "program.py", "notes": "n"})),
     )
-    build = replace(session_build(tmp_path, model, services, proposal, 0), builder=expiring)
+    build = replace(session_build(tmp_path, model, services, 0), builder=expiring)
 
     with pytest.raises(BuildExpired) as raised:
         await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
@@ -613,7 +643,7 @@ async def test_a_build_past_its_clock_ends_the_round_unseen_by_the_author_and_un
 
 
 async def test_a_storage_fault_in_a_build_ends_the_round_unseen_by_the_author(tmp_path, services, proposal, ledger):
-    async def corrupt_store(source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
+    async def corrupt_store(source: str, run_dir: Path, **build: object) -> TaskDraft:
         raise StoreCorruption("Blob sha256:00 of step grader does not match its digest")
 
     workpiece = tmp_path / "workpiece"
@@ -622,7 +652,7 @@ async def test_a_storage_fault_in_a_build_ends_the_round_unseen_by_the_author(tm
         turn(("run_build", {"path": "program.py"})),
         turn(("submit", {"path": "program.py", "notes": "n"})),
     )
-    build = replace(session_build(tmp_path, model, services, proposal, 0), builder=corrupt_store)
+    build = replace(session_build(tmp_path, model, services, 0), builder=corrupt_store)
 
     with pytest.raises(StoreCorruption):
         await author_round(CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 0, proposal, None)
@@ -806,6 +836,118 @@ async def test_same_session_revision_continues_the_conversation(tmp_path, author
     session = read(authored(workpiece, 1, 0) / "session.json")
     assert session["mode"] == "same_session" and session["turns_total"] == 33
     assert (agentic(workpiece, 1, 0) / "workspace" / "program.py").read_text() == PROGRAM
+
+
+async def test_a_session_answering_findings_swaps_the_verifier_kind_and_builds_and_submits_the_new_kind(
+    tmp_path, services, proposal, ledger
+):
+    workpiece = tmp_path / "workpiece"
+    prior_session(workpiece, "submitted", 100_000, 30)
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("change_verification", {"kind": "answer_in_box", "reason": TO_ANSWER_IN_BOX.reason})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "grades 6 * 7 exactly"})),
+    )
+    build = session_build(tmp_path, model, services, 1)
+
+    outcome = await author_round(
+        CONFIG, model, LLMPolicy(), ledger, build, workpiece, WORKPIECE, 1, declaring_code(proposal), FINDINGS
+    )
+
+    assert "change_verification" in offered_tools(model)
+    refused, changed, built = tool_outputs(model)[1:4]
+    assert refused.startswith("build failed (build_failure in step verification)")
+    assert "declares code verification but the built grader is answer_in_box" in refused
+    assert changed.startswith("verification changed from code to answer_in_box;")
+    assert built.startswith("built: program ")
+    assert (outcome.status, outcome.verification_change) == (AuthorStatus.ACCEPTED, TO_ANSWER_IN_BOX)
+    record = read(authored(workpiece, 1, 0) / "author.json")
+    assert record["tested"] is True
+    assert record["verification_change"] == {
+        "declared": "code",
+        "revised": "answer_in_box",
+        "reason": TO_ANSWER_IN_BOX.reason,
+    }
+    session = agentic(workpiece, 1, 0)
+    assert "verification: answer_in_box" in (session / "workspace" / "proposal.md").read_text()
+    provenance = load_draft(session / "runs" / "1" / DRAFT_DIR).provenance
+    assert (provenance.verification, provenance.verification_change) == (Verification.ANSWER_IN_BOX, TO_ANSWER_IN_BOX)
+
+
+async def test_a_session_starts_from_the_verification_change_its_revision_carries(tmp_path, services, proposal, ledger):
+    workpiece = tmp_path / "workpiece"
+    prior_session(workpiece, "submitted", 100_000, 30)
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+    revision = replace(FINDINGS, verification_change=TO_ANSWER_IN_BOX)
+
+    outcome = await author_round(
+        CONFIG,
+        model,
+        LLMPolicy(),
+        ledger,
+        session_build(tmp_path, model, services, 1),
+        workpiece,
+        WORKPIECE,
+        1,
+        declaring_code(proposal),
+        revision,
+    )
+
+    assert tool_outputs(model)[1].startswith("built: program ")
+    assert (outcome.status, outcome.verification_change) == (AuthorStatus.ACCEPTED, TO_ANSWER_IN_BOX)
+
+
+async def test_change_verification_refuses_what_it_cannot_swap_to_and_the_declared_kind_undoes_a_swap(tmp_path, author):
+    workpiece = tmp_path / "workpiece"
+    prior_session(workpiece, "submitted", 100_000, 30)
+    model = ScriptedModel(
+        turn(("change_verification", {"kind": "composite", "reason": "two graders"})),
+        turn(("change_verification", {"kind": "answer_in_box", "reason": "it already is"})),
+        turn(("change_verification", {"kind": "code", "reason": " "})),
+        turn(("change_verification", {"kind": "code", "reason": "the answer needs execution"})),
+        turn(("change_verification", {"kind": "answer_in_box", "reason": "one number after all"})),
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "n"})),
+    )
+
+    outcome = await author(workpiece, model, round_no=1, revision=FINDINGS)
+
+    composite, same, blank, swapped, undone, _, built = tool_outputs(model)
+    assert composite.startswith("error: tool arguments do not match the schema at $.kind: enum")
+    assert same == "error: the verification is already answer_in_box; nothing changed"
+    assert blank == "error: verification unchanged: a verification change states its reason"
+    assert swapped.startswith("verification changed from answer_in_box to code;")
+    assert undone.startswith("verification changed from code to answer_in_box (the round's own kind);")
+    assert built.startswith("built: program ")
+    assert (outcome.status, outcome.verification_change) == (AuthorStatus.ACCEPTED, None)
+    assert read(authored(workpiece, 1, 0) / "author.json")["verification_change"] is None
+
+
+async def test_round_zero_and_a_build_failure_offer_no_change_verification(tmp_path, author):
+    def calling_it() -> ScriptedModel:
+        return ScriptedModel(
+            turn(("change_verification", {"kind": "code", "reason": "the answer needs execution"})),
+            answer("done"),
+            answer("done"),
+            answer("done"),
+        )
+
+    round_zero, after_failure = calling_it(), calling_it()
+    await author(tmp_path / "zero" / "workpiece", round_zero)
+    failed = tmp_path / "failed" / "workpiece"
+    prior_session(failed, "submitted", 100_000, 30)
+    await author(failed, after_failure, round_no=1, revision=FAILURE)
+
+    for model in (round_zero, after_failure):
+        assert "change_verification" not in offered_tools(model)
+        assert tool_outputs(model)[0].startswith("error: unknown tool 'change_verification'")
 
 
 def test_tool_results_keep_head_and_tail_within_the_cap():

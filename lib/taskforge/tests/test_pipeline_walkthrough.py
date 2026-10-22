@@ -21,7 +21,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.grader import verifyit_package
 from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, TaskResource, TaskSpec
-from verifyit.spec import NumericSpec
+from verifyit.spec import JudgeSpec, NumericSpec
 
 from taskforge import content_hash
 from taskforge.llm.agent import ReasoningReplay
@@ -35,12 +35,20 @@ from taskforge.stage10_proposal.model import (
     ProposalFormatError,
     SolverMachine,
     TaskProposal,
+    Verification,
     parse,
     render,
 )
 from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage20_triage.verdict import TriageDecision, Verdict
-from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
+from taskforge.stage30_author.author import (
+    PROGRAM_FILE,
+    AuthoredProgram,
+    Revision,
+    RevisionKind,
+    VerificationChange,
+    static_author,
+)
 from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
     RLEnvBuildProgram,
@@ -62,6 +70,7 @@ from taskforge.stage40_build_with_program.run import (
     ResearchRequirement,
     TaskDraft,
     build_model_digest,
+    load_draft,
     run_build,
 )
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
@@ -204,8 +213,28 @@ async def broken(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec
     raise BuildFailure("the numbers do not multiply to the answer")
 
 
+@rl_env_build_sink
+async def judged(context: RLEnvBuildContext, numbers: TaskResource, proposal: TaskProposal) -> TaskSpec:
+    environment = requirements(image=None)
+    judge = verifyit_package(
+        JudgeSpec(references=("42",), question="the product", model="judge"), environment=environment
+    )
+    return assemble(
+        context.workpiece_id,
+        proposal.body,
+        AnswerType.TEXT,
+        PlainText(),
+        judge,
+        Source(dataset="taskforge", revision="test", row=context.workpiece_id, importer_revision="test"),
+        environment=environment,
+        files=(numbers,),
+    )
+
+
 PROGRAM = rl_env_build_program(numbers, grader, sink=task)
 FAILING = rl_env_build_program(sink=broken)
+JUDGED = rl_env_build_program(numbers, sink=judged)
+"""The toy task graded by an LLM judge, the kind ``TO_JUDGE`` swaps to."""
 SOURCE_IMPORTS = """\
 import base64
 
@@ -276,7 +305,7 @@ class RecordingAuthor:
     ) -> AuthoredProgram:
         self.revisions.append(revision)
         self.states.append(author_state)
-        return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
+        return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None, None)
 
 
 class SourceAuthor:
@@ -290,7 +319,7 @@ class SourceAuthor:
         self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
     ) -> AuthoredProgram:
         self.revisions.append(revision)
-        return AuthoredProgram(load_toy_program(self.source), self.source)
+        return AuthoredProgram(load_toy_program(self.source), self.source, None)
 
 
 HOST_FAILURE = BuildInfrastructureFailure("image_pull", "the sandbox image did not pull")
@@ -618,7 +647,7 @@ class CutAuthor:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
-        return AuthoredProgram(load_toy_program(SOURCE), SOURCE)
+        return AuthoredProgram(load_toy_program(SOURCE), SOURCE, None)
 
 
 async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_author_samples_again(tmp_path):
@@ -784,6 +813,92 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
     assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
+
+
+TO_JUDGE = VerificationChange(Verification.ANSWER_IN_BOX, Verification.LLM_AS_JUDGE, "the product is judged in prose")
+
+
+class SwappingAuthor:
+    """Returns ``PROGRAM`` in round 0, then ``JUDGED``: with ``TO_JUDGE`` for a modify revision carrying no change,
+    and with the revision's change otherwise. Records each call's proposal kind and revision."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[Verification, Revision | None]] = []
+
+    async def __call__(
+        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
+        self.calls.append((proposal.header.verification, revision))
+        if revision is None:
+            return AuthoredProgram(PROGRAM, None, None)
+        if revision.kind is RevisionKind.MODIFY and revision.verification_change is None:
+            return AuthoredProgram(JUDGED, None, TO_JUDGE)
+        return AuthoredProgram(JUDGED, None, revision.verification_change)
+
+
+class RecordingBuild:
+    """``run_build``, recording each build's proposal kind and verification change; build ``fails`` raises."""
+
+    def __init__(self, fails: int) -> None:
+        self.fails = fails
+        self.calls: list[tuple[Verification, VerificationChange | None]] = []
+
+    async def __call__(self, program: RLEnvBuildProgram, proposal: TaskProposal, *args: Any, **kwargs: Any) -> TaskDraft:
+        self.calls.append((proposal.header.verification, kwargs["verification_change"]))
+        if len(self.calls) == self.fails:
+            raise BuildFailure("the judge saw no question", "judged")
+        return await run_build(program, proposal, *args, **kwargs)
+
+
+async def test_an_authored_verification_change_reaches_every_later_build_and_author_call(tmp_path):
+    decisions: list[Decision] = [
+        Modify(findings=("the product is reported in prose",)),
+        Modify(findings=("the question names no unit",)),
+        Accept(band=BandOutcome.IN_BAND),
+    ]
+
+    async def review_in_turn(summary: object) -> Decision:
+        return decisions.pop(0)
+
+    author, build = SwappingAuthor(), RecordingBuild(fails=3)
+    stages = replace(STAGES, author=author, build=build, review=review_in_turn)
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    aib, judge = Verification.ANSWER_IN_BOX, Verification.LLM_AS_JUDGE
+    assert build.calls == [(aib, None), (judge, TO_JUDGE), (judge, TO_JUDGE), (judge, TO_JUDGE)]
+    authored = [(e.round, e.attrs.get("verification_change")) for e in log.events() if e.kind == "authored"]
+    swap = content_hash.canonical_json(TO_JUDGE)
+    assert authored == [(0, None), (1, swap), (2, swap), (2, None)]
+    # Each author call runs once at the author stage and once more at the build, since the program has no source.
+    modify, failure = RevisionKind.MODIFY, RevisionKind.BUILD_FAILURE
+    assert [(kind, None if r is None else (r.kind, r.verification_change)) for kind, r in author.calls] == [
+        (aib, None),
+        (aib, None),
+        (aib, (modify, None)),
+        (aib, (modify, TO_JUDGE)),
+        (aib, (modify, TO_JUDGE)),
+        (aib, (modify, TO_JUDGE)),
+        (judge, (failure, None)),
+        (judge, (failure, None)),
+    ]
+    assert derive_state(log.events()).verification_change == TO_JUDGE
+    provenance = load_draft(tmp_path / "workpieces" / WORKPIECE / "rounds" / "2" / DRAFT_DIR).provenance
+    assert (provenance.verification, provenance.verification_change) == (judge, TO_JUDGE)
+
+
+async def test_an_author_swapping_the_kind_outside_a_modify_revision_fails_the_workpiece_at_the_author(tmp_path):
+    async def swapping(
+        proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    ) -> AuthoredProgram:
+        return AuthoredProgram(JUDGED, None, TO_JUDGE)
+
+    with pytest.raises(ValueError, match="only an author answering modify may"):
+        await run_workpiece(
+            coordinator(tmp_path, replace(STAGES, author=swapping)), WORKPIECE, PROPOSAL, InMemoryEventLog()
+        )
+    state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
+    assert (state.stage, state.terminal, state.verification_change) == (Stage.AUTHOR, Terminal.FAILED, None)
 
 
 class TriageInTurn:

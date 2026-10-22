@@ -17,9 +17,9 @@ as they are and may also call any stage directly::
     review        Review          a caller's function
 
 The Protocols defined here take positional-only parameters, so a caller's function may use its own
-parameter names; ``Build`` passes ``run_build``'s keyword-only ``research`` and ``model_digest`` by
-name. ``Author`` comes from ``stage30_author.author``, and the coordinator calls it with
-``proposal`` and ``revision`` in that order. The triage stage calls ``repair`` only on a REPAIR
+parameter names; ``Build`` passes ``run_build``'s keyword-only ``research``, ``model_digest`` and
+``verification_change`` by name. ``Author`` comes from ``stage30_author.author``, and the coordinator calls it
+with ``proposal`` and ``revision`` in that order. The triage stage calls ``repair`` only on a REPAIR
 verdict within ``WorkpieceBudget.max_triage_repairs``, and triages the proposal it returns; under a
 budget of zero it never calls it. The build stage calls ``load_program`` on the source the author
 returned, read back from ``authored/<k>/program.py``. The coordinator writes the summary returned by
@@ -35,7 +35,7 @@ from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import TaskProposal
 from taskforge.stage20_triage.verdict import Verdict
-from taskforge.stage30_author.author import Author
+from taskforge.stage30_author.author import Author, VerificationChange
 from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
@@ -78,6 +78,7 @@ class Build(Protocol):
         *,
         research: ResearchRequirement,
         model_digest: str,
+        verification_change: VerificationChange | None,
     ) -> TaskDraft: ...
 
 

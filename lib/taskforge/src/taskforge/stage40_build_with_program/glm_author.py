@@ -17,6 +17,8 @@ raised ``StructuredOutputError``. It writes the accepted source to ``<workpiece_
 it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
 no source, and continues the conversation with the previous program as the model's turn and the
 revision as the next user turn (``revision_prompt``), which names a verification change the revision carries.
+The one-shot author cannot choose a swap of the verifier kind: it renders the proposal with the revision's
+change applied and returns that change unchanged.
 """
 
 import inspect
@@ -387,14 +389,16 @@ class GlmAuthor:
     ) -> AuthoredProgram:
         """Author the program for ``proposal``, revising the workpiece's ``program.py`` when ``revision`` is given.
 
-        The prompt does not carry ``author_state``.
+        The prompt does not carry ``author_state``. A revision's verification change is applied to the
+        proposal the prompt renders and returned unchanged; this author cannot choose one.
 
         Raises:
             FileNotFoundError: ``revision`` is given and the workpiece has no ``program.py`` to revise.
             StructuredOutputError: the output limit cut a reply off, or every submission, repairs
                 included, failed to load.
         """
-        messages = author_messages(proposal)
+        change = None if revision is None else revision.verification_change
+        messages = author_messages(proposal if change is None else change.revise(proposal))
         if revision is not None:
             follow_up: list[Message] = [
                 {"role": "assistant", "content": (self.workpiece_dir / PROGRAM_FILE).read_text()},
@@ -433,7 +437,7 @@ class GlmAuthor:
             "requests": len(result.completions),
         }
         _write(record_dir / RECORD_FILE, json.dumps(record, indent=2).encode())
-        return AuthoredProgram(program, source)
+        return AuthoredProgram(program, source, change)
 
 
 def _write(path: Path, content: bytes) -> None:
