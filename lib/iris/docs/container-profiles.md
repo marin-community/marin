@@ -206,8 +206,10 @@ Practical guidance:
   that name too; a failing download names the host it could not resolve.
 - Add CIDR rules only for services reached by address. Kubernetes clusters
   admit a domain rule's addresses only after the task resolves the name.
-- An unlisted name fails at once with `Temporary failure in name resolution`
-  (`socket.gaierror`, `curl: (6)`). An unlisted address times out.
+- An unlisted name fails at once: `Temporary failure in name resolution` from
+  Python and `curl: (6) Could not resolve host` from curl, or
+  `dns error: failed to lookup address information: Try again` from uv. An
+  unlisted address times out.
 - If a job needs arbitrary internet access, run it with
   `--egress-policy cluster`; its children inherit that.
 

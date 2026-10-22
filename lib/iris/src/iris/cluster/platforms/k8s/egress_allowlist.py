@@ -38,12 +38,12 @@ _API_VERSION = "cilium.io/v2"
 _KIND = "CiliumNetworkPolicy"
 _NAMESPACE_LABEL = "k8s:io.kubernetes.pod.namespace"
 _DNS_NAMESPACE = "kube-system"
-# Cilium's "*" matches one DNS label, so cluster-domain names get one pattern
-# per depth. glibc stops walking the resolv.conf search list at the first
-# REFUSED answer, so every search candidate of an in-cluster name
-# ("svc.namespace" becomes "svc.namespace.namespace.svc.cluster.local") must
-# resolve rather than be refused.
-_CLUSTER_DOMAIN_PATTERNS = tuple("*." * depth + "cluster.local" for depth in range(1, 5))
+# Every search candidate a lookup tries must reach CoreDNS rather than be
+# refused: musl, which static binaries such as uv use, fails the whole lookup
+# at the first REFUSED answer. With the pod's "ndots:5", a name of up to five
+# labels is first tried under "<namespace>.svc.cluster.local", giving nine
+# labels. Cilium's "*" matches one label, so each depth gets a pattern.
+_CLUSTER_DOMAIN_PATTERNS = tuple("*." * depth + "cluster.local" for depth in range(1, 8))
 _NODE_ENTITIES = ("host", "remote-node")
 
 

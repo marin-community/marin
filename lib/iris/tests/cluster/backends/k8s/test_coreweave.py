@@ -1240,7 +1240,7 @@ def test_start_controller_creates_the_allowlist_policy_only_on_cilium_clusters(c
     assert not lookups.allows("attacker.example")
     # In-cluster names resolve, including the search-list candidates glibc tries before an absolute name.
     assert lookups.allows("iris-controller-svc.iris.svc.cluster.local")
-    assert lookups.allows("pypi.org.iris.svc.cluster.local")
+    assert lookups.allows("us.aws.cdn.hf.co.iris.svc.cluster.local")
     assert {} in endpoints  # every pod in the Iris namespace
     assert {
         "matchLabels": {"k8s:io.kubernetes.pod.namespace": "cw-object-storage", "k8s:app.kubernetes.io/name": "lota"}

@@ -59,6 +59,7 @@ BASE_EGRESS_ALLOWLIST: tuple[str, ...] = (
     "hf.co",
     "*.hf.co",
     "*.xethub.hf.co",
+    "*.*.cdn.hf.co",
     # Google Cloud APIs, Cloud Storage and Artifact Registry.
     "*.googleapis.com",
     "*.pkg.dev",
