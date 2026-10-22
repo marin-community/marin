@@ -9,6 +9,8 @@ from experiments.post_training.pivotrl.mixed_rlvr_analysis import (
     EVALCHEMY,
     HARBOR,
     REF,
+    PairedDelta,
+    axis_half_range,
     exact_mcnemar_p,
     harbor_scores,
     paired_delta,
@@ -65,6 +67,15 @@ def test_report_skips_runs_that_have_not_scored_anything(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "a-step4 vs REF" in out
     assert "step  8: n=2  (no comparable runs)" in out
+
+
+def test_axis_covers_the_largest_delta_but_never_zooms_into_the_noise():
+    # A clear effect sets the range, rounded up to a nice value: 8.8 points with headroom becomes 10.
+    assert axis_half_range([PairedDelta(8.8, 6.2, 11.4, 500), PairedDelta(-1.2, -3.8, 1.4, 500)]) == 10.0
+    # Deltas inside wide intervals (AIME24-like, half-width 5) keep the range at twice the half-width.
+    assert axis_half_range([PairedDelta(-3.3, -8.3, 1.7, 30), PairedDelta(1.0, -4.0, 6.0, 30)]) == 10.0
+    # A small but precise effect (MMLU-Pro-like) gets a tight range.
+    assert axis_half_range([PairedDelta(-1.6, -2.0, -1.2, 12032), PairedDelta(0.9, 0.5, 1.3, 12032)]) == 2.0
 
 
 def test_paired_delta_uses_shared_items_only():

@@ -36,6 +36,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pyarrow.parquet as pq
 from dotenv import dotenv_values
+from matplotlib.ticker import MaxNLocator
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
@@ -125,6 +126,23 @@ class PairedDelta:
     low: float
     high: float
     n: int
+
+
+NICE_HALF_RANGES = (1.0, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
+
+
+def axis_half_range(deltas: Sequence[PairedDelta]) -> float:
+    """Half-height of a panel's y-range, which is symmetric about zero.
+
+    It covers the largest |delta| with 5% headroom and is never tighter than twice the panel's median 80% interval
+    half-width, so a benchmark's noise-level differences look small without drawing the intervals. The result is
+    rounded up to a value in ``NICE_HALF_RANGES`` times a power of ten.
+    """
+    largest = 1.05 * max(abs(delta.mean) for delta in deltas)
+    noise = 2 * float(np.median([(delta.high - delta.low) / 2 for delta in deltas]))
+    half = max(largest, noise, 0.5)
+    scale = 10 ** math.floor(math.log10(half))
+    return next(step * scale for step in NICE_HALF_RANGES if step * scale >= half - 1e-9)
 
 
 def paired_delta(arm: dict[str, float], ref: dict[str, float], rng: np.random.Generator) -> PairedDelta:
@@ -410,6 +428,11 @@ def plot(
             fontsize=8,
             color="#666666",
         )
+        drawn = [delta for label in series for _, delta in points[(bench, label)]]
+        if drawn:
+            half = axis_half_range(drawn)
+            ax.set_ylim(-half, half)
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=4, steps=[1, 2, 5, 10], symmetric=True))
         ax.set_xticks(list(steps))
         ax.set_xlim(min(steps) - 0.6, max(steps) + 0.6)
         ax.grid(axis="y", color="#E6E6E6", lw=0.7, zorder=0)
