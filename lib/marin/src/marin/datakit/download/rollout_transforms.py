@@ -111,6 +111,20 @@ def repair_orphan_reasoning_closers(text: str) -> tuple[str, int]:
     return "".join(parts), repairs
 
 
+def repair_assistant_messages(messages: list[dict]) -> tuple[list[dict], int]:
+    """Repair assistant content without changing user or tool messages."""
+    repaired_messages = []
+    total_repairs = 0
+    for message in messages:
+        if message.get("role") != "assistant":
+            repaired_messages.append(message)
+            continue
+        content, repairs = repair_orphan_reasoning_closers(message.get("content") or "")
+        repaired_messages.append({**message, "content": content} if repairs else message)
+        total_repairs += repairs
+    return repaired_messages, total_repairs
+
+
 def normalize_reasoning_tokens(text: str) -> str:
     """Normalize balanced reasoning tags to the canonical source delimiters."""
     text = re.sub(r"<think>", REASONING_START, text, flags=re.IGNORECASE)

@@ -26,6 +26,7 @@ from marin.datakit.download.rollout_transforms import (
     checked_openai_chat_document,
     load_parquet_batched,
     render_role_message,
+    repair_assistant_messages,
     repair_orphan_reasoning_closers,
     text_document,
 )
@@ -102,15 +103,10 @@ def row_to_doc(row: dict) -> list[dict]:
         counters.pipeline.update_counter("swe_zero_12m/dropped", 1)
         return []
 
-    rendered = []
-    for message in messages:
-        if message.get("role") == "assistant":
-            content, repairs = repair_orphan_reasoning_closers(message.get("content") or "")
-            if repairs:
-                counters.pipeline.update_counter("swe_zero_12m/orphan_reasoning_closes_repaired", repairs)
-            message = {**message, "content": content}
-        rendered.append(render_role_message(message))
-    text = "\n\n".join(rendered)
+    messages, repairs = repair_assistant_messages(messages)
+    if repairs:
+        counters.pipeline.update_counter("swe_zero_12m/orphan_reasoning_closes_repaired", repairs)
+    text = "\n\n".join(render_role_message(message) for message in messages)
 
     counters.pipeline.update_counter("swe_zero_12m/kept", 1)
     return [text_document(text, HF_DATASET_ID)]

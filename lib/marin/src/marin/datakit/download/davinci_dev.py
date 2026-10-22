@@ -40,7 +40,7 @@ from marin.datakit.download.rollout_transforms import (
     checked_openai_chat_document,
     load_parquet_batched,
     render_tool_message,
-    repair_orphan_reasoning_closers,
+    repair_assistant_messages,
     text_document,
 )
 from marin.datakit.normalize import normalize_step
@@ -228,15 +228,10 @@ def env_row_to_doc(row: dict) -> list[dict]:
         counters.pipeline.update_counter("davinci_dev/env/dropped", 1)
         return []
     tag = _success_to_tag(row.get("success") if "success" in row else None)
-    rendered_messages = []
-    for message in messages:
-        if message.get("role") == "assistant":
-            content, repairs = repair_orphan_reasoning_closers(message.get("content") or "")
-            if repairs:
-                counters.pipeline.update_counter("davinci_dev/env/orphan_reasoning_closes_repaired", repairs)
-            message = {**message, "content": content}
-        rendered_messages.append(render_tool_message(message))
-    rendered = "\n\n".join(rendered_messages)
+    messages, repairs = repair_assistant_messages(messages)
+    if repairs:
+        counters.pipeline.update_counter("davinci_dev/env/orphan_reasoning_closes_repaired", repairs)
+    rendered = "\n\n".join(render_tool_message(message) for message in messages)
     text = f"{tag}\n\n{rendered}" if tag else rendered
 
     counters.pipeline.update_counter("davinci_dev/env/kept", 1)
