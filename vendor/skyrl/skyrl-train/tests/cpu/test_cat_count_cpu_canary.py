@@ -78,7 +78,7 @@ def cat_count_session(monkeypatch):
 
 
 def train(
-    runs: ForkServerContext,
+    forkserver_context: ForkServerContext,
     root: Path,
     model: Path,
     *,
@@ -99,7 +99,7 @@ def train(
         cfg.trainer.algorithm.advantage_estimator = "cat_count_flipped_grpo"
     worker_env = {key: os.environ[key] for key in ("SKYRL_TELEMETRY_ENDPOINT", "SKYRL_RUN_ID", "SKYRL_EXECUTION_UID")}
     start = time.perf_counter()
-    process = runs.Process(target=run_cat_count, args=(cfg, worker_env))
+    process = forkserver_context.Process(target=run_cat_count, args=(cfg, worker_env))
     process.start()
     process.join(RUN_TIMEOUT_SECONDS)
     if process.exitcode is None:
@@ -254,9 +254,9 @@ def assert_cpu_learning(positive, root: Path, telemetry):
     )
 
 
-def train_positive(runs, root, model, seed=0):
+def train_positive(forkserver_context, root, model, seed=0):
     return train(
-        runs,
+        forkserver_context,
         root,
         model,
         seed=seed,
@@ -277,9 +277,9 @@ def train_positive(runs, root, model, seed=0):
     )
 
 
-def test_cat_count_cpu_learns(tmp_path, cat_count_policy, cat_count_session, runs):
+def test_cat_count_cpu_learns(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
     root = tmp_path / "positive"
-    positive = train_positive(runs, root, cat_count_policy)
+    positive = train_positive(forkserver_context, root, cat_count_policy)
     assert_cpu_learning(positive, root, cat_count_session)
     before, after = scores(positive)
     print(f"CAT_COUNT_CPU seed=0 positive_scores={before}->{after}")
@@ -287,10 +287,10 @@ def test_cat_count_cpu_learns(tmp_path, cat_count_policy, cat_count_session, run
 
 @pytest.mark.nightly
 @pytest.mark.parametrize("seed", [0, 1])
-def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count_session, runs, seed):
+def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count_session, forkserver_context, seed):
     root = tmp_path / "positive"
-    positive = train_positive(runs, root, cat_count_policy, seed=seed)
-    negative = train(runs, tmp_path / "negative", cat_count_policy, flipped=True, seed=seed)
+    positive = train_positive(forkserver_context, root, cat_count_policy, seed=seed)
+    negative = train(forkserver_context, tmp_path / "negative", cat_count_policy, flipped=True, seed=seed)
     assert_cpu_learning(positive, root, cat_count_session)
     before, after = scores(positive)
     negative_before, negative_after = scores(negative)
@@ -303,10 +303,10 @@ def test_cat_count_flipped_advantage_fails(tmp_path, cat_count_policy, cat_count
 
 
 @pytest.mark.nightly
-def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_count_session, runs):
+def test_cat_count_async_resumes_and_converges(tmp_path, cat_count_policy, cat_count_session, forkserver_context):
     root = tmp_path / "async"
-    first = train(runs, root, cat_count_policy, steps=4, staleness=1)
-    resumed = train(runs, root, cat_count_policy, steps=100, staleness=1, resume=True, eval_interval=2)
+    first = train(forkserver_context, root, cat_count_policy, steps=4, staleness=1)
+    resumed = train(forkserver_context, root, cat_count_policy, steps=100, staleness=1, resume=True, eval_interval=2)
     assert scores(resumed)[len(scores(first))] == scores(first)[-1]
     assert len([row for row in first if "policy/raw_grad_norm" in row]) == 4
     training = [row for row in resumed if "policy/raw_grad_norm" in row]

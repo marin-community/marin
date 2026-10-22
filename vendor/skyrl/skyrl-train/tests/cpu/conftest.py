@@ -41,7 +41,7 @@ def cat_count_policy(pytestconfig) -> Path:
 
 
 @pytest.fixture(scope="module")
-def runs() -> ForkServerContext:
+def forkserver_context() -> ForkServerContext:
     context = multiprocessing.get_context("forkserver")
     context.set_forkserver_preload(["tests.cpu.tiny_training.cat_count"])
     return context
