@@ -111,17 +111,17 @@ A harness does not grade. After `run` returns, the engine grades the rollout wit
 [Grading](#grading)). A harness can attach its own reward to a step with `record(data=...)`. The engine does
 not read it.
 
-### Assistant prefills
+### Assistant prefixes
 
-`PrefillHarness` continues the final assistant text in `ConversationInput.events` once. Register it
+`AssistantPrefixHarness` continues the final assistant text in `ConversationInput.events` once. Register it
 and select it explicitly with `TaskRolloutSpec.harness`:
 
 ```python
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
 
-engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+engine = RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()})
 spec = TaskRolloutSpec(
-    task=task, harness="prefill", limits=limits, task_machine=None, verifier_machine=None
+    task=task, harness="assistant_prefix", limits=limits, task_machine=None, verifier_machine=None
 )
 ```
 
@@ -137,7 +137,7 @@ channels make the attempt invalid, so parser behavior cannot silently turn a con
 zero reward. Structural-closure grading concatenates its fixed text prefix with this continuation and
 scores the first completed outer structure.
 
-The selected model tokenizes the conversation and prefill. Training records its actual prompt and sampled
+The selected model tokenizes the conversation and assistant prefix. Training records its actual prompt and sampled
 response tokens with their logprobs through the normal model session. Historical token IDs do not constrain
 the task. Backends can use `TraceMode.MESSAGES` when only text and usage are available.
 

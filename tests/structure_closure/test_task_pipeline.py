@@ -7,7 +7,7 @@ from dataclasses import asdict, replace
 
 import pytest
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
 from rolloutengine.test_support import ReplayModel, rollout_spec
 from taskcompendium.models import Source, TaskSpec, verifyit_spec
 from verifyit.spec import StructureClosureSpec
@@ -57,7 +57,7 @@ async def test_exported_tasks_grade_each_family_through_prefill_harness(tmp_path
     originals = {row["case_id"]: row for row in map(json.loads, (cases / "validation.jsonl").read_text().splitlines())}
     assert {task.id for task in tasks} == {"structure-closure:" + identity for identity in originals}
     assert {original["family"] for original in originals.values()} == set(Family)
-    engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+    engine = RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()})
     for task in tasks:
         original = originals[task.id.removeprefix("structure-closure:")]
         spec = verifyit_spec(task.grader)
@@ -69,7 +69,7 @@ async def test_exported_tasks_grade_each_family_through_prefill_harness(tmp_path
         else:
             assert spec.expected == original["expected"]
         model = ReplayModel([{"role": "assistant", "content": spec.expected[len(spec.prefix) :]}])
-        result = await engine.run_task(rollout_spec(task, harness="prefill", max_turns=1), model.complete)
+        result = await engine.run_task(rollout_spec(task, harness="assistant_prefix", max_turns=1), model.complete)
         assert result.grade.reward == 1
         assert model.requests[0].messages[-1] == {"role": "assistant", "content": spec.prefix}
 
@@ -88,7 +88,7 @@ async def test_paired_tool_probes_preserve_quoted_protocol_markers(tokenizer, ma
     historical = paired_tool_probes(record, tokenizer)
     tasks = paired_task_probes(case, SOURCE, tokenizer)
     assert len(historical) == len(tasks) == 4
-    engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+    engine = RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()})
     for old, task in zip(historical, tasks, strict=True):
         spec = verifyit_spec(task.grader)
         assert isinstance(spec, StructureClosureSpec)
@@ -97,7 +97,7 @@ async def test_paired_tool_probes_preserve_quoted_protocol_markers(tokenizer, ma
             "result"
         ] == [{"search": {"query": marker}}]
         model = ReplayModel([{"role": "assistant", "content": "</tool_call>"}])
-        result = await engine.run_task(rollout_spec(task, harness="prefill", max_turns=1), model.complete)
+        result = await engine.run_task(rollout_spec(task, harness="assistant_prefix", max_turns=1), model.complete)
         assert result.grade.reward == 1
         assert bool(model.requests[0].options.get("tools")) == old["probe_variant"].startswith("declared-")
 
@@ -172,8 +172,8 @@ async def test_reasoning_task_grades_raw_closing_delimiter(continuation, reward)
     )
     task = case_task(case, SOURCE)
     model = ReplayModel([{"role": "assistant", "content": continuation}])
-    result = await RolloutEngine({}, {"prefill": PrefillHarness()}).run_task(
-        rollout_spec(task, harness="prefill", max_turns=1), model.complete
+    result = await RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()}).run_task(
+        rollout_spec(task, harness="assistant_prefix", max_turns=1), model.complete
     )
     assert result.grade.reward == reward
     assert result.rollout.conversations[0].steps[0].turn.message["content"] == continuation

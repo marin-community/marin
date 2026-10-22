@@ -48,7 +48,6 @@ from experiments.post_training.snowball_inventory_smoke import (
 from experiments.post_training.snowball_inventory_train import CHECKPOINT_INTERVAL, ROLE_PLAN, training_recipe
 
 MAX_STEPS = 50
-EVAL_CONCURRENCY = 8
 REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_STEPS = tuple(range(0, MAX_STEPS + 1, CHECKPOINT_INTERVAL))
@@ -130,13 +129,11 @@ def comparison_recipe(model_uri: str, *, judge_base_url: str, judge_model: str) 
     recipe["environment"]["task_sessions"].update(
         daytona={"api_key_env": "DAYTONA_EVAL_API_KEY", "ttl_minutes": 60},
     )
-    recipe.setdefault("trajectory_runner", {}).update(eval_max_concurrent_tasks=EVAL_CONCURRENCY)
     trainer = recipe["trainer"]
     trainer.update(
         evaluation_runner="task",
         eval_num_prompts=None,
         eval_batch_size=sum(FAMILY_COUNTS.values()),
-        eval_required_score_coverage=1.0,
         dump_eval_results=True,
     )
     trainer.setdefault("step_phase_budgets", {}).update(

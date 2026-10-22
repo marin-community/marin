@@ -20,7 +20,7 @@ from taskcompendium.models import NoGrader
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from rolloutengine.models import (
     GenerationLimitReached,
     GradedRollout,
@@ -73,7 +73,6 @@ from skyrl_train.rollouts.task_projections import (
 )
 from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
-from skyrl_train.task_inputs import PREFILL_HARNESS
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
@@ -401,8 +400,8 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
-        if lowered.harness == PREFILL_HARNESS:
-            harnesses[PREFILL_HARNESS] = PrefillHarness()
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS:
+            harnesses[ASSISTANT_PREFIX_HARNESS] = AssistantPrefixHarness()
         if is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = shell_harness(lowered.harness)
         if lowered.harness == HARBOR_TRIAL_SESSION:

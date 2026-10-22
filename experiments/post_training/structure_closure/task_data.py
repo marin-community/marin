@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Publish generated closure cases as ordinary text-prefill TaskSpecs."""
+"""Publish generated closure cases as assistant-prefix TaskSpecs."""
 
 import argparse
 import hashlib
