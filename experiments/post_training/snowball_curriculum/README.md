@@ -48,7 +48,7 @@ The exporter runs in the pinned trainer CPU environment, which supplies
 trainer. `Deployment` requires all rollout limits, command timeout, shell tool
 configuration and machine choices. Ordinary tasks use the production lowerer and
 serialized `shellbox:{settings}` discriminator, restoring `ToolHarness` with the
-same command settings in the worker. Prefill is always selected explicitly.
+same command settings in the worker. Assistant-prefix continuation is selected explicitly.
 
 ```sh
 uv run python -m experiments.post_training.snowball_curriculum.export export \
@@ -61,7 +61,7 @@ Canonical TaskSpecs retain their complete contracts. Native records go through
 `taskcompendium.convert.structure_closure.structure_closure_task`: original
 conversation events are followed by the supplied assistant text prefix, and the
 shared structure-closure grader replaces the historical session grader. The
-`prefill` harness requests continuation of that text using the selected model's
+`assistant_prefix` harness requests continuation of that text using the selected model's
 own tokenizer. Historical integer prompt IDs and tokenizer pins remain source
 audit data. Historical terminal-marker normalization is absent in the current
 grader. This changes native conditioning and grading semantics; historical replay

@@ -374,8 +374,6 @@ def run_recoverable_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
 
 def recoverable_evaluation_recipe(max_new_tokens: int = 8192, *, judge_base_url: str, judge_model: str) -> dict:
     recipe = evaluation_recipe(max_new_tokens)
-    # The post-generation scorer enforces full coverage after its one saved-answer attempt.
-    recipe["trainer"]["eval_required_score_coverage"] = None
     recipe["environment"]["task_sessions"]["remote_judge"] = {
         "base_url": judge_base_url,
         "api_key_env": "JUDGE_API_KEY",

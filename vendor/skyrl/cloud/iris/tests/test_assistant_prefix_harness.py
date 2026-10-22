@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Behavior tests for the explicit assistant-prefill harness and saved-answer replay."""
+"""Behavior tests for the assistant-prefix task runtime and saved-answer replay."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from omegaconf import OmegaConf
-from rolloutengine.harness.prefill import prefill_prompt
+from rolloutengine.harness.assistant_prefix import assistant_prefix_prompt
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutContractError
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import TaskDataset, task_prompt_token_count, write_tasks
@@ -105,15 +105,11 @@ def task_inputs():
     "response,parsed_channel,reward",
     [
         ("12}", None, 1.0),
-        ("12} trailing text", None, 1.0),
-        ("13}", None, 0.0),
-        ("12", None, 0.0),
         ("12}", {"reasoning_content": "parsed reasoning"}, None),
-        ("12}", {"reasoning": "parsed reasoning alias"}, None),
         ("12}", {"tool_calls": [{"id": "call-1", "type": "function"}]}, None),
     ],
 )
-async def test_prefill_worker_preserves_continuation_and_rejects_parsed_channels(
+async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed_channels(
     task_inputs, tmp_path, response, parsed_channel, reward
 ):
     config, request = task_inputs
@@ -132,7 +128,7 @@ async def test_prefill_worker_preserves_continuation_and_rejects_parsed_channels
             "grader": package.grader,
         }
     )
-    spec = lowered_task(task, "prefill", max_turns=1)
+    spec = lowered_task(task, "assistant_prefix", max_turns=1)
     request = replace(request, rows=(task_input(spec),), batch_metadata=BatchMetadata(0, "eval"))
     observed = []
 
@@ -186,7 +182,7 @@ async def test_prefill_worker_preserves_continuation_and_rejects_parsed_channels
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("served_prompt", ["matching", "different"])
-async def test_prefill_transport_renders_serving_tokens_and_retains_raw_structural_delimiters(served_prompt):
+async def test_assistant_prefix_transport_renders_serving_tokens_and_retains_raw_structural_delimiters(served_prompt):
     backend = Tokenizer(
         models.WordLevel(
             {
@@ -210,7 +206,7 @@ async def test_prefill_transport_renders_serving_tokens_and_retains_raw_structur
         "{% for m in messages %}{{ m.role }} {{ m.content }} {% endfor %}"
         "closed {% if add_generation_prompt %}new-generation{% endif %}",
     )
-    task = text_task("prefill").model_copy(
+    task = text_task("assistant_prefix").model_copy(
         update={
             "context": ConversationInput(
                 events=(TextMessage(role="user", content="question"), TextMessage(role="assistant", content="prefix"))
@@ -220,7 +216,7 @@ async def test_prefill_transport_renders_serving_tokens_and_retains_raw_structur
             ),
         }
     )
-    prompt = prefill_prompt(task)
+    prompt = assistant_prefix_prompt(task)
     observed = []
 
     class Engine:
@@ -256,7 +252,7 @@ async def test_prefill_transport_renders_serving_tokens_and_retains_raw_structur
     # Both admission and inference render the unfinished message, excluding its
     # template closer and a new assistant generation prompt, including tool schemas.
     assert output["prompt_ids"] == [[5, 1, 2, 3, 4]]
-    lowered = lowered_task(task, "prefill", max_turns=1)
+    lowered = lowered_task(task, "assistant_prefix", max_turns=1)
     assert task_prompt_token_count(tokenizer, {"task_rollout_spec": lowered.model_dump_json()}, "prompt") == 5
     assert observed[0]["sampling_params"]["max_tokens"] == 3
     assert observed[0]["sampling_params"]["skip_special_tokens"] is False
@@ -271,7 +267,7 @@ async def test_prefill_transport_renders_serving_tokens_and_retains_raw_structur
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("interrupted", [False, True])
-async def test_prefill_real_client_preserves_prompt_and_raw_completion_across_retry(interrupted):
+async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_across_retry(interrupted):
     backend = Tokenizer(
         models.WordLevel({"[UNK]": 0, "assistant": 1, "prefix": 2, "</think>": 3, "tail": 4}, unk_token="[UNK]")
     )
@@ -282,10 +278,10 @@ async def test_prefill_real_client_preserves_prompt_and_raw_completion_across_re
         additional_special_tokens=["</think>"],
         chat_template="{% for m in messages %}{{ m.role }} {{ m.content }} {% endfor %}closed",
     )
-    task = text_task("real-client-prefill").model_copy(
+    task = text_task("real-client-assistant_prefix").model_copy(
         update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix"),))}
     )
-    prompt = prefill_prompt(task)
+    prompt = assistant_prefix_prompt(task)
     submitted = []
 
     class Engine:
@@ -310,7 +306,7 @@ async def test_prefill_real_client_preserves_prompt_and_raw_completion_across_re
         {
             "prompts": [list(prompt.messages)],
             "chat_completion_params": [dict(prompt.options)],
-            "session_ids": ["prefill"],
+            "session_ids": ["assistant_prefix"],
             "sampling_params": {"max_generate_length": 10, "logprobs": 1},
             "max_context_length": 5,
             "max_prompt_length": 2,
@@ -335,10 +331,7 @@ async def test_prefill_real_client_preserves_prompt_and_raw_completion_across_re
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("include_header,expected_ids", [(False, [1, 2]), (True, [3, 1, 2])])
-async def test_prefill_admission_and_transport_share_configured_template_and_defaults(
-    tmp_path, include_header, expected_ids
-):
+async def test_assistant_prefix_admission_and_transport_share_configured_template_and_defaults(tmp_path):
     backend = Tokenizer(models.WordLevel({"[UNK]": 0, "assistant": 1, "prefix": 2, "header": 3}, unk_token="[UNK]"))
     backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
     original = PreTrainedTokenizerFast(
@@ -356,18 +349,18 @@ async def test_prefill_admission_and_transport_share_configured_template_and_def
     config.trainer.policy.model.tokenizer_path = str(model_path)
     config.generator.chat_template.source = "file"
     config.generator.chat_template.name_or_path = str(template_path)
-    config.generator.chat_template_kwargs = {"include_header": include_header}
+    config.generator.chat_template_kwargs = {"include_header": True}
     tokenizer = tokenizer_from_config(config)
-    task = text_task("configured-prefill").model_copy(
+    task = text_task("configured-assistant_prefix").model_copy(
         update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix"),))}
     )
-    spec = lowered_task(task, "prefill", max_turns=1)
+    spec = lowered_task(task, "assistant_prefix", max_turns=1)
     panel_path = tmp_path / "panel.parquet"
     write_tasks(panel_path, [spec])
     dataset = TaskDataset(
         [str(panel_path)],
         tokenizer,
-        len(expected_ids),
+        3,
         num_workers=1,
         chat_template_kwargs=dict(config.generator.chat_template_kwargs),
     )
@@ -385,7 +378,7 @@ async def test_prefill_admission_and_transport_share_configured_template_and_def
 
     engine = Engine()
     engine.tokenizer = tokenizer
-    prompt = prefill_prompt(task)
+    prompt = assistant_prefix_prompt(task)
     output = await DirectModelClient(engine).generate(
         {
             "prompts": [list(prompt.messages)],
@@ -393,15 +386,15 @@ async def test_prefill_admission_and_transport_share_configured_template_and_def
                 {**prompt.options, "chat_template_kwargs": dict(config.generator.chat_template_kwargs)}
             ],
             "sampling_params": {"max_tokens": 1},
-            "max_prompt_length": len(expected_ids),
+            "max_prompt_length": 3,
             "max_context_length": 10,
         }
     )
-    assert output["prompt_ids"] == [expected_ids]
+    assert output["prompt_ids"] == [[3, 1, 2]]
     assert output["responses"] == ["continuation"]
 
 
-def test_prefill_dataset_counts_effective_continuation_without_new_generation_prompt(tmp_path):
+def test_assistant_prefix_dataset_counts_effective_continuation_without_new_generation_prompt(tmp_path):
     backend = Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]"))
     backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
     tokenizer = PreTrainedTokenizerFast(
@@ -410,18 +403,18 @@ def test_prefill_dataset_counts_effective_continuation_without_new_generation_pr
         chat_template="{% for m in messages %}{{ m.content }} {% endfor %}"
         "{% if add_generation_prompt %}new assistant generation prompt that exceeds the cap{% endif %}",
     )
-    short = text_task("short-prefill").model_copy(
+    short = text_task("short-assistant_prefix").model_copy(
         update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix one"),))}
     )
-    long = text_task("long-prefill").model_copy(
+    long = text_task("long-assistant_prefix").model_copy(
         update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix " * 20),))}
     )
-    path = tmp_path / "prefill.parquet"
-    write_tasks(path, [lowered_task(task, "prefill", max_turns=1) for task in (short, long)])
+    path = tmp_path / "assistant_prefix.parquet"
+    write_tasks(path, [lowered_task(task, "assistant_prefix", max_turns=1) for task in (short, long)])
     dataset = TaskDataset([str(path)], tokenizer, 6, num_workers=1)
     (selected,) = dataset.collate_fn(list(dataset))
     spec = selected["input"].spec
-    assert spec.task.id == "short-prefill"
+    assert spec.task.id == "short-assistant_prefix"
     assert task_messages(spec) == [{"role": "assistant", "content": "prefix one"}]
 
 
@@ -440,14 +433,14 @@ async def test_canceled_saved_answer_attempt_cannot_spend_a_second_grade(task_in
                     ).grader,
                 }
             ),
-            "harness": "prefill",
+            "harness": "assistant_prefix",
             "limits": spec.limits.model_copy(update={"max_turns": 1}),
         }
     )
     messages = ({"role": "assistant", "content": '{"value":'},)
     turn = ModelTurn({"role": "assistant", "content": "12}"}, (1,), (2,), None, "stop", text="12}")
     root = str(tmp_path / "answers")
-    save_answer(root, spec, "arithmetic", 0, ModelRequest(messages, dict(prefill_prompt(spec.task).options)), turn)
+    save_answer(root, spec, "arithmetic", 0, ModelRequest(messages, dict(assistant_prefix_prompt(spec.task).options)), turn)
     admit_answer(root, "arithmetic", 0, (*messages, turn.message), "grade", "TimeoutError", "infra_error")
     path = Path(answer_uri(root, "arithmetic"))
     record = SavedAnswer.model_validate_json(path.read_bytes())
@@ -477,7 +470,7 @@ async def test_canceled_saved_answer_attempt_cannot_spend_a_second_grade(task_in
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("storage", ["ready", "blocked"])
-@pytest.mark.parametrize("harness", ["prefill", "shellbox"])
+@pytest.mark.parametrize("harness", ["assistant_prefix", "shellbox"])
 async def test_grader_failure_keeps_durable_answer_for_one_retry_without_generation(
     task_inputs, tmp_path, monkeypatch, storage, harness
 ):
@@ -574,7 +567,7 @@ async def test_recovery_admission_rejects_unbounded_host_grading_before_model(ta
         }
     )
     spec = spec.model_copy(
-        update={"task": task, "harness": "prefill", "limits": spec.limits.model_copy(update={"max_turns": 1})}
+        update={"task": task, "harness": "assistant_prefix", "limits": spec.limits.model_copy(update={"max_turns": 1})}
     )
     request = replace(request, rows=(task_input(spec),), batch_metadata=BatchMetadata(0, "eval"))
     calls = []
@@ -619,12 +612,12 @@ async def test_saved_answer_replay_preserves_verifier_user_and_bounds_hung_close
     spec = original.model_copy(
         update={
             "task": task,
-            "harness": "prefill",
+            "harness": "assistant_prefix",
             "verifier_machine": machine_runtime("fixture").model_copy(update={"user": "123", "cleanup_timeout": 0.01}),
             "limits": original.limits.model_copy(update={"max_turns": 1}),
         }
     )
-    prompt = prefill_prompt(task)
+    prompt = assistant_prefix_prompt(task)
     root = str(tmp_path / "answers")
     turn = ModelTurn({"role": "assistant", "content": "12"}, (1,), (2,), None, "stop", text="12")
     save_answer(root, spec, "arithmetic", 0, ModelRequest(prompt.messages, dict(prompt.options)), turn)

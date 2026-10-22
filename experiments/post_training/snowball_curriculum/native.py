@@ -5,7 +5,7 @@
 
 These records are reviewed imports, not current TaskSpecs or production-admitted
 tasks. The exact original lowered_task_spec is the source payload. The exporter
-converts it to text-prefill tasks with explicitly different conditioning and
+converts it to assistant-prefix tasks with explicitly different conditioning and
 grading semantics. Historical tokenizer pins below identify the source only.
 """
 

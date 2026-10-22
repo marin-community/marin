@@ -151,7 +151,7 @@ def test_panel_native_prefill_retains_source_pairing_and_private_resources():
     assert record["source_contract_id"] == source.contract_id
     assert record["source_public_content_id"] == source.public_content_id
     assert record["contract_id"] != source.contract_id
-    assert spec.harness == "prefill"
+    assert spec.harness == "assistant_prefix"
     assert spec.task.context.events[-1] == TextMessage(role="assistant", content=extras["prefix"])
     assert spec.task.resources == task.resources
     assert "terminal_markers" not in spec.task.grader.parameters

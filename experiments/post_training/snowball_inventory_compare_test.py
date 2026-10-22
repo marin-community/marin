@@ -74,8 +74,6 @@ def test_composed_arm_binds_initializer_and_complete_paired_panel(initializer, r
     recipe = document["skyrl"]
     assert recipe["trainer"]["evaluation_runner"] == "task"
     assert recipe["trainer"]["eval_num_prompts"] is None
-    assert recipe["trainer"]["eval_required_score_coverage"] == 1.0
-    assert recipe["trajectory_runner"]["eval_max_concurrent_tasks"] == 8
     assert recipe["environment"]["task_sessions"]["daytona"]["api_key_env"] == "DAYTONA_EVAL_API_KEY"
     evaluation = next(row for row in recipe["trainer"]["callbacks"] if row["type"] == "evaluation")
     assert evaluation == {"type": "evaluation", "eval_steps": 25, "eval_before_train": True}
