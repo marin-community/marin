@@ -78,6 +78,24 @@ class GenerationBudgetExceededError(ContextLengthExceededError):
         super().__init__(category="context_overflow", request_id=None, status_code=None)
 
 
+def _generation_token_budget(
+    request: InferenceEngineInput, prompt_ids: list[int], requested_tokens: list[int]
+) -> int | None:
+    max_prompt_length = request.get("max_prompt_length")
+    if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
+        raise GenerationBudgetExceededError(prompt_ids)
+    sampling = request.get("sampling_params") or {}
+    configured = [int(sampling[key]) for key in _OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
+    configured.extend(requested_tokens)
+    max_context_length = request.get("max_context_length")
+    if max_context_length is not None:
+        remaining = max_context_length - len(prompt_ids)
+        if remaining <= 0:
+            raise GenerationBudgetExceededError(prompt_ids)
+        configured.append(remaining)
+    return min(configured) if configured else None
+
+
 @dataclass(frozen=True)
 class _ChatResult:
     prompt_ids: list[int]
@@ -192,22 +210,13 @@ class DirectModelClient:
         self, request: InferenceEngineInput, messages: list[dict[str, Any]], options: dict[str, Any], session_id: str
     ) -> _ChatResult:
         prompt_ids = prefill_token_ids(self._client.tokenizer, messages, options)
-        max_prompt_length = request.get("max_prompt_length")
-        if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
-            raise GenerationBudgetExceededError(prompt_ids)
         sampling = dict(request.get("sampling_params") or {})
-        configured = [int(sampling[key]) for key in _OUTPUT_LIMIT_KEYS if sampling.get(key) is not None]
-        if options.get("max_completion_tokens") is not None:
-            configured.append(int(options["max_completion_tokens"]))
-        if options.get("max_output_tokens") is not None:
-            configured.append(int(options["max_output_tokens"]))
-        max_context_length = request.get("max_context_length")
-        if max_context_length is not None:
-            remaining = max_context_length - len(prompt_ids)
-            if remaining <= 0:
-                raise GenerationBudgetExceededError(prompt_ids)
-            configured.append(remaining)
-        token_budget = min(configured) if configured else None
+        requested_tokens = [
+            int(options[key])
+            for key in ("max_completion_tokens", "max_output_tokens")
+            if options.get(key) is not None
+        ]
+        token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
         if token_budget is not None:
             sampling["max_tokens"] = token_budget
         sampling.pop("max_generate_length", None)
@@ -290,16 +299,15 @@ class DirectModelClient:
             }
             with rollout_phase("tokenize"):
                 messages, prompt_ids = await _render_chat_prompt(self._client.tokenize, render_request, continuation)
-            max_prompt_length = request.get("max_prompt_length")
-            if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
-                raise GenerationBudgetExceededError(prompt_ids)
-            max_context_length = request.get("max_context_length")
-            if max_context_length is not None:
-                remaining_tokens = max_context_length - len(prompt_ids)
-                if remaining_tokens <= 0:
-                    raise GenerationBudgetExceededError(prompt_ids)
-                requested_tokens = chat_options.get("max_completion_tokens", remaining_tokens)
-                chat_options["max_completion_tokens"] = min(int(requested_tokens), remaining_tokens)
+            requested_tokens = (
+                [] if chat_options.get("max_completion_tokens") is None else [int(chat_options["max_completion_tokens"])]
+            )
+            token_budget = _generation_token_budget(request, prompt_ids, requested_tokens)
+            if token_budget is not None:
+                # Preserve chat's explicit-null handling when context supplies a budget.
+                chat_options["max_completion_tokens"] = min(
+                    int(chat_options.get("max_completion_tokens", token_budget)), token_budget
+                )
 
             body = {
                 "model": self._client.model_name,
