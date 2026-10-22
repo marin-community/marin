@@ -112,7 +112,7 @@ def test_parent_and_plateau_outputs_are_disjoint_and_use_the_selected_weights():
 
 
 @pytest.mark.parametrize("parent_name", tuple(PARENTS))
-@pytest.mark.parametrize("data_variant", ("low", "matched-relay"))
+@pytest.mark.parametrize("data_variant", ("low", "matched-relay", "contributor"))
 def test_plain_variant_has_distinct_cache_checkpoint_and_tracker_identity(parent_name, data_variant):
     rows = manifest(parent_name, "plain")
     high = graph(rows, parent_name)
