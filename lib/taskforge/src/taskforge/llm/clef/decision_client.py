@@ -1,39 +1,53 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The production ``spec.decision.DecisionClient``: Clef's ``POST /v1/systemone`` behind the Orion gateway.
+"""Clef's ``POST /v1/systemone`` behind the Orion gateway: the production ``spec.decision.DecisionClient``, and a
+``ClefReader`` for any mix of question types.
 
 The host selects it from its own configuration (``ClefDecisionConfig``: the gateway URL, the name of the
 environment variable holding the bearer token, the engine window); no proposal, author or task names it.
 
-One ``decide`` is one Clef read, bounded as a whole by the caller's ``timeout`` (the verifier deadline): the
-wait for an in-flight slot, fitting the state and the HTTP exchange. Nothing runs on the event loop's default
-executor; fitting the state to the window tokenizes on the client's own thread pool, and the HTTP call is
-async. The client retries nothing: a transient failure (a connection error or timeout, a 5xx, the front
-door's ``clef_unavailable``, the deadline) raises ``DecisionUnavailable`` and the host retries the grade once
-(``spec.decision.host_graded``); any other failure (a 4xx, an answer that does not match the questions)
-raises ``DecisionRequestError`` and is not retried.
+``read`` asks any mix of choice, noul and score questions and returns Clef's whole response; ``decide`` is one
+``read`` of a grader's score questions, answered as level probabilities. Both share the client's HTTP pool and
+in-flight limit. One read is bounded as a whole by the caller's ``timeout`` (for a grade, the verifier
+deadline): the wait for an in-flight slot, fitting the state and the HTTP exchange. Nothing runs on the event
+loop's default executor; fitting the state to the window tokenizes on the client's own thread pool, and the
+HTTP call is async. The client retries nothing: a transient failure (a connection error or timeout, a 5xx, the
+front door's ``clef_unavailable``, the deadline) raises ``DecisionUnavailable``, and for a grade the host
+retries once (``spec.decision.host_graded``); any other failure (a 4xx, an answer that does not match the
+questions) raises ``DecisionRequestError`` and is permanent.
 
 The state is fitted with ``budget.fit_request`` to the pinned window, or to Clef's 131,072-token maximum
-when none is pinned; only the ``elastic`` key the caller names (the solver's output) is cut, from the
-middle, with a visible marker. A pinned window is sent as ``x-clef-window``. The token is sent as a bearer
-header and appears in no log, error or repr.
+when none is pinned; only the ``elastic`` string the caller names is cut, with a visible marker (``decide``
+cuts the solver's output from the middle). A pinned window is sent as ``x-clef-window``. The token is sent as
+a bearer header and appears in no log, error or repr.
 """
 
 import asyncio
 import logging
 import os
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Self
+from typing import Protocol, Self
 
 import httpx
 from pydantic import JsonValue
 
 from taskforge.llm.clef.budget import MAX_LENGTH, ClefTokenizer, TruncateFrom, fit_request, load_tokenizer
-from taskforge.llm.clef.schema import ScoreAnswer, ScoreQuestion, SystemOneRequest, SystemOneResponse
+from taskforge.llm.clef.schema import (
+    Answer,
+    ChoiceAnswer,
+    ChoiceQuestion,
+    NoulAnswer,
+    NoulQuestion,
+    Question,
+    ScoreAnswer,
+    ScoreQuestion,
+    SystemOneRequest,
+    SystemOneResponse,
+)
 from taskforge.spec import decision
 
 logger = logging.getLogger(__name__)
@@ -48,8 +62,30 @@ FIT_WORKERS = 4
 """Threads of the client's own pool that tokenize states to fit them."""
 
 
+ANSWER_TYPES: dict[type[Question], type[Answer]] = {
+    ChoiceQuestion: ChoiceAnswer,
+    NoulQuestion: NoulAnswer,
+    ScoreQuestion: ScoreAnswer,
+}
+"""The answer type Clef gives each question type."""
+
+
 class DecisionRequestError(ValueError):
     """Clef refused the read or answered something other than the questions asked: a permanent failure."""
+
+
+class ClefReader(Protocol):
+    """One Clef read of any mix of question types; the client that grades decisions is one."""
+
+    async def read(
+        self,
+        state: Mapping[str, JsonValue],
+        questions: Mapping[str, Question],
+        *,
+        elastic: Sequence[str],
+        truncate_from: TruncateFrom,
+        timeout: float,
+    ) -> SystemOneResponse: ...
 
 
 @dataclass(frozen=True)
@@ -77,7 +113,7 @@ class ClefDecisionConfig:
 
 
 class ClefDecisionClient:
-    """A ``DecisionClient`` over Clef; open one per host with ``open_clef_decision_client``."""
+    """A ``DecisionClient`` and a ``ClefReader`` over Clef; open one per host with ``open_clef_decision_client``."""
 
     def __init__(
         self,
@@ -120,17 +156,45 @@ class ClefDecisionClient:
         elastic: str,
         timeout: float,
     ) -> Mapping[str, tuple[float, ...]]:
-        """One Clef read of ``questions`` over ``state``, within ``timeout`` seconds.
+        """Each score question's level probabilities from one ``read`` of ``questions`` over ``state``.
+
+        ``elastic`` is the state key ``read`` may cut, from the middle, to fit the window.
 
         Raises:
             DecisionUnavailable: a connection error or timeout, a 5xx or ``clef_unavailable``, or the deadline.
             DecisionRequestError: a 4xx, or an answer that is not a score for each question asked.
             taskforge.llm.clef.schema.ClefRequestError: the questions and the non-elastic state do not fit the window.
         """
-        request = SystemOneRequest(
-            state=dict(state),
-            questions={qid: ScoreQuestion(q.prompt, q.levels) for qid, q in questions.items()},
+        response = await self.read(
+            state,
+            {qid: ScoreQuestion(q.prompt, q.levels) for qid, q in questions.items()},
+            elastic=(elastic,),
+            truncate_from=TruncateFrom.MIDDLE,
+            timeout=timeout,
         )
+        return _probabilities(response, questions)
+
+    async def read(
+        self,
+        state: Mapping[str, JsonValue],
+        questions: Mapping[str, Question],
+        *,
+        elastic: Sequence[str],
+        truncate_from: TruncateFrom,
+        timeout: float,
+    ) -> SystemOneResponse:
+        """One Clef read of ``questions`` over ``state``, within ``timeout`` seconds, sent once.
+
+        ``state`` is fitted to the window by cutting the string at the key path ``elastic`` from
+        ``truncate_from``. The wait for an in-flight slot, the fit and the HTTP exchange share ``timeout``. Nothing
+        is retried: a caller that wants another read after ``DecisionUnavailable`` makes it.
+
+        Raises:
+            DecisionUnavailable: a connection error or timeout, a 5xx or ``clef_unavailable``, or the deadline.
+            DecisionRequestError: a 4xx, or answers other than one of its own type for each question asked.
+            taskforge.llm.clef.schema.ClefRequestError: the questions and the non-elastic state do not fit the window.
+        """
+        request = SystemOneRequest(state=dict(state), questions=dict(questions))
         try:
             async with asyncio.timeout(timeout):
                 async with self._slots:
@@ -139,18 +203,16 @@ class ClefDecisionClient:
                         fit_request,
                         self._tokenizer,
                         request,
-                        (elastic,),
-                        TruncateFrom.MIDDLE,
+                        elastic,
+                        truncate_from,
                         self._max_length,
                     )
                     response = await self._post(fitted, timeout)
         except TimeoutError as error:
             raise decision.DecisionUnavailable(f"clef gave no answer within {timeout:.1f}s") from error
         if budget.truncated:
-            logger.info(
-                "clef decision read: cut %d tokens of %r to fit %d", budget.tokens_cut, elastic, self._max_length
-            )
-        return _probabilities(response, questions)
+            logger.info("clef read: cut %d tokens of %r to fit %d", budget.tokens_cut, list(elastic), self._max_length)
+        return _matched(response, questions)
 
     async def _post(self, request: SystemOneRequest, timeout: float) -> SystemOneResponse:
         headers = {} if self._window is None else {WINDOW_HEADER: str(self._window)}
@@ -178,16 +240,29 @@ def _error_code(response: httpx.Response) -> str | None:
     return error.get("code") if isinstance(error, dict) else None
 
 
+def _matched(response: SystemOneResponse, questions: Mapping[str, Question]) -> SystemOneResponse:
+    """``response``, once it answers each question exactly once with that question's answer type.
+
+    Raises:
+        DecisionRequestError: an answer is missing, extra, or of another question type.
+    """
+    if set(response.answers) != set(questions):
+        raise DecisionRequestError(f"clef answered {sorted(response.answers)}, not the questions {sorted(questions)}")
+    for qid, question in questions.items():
+        answer = response.answers[qid]
+        if not isinstance(answer, ANSWER_TYPES[type(question)]):
+            raise DecisionRequestError(f"clef answered {type(question).__name__} {qid!r} with a {type(answer).__name__}")
+    return response
+
+
 def _probabilities(
     response: SystemOneResponse, questions: Mapping[str, decision.ScoreQuestion]
 ) -> dict[str, tuple[float, ...]]:
     """Each question's level probabilities, in level order.
 
     Raises:
-        DecisionRequestError: an answer is missing, extra, not a score, or lacks a level.
+        DecisionRequestError: an answer is not a score, or lacks a level.
     """
-    if set(response.answers) != set(questions):
-        raise DecisionRequestError(f"clef answered {sorted(response.answers)}, not the questions {sorted(questions)}")
     reads: dict[str, tuple[float, ...]] = {}
     for qid, question in questions.items():
         answer = response.answers[qid]
