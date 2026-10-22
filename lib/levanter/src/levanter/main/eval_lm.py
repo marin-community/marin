@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import jax
-import jax.numpy as jnp
 import jmp
 
 import haliax
@@ -23,6 +22,7 @@ from levanter.data.loader import DataLoader
 from levanter.data.text.datasets import LmDataConfig
 from levanter.eval import LossFnOutput, TaggedEvaluator, eval_model
 from levanter.model_loading import load_hf_checkpoint, load_levanter_checkpoint
+from levanter.models.loss import next_token_ids
 from levanter.models.llama import LlamaConfig
 from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel, split_activations
 from levanter.trainer import TrainerConfig
@@ -95,7 +95,7 @@ def main(config: EvalLmConfig):
             model = mp.cast_to_compute(model)
             per_pos_loss = model.compute_next_token_loss(batch, reduction=None, reduction_axis=()).array
             per_pos_weight = batch.loss_weight.array
-            per_pos_token_id = jnp.roll(batch.tokens.array, -1, axis=-1)
+            per_pos_token_id = next_token_ids(model.Pos.name, batch.tokens).array
             return per_pos_loss, per_pos_weight, per_pos_token_id
 
         evaluator = TaggedEvaluator(
@@ -103,6 +103,7 @@ def main(config: EvalLmConfig):
             tagged_eval_sets=datasets,
             loss_fn=eval_loss_fn,
             tokenizer=tokenizer,
+            device_mesh=config.trainer.device_mesh,
             axis_mapping=compute_axis_mapping,
             max_examples_per_dataset=max_examples,
         )

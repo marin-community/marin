@@ -22,6 +22,24 @@ from levanter.sharding import partition_spec_of
 DEFAULT_REDUCTION = cast(hax.ReductionFunction, hax.mean)
 
 
+def next_token_ids(Pos: hax.AxisSelector, true_ids: NamedArray) -> NamedArray:
+    """Shift next-token targets while preserving sequence sharding."""
+    Pos = cast(hax.Axis, true_ids.resolve_axis(Pos))
+    token_spec = partition_spec_of(true_ids.array)
+    position_index = true_ids.axes.index(Pos)
+    if token_spec is not None:
+        # JAX cannot roll across a sharded sequence axis. Gather only the token IDs,
+        # shift them, then restore their layout for the sharded loss kernel.
+        # Slice operations can drop explicit sharding on singleton dimensions. Normalize
+        # those dimensions too so the two slices in roll have identical layouts.
+        unsharded_position = P(
+            *(None if i == position_index or true_ids.axes[i].size == 1 else axis for i, axis in enumerate(token_spec))
+        )
+        ids = reshard(true_ids.array, unsharded_position)
+        return hax.named(reshard(jnp.roll(ids, -1, axis=position_index), token_spec), true_ids.axes)
+    return hax.roll(true_ids, -1, Pos)
+
+
 def next_token_loss_weight(Pos: hax.Axis, loss_weight: Optional[NamedArray]) -> NamedArray:
     """Build the per-position loss weight for next-token prediction.
 
@@ -76,16 +94,7 @@ def maybe_fused_next_token_loss(
     Vocab = pred_lm_head.resolve_axis(Vocab)
 
     # Shift target tokens to predict the next token
-    token_spec = partition_spec_of(true_ids.array)
-    position_index = true_ids.axes.index(Pos)
-    if token_spec is not None and position_index < len(token_spec) and token_spec[position_index] is not None:
-        # JAX cannot roll across a sharded sequence axis. Gather only the token IDs,
-        # shift them, then restore their layout for the sharded loss kernel.
-        unsharded_position = P(*(None if i == position_index else axis for i, axis in enumerate(token_spec)))
-        ids = reshard(true_ids.array, unsharded_position)
-        target_y = hax.named(reshard(jnp.roll(ids, -1, axis=position_index), token_spec), true_ids.axes)
-    else:
-        target_y = hax.roll(true_ids, -1, Pos)
+    target_y = next_token_ids(Pos, true_ids)
 
     # When a loss_weight is supplied, the fused kernel runs the loss in its dtype.
     if loss_weight is not None:
@@ -138,7 +147,7 @@ def next_token_loss(
     """
     Pos = logits.resolve_axis(hax.axis_name(Pos))
 
-    target_y = hax.roll(true_ids, -1, Pos)
+    target_y = next_token_ids(Pos, true_ids)
     target_y_full = hax.nn.one_hot(target_y, Vocab, dtype=logits.dtype)
 
     loss_weight = next_token_loss_weight(Pos, loss_weight)

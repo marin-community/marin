@@ -17,6 +17,7 @@ from haliax import NamedArray
 # Import the functions from your module
 # Replace 'your_module' with the actual module name where your functions are defined
 from levanter.models.loss import cross_entropy_loss_and_log_normalizers, fused_cross_entropy_loss_and_logsumexp_penalty
+from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.utils.jax_utils import key_iterator
 
 
@@ -395,3 +396,29 @@ def test_grad_loss_without_logz(test_data):
         hax.isclose(g_embed, g_embed_direct, atol=1e-3, rtol=1e-3)
     ), "Gradient of embeddings does not match."
     assert hax.all(hax.isclose(g_head, g_head_direct, atol=1e-3, rtol=1e-3)), "Gradient of lm_head does not match."
+
+
+def test_next_token_shift_preserves_explicit_layout():
+    run_on_cpu_devices(
+        """
+        import jax
+        import numpy as np
+        import haliax as hax
+        from jax.sharding import Mesh, NamedSharding, PartitionSpec as P, AxisType
+        from levanter.models.loss import next_token_ids
+
+        for batch, data_size, position_shard in [(1, 1, "context"), (2, 2, "context"), (1, 1, None), (2, 2, None)]:
+            context_size = 4 // data_size
+            mesh = Mesh(np.array(jax.devices()).reshape(data_size, context_size),
+                        ('data', 'context'), axis_types=(AxisType.Explicit, AxisType.Explicit))
+            with jax.set_mesh(mesh):
+                axes = (hax.Axis('batch', batch), hax.Axis('position', 8))
+                expected = np.arange(batch * 8, dtype=np.int32).reshape(batch, 8)
+                layout = NamedSharding(mesh, P('data', position_shard))
+                ids = hax.named(jax.device_put(expected, layout), axes)
+                actual = jax.jit(lambda a: next_token_ids(axes[1], a))(ids)
+                np.testing.assert_array_equal(actual.array, np.roll(expected, -1, axis=1))
+                assert actual.array.sharding == layout
+        """,
+        device_count=4,
+    )

@@ -27,6 +27,7 @@ from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compati
 from safetensors.numpy import load_file
 
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.attention import AttentionMask
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -455,7 +456,7 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
 
         def run(shape):
             mesh = Mesh(
-                np.asarray(jax.devices()).reshape(shape), axes,
+                np.asarray(jax.devices()[:int(np.prod(shape))]).reshape(shape), axes,
                 axis_types=(AxisType.Explicit,) * len(axes),
             )
             with jax.set_mesh(mesh):
@@ -472,13 +473,15 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
             )
 
         data_axis, reference = run((1, 2, 1, 2, 1))
-        context_axis, sharded = run((1, 1, 2, 2, 1))
         assert data_axis is None
-        assert context_axis == "context"
-        for expected, actual in zip(reference, sharded, strict=True):
-            np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
+        # Four context shards make the flattened token sharding larger than the batch.
+        for shape in [(1, 1, 2, 2, 1), (1, 1, 4, 2, 1)]:
+            context_axis, sharded = run(shape)
+            assert context_axis == "context"
+            for expected, actual in zip(reference, sharded, strict=True):
+                np.testing.assert_allclose(actual, expected, rtol=2e-4, atol=2e-4)
         """,
-        device_count=4,
+        device_count=8,
     )
 
 
@@ -543,7 +546,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
             )
             trainer_cfg = TrainerConfig(
                 id="local-snowball-sft", mesh=mesh, use_explicit_mesh_axes=True,
-                train_batch_size=8, num_train_steps=1, max_eval_batches=0,
+                train_batch_size=8, num_train_steps=1, max_eval_batches=1,
                 tracker=JsonFileTrackerConfig(output_path=str(root)),
                 checkpointer=CheckpointerConfig(base_path=str(root / "ckpts")),
                 require_accelerator=False,
@@ -583,7 +586,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 ), moment_specs
             examples = [GrugLmExample.causal(jnp.arange(8, dtype=jnp.int32) + 2) for _ in range(16)]
             data = LmDataConfig(
-                components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
+                components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples), "validation": ListAsyncDataset(examples)})},
                 tokenizer=str(hf_path),
             )
             main(TrainLmConfig(
@@ -593,6 +596,7 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
             with (root / "eval_results.json").open() as handle:
                 metrics = json.load(handle)
             assert math.isfinite(metrics["train/loss"])
+            assert math.isfinite(metrics["eval/loss"])
             native_trainer = replace(
                 trainer_cfg, id="local-snowball-native-sft",
                 tracker=JsonFileTrackerConfig(output_path=str(root / "native")),
@@ -605,6 +609,68 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
             with (root / "native" / "eval_results.json").open() as handle:
                 native_metrics = json.load(handle)
             assert math.isfinite(native_metrics["train/loss"])
+            assert math.isfinite(native_metrics["eval/loss"])
         """,
         device_count=8,
+    )
+
+
+@pytest.mark.parametrize("separate_key_axis", [False, True])
+def test_snowball_packed_conversations_are_isolated(separate_key_axis):
+    cfg = _tiny_config()
+    ids = _device_batched_ids(cfg.vocab_size, 8)
+    segments = hax.named(jnp.broadcast_to(jnp.array([0, 0, 0, 0, 1, 1, 1, 1]), ids.array.shape), ids.axes)
+    key_segments = segments.rename({"position": "key_position"}) if separate_key_axis else segments
+    mask = AttentionMask.causal().with_segment_ids(segments, key_segments)
+    changed = hax.named(ids.array.at[:, :4].set((ids.array[:, :4] + 13) % cfg.vocab_size), ids.axes)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(9))
+        forward = eqx.filter_jit(lambda m, tokens: m.activations(tokens, mask).array)
+        before = np.array(forward(model, ids))
+        after = np.array(forward(model, changed))
+    assert not np.allclose(before[:, :4], after[:, :4])
+    np.testing.assert_allclose(before[:, 4:], after[:, 4:], atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.timeout(120)
+def test_snowball_capacity_preserves_imbalanced_outputs_and_gradients():
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from levanter.grug.sharding import compact_grug_mesh
+        from levanter.models.snowball import SnowballConfig, SnowballMoEMLP
+
+        def run(expert_axis, capacity):
+            with jax.set_mesh(compact_grug_mesh(expert_axis_size=expert_axis)):
+                cfg = SnowballConfig(
+                    hidden_dim=8, intermediate_dim=16, num_experts=4,
+                    num_experts_per_token=2, initializer_std=0.2,
+                    moe_implementation="ring", moe_capacity_factor=capacity,
+                )
+                model = SnowballMoEMLP.init(cfg, key=jax.random.key(19))
+                # All tokens choose experts on the same destination shard.
+                model = eqx.tree_at(lambda m: m.router_bias, model,
+                                    jnp.array([10., 9., -10., -10.]))
+                inputs = jnp.arange(256, dtype=jnp.float32).reshape(4, 8, 8) / 256
+                outputs = eqx.filter_jit(lambda m: m(inputs))(model)
+                _, grad = eqx.filter_jit(eqx.filter_value_and_grad(
+                    lambda m: jnp.sum(m(inputs) ** 2)
+                ))(model)
+                return [np.asarray(outputs), np.asarray(grad.router),
+                        np.asarray(grad.expert_mlp.w_gate),
+                        np.asarray(grad.expert_mlp.w_up),
+                        np.asarray(grad.expert_mlp.w_down)]
+
+        reference = run(1, 2)
+        preserved = run(2, 2)
+        dropped = run(2, 1)
+        for actual, expected in zip(preserved, reference, strict=True):
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        assert not np.allclose(dropped[0], reference[0], rtol=1e-5, atol=1e-5)
+        assert not np.allclose(dropped[2], reference[2], rtol=1e-5, atol=1e-5)
+        """,
+        device_count=2,
     )

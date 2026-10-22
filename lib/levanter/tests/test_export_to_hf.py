@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import equinox as eqx
 import jax
-from transformers import AutoModelForCausalLM
+from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig
 from transformers import GPT2Config as HfGpt2Config
 
 import haliax
@@ -65,6 +65,7 @@ def test_export_lm_to_hf():
             output_dir=output_dir,
             model=model_config,
             use_cpu=True,
+            hf_generation_eos_token_ids=[1, 2],
         )
         export_lm_to_hf.main(config)
 
@@ -79,6 +80,9 @@ def test_export_lm_to_hf():
         # the exported config must round-trip our model shape, not just be present
         assert hf_config["n_layer"] == 2
         assert hf_config["n_head"] == 2
+        generation = GenerationConfig.from_pretrained(output_dir)
+        exported_tokenizer = AutoTokenizer.from_pretrained(output_dir)
+        assert generation.eos_token_id == sorted({1, 2, exported_tokenizer.eos_token_id})
 
         if has_torch():
             reloaded = AutoModelForCausalLM.from_pretrained(output_dir)
