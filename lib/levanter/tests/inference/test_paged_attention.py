@@ -254,6 +254,53 @@ def test_do_tpu_ragged_paged_attention_accepts_traced_sm_scale(monkeypatch):
     assert out.axes == q.axes
 
 
+@pytest.mark.parametrize("kv_heads", [2, 5])
+def test_tpu_paged_wrapper_preserves_gqa_head_and_interleaved_kv_order(monkeypatch, kv_heads):
+    def sentinel_kernel(q, pages, *_args, **_kwargs):
+        heads = pages.shape[2] // 2
+        groups = q.shape[1] // heads
+        grouped = q.reshape(q.shape[0], heads, groups, q.shape[-1])
+        keys = pages[0, 0, 0::2]
+        values = pages[0, 0, 1::2]
+        return (grouped + keys[None, :, None, :] + 10 * values[None, :, None, :]).reshape(q.shape)
+
+    monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", sentinel_kernel)
+    with use_test_mesh():
+        q = hax.named(
+            jnp.arange(4 * kv_heads * 4 * 128, dtype=jnp.float32).reshape(4, kv_heads, 4, 128),
+            ("position", "kv_head", "q_heads_per_group", "head_size"),
+        )
+        pages = hax.named(
+            jnp.broadcast_to(
+                jnp.arange(2 * kv_heads, dtype=jnp.float32)[None, None, :, None], (1, 4, 2 * kv_heads, 128)
+            ),
+            ("page", "slot", "kv_head", "head_size"),
+        )
+        output = attention_module._do_tpu_ragged_paged_attention(
+            q,
+            pages,
+            hax.named(jnp.array([4], jnp.int32), "seq"),
+            hax.named(jnp.array([[0]], jnp.int32), ("seq", "page")),
+            hax.named(jnp.array([0, 4], jnp.int32), "seq"),
+            jnp.array(1, jnp.int32),
+        )
+        expected = q.array + np.arange(0, 2 * kv_heads, 2)[None, :, None, None]
+        expected = expected + 10 * np.arange(1, 2 * kv_heads, 2)[None, :, None, None]
+        np.testing.assert_array_equal(output.array, expected)
+
+
+def test_strict_tpu_paged_attention_does_not_fall_back(monkeypatch):
+    def failed_kernel(*args, **kwargs):
+        raise RuntimeError("deliberate TPU kernel failure")
+
+    monkeypatch.setattr(attention_module, "tpu_ragged_paged_attention", failed_kernel)
+    monkeypatch.setattr(attention_module.jax, "default_backend", lambda: "tpu")
+    with use_test_mesh():
+        args = _build_random_case(jr.PRNGKey(18), [4])
+        with pytest.raises(RuntimeError, match="deliberate TPU kernel failure"):
+            ragged_paged_attention(*args, allow_fallback=False)
+
+
 # -----------------------------------------------------------------------------
 # Tests moved from tests/test_paged_attention.py
 # -----------------------------------------------------------------------------

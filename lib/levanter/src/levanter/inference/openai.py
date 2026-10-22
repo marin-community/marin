@@ -18,7 +18,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 import haliax as hax
 import jax.numpy as jnp
@@ -44,6 +44,7 @@ from levanter.inference.engine import (
     TokenSequenceLogprobs,
 )
 from levanter.inference.jit_scheduler import SeqDecodingParams
+from levanter.inference.utils import INVALID
 from levanter.inference.openai_protocol import (
     ChatCompletionRequest,
     ChatMessage,
@@ -73,6 +74,9 @@ class InferenceServerConfig:
     # Inference service/memory layout configuration
     service: InferenceEngineConfig = field(default_factory=lambda: InferenceEngineConfig(4096))
 
+    eos_token_ids: tuple[int, ...] = ()
+    """Termination IDs from the pinned generation configuration; resolved by the model loader."""
+
     model_name: str = DEFAULT_MODEL_NAME
     """Model id this server advertises from ``/v1/models``."""
 
@@ -95,7 +99,7 @@ class InferenceRequest:
     max_tokens: int
     temperature: float
     top_p: float | None
-    stop_tokens: List[int] | None
+    stop_tokens: List[List[int]] | None
     seed: int | None
     future: asyncio.Future
     n_generations: int = 1
@@ -114,6 +118,7 @@ class InferenceResponse:
     logprobs: Optional[List[float]] = None
     echo_token_ids: List[int] | None = None
     echo_logprobs: TokenSequenceLogprobs | None = None
+    finish_reason: Literal["stop", "length"] = "stop"
 
 
 class InferenceBatch(list):
@@ -141,17 +146,20 @@ def _fetch_all_from_queue(q: queue.Queue, timeout: float) -> List:
     return items
 
 
-def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> Optional[List[int]]:
-    """Tokenize the OpenAI-style ``stop`` field into a flat list of token ids, or None if unset."""
+def _encode_stop_tokens(stop: Union[str, List[str], None], tokenizer: MarinTokenizer) -> Optional[List[List[int]]]:
+    """Keep each OpenAI stop string as an independent token sequence."""
     if not stop:
         return None
     stop_list = [stop] if isinstance(stop, str) else stop
-    stop_tokens: List[int] = []
-    for s in stop_list:
-        stop_ids = tokenizer.encode(s, add_special_tokens=False)
-        if stop_ids:
-            stop_tokens.extend(stop_ids)
-    return stop_tokens
+    sequences = [tokenizer.encode(text, add_special_tokens=False) for text in stop_list]
+    return [tokens for tokens in sequences if tokens] or None
+
+
+def _strip_stop_suffix(tokens: List[int], stops: List[List[int]]) -> tuple[List[int], bool]:
+    for stop in sorted(stops, key=len, reverse=True):
+        if stop and len(tokens) >= len(stop) and tokens[-len(stop) :] == stop:
+            return tokens[: -len(stop)], True
+    return tokens, False
 
 
 class InferenceContext:
@@ -225,7 +233,7 @@ class InferenceContext:
         max_tokens: int,
         temperature: float,
         top_p: float | None,
-        stop_tokens: Optional[List[int]],
+        stop_tokens: Optional[List[List[int]]],
         seed: int | None,
         future: asyncio.Future,
         n_generations: int = 1,
@@ -337,12 +345,15 @@ class InferenceContext:
             raise RuntimeError("Inference engine is not initialized.")
 
         for i, req in enumerate(requests):
-            # Create stop tokens if specified
+            # Each row is an alternative, left padded for suffix matching.
+            stops = list(req.stop_tokens or []) + [[token] for token in self.config.eos_token_ids]
             stop_ids = None
-            if req.stop_tokens:
-                stop_ids = hax.named(jnp.asarray(req.stop_tokens, dtype=jnp.int32), axis="position").broadcast_axis(
-                    {"stop_seq": 1}
-                )
+            if stops:
+                width = max(map(len, stops))
+                padded = np.full((len(stops), width), INVALID, dtype=np.int32)
+                for row, stop in enumerate(stops):
+                    padded[row, -len(stop) :] = stop
+                stop_ids = hax.named(jnp.asarray(padded), ("stop_seq", "position"))
 
             # dumb fallback seed if none provided
             if req.seed is None:
@@ -377,10 +388,15 @@ class InferenceContext:
                 req_outputs = []
                 for _ in range(req.n_generations):
                     if output_idx < len(result.tokens):
-                        generated_tokens = result.tokens[output_idx]
+                        raw_tokens = result.tokens[output_idx]
+                        stops = list(req.stop_tokens or []) + [[token] for token in self.config.eos_token_ids]
+                        generated_tokens, stopped = _strip_stop_suffix(raw_tokens, stops)
                         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
+                        finish_reason = "stop" if stopped or len(raw_tokens) < req.max_tokens else "length"
 
                         result_logprobs = result.logprobs[output_idx] if result.logprobs is not None else None
+                        if result_logprobs is not None:
+                            result_logprobs = result_logprobs[: len(generated_tokens)]
                         echo_token_ids = None
                         echo_logprobs = None
                         if req.echo_logprobs_top_k is not None:
@@ -393,10 +409,11 @@ class InferenceContext:
                         req_outputs.append(
                             InferenceResponse(
                                 text=text,
-                                tokens=result.tokens[output_idx],
+                                tokens=generated_tokens,
                                 logprobs=result_logprobs,
                                 prompt_tokens=len(req.prompt_tokens),
-                                completion_tokens=len(generated_tokens),
+                                completion_tokens=len(raw_tokens),
+                                finish_reason=finish_reason,
                                 request_id=req.request_id,
                                 echo_token_ids=echo_token_ids,
                                 echo_logprobs=echo_logprobs,
@@ -632,7 +649,7 @@ async def _create_completion(ctx: InferenceContext, request: CompletionRequest) 
                     CompletionChoice(
                         text=choice_text,
                         index=choice_idx,
-                        finish_reason="stop",
+                        finish_reason=generation.finish_reason,
                         logprobs=logprobs,
                     )
                 )
@@ -775,7 +792,7 @@ async def _create_chat_completion(ctx: InferenceContext, request: ChatCompletion
                 ChatCompletionChoice(
                     index=i,
                     message=ChatCompletionMessage(role="assistant", content=generation.text),
-                    finish_reason="stop",
+                    finish_reason=generation.finish_reason,
                     logprobs=logprobs,
                 )
             )

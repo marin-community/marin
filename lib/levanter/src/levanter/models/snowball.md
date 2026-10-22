@@ -57,3 +57,41 @@ two-device expert-parallel stage path, and the telemetry bound. The wider GRPO
 migration additionally required a scorer-only compute-weight
 cast boundary; its end-to-end numerical result should not be attributed to
 these model changes alone. See the [numerical investigation](https://marina.oa.dev/echo/wiki/363).
+
+## Paged Snowball inference
+
+`SnowballLMHeadModel.initial_cache` and `decode` implement the inference engine's
+packed-token interface. They preserve the global-layer schedule (including the
+last layer), absolute half-RoPE positions on local layers, the 2,048-token local
+window, and the current-token V vector used by exclusive self-attention.
+Every layer initially retains full paged KV storage; the local window changes
+visibility rather than evicting pages.
+
+The initial multi-host layout replicates attention and KV pages and distributes
+expert weights on `expert`. Before MoE dispatch, one global token pack is sharded
+on that axis; the result is replicated again before the next attention layer.
+Padded tokens are excluded from routing. Ring capacity scales with the expert
+axis size to cover worst-case routing, and caches retain sender/receiver drop
+counts so the serving engine can reject a result containing dropped assignments.
+No attention-head partitioning is required.
+
+`MultiHostInferenceEngine` broadcasts materialized batches from process zero
+after tokenization and sampling-seed selection. Followers run `worker_loop`;
+only process zero runs HTTP. Rejectable request errors are checked before
+broadcast. Unexpected execution failures terminate the rank so JAX coordination
+and the job scheduler can fail the gang. Configure bounded runtime and no partial
+gang retries. Stop the HTTP execution thread before calling `shutdown_workers`.
+
+For Snowball, this engine also scores token logprobs through cached, chunked
+decode instead of the full-forward scoring helper. The item-303 diagnostic
+uses actual one-row query buffers around positions 2046–2050 and separately
+checks generation after a long prompt. A CPU test is not evidence of TPU
+numerical parity; gate each serving backend against the pinned oracle before
+running evaluations.
+
+TPU serving disables the paged attention reference fallback. The TPU wrapper
+temporarily pads whole GQA groups when required by the kernel's head tiling
+(five KV/twenty Q heads become eight KV/thirty-two Q heads), then slices the
+result back to the logical heads. This adds temporary memory beyond the stored
+KV cache, which uses 66,560 BF16 bytes per cached token per chip for the full
+26-layer model. Set explicit cache limits before benchmarking.

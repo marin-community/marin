@@ -1,0 +1,236 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Job-local model loading, synchronized serving, and cached item-303 capture."""
+
+import hashlib
+import json
+import logging
+import threading
+import time
+import urllib.request
+
+import equinox as eqx
+import haliax as hax
+import jax
+import jax.numpy as jnp
+import numpy as np
+from iris.client.client import iris_ctx
+from iris.cluster.client.job_info import get_job_info
+from iris.jax.init import initialize_jax
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.inference.engine import InferenceEngineConfig
+from levanter.inference.multihost import MultiHostInferenceEngine
+from levanter.inference.openai import InferenceContext, InferenceServer, InferenceServerConfig
+from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig, SnowballLMHeadModel
+from levanter.tokenizers import load_tokenizer
+from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
+from rigging.filesystem.storage_path import StoragePath
+
+
+def _post(url, payload):
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=1800) as response:
+        return json.load(response)
+
+
+def _save(output, name, value):
+    data = json.dumps(value, indent=2).encode()
+    (StoragePath(output) / name).write_bytes(data)
+    print("ARTIFACT", str(StoragePath(output) / name), flush=True)
+
+
+def run(mode, model_path, output, item, max_seq_len):
+    logging.basicConfig(level=logging.INFO)
+    info = get_job_info()
+    initialize_jax()
+    if jax.process_count() != 4 or jax.device_count() != 16:
+        raise RuntimeError(f"Expected 4 processes / 16 chips, got {jax.process_count()} / {jax.device_count()}")
+    trainer = TrainerConfig(
+        use_explicit_mesh_axes=True,
+        mesh=MeshConfig(
+            axes={"data": 1, "context": 1, "expert": 16, "model": 1},
+            dcn_axes={"replica_dcn": 1},
+            batch_axis_name=None,
+            param_mapping={},
+        ),
+    )
+    with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
+        start = time.monotonic()
+        tokenizer = load_tokenizer(model_path)
+        if mode == "tiny":
+            cfg = SnowballConfig(
+                vocab_size=tokenizer.vocab_size,
+                hidden_dim=128,
+                intermediate_dim=128,
+                shared_expert_intermediate_dim=128,
+                num_experts=32,
+                num_layers=5,
+                max_seq_len=max_seq_len,
+                num_heads=20,
+                num_kv_heads=5,
+                head_dim=128,
+            )
+            model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(13))
+            model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_array(x) else x, model)
+            # Router biases are fixed selection thresholds; retain their FP32 contract.
+            blocks = tuple(
+                eqx.tree_at(lambda b: b.mlp.router_bias, b, b.mlp.router_bias.astype(jnp.float32))
+                for b in model.transformer.blocks
+            )
+            model = eqx.tree_at(lambda m: m.transformer.blocks, model, blocks)
+        else:
+            converter = HFCheckpointConverter(
+                SnowballConfig,
+                reference_checkpoint=model_path,
+                tokenizer=tokenizer,
+                HfConfigClass=GrugMoeHfConfig,
+            )
+            # Preserve checkpoint dtypes, particularly the fixed FP32 routing biases.
+            model = converter.load_pretrained(SnowballLMHeadModel, dtype=None, axis_mapping={})
+        jax.block_until_ready(model)
+        print(
+            "MODEL_READY",
+            json.dumps(dict(seconds=time.monotonic() - start, mesh=dict(trainer.device_mesh.shape))),
+            flush=True,
+        )
+        page_size = 128
+        pages = (max_seq_len + page_size - 1) // page_size
+        generation_config = json.loads((StoragePath(model_path) / "generation_config.json").read_text())
+        eos_ids = generation_config["eos_token_id"]
+        eos_ids = (eos_ids,) if isinstance(eos_ids, int) else tuple(eos_ids)
+        print("PINNED_EOS_IDS", json.dumps(eos_ids), flush=True)
+        config = InferenceServerConfig(
+            eos_token_ids=eos_ids,
+            trainer=trainer,
+            model_name="snowball-levanter",
+            host="0.0.0.0",
+            port=info.ports["http"],
+            service=InferenceEngineConfig(
+                max_seq_len=max_seq_len,
+                page_size=page_size,
+                max_pages=pages + 2,
+                max_stop_seqs=8,
+                max_seqs=1,
+                max_seqs_in_prefill=1,
+                max_prefill_size=256,
+                max_queued_tokens=16,
+                max_tokens_per_round=16,
+                max_rounds=8,
+            ),
+        )
+        engine = MultiHostInferenceEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
+        if jax.process_index() != 0:
+            engine.worker_loop()
+            return
+        context = InferenceContext(model, tokenizer, engine, config)
+        server = InferenceServer(config, context, InferenceServer._create_app(context))
+        context.start()
+        http_thread = threading.Thread(target=server.serve, daemon=True)
+        http_thread.start()
+        local = f"http://127.0.0.1:{config.port}"
+        registration = None
+        try:
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
+                if server._server is not None and server._server.started:
+                    break
+                time.sleep(0.2)
+            else:
+                raise TimeoutError("HTTP server did not start")
+            registration = iris_ctx().registry.register(
+                "levanter267-http",
+                f"http://{info.advertise_host}:{config.port}",
+                metadata={"model": config.model_name},
+            )
+            with urllib.request.urlopen(local + "/v1/models", timeout=30) as response:
+                _save(output, "models.json", json.load(response))
+            # Invalid deterministic requests must not broadcast and strand the followers.
+            try:
+                engine.score_token_logprobs([0], 0)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("Malformed scoring request was accepted")
+            start = time.monotonic()
+            smoke = _post(
+                local + "/v1/completions",
+                dict(
+                    model=config.model_name,
+                    prompt="The answer to 2 + 2 is",
+                    max_tokens=4,
+                    temperature=0,
+                    seed=19311,
+                ),
+            )
+            _save(output, "first-token.json", dict(response=smoke, wall_seconds=time.monotonic() - start))
+            print("FIRST_SERVED_TOKEN", json.dumps(smoke), flush=True)
+            if item is not None:
+                text = item["prompt"] + item["completion"]
+                tokens = tokenizer.encode(text, add_special_tokens=False)
+                if len(tokens) != 5279:
+                    raise ValueError(f"Item303 tokenization mismatch: {len(tokens)} != 5279")
+                start = time.monotonic()
+                result = engine.score_token_logprobs(tokens, 1)
+                elapsed = time.monotonic() - start
+                rows = []
+                for position, (token, logprob, tops) in enumerate(
+                    zip(tokens, result.token_logprobs, result.top_token_logprobs, strict=True)
+                ):
+                    top_id, top_value = max(tops.items(), key=lambda pair: pair[1])
+                    rows.append(
+                        dict(
+                            position=position,
+                            token_id=token,
+                            token=tokenizer.decode([token], skip_special_tokens=False),
+                            logprob=None if position == 0 else logprob,
+                            top1_token_id=None if position == 0 else top_id,
+                            top1_logprob=None if position == 0 else top_value,
+                        )
+                    )
+                _save(
+                    output,
+                    "303.json",
+                    dict(
+                        id=303,
+                        input_sha256=hashlib.sha256(text.encode()).hexdigest(),
+                        tokens=rows,
+                        elapsed_seconds=elapsed,
+                        tokens_per_second=(len(tokens) - 1) / elapsed,
+                        usage=dict(prompt_tokens=len(tokens)),
+                        dropped_assignments=np.asarray(engine.gen_state.cache.dropped_assignments).tolist(),
+                    ),
+                )
+                # Use the generation scheduler's q_len=1 path after a production-window-length prompt too.
+                long_prompt = tokenizer.decode(tokens[:2050], skip_special_tokens=False)
+                if tokenizer.encode(long_prompt, add_special_tokens=False) != tokens[:2050]:
+                    raise ValueError("Long-decode prompt does not round-trip through the tokenizer")
+                long_smoke = _post(
+                    local + "/v1/completions",
+                    dict(
+                        model=config.model_name,
+                        prompt=long_prompt,
+                        max_tokens=2,
+                        temperature=0,
+                        seed=19311,
+                    ),
+                )
+                _save(output, "long-decode.json", long_smoke)
+            if mode == "serve":
+                http_thread.join()
+        finally:
+            if registration is not None:
+                iris_ctx().registry.unregister(registration)
+            if server._server is not None:
+                server._server.should_exit = True
+            http_thread.join(timeout=10)
+            if http_thread.is_alive():
+                raise RuntimeError("HTTP server did not shut down; refusing to desynchronize workers")
+            engine.shutdown_workers()
+        _save(output, "complete.json", dict(mode=mode, success=True))

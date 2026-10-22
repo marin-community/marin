@@ -789,6 +789,18 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         new_tf = eqx.tree_at(lambda t: (t.token_embed, t.output_proj, t.config), self.transformer, (te, op, new_cfg))
         return SnowballLMHeadModel(new_tf, new_cfg)
 
+    def initial_cache(self, spec, *, dtype):
+        # Import here to break the model / inference adapter dependency cycle.
+        from levanter.inference.snowball import initial_cache  # noqa: PLC0415
+
+        return initial_cache(self, spec, dtype=dtype)
+
+    def decode(self, input_ids, kv_cache, batch_info, pos_ids, *, key=None):
+        # Import here to break the model / inference adapter dependency cycle.
+        from levanter.inference.snowball import decode  # noqa: PLC0415
+
+        return decode(self, input_ids, kv_cache, batch_info, pos_ids)
+
     # --- state dict (bidirectional HF serialization) ---
     def to_state_dict(self, prefix: Optional[str] = None) -> StateDict:
         return snowball_to_state_dict(self.transformer, prefix=prefix)

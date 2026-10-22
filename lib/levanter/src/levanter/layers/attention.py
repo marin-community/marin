@@ -1609,6 +1609,8 @@ def ragged_paged_attention(
     num_seqs: jnp.ndarray,
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
+    sliding_window: int | None = None,
+    allow_fallback: bool = True,
 ) -> NamedArray:
     """Ragged attention for paged KV caches.
 
@@ -1626,6 +1628,21 @@ def ragged_paged_attention(
             return False
         return True
 
+    if not allow_fallback and jax.default_backend() == "tpu":
+        if not _tpu_rpa_available():
+            raise RuntimeError("TPU paged attention is unavailable; reference fallback is disabled")
+        return _do_tpu_ragged_paged_attention(
+            q,
+            kv_pages,
+            kv_lens,
+            page_indices,
+            cu_q_lens,
+            num_seqs,
+            sm_scale=sm_scale,
+            soft_cap=soft_cap,
+            sliding_window=sliding_window,
+        )
+
     if _tpu_rpa_available():
         try:
             out = _do_tpu_ragged_paged_attention(
@@ -1637,6 +1654,7 @@ def ragged_paged_attention(
                 num_seqs,
                 sm_scale=sm_scale,
                 soft_cap=soft_cap,
+                sliding_window=sliding_window,
             )
             return out
         except Exception:  # pragma: no cover - fall back if kernel fails
@@ -1655,6 +1673,7 @@ def ragged_paged_attention(
         num_seqs,
         sm_scale=sm_scale,
         soft_cap=soft_cap,
+        sliding_window=sliding_window,
     )
 
 
@@ -1667,6 +1686,7 @@ def _do_tpu_ragged_paged_attention(
     num_seqs: jnp.ndarray,  # scalar int32
     sm_scale: float = 1.0,
     soft_cap: float | None = None,
+    sliding_window: int | None = None,
 ) -> NamedArray:
     if tpu_ragged_paged_attention is None:
         msg = "TPU ragged paged attention kernel is unavailable."
@@ -1694,6 +1714,17 @@ def _do_tpu_ragged_paged_attention(
         q_padded = q
         kv_pages_padded = kv_pages
 
+    # TPU RPA requires tileable interleaved KV heads. Pad whole GQA groups so odd
+    # head counts (Snowball: five KV, twenty Q) retain their query-to-KV mapping.
+    original_kv_heads = q.axis_size("kv_head")
+    padded_kv_heads = 1 << (original_kv_heads - 1).bit_length()
+    if padded_kv_heads != original_kv_heads:
+        extra = padded_kv_heads - original_kv_heads
+        q_padded = hax.concatenate("kv_head", [q_padded, hax.zeros_like(q_padded["kv_head", hax.ds(0, extra)])])
+        kv_pages_padded = hax.concatenate(
+            "kv_head", [kv_pages_padded, hax.zeros_like(kv_pages_padded["kv_head", hax.ds(0, 2 * extra)])]
+        )
+
     # The TPU kernel expects the second dimension of the query tensor to be the total number of query heads.
     q_flat = q_padded.flatten_axes(("kv_head", "q_heads_per_group"), "kv_head")
     if num_seqs.ndim == 0:
@@ -1717,6 +1748,13 @@ def _do_tpu_ragged_paged_attention(
         cu_q_lens_arg: jax.Array,
         num_seqs_arg: jax.Array,
     ) -> jax.Array:
+        window_kwargs = {} if sliding_window is None else {"sliding_window": sliding_window}
+        if padded_kv_heads != original_kv_heads:
+            # The v4 default stages too many replicated heads in VMEM at once.
+            window_kwargs.update(
+                num_kv_pages_per_block=min(4, page_indices.axis_size("page")),
+                num_queries_per_block=min(32, q.axis_size("position")),
+            )
         return kernel(
             q_arg,
             kv_pages_arg,
@@ -1726,6 +1764,7 @@ def _do_tpu_ragged_paged_attention(
             num_seqs_arg,
             sm_scale=1.0,
             soft_cap=soft_cap,
+            **window_kwargs,
         )
 
     o = shard_map(
@@ -1763,10 +1802,13 @@ def _do_tpu_ragged_paged_attention(
     out = out.unflatten_axis(
         "kv_head",
         (
-            q.resolve_axis("kv_head"),
-            q.resolve_axis("q_heads_per_group"),
+            q_padded.resolve_axis("kv_head"),
+            q_padded.resolve_axis("q_heads_per_group"),
         ),
     )
+
+    if padded_kv_heads != original_kv_heads:
+        out = out["kv_head", hax.ds(0, original_kv_heads)]
 
     # If we padded head_size for the kernel, slice back to the original size
     if padded_head_size != orig_head_size:
@@ -1784,6 +1826,7 @@ def default_ragged_paged_attention(
     num_seqs: jnp.ndarray,  # scalar int32
     sm_scale: float,
     soft_cap: float | None = None,
+    sliding_window: int | None = None,
 ) -> NamedArray:
     """Default implementation of ragged paged attention.
     This implementation is not optimized for performance and is intended for testing purposes.
@@ -1872,6 +1915,8 @@ def default_ragged_paged_attention(
 
                 attn_mask = kv_tok.broadcast_axis(q_tok.axes) <= q_tok  # causal
                 attn_mask = attn_mask & (kv_tok < kv_len) & (q_tok < q_pos_id_end)  # stay within bounds
+                if sliding_window is not None:
+                    attn_mask = attn_mask & (kv_tok.broadcast_axis(q_tok.axes) > q_tok - sliding_window)
 
                 attn_b = hax.where(attn_mask, attn_b, -1e10)
 
