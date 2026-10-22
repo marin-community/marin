@@ -80,6 +80,9 @@ benchmarks = ["evalchemy[aime24,aime25,aiw,amc23,bigcodebench,codeelo,codeforces
 test = ["pytest>=8.3.2", "pytest-timeout", "pytest-mock", "zstandard"]
 dev = [{ include-group = "test" }]
 
+[tool.uv]
+exclude-dependencies = ["litellm"]
+
 [tool.uv.sources]
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
