@@ -363,10 +363,13 @@ an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`
 caller's `ProgramBuilder` (`run_build`, which must build as the caller's build stage does, on the same
 step store, so a program that built in the session rebuilds there from memo hits alone), grade a
 candidate against the last draft the session built (`run_grade_candidate`), and search and fetch the
-web when the proposal lists research. Every load of a program (`run_loader`, `run_build`, `submit`)
-goes through the session's `ProgramLoader`, by default `stage30_author.load_process` in a child process
-bounded by `LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the
-caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A host failure never
+web when the proposal lists research. A session answering a `MODIFY` revision may also swap the verifier
+kind (`change_verification(kind, reason)`, the declared kind undoing the swap); the builder then
+receives the revised proposal and the change, and a program counts as built only for the kind it built.
+Every load of a program (`run_loader`, `run_build`, `submit`) goes through the session's
+`ProgramLoader`, by default `stage30_author.load_process` in a child process bounded by
+`LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the caller's
+event loop. Every tool result is cut to 6,000 characters, head and tail. A host failure never
 reaches the model: `run_build` and `run_grade_candidate` retry a `BuildInfrastructureFailure` up to
 `HOST_RETRIES` times with a doubling backoff (at once re-raising a cause in `HOST_REJECTIONS`), then
 re-raise it like `ModelUnavailable`, so the round ends without a record and spends no revision; a
@@ -386,7 +389,8 @@ smaller step instead). It writes, under the workpiece's directory:
 ```
 rounds/<n>/authored/<k>/
   author.json        author_kind, status (accepted, handed_off, author_failed), revision, session_dir,
-                     mode, stop_reason, wall; accepted adds program_digest and tested
+                     mode, stop_reason, wall; accepted adds program_digest, tested and
+                     verification_change ({declared, revised, reason} or null)
   session.json       turns, tool calls by tool, tokens, cached share, prompts, stop reason, nudges,
                      submissions, in-session builds
   transcript.json    the opening and user turns, then each assistant turn with its tool calls and results
@@ -461,12 +465,18 @@ invalid through the repair turns, as when the output limit cut it, and the next 
 again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
 author stage.
 
-A `MODIFY` revision, which sends review's or an adversary's findings back, may carry a
-`VerificationChange` that swaps the task's verifier kind (`declared`, `revised`, `reason`). The
-caller passes `change.revise(proposal)` to the author and to the build from that round on, so both
-authors' prompts and the build's check of the built grader's kind read the revised kind, and
-`run_build(verification_change=...)` records both kinds in the draft's provenance. A build or
-author failure may not change the kind.
+A `MODIFY` revision, which sends review's or an adversary's findings back, lets the author swap the
+task's verifier kind with a `VerificationChange` (`declared`, `revised`, `reason`). The agentic
+author decides in its session with the `change_verification` tool; a caller may also put a change on
+the revision, which the author starts from and may keep, replace or undo, and which the one-shot
+`GlmAuthor` keeps unchanged. The author returns its choice as `AuthoredProgram.verification_change`,
+relative to the proposal as declared. Callers build that round and every later one with
+`change.revise(proposal)` and the change, so the build's check of the built grader's kind reads the
+revised kind and `run_build(verification_change=...)` records both kinds in the draft's provenance;
+later author calls receive the revised proposal, and a later `MODIFY` call receives the declared one
+with the change on its revision. The coordinator records the change on the `AUTHORED` event
+(`verification_change`, canonical JSON) and folds it into `WorkpieceState.verification_change`. A
+build or author failure may not swap the kind.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the

@@ -68,6 +68,15 @@ returns, the build stage asks the author again with the revision kept in the sta
 has to return the same program for the same proposal and revision. Either way, the build stage
 refuses a program whose digest differs from the ``AUTHORED`` event.
 
+An author answering a ``MODIFY`` revision may swap the verifier kind (``AuthoredProgram.verification_change``).
+The coordinator records the change, or its absence, on the ``AUTHORED`` event as canonical JSON, and the
+workpiece state keeps it (``WorkpieceState.verification_change``) until a later such event replaces or
+clears it. Every later build runs ``change.revise(proposal)`` with the change, and every later author call
+receives the revised proposal, except a ``MODIFY`` call, which receives the proposal as triage left it with
+the change on its revision, so its author may keep, replace or undo it. An author returning a change for
+any other revision fails the workpiece at the author stage. The default review returns no ``Modify``, so
+no change arises unless a caller's review sends findings back.
+
 The layout of the run root is in ``lib/taskforge/README.md``.
 """
 
@@ -91,6 +100,7 @@ from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
     PROGRAM_MANIFEST_FILE,
+    AuthoredProgram,
     Revision,
     RevisionKind,
     program_manifest,
@@ -111,6 +121,7 @@ from taskforge.stage_coordinator.workpiece_machine import (
     REASON_ATTR,
     TERMINAL_ATTR,
     TRIAGE_REJECTED,
+    VERIFICATION_CHANGE_ATTR,
     EventKind,
     Exit,
     Stage,
@@ -218,6 +229,12 @@ class _Workpiece:
         if digest(proposal) != state.proposal_digest:
             raise ValueError(f"{path} holds proposal {digest(proposal)}, not the repaired {state.proposal_digest}")
         return proposal
+
+    def built_proposal(self, state: WorkpieceState) -> TaskProposal:
+        """The proposal builds run at ``state``: ``proposal_at``, revised by the state's verification change."""
+        change = state.verification_change
+        proposal = self.proposal_at(state)
+        return proposal if change is None else change.revise(proposal)
 
 
 def _repaired_file(repairs: int) -> Path:
@@ -367,7 +384,8 @@ def _repaired(workpiece: _Workpiece, state: WorkpieceState, proposal: TaskPropos
 
 
 def _revision(workpiece: _Workpiece, state: WorkpieceState) -> Revision | None:
-    """Read what the round's author call revises: nothing, the last build or author failure, or review's findings."""
+    """Read what the round's author call revises: nothing, the last build or author failure, or review's findings
+    with the verification change in force."""
     match state.revision:
         case RevisionKind.NONE:
             return None
@@ -378,7 +396,15 @@ def _revision(workpiece: _Workpiece, state: WorkpieceState) -> Revision | None:
             path = workpiece.round_dir(state.round - 1) / DECISION_FILE
             decision = _DECISION.validate_json(path.read_bytes())
             assert isinstance(decision, Modify), f"{path} holds {decision}, not a Modify"
-            return Revision(kind=state.revision, detail="\n\n".join(decision.findings))
+            return Revision(state.revision, "\n\n".join(decision.findings), state.verification_change)
+
+
+async def _call_author(workpiece: _Workpiece, state: WorkpieceState) -> AuthoredProgram:
+    """Call the author for ``state``: a modify revision gets the proposal as triage left it and the change in
+    force on the revision; any other call gets the proposal builds run."""
+    modify = state.revision is RevisionKind.MODIFY
+    proposal = workpiece.proposal_at(state) if modify else workpiece.built_proposal(state)
+    return await workpiece.coordinator.stages.author(proposal, _revision(workpiece, state), state.author_state)
 
 
 async def _author(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
@@ -388,20 +414,29 @@ async def _author(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     when the output limit cut the reply. The adapter writes the failure to ``build-failures/`` and
     returns ``AUTHOR_FAILED``, so the next author call samples again with the failure as its
     revision. Every other exception passes through unchanged, and ``run_workpiece`` fails the workpiece in
-    place at the author stage.
+    place at the author stage. An ``AUTHORED`` event answering a modify revision records the author's
+    verification change, ``null`` for none.
+
+    Raises:
+        ValueError: the author returned a verification change for a revision other than modify.
     """
     try:
-        authored = await workpiece.coordinator.stages.author(
-            workpiece.proposal_at(state), _revision(workpiece, state), state.author_state
-        )
+        authored = await _call_author(workpiece, state)
     except StructuredOutputError as error:
         attrs = _failure_attrs(workpiece, state, error, _error_line(error))
         return WorkpieceEvent(EventKind.AUTHOR_FAILED, state.round, state.proposal_digest, attrs)
+    attrs: dict[str, str] = {EXIT: Exit.AUTHORED, "revision": state.revision}
+    if state.revision is RevisionKind.MODIFY:
+        attrs[VERIFICATION_CHANGE_ATTR] = canonical_json(authored.verification_change)
+    elif authored.verification_change is not None:
+        raise ValueError(
+            f"{workpiece.workpiece_id}: the author changed the verification answering a {state.revision} revision; "
+            f"only an author answering {RevisionKind.MODIFY} may"
+        )
     directory = workpiece.authored_dir(state)
     _write(directory / PROGRAM_MANIFEST_FILE, pretty_json(program_manifest(authored.program)).encode())
     if authored.source is not None:
         _write(directory / PROGRAM_FILE, authored.source.encode())
-    attrs: dict[str, str] = {EXIT: Exit.AUTHORED, "revision": state.revision}
     return WorkpieceEvent(EventKind.AUTHORED, state.round, authored.program.digest, attrs)
 
 
@@ -416,10 +451,7 @@ async def _authored_program(workpiece: _Workpiece, state: WorkpieceState) -> RLE
         program = workpiece.coordinator.stages.load_program(source.read_text())
         found = f"{source} holds program {program.digest}"
     else:
-        revision = _revision(workpiece, state)
-        program = (
-            await workpiece.coordinator.stages.author(workpiece.proposal_at(state), revision, state.author_state)
-        ).program
+        program = (await _call_author(workpiece, state)).program
         found = f"the author now returns program {program.digest}"
     if program.digest != state.program_digest:
         raise ValueError(f"{workpiece.workpiece_id}: {found}, not the authored {state.program_digest}")
@@ -447,7 +479,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
     try:
         draft = await coordinator.stages.build(
             program,
-            workpiece.proposal_at(state),
+            workpiece.built_proposal(state),
             workpiece.workpiece_id,
             workpiece.round_dir(state.round),
             str(coordinator.root / STORE_DIR),
@@ -457,6 +489,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
             state.round,
             research=coordinator.research,
             model_digest=coordinator.model_digest,
+            verification_change=state.verification_change,
         )
     except (BuildInfrastructureFailure, BuildExpired, ModelUnavailable):
         raise
