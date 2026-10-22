@@ -42,7 +42,7 @@ from taskcompendium.models import ScriptGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 from experiments.post_training.snowball_curriculum.export import DerivedDeployment, derived_record
-from experiments.post_training.snowball_inventory_panel import PROMPT_TOKEN_BUDGET
+from experiments.post_training.snowball_inventory_panel import PROMPT_TOKEN_BUDGET, evaluation_dataset_uid
 from experiments.post_training.snowball_inventory_probe import (
     package_revisions,
     preflight_tokenizer,
@@ -328,7 +328,7 @@ def results(request: dict) -> dict:
                         score = normalized_verifier_score(verdict)
                 outcomes.append(
                     {
-                        "task_id": request["dataset_uids"][row["uid"]],
+                        "task_id": request["dataset_uids"][evaluation_dataset_uid(row["uid"], step)],
                         "score": score,
                         "stop_reason": row.get("stop_reason"),
                         "verification_status": verification["status"].value if verification is not None else None,
