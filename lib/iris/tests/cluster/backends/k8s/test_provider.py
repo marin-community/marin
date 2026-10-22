@@ -3,6 +3,9 @@
 
 """Tests for K8sTaskProvider: sync lifecycle, capacity, scheduling, profiling."""
 
+import base64
+import json
+from configparser import ConfigParser
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -68,6 +71,77 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
     assert result == []
+
+
+@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_SANDBOX])
+def test_submitted_credentials_use_attempt_secret_and_are_collected(k8s, profile):
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(require_coreweave_credentials=True, task_outputs=TaskOutputPolicy()),
+        cluster_scan_interval=0.0,
+    )
+    req = make_run_req("/test-user/job/0", attempt_uid="abcdef0123456789")
+    req.container_profile = profile
+    req.egress_policy = (
+        job_pb2.EGRESS_POLICY_NONE if profile == job_pb2.CONTAINER_PROFILE_SANDBOX else job_pb2.EGRESS_POLICY_UNSPECIFIED
+    )
+    req.environment.secrets.update({"custom": "submitted-hf-value", "another": "submitted-api-value"})
+    req.environment.secrets.update({"CW_KEY_ID": "personal-key", "CW_KEY_SECRET": "personal-secret"})
+    req.environment.env_vars.update({"FLAG": "keep", "HF_TOKEN": "explicit-env"})
+    try:
+        assert provider.sync(make_batch(tasks_to_run=[req])) == []
+        pod = k8s.list_json(K8sResource.PODS)[0]
+        assert "submitted-hf-value" not in json.dumps(pod)
+        assert "submitted-api-value" not in json.dumps(pod)
+        container = pod["spec"]["containers"][0]
+        env = {entry["name"]: entry.get("value") for entry in container["env"]}
+        assert env["FLAG"] == "keep"
+        assert env["RIGGING_SECRETS_DIR"] == "/run/rigging/secrets"
+        assert env["HF_TOKEN"] == "explicit-env"
+        volume = next(v for v in pod["spec"]["volumes"] if v["name"] == "job-secrets")
+        secret_name = volume["secret"]["secretName"]
+        assert not any(v.get("secret", {}).get("secretName") == "iris-storage-secrets" for v in pod["spec"]["volumes"])
+        secret = k8s.get_json(K8sResource.SECRETS, secret_name)
+        assert base64.b64decode(secret["data"]["custom"]).decode() == "submitted-hf-value"
+        assert secret["metadata"]["ownerReferences"][0]["uid"] == pod["metadata"]["uid"]
+        if profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+            uploader = next(c for c in pod["spec"]["containers"] if c["name"] == "output-uploader")
+            mount = next(m for m in uploader["volumeMounts"] if m["name"] == "job-storage-secrets")
+            projection = next(v["secret"] for v in pod["spec"]["volumes"] if v["name"] == mount["name"])
+            assert projection["items"] == [{"key": ".aws-credentials", "path": ".aws-credentials"}]
+            assert projection["secretName"] == secret_name
+            credentials = ConfigParser(interpolation=None)
+            credentials.read_string(base64.b64decode(secret["data"][".aws-credentials"]).decode())
+            assert credentials["default"]["aws_access_key_id"] == "personal-key"
+            assert credentials["default"]["aws_secret_access_key"] == "personal-secret"
+            assert "personal-secret" not in json.dumps(pod)
+        assert not any(
+            mount["name"] == "job-secrets"
+            for sidecar in pod["spec"]["containers"][1:]
+            for mount in sidecar.get("volumeMounts", [])
+        )
+        provider.sync(make_batch())
+        provider.collect_garbage()
+        assert k8s.get_json(K8sResource.SECRETS, secret_name) is None
+    finally:
+        provider.close()
+
+
+def test_redispatch_finishes_credential_delivery_after_pod_creation(provider, k8s):
+    req = make_run_req("/test-user/job/0", attempt_uid="abcdef0123456789")
+    req.environment.secrets["custom"] = "submitted-token"
+    k8s.inject_failure("get_json", KubectlError("interrupted after Pod creation"))
+    result = provider.sync(make_batch(tasks_to_run=[req]))
+    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert len(k8s.list_json(K8sResource.PODS)) == 1
+    assert k8s.list_json(K8sResource.SECRETS) == []
+
+    assert provider.sync(make_batch(tasks_to_run=[req])) == []
+    assert len(k8s.list_json(K8sResource.PODS)) == 1
+    assert len(k8s.list_json(K8sResource.SECRETS)) == 1
+    secret = k8s.list_json(K8sResource.SECRETS)[0]
+    assert base64.b64decode(secret["data"]["custom"]).decode() == "submitted-token"
 
 
 def test_sync_releases_output_uploader_after_task_container_exits(k8s):

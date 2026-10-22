@@ -475,9 +475,12 @@ message ResourceSpecProto {
 // ENVIRONMENT CONFIGURATION
 // ============================================================================
 
-// Job environment configuration
+// Job environment configuration.
 message EnvironmentConfig {
   map<string, string> env_vars = 2;  // Environment variables to set
+  // Explicit application credentials, delivered as read-only files by name.
+  // Values remain in authenticated job state and are redacted from display APIs.
+  map<string, string> secrets = 7;
   // Resolved setup scripts the worker runs in order before the command. The
   // client builds this list (default project sync, or caller-provided); empty
   // means no setup. Child jobs inherit it to reproduce the parent's environment.

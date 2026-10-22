@@ -12,6 +12,7 @@ from typing import Protocol
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
+from rigging.secrets import validate_secret_name
 from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_identity
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import Row, bindparam, func, select
@@ -475,6 +476,11 @@ class LaunchIdentity:
 
 
 def _validate_launch_request(request: controller_pb2.Controller.LaunchJobRequest) -> JobName:
+    for name in request.environment.secrets:
+        try:
+            validate_secret_name(name)
+        except ValueError as error:
+            raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from None
     if not request.name:
         raise ConnectError(Code.INVALID_ARGUMENT, "Job name is required")
     if request.HasField("coscheduling") and not request.coscheduling.group_by:

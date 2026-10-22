@@ -37,19 +37,15 @@ see [Pulumi conventions](../../../infra/pulumi.md).
 Apply that reviewed stack before deploying configs that use the directory.
 
 GCP controllers load the reference at startup using their service account.
-CoreWeave configs list the controller's projected environment variable first:
-
-```yaml
-auth:
-  principal_directory:
-    - env:IRIS_PRINCIPAL_DIRECTORY
-    - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
-```
-
-The deploy operator reads the directory and passes it through the existing
-`iris-controller-env` Kubernetes Secret, which tasks do not mount. Operators need
+On CoreWeave the deploy operator reads the same reference and writes the value
+into the `iris-controller-secrets` Kubernetes Secret. The rendered config uses
+a controller-only file reference; tasks do not mount this Secret. Operators need
 directory-read access; ordinary submitters do not need it for login or submission.
 Use tracked configs for normal start and restart commands. Preflight rejects a
 missing, malformed, or incomplete directory before stopping a controller.
 Startup resolves role, admission, and budget identities before persistent-state
 changes. ConfigMaps and VM bootstrap configs retain the references.
+
+Pass application credentials explicitly through `EnvironmentSpec.secrets`; see
+[secret delivery](../docs/secrets.md). Cluster configs have no application secret
+defaults. `task_env`, `.marin.yaml` and job `-e` values use environment delivery.

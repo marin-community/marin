@@ -654,13 +654,17 @@ def test_redact_request_env_vars_does_not_mutate_original():
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
         entrypoint=make_test_entrypoint(),
-        environment=job_pb2.EnvironmentConfig(env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}),
+        environment=job_pb2.EnvironmentConfig(
+            env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}, secrets={"arbitrary": "private"}
+        ),
     )
     redacted = redact_request_env_vars(original)
 
     assert original.environment.env_vars["WANDB_API_KEY"] == "secret"
     assert redacted.environment.env_vars["WANDB_API_KEY"] == REDACTED_VALUE
     assert redacted.environment.env_vars["SAFE"] == "ok"
+    assert original.environment.secrets["arbitrary"] == "private"
+    assert redacted.environment.secrets["arbitrary"] == REDACTED_VALUE
 
 
 def test_submit_argv_roundtrips_through_get_job_status(service):
@@ -1597,7 +1601,7 @@ def test_coreweave_launch_with_missing_keys_is_rejected(coreweave_service, monke
     monkeypatch.setenv("CW_KEY_ID", "operator-key")
     monkeypatch.setenv("CW_KEY_SECRET", "operator-secret")
     request = make_job_request("missing-cw-keys")
-    request.environment.env_vars.update(env)
+    request.environment.secrets.update(env)
 
     with pytest.raises(ConnectError) as exc:
         coreweave_service.launch_job(request, None)
@@ -1611,9 +1615,9 @@ def test_coreweave_launch_with_missing_keys_is_rejected(coreweave_service, monke
 
 def test_coreweave_invalid_replacement_preserves_existing_job(coreweave_service):
     request = make_job_request("existing-cw-job")
-    request.environment.env_vars.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    request.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
     response = coreweave_service.launch_job(request, None)
-    request.environment.env_vars.clear()
+    request.environment.secrets.clear()
     request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
 
     with pytest.raises(ConnectError) as exc:

@@ -11,7 +11,7 @@
 #
 # Workflow:
 #   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
-#      Access Keys). `iris cluster start` stores them in the infrastructure-only iris-storage-env
+#      Access Keys). `iris cluster start` turns them into the iris-storage-secrets
 #      Secret (addressing style is derived from the endpoint domain):
 #        export CW_KEY_ID=<coreweave-access-key-id>
 #        export CW_KEY_SECRET=<coreweave-access-key-secret>
@@ -94,14 +94,12 @@ storage:
 # `signing_key` signs this controller's worker and /proxy tokens. The controller pod
 # has no GCP credentials, so `iris cluster up` resolves the Secret Manager reference in
 # the operator's shell and projects it as IRIS_SIGNING_KEY through the
-# iris-controller-env Secret, which task pods do not mount. Rotate with
+# iris-controller-secrets Secret, which task pods do not mount. Rotate with
 # `iris cluster init-keys --rotate`.
 auth:
   principal_directory:
-    - env:IRIS_PRINCIPAL_DIRECTORY
     - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
   signing_key:
-    - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-rno2a-signing-key/versions/1
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
   federation_peers:

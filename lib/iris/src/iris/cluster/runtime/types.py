@@ -70,6 +70,7 @@ class MountKind(StrEnum):
     OUTPUT = "output"  # attempt-local files captured after task termination
     TMPFS = "tmpfs"  # volatile fast storage; tmpfs on Docker, emptyDir on K8s
     CACHE = "cache"  # persistent cross-task cache (uv, cargo); hostPath bind mount
+    SECRET = "secret"  # per-attempt credentials on host tmpfs, mounted read-only
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,7 @@ class ContainerConfig:
     resolv_conf: Path | None = None
     workdir_host_path: Path | None = None
     output_host_path: Path | None = None
+    secret_host_path: Path | None = None
     task_id: str | None = None
     attempt_id: int | None = None
     attempt_uid: str | None = None

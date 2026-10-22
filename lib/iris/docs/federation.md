@@ -157,14 +157,14 @@ pod holding only S3 credentials.
 ## Storage credentials
 
 GCP task Pods use a platform service account. CoreWeave task Pods use the
-submitter's object-storage keys from the job environment:
+submitter's object-storage keys from the job's secret bundle:
 
 | Cluster | Task pods can read |
 | --- | --- |
 | `marin` (GCP) | `gs://` via the `iris-worker` service account |
-| `cw-*` (CoreWeave) | `s3://` with submitter `CW_KEY_ID` / `CW_KEY_SECRET` (CoreWeave AI Object Storage) |
+| `cw-*` (CoreWeave) | `s3://` via submitted personal CoreWeave credentials, delivered as files |
 
-Federation forwards the job environment, including CoreWeave keys. It does not
+Federation forwards the job environment and secrets, including CoreWeave keys. It does not
 translate service-account identity or storage URLs. A CoreWeave job cannot use
 the GCP worker service account to read `gs://`; a GCP job accessing CoreWeave
 storage needs the object-storage keys and endpoint configuration. Keep artifacts
