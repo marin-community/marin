@@ -107,7 +107,7 @@ def make_fns():
         w = weight.reshape(-1, 1)
         xtx, xty = [], []
         for srcs in _stage_sources(tr):
-            _, mixed = forward._gate(srcs, final_q, eps)
+            _, mixed = forward._gate(srcs, final_q, eps, plain_sum=model.config.attn_res_plain_sum)
             x = jnp.concatenate(
                 [forward.rms_norm(mixed.astype(jnp.float32), eps).reshape(-1, forward.HIDDEN), jnp.ones_like(w)], axis=1
             )
@@ -163,7 +163,7 @@ def make_fns():
         gate_loss, gate_agree, tuned_loss, tuned_agree, gate_kl = [], [], [], [], []
         final_logp = _labels_logp(model_r, tr["hidden"])
         for k, srcs in enumerate(_stage_sources(tr)):
-            _, mixed = forward._gate(srcs, final_q, eps)
+            _, mixed = forward._gate(srcs, final_q, eps, plain_sum=model_r.config.attn_res_plain_sum)
             for kind, hidden in (
                 ("gate", model_r.final_norm(mixed)),
                 (
@@ -276,7 +276,7 @@ def main() -> None:
     parser.add_argument("--ablation-batches", type=int, default=12)
     args = parser.parse_args()
     checkpoint = args.checkpoint or common.CHECKPOINTS[args.tag]
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, checkpoint)

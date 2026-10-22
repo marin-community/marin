@@ -37,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 SIZE = "d512"
 ONSET_ARMS = ("ctl", "last-half", "first-half", "stagger", "rstagger", "last-half-wu")
+# The plain-residual (attn_res_plain_sum) onset arms.
+PLAIN_SUM_ARMS = ("ctl-ps", "last-half-ps", "stagger-ps")
 # The 8-minute Belay d512 (Ckpt 1 at 2760 steps) and the 8821-step 171-TPP ladder rung, by study tag.
 CHECKPOINTS = {
     "tn-d512-ckpt1-rno": "s3://marin-us-east-02a/marin/grug/tn-d512-ckpt1-rno/2026.09.25/checkpoints/step-2760",
@@ -44,7 +46,7 @@ CHECKPOINTS = {
     # The layer onset study (Ckpt 1 d512, 2760 steps, seed 0; one arm per layer_onset_steps schedule).
     **{
         f"lc1-onset-{arm}-s0": f"s3://marin-us-east-02a/marin/grug/lc1-onset-{arm}-s0/2026.09.25/checkpoints/step-2760"
-        for arm in ONSET_ARMS
+        for arm in (*ONSET_ARMS, *PLAIN_SUM_ARMS)
     },
 }
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/interp-belay-d512"
@@ -76,8 +78,12 @@ TRAINED_SEQUENCES = 8821 * 128  # the longer run's; the 2760-step run saw a pref
 MP = jmp.get_policy("params=float32,compute=bfloat16,output=bfloat16")
 
 
-def model_config() -> GrugModelConfig:
-    """The Ckpt 1 d512 model, built the way ``build_h100_ladder_run`` builds it from ``belay_ckpt1.recipe_args``."""
+PLAIN_SUM_TAGS = frozenset(f"lc1-onset-{arm}-s0" for arm in PLAIN_SUM_ARMS)
+
+
+def model_config(tag: str) -> GrugModelConfig:
+    """The Ckpt 1 d512 model of study tag ``tag``, built the way ``build_h100_ladder_run`` builds it from
+    ``belay_ckpt1.recipe_args`` (with ``attn_res_plain_sum`` for the plain-residual onset arms)."""
     args = belay_ckpt1.recipe_args(SIZE)
     settings = {}
     for flag, value in itertools.pairwise(args):
@@ -87,7 +93,8 @@ def model_config() -> GrugModelConfig:
     rung = launch._resolved_rung(SIZE, None, None)
     model = dataclasses.replace(launch._h100_ladder_model(rung), vocab_size=launch.V16384_VOCAB)
     model = launch._kma_model(model)
-    return launch._apply_settings(model, settings)
+    model = launch._apply_settings(model, settings)
+    return dataclasses.replace(model, attn_res_plain_sum=tag in PLAIN_SUM_TAGS)
 
 
 def one_gpu_mesh() -> Mesh:

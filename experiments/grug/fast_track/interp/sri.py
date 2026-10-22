@@ -412,7 +412,7 @@ def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir,
     final_q = m.attn_res_query_final
     lens = {k: [] for k in ("gate_logp", "gate_rank", "tuned_logp", "tuned_rank")}
     for k, srcs in enumerate(_stage_sources(tr)):
-        _, mixed = forward._gate(srcs, final_q, eps)
+        _, mixed = forward._gate(srcs, final_q, eps, plain_sum=m.config.attn_res_plain_sum)
         mq = _pq(mixed, qflat)
         h_gate = m.final_norm(mq)
         tuned_in = jnp.concatenate([forward.rms_norm(mq.astype(jnp.float32), eps), jnp.ones((Q, 1))], axis=-1)
@@ -619,7 +619,7 @@ def main() -> None:
     parser.add_argument("--swap-batches", type=int, default=24)
     args = parser.parse_args()
     t0 = time.time()
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])

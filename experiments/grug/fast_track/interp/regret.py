@@ -560,7 +560,7 @@ def main() -> None:
     parser.add_argument("--name", default="regret", help="output file name")
     args = parser.parse_args()
     rng = np.random.default_rng(args.seed)
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])

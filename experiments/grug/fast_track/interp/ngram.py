@@ -248,7 +248,7 @@ def main() -> None:
     sample = load_npz(args.tag, "tokens")
     cand = candidates(stats, sample["tokens"], sample["segment_ids"])
     logger.info("candidates (%.0fs)", time.time() - t0)
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])

@@ -92,7 +92,7 @@ def main() -> None:
     parser.add_argument("--batches", type=int, default=4)
     parser.add_argument("--seed", type=int, default=5)
     args = parser.parse_args()
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])

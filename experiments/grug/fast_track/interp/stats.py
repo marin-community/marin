@@ -302,7 +302,7 @@ def main() -> None:
     parser.add_argument("--paloma-sequences", type=int, default=64, help="per Paloma set")
     args = parser.parse_args()
     checkpoint = args.checkpoint or common.CHECKPOINTS[args.tag]
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, checkpoint)

@@ -86,7 +86,6 @@ def check_config(cfg: GrugModelConfig) -> None:
         vocab_size=VOCAB,
         attn_res=True,
         attn_res_num_blocks=8,
-        attn_res_plain_sum=False,
         moe_ungated_relu2=True,
         shared_ungated_relu2=True,
         router_combine=RouterCombine.SQRT_SOFTPLUS_RENORM,
@@ -195,8 +194,15 @@ def _mix(m: jax.Array, out: jax.Array, mean: jax.Array) -> jax.Array:
     return (m * out.astype(jnp.float32) + (1.0 - m) * mean).astype(out.dtype)
 
 
-def _gate(sources: list[jax.Array], query: jax.Array, eps: float) -> tuple[jax.Array, jax.Array]:
-    """One AttnRes gate: softmax over ``q . rms_norm(src)`` (float32) and the mix, as ``_attn_res_mix``."""
+def _gate(sources: list[jax.Array], query: jax.Array, eps: float, *, plain_sum: bool) -> tuple[jax.Array, jax.Array]:
+    """One AttnRes gate: softmax over ``q . rms_norm(src)`` (float32) and the mix, as ``_attn_res_mix``; with
+    ``plain_sum`` (``attn_res_plain_sum``) the plain sum of the sources, with uniform weights for logging."""
+    if plain_sum:
+        total = sources[0].astype(jnp.float32)
+        for src in sources[1:]:
+            total = total + src.astype(jnp.float32)
+        weights = jnp.full((len(sources), *sources[0].shape[:-1]), 1.0 / len(sources), jnp.float32)
+        return weights, total.astype(sources[0].dtype)
     logits = []
     for src in sources:
         inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(src.astype(jnp.float32)), axis=-1) + eps)
@@ -471,7 +477,7 @@ def trace_forward(
     layers_out = []
     for i, layer in enumerate(model.layers()):
         out: dict = {}
-        w_attn, h = _gate(blocks, layer.attn_res_query_attn, eps)
+        w_attn, h = _gate(blocks, layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum)
         attn_in = layer._attn_input(h)
         if i in KDA_LAYERS:
             _, contrib = _kda_branch(layer.attn, attn_in, seg, cfg, abl.head_mult[i], abl.head_mean[i], abl, out)
@@ -494,7 +500,7 @@ def trace_forward(
             ve_contrib = _heads_through(layer.sconv_attn, ve_contrib, seg)
         attn_out = jnp.sum(contrib.astype(jnp.float32), axis=2)
         attn_out = _mix(abl.sub_mult[i, SUB_ATTN], attn_out, abl.sub_mean[i, SUB_ATTN]).astype(embed.dtype)
-        w_mlp, h2 = _gate([*blocks, attn_out], layer.attn_res_query_mlp, eps)
+        w_mlp, h2 = _gate([*blocks, attn_out], layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum)
         mlp_in = layer._mlp_input(h2)
         routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out)
         routed_sc = layer.sconv_mlp(routed, seg)
@@ -519,7 +525,7 @@ def trace_forward(
         )
         layers_out.append(out)
         blocks.append(block_out)
-    w_final, mixed = _gate(blocks, model.attn_res_query_final, eps)
+    w_final, mixed = _gate(blocks, model.attn_res_query_final, eps, plain_sum=cfg.attn_res_plain_sum)
     mixed_f = mixed.astype(jnp.float32)
     inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(mixed_f), axis=-1, keepdims=True) + eps)
     hidden = model.final_norm(mixed)

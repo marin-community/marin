@@ -97,11 +97,13 @@ def main() -> None:
     parser.add_argument("--paloma-sequences", type=int, default=2, help="per Paloma set")
     args = parser.parse_args()
     t0 = time.time()
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params_a = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
-    params_b = common.load_params(cfg, mesh, common.CHECKPOINTS[args.ref])
+    cfg_b = common.model_config(args.ref)
+    forward.check_config(cfg_b)
+    params_b = common.load_params(cfg_b, mesh, common.CHECKPOINTS[args.ref])
     batches = [
         *common.paloma_batches(BATCH, max_sequences=args.paloma_sequences),
         *common.train_batches(BATCH, args.train_sequences, seed=21),

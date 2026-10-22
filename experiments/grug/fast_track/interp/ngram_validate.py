@@ -340,7 +340,7 @@ def main() -> None:
     routed_mean = jnp.asarray(stats["act_sum"] / np.maximum(stats["expert_tokens"][..., None], 1.0), jnp.float32)
     shared_mean = jnp.asarray(stats["s_act_sum"] / np.maximum(stats["tokens"], 1.0), jnp.float32)
 
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])

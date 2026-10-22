@@ -359,7 +359,7 @@ def main() -> None:
     parser.add_argument("--ablation-batches", type=int, default=12)
     args = parser.parse_args()
     t0 = time.time()
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])

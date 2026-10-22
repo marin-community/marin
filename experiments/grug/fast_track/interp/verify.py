@@ -85,7 +85,7 @@ def main() -> None:
     parser.add_argument("--logged-paloma-macro", type=float, required=True)
     args = parser.parse_args()
     checkpoint = args.checkpoint or common.CHECKPOINTS[args.tag]
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     report: dict = {"config": {k: str(v) for k, v in vars(cfg).items()}}
     t0 = time.time()

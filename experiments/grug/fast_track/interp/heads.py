@@ -211,7 +211,7 @@ def main() -> None:
     parser.add_argument("--induction-sequences", type=int, default=4)
     args = parser.parse_args()
     checkpoint = args.checkpoint or common.CHECKPOINTS[args.tag]
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, checkpoint)

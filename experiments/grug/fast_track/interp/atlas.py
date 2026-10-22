@@ -235,7 +235,7 @@ def main() -> None:
     parser.add_argument("--paloma-sequences", type=int, default=128, help="per Paloma set")
     parser.add_argument("--seed", type=int, default=2)
     args = parser.parse_args()
-    cfg = common.model_config()
+    cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
