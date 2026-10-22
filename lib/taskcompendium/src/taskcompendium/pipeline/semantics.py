@@ -156,17 +156,26 @@ def prepare_instruction_texts(context: ZephyrContext, *, input_paths: Sequence[s
     return result.results
 
 
-def task_semantic_input(task: TaskSpec, source: TaskInputFile) -> TaskSemanticInput:
-    """Project instructions and the public submission contract without opening task files."""
-    public = {
-        "context": task.context.model_dump(mode="json"),
-        "final_tools": [tool.model_dump(mode="json") for tool in task.final_tools],
-        "interaction_tools": [tool.model_dump(mode="json") for tool in task.interaction_tools],
-        "answer_type": task.answer_type.value,
-        "answer_format": task.answer_format.model_dump(mode="json"),
-        "output_paths": list(task.output_paths),
-        "command_semantics": task.environment_requirements.command_semantics,
+PUBLIC_FIELDS = frozenset(
+    {"context", "final_tools", "interaction_tools", "answer_type", "answer_format", "output_paths"}
+)
+
+
+def public_task_input(task: dict[str, Any]) -> dict[str, Any]:
+    """Project a JSON-serialized task's instructions and public submission contract, without its files."""
+    return {
+        **{field: task[field] for field in sorted(PUBLIC_FIELDS)},
+        "command_semantics": task["environment_requirements"]["command_semantics"],
     }
+
+
+def task_content_hash(task: dict[str, Any]) -> str:
+    """The key under which curriculum alignment scores a task, from the task as serialized at its schema version."""
+    return canonical_sha256(public_task_input(task))
+
+
+def task_semantic_input(task: TaskSpec, source: TaskInputFile) -> TaskSemanticInput:
+    public = public_task_input(task.model_dump(mode="json", include={*PUBLIC_FIELDS, "environment_requirements"}))
     return TaskSemanticInput(
         source_id=source.source_id,
         source_key=source.source_key,
