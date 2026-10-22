@@ -13,7 +13,8 @@ are (nats, positive = lower loss):
 - an expert's gain ``-s r_e g . y_e``: for a selected expert what removing it would cost, for an unselected one
   what adding it at the weight it would get would save (``regret`` = best unselected minus worst selected gain;
   ``regret_fix`` uses a fixed weight, the median smallest combine weight, for the candidate);
-- the renormalized swap of the worst selected expert ``k`` for an unselected ``e`` (``swap_gain``);
+- the renormalized swap of the worst selected expert ``k`` for an unselected ``e`` (``swap_gain``), and for the best
+  near miss, an unselected expert within the router's unbiased top ``NEAR_RANK`` (``near_gain``);
 - restoring the unbiased top-10 ``U`` (``bias_lin`` = loss(U) - loss(S)).
 
 "Strong" units are activations above ``atlas.HIGH_FRACTION`` of the unit's mean top-16 routed activation; an expert
@@ -67,6 +68,7 @@ NGRAM_MAX_MATCHES = 4096
 LARGE_REGRET = 0.1
 NEG = -1e9
 STRONG_BINS = (1, 2, 4, 8, 16)  # n_strong buckets [0], [1], [2, 4), [4, 8), [8, 16), [16, inf)
+NEAR_RANK = 20  # near-miss candidates: unselected experts within the router's unbiased top-NEAR_RANK
 
 
 class Kind:
@@ -76,6 +78,7 @@ class Kind:
     NOOP = 3
     NGRAM_ADD = 4
     NGRAM_REMOVE = 5
+    NEAR = 6
 
 
 RECORD_FIELDS = (
@@ -98,6 +101,8 @@ RECORD_FIELDS = (
     "n_topic",
     "n_bias_only",
     "moe_gain",
+    "near_e",
+    "near_gain",
 )
 
 
@@ -163,6 +168,9 @@ def dense_chunk(c: dict, w_up, w_down, thr, topic_dom_g, topic_slot_t, slot_tabl
     swap_gain = jnp.where(rmask, NEG, -swap_delta)
     swap_e = jnp.argmax(swap_gain, axis=-1)
     swap_best = jnp.max(swap_gain, axis=-1)
+    urank = jnp.sum(logits[:, None, :] > logits[:, :, None], axis=-1)  # [T, E] unbiased rank of each expert
+    near_gain = jnp.where(urank < NEAR_RANK, swap_gain, NEG)
+    near_e = jnp.argmax(near_gain, axis=-1)
     total_u = jnp.sum(raw * umask, axis=-1)
     bias_lin = 2.5 / total_u * jnp.sum(raw * gy * umask, axis=-1) - s * g_a
 
@@ -195,6 +203,8 @@ def dense_chunk(c: dict, w_up, w_down, thr, topic_dom_g, topic_slot_t, slot_tabl
         n_topic=jnp.sum(flagged, axis=-1),
         n_bias_only=jnp.sum(rmask & ~umask, axis=-1),
         moe_gain=-s * g_a,
+        near_e=near_e,
+        near_gain=jnp.max(near_gain, axis=-1),
     )
     vf = vb.astype(jnp.float32)
     vr = rmask * vf[:, None]
@@ -446,6 +456,10 @@ def choose_swaps(
             new = sel[t].copy()
             new[new == rec["worst_e"][layer][t]] = rec["topic_e"][layer][t]
             swaps.append(Swap(t // s, layer, t % s, new, Kind.TOPIC, t))
+        for t in pick(rec["near_gain"][layer], np.ones(len(valid), bool)):
+            new = sel[t].copy()
+            new[new == rec["worst_e"][layer][t]] = rec["near_e"][layer][t]
+            swaps.append(Swap(t // s, layer, t % s, new, Kind.NEAR, t))
         for t in rng.choice(ok, size=min(n_top // 4, len(ok)), replace=False):
             swaps.append(Swap(t // s, layer, t % s, sel[t].copy(), Kind.NOOP, t))
     return swaps
@@ -543,6 +557,7 @@ def main() -> None:
     parser.add_argument("--swap-random", type=int, default=512)
     parser.add_argument("--ngram-swaps", type=int, default=1536)
     parser.add_argument("--seed", type=int, default=3)
+    parser.add_argument("--name", default="regret", help="output file name")
     args = parser.parse_args()
     rng = np.random.default_rng(args.seed)
     cfg = common.model_config()
@@ -615,7 +630,7 @@ def main() -> None:
         out["swap/new_sel"] = np.stack([s.new_sel for s in swaps]).astype(np.int16)
         out["swap/delta"] = deltas
         logger.info("swap phase done %.0fs (%d swaps)", time.time() - t0, len(swaps))
-        common.save_npz(args.tag, "regret", **out)
+        common.save_npz(args.tag, args.name, **out)
 
         ngram_run = make_ngram_step()
         gram_batches = common.train_batches(NGRAM_BATCH, args.ngram_sequences, seed=args.seed + 1)
@@ -698,7 +713,7 @@ def main() -> None:
         out["ngram_swap/ref"] = np.asarray([s.ref for s in gswaps], np.int64)
         out["ngram_swap/delta"] = gdeltas
         logger.info("ngram phase done %.0fs (%d matches, %d swaps)", time.time() - t0, len(found["unit"]), len(gswaps))
-    common.save_npz(args.tag, "regret", **out)
+    common.save_npz(args.tag, args.name, **out)
     logger.info("done in %.0fs", time.time() - t0)
 
 
