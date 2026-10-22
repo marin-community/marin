@@ -4,6 +4,7 @@
 import json
 import os
 from concurrent.futures import Future
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -71,7 +72,7 @@ def completed_run(launch):
     return SkyRLRun(
         path=str(Path(launch.output.terminal_manifest_uri).parent),
         hf_model_uri=str(Path(launch.output.export_root) / "policy"),
-        global_step=50,
+        global_step=yaml.safe_load(launch.launch_config_yaml)["skyrl"]["trainer"]["max_steps"],
         tokenizer_uri=launch.model.tokenizer_uri,
         tokenizer_revision=launch.model.tokenizer_revision,
         checkpoint_root=launch.output.checkpoint_root,
@@ -151,10 +152,15 @@ def test_nested_preflight_can_grade_with_only_explicit_child_credentials(kind, l
     assert json.loads(evidence.read_text()) == {"judge_probe": "passed", "verifier_probe": "passed"}
 
 
+@pytest.mark.parametrize("max_steps", [50, 75])
 @pytest.mark.parametrize("missing_final_grade", [False, True])
 def test_periodic_comparison_persists_fixed_pairing_and_coverage_before_return(
-    missing_final_grade, launch, tmp_path, monkeypatch
+    max_steps, missing_final_grade, launch, tmp_path, monkeypatch
 ):
+    document = yaml.safe_load(launch.launch_config_yaml)
+    document["skyrl"]["trainer"]["max_steps"] = max_steps
+    launch = replace(launch, launch_config_yaml=yaml.safe_dump(document))
+    steps = tuple(range(0, max_steps + 1, 25))
     rows = [
         {
             "task_id": f"{family}-{index}",
@@ -184,7 +190,7 @@ def test_periodic_comparison_persists_fixed_pairing_and_coverage_before_return(
             "outcomes": [
                 {
                     "task_id": row["task_id"],
-                    "score": None if missing_final_grade and step == 50 and index == 0 else 1.0,
+                    "score": None if missing_final_grade and step == max_steps and index == 0 else 1.0,
                     "stop_reason": "stop",
                 }
                 for index, row in enumerate(reversed(rows))
@@ -207,22 +213,21 @@ def test_periodic_comparison_persists_fixed_pairing_and_coverage_before_return(
         validation_sha256="panel-sha",
         judge_base_url="https://judge.example/v1",
         judge_model="fixture-judge",
+        max_steps=max_steps,
     )
     config = inventory.InventoryRunConfig(launch, "pool-sha")
     if missing_final_grade:
         with pytest.raises(ValueError):
             artifact.run(config)
     else:
-        assert artifact.run(config).global_step == 50
-    reports = [
-        json.loads((tmp_path / "evaluation" / f"step-{step}" / "report.json").read_text()) for step in (0, 25, 50)
-    ]
+        assert artifact.run(config).global_step == max_steps
+    reports = [json.loads((tmp_path / "evaluation" / f"step-{step}" / "report.json").read_text()) for step in steps]
     assert len({report["pairing_identity"] for report in reports}) == 1
-    for step, report in zip((0, 25, 50), reports, strict=True):
+    for step, report in zip(steps, reports, strict=True):
         assert report["step"] == step
         assert report["panel_sha256"] == "panel-sha"
         assert {family: row["expected"] for family, row in report["families"].items()} == FAMILY_COUNTS
         assert [row["task_id"] for row in report["tasks"]] == [row["task_id"] for row in rows]
         assert report["source_dumps"] == [{"uri": f"retained-step-{step}.jsonl", "sha256": f"dump-{step}"}]
-        assert report["complete"] == (not missing_final_grade or step != 50)
+        assert report["complete"] == (not missing_final_grade or step != max_steps)
     assert reports[-1]["aggregate_fixed_denominator_mean"] == pytest.approx(909 / 910 if missing_final_grade else 1.0)

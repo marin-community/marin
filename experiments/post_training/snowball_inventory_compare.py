@@ -54,7 +54,6 @@ MAX_STEPS = 50
 EVAL_CONCURRENCY = 8
 REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
-EVALUATION_STEPS = tuple(range(0, MAX_STEPS + 1, CHECKPOINT_INTERVAL))
 
 
 class Initializer(StrEnum):
@@ -79,10 +78,15 @@ INITIALIZERS = {
 }
 
 
+def periodic_evaluation_steps(launch_document: str) -> range:
+    max_steps = yaml.safe_load(launch_document)["skyrl"]["trainer"]["max_steps"]
+    return range(0, max_steps + 1, CHECKPOINT_INTERVAL)
+
+
 def summarize_periodic_evaluation(launch_document: str, probe_report: dict, step: int) -> dict:
     """Pair an in-run evaluation dump with the CPU-admitted fixed panel."""
-    if step not in EVALUATION_STEPS:
-        raise ValueError(f"The comparison evaluates only updates {EVALUATION_STEPS}")
+    if step not in periodic_evaluation_steps(launch_document):
+        raise ValueError("The requested update is outside the comparison evaluation schedule")
     if probe_report["status"] != "passed" or probe_report["validation_family_counts"] != FAMILY_COUNTS:
         raise ValueError("The comparison requires the complete CPU-admitted original development panel")
     tasks = [
@@ -114,9 +118,8 @@ def run_comparison(config: InventoryRunConfig) -> SkyRLRun:
     completed = run_inventory(config)
     root = StoragePath(config.training.output.terminal_manifest_uri).parent
     probe = json.loads((root / "probe" / "report.json").read_text())
-    max_steps = yaml.safe_load(config.training.launch_config_yaml)["skyrl"]["trainer"]["max_steps"]
     incomplete = []
-    for step in range(0, max_steps + 1, CHECKPOINT_INTERVAL):
+    for step in periodic_evaluation_steps(config.training.launch_config_yaml):
         report = summarize_periodic_evaluation(config.training.launch_config_yaml, probe, step)
         destination = root / "evaluation" / f"step-{step}" / "report.json"
         destination.parent.mkdirs()
