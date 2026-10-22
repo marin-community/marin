@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic_core import to_jsonable_python
+
 from taskforge.content_hash import canonical_json
 
 # A value whose sets would serialize in hash-seed order: a module-level frozenset, as a build step's
