@@ -427,7 +427,7 @@ With the original `\r\n` line ends, `\r` tokens carried 25–56% of the MBPP bit
 A rung that passes goes to the next rung with the same gate.
 Confirm a quality head on a second raw pool (`corpus_sample_cli --seed`), because repeated selection on one pool can overfit it.
 
-The judge accepts a known good classifier. `probe_scorers:dclm_fasttext_web` ranks the raw web documents by the public
+On the d512 web arena, the judge accepts a known good classifier. `probe_scorers:dclm_fasttext_web` ranks the raw web documents by the public
 [DCLM fastText classifier](https://huggingface.co/mlfoundations/fasttext-oh-eli5) and takes 60% of the web tokens.
 Against a random 60% of the web tokens (`probe_scorers:web_only`), with 12 seeds each at d512, the judge gave `better`:
 G +2.2% [+1.8%, +2.6%], and the English, code, and math groups went up.
@@ -444,8 +444,8 @@ Against 24 new random runs, commonsense lost 1.6% [0.9%, 2.3%], so the judge gav
 In the full pool, web is 17% of the tokens. There, the DCLM classifier on the web sources gave G +0.4%, which the judge cannot resolve at d768.
 To improve a scorer for some sources, compare it against random on those sources only. Then confirm it on the full pool at a larger rung.
 
-The bounds are Welch t intervals. In an A/A test on 24 random-control runs that did not set the weights, the judge gave `better`
-for 0.1% of the 3-seed pairs, 1.4% of the 6-seed pairs, and 2.9% of the 12-seed pairs.
+The bounds are Welch t intervals. In an A/A test on 24 random-control runs of the d512 web arena that did not set the weights,
+the judge gave `better` for 0.1% of the 3-seed pairs, 1.4% of the 6-seed pairs, and 2.9% of the 12-seed pairs.
 With equal weights on 12 earlier runs, a percentile bootstrap over runs gave `better` for 5.5% of the 3-seed pairs.
 With three seeds, the knowledge interval is about 6 to 8 points wide, so use three seeds only to rank search candidates.
 For the confirmation, use new seeds and set the seed count before the runs.
