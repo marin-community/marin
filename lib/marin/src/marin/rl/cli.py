@@ -18,6 +18,7 @@ from fray.iris_backend import FrayIrisClient
 from fray.types import Entrypoint, JobRequest, ResourceConfig, create_environment
 from iris.cli.connect import open_iris_client
 from iris.cluster.client.job_info import get_job_info
+from iris.rpc import job_pb2
 from iris.rpc.proto_display import priority_band_value
 from rigging.config_discovery import find_project_root
 from rigging.timing import Duration
@@ -30,7 +31,14 @@ from marin.rl.skyrl import IrisSkyRLExecution
 _COORDINATOR_CPU = 4
 _COORDINATOR_MEMORY = "16GB"
 _COORDINATOR_DISK = "64GB"
-_COORDINATOR_ENV_VARS = ("DAYTONA_API_KEY", "HF_TOKEN", "TOGETHER_API_KEY", "WANDB_API_KEY")
+_COORDINATOR_ENV_VARS = (
+    "DAYTONA_API_KEY",
+    "DAYTONA_RL_API_KEY",
+    "DAYTONA_EVAL_API_KEY",
+    "HF_TOKEN",
+    "TOGETHER_API_KEY",
+    "WANDB_API_KEY",
+)
 
 
 @dataclass(frozen=True)
@@ -39,6 +47,7 @@ class _IrisSubmissionRoute:
     target_cluster: str | None
     priority: str
     timeout_hours: int
+    container_profile: job_pb2.ContainerProfile | None
 
 
 def _module_name(module: ModuleType) -> str:
@@ -64,7 +73,11 @@ def _skyrl_executions(handles: list[ArtifactStep]) -> tuple[IrisSkyRLExecution, 
 
 def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmissionRoute:
     routes = {
-        (execution.parent_cluster_config or execution.cluster_config, execution.target_cluster)
+        (
+            execution.parent_cluster_config or execution.cluster_config,
+            execution.target_cluster,
+            execution.container_profile,
+        )
         for execution in executions
     }
     if len(routes) != 1:
@@ -72,12 +85,13 @@ def _submission_route(executions: tuple[IrisSkyRLExecution, ...]) -> _IrisSubmis
     priorities = {execution.priority for execution in executions}
     if len(priorities) != 1:
         raise ValueError(f"one RL main cannot use multiple coordinator priorities: {sorted(priorities)!r}")
-    cluster_config, target_cluster = routes.pop()
+    cluster_config, target_cluster, container_profile = routes.pop()
     return _IrisSubmissionRoute(
         cluster_config=cluster_config,
         target_cluster=target_cluster,
         priority=priorities.pop(),
         timeout_hours=max(execution.coordinator_timeout_hours for execution in executions),
+        container_profile=container_profile,
     )
 
 
@@ -104,6 +118,9 @@ def _coordinator_request(
             ram=_COORDINATOR_MEMORY,
             disk=_COORDINATOR_DISK,
             target_cluster=route.target_cluster,
+            container_profile=(
+                job_pb2.ContainerProfile.Name(route.container_profile) if route.container_profile is not None else None
+            ),
         ),
         environment=create_environment(workspace=str(workspace), env_vars=dict(env_vars), extras=["cpu"]),
         priority=priority_band_value(route.priority),

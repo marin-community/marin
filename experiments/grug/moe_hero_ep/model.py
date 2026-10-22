@@ -8,6 +8,7 @@ No load-balancing loss; router z-loss only. All layers are MoE (no dense layers)
 """
 
 import dataclasses
+import math
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Literal
@@ -30,6 +31,7 @@ except ModuleNotFoundError:
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -55,11 +57,11 @@ from levanter.grug.grug_moe import (
     qb_beta_topk_shard,
     qb_topk_physical_count,
     reduce_moe_routing_stats,
-    resolve_moe_implementation,
+    validate_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
-from levanter.kernels.pallas.short_conv import short_conv
+from levanter.kernels.triton.short_conv import short_conv
 from levanter.tracker.histogram import Histogram, SummaryStats
 from levanter.utils.activation import ActivationFunctionEnum
 from transformers import PretrainedConfig as HfConfig
@@ -115,6 +117,14 @@ OFFLOAD_CARRY_REMAT_MODE: RematMode = "offload_carry"
 # The per-layer residual-stream input. Plain remat holds it as the checkpoint argument, which
 # pins about 39 GiB of HBM across the hero's 48 layers.
 LAYER_CARRY_REMAT_NAME = "grug_layer_carry"
+# The routed experts' combined output, before the latent up projection. At the hero shapes it is
+# 402 MB per layer, 18 GiB of HBM across 48 layers. With the QuACK expert MLP, the ragged backend
+# takes the routing-weight gradient on the expert side, so its backward reads neither the expert
+# down projection nor the return transport, and saving this value leaves the recompute only the
+# dispatch and the gate/up projection. The routing weights are positive renormalized sigmoids and
+# the cotangents bf16, so that gradient loses precision only where an output cotangent element is
+# below 2^-126 / w.
+MOE_OUTPUT_REMAT_NAME = "grug_moe_routed_output"
 
 
 def _batch_spec() -> P:
@@ -146,6 +156,54 @@ def _token_spec() -> P:
 def _activation_spec(x: Float[Array, "B S D"]) -> P:
     """Preserve the input residual layout after an MLP flattens and restores tokens."""
     return _partition_spec_of(x) or _batch_spec()
+
+
+def _flatten_tokens(x: jax.Array) -> jax.Array:
+    """Merge ``[B, S, ...]`` into the token axis without moving data between devices.
+
+    Each device flattens its own block of rows and sequence shard. With a context-sharded sequence the
+    token order is therefore shard-major rather than the global ``(b s)`` order; with an unsharded
+    sequence the two orders agree. Per-token computations do not depend on the order, and
+    `_unflatten_tokens` inverts it.
+    """
+    mesh = get_abstract_mesh()
+    trailing = (None,) * (x.ndim - 2)
+    residual_spec = P(_BATCH_AXES, _seq_axis(mesh), *trailing)
+    return shard_map(
+        lambda local: rearrange(local, "b s ... -> (b s) ..."),
+        mesh=mesh,
+        in_specs=residual_spec,
+        out_specs=P(_token_axes(mesh), *trailing),
+    )(reshard(x, residual_spec))
+
+
+def _unflatten_tokens(x_flat: jax.Array, like: Float[Array, "B S D"]) -> jax.Array:
+    """Invert `_flatten_tokens` and restore ``like``'s residual layout."""
+    mesh = get_abstract_mesh()
+    trailing = (None,) * (x_flat.ndim - 1)
+    token_spec = P(_token_axes(mesh), *trailing)
+    local_rows = like.shape[0] // math.prod(mesh.shape[axis] for axis in _BATCH_AXES)
+    restored = shard_map(
+        lambda local: rearrange(local, "(b s) ... -> b s ...", b=local_rows),
+        mesh=mesh,
+        in_specs=token_spec,
+        out_specs=P(_BATCH_AXES, _seq_axis(mesh), *trailing),
+    )(reshard(x_flat, token_spec))
+    return reshard(restored, _activation_spec(like))
+
+
+def _router_top_k(logits: Float[Array, "T E"], k: int) -> Int[Array, "T K"]:
+    """Per-token top-k expert indices, in ``jax.lax.top_k``'s order, from a fused GPU kernel.
+
+    XLA sorts every row of a few hundred logits in full; the kernel selects in registers.
+    """
+    token_spec = _token_spec()
+    return shard_map(
+        lambda local: top_k_indices(local, k),
+        mesh=get_abstract_mesh(),
+        in_specs=P(*token_spec, None),
+        out_specs=P(*token_spec, None),
+    )(reshard(logits, P(*token_spec, None)))
 
 
 def _embedding_gather(token_embed: jax.Array, token_ids: Int[Array, "B S"]) -> Float[Array, "B S D"]:
@@ -240,6 +298,8 @@ class GrugModelConfig:
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
     qk_mult: float = 1.3
+    qk_mult_long_scale: float = 1.0
+    """Extra Q multiplier on the global (full-causal) layers; local layers use ``qk_mult`` alone."""
     sconv: bool = False
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
@@ -305,7 +365,7 @@ class GrugModelConfig:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
-        resolve_moe_implementation(self.moe_implementation)
+        validate_moe_implementation(self.moe_implementation)
 
     @property
     def Embed(self) -> Axis:
@@ -379,6 +439,7 @@ class GrugModelConfig:
             layer_norm_eps=float(_hf_config_attr(hf_config, ("layer_norm_eps", "rms_norm_eps"), 1e-5)),
             initializer_std=float(_hf_config_attr(hf_config, ("initializer_std", "initializer_range"), 0.02)),
             qk_mult=float(_hf_config_attr(hf_config, ("qk_mult",), 1.0)),
+            qk_mult_long_scale=float(_hf_config_attr(hf_config, ("qk_mult_long_scale",), 1.0)),
             rope=rope,
             rope_fused=bool(_hf_config_attr(hf_config, ("rope_fused",), False)),
             sconv=bool(_hf_config_attr(hf_config, ("sconv",), False)),
@@ -414,6 +475,7 @@ class GrugModelConfig:
             # grug-specific (no public equivalent)
             "latent_dim": self.latent_dim,
             "qk_mult": self.qk_mult,
+            "qk_mult_long_scale": self.qk_mult_long_scale,
             "local_kv_heads": self.local_kv_heads,
             "global_kv_heads": self.global_kv_heads,
             "global_every": self.global_every,
@@ -487,7 +549,7 @@ class ShortConv(eqx.Module):
     (``weight[0]=1``, later taps 0) makes it a pass-through at step 0. Weights are tiny (``W*C``) and
     routed to Adam. Context shards exchange a left halo of ``W-1`` sequence positions.
 
-    The body dispatches to ``levanter.kernels.pallas.short_conv``, which selects a fused Pallas
+    The body dispatches to ``levanter.kernels.triton.short_conv``, which selects a streaming Triton
     kernel on GPU and the pad-and-shift weighted sum everywhere else; see that module's docstring.
     """
 
@@ -637,6 +699,8 @@ class CausalSelfAttention(eqx.Module):
                 q = jnp.where(keep, q_roped, q)
                 k = jnp.where(keep, k_roped, k)
         q = q * self.cfg.qk_mult
+        if self.cfg.qk_mult_long_scale != 1.0:
+            q = q * jnp.where(is_global, self.cfg.qk_mult_long_scale, 1.0)
         # Context parallelism: shard Q's sequence over "context" and all-gather K/V, so each
         # shard attends its own queries against the whole key sequence. The backends reject a
         # sharded K/V sequence, and the output returns to the residual stream's layout, which
@@ -747,17 +811,11 @@ class DenseMLP(eqx.Module):
         else:
             activation_fn = activation
 
-        b, s, _ = x.shape
-        # Flattening sequence shards requires an all-to-all when a device owns multiple
-        # batch rows; restoring the residual layout exchanges them back.
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
+        x_flat = _flatten_tokens(x)
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", activation_fn(gate) * up, self.w_down, out_sharding=_token_spec())
-        # Reshard after the reshape so the shared-expert output carries the same sharding as the
-        # routed MoE output (MoEMLP reshards its routed result identically). See `_activation_spec`
-        # for why the unflattened tensor cannot keep the fused token tuple.
-        return reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s), _activation_spec(x))
+        return _unflatten_tokens(out_flat, x)
 
 
 def _summarize_router_metrics(router_metrics: dict[str, jax.Array]) -> dict[str, jax.Array | SummaryStats]:
@@ -993,16 +1051,15 @@ class MoEMLP(eqx.Module):
         x: Float[Array, "B S D"],
         token_valid: Bool[Array, "B S"],
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        b, s, _ = x.shape
-        x_flat = reshard(rearrange(x, "b s d -> (b s) d"), _token_spec())
-        token_valid_flat = reshard(rearrange(token_valid, "b s -> (b s)"), _token_spec())
+        x_flat = _flatten_tokens(x)
+        token_valid_flat = _flatten_tokens(token_valid)
         # Keep the router path in fp32 before top-k, softmax, and QB statistics.
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         router_probs = jax.nn.softmax(router_logits, axis=-1)
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
-        _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
-        qb_alpha = _topk_logits[:, -1:]
+        selected_experts = _router_top_k(biased_logits, self.cfg.num_experts_per_token + 1)
+        qb_alpha = jnp.take_along_axis(biased_logits, selected_experts[:, -1:], axis=-1)
         selected_experts = selected_experts[:, :-1]
         # Sigmoid combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
@@ -1103,6 +1160,7 @@ class MoEMLP(eqx.Module):
             sender_dropped_assignments = _zero_dropped_assignments()
             receiver_dropped_assignments = _zero_dropped_assignments()
             skipped_assignments = padding_skipped_assignments(token_valid_flat, topk=self.cfg.num_experts_per_token)
+        routed_flat = tree_checkpoint_name(routed_flat, MOE_OUTPUT_REMAT_NAME)
         router_stats["capacity_overflow"] = dropped_assignments
         router_stats["sender_capacity_overflow"] = sender_dropped_assignments
         router_stats["receiver_capacity_overflow"] = receiver_dropped_assignments
@@ -1118,9 +1176,7 @@ class MoEMLP(eqx.Module):
                 out_sharding=_token_spec(),
             )
 
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        routed = reshard(routed, _activation_spec(x))
-        return routed, router_stats
+        return _unflatten_tokens(routed_flat, x), router_stats
 
 
 class Block(eqx.Module):
@@ -1289,7 +1345,7 @@ class Transformer(eqx.Module):
             # Adding names is therefore not free. The carry alone fits. The carry plus the
             # attention residuals exceeds the host memory the run has.
             remat_policy = jax.checkpoint_policies.save_and_offload_only_these_names(
-                names_which_can_be_saved=[],
+                names_which_can_be_saved=[MOE_OUTPUT_REMAT_NAME],
                 names_which_can_be_offloaded=[LAYER_CARRY_REMAT_NAME],
                 offload_src="device",
                 offload_dst="pinned_host",

@@ -81,6 +81,12 @@ class MountSpec:
     size_bytes: int = 0  # 0 = no limit; tmpfs size / emptyDir sizeLimit
 
 
+# Docker network modes. A host-network container shares the worker VM's network
+# stack; a "none" container has only loopback.
+NETWORK_MODE_HOST = "host"
+NETWORK_MODE_NONE = "none"
+
+
 @dataclass
 class ContainerConfig:
     """Configuration for running a container."""
@@ -93,7 +99,7 @@ class ContainerConfig:
     container_profile: int = job_pb2.CONTAINER_PROFILE_UNSPECIFIED
     timeout_seconds: int | None = None
     mounts: list[MountSpec] = field(default_factory=list)
-    network_mode: str = "host"  # e.g. "host" for --network=host
+    network_mode: str = NETWORK_MODE_HOST
     workdir_host_path: Path | None = None
     output_host_path: Path | None = None
     task_id: str | None = None

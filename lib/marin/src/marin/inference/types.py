@@ -5,10 +5,20 @@
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Protocol
 
 # Keep logs readable when a poll returns many request IDs.
 _REQUEST_ID_LOG_LIMIT = 4
+STREAM_BUFFER_BYTES = 4 * 1024 * 1024
+WORKER_HEARTBEAT_SECONDS = 5.0
+WORKER_LEASE_SECONDS = 3 * WORKER_HEARTBEAT_SECONDS
+
+
+class InferenceBackendState(StrEnum):
+    READY = "ready"
+    RECOVERING = "recovering"
+    FINISHED = "finished"
 
 
 def format_request_ids(ids: list[str]) -> str:
@@ -31,6 +41,11 @@ class OpenAIEndpoint:
         """Return an endpoint URL under the API root."""
         return f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
 
+    def server_url(self, path: str) -> str:
+        """Return an endpoint URL relative to the inference server root."""
+        server_root = self.base_url.rstrip("/").removesuffix("/v1")
+        return f"{server_root}/{path.lstrip('/')}"
+
 
 @dataclass(frozen=True)
 class RunningModel:
@@ -48,6 +63,7 @@ class InferenceRequest:
     payload: bytes
     query_string: str = ""
     headers: tuple[tuple[str, str], ...] = ()
+    streaming: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,9 +87,62 @@ class LeasedInferenceResponse:
 
 
 @dataclass(frozen=True)
+class StreamStart:
+    request_id: str
+    lease_id: str
+    sequence: int
+    status_code: int
+    headers: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class StreamChunk:
+    request_id: str
+    lease_id: str
+    sequence: int
+    payload: bytes
+
+
+@dataclass(frozen=True)
+class StreamEnd:
+    request_id: str
+    lease_id: str
+    sequence: int
+
+
+@dataclass(frozen=True)
+class StreamError:
+    request_id: str
+    lease_id: str
+    sequence: int
+    message: str
+
+
+type StreamEvent = StreamStart | StreamChunk | StreamEnd | StreamError
+type BrokerResponse = InferenceResponse | StreamEvent
+
+
+@dataclass(frozen=True)
 class InferenceWorkerMetadata:
     tensor_parallel_size: int
     backend_name: str
+
+
+@dataclass(frozen=True)
+class BrokerStatus:
+    queued_requests: int
+    leased_requests: int
+    buffered_responses: int
+    submitted_requests: int
+    dispatched_requests: int
+    completed_requests: int
+    failed_responses: int
+    dropped_responses: int
+    mean_queue_wait_seconds: float
+    max_queue_wait_seconds: float
+    workers: dict[str, InferenceWorkerMetadata]
+    readiness: InferenceBackendState
+    recovery_count: int
 
 
 # Brokers route payloads only; callers own broker and worker lifecycle.
@@ -86,8 +155,27 @@ class InferenceRequestProvider(Protocol):
 
     def worker_metadata(self) -> dict[str, InferenceWorkerMetadata]: ...
 
+    def heartbeat(self, worker_id: str) -> None:
+        """Renew liveness using the identity supplied to register_worker."""
+        ...
+
+    def submit_stream_event(self, event: StreamEvent) -> bool:
+        """Submit an event for the current request lease; stop forwarding on False.
+
+        Start at sequence zero with StreamStart, then increment the sequence for
+        each chunk and terminal event. Before StreamStart is accepted, report
+        errors through submit_responses; afterward, send StreamError.
+        """
+        ...
+
+    def finish(self) -> None: ...
+
 
 class InferenceResponseProvider(Protocol):
     def submit_request(self, request: InferenceRequest) -> None: ...
 
-    def fetch_responses(self, *, max_items: int) -> list[InferenceResponse]: ...
+    def fetch_responses(self, *, max_items: int) -> list[BrokerResponse]: ...
+
+    def cancel_request(self, request_id: str) -> None: ...
+
+    def status(self) -> BrokerStatus: ...

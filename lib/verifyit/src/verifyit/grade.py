@@ -13,14 +13,17 @@ import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from fractions import Fraction
+from functools import cache
 from pathlib import Path
+from types import ModuleType
 from typing import Any
 
-from harbor_config.errors import ErrorCategory
-
 from verifyit.file_ops.read import read_text
+from verifyit.numeric import MAX_NUMERIC_DIGITS, numeric_literal
 from verifyit.spec import (
     DEFAULT_WORKSPACE,
+    MODE_DESCRIPTORS,
     RUBRIC_REFERENCE,
     EmptyOutputPolicy,
     ExactSpec,
@@ -46,6 +49,13 @@ class Status(StrEnum):
     SCORED = "scored"
     INVALID_TASK = "invalid_task"
     INFRA_ERROR = "infra_error"
+
+
+class PreparationCategory(StrEnum):
+    """Attribution of a failure before a grade exists."""
+
+    AGENT = "agent"
+    UNKNOWN = "unknown"
 
 
 class Aggregation(StrEnum):
@@ -192,15 +202,15 @@ def invalid_task(message: str) -> Reward:
 
 
 def finalize_preparation_failure(
-    *, status: Status, category: ErrorCategory, error_type: str, message: str, stage: str
+    *, status: Status, category: PreparationCategory, error_type: str, message: str, stage: str
 ) -> Reward:
     """Terminate failed preparation at minimum reward without grading partial data.
 
-    Task validity is separate from the imported framework error category.
-    PASSTHROUGH requires a completed grade; preparation has none to preserve.
+    Task validity is separate from error attribution. Only a candidate-attributed
+    failure can be a scored zero when preparation ends before grading.
     """
     source_status = status
-    if status != Status.INVALID_TASK and (status != Status.SCORED or category != ErrorCategory.AGENT):
+    if status != Status.INVALID_TASK and (status != Status.SCORED or category != PreparationCategory.AGENT):
         status = Status.INFRA_ERROR
     return _validated_reward(
         Reward(
@@ -218,17 +228,18 @@ def finalize_preparation_failure(
     )
 
 
-def numeric_tolerance(spec: NumericSpec) -> float:
-    """Return the finite effective tolerance for a valid numeric grading spec."""
-    if not math.isfinite(spec.expected):
-        raise InvalidTask(f"numeric expected must be a finite number, got {spec.expected}")
-    for name, value in (("tolerance_abs", spec.tolerance_abs), ("tolerance_rel", spec.tolerance_rel)):
-        if not math.isfinite(value) or value < 0:
-            raise InvalidTask(f"numeric {name} must be a finite nonnegative number, got {value}")
-    tolerance = max(spec.tolerance_abs, spec.tolerance_rel * abs(spec.expected))
-    if not math.isfinite(tolerance):
-        raise InvalidTask(f"numeric effective tolerance must be finite, got {tolerance}")
-    return tolerance
+def numeric_tolerance(spec: NumericSpec) -> Fraction:
+    """Validate the reference and return exact tolerance from float decimal spellings."""
+    try:
+        expected = numeric_literal(spec.expected)
+        for tolerance in (spec.tolerance_abs, spec.tolerance_rel):
+            if type(tolerance) not in (int, float) or not math.isfinite(tolerance) or tolerance < 0:
+                raise ValueError("numeric tolerances must be finite nonnegative numbers")
+        absolute = Fraction(str(spec.tolerance_abs))
+        relative = Fraction(str(spec.tolerance_rel))
+    except (ValueError, OverflowError) as error:
+        raise InvalidTask(f"invalid numeric contract: {error}") from error
+    return max(absolute, relative * abs(expected))
 
 
 def infra_error(message: str, **detail: object) -> Reward:
@@ -296,7 +307,7 @@ def positive_candidate(spec: Spec) -> str | None:
 
 
 def negative_candidate(spec: Spec) -> str | None:
-    """Return a candidate that must score zero, when a safe perturbation exists."""
+    """Return a zero-scoring negative control when available."""
     if isinstance(spec, McqSpec):
         other = "B" if spec.expected.upper() != "B" else "A"
         return f"Answer: {other}"
@@ -305,11 +316,14 @@ def negative_candidate(spec: Spec) -> str | None:
             tolerance = numeric_tolerance(spec)
         except InvalidTask:
             return None
-        offset = max(2 * tolerance, 1.0)
-        for candidate in (spec.expected + offset, spec.expected - offset):
-            if math.isfinite(candidate) and abs(candidate - spec.expected) > tolerance:
+        expected = numeric_literal(spec.expected)
+        step = max(2 * tolerance, 1)
+        limit = 10**MAX_NUMERIC_DIGITS
+        for candidate in (expected + step, expected - step):
+            if abs(candidate.numerator) < limit and candidate.denominator < limit:
                 return f"\\boxed{{{candidate}}}"
-        return "not a number"
+        # If both perturbations exceed literal bounds, use a malformed submission as the negative control.
+        return r"\boxed{not a number}"
     if isinstance(spec, ExactSpec) and len(spec.expected) > 1 and spec.ordered:
         return "\n".join(reversed(spec.expected))
     return None
@@ -321,30 +335,17 @@ Grader = Callable[[Any, Path, Path], Reward]
 # Mode modules are imported on first use: several depend on an extra (math-verify, jsonschema,
 # reasoning-gym, openai) that only the images needing that mode install. A missing extra
 # surfaces as an ImportError from the grader, which the CLI records as infra_error.
-MODE_MODULES: dict[Mode, str] = {
-    Mode.PREDICTED_ACTION: "grade_predicted_action",
-    Mode.MCQ: "grade_mcq",
-    Mode.MATH: "grade_math",
-    Mode.NUMERIC: "grade_math",
-    Mode.EXACT: "grade_exact",
-    Mode.JSON_SCHEMA: "grade_json_schema",
-    Mode.XML_ELEMENTS: "grade_xml",
-    Mode.CSV_COLUMNS: "grade_csv",
-    Mode.IFEVAL: "grade_ifeval",
-    Mode.REASONING_GYM: "grade_reasoning_gym",
-    Mode.STDIO: "grade_stdio",
-    Mode.PYTEST: "grade_pytest",
-    Mode.JUNIT: "grade_junit",
-    Mode.GOTEST: "grade_gotest",
-    Mode.JUDGE: "grade_judge",
-    Mode.SCRIPT: "grade_script",
-}
 GRADERS: dict[Mode, Grader] = {}
+
+
+@cache
+def mode_module(mode: Mode) -> ModuleType:
+    return importlib.import_module(f"verifyit.modes.{MODE_DESCRIPTORS[mode].module}")
 
 
 def grader_for(mode: Mode) -> Grader:
     if mode not in GRADERS:
-        GRADERS[mode] = importlib.import_module(f"verifyit.modes.{MODE_MODULES[mode]}").grade
+        GRADERS[mode] = mode_module(mode).grade
     return GRADERS[mode]
 
 

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""JEEBench source preparation composed with Exact and Numeric primitives."""
+"""JEEBench source preparation with exact choice and source float grading."""
 
 import math
 from dataclasses import dataclass, replace
@@ -9,8 +9,8 @@ from enum import StrEnum
 
 from verifyit.grade import InvalidTask, Reward, invalid_task
 from verifyit.modes.grade_exact import grade_collection_subset, grade_exact_candidate
-from verifyit.modes.grade_math import grade_numeric_candidate
-from verifyit.spec import ExactSpec, NumericSpec
+from verifyit.modes.grade_math import grade_numeric_candidate_float
+from verifyit.spec import ExactSpec
 
 LETTERS = "ABCD"
 
@@ -75,7 +75,7 @@ def prepare_jee_input(raw: JEEInputs, policy: JEEPolicy) -> PreparedJEE:
 
 
 def grade_prepared_jee(prepared: PreparedJEE) -> Reward:
-    """Let Exact or Numeric determine reward for prepared source answers."""
+    """Score prepared answers using the source choice and numeric policies."""
     if isinstance(prepared.expected, tuple):
         assert isinstance(prepared.candidate, tuple)
         if prepared.raw.question_type == "MCQ(multiple)":
@@ -87,8 +87,7 @@ def grade_prepared_jee(prepared: PreparedJEE) -> Reward:
             )
     else:
         assert prepared.candidate is None or isinstance(prepared.candidate, float)
-        value = math.nan if prepared.candidate is None else prepared.candidate
-        result = grade_numeric_candidate(NumericSpec(prepared.expected, tolerance_abs=0.01, tolerance_rel=0), value)
+        result = grade_numeric_candidate_float(prepared.expected, prepared.candidate, tolerance_abs=0.01)
     return replace(result, detail={**result.detail, "policy": prepared.policy.value})
 
 

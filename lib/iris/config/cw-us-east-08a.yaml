@@ -107,6 +107,9 @@ storage:
 # `iris cluster init-keys` and register this cluster's public half in the marin /
 # marin-dev federation_peers before first start.
 auth:
+  principal_directory:
+    - env:IRIS_PRINCIPAL_DIRECTORY
+    - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
   signing_key:
     - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-us-east-08a-signing-key/versions/1
@@ -123,13 +126,20 @@ auth:
   # GitHub GPU workflows submit through the marin hub as github-iris; the
   # remaining non-openathena identities are interactive principals.
   allowed_submitters:
+    - principal:human-080
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris
+  node_health:
+    storage:
+      scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-08a
+      minimum_healthy_nodes: 2
+    max_cordoned_nodes: 1
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   cache_max_age:
@@ -146,6 +156,7 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-erapids
+    hostname: g8fc280
     # Off-cluster reach is the operator-managed, IP-locked federation ingress
     # (docs/coreweave.md, scripts/install_cw_network.py).
 
@@ -158,10 +169,8 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # Durable outputs remain in 02A. All lifecycle-managed temporary writes use
-    # the region-local 08A bucket; rigging adds the tmp/ttl=Nd prefixes.
+    # Durable outputs remain in 02A; shared scratch uses the separate 08A bucket.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
-    MARIN_TEMP_PREFIX: s3://hero-checkpoints
     # Task pods carry one CoreWeave endpoint/credential set valid for both buckets.
     # GB200 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
@@ -240,6 +249,7 @@ user_budgets:
       - benjaminfeuer
       - david.hall@openathena.ai
       - dlwh
+      - david.lundgren@openathena.ai
       - mark.muchane@openathena.ai
       - muchanem
       - matt.wittmann@openathena.ai

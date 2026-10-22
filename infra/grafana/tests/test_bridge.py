@@ -4,7 +4,9 @@
 """Tests for the grafana bridge: its HTTP surface over a fake finelog, and the
 cache's coalescing and eviction contract."""
 
+import gc
 import threading
+import weakref
 from datetime import UTC, datetime, timedelta
 
 import duckdb
@@ -23,7 +25,8 @@ from conftest import (
     make_k8s_source,
     queried_namespace,
 )
-from errors import FinelogUnavailableError
+from dashboard_dataset import SourceQuery
+from errors import FinelogUnavailableError, UpstreamError
 from finelog.errors import QueryResultTooLargeError, StatsError
 from finelog_health import FinelogHealth, FinelogRole
 from github_source import GithubSource
@@ -45,14 +48,11 @@ from k8s_source import K8sFleet
 from loom_alerts import (
     LoomAlertClient,
     LoomAlertDeliveryError,
-    SlackAlertClient,
-    SlackAnnouncementError,
-    SlackThread,
 )
 from loss_spikes import loss_spike_alert_rows, loss_window_query
 from relay_health import RelayNamespaceStatus, RelaySenderStatus
 from rl_producers import RL_PRODUCER_NAMESPACES
-from server import create_app, workload_overview
+from server import _dataset_source, create_app, workload_overview
 from starlette.testclient import TestClient
 from training_stalls import telemetry_query, training_stall_alert_rows
 from wandb_source import LoggedPoint, WandbSource
@@ -125,7 +125,6 @@ def _client(
     cache_ttl: float = 20.0,
     k8s_fleet: K8sFleet | None = None,
     loom_alerts: LoomAlertClient | None = None,
-    slack_alerts: SlackAlertClient | None = None,
     raise_server_exceptions: bool = True,
 ) -> TestClient:
     github = GithubSource(auth=None, timeout=5.0)
@@ -138,7 +137,6 @@ def _client(
             k8s_fleet or K8sFleet(()),
             WandbSource(timeout=5.0),
             loom_alerts,
-            slack_alerts,
         ),
         raise_server_exceptions=raise_server_exceptions,
     )
@@ -1496,49 +1494,6 @@ def test_loom_alert_route_returns_retryable_failure_for_delivery_errors():
     assert resp.json() == {"error": "loom.example returned HTTP 503"}
 
 
-class FakeSlackAlerts(SlackAlertClient):
-    def __init__(self, thread: SlackThread | None) -> None:
-        self.thread = thread
-        self.payloads: list[object] = []
-
-    async def announce(self, payload: object) -> SlackThread | None:
-        self.payloads.append(payload)
-        return self.thread
-
-
-def test_slack_alert_route_announces_without_a_run():
-    fallback = FakeSlackAlerts(SlackThread(channel="C0123ABCD", thread_ts="1700000000.000001"))
-    resp = _client(FakeSource(), slack_alerts=fallback).post("/alerts/slack", json={"alerts": []})
-
-    assert resp.status_code == 202
-    assert resp.json() == {"announced": True}
-    assert fallback.payloads == [{"alerts": []}]
-
-
-def test_slack_alert_route_is_disabled_without_a_configured_destination():
-    resp = _client(FakeSource()).post("/alerts/slack", json={"alerts": []})
-    assert resp.status_code == 503
-
-
-def test_slack_alert_route_reports_a_resolution_as_nothing_announced():
-    resp = _client(FakeSource(), slack_alerts=FakeSlackAlerts(None)).post("/alerts/slack", json={"alerts": []})
-    assert resp.status_code == 202
-    assert resp.json() == {"announced": False, "reason": "no firing alerts"}
-
-
-def test_slack_alert_route_asks_grafana_to_retry_a_refused_announcement():
-    """This receiver has no second leg, so a dropped announcement is the whole
-    notification: it must not answer 2xx."""
-
-    class RefusingSlackAlerts(FakeSlackAlerts):
-        async def announce(self, payload: object) -> SlackThread | None:
-            raise SlackAnnouncementError("Slack did not accept the alert announcement")
-
-    resp = _client(FakeSource(), slack_alerts=RefusingSlackAlerts(None)).post("/alerts/slack", json={"alerts": []})
-    assert resp.status_code == 502
-    assert resp.json() == {"error": "Slack did not accept the alert announcement"}
-
-
 def test_finelog_fleet_health_combines_the_main_hub_and_k8s_mirrors():
     fleet = K8sFleet([make_k8s_source(k8s_api(healthy_k8s_routes()))])
 
@@ -1703,3 +1658,63 @@ def test_cache_evicts_oldest_values_to_bound_retained_bytes():
     assert cache.get_or_compute("a", lambda: b"new") == b"new"
     assert cache.get_or_compute("large", lambda: b"too large") == b"too large"
     assert cache.get_or_compute("large", lambda: b"fresh") == b"fresh"
+
+
+@pytest.mark.parametrize("error_type", [ValueError, QueryResultTooLargeError])
+def test_cached_failure_releases_query_locals_and_cause(error_type):
+    cache = TtlCache(60)
+    tables = []
+    calls = []
+
+    def compute():
+        calls.append(1)
+        table = pa.table({"value": [1, 2]})
+        tables.append(weakref.ref(table))
+        try:
+            raise RuntimeError("transport failed")
+        except RuntimeError as cause:
+            raise error_type("query failed") from cause
+
+    for _ in range(3):
+        with pytest.raises(error_type, match="query failed"):
+            cache.get_or_compute("query", compute)
+        gc.collect()
+        assert all(table() is None for table in tables)
+    assert calls == [1]
+
+
+def test_cached_upstream_error_preserves_http_status_without_response_locals():
+    cache = TtlCache(60)
+    calls = []
+
+    def compute():
+        calls.append(1)
+        raise UpstreamError("github", "not found", status_code=404)
+
+    for _ in range(2):
+        with pytest.raises(UpstreamError) as caught:
+            cache.get_or_compute("query", compute)
+        assert caught.value.source == "github"
+        assert caught.value.status_code == 404
+    assert calls == [1]
+
+
+def test_rejected_arrow_samples_are_not_retained_by_failure_cache():
+    tables = []
+    calls = []
+
+    class Source:
+        def query(self, sql, *, max_rows):
+            calls.append(sql)
+            table = pa.table({"points": [[1.0, 2.0]]})
+            tables.append(weakref.ref(table))
+            return table
+
+    cache = TtlCache(60, max_size=1024, get_size=lambda table: table.nbytes)
+    query = SourceQuery("samples", "SELECT points", max_rows=1, max_samples=1)
+    for _ in range(2):
+        with pytest.raises(QueryResultTooLargeError, match="sample budget"):
+            _dataset_source(Source(), "marin", query, 1, cache)
+        gc.collect()
+        assert all(table() is None for table in tables)
+    assert calls == [query.sql]

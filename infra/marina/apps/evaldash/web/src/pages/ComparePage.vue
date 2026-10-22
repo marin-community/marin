@@ -17,6 +17,8 @@ import { cohortWarning, isPartialCoverage } from '@/utils/panel'
 import { FACETS, MAX_COMPARE } from '@/constants'
 import type { Comparison, ComparisonRow, Meta, Panel, PanelCell } from '@/types/api'
 import EmptyState from '@/components/shared/EmptyState.vue'
+import SearchSelect from '@/components/shared/SearchSelect.vue'
+import ModelName from '@/components/shared/ModelName.vue'
 import PolicyRejections from '@/components/shared/PolicyRejections.vue'
 import ModelCompareChart from '@/components/charts/ModelCompareChart.vue'
 
@@ -25,6 +27,7 @@ const router = useRouter()
 
 const requestedModels = ref<string[]>([])
 const selected = computed(() => requestedModels.value.filter((model) => availableModels.value.includes(model)))
+const remainingModels = computed(() => availableModels.value.filter((model) => !selected.value.includes(model)))
 const comparing = computed(() => selected.value.length >= 2)
 
 // The panel's selection travels in the route, so a comparison launched from a narrowed panel keeps
@@ -43,7 +46,7 @@ const selectionQuery = computed(() => {
   if (!params.has('cohort') && meta.value) params.set('cohort', meta.value.default_cohort)
   return params.toString()
 })
-const { data, loading, error, refresh } = useApi<Comparison>(() =>
+const { data, error, refresh } = useApi<Comparison>(() =>
   `api/compare?${selectionQuery.value}&models=${encodeURIComponent(selected.value.join(','))}`,
 )
 const { data: panel, loading: loadingModels, error: modelsError, refresh: refreshModels } = useApi<Panel>(() =>
@@ -51,7 +54,7 @@ const { data: panel, loading: loadingModels, error: modelsError, refresh: refres
 )
 const mixedCohorts = computed(() => new URLSearchParams(selectionQuery.value).get('cohort') === 'all')
 const availableModels = computed(() =>
-  loadingModels.value || modelsError.value || mixedCohorts.value
+  modelsError.value || mixedCohorts.value
     ? []
     : (panel.value?.rows ?? [])
         .filter((row) => Object.values(row.cells).some((cell) => cell.value !== 0))
@@ -75,15 +78,13 @@ async function goToModel(model: string) {
 function fromQuery(): string[] {
   const raw = route.query.models
   const csv = Array.isArray(raw) ? raw[0] : raw
-  return (csv ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .slice(0, MAX_COMPARE)
+  return [...new Set((csv ?? '').split(',').map((s) => s.trim()).filter(Boolean))].slice(0, MAX_COMPARE)
 }
 
 function load() {
-  if (comparing.value) refresh()
+  if (!comparing.value) return
+  if (data.value?.models.join(',') !== selected.value.join(',')) data.value = null
+  refresh()
 }
 
 onMounted(() => {
@@ -98,7 +99,10 @@ watch(
   },
   { deep: true },
 )
-watch(selectionQuery, refreshModels)
+watch(selectionQuery, () => {
+  data.value = null
+  refreshModels()
+})
 watch(selected, load)
 watch(
   () => meta.value?.default_cohort,
@@ -119,11 +123,17 @@ function syncQuery() {
   else delete query.models
   router.replace({ path: '/compare', query })
 }
-function toggle(model: string) {
-  requestedModels.value = [...selected.value]
-  const at = requestedModels.value.indexOf(model)
-  if (at >= 0) requestedModels.value.splice(at, 1)
-  else if (selected.value.length < MAX_COMPARE) requestedModels.value.push(model)
+function addModel(model: string) {
+  if (!remainingModels.value.includes(model) || selected.value.length >= MAX_COMPARE) return
+  requestedModels.value = [...selected.value, model]
+  syncQuery()
+}
+function removeModel(model: string) {
+  requestedModels.value = selected.value.filter((value) => value !== model)
+  syncQuery()
+}
+function clearModels() {
+  requestedModels.value = []
   syncQuery()
 }
 
@@ -181,27 +191,37 @@ const chartSeries = computed(() =>
         Models ({{ selected.length }}/{{ MAX_COMPARE }})
       </div>
       <p v-if="mixedCohorts" class="text-sm text-status-warning">Choose one cohort on the Panel before comparing models.</p>
-      <p v-else-if="loadingModels" class="text-sm text-text-muted">Loading models…</p>
+      <p v-else-if="loadingModels && !panel" class="text-sm text-text-muted">Loading models…</p>
       <p v-else-if="modelsError" class="text-sm text-status-danger">{{ modelsError }}</p>
       <p v-else-if="!availableModels.length" class="text-sm text-text-muted">No models have non-zero scores in this selection.</p>
-      <div class="flex flex-wrap gap-2">
-        <button
-          v-for="m in availableModels"
-          :key="m"
-          class="font-mono text-xs px-2.5 py-1 rounded-full border"
-          :class="
-            selected.includes(m)
-              ? 'border-accent bg-accent-subtle text-text'
-              : selected.length >= MAX_COMPARE
-                ? 'border-surface-border-subtle text-text-muted opacity-50 cursor-not-allowed'
-                : 'border-surface-border text-text-secondary hover:bg-surface-raised'
-          "
-          :disabled="!selected.includes(m) && selected.length >= MAX_COMPARE"
-          @click="toggle(m)"
+      <template v-else>
+        <div v-if="selected.length" class="flex flex-wrap items-center gap-2 mb-3">
+          <button
+            v-for="model in selected"
+            :key="model"
+            type="button"
+            :aria-label="`Remove ${model}`"
+            class="flex items-center gap-3 max-w-full px-3 py-2 rounded border border-accent bg-accent-subtle text-left text-xs"
+            @click="removeModel(model)"
+          >
+            <ModelName :model="model" />
+            <span aria-hidden="true" class="text-text-muted">×</span>
+          </button>
+          <button type="button" class="text-xs text-text-muted hover:text-text" @click="clearModels">Clear models</button>
+        </div>
+        <SearchSelect
+          v-if="selected.length < MAX_COMPARE && remainingModels.length"
+          label="Add model"
+          placeholder="Search models…"
+          :options="remainingModels"
+          model-value=""
+          class="max-w-xl"
+          @update:model-value="addModel"
         >
-          {{ m }}
-        </button>
-      </div>
+          <template #option="{ option }"><ModelName :model="option" /></template>
+        </SearchSelect>
+        <p v-if="selected.length >= MAX_COMPARE" class="text-xs text-text-muted">All {{ MAX_COMPARE }} slots are filled. Remove a model to choose another.</p>
+      </template>
     </div>
 
     <div
@@ -213,7 +233,7 @@ const chartSeries = computed(() =>
 
     <EmptyState v-if="!comparing" icon="⚖" message="Pick at least two models to compare." />
 
-    <div v-else-if="data && !loading && !error" class="space-y-6">
+    <div v-else-if="data && !error" class="space-y-6">
       <PolicyRejections :rejections="data.policy_rejections" scope="this comparison" />
       <!-- shared-benchmark ranking -->
       <div>
@@ -239,10 +259,11 @@ const chartSeries = computed(() =>
             >
               <span class="font-mono text-text-muted tabular-nums w-5">{{ i + 1 }}</span>
               <button
-                class="font-mono text-[13px] font-semibold text-accent hover:underline"
+                class="min-w-0 text-left text-[13px] font-semibold text-accent hover:underline"
+                :aria-label="entry.model"
                 @click="goToModel(entry.model)"
               >
-                {{ entry.model }}
+                <ModelName :model="entry.model" />
               </button>
               <span class="ml-auto text-right">
                 <span class="font-mono text-base font-semibold tabular-nums">{{
@@ -275,7 +296,7 @@ const chartSeries = computed(() =>
                 class="border-b border-surface-border bg-surface-raised text-xs font-semibold uppercase tracking-wider text-text-secondary"
               >
                 <th class="px-3 py-2 text-left">Benchmark</th>
-                <th v-for="m in selected" :key="m" class="px-3 py-2 text-center font-mono normal-case">{{ m }}</th>
+                <th v-for="m in selected" :key="m" class="px-3 py-2 text-center normal-case min-w-40 max-w-72"><ModelName :model="m" /></th>
                 <th class="px-3 py-2 text-left">Ordering</th>
               </tr>
             </thead>

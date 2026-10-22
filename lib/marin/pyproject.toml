@@ -43,7 +43,7 @@ dependencies = [
     "requests>=2.33.0",
     "resiliparse>=0.17.2",
     "s3fs>=2024",
-    "shellsim>=0.1.29",
+    "shellsim>=0.1.38",
     "tqdm",
     "tqdm-loggable",
     "wandb>0.24.0",
@@ -67,10 +67,13 @@ test = [
     "pytest-json-report>=1.5",
     "pytest-xdist",
     "pytest-timeout",
-    "verifyit[answer,reasoning-gym,schema]",
-    "taskcompendium[pipeline]",
+    "marin-verifyit[math,reasoning-gym,schema]",
+    "marin-taskcompendium[pipeline]",
+    "universal-pathlib",
     # for scaling law plotting tests
     "plotly",
+    # SOTOPIA length-control regression tests fit a logistic model.
+    "scikit-learn",
 ]
 lint = [
     "ruff==0.14.3",
@@ -161,8 +164,8 @@ cpu = [
   "torchvision==0.26.0; (sys_platform == 'linux' and platform_machine == 'aarch64') or (sys_platform == 'darwin' and platform_machine == 'arm64')",
 ]
 
-# Evalchemy runs from a commit-pinned uvx environment against a served OpenAI URL, so lm-eval does
-# not share Marin's project environment. See marin.evaluation.evalchemy.runtime.
+# Vendored Evalchemy runs against a served OpenAI URL from its own locked uv project.
+# See vendor/evalchemy and marin.evaluation.evalchemy.runtime.
 
 vizier = [
     "google-vizier[jax]",

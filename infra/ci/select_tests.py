@@ -63,6 +63,7 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
+    SourceRoot("infra/shellsim", "."),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
@@ -92,7 +93,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
-    "verifyit": "verifyit",
+    "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
 }
@@ -123,10 +124,10 @@ TEST_DIRS: dict[str, tuple[str, ...]] = {
     "marin": ("tests", "experiments"),
 }
 
-# Levanter's suite is the only unit leg that runs long enough to be worth spreading over
-# extra runners; every other scope finishes well under the workflow's per-leg budget. A
-# sharded scope splits its selected files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4}
+# The Levanter and Marin suites run long enough to be worth spreading over extra runners;
+# every other scope finishes in a few minutes on one. A sharded scope splits its selected
+# files across this many parallel matrix legs.
+SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 3}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
@@ -151,13 +152,90 @@ RUST_SETUP_TAG = "rust"
 SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
-# Suites outside the root workspace's import-selected Python matrix.
-# TaskCompendium has its own uv lock and pinned Harbor dependency; Iris smoke
-# drives a browser. Levanter's accelerator lanes use its selected files below.
+# Suites outside the import-selected Python matrix.
+# TaskCompendium, Shellbox, RolloutEngine and Taskforge use the root lock. Iris
+# smoke drives a browser. Harbor uses its own lock and local Marin sources.
+# Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "skyrl-wheel": (
+        "vendor/skyrl/",
+        "vendor/harbor/",
+        "lib/finelog/",
+        "lib/finestore/",
+        "lib/iris/",
+        "lib/rigging/",
+        "lib/rolloutengine/",
+        "lib/shellbox/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ),
+    "evalchemy-unit": (
+        "vendor/evalchemy/",
+        "lib/finestore/",
+        "lib/rigging/",
+        "lib/marin/src/marin/evaluation/evalchemy/",
+        "experiments/evaluation/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "harbor-unit": (
+        "vendor/harbor/",
+        "lib/finestore/",
+        "lib/rigging/",
+        "lib/marin/src/marin/evaluation/harbor/",
+        "experiments/post_training/task_curation/harbor_hub.py",
+        "experiments/post_training/task_curation/tests/test_harbor_hub.py",
+        "infra/ci/select_tests.py",
+        "infra/ci/run_harbor_tests.py",
+        "infra/ci/run_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ),
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
-    "taskcompendium-unit": ("lib/taskcompendium/", "infra/ci/select_tests.py", ".github/workflows/unified-unit.yaml"),
+    "shellbox-unit": (
+        "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "taskcompendium-unit": (
+        "lib/taskcompendium/",
+        "lib/shellbox/",
+        "lib/rigging/",
+        "lib/verifyit/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "rolloutengine-unit": (
+        "lib/rolloutengine/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
+        "lib/rigging/",
+        "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "taskforge-unit": (
+        "lib/taskforge/",
+        "experiments/post_training/capability_driven_envs/",
+        "experiments/post_training/glm.py",
+        "lib/rolloutengine/",
+        "lib/zephyr/",
+        "lib/fray/",
+        "lib/taskcompendium/",
+        "lib/iris/",
+        "lib/shellbox/",
+        "lib/verifyit/",
+        "lib/rigging/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
 }
 
 LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
@@ -185,19 +263,6 @@ UV_LOCK_REVISION = 3
 PACKAGE_IDENTITY_FIELDS = ("name", "version", "source")
 LEVANTER_TORCH_SUITE = "levanter-torch"
 LEVANTER_TPU_SUITE = "levanter-tpu"
-
-# These files are intentionally absent from the TPU command today. Keep the selection
-# rule next to the selector so an affected-file TPU run does not start only to collect
-# zero runnable tests.
-TPU_IGNORED_TEST_PATHS: frozenset[str] = frozenset(
-    {
-        "lib/levanter/tests/test_audio.py",
-        "lib/levanter/tests/test_new_cache.py",
-        "lib/levanter/tests/test_hf_checkpoints.py",
-        "lib/levanter/tests/test_hf_gpt2_serialize.py",
-        "lib/levanter/tests/test_gdn_layer.py",
-    }
-)
 
 
 # ---------------------------------------------------------------------------
@@ -753,57 +818,52 @@ def extra_suites(changed_files: list[str]) -> list[str]:
     )
 
 
-def _node_has_torch_marker(node: ast.AST) -> bool:
-    return any(
-        (isinstance(child, ast.Name) and child.id == "skip_if_no_torch")
-        or (isinstance(child, ast.Attribute) and child.attr == "torch")
-        for child in ast.walk(node)
-    )
+def _node_markers(node: ast.AST) -> set[str]:
+    markers: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and child.id == "skip_if_no_torch":
+            markers.add("torch")
+        if (
+            isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Attribute)
+            and child.value.attr == "mark"
+            and isinstance(child.value.value, ast.Name)
+            and child.value.value.id == "pytest"
+        ):
+            markers.add(child.attr)
+    return markers
 
 
-def torch_membership_for_test_file(path: Path) -> tuple[bool, bool]:
-    """Return whether a test file contains torch and non-torch tests.
+def markers_for_test_file(path: Path) -> frozenset[str]:
+    """Return markers used to select a test file's accelerator lanes.
 
-    The Levanter helper ``skip_if_no_torch`` applies ``pytest.mark.torch``. The
-    selector cannot import test modules because its job intentionally installs no test
-    dependencies, so inspect decorators and module-level ``pytestmark`` assignments.
-    Unknown/dynamically generated test shapes conservatively enter both lanes.
+    Inspect module-level pytestmark, test/class decorators, and parameter marks
+    without importing tests. The skip_if_no_torch helper also supplies torch.
+    Unknown/generated test shapes conservatively include the Torch lane.
     """
     tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
-    module_is_torch = any(
-        isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets)
-        and _node_has_torch_marker(node.value)
-        for node in tree.body
-    )
-
-    has_torch = module_is_torch
-    has_non_torch = False
+    markers: set[str] = set()
     found_test = False
     for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets
+        ):
+            markers.update(_node_markers(node.value))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
             found_test = True
-            is_torch = module_is_torch or any(_node_has_torch_marker(decorator) for decorator in node.decorator_list)
-            has_torch |= is_torch
-            has_non_torch |= not is_torch
-            continue
-
+            for decorator in node.decorator_list:
+                markers.update(_node_markers(decorator))
         if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-            class_is_torch = module_is_torch or any(
-                _node_has_torch_marker(decorator) for decorator in node.decorator_list
-            )
+            for decorator in node.decorator_list:
+                markers.update(_node_markers(decorator))
             for method in node.body:
                 if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name.startswith("test_"):
                     found_test = True
-                    is_torch = class_is_torch or any(
-                        _node_has_torch_marker(decorator) for decorator in method.decorator_list
-                    )
-                    has_torch |= is_torch
-                    has_non_torch |= not is_torch
-
+                    for decorator in method.decorator_list:
+                        markers.update(_node_markers(decorator))
     if not found_test:
-        return True, True
-    return has_torch, has_non_torch
+        markers.add("torch")
+    return frozenset(markers)
 
 
 # ---------------------------------------------------------------------------
@@ -974,17 +1034,14 @@ def accelerator_suite_test_paths(
 
     torch_paths: list[str] = []
     tpu_paths: list[str] = []
+    if any(test_path in TEST_DIRS["levanter"] for test_path in selected):
+        selected = all_test_files("levanter", repo_root)
     for test_path in selected:
-        if test_path in TEST_DIRS["levanter"]:
+        markers = markers_for_test_file(repo_root / test_path)
+        # TPU coverage is opt-in, including for full-suite and scheduled runs.
+        if "torch" in markers:
             torch_paths.append(test_path)
-            tpu_paths.append(test_path)
-            continue
-
-        path = repo_root / test_path
-        has_torch, has_non_torch = torch_membership_for_test_file(path)
-        if has_torch:
-            torch_paths.append(test_path)
-        if has_non_torch and test_path not in TPU_IGNORED_TEST_PATHS:
+        if "tpu" in markers:
             tpu_paths.append(test_path)
 
     suites: dict[str, list[str]] = {}

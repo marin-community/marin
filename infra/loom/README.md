@@ -91,6 +91,12 @@ pulumi config set --cwd /path/to/marin/infra/loom --stack marin-loom \
 Delete the local payload after upload. The startup script never reads `latest`,
 so uploading another secret version does not change the running service.
 
+The deployment's `browser.allowed_origins` permits credentialed agent-panel
+connections from `https://marina.oa.dev` and `https://applets.marina.oa.dev`,
+Marina's authenticated private applet origin. Public applets on
+`https://public.applets.marina.oa.dev` are excluded. Allowed origins must still
+authenticate with Loom, and profile permissions still apply.
+
 ## Automation identities
 
 Runtime profiles and workload federation mappings live in
@@ -142,8 +148,8 @@ consume the shared automation pool. The remaining GitHub agent workflows have
 individual federation mappings to the `github-automation` profile. Each mapping binds an exact workflow path on
 `main`; the shared profile does not make other workflows eligible. Deploy the
 Loom stack before the GitHub Pulumi stack so the latter can publish
-`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`, and
-`LOOM_PROSE_CLEANUP_PROFILE`. Apply the
+`LOOM_AGENTIC_LINT_PROFILE`, `LOOM_GITHUB_AUTOMATION_PROFILE`,
+`LOOM_PR_HOLISTIC_REVIEW_PROFILE`, and `LOOM_PROSE_CLEANUP_PROFILE`. Apply the
 Loom stack before the GitHub Pulumi stack whenever these federations or profile
 variables change.
 
@@ -159,6 +165,9 @@ their federation mapping.
 
 The PR review workflow launches on open, ready-for-review, and reopen events.
 Reopen a PR to retry its latest head if a push invalidates an in-progress review.
+The `pr-holistic-review` mapping authorizes the whole-change review profile,
+which runs the `claude` agent with the `fable` model and also launches on
+pushes; its session skips small deltas since the last reviewed head.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only
@@ -272,6 +281,18 @@ Declare scheduled agent or script watches under `marin-loom:watches` in
 [Pulumi.marin-loom.yaml](Pulumi.marin-loom.yaml). The disabled
 `weekday-job-check` entry shows agent configuration. Use `promptFile` for prompts
 stored under `infra/loom`; Pulumi includes their contents in the manifest.
+
+The `goals` watch runs the `pm` profile ([instructions](profiles/pm/AGENTS.md)),
+which keeps the Marin high-level board and the goals document below its
+`Status` heading in line with the goals the document lists. It needs:
+
+- the `LOOM_PM_BOARD_TOKEN` secret in `hai-gcp-models`, holding a fine-grained
+  token with `marin-community` Projects read and write access, because Loom's
+  session tokens cannot write organization projects;
+- the document shared with `loom-vm@hai-gcp-models.iam.gserviceaccount.com` as
+  an editor;
+- the `marin` IAM stack applied first, for the `loom-vm` token-creator grant on
+  itself that mints a documents-scoped token.
 
 Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/pull/378)
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)

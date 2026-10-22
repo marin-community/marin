@@ -5,6 +5,7 @@ task_options:
     task_alias: graphwalks
     generation: true
 apply_chat_template: true
+chat_tokenizer_backend: huggingface
 prompt_budget_preflight: true
 batch_size: 1
 max_tokens: 131072

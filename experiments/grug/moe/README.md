@@ -74,7 +74,7 @@ long layers.
 
 **Other.**
 - **Expert parallelism**: `ragged_all_to_all` or ring-based via
-  `levanter.grug.grug_moe.moe_mlp` (default: ring). Default capacity factor 1.0.
+  `levanter.grug.grug_moe.moe_mlp` (default: `ring_gather_combine` on GPUs, `ring` elsewhere). Default capacity factor 1.0.
 
 ## Scaling heuristic
 

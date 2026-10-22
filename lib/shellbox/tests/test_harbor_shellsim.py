@@ -8,7 +8,7 @@ import importlib
 from pathlib import Path
 
 import pytest
-from shellbox.machine import MachineSpec, ShellSimBuiltins
+from shellbox.machine import MachineSpec, PackageSpec
 
 
 def test_shellsim_harbor_trial(tmp_path: Path) -> None:
@@ -31,12 +31,11 @@ def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
     pytest.importorskip("harbor")
     pytest.importorskip("shellsim")
     StoragePath = pytest.importorskip("rigging.filesystem.storage_path").StoragePath
-    JobConfig = pytest.importorskip("harbor_config").JobConfig
     environment_module = importlib.import_module("shellbox.backends.shellsim.environment")
     machine_module = importlib.import_module("shellbox.backends.shellsim.machine")
 
     async def check() -> None:
-        machine = await machine_module.ShellSimMachineFactory().create(MachineSpec(ShellSimBuiltins()))
+        machine = await machine_module.ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
         environment = object.__new__(environment_module.ShellSimEnvironment)
         environment.machine = machine
         try:
@@ -47,9 +46,8 @@ def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
             await machine.upload(source, "/logs/agent")
 
             remote = StoragePath(f"memory://shellbox-{tmp_path.name}")
-            harbor_remote = JobConfig(jobs_dir=str(remote)).jobs_dir
             await environment.download_file("/logs/agent/agent.log", remote / "agent.log")
-            await environment.download_dir("/logs/agent", harbor_remote / "downloaded")
+            await environment.download_dir("/logs/agent", remote / "downloaded")
             await environment.download_file("/logs/agent/agent.log", tmp_path / "local-agent.log")
             await environment.download_dir("/logs/agent", f"file://{tmp_path}/local-download")
 
