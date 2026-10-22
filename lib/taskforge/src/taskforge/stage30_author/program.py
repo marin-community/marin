@@ -19,6 +19,7 @@ and runs the sink last. The sink's ``TaskSpec`` becomes the program's output.
 
 import bisect
 import inspect
+import re
 import types
 import typing
 from collections.abc import Awaitable, Callable, Mapping
@@ -31,6 +32,10 @@ from taskforge.content_hash import canonical_json, digest, sha256_hex
 
 PROPOSAL_INPUT = "proposal"
 """The parameter name a step takes to receive the proposal. A step may not use it as its own name."""
+
+
+MEMORY_ADDRESS = re.compile(r" at 0x[0-9a-fA-F]+")
+"""What a ``repr`` that changes from one process to the next contains."""
 
 
 @dataclass(frozen=True)
@@ -122,8 +127,10 @@ def _source_digest(fn: Callable[..., Awaitable[Any]], output_type: Any) -> str:
 
     From the step's code and from its return annotation, the walk follows every name the module
     defines: a function or class adds its source and is walked in turn (a class through its methods,
-    its field annotations and its bases), any other value adds its canonical JSON, or its ``repr``
-    when it has none. Names bound by imports, modules and builtins stay out; ``SDK_VERSION`` covers
+    its field annotations and its bases), another step adds its own source digest, and any other value
+    adds its canonical JSON, or its ``repr`` when it has none. A value whose ``repr`` names a memory
+    address has no text that survives the process, so it is refused with ``TypeError``. Names bound by
+    imports, modules and builtins stay out; ``SDK_VERSION`` covers
     the library. The step's source comes first, then each reached object under its name in sorted
     order, so a step that reaches nothing digests its source alone.
     """
@@ -140,8 +147,11 @@ def _source_digest(fn: Callable[..., Awaitable[Any]], output_type: Any) -> str:
         elif inspect.isclass(value):
             reached[name] = inspect.getsource(value)
             pending += _reached_by_class(value, namespace, module)
+        elif isinstance(value, RLEnvBuildStep | RLEnvBuildSink):
+            if value.fn is not fn:
+                reached[name] = f"step {value.source_digest}"
         else:
-            reached[name] = _value_text(value)
+            reached[name] = _value_text(name, value)
     parts = [inspect.getsource(fn), *(f"\n# {name}\n{text}" for name, text in sorted(reached.items()))]
     return sha256_hex("".join(parts).encode())
 
@@ -197,11 +207,17 @@ def _annotated_classes(annotation: Any, module: str) -> list[tuple[str, Any]]:
     return found
 
 
-def _value_text(value: Any) -> str:
+def _value_text(name: str, value: Any) -> str:
     try:
         return canonical_json(value)
     except (TypeError, ValueError):
-        return repr(value)
+        text = repr(value)
+    if MEMORY_ADDRESS.search(text):
+        raise TypeError(
+            f"{name} has no text a step's digest can keep across processes (its repr names a memory address): "
+            "make it a function, a class, or a JSON value"
+        )
+    return text
 
 
 @dataclass(frozen=True)
