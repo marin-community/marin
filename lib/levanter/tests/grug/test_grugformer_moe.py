@@ -32,6 +32,7 @@ from levanter.grug._moe.common import (
     _swiglu_gate_up_backward,
     CapacityDrops,
 )
+from levanter.grug._moe.ep_common import _aligned_receiver_rows
 from levanter.grug._moe.ep_deepep import _pack_deepep_local_assignments
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
@@ -53,6 +54,7 @@ from levanter.grug._moe.ep_ring import _gather_dispatch_combine
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
+    ExpertPrecision,
     MoEExpertMlp,
     MoEExpertMlpPspecs,
     MoeImplementation,
@@ -65,6 +67,12 @@ from levanter.utils.activation import ActivationFunctionEnum
 
 _BF16_MOE_RELATIVE_TOLERANCE = 0.02
 _FP32_MOE_RELATIVE_TOLERANCE = 1e-4
+# Relative Frobenius error. MXFP8 keeps three mantissa bits of every expert GEMM operand, so on
+# unit-scale Gaussian operands the MXFP8 expert MLP's output and each of its gradients land at
+# 6.6e-2 to 6.9e-2 against a float32 MLP. This is the gate of tests/kernels/test_mxfp8_expert_mlp.py.
+# Expert parallelism over 8 B200s measures the same, and at most 7.6e-2 on any one GPU's tokens or
+# any one expert's weights.
+_MXFP8_MOE_RELATIVE_TOLERANCE = 0.1
 
 
 def _make_dense_mesh() -> Mesh:
@@ -189,6 +197,12 @@ def _dense_moe_output(
         w_down[selected_experts],
     )
     return jnp.einsum("tkh,tk->th", expert_output, combine_weights)
+
+
+def _relative_max_error(actual: jax.Array, expected: jax.Array) -> float:
+    actual = np.asarray(actual, dtype=np.float32)
+    expected = np.asarray(expected, dtype=np.float32)
+    return float(np.max(np.abs(actual - expected)) / np.max(np.abs(expected)))
 
 
 def _make_unique_topk_experts(*, tokens: int, topk: int, num_experts: int) -> jax.Array:
@@ -1704,15 +1718,42 @@ def _simulate_ragged_a2a(operands, outputs, params):
             n = send[i]
             recv = np.asarray(params[dst].recv_sizes)[sender * slices_per_device + i % slices_per_device]
             assert recv == n, f"recv_sizes {recv} != send_sizes {n} for update {i} from {sender} to {dst}"
+            assert out_off[i] + n <= len(outputs[dst]), f"update {i} from {sender} overruns shard {dst}'s buffer"
             outputs[dst][out_off[i] : out_off[i] + n] = operands[sender][in_off[i] : in_off[i] + n]
 
 
-def test_expert_granular_a2a_params_roundtrip_with_drops():
-    """Dispatch packs receivers expert-major with sender order inside each expert, and the
-    return direction restores each accepted row to its unclipped sorted position, leaving
-    dropped rows at the output operand's values -- all under forced capacity clipping. The
-    expert MLP leaves unused receiver capacity unspecified, so it starts as NaN here and must
-    never reach the return."""
+def _round_up(n: int, multiple: int) -> int:
+    return -(-n // multiple) * multiple
+
+
+# The packed receiver layout, and an alignment that most expert groups here do not fill, so the
+# receiver buffer has gaps between experts.
+_RECEIVER_ALIGNMENTS = [pytest.param(1, id="packed"), pytest.param(4, id="aligned")]
+
+
+def _expected_receiver_buffer(sorted_payload, starts, clipped, *, receiver, local_experts, rows, alignment):
+    """A receiver buffer as dispatch must leave it: each local expert's arrivals, sender-major, from
+    the next multiple of ``alignment``; NaN in every row no arrival writes."""
+    shards, _, hidden = sorted_payload.shape
+    expected = np.full((rows, hidden), np.nan, np.float32)
+    start = 0
+    for e in range(local_experts):
+        g = receiver * local_experts + e
+        arrivals = np.concatenate(
+            [sorted_payload[s][starts[s, g] : starts[s, g] + clipped[s, g]] for s in range(shards)]
+        )
+        expected[start : start + len(arrivals)] = arrivals
+        start = _round_up(start + len(arrivals), alignment)
+    return expected
+
+
+@pytest.mark.parametrize("alignment", _RECEIVER_ALIGNMENTS)
+def test_expert_granular_a2a_params_roundtrip_with_drops(alignment):
+    """Dispatch lays receivers out expert-major with sender order inside each expert, each expert
+    from a multiple of the receiver alignment, and the return direction restores each accepted
+    row to its unclipped sorted position, leaving dropped rows at the output operand's values --
+    all under forced capacity clipping. The expert MLP leaves the alignment gaps and unused
+    receiver rows unspecified, so they start as NaN here and must never reach the return."""
     shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
     num_experts = shards * local_experts
     assignments = tokens * topk
@@ -1733,6 +1774,9 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
         )
     )
     assert clipped.sum() < group_sizes.sum()  # drops actually happen
+    receiver_totals = clipped.sum(axis=0)
+    # An alignment above 1 must leave gaps between experts, or the aligned case tests nothing new.
+    assert alignment == 1 or (receiver_totals % alignment != 0).any()
 
     params = [
         _expert_granular_a2a_params(
@@ -1740,22 +1784,25 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
             jnp.asarray(clipped),
             jnp.asarray(s),
             local_expert_size=local_experts,
+            receiver_alignment=alignment,
         )
         for s in range(shards)
     ]
 
-    received = [np.full((capacity, hidden), np.nan, np.float32) for _ in range(shards)]
+    rows = _aligned_receiver_rows(capacity, local_experts, alignment)
+    received = [np.full((rows, hidden), np.nan, np.float32) for _ in range(shards)]
     _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
     for receiver in range(shards):
-        rows = [
-            sorted_payload[s][starts[s, g] : starts[s, g] + clipped[s, g]]
-            for e in range(local_experts)
-            for g in [receiver * local_experts + e]
-            for s in range(shards)
-        ]
-        expected = np.concatenate(rows, axis=0)
-        np.testing.assert_array_equal(received[receiver][: len(expected)], expected)
-        assert np.isnan(received[receiver][len(expected) :]).all()
+        expected = _expected_receiver_buffer(
+            sorted_payload,
+            starts,
+            clipped,
+            receiver=receiver,
+            local_experts=local_experts,
+            rows=rows,
+            alignment=alignment,
+        )
+        np.testing.assert_array_equal(received[receiver], expected)
 
     returned = [np.zeros((assignments, hidden), np.float32) for _ in range(shards)]
     _simulate_ragged_a2a(received, returned, [p[1] for p in params])
@@ -1768,7 +1815,58 @@ def test_expert_granular_a2a_params_roundtrip_with_drops():
         np.testing.assert_array_equal(returned[s], expected)
 
 
-def test_expert_granular_a2a_params_are_each_others_transpose():
+def test_expert_granular_a2a_params_stay_inside_the_aligned_receiver_at_worst_case_rounding():
+    """Full receivers whose experts' arrivals each end one row past an alignment boundary: the
+    split whose aligned starts reach furthest. The gaps push the writes past a buffer of capacity
+    rows, but they must stay inside the aligned receiver rows and round-trip every row."""
+    shards, local_experts, hidden, alignment = 2, 3, 3, 4
+    # Each receiver gets 1, 1 and 21 rows: all three are 1 mod 4, and 23 is its capacity.
+    capacity = 23
+    group_sizes = np.array([[1, 0, 11, 0, 1, 10], [0, 1, 10, 1, 0, 11]], np.int32)
+    clipped = np.asarray(
+        _clip_receiver_group_sizes(
+            jnp.asarray(group_sizes), local_expert_size=local_experts, receiver_capacity=capacity
+        )
+    )
+    np.testing.assert_array_equal(clipped, group_sizes)  # nothing drops
+    starts = np.cumsum(group_sizes, axis=1) - group_sizes
+    rng = np.random.default_rng(2)
+    sorted_payload = rng.normal(size=(shards, int(group_sizes.sum(axis=1).max()), hidden)).astype(np.float32)
+    params = [
+        _expert_granular_a2a_params(
+            jnp.asarray(group_sizes),
+            jnp.asarray(clipped),
+            jnp.asarray(s),
+            local_expert_size=local_experts,
+            receiver_alignment=alignment,
+        )
+        for s in range(shards)
+    ]
+
+    rows = _aligned_receiver_rows(capacity, local_experts, alignment)
+    received = [np.full((rows, hidden), np.nan, np.float32) for _ in range(shards)]
+    _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
+    for receiver in range(shards):
+        expected = _expected_receiver_buffer(
+            sorted_payload,
+            starts,
+            clipped,
+            receiver=receiver,
+            local_experts=local_experts,
+            rows=rows,
+            alignment=alignment,
+        )
+        np.testing.assert_array_equal(received[receiver], expected)
+        # The last expert starts after two 4-row spans, so its 21 rows end past the capacity.
+        assert np.flatnonzero(~np.isnan(received[receiver][:, 0])).max() + 1 == 29
+
+    returned = [np.zeros_like(sorted_payload[s]) for s in range(shards)]
+    _simulate_ragged_a2a(received, returned, [p[1] for p in params])
+    np.testing.assert_array_equal(np.stack(returned), sorted_payload)
+
+
+@pytest.mark.parametrize("alignment", _RECEIVER_ALIGNMENTS)
+def test_expert_granular_a2a_params_are_each_others_transpose(alignment):
     """The return parameters equal what JAX's ragged_all_to_all transpose rule derives from the
     dispatch parameters with its two offset all-to-alls, and vice versa, so the backend's backward
     can use them directly. Checked under forced capacity clipping."""
@@ -1782,7 +1880,13 @@ def test_expert_granular_a2a_params_are_each_others_transpose():
     )
     assert int(jnp.sum(clipped)) < group_sizes.sum()  # drops actually happen
     params = [
-        _expert_granular_a2a_params(jnp.asarray(group_sizes), clipped, jnp.asarray(s), local_expert_size=local_experts)
+        _expert_granular_a2a_params(
+            jnp.asarray(group_sizes),
+            clipped,
+            jnp.asarray(s),
+            local_expert_size=local_experts,
+            receiver_alignment=alignment,
+        )
         for s in range(shards)
     ]
 
@@ -1804,17 +1908,19 @@ def test_expert_granular_a2a_params_are_each_others_transpose():
             np.testing.assert_array_equal(forward.send_sizes, transpose.recv_sizes)
 
 
-def test_expert_granular_a2a_params_chunked_masking_composes():
+@pytest.mark.parametrize("alignment", _RECEIVER_ALIGNMENTS)
+def test_expert_granular_a2a_params_chunked_masking_composes(alignment):
     """Masking the clip to one expert chunk at a time (full sender starts, chained returns)
-    reproduces the whole layer: each chunk's receiver packs only its experts from offset zero,
-    and the chained returns cover exactly the per-chunk accepted prefixes, never a chunk's
-    unused capacity."""
+    reproduces the whole layer: each chunk's receiver lays out only its experts from offset zero,
+    in a buffer sized for the chunk's experts alone, and the chained returns cover exactly the
+    per-chunk accepted prefixes, never a chunk's alignment gaps or unused capacity."""
     shards, local_experts, tokens, topk, hidden = 4, 3, 10, 2, 5
     num_experts = shards * local_experts
     assignments = tokens * topk
     capacity = int(0.7 * assignments)
     chunks = 3
     chunk_capacity = -(-capacity // chunks)
+    chunk_rows = _aligned_receiver_rows(chunk_capacity, local_experts // chunks, alignment)
     chunk_of_expert = (np.arange(num_experts) % local_experts) // (local_experts // chunks)
 
     rng = np.random.default_rng(0)
@@ -1842,10 +1948,11 @@ def test_expert_granular_a2a_params_chunked_masking_composes():
                 jnp.asarray(clipped),
                 jnp.asarray(s),
                 local_expert_size=local_experts,
+                receiver_alignment=alignment,
             )
             for s in range(shards)
         ]
-        received = [np.full((chunk_capacity, hidden), np.nan, np.float32) for _ in range(shards)]
+        received = [np.full((chunk_rows, hidden), np.nan, np.float32) for _ in range(shards)]
         _simulate_ragged_a2a(sorted_payload, received, [p[0] for p in params])
         _simulate_ragged_a2a(received, returned, [p[1] for p in params])
 
@@ -1870,8 +1977,8 @@ def _force_routing_weight_gradient(
     monkeypatch.setattr(
         ep_ragged_all_to_all,
         "_select_expert_mlp",
-        lambda activation_fn, dtype: dataclasses.replace(
-            select_expert_mlp(activation_fn, dtype), routing_weight_gradient=routing_weight_gradient
+        lambda activation_fn, dtype, precision: dataclasses.replace(
+            select_expert_mlp(activation_fn, dtype, precision), routing_weight_gradient=routing_weight_gradient
         ),
     )
 
@@ -2004,16 +2111,11 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
             )
         )(x, w_up_gate, w_down, combine_weights)
 
-    def relative_max_error(actual, expected):
-        actual = np.asarray(actual, dtype=np.float32)
-        expected = np.asarray(expected, dtype=np.float32)
-        return np.max(np.abs(actual - expected)) / np.max(np.abs(expected))
-
-    assert relative_max_error(actual, expected) < relative_tolerance
+    assert _relative_max_error(actual, expected) < relative_tolerance
     for actual_gradient in actual_gradients:
         assert np.isfinite(np.asarray(actual_gradient)).all()
     for actual_gradient, expected_gradient in zip(actual_gradients[:3], expected_gradients[:3], strict=True):
-        assert relative_max_error(actual_gradient, expected_gradient) < relative_tolerance
+        assert _relative_max_error(actual_gradient, expected_gradient) < relative_tolerance
     actual_weight_gradient = np.asarray(actual_gradients[3], dtype=np.float32)
     expected_weight_gradient = np.asarray(expected_gradients[3])
     if routing_weight_gradient == _RoutingWeightGradient.EXPERT_SIDE:
@@ -2021,10 +2123,10 @@ def test_moe_mlp_ep_backends_match_dense_value_and_gradients_when_available(
         inside = np.ones(expected_weight_gradient.shape, dtype=bool)
         inside[edge_assignments] = False
         assert (
-            relative_max_error(actual_weight_gradient[inside], expected_weight_gradient[inside]) < relative_tolerance
+            _relative_max_error(actual_weight_gradient[inside], expected_weight_gradient[inside]) < relative_tolerance
         )
     else:
-        assert relative_max_error(actual_weight_gradient, expected_weight_gradient) < relative_tolerance
+        assert _relative_max_error(actual_weight_gradient, expected_weight_gradient) < relative_tolerance
         edge_errors = np.abs(actual_weight_gradient[edge_assignments] - expected_weight_gradient[edge_assignments])
         np.testing.assert_array_less(edge_errors, relative_tolerance * np.asarray(edge_scales))
     assert int(overflow.dropped) == 0
@@ -2073,6 +2175,198 @@ def test_ragged_backward_takes_the_routing_weight_gradient_of_its_expert_mlp(
         return eqn.invars[0].aval.shape[-1:] == (1,) and eqn.invars[0].aval.dtype == jnp.float32
 
     assert _count_jaxpr_primitives(jaxpr, "ragged_all_to_all", is_row_dot) == row_dot_transports
+
+
+# The hero compiles without XLA GPU command buffers (experiments/grug/moe_hero_ep/train.py:
+# XLA_DISABLE_GPU_COMMAND_BUFFER_FLAG).
+_jit_without_command_buffers = functools.partial(jax.jit, compiler_options={"xla_gpu_enable_command_buffer": ""})
+
+# The EP8 layout: 16 experts over 8 GPUs, two per GPU, which the ragged backend runs as two
+# one-expert chunks. H and I are multiples of the MXFP8 kernels' 128-wide scale tiles.
+_EP8_DEVICES = 8
+_EP8_EXPERTS = 16
+_EP8_TOKENS_PER_DEVICE = 256
+_EP8_TOPK = 2
+_EP8_HIDDEN = 256
+_EP8_INTERMEDIATE = 256
+_EP8_CAPACITY_FACTOR = 2.0
+# Each receiver chunk, so each expert, holds capacity_factor * tokens_per_device * topk / 2 rows:
+# twice what balanced routing sends an expert on average.
+_EP8_EXPERT_ROWS = int(_EP8_CAPACITY_FACTOR * _EP8_TOKENS_PER_DEVICE * _EP8_TOPK) // 2
+
+
+def _ep8_sm100_mesh() -> Mesh:
+    """An expert axis over 8 GPUs; skips unless they are SM100 GPUs that can run the MXFP8 kernels."""
+    devices = jax.devices()
+    if len(devices) < _EP8_DEVICES or devices[0].platform != "gpu":
+        pytest.skip(f"requires {_EP8_DEVICES} GPUs")
+    if not ep_ragged_all_to_all._sm100_gpu_present():
+        pytest.skip("the MXFP8 expert MLP requires an SM100 GPU")
+    pytest.importorskip("cutlass")
+    pytest.importorskip("quack")
+    return Mesh(
+        np.array(devices[:_EP8_DEVICES]).reshape(1, _EP8_DEVICES, 1),
+        axis_names=("data", "expert", "model"),
+        axis_types=(AxisType.Explicit, AxisType.Explicit, AxisType.Explicit),
+    )
+
+
+def _ep8_routing(key: jax.Array, *, skewed: bool) -> jax.Array:
+    """Each token's top-k experts under random logits.
+
+    The skewed routing favors experts 0 and 1, which share the first GPU, so that GPU is sent more
+    rows than its chunks hold. It never picks the last expert, so the last GPU's second chunk
+    receives no rows.
+    """
+    logits = jax.random.normal(key, (_EP8_DEVICES * _EP8_TOKENS_PER_DEVICE, _EP8_EXPERTS))
+    if skewed:
+        logits = logits + jnp.zeros((_EP8_EXPERTS,)).at[0].set(2.0).at[1].set(1.0).at[-1].set(-jnp.inf)
+    return jax.lax.top_k(logits, _EP8_TOPK)[1].astype(jnp.int32)
+
+
+def _first_assignments_of_each_expert(selected_experts: np.ndarray, rows_per_expert: int) -> np.ndarray:
+    """Which assignments survive when each expert's receiver chunk holds ``rows_per_expert`` rows.
+
+    A receiver accepts earlier senders first, and each sender's rows of an expert in token order. The
+    token shards lie on the expert axis in device order, so an expert keeps its first
+    ``rows_per_expert`` assignments in (token, slot) order.
+    """
+    flat = selected_experts.reshape(-1)
+    kept = np.ones(flat.shape, dtype=bool)
+    for expert in np.unique(flat):
+        kept[np.flatnonzero(flat == expert)[rows_per_expert:]] = False
+    return kept.reshape(selected_experts.shape)
+
+
+def _worst_slice_relative_error(actual: jax.Array, expected: jax.Array, *, slices: int) -> float:
+    """The largest relative Frobenius error over ``slices`` equal blocks of the leading axis.
+
+    A fault confined to one GPU's tokens or to one expert moves only its own block. A block whose
+    reference is zero, such as an unused expert's weight gradient, must be exactly zero.
+    """
+    actual = np.asarray(actual, dtype=np.float32).reshape(slices, -1)
+    expected = np.asarray(expected, dtype=np.float32).reshape(slices, -1)
+    error = np.linalg.norm(actual - expected, axis=1)
+    scale = np.linalg.norm(expected, axis=1)
+    relative = np.divide(error, scale, out=np.where(error > 0, np.inf, 0.0), where=scale > 0)
+    return float(relative.max())
+
+
+@pytest.mark.timeout(900)
+def test_ragged_ep8_mxfp8_matches_dense_value_and_gradients_on_sm100_gpus():
+    # MXFP8 expert parallelism over 8 GPUs against a float32 dense MoE on one device: the output and
+    # the gradients of the tokens, both expert weights, and the routing weights. Balanced routing
+    # drops nothing and leaves most of each receiver chunk unwritten. Skewed routing sends the first
+    # GPU's experts more than their chunks hold, which drops about a quarter of all assignments, and
+    # leaves one chunk empty; the reference then computes only the assignments the capacity gate keeps. BF16 expert
+    # parallelism runs on the same inputs and must still match at its own tolerance.
+    mesh = _ep8_sm100_mesh()
+
+    tokens = _EP8_DEVICES * _EP8_TOKENS_PER_DEVICE
+    k_x, k_weights, k_w13, k_w2, k_cotangent, k_balanced, k_skewed = jax.random.split(jax.random.key(67), 7)
+    x = jax.random.normal(k_x, (tokens, _EP8_HIDDEN), jnp.bfloat16)
+    combine_weights = jax.nn.softmax(jax.random.normal(k_weights, (tokens, _EP8_TOPK)), axis=-1).astype(jnp.bfloat16)
+    # Unit-scale expert activations, as in the MXFP8 expert MLP's own tests.
+    w_up_gate = jax.random.normal(k_w13, (_EP8_EXPERTS, _EP8_HIDDEN, 2 * _EP8_INTERMEDIATE)) / _EP8_HIDDEN**0.5
+    w_down = jax.random.normal(k_w2, (_EP8_EXPERTS, _EP8_INTERMEDIATE, _EP8_HIDDEN)) / _EP8_INTERMEDIATE**0.5
+    w_up_gate, w_down = w_up_gate.astype(jnp.bfloat16), w_down.astype(jnp.bfloat16)
+    cotangent = jax.random.normal(k_cotangent, (tokens, _EP8_HIDDEN), jnp.bfloat16)
+    operands = (x, w_up_gate, w_down, combine_weights)
+
+    @jax.jit
+    def dense(x, w_up_gate, w_down, combine_weights, selected_experts, kept, cotangent):
+        def layer(x, w_up_gate, w_down, combine_weights):
+            return _dense_moe_output(x, selected_experts, combine_weights * kept, w_up_gate, w_down)
+
+        out, pullback = jax.vjp(layer, x, w_up_gate, w_down, combine_weights)
+        return out, *pullback(cotangent)
+
+    def ep_step(precision: ExpertPrecision):
+        def layer(x, w_up_gate, w_down, combine_weights, selected_experts):
+            return moe_mlp(
+                x,
+                selected_experts,
+                combine_weights,
+                w_up_gate,
+                w_down,
+                implementation="ragged_all_to_all",
+                mesh=mesh,
+                report_capacity_overflow=True,
+                capacity_factor=_EP8_CAPACITY_FACTOR,
+                expert_precision=precision,
+            )
+
+        def loss(x, w_up_gate, w_down, combine_weights, selected_experts, cotangent):
+            return jnp.sum(layer(x, w_up_gate, w_down, combine_weights, selected_experts)[0] * cotangent)
+
+        def step(x, w_up_gate, w_down, combine_weights, selected_experts, cotangent):
+            # The forward alone runs the expert MLP's `apply`; the gradient runs `forward` and `backward`.
+            out, counts = layer(x, w_up_gate, w_down, combine_weights, selected_experts)
+            gradients = jax.grad(loss, argnums=range(4))(
+                x, w_up_gate, w_down, combine_weights, selected_experts, cotangent
+            )
+            return out, counts.dropped, *gradients
+
+        return _jit_without_command_buffers(step)
+
+    batch = NamedSharding(mesh, P(("data", "expert"), None))
+    experts = NamedSharding(mesh, P("expert", None, None))
+    ep_operands = (
+        jax.sharding.reshard(x, batch),
+        jax.sharding.reshard(w_up_gate, experts),
+        jax.sharding.reshard(w_down, experts),
+        jax.sharding.reshard(combine_weights, batch),
+    )
+    ep_cotangent = jax.sharding.reshard(cotangent, batch)
+    steps = {precision: ep_step(precision) for precision in (ExpertPrecision.BF16, ExpertPrecision.MXFP8)}
+    # Token tensors are compared per GPU shard, weight gradients per expert.
+    quantities = (
+        ("output", _EP8_DEVICES),
+        ("x grad", _EP8_DEVICES),
+        ("w_up_gate grad", _EP8_EXPERTS),
+        ("w_down grad", _EP8_EXPERTS),
+        ("combine_weights grad", _EP8_DEVICES),
+    )
+
+    failures = []
+    expected_drops = {}
+    for routing, key in (("balanced", k_balanced), ("skewed", k_skewed)):
+        selected_experts = _ep8_routing(key, skewed=routing == "skewed")
+        kept = _first_assignments_of_each_expert(np.asarray(selected_experts), _EP8_EXPERT_ROWS)
+        expected_drops[routing] = int(np.sum(~kept))
+        with jax.default_matmul_precision("highest"):
+            expected = dense(
+                *(operand.astype(jnp.float32) for operand in operands),
+                selected_experts,
+                jnp.asarray(kept, jnp.float32),
+                cotangent.astype(jnp.float32),
+            )
+        with jax.set_mesh(mesh):
+            for precision, step in steps.items():
+                out, dropped, *gradients = step(
+                    *ep_operands, jax.sharding.reshard(selected_experts, batch), ep_cotangent
+                )
+                label = f"{routing} {precision}"
+                if int(dropped) != expected_drops[routing]:
+                    failures.append(f"{label}: dropped {int(dropped)} instead of {expected_drops[routing]}")
+                report = []
+                for (name, slices), actual, reference in zip(quantities, (out, *gradients), expected, strict=True):
+                    if not np.isfinite(np.asarray(actual, dtype=np.float32)).all():
+                        failures.append(f"{label} {name}: not finite")
+                        continue
+                    frobenius = _worst_slice_relative_error(actual, reference, slices=1)
+                    worst_slice = _worst_slice_relative_error(actual, reference, slices=slices)
+                    max_error = _relative_max_error(actual, reference)
+                    report.append(f"{name} frob={frobenius:.3e} worst-slice={worst_slice:.3e} max={max_error:.3e}")
+                    if precision == ExpertPrecision.MXFP8 and not worst_slice < _MXFP8_MOE_RELATIVE_TOLERANCE:
+                        failures.append(f"{label} {name}: worst-slice relative Frobenius error {worst_slice:.3e}")
+                    if precision == ExpertPrecision.BF16 and not max_error < _BF16_MOE_RELATIVE_TOLERANCE:
+                        failures.append(f"{label} {name}: relative max error {max_error:.3e}")
+                print(f"{label} vs float32 dense (dropped {int(dropped)}): " + "; ".join(report))
+
+    # The routings must do what they claim, or the cases they name go untested.
+    assert expected_drops["balanced"] == 0 and expected_drops["skewed"] > 0, expected_drops
+    assert not failures, failures
 
 
 def _filled_transport_buffer(fill: float):
@@ -2224,6 +2518,81 @@ def test_ragged_moe_reads_no_unwritten_transport_rows_on_gpu(
     # The routings must do what they claim, or the cases they name go untested.
     assert dropped["two-experts"] > 0 and dropped["rank-unused"] > 0, dropped
     assert dropped["mostly-padded"] == 0, dropped
+
+
+@pytest.mark.timeout(900)
+@pytest.mark.parametrize("num_experts", [16, 32], ids=["one-expert-chunks", "two-expert-chunks"])
+def test_ragged_mxfp8_moe_reads_no_unwritten_transport_rows_on_8_sm100_gpus(
+    num_experts: int, monkeypatch: pytest.MonkeyPatch
+):
+    # The MXFP8 expert MLP takes receiver buffers whose experts start on 256-row boundaries. Over
+    # eight GPUs, NaN in every unwritten transport row, the gaps between experts included, must
+    # change no output or gradient. With 32 experts each chunk holds two, so the receiver buffers
+    # have gaps between experts as well as trailing rows.
+    mesh = _ep8_sm100_mesh()
+    tokens, hidden_dim, intermediate_dim, topk = _EP8_DEVICES * 512, 256, 256, 4
+    x, selected_experts, combine_weights, w_up_gate, w_down = _make_inputs(
+        key=jax.random.key(51),
+        tokens=tokens,
+        hidden_dim=hidden_dim,
+        intermediate_dim=intermediate_dim,
+        num_experts=num_experts,
+        topk=topk,
+    )
+    # Skewed routing: expert 1 also takes every assignment to expert 0, which receives no rows.
+    selected_experts = jnp.where(selected_experts == 0, 1, selected_experts)
+    w_up_gate = w_up_gate / hidden_dim**0.5
+    w_down = w_down / intermediate_dim**0.5
+    cotangent = jax.random.normal(jax.random.key(52), x.shape, dtype=jnp.bfloat16)
+
+    batch = NamedSharding(mesh, P(("data", "expert"), None))
+    experts = NamedSharding(mesh, P("expert", None, None))
+    shardings = (batch, experts, experts, batch)
+    operands = tuple(
+        jax.sharding.reshard(a.astype(jnp.bfloat16), s)
+        for a, s in zip((x, w_up_gate, w_down, combine_weights), shardings, strict=True)
+    )
+    routing = jax.sharding.reshard(selected_experts, batch)
+    cotangent = jax.sharding.reshard(cotangent, batch)
+
+    def layer(x, w_up_gate, w_down, combine_weights, routing):
+        return moe_mlp(
+            x,
+            routing,
+            combine_weights,
+            w_up_gate,
+            w_down,
+            implementation="ragged_all_to_all",
+            mesh=mesh,
+            report_capacity_overflow=True,
+            # Room for expert 1's doubled share in its own chunk, so nothing drops.
+            capacity_factor=6.0,
+            expert_precision=ExpertPrecision.MXFP8,
+        )
+
+    def run(operands, routing, cotangent):
+        def loss(*operands):
+            out, counts = layer(*operands, routing)
+            return jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32)), (out, counts.dropped)
+
+        return jax.grad(loss, argnums=range(4), has_aux=True)(*operands)
+
+    def zero_and_nan(operands, routing, cotangent):
+        results = []
+        for fill in (0.0, jnp.nan):
+            monkeypatch.setattr(ep_ragged_all_to_all, "_transport_buffer", _filled_transport_buffer(fill))
+            results.append(run(operands, routing, cotangent))
+        return results
+
+    with jax.set_mesh(mesh):
+        zero_filled, nan_filled = _jit_without_command_buffers(zero_and_nan)(operands, routing, cotangent)
+
+    for zero, nan in zip(jax.tree.leaves(zero_filled), jax.tree.leaves(nan_filled), strict=True):
+        nan = np.asarray(nan, dtype=np.float32)
+        assert np.isfinite(nan).all(), "a NaN-filled unwritten row reached an output"
+        np.testing.assert_array_equal(nan, np.asarray(zero, dtype=np.float32))
+    _gradients, (_out, dropped) = zero_filled
+    assert int(dropped) == 0
 
 
 @pytest.mark.tpu

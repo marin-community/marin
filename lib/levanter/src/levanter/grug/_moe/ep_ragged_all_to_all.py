@@ -14,7 +14,9 @@ Axis names used in the shape annotations:
     E       experts in the model
     Elocal  experts held by this shard
     Echunk  experts in one sequential chunk, Elocal / chunks
-    C       rows in one chunk's receiver buffer, the per-chunk capacity
+    C       rows one chunk accepts, the per-chunk capacity
+    R       rows in one chunk's receiver buffer: C, plus room to start each expert's rows on the
+            expert MLP's receiver alignment
     S       shards on the expert axis
     U       expert-granular transfers on the expert axis
 """
@@ -38,6 +40,7 @@ from levanter.grug._moe.common import (
     _interleave_gate_up,
     _scaled_capacity,
     CapacityDrops,
+    ExpertPrecision,
 )
 from levanter.grug._moe.sonic import (
     sonic_gather_sum,
@@ -47,19 +50,27 @@ from levanter.grug._moe.sonic import (
 )
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
+    _aligned_group_sizes,
+    _aligned_receiver_rows,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     _sort_activations,
 )
+from levanter.grug._moe.mxfp8.triton_quant import mxfp8_triton_quant_available
 
 logger = logging.getLogger(__name__)
 
-# QuACK's grouped GEMMs are written for SM100 and ship only with the CUDA 13 GPU extra.
+# QuACK's grouped GEMMs and the MXFP8 expert MLP's block-scaled GEMMs are written for SM100, and
+# ship only with the CUDA 13 GPU extra.
 _SM100_COMPUTE_CAPABILITY = 10.0
 
 # Sequential local-expert chunks per MoE layer; capacity splits evenly across chunks. Falls
 # back to a single chunk when the local expert count is not divisible.
 _EXPERT_CHUNKS = 2
+
+# The receiver alignment of an expert MLP that takes each expert's rows right after the previous
+# expert's.
+_PACKED_RECEIVER_ALIGNMENT = 1
 
 # Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
 # every other collective keeps NCCL's host-launched kernels.
@@ -83,11 +94,14 @@ class _RoutingWeightGradient(StrEnum):
 class _ExpertMlp(Protocol):
     """Runs the expert MLP over a receiver buffer laid out expert-major, with its own backward.
 
-    Implementations take both views of the buffer's group sizes: the physical sizes, which charge
-    trailing padding to the last expert, and the active sizes, which count only received rows.
-    Rows past the active count are unspecified, and may be non-finite, in ``x_dispatch`` and in
-    the output's cotangent. Implementations keep them out of the active output rows and out of
-    the weight gradients, and leave their own output rows past the active count unspecified.
+    Each expert's rows start at a multiple of ``receiver_alignment`` rows; with alignment 1 they
+    follow the previous expert's rows directly. Implementations take both views of the buffer's
+    group sizes: the physical sizes, the rows each expert spans up to the next expert's start, with
+    the buffer's trailing rows charged to the last expert, and the active sizes, which count only
+    received rows. The active rows are a prefix of each expert's span. Every other row, an
+    alignment gap or the trailing rows, is unspecified and may be non-finite, in ``x_dispatch`` and
+    in the output's cotangent. Implementations keep those rows out of the active output rows and
+    out of the weight gradients, and leave their own output rows there unspecified.
 
     ``backward`` also returns each row's ``<y, dy>`` in fp32, the gradient of a per-row scale
     applied to the output. With an EXPERT_SIDE ``routing_weight_gradient``, the routed-expert
@@ -99,23 +113,28 @@ class _ExpertMlp(Protocol):
         """The routing-weight gradient the routed-expert backward takes with this expert MLP."""
         ...
 
+    @property
+    def receiver_alignment(self) -> int:
+        """The row multiple at which each expert's rows start in the receiver buffer this MLP takes."""
+        ...
+
     def forward(
         self,
-        x_dispatch: Float[Array, "C H"],
+        x_dispatch: Float[Array, "R H"],
         moe_w13_local: Float[Array, "Echunk H I2"],
         moe_w2_local: Float[Array, "Echunk I H"],
         physical_group_sizes: Int[Array, "Echunk"],
         active_group_sizes: Int[Array, "Echunk"],
-    ) -> tuple[Float[Array, "C H"], tuple[jax.Array, ...]]: ...
+    ) -> tuple[Float[Array, "R H"], tuple[jax.Array, ...]]: ...
 
     def apply(
         self,
-        x_dispatch: Float[Array, "C H"],
+        x_dispatch: Float[Array, "R H"],
         moe_w13_local: Float[Array, "Echunk H I2"],
         moe_w2_local: Float[Array, "Echunk I H"],
         physical_group_sizes: Int[Array, "Echunk"],
         active_group_sizes: Int[Array, "Echunk"],
-    ) -> tuple[Float[Array, "C H"], object]:
+    ) -> tuple[Float[Array, "R H"], object]:
         """`forward`'s output without the residuals, for a forward pass whose backward recomputes.
 
         Also returns the value the residuals' last-produced member stands for, so a caller can
@@ -124,8 +143,8 @@ class _ExpertMlp(Protocol):
         ...
 
     def backward(
-        self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "C H"]
-    ) -> tuple[Float[Array, "C H"], Float[Array, "Echunk H I2"], Float[Array, "Echunk I H"], Float[Array, "C"]]: ...
+        self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "R H"]
+    ) -> tuple[Float[Array, "R H"], Float[Array, "Echunk H I2"], Float[Array, "Echunk I H"], Float[Array, "R"]]: ...
 
 
 @dataclasses.dataclass(frozen=True)
@@ -139,6 +158,10 @@ class _RaggedDotExpertMlp:
 
     activation_fn: Callable[[jax.Array], jax.Array]
     routing_weight_gradient: _RoutingWeightGradient
+
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
 
     def _apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
@@ -180,6 +203,10 @@ class _CuteExpertMlp:
 
     routing_weight_gradient: _RoutingWeightGradient
 
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
+
     @staticmethod
     def _operands(moe_w13_local, moe_w2_local, active_group_sizes):
         """The interleaved gate/up weights and the cumulative active group sizes QuACK's GEMMs take."""
@@ -212,8 +239,8 @@ class _CuteExpertMlp:
         return dx, _deinterleave_gate_up(dw13_interleaved), dw2, output_dot_cotangent
 
 
-@functools.cache
-def _quack_grouped_gemm_available() -> bool:
+def _sm100_gpu_present() -> bool:
+    """Whether this process's GPU is an NVIDIA SM100 (Blackwell) or newer device."""
     if jax.default_backend() != "gpu":
         return False
     device = jax.devices("gpu")[0]
@@ -221,7 +248,12 @@ def _quack_grouped_gemm_available() -> bool:
     # a gfx architecture name such as "gfx942".
     if "nvidia" not in device.device_kind.lower():
         return False
-    if float(device.compute_capability) < _SM100_COMPUTE_CAPABILITY:
+    return float(device.compute_capability) >= _SM100_COMPUTE_CAPABILITY
+
+
+@functools.cache
+def _quack_grouped_gemm_available() -> bool:
+    if not _sm100_gpu_present():
         return False
     try:
         # `sonic_cute` pulls in `quack_moe_cute`, which imports QuACK's varlen entry points at
@@ -238,12 +270,50 @@ def _quack_grouped_gemm_available() -> bool:
     return True
 
 
-def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], dtype: jnp.dtype) -> _ExpertMlp:
-    """Pick the fastest expert-MLP kernel this process can actually run, and its routing-weight gradient.
+def _select_mxfp8_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], dtype: jnp.dtype) -> _ExpertMlp:
+    """The MXFP8 expert MLP, or an error naming the requirement this call does not meet."""
+    if activation_fn is not jax.nn.silu:
+        raise ValueError(
+            "expert_precision=mxfp8 requires SiLU experts, because the MXFP8 expert MLP fuses SwiGLU; "
+            f"got activation {activation_fn!r}"
+        )
+    if dtype != jnp.bfloat16:
+        raise ValueError(f"expert_precision=mxfp8 requires bfloat16 tokens; got {jnp.dtype(dtype).name}")
+    if not _sm100_gpu_present():
+        raise ValueError(
+            "expert_precision=mxfp8 requires an NVIDIA SM100 (Blackwell) or newer GPU; "
+            f"got device {jax.devices()[0].device_kind!r}"
+        )
+    try:
+        # The MXFP8 kernels need CUTLASS DSL, which is installed only with the CUDA 13 GPU extra.
+        from levanter.grug._moe.mxfp8.expert_mlp import _Mxfp8ExpertMlp  # noqa: PLC0415
+    except ImportError as exc:
+        raise ImportError(
+            f"expert_precision=mxfp8 was requested, but the MXFP8 expert MLP is not available: {exc}"
+        ) from exc
+    if not mxfp8_triton_quant_available():
+        raise ImportError(
+            "expert_precision=mxfp8 was requested, but the MXFP8 expert MLP's Triton quantizer is not "
+            "available: it needs jax-triton and triton, from levanter's gpu extra"
+        )
+    return _Mxfp8ExpertMlp(routing_weight_gradient=_RoutingWeightGradient.EXPERT_SIDE)
 
+
+def _select_expert_mlp(
+    activation_fn: Callable[[jax.Array], jax.Array], dtype: jnp.dtype, precision: ExpertPrecision
+) -> _ExpertMlp:
+    """Pick the expert-MLP kernel for ``precision``, and its routing-weight gradient.
+
+    BF16 picks the fastest kernel in the tokens' dtype that this process can actually run.
     QuACK's kernel fuses SwiGLU, so it only applies to SiLU. Everything else -- another
     activation, a non-SM100 GPU, a TPU or CPU, or a build without the GPU extra -- runs the
     portable `ragged_dot` path, which computes the same function.
+
+    MXFP8 is an explicit request for the MXFP8 expert MLP, which runs only for SiLU experts on
+    bfloat16 tokens on an SM100 GPU, and takes the expert-side gradient. Any other activation,
+    dtype, or device, an MXFP8 expert MLP that does not import, or a missing Triton for its
+    quantizer, raises: a bfloat16 kernel in its place would train in a number format other than
+    the one requested.
 
     ``dtype`` is the tokens' dtype, which the expert outputs and their cotangents share. The
     expert-side gradient divides ``<h, dh>`` by ``w``, and ``dh`` comes from the row cotangent
@@ -260,6 +330,8 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], dtype: j
     buffer and the return transport. It takes the exact gradient, which holds for every weight and
     dtype.
     """
+    if precision == ExpertPrecision.MXFP8:
+        return _select_mxfp8_expert_mlp(activation_fn, dtype)
     if activation_fn is jax.nn.silu and _quack_grouped_gemm_available():
         if dtype == jnp.float16:
             return _CuteExpertMlp(routing_weight_gradient=_RoutingWeightGradient.EXACT)
@@ -416,7 +488,12 @@ class _ExpertRouting(NamedTuple):
 
 @dataclasses.dataclass(frozen=True)
 class _ExpertLayout:
-    """Static shapes of the chunked expert pipeline on one shard."""
+    """Static shapes of the chunked expert pipeline on one shard.
+
+    ``chunk_capacity`` bounds the rows one chunk accepts, the logical capacity that clipping and
+    drops count against. Each chunk's receiver buffer has ``receiver_rows`` rows: that capacity
+    plus room for every expert's rows to start on the expert MLP's ``receiver_alignment``.
+    """
 
     tokens_per_shard: int
     topk: int
@@ -429,6 +506,14 @@ class _ExpertLayout:
     @property
     def chunks(self) -> int:
         return self.local_experts // self.chunk_experts
+
+    @property
+    def receiver_alignment(self) -> int:
+        return self.expert_mlp.receiver_alignment
+
+    @property
+    def receiver_rows(self) -> int:
+        return _aligned_receiver_rows(self.chunk_capacity, self.chunk_experts, self.receiver_alignment)
 
 
 class _ChunkPlan(NamedTuple):
@@ -462,6 +547,7 @@ def _chunk_plans(routing: _ExpertRouting, layout: _ExpertLayout) -> tuple[_Chunk
                 clipped_group_sizes,
                 routing.shard_id,
                 local_expert_size=layout.local_experts,
+                receiver_alignment=layout.receiver_alignment,
             )
             active_all = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(layout.ep_size, layout.ep_size, layout.local_experts)[
@@ -471,18 +557,20 @@ def _chunk_plans(routing: _ExpertRouting, layout: _ExpertLayout) -> tuple[_Chunk
             )
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
             active_group_sizes = active_all[experts]  # [Echunk]
-            total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
-            physical_group_sizes = active_group_sizes.at[-1].add(layout.chunk_capacity - total_valid)  # [Echunk]
+            # Each expert spans its aligned rows, and the last one also the buffer's unused rows.
+            spans = _aligned_group_sizes(active_group_sizes, layout.receiver_alignment)  # [Echunk]
+            spanned = jnp.sum(spans, dtype=jnp.int32)
+            physical_group_sizes = spans.at[-1].add(layout.receiver_rows - spanned)  # [Echunk]
             plans.append(_ChunkPlan(dispatch_params, return_params, physical_group_sizes, active_group_sizes))
     return tuple(plans)
 
 
-def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _ExpertLayout) -> Float[Array, "C H"]:
+def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _ExpertLayout) -> Float[Array, "R H"]:
     # Accepted rows are the prefix of each unclipped expert group and receiver offsets pack
-    # arrivals expert-major, so the received buffer feeds the grouped MLP directly: no sender
-    # compaction and no receiver-side permute.
-    dispatch_init = _transport_buffer(  # [C, H]
-        layout.chunk_capacity,
+    # arrivals expert-major, from each expert's aligned start, so the received buffer feeds the
+    # grouped MLP directly: no sender compaction and no receiver-side permute or padding.
+    dispatch_init = _transport_buffer(  # [R, H]
+        layout.receiver_rows,
         sorted_x.shape[1],
         sorted_x.dtype,
         plan.dispatch_params.send_sizes,
@@ -540,9 +628,9 @@ def _routed_experts_forward(
                 # drops it and must not be held to it. (Dispatching chunk c+1 during chunk c's MLP
                 # measured 3 ms per layer slower in a rematted four-GPU layer scan.)
                 source, _ = jax.lax.optimization_barrier((sorted_x, previous_ready))
-            x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+            x_dispatch = _dispatch_chunk(source, plan, layout)  # [R, H]
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
-            out_dispatch, expert_mlp_residuals, previous_ready = chunk_mlp(  # [C, H]
+            out_dispatch, expert_mlp_residuals, previous_ready = chunk_mlp(  # [R, H]
                 x_dispatch,
                 moe_w13_local[experts],
                 moe_w2_local[experts],
@@ -661,7 +749,7 @@ def _routed_experts_bwd(layout, residuals, out_cotangent):
         plan, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             out_dispatch_init = _transport_buffer(
-                layout.chunk_capacity,
+                layout.receiver_rows,
                 hidden_dim,
                 out_cotangent.dtype,
                 plan.return_params.recv_sizes,
@@ -734,6 +822,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     num_experts: int,
     capacity_factor: float,
     token_sharding_axes: tuple[str, ...],
+    expert_precision: ExpertPrecision,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops]:
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
@@ -807,7 +896,7 @@ def _moe_mlp_ep_ragged_a2a_local(
         ep_size=ep_size,
         chunk_experts=chunk_experts,
         chunk_capacity=chunk_capacity,
-        expert_mlp=_select_expert_mlp(activation_fn, x_local.dtype),
+        expert_mlp=_select_expert_mlp(activation_fn, x_local.dtype, expert_precision),
     )
     # A dropped or padding assignment gets weight zero, so the combine never reads its unwritten
     # row, and the `where` discards any gradient for it.

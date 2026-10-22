@@ -12,6 +12,7 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
+from levanter.grug.grug_moe import ExpertPrecision
 from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
@@ -108,6 +109,7 @@ def build_diagnostic_run(
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
     moe_implementation: str | None = None,
+    expert_precision: ExpertPrecision | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -173,6 +175,7 @@ def build_diagnostic_run(
             ("qk_mult", qk_mult),
             ("qk_mult_long_scale", qk_mult_long_scale),
             ("moe_implementation", moe_implementation),
+            ("expert_precision", expert_precision),
         )
         if value is not None
     }
@@ -205,6 +208,10 @@ def build_diagnostic_run(
             f"num_experts={model.num_experts} must be divisible by expert ({expert_axis_size}) * "
             f"context ({context_axis_size}) = {bank_shards}, the expert bank's storage split"
         )
+    # Without a second expert rank the ragged backend runs its local scatter path, which has no MXFP8
+    # expert MLP; `moe_mlp` would reject this only once the model is traced on the rack.
+    if model.expert_precision == ExpertPrecision.MXFP8 and expert_axis_size < 2:
+        raise ValueError(f"expert_precision=mxfp8 requires expert_axis_size >= 2, got {expert_axis_size}")
     local_experts = model.num_experts // expert_axis_size
     if local_experts % model.num_expert_waves != 0:
         raise ValueError(
@@ -221,6 +228,7 @@ def build_diagnostic_run(
         raise AssertionError("the pooled-wave hero requires a transport capacity factor")
     backend_tag = model.moe_implementation.replace("_", "-")
     capacity_tag = f"capacity-{model.capacity_factor:g}"
+    precision_tag = f"expert-precision-{model.expert_precision}"
     # Only the pooled transport has a receiver capacity of its own to report.
     transport_capacity_tags = (f"transport-capacity-{model.pooled_transport_capacity_factor:g}",) if pooled else ()
     wave_tag = f"expert-waves-{model.num_expert_waves}"
@@ -285,6 +293,7 @@ def build_diagnostic_run(
                     "ep",
                     backend_tag,
                     capacity_tag,
+                    precision_tag,
                     f"master-params-{master_param_mode.value.replace('_', '-')}",
                     *transport_capacity_tags,
                     wave_tag,
@@ -432,6 +441,15 @@ def build_diagnostic_run(
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
 )
 @click.option(
+    "--expert-precision",
+    type=click.Choice([precision.value for precision in ExpertPrecision]),
+    default=None,
+    help=(
+        "Override the routed-expert matmul format. mxfp8 requires the ragged_all_to_all backend on SM100 GPUs. "
+        "Defaults to the hero spec."
+    ),
+)
+@click.option(
     "--master-params",
     type=click.Choice([mode.value for mode in MasterParamMode]),
     default=HERO_MASTER_PARAM_MODE.value,
@@ -571,6 +589,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
+    expert_precision: str | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -610,6 +629,7 @@ def main(
         qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
         moe_implementation=moe_implementation,
+        expert_precision=None if expert_precision is None else ExpertPrecision(expert_precision),
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,

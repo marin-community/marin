@@ -68,6 +68,7 @@ pipeline = [
     "nvidia-cutlass-dsl[cu13]==4.6.2; sys_platform == 'linux'",
     "flash-attn-4[cu13]>=4.0.0b28,<4.1; sys_platform == 'linux'",
     "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
+    "nvidia-cudnn-frontend==1.31.0; sys_platform == 'linux'",
     "jax-triton==0.3.1; sys_platform == 'linux'",
     "triton>=3.6.0,<3.7; sys_platform == 'linux'",
     # Flash Attention's Python helpers import Torch, but the Grug kernels execute
@@ -426,7 +427,9 @@ ignore-missing-imports = [
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
-    # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
+    # The cuDNN frontend, QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
+    "cudnn",
+    "cudnn.*",
     "cutlass",
     "cutlass.*",
     "jax_triton",

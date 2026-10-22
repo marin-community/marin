@@ -45,6 +45,7 @@ from levanter.grug.grug_moe import (
     MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
+    ExpertPrecision,
     MoeImplementation,
 )
 from levanter.grug.sharding import compact_grug_mesh
@@ -520,9 +521,14 @@ def _to_dropless_local(
     so one replacement covers every layer. The forward reads ``self.expert_mlp.implementation``
     (not the model config), so this alone routes the eval dropless. Must run on an expert-collapsed
     mesh: the local backend raises when the mesh expert axis is larger than one.
+
+    The local backends run bf16 experts only, so this also resets ``expert_precision``: a model
+    trained with MXFP8 experts is evaluated dropless with bf16 experts.
     """
     expert_mlp = model.stacked_blocks.stacked.mlp.expert_mlp
-    dropless = dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
+    dropless = dataclasses.replace(
+        expert_mlp, implementation=implementation, expert_chunks=1, expert_precision=ExpertPrecision.BF16
+    )
     return eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.expert_mlp, model, dropless)
 
 

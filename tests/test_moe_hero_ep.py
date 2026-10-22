@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import dataclasses
 import math
 import os
@@ -28,6 +29,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig, compute_watch_stats
 from levanter.checkpoint import save_checkpoint
+from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import (
     MOE_DROPPED_ASSIGNMENTS_METRIC,
@@ -35,6 +37,7 @@ from levanter.grug.grug_moe import (
     MOE_SENDER_DROPPED_ASSIGNMENTS_METRIC,
     MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC,
     MOE_VALID_ASSIGNMENTS_METRIC,
+    ExpertPrecision,
 )
 from levanter.testing.cpu_devices import run_on_cpu_devices
 from levanter.utils.mesh import MeshConfig
@@ -666,6 +669,42 @@ def test_only_the_ragged_transport_offloads_the_layer_carry(moe_implementation, 
     assert config.model.remat_mode == expected_remat_mode
 
 
+@pytest.mark.parametrize(
+    ("expert_precision", "expectation"),
+    [
+        # The hero default keeps bf16 experts, which run on any device.
+        (None, contextlib.nullcontext()),
+        # MXFP8 reaches the ragged expert-MLP selector, which refuses to run bf16 experts in its place.
+        (ExpertPrecision.MXFP8, pytest.raises(ValueError, match="SM100")),
+    ],
+    ids=["hero_default", "mxfp8"],
+)
+def test_expert_precision_option_reaches_the_hero_expert_mlp(expert_precision, expectation, monkeypatch):
+    monkeypatch.setattr(ep_ragged_all_to_all, "_sm100_gpu_present", lambda: False)
+    step = launch.build_diagnostic_run(
+        run_id="expert-precision", dp_racks=1, num_steps=1, version="dev", expert_precision=expert_precision
+    )
+    cfg = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps)).model
+    mesh = AbstractMesh(
+        axis_sizes=(1, 1, 1, 2, 1),
+        axis_names=("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    compute = jmp.get_policy("params=float32,compute=bfloat16")
+    token_spec = P(("replica_dcn", "data", "expert"), None)
+
+    def moe_layer(x, token_valid):
+        return compute.cast_to_compute(model.MoEMLP.init(cfg, key=jax.random.key(0)))(x, token_valid)[0]
+
+    with use_abstract_mesh(mesh):
+        x = jax.ShapeDtypeStruct(
+            (2, 8, cfg.hidden_dim), jnp.bfloat16, sharding=NamedSharding(mesh, P(*token_spec, None))
+        )
+        token_valid = jax.ShapeDtypeStruct((2, 8), jnp.bool_, sharding=NamedSharding(mesh, token_spec))
+        with expectation:
+            assert jax.eval_shape(moe_layer, x, token_valid).shape == x.shape
+
+
 def test_ep_newton_schulz_returns_to_expert_sharding():
     mesh = AbstractMesh(
         axis_sizes=(1, 1, 1, 64, 1),
@@ -888,6 +927,30 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
     swapped_leaves = jax.tree_util.tree_leaves(swapped)
     assert len(orig_leaves) == len(swapped_leaves)
     assert all(a is b for a, b in zip(orig_leaves, swapped_leaves, strict=True))
+
+
+def test_dropless_eval_of_mxfp8_experts_computes_the_bf16_expert_function():
+    # The local dropless backends have no MXFP8 expert MLP and refuse MXFP8, so the dropless eval
+    # scores an MXFP8-trained model's weights with bf16 experts: the function a bf16 model's
+    # dropless eval computes from the same weights.
+    mesh = Mesh(
+        np.asarray(jax.devices()[:1]).reshape(1, 1, 1, 1, 1),
+        ("replica_dcn", "data", "context", "expert", "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    # MXFP8 configs need expert widths that are multiples of the kernels' 128-wide scale tiles.
+    bf16_config = dataclasses.replace(
+        _latent_config(), moe_implementation="ragged_all_to_all", hidden_dim=128, intermediate_dim=128
+    )
+    mxfp8_config = dataclasses.replace(bf16_config, expert_precision=ExpertPrecision.MXFP8)
+    tokens = jax.random.randint(jax.random.key(1), (2, bf16_config.max_seq_len), 0, bf16_config.vocab_size)
+    dropless_logits = eqx.filter_jit(lambda m, t: train._to_dropless_local(m, implementation="scatter").logits(t))
+
+    with set_mesh(mesh):
+        expected = dropless_logits(model.Transformer.init(bf16_config, key=jax.random.key(0)), tokens)
+        actual = dropless_logits(model.Transformer.init(mxfp8_config, key=jax.random.key(0)), tokens)
+
+    np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
