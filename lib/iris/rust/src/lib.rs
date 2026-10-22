@@ -921,7 +921,7 @@ fn verified_identity(
                 .authorizes_task(&identity, state.verifier.requires_task_sessions())
                 && state.control.task_can_proxy(&identity) =>
         {
-            Ok(identity)
+            Ok(*identity)
         }
         VerifyOutcome::Verified(_) => Err(Box::new(error_response(
             StatusCode::UNAUTHORIZED,

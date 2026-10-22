@@ -89,7 +89,7 @@ fn is_zero(value: &u64) -> bool {
 
 #[derive(Clone, Debug)]
 pub enum VerifyOutcome {
-    Verified(VerifiedIdentity),
+    Verified(Box<VerifiedIdentity>),
     Invalid,
     Missing,
     Anonymous,
@@ -269,7 +269,7 @@ impl NativeVerifier {
         {
             let key = *blake3::hash(assertion.as_bytes()).as_bytes();
             if let Some(identity) = self.cached_identity(&key) {
-                return VerifyOutcome::Verified(identity);
+                return VerifyOutcome::Verified(Box::new(identity));
             }
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
             let verified = match &self.iap {
@@ -298,7 +298,7 @@ impl NativeVerifier {
     ) -> VerifyOutcome {
         let key = *blake3::hash(token.as_bytes()).as_bytes();
         if let Some(identity) = self.cached_identity(&key) {
-            return VerifyOutcome::Verified(identity);
+            return VerifyOutcome::Verified(Box::new(identity));
         }
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
         self.cache_result(key, verify())
@@ -326,7 +326,7 @@ impl NativeVerifier {
         match result {
             Ok(identity) => {
                 self.cache.insert(key, identity.clone());
-                VerifyOutcome::Verified(identity)
+                VerifyOutcome::Verified(Box::new(identity))
             }
             Err(_) if matches!(self.config.mode, NativeAuthMode::Permissive) => {
                 VerifyOutcome::Anonymous

@@ -135,6 +135,7 @@ def main() -> None:
         return
     if not args.profile:
         parser.error("--profile is required")
+    # The SDK reads its credential_process response from the private stdout pipe.
     print(json.dumps(storage_credentials(args.file, args.profile, args.cache_dir)))
 
 
