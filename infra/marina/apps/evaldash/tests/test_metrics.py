@@ -7,12 +7,13 @@ aggregates, and head-to-head difference intervals."""
 from dataclasses import asdict
 
 import pytest
+from evaldash.app import MemoryRecordStore
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
 from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
 from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
 from marin.evaluation.eval_stats import Completeness, MissingPolicy
-from marin.evaluation.model_config import GenerationConfig, ModelConfig
-from marin.evaluation.model_identity import comparison_model_name
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
+from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -732,7 +733,7 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
     assert comparison["aggregates"]["a"]["panel"] == ["mmlu"]
 
 
-def test_policy_comparison_excludes_wrong_mode_and_splits_model_yamls():
+def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
     def policy_run(thinking: bool, config_thinking: bool, created_at: str, name: str = "same-name") -> EvalRunRecord:
         record = _record(name, "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
         model_config = ModelConfigRef.model_validate(
@@ -783,20 +784,76 @@ def test_policy_comparison_excludes_wrong_mode_and_splits_model_yamls():
     request = panel_request(cohort_version="eval-policy-2026-09-24-verified", model_query="same-name")
     panel = build_panel(records, request)
 
-    assert len(panel["rows"]) == 2
-    assert {row["model"] for row in panel["rows"]} == {
-        comparison_model_name(first.model),
-        comparison_model_name(second.model),
-    }
+    assert len(panel["rows"]) == 1
+    assert panel["rows"][0]["model"] == "same-name"
+    assert panel["rows"][0]["cells"]["math500"]["run_id"] == second.run_id
     assert [(item["run_id"], item["benchmark"]) for item in panel["policy_rejections"]] == [(invalid.run_id, "math500")]
-    comparison = build_comparison(
-        records, request, (comparison_model_name(first.model), comparison_model_name(second.model))
-    )
-    assert [item["run_id"] for item in comparison["policy_rejections"]] == [invalid.run_id]
-    detail = build_model_detail([first, second, invalid], comparison_model_name(first.model))
+    detail = build_model_detail([first, second, invalid], "same-name")
     assert detail is not None
     rejected_run = next(run for run in detail["runs"] if run["run_id"] == invalid.run_id)
     assert rejected_run["headline"] is None
+
+
+def test_panel_groups_tau_context_override_with_other_evals_despite_archived_config_alias():
+    records = []
+    for evaluation, context, tokens in (("math500", 73728, None), ("tau3-pi", 131072, 32768)):
+        record = _record(
+            "grug",
+            evaluation,
+            "test-cohort",
+            "2026-10-21T00:00:00+00:00",
+            0.5,
+            primary_metric="accuracy",
+            metric_kind=MetricKind.BINARY,
+            coverage={
+                evaluation: TaskCoverage(
+                    n_benchmark=ITEMS,
+                    n_attempted=ITEMS,
+                    n_scored=ITEMS,
+                    n_correct=ITEMS // 2,
+                )
+            },
+        )
+        config = ModelConfigRef.model_validate(
+            asdict(
+                ModelConfig(
+                    name="grug",
+                    location="org/grug",
+                    revision="1" * 40,
+                    serve=ServeConfig(max_model_len=context),
+                    generation=GenerationConfig(max_gen_toks=tokens),
+                )
+            )
+        )
+        records.append(
+            record.model_copy(
+                update={
+                    "model": ModelRef(
+                        name="grug",
+                        location="org/grug",
+                        backend="vllm",
+                        config=config,
+                        config_digest=model_config_digest(config),
+                    )
+                }
+            )
+        )
+    store = MemoryRecordStore()
+    store.refresh(records)
+    tau_model = records[1].model
+    assert tau_model.config is not None
+    store.set_model_archived(f"grug@{model_config_digest(tau_model.config)[:12]}", True, None)
+
+    panel = store.panel(panel_request(cohort_version="test-cohort"), None, False)
+
+    assert len(panel["rows"]) == 1
+    assert panel["rows"][0]["model"] == "grug"
+    assert set(panel["rows"][0]["cells"]) == {"math500", "tau3-pi"}
+    assert {row["eval_name"] for row in store.fetch_runs(model="grug")} == {"math500", "tau3-pi"}
+    saved = store.get_record(records[1].run_id)
+    assert saved is not None
+    assert saved["model"]["config"]["serve"]["max_model_len"] == 131072
+    assert saved["model"]["config_digest"] == records[1].model.config_digest
 
 
 def test_compare_complete_panel_ignores_benchmarks_unique_to_unselected_models():

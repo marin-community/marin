@@ -27,7 +27,7 @@ from pathlib import Path
 
 import taskforge
 
-SHARED = ("child_process", "content_hash", "ledger", "llm", "sandbox", "spec")
+SHARED = ("capability", "child_process", "content_hash", "ledger", "llm", "sandbox", "spec")
 TOP = ("stage_coordinator",)
 BUILDS_ON: dict[str, tuple[str, ...]] = {}
 STAGE = re.compile(r"stage(\d+)_[a-z0-9_]+")

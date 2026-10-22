@@ -27,8 +27,9 @@ class Episode(Protocol):
 class StepHarness:
     """A harness for an ``Episode``: ``prepare`` gives the first prompt, and ``advance`` answers each model turn.
 
-    The episode closes in the attempt's cleanup. The harness accepts every task. A harness that must reject a
-    task before any machine starts implements ``Harness`` itself, and its ``run`` can call this harness's ``run``.
+    The episode closes in the attempt's cleanup.
+    A harness that must reject a task before any machine starts implements ``Harness`` itself,
+    and its ``run`` can call this harness's ``run``.
     """
 
     open_episode: Callable[[HarnessContext], Episode]

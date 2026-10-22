@@ -302,31 +302,10 @@ def _require_docker(repository: str) -> None:
     raise RuntimeError(f"Docker has no credentials for {host}; run `docker login {host}` before building")
 
 
-def _git_tracked(directory: Path, pathspec: str) -> set[str]:
-    listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", pathspec], cwd=directory, check=True, capture_output=True, text=True
-    ).stdout
-    return {path for path in listed.split("\0") if path}
-
-
-def _require_tracked(environment: Environment) -> None:
-    """The fragment the identity hashes must be a git-tracked file, and package files have no exec bits.
-
-    Consumers recompute the identity from a workspace bundle that has no git metadata and no exec bits,
-    so an untracked or executable file here would give them a different identity.
-    """
-    fragment = environment.dockerfile
-    if fragment is not None and fragment.name not in _git_tracked(fragment.parent, fragment.name):
-        raise ValueError(f"{fragment} must be tracked by git")
+def _reject_executable_runtime_files() -> None:
+    """Reject runtime package files with executable permission bits."""
     for package in RUNTIME_PACKAGES:
         files = context_files(package)
-        found = {file.path for file in files}
-        expected = _git_tracked(package, ".")
-        if found != expected:
-            raise ValueError(
-                f"{package} must contain exactly its git-tracked files; "
-                f"untracked: {sorted(found - expected)}, missing: {sorted(expected - found)}"
-            )
         executable = [file.path for file in files if file.mode == EXECUTABLE_MODE]
         if executable:
             raise ValueError(f"{package} has executable files {executable}")
@@ -368,7 +347,7 @@ def build_environment(environment: Environment, build: EnvironmentBuild) -> Envi
     builds_image = placement(environment) == Placement.BUILT_IMAGE
     if builds_image:
         _require_docker(build.repository)
-    _require_tracked(environment)
+    _reject_executable_runtime_files()
     image = None
     with TemporaryDirectory() as directory:
         context = Path(directory)
