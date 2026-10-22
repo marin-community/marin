@@ -130,7 +130,7 @@ def _log_client(run_id: str) -> LogClient | None:
 def connect_finelog_ledger(run_id: str) -> Iterator[FinelogLedger | None]:
     """A ``FinelogLedger`` for ``run_id``, or None outside an Iris task or when connecting fails.
 
-    The ledger owns the client this opens: on exit it flushes its rows, and the client closes.
+    This owns the client it opens: on exit the ledger flushes its rows, then the client closes.
     """
     client = _log_client(run_id)
     if client is None:
