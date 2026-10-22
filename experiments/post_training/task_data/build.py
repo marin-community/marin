@@ -18,6 +18,7 @@ import json
 from pathlib import Path
 
 import click
+from marin.inference.openai_chat import OpenAIChatClient
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_data.code_x import exclude_public_cruxeval, synthesize_x_tasks
@@ -33,7 +34,6 @@ from experiments.post_training.task_data.expert_traces import (
     write_trace_batch,
 )
 from experiments.post_training.task_data.math_r import build_r_tasks
-from marin.inference.openai_chat import OpenAIChatClient
 
 TOKEN_CAPS = {"X": X_COMPLETION_TOKEN_CAP, "R": R_COMPLETION_TOKEN_CAP}
 DATA_SOURCES = {"X": "task_X", "R": "task_R"}

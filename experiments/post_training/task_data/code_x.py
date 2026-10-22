@@ -25,11 +25,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from verifyit.modes.extract import extract_boxed
+
 from experiments.post_training.curriculum_sft.code_tasks import (
     literals_equal,
     trace_value,
 )
-from verifyit.modes.extract import extract_boxed
 
 # Prediction directions, as in CruxEval.
 DIRECTION_OUTPUT = "output"  # given code + input, predict the return value

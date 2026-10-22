@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 import jinja2
+from marin.inference.openai_chat import OpenAIChatClient
 from transformers import AutoTokenizer
 
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, FAMILY_TOKENIZER_REVISIONS, shared_template
@@ -32,7 +33,6 @@ from experiments.post_training.glm import (
     GLM_REQUEST_TIMEOUT,
     resolve_glm_base_url,
 )
-from marin.inference.openai_chat import OpenAIChatClient
 
 R_COMPLETION_TOKEN_CAP = 16_384
 X_COMPLETION_TOKEN_CAP = 4_096
