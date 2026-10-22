@@ -58,6 +58,20 @@ def async_phase_window(phase: str, *, step: int, enabled: bool) -> Iterator[None
         )
 
 
+async def sample_event_loop_lag(
+    record: Callable[[float], None],
+    *,
+    interval: float,
+    clock: Callable[[], float] = time.perf_counter,
+    wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Pass how late each ``interval`` wake-up ran to ``record`` until cancelled, without replaying missed ticks."""
+    while True:
+        expected = clock() + interval
+        await wait(interval)
+        record(max(0.0, clock() - expected))
+
+
 async def monitor_event_loop_lag(
     *,
     step_fn: Callable[[], int],
@@ -67,13 +81,12 @@ async def monitor_event_loop_lag(
     wait: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
     """Sample driver scheduling delay until cancelled, without replaying missed ticks."""
-    while True:
-        expected = clock() + interval
-        await wait(interval)
-        event_loop_lag.record(
-            max(0.0, clock() - expected),
-            attributes={"role": TRAINER_ROLE, "step": str(step_fn()), "mode": mode},
-        )
+    await sample_event_loop_lag(
+        lambda lag: event_loop_lag.record(lag, attributes={"role": TRAINER_ROLE, "step": str(step_fn()), "mode": mode}),
+        interval=interval,
+        clock=clock,
+        wait=wait,
+    )
 
 
 def publish_wait(name: str, durations: Sequence[float], *, step: int, mode: str) -> None:

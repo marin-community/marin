@@ -1,8 +1,8 @@
 """Rollout-host health measured from inside each rollout worker: a sandbox canary and event-loop lag.
 
 Each rollout worker runs a ``SandboxHealthProbe``. Every ``canary_interval_seconds`` it creates a machine from the
-worker's own task backend, runs ``true`` in it and closes it, one canary at a time; once a second it measures how
-late its event loop wakes. The pool's ``SandboxHealthWatch`` collects these readings from every worker, publishes
+worker's own task backend, runs ``true`` in it and closes it, one canary at a time; every
+``event_loop_lag_interval_seconds`` it measures how late its event loop wakes. The pool's ``SandboxHealthWatch`` collects these readings from every worker, publishes
 them to telemetry, raises alarms in the driver log, and turns each step's readings into tracker metrics.
 
 The watch raises an alarm for a worker when, since the previous collection:
@@ -24,6 +24,7 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field, replace
+from functools import partial
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
 
@@ -31,7 +32,7 @@ from loguru import logger
 from omegaconf import DictConfig
 from shellbox.machine import Command, HostImage, Machine, MachineFactory, MachineSpec
 
-from skyrl_train.rollout_observability import event_loop_lag
+from skyrl_train.rollout_observability import event_loop_lag, sample_event_loop_lag
 from skyrl_train.telemetry import WORKER_ROLE, telemetry
 
 TRAINING_METRIC_PREFIX = "rollout_workers"
@@ -165,14 +166,28 @@ class SandboxHealthProbe:
         if not self._config.enabled:
             return
         self._last_canary = self._clock()
-        self._tasks.append(asyncio.create_task(self._lag_loop(), name="sandbox-health-lag"))
-        if self._factory is not None:
-            self._tasks.append(asyncio.create_task(self._canary_loop(), name="sandbox-health-canary"))
+        lag = sample_event_loop_lag(
+            partial(self._append, self._lags),
+            interval=self._config.event_loop_lag_interval_seconds,
+            clock=self._clock,
+            wait=self._wait,
+        )
+        loops = [lag] if self._factory is None else [lag, self._canary_loop()]
+        for loop in loops:
+            task = asyncio.create_task(loop, name=f"sandbox-health-{loop.__name__}")
+            task.add_done_callback(self._loop_ended)
+            self._tasks.append(task)
+
+    def _loop_ended(self, task: asyncio.Task[None]) -> None:
+        if not task.cancelled() and (error := task.exception()) is not None:
+            # The pool sees the gap as missing readings; this names the cause in the worker's log.
+            logger.opt(exception=error).error("Sandbox health loop {} on {} stopped", task.get_name(), self._host)
 
     async def stop(self) -> None:
         tasks, self._tasks = self._tasks, []
         for task in tasks:
             task.cancel()
+        # Each loop that ended with an error already logged it when it ended.
         await asyncio.gather(*tasks, return_exceptions=True)
 
     def report(self) -> WorkerHealthReport:
@@ -244,13 +259,6 @@ class SandboxHealthProbe:
         while True:
             await self._wait(self._config.canary_interval_seconds)
             await self.canary()
-
-    async def _lag_loop(self) -> None:
-        interval = self._config.event_loop_lag_interval_seconds
-        while True:
-            expected = self._clock() + interval
-            await self._wait(interval)
-            self._append(self._lags, max(0.0, self._clock() - expected))
 
     def _append(self, readings: deque, value) -> None:
         if len(readings) >= MAX_BUFFERED_READINGS:
@@ -332,63 +340,46 @@ class SandboxHealthWatch:
 
     def step_metrics(self, prefix: str) -> dict[str, float]:
         """Summarize readings since the previous call as tracker metrics under ``prefix``, then start a new window."""
+        metrics = self._summary(prefix)
+        if metrics[f"{prefix}/sandbox_canary_alarm"]:
+            _log_step_alarm(prefix, metrics)
+        for window in self._workers:
+            window.canaries, window.loop_lags = [], []
+            window.missing_collections = window.dropped_readings = 0
+        return metrics
+
+    def _summary(self, prefix: str) -> dict[str, float]:
         windows = self._workers
         canaries = [reading for window in windows for reading in window.canaries]
-        lags = [lag for window in windows for lag in window.loop_lags]
         counts = {alarm: 0 for alarm in _Alarm}
         for reading in canaries:
             if (alarm := _OUTCOME_ALARMS.get(reading.outcome)) is not None:
                 counts[alarm] += 1
-        missing_workers = sum(1 for window in windows if window.missing_collections)
-        counts[_Alarm.MISSING] = missing_workers
-        alarm = any(counts.values())
+        counts[_Alarm.MISSING] = sum(1 for window in windows if window.missing_collections)
         metrics = {
             f"{prefix}/sandbox_canary_workers": float(sum(window.canary_enabled for window in windows)),
             f"{prefix}/sandbox_canary_samples": float(len(canaries)),
             f"{prefix}/sandbox_canary_slow": float(counts[_Alarm.SLOW]),
             f"{prefix}/sandbox_canary_failures": float(counts[_Alarm.FAILED]),
             f"{prefix}/sandbox_canary_timeouts": float(counts[_Alarm.TIMED_OUT]),
-            f"{prefix}/sandbox_canary_missing_workers": float(missing_workers),
-            f"{prefix}/sandbox_canary_alarm": float(alarm),
+            f"{prefix}/sandbox_canary_missing_workers": float(counts[_Alarm.MISSING]),
+            f"{prefix}/sandbox_canary_alarm": float(any(counts.values())),
             f"{prefix}/dropped_readings": float(sum(window.dropped_readings for window in windows)),
         }
         # A timed-out canary's elapsed time is a lower bound on its latency; it belongs in the tail.
-        timed = [reading for reading in canaries if reading.outcome != CanaryOutcome.FAILED]
-        metrics.update(_percentiles(f"{prefix}/sandbox_canary_seconds", (r.total_seconds for r in timed)))
+        metrics.update(_percentiles(f"{prefix}/sandbox_canary_seconds", _timed_seconds(canaries)))
         for phase in ("create", "run", "close"):
-            values = (getattr(r, f"{phase}_seconds") for r in canaries)
+            values = (getattr(reading, f"{phase}_seconds") for reading in canaries)
             metrics.update(
                 _percentiles(f"{prefix}/sandbox_canary_{phase}_seconds", (v for v in values if v is not None))
             )
-        metrics.update(_percentiles(f"{prefix}/event_loop_lag_seconds", lags))
+        metrics.update(_percentiles(f"{prefix}/event_loop_lag_seconds", (lag for w in windows for lag in w.loop_lags)))
         thresholds = [self.slow_threshold_seconds(index) for index, w in enumerate(windows) if w.canary_enabled]
         if thresholds:
             metrics[f"{prefix}/sandbox_canary_slow_threshold_seconds"] = max(thresholds)
         for index, window in enumerate(windows):
-            worker_timed = [r.total_seconds for r in window.canaries if r.outcome != CanaryOutcome.FAILED]
-            if worker_timed:
+            if worker_timed := _timed_seconds(window.canaries):
                 metrics[f"{prefix}/worker_{index}/sandbox_canary_max_seconds"] = max(worker_timed)
-        if alarm:
-            logger.bind(alarm="sandbox_canary", **{key.value: value for key, value in counts.items()}).warning(
-                "Sandbox canary alarm for {}: slow={} failed={} timed_out={} missing_workers={} p95={} max={} "
-                "threshold={}",
-                prefix,
-                counts[_Alarm.SLOW],
-                counts[_Alarm.FAILED],
-                counts[_Alarm.TIMED_OUT],
-                missing_workers,
-                *(
-                    _seconds(metrics.get(f"{prefix}/{name}"))
-                    for name in (
-                        "sandbox_canary_seconds/p95",
-                        "sandbox_canary_seconds/max",
-                        "sandbox_canary_slow_threshold_seconds",
-                    )
-                ),
-            )
-        for window in windows:
-            window.canaries, window.loop_lags = [], []
-            window.missing_collections = window.dropped_readings = 0
         return metrics
 
     def _absorb(self, index: int, report: WorkerHealthReport) -> None:
@@ -464,8 +455,32 @@ class SandboxHealthWatch:
         window.active = seen | (window.active & {_Alarm.MISSING})
 
 
-def _seconds(value: float | None) -> str:
-    return "none" if value is None else f"{value:.3f}s"
+def _timed_seconds(canaries: Iterable[CanaryReading]) -> list[float]:
+    return [reading.total_seconds for reading in canaries if reading.outcome != CanaryOutcome.FAILED]
+
+
+def _log_step_alarm(prefix: str, metrics: dict[str, float]) -> None:
+    def count(name: str) -> int:
+        return int(metrics[f"{prefix}/sandbox_canary_{name}"])
+
+    def seconds(name: str) -> str:
+        value = metrics.get(f"{prefix}/{name}")
+        return "none" if value is None else f"{value:.3f}s"
+
+    counts = {
+        "slow": count("slow"),
+        "failed": count("failures"),
+        "timed_out": count("timeouts"),
+        "missing_workers": count("missing_workers"),
+    }
+    logger.bind(alarm="sandbox_canary", **counts).warning(
+        "Sandbox canary alarm for {}: {} p95={} max={} threshold={}",
+        prefix,
+        " ".join(f"{name}={value}" for name, value in counts.items()),
+        seconds("sandbox_canary_seconds/p95"),
+        seconds("sandbox_canary_seconds/max"),
+        seconds("sandbox_canary_slow_threshold_seconds"),
+    )
 
 
 def _percentiles(name: str, values: Iterable[float]) -> dict[str, float]:

@@ -549,7 +549,7 @@ class TaskRolloutWorker:
         self.trajectory_sink = sink
 
     def machine_factory(self, backend: str) -> MachineFactory | None:
-        """The provider rollouts use for ``backend``, so a health probe measures the same backend."""
+        """The provider this worker's rollouts use for ``backend``, or None when the worker has no such backend."""
         owned = self.factories.get(backend)
         return None if owned is None else owned.factory
 
