@@ -529,7 +529,7 @@ class DenseMLP(eqx.Module):
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, self.w_down, out_sharding=_token_spec())
-        return _activation_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+        return jnp.reshape(out_flat, (b, s, x.shape[-1]), out_sharding=_activation_spec())
 
 
 class SnowballMoEMLP(eqx.Module):
@@ -577,7 +577,7 @@ class SnowballMoEMLP(eqx.Module):
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
         # otherwise make router_logits + router_bias illegally sharded on multi-device meshes.
-        biased_logits = router_logits + unshard(self.router_bias)
+        biased_logits = router_logits + unshard(jax.lax.stop_gradient(self.router_bias))
         # Select top-(K+1) on biased logits; the (K+1)-th is only the QB threshold (unused at inference).
         _topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.cfg.num_experts_per_token + 1)
         selected_experts = selected_experts[:, :-1]
@@ -595,7 +595,7 @@ class SnowballMoEMLP(eqx.Module):
             mesh=get_abstract_mesh(),
             report_capacity_overflow=False,
         )
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
+        routed = jnp.reshape(routed_flat, (b, s, x.shape[-1]), out_sharding=_activation_spec())
         return _activation_reshard(routed)
 
 
