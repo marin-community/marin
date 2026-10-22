@@ -16,6 +16,7 @@ scratch directory is treated as durable.
 
 from __future__ import annotations
 
+import argparse
 import glob
 import hashlib
 import json
@@ -34,6 +35,7 @@ from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec
 from iris.rpc import job_pb2
 from rigging.timing import Duration
+from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)
 
