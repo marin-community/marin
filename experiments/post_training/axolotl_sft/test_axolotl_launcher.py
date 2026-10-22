@@ -222,6 +222,16 @@ def test_printed_smoke_command_is_what_the_pod_runs():
     ]
 
 
+def test_chained_stages_initialize_from_the_previous_stage_export():
+    spec = _spec(QWEN3_30B_A3B_BASE, init_checkpoint="/scratch/axolotl/stage1/output")
+    config = axolotl_config(spec, scratch_output_dir="/scratch/axolotl/stage2")
+    assert config["base_model"] == "/scratch/axolotl/stage1/output"
+    assert "revision_of_model" not in config
+    first = axolotl_config(_spec(QWEN3_30B_A3B_BASE), scratch_output_dir="/scratch/axolotl/stage1")
+    assert first["base_model"] == QWEN3_30B_A3B_BASE.hf_id
+    assert first["revision_of_model"] == QWEN3_30B_A3B_BASE.revision
+
+
 def test_payload_json_round_trips():
     spec = _spec(QWEN3_30B_A3B_BASE)
     payload = AxolotlLaunchPayload(
