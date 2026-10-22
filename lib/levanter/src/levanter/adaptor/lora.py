@@ -580,6 +580,7 @@ def save_merged_hf_checkpoint_callback(
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     model_getter: Optional[Callable[[StepInfo], PyTree]] = None,
+    save_reference_code: bool | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -621,6 +622,7 @@ def save_merged_hf_checkpoint_callback(
             path,
             upload_to_hf=upload_to_hf,
             generation_config=generation_config,
+            save_reference_code=save_reference_code,
             **my_upload_kwargs,
         )
 
@@ -635,6 +637,7 @@ def save_merged_hf_model(
     path: str,
     upload_to_hf: Optional[Union[str, RepoRef]] = None,
     generation_config: Optional[GenerationConfigDict] = None,
+    save_reference_code: bool | None = None,
     **upload_kwargs,
 ):
     """
@@ -649,6 +652,7 @@ def save_merged_hf_model(
         path,
         upload_to_hf=upload_to_hf,  # type: ignore
         generation_config=generation_config,
+        save_reference_code=save_reference_code,
         **upload_kwargs,
     )
 

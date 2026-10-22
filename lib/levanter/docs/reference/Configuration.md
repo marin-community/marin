@@ -2,6 +2,16 @@
 
 This page gives an overview of the various settings you can use to customize a training run.
 
+`TrainLmConfig.hf_save_reference_code` controls whether HF exports copy custom code
+from the reference checkpoint. `None` preserves automatic selection for custom
+architectures; `False` skips that copy without disabling weight, configuration, or
+tokenizer export. Set it to `False` only when the exported model does not need
+code bundled from the reference. This also applies to merged LoRA exports.
+
+`TrainerConfig.save_final_checkpoint=False` disables the forced final native
+checkpoint, not periodic native checkpoints or HF export hooks. Use it for
+export-only runs that do not need optimizer-state recovery.
+
 We use [Draccus](https://github.com/dlwh/draccus) for configuration. Draccus is yet-another yaml-to-dataclass library
 that uses both dataclasses to generate yaml and argparse to parse command line arguments.
 

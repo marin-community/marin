@@ -1,0 +1,36 @@
+{
+  "test_exposed": true,
+  "source_sha256": "fa0fad60cd6b3d083975b81943770cdc7d15482d01305a3d80c4e51405c2a978",
+  "student": "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+  "student_revision": "fdc3c3c5fff489d3fb04dcbc2387c179b1bf3fab",
+  "selection": "correct execution grade, finish_reason stop, nonempty reasoning; one per problem/direction",
+  "training_rows": 1454,
+  "selected_by_task": {
+    "input": 751,
+    "output": 703
+  },
+  "batch_size": 16,
+  "padding_rows": 2,
+  "steps_per_epoch": 91,
+  "evaluation_denominators": {
+    "input": 800,
+    "output": 800
+  },
+  "max_sequence_tokens": 32768,
+  "longest_row": 22835,
+  "input_tokens": 1076959,
+  "supervised_tokens": 592189,
+  "source_hashes": {
+    "requests.jsonl": "d22043dd9c961b1fca2cbf1ec9f7da1d109bdf3fcc78ea32a0d0d13e28a903a3",
+    "raw-responses.jsonl": "a93d4565fe6e5ce01a5b2bad30815eb2faa10c1339aacded123f64471510e999",
+    "manifest.json": "f344445a0277cf971a59e016f6986729573291b546f783fcba4d31e3f0f4e023"
+  },
+  "grades_sha256": "e70738d1b373e15f194b5f08e4a009526c3beb5826dc51a822c522f26ba94f85",
+  "output_hashes": {
+    "train-prebuilt.jsonl.gz": "d17e19a5d035c390d6bcff4249f90e37cf41a3f9341893b1f09d0c6d62192021",
+    "token-audit.jsonl": "e6a290048b62090188e30d290603635a8e7a9b24e44edb2f8bff49dea83031fc",
+    "row-probes.jsonl": "56b012fde954b542c8e3c30ec1e321e185eaa6ac6a6658f0f23306875c236d76",
+    "train.jsonl": "ed42af7aa93b19e5ca8cd5b016a0b2de204aa6af2a9ae7108dffa699fd9ea187",
+    "chat_template.jinja": "fb5b15f09750ee3e180d60b7eb8968c7ff27c3d2472a4b4c6449c7bacbbb45b2"
+  }
+}

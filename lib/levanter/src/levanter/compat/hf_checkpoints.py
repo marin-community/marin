@@ -1357,6 +1357,7 @@ def save_hf_checkpoint_callback(
     save_dtype: Optional[jnp.dtype] = None,
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
+    save_reference_code: bool | None = None,
     **hf_upload_kwargs,
 ):
     """
@@ -1388,6 +1389,7 @@ def save_hf_checkpoint_callback(
             dtype=save_dtype,
             generation_config=generation_config,
             chat_template=chat_template,
+            save_reference_code=save_reference_code,
             **my_upload_kwargs,
         )
 

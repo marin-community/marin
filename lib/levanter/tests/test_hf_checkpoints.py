@@ -32,6 +32,7 @@ from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
+from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
 from transformers import GPT2Config as HfGpt2Config
 
@@ -406,6 +407,11 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
         num_layers=4, num_heads=1, hidden_dim=32, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
     )
     converter = gpt2_config.hf_checkpoint_converter()
+    parent_path = f"memory://levanter/hf-parent/{uuid.uuid4().hex}"
+    (StoragePath(parent_path) / "config.json").write_text(
+        json.dumps(gpt2_config.to_hf_config(converter.Vocab.size).to_dict())
+    )
+    converter = converter.replaced(reference_checkpoint=parent_path)
 
     try:
         fs.rm(path, recursive=True)
@@ -419,7 +425,7 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
             model,
             path,
             max_shard_size=128,
-            save_tokenizer=False,
+            save_tokenizer=True,
             save_reference_code=False,
             save_feature_extractor=False,
         )
@@ -431,6 +437,7 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
         assert len(safetensor_files) > 1
         assert f"{base_path}/config.json" in stored_files
         assert f"{base_path}/{SAFE_TENSORS_INDEX_NAME}" in stored_files
+        assert f"{base_path}/tokenizer.json" in stored_files
 
         for file in safetensor_files:
             with fs.open(file, "rb") as fh:
@@ -451,6 +458,7 @@ def test_save_pretrained_to_memory_fs(local_gpt2_tokenizer_path):
             assert_trees_all_close(original_value, reloaded_value)
 
     fs.rm(base_path, recursive=True)
+    fs.rm(parent_path, recursive=True)
 
 
 def test_causal_lm_architecture_name_is_torch_free():

@@ -483,10 +483,12 @@ def test_snowball_context_parallel_values_and_gradients_match_data_parallel():
 
 
 @pytest.mark.timeout(120)
-def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
+def test_snowball_hf_init_trains_with_context_and_expert_parallelism(monkeypatch):
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     run_on_cpu_devices(
         """
         import json
+        from rigging.filesystem.storage_path import StoragePath
         import math
         import tempfile
         from dataclasses import replace
@@ -586,10 +588,26 @@ def test_snowball_hf_init_trains_with_context_and_expert_parallelism():
                 components={"direct": DirectDatasetComponent(datasets={"train": ListAsyncDataset(examples)})},
                 tokenizer=str(hf_path),
             )
+            remote_parent = "memory://snowball-export-parent"
+            for source in hf_path.iterdir():
+                (StoragePath(remote_parent) / source.name).upload_from(str(source))
             main(TrainLmConfig(
-                data=data, model=model_cfg, initialize_from_hf=str(hf_path),
-                optimizer=AdamConfig(learning_rate=5e-5), trainer=trainer_cfg,
+                data=data, model=model_cfg, initialize_from_hf=remote_parent,
+                optimizer=AdamConfig(learning_rate=5e-5),
+                trainer=replace(trainer_cfg, num_train_steps=2),
+                hf_save_path=str(root / "exports"), hf_save_steps=1,
+                hf_save_reference_code=False,
+                hf_generation_eos_token_ids=[1],
             ))
+            export_paths = list((root / "exports").rglob("step-1"))
+            assert len(export_paths) == 1, export_paths
+            export_path = export_paths[0]
+            assert (export_path / "model.safetensors").is_file()
+            assert (export_path / "tokenizer.json").is_file()
+            with (export_path / "config.json").open() as handle:
+                assert json.load(handle)["model_type"] == "grug_moe"
+            with (export_path / "generation_config.json").open() as handle:
+                assert json.load(handle)["eos_token_id"] == [1]
             with (root / "eval_results.json").open() as handle:
                 metrics = json.load(handle)
             assert math.isfinite(metrics["train/loss"])
