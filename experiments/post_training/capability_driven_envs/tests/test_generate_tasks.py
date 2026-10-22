@@ -9,7 +9,7 @@ pytest.importorskip("taskforge")
 import asyncio
 import json
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import click
@@ -72,7 +72,9 @@ class CannedModel:
         self.errors = list(errors)
         self.output_types: list[type[BaseModel]] = []
 
-    async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion:
+    async def complete(
+        self, messages: Sequence[Message], policy: LLMPolicy, request_fields: Mapping[str, object] | None = None
+    ) -> Completion:
         raise AssertionError("the driver asks only for structured output")
 
     async def complete_structured[T: BaseModel](
