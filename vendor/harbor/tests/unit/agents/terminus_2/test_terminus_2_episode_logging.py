@@ -1,13 +1,4 @@
-"""Episode logging is DEFAULT-OFF (throughput fix).
-
-`debug.json` (the full raw litellm request+response, written synchronously by
-litellm's logger_fn) plus the per-turn prompt/response writes stall the shared
-rollout event loop when logs_dir is remote (s3://). `enable_episode_logging`
-defaults False and gates `_setup_episode_logging` so those paths are None ->
-litellm's logger_fn is never attached and no per-turn object-store write happens.
-
-Ref: agent_logs/2026-07-03_r5_engine_starvation_rootcause.md
-"""
+"""Episode logging can be disabled without losing the in-memory rollout trace."""
 
 from harbor.agents.terminus_2.terminus_2 import EpisodeLoggingPaths, Terminus2
 
