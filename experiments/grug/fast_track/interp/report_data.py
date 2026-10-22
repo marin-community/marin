@@ -333,6 +333,129 @@ def attrib_section(a) -> dict:
     return out
 
 
+def deepdive_section(d) -> dict:
+    """VE copy path (weights, natural text, ablations, path patching, examples) and the KDA sink check."""
+    out: dict = {"categories": [str(c) for c in d["categories"]], "pos_edges": d["pos_edges"].tolist()}
+    freq = d["w/freq"]
+    common_tok = freq >= np.sort(freq)[-4000]
+    has_var = d["w/has_variant"]
+    weights = {}
+    for li in forward.MLA_LAYERS:
+        rank, nxt, var = d[f"w/L{li}/rank"], d[f"w/L{li}/next_rank"], d[f"w/L{li}/variant_rank"]
+        rows = []
+        for h in range(H + 1):
+            rows.append(
+                dict(
+                    head="all heads" if h == H else f"h{h}",
+                    self_top1=float(np.mean(rank[:, h] == 0)),
+                    self_top10=float(np.mean(rank[:, h] < 10)),
+                    self_top10_common=float(np.mean(rank[common_tok, h] < 10)),
+                    self_median_rank=float(np.median(rank[:, h])),
+                    margin_median=float(np.median(d[f"w/L{li}/margin"][:, h])),
+                    variant_top10=float(np.mean(var[has_var, h] < 10)),
+                    next_top10=float(np.mean(nxt[:, h] < 10)),
+                    cos_lm=float(np.median(d[f"w/L{li}/cos_lm"][:, h])),
+                    cos_emb=float(np.median(d[f"w/L{li}/cos_emb"][:, h])),
+                    norm=float(np.median(d[f"w/L{li}/norm"][:, h])),
+                )
+            )
+        norm_all = d[f"w/L{li}/norm"][:, H]
+        idx = np.empty(len(freq), np.int64)
+        idx[np.argsort(freq, kind="stable")] = np.arange(len(freq)) * 10 // len(freq)  # frequency deciles by rank
+        weights[f"L{li}"] = dict(
+            heads=rows,
+            lambda1=float(d[f"w/L{li}/lambda"][0]),
+            corr_norm_logfreq=float(np.corrcoef(norm_all, np.log(freq + 1))[0, 1]),
+            corr_coslm_logfreq=float(np.corrcoef(d[f"w/L{li}/cos_lm"][:, H], np.log(freq + 1))[0, 1]),
+            norm_by_freq_decile=[float(np.median(norm_all[idx == k])) for k in range(10)],
+            coslm_by_freq_decile=[float(np.median(d[f"w/L{li}/cos_lm"][idx == k, H])) for k in range(10)],
+        )
+    out["weights"] = weights
+    n = d["nat/n"]
+    nat = {}
+    for li in forward.MLA_LAYERS:
+        p = f"nat/L{li}/"
+        nat[f"L{li}"] = dict(
+            dla_ve=_r(d[p + "dla_ve_y"] / n[:, None], 3),
+            dla_head=_r(d[p + "dla_head_y"] / n[:, None], 3),
+            dla_ve_top=_r(d[p + "dla_ve_top"] / n[:, None], 3),
+            gate_mean=_r(d[p + "gate_mean"] / n[:, None], 3),
+            log_ratio=_r(d[p + "ratio_mean"] / n[:, None], 3),
+            gate_hist=_r(d[p + "gate_hist"] / np.maximum(d[p + "gate_hist"].sum(1, keepdims=True), 1), 4),
+            ratio_hist=_r(d[p + "ratio_hist"] / np.maximum(d[p + "ratio_hist"].sum(1, keepdims=True), 1), 4),
+        )
+    out["natural"] = nat
+    out["n_examples"], out["n_failures"], out["n_scored"] = (
+        float(d["nat/n_examples"]),
+        float(d["nat/n_failures"]),
+        float(d["nat/n_scored"]),
+    )
+    names = [str(x) for x in d["abl/names"]]
+    base_nat, base_copy = d["abl/natural"][0], d["abl/copy"][0]
+    out["ablations"] = dict(
+        names=names,
+        natural_delta=[[None if np.isnan(v) else float(v) for v in row] for row in d["abl/natural"] - base_nat],
+        copy=_r(d["abl/copy"], 3),
+        copy_base=float(base_copy),
+    )
+    srcs = [str(x) for x in d["patch/sources"]]
+    patch = {}
+    for kind in ("induction",):
+        c = d[f"patch/{kind}/{srcs[0]}/clean/induction"] / d[f"patch/{kind}/{srcs[0]}/clean/n_induction"]
+        cd = d[f"patch/{kind}/{srcs[0]}/clean/ve_dla"]
+        rows = {}
+        for s in srcs:
+            rows[s] = {}
+            for mode in ("q_patched", "k_patched", "both"):
+                ind = d[f"patch/{kind}/{s}/{mode}/induction"] / d[f"patch/{kind}/{s}/{mode}/n_induction"]
+                dla = d[f"patch/{kind}/{s}/{mode}/ve_dla"]
+                rows[s][mode] = dict(
+                    induction_delta=_r(ind - c, 4), ve_dla_rel=_r((dla - cd) / np.maximum(np.abs(cd), 1e-9), 4)
+                )
+        patch[kind] = dict(clean_induction=_r(c, 4), sources=srcs, rows=rows)
+    out["patch"] = patch
+    out["examples"] = json.loads(str(d["examples_json"]))
+    out["failures"] = json.loads(str(d["failures_json"]))
+    sink = {}
+    for li in range(L):
+        p = f"sink/L{li}/"
+        nb = np.maximum(d[p + "n_by_pos"], 1)
+        row = {f"early{k}_abs": _r(d[p + f"early{k}_abs"] / nb, 4) for k in (1, 4, 16)}
+        if li in forward.KDA_LAYERS:
+            nn = float(d[p + "n"])
+            g = d[p + "log_decay_sum"] / nn
+            half = np.log(0.5) / np.minimum(g, -1e-12)
+            row.update(
+                {f"early{k}_signed": _r(d[p + f"early{k}_signed"] / nb, 4) for k in (1, 4, 16)},
+                **{f"early{k}_out_share": _r(d[p + f"early{k}_out_share"] / nb, 4) for k in (1, 4, 16)},
+                beta_small=_r(d[p + "beta_small"] / nn, 4),
+                gate_small=_r(d[p + "gate_small"] / nn, 4),
+                read_small=_r(d[p + "read_small"] / nn, 4),
+                gate_mean=_r(d[p + "gate_mean"] / nn, 3),
+                channels_over_context=(half > 4096).sum(1).tolist(),
+                channels_over_1k=(half > 1024).sum(1).tolist(),
+            )
+        sink[f"L{li}"] = row
+    out["sink"] = sink
+    return out
+
+
+def attnres_mag_section(a) -> dict:
+    n = a["n"]
+    return dict(
+        rms=_r(a["rms"], 3),
+        mag_share=_r(a["mag_share"], 4),
+        proj_share=_r(a["proj_share"], 4),
+        dla=_r(a["dla"] / n[None, :], 4),
+        base=_r(a["base"] / n, 4),
+        zero=_r(a["zero"] / n[None, :] - (a["base"] / n)[None, :], 4),
+        mean=_r(a["mean"] / n[None, :] - (a["base"] / n)[None, :], 4),
+        plain_sum=_r(a["plain_sum"] / n - a["base"] / n, 4),
+        uniform=_r(a["uniform"] / n - a["base"] / n, 4),
+        categories=[str(c) for c in a["categories"]],
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("data")
@@ -353,7 +476,13 @@ def main() -> None:
         arrays=verify["chunks"]["arrays"],
         paloma=verify["paloma_loss"],
     )
-    for name, fn in (("heads", heads_section), ("attrib", attrib_section)):
+    sections = (
+        ("heads", heads_section),
+        ("attrib", attrib_section),
+        ("deepdive", deepdive_section),
+        ("attnres_mag", attnres_mag_section),
+    )
+    for name, fn in sections:
         path = os.path.join(args.data, f"{name}.npz")
         if os.path.exists(path):
             doc[name] = fn(np.load(path))
@@ -369,7 +498,7 @@ def main() -> None:
         doc["routing"] = routing_section(s)
     if args.compare:
         other: dict = {}
-        for name, fn in (("heads", heads_section), ("attrib", attrib_section)):
+        for name, fn in sections:
             path = os.path.join(args.compare, f"{name}.npz")
             if os.path.exists(path):
                 other[name] = fn(np.load(path))
@@ -378,7 +507,18 @@ def main() -> None:
             other["routing"] = routing_section(np.load(stats_path))
         doc["compare"] = other
     with open(args.out, "w") as f:
-        json.dump(doc, f)
+        json.dump(_finite(doc), f, allow_nan=False)
+
+
+def _finite(x):
+    """NaN and infinities become null (the page's JSON.parse rejects them)."""
+    if isinstance(x, dict):
+        return {k: _finite(v) for k, v in x.items()}
+    if isinstance(x, list):
+        return [_finite(v) for v in x]
+    if isinstance(x, float) and not np.isfinite(x):
+        return None
+    return x
 
 
 if __name__ == "__main__":
