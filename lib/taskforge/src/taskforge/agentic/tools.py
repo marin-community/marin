@@ -365,12 +365,12 @@ class ToolSession:
         if not paths or len(set(paths)) < len(paths):
             raise ToolError("Give one or more different paths")
         tasks = [await self._load(path) for path in paths]
+        # The same checks as at submit, so that no rollout goes to a task that submit cannot accept.
+        for path, task in zip(paths, tasks, strict=True):
+            problems = _unsupported(task, self.tools.solver_engine, self.config)
+            if problems:
+                raise ToolError(f"{path} cannot run: {'; '.join(problems)}")
         specs = [_solver_spec(_adversary_task(task) if role == "adversary" else task, self.config) for task in tasks]
-        for path, spec in zip(paths, specs, strict=True):
-            try:
-                self.tools.solver_engine.check(spec)
-            except (ValueError, NotImplementedError) as error:
-                raise ToolError(f"The rollout engine rejects {path}: {error}") from error
         self._spend("solver_rollouts", self.config.budget.solver_rollouts, n * len(paths))
         results = await asyncio.gather(
             *(self._rollouts(task, spec, n, role) for task, spec in zip(tasks, specs, strict=True))
@@ -416,12 +416,13 @@ class ToolSession:
                 evidence.adversary_passes += passed
                 record = {"passed": passed, "answer": _clip(answer, limit=300), "commands": _commands(rollout)}
                 self.tools.adversary_runs[key].append(record)
-        graded = len(answers)
-        passes = sum(answer["passed"] for answer in answers)
+        graded = [answer for answer in answers if not answer["format_failure"]]
+        passes = sum(answer["passed"] for answer in graded)
         return {
-            "graded": graded,
+            "graded": len(graded),
+            "format_failures": len(answers) - len(graded),
             "passes": passes,
-            "pass_rate": passes / graded if graded else None,
+            "pass_rate": passes / len(graded) if graded else None,
             "not_graded": dict(ungraded),
             "answers": answers,
             "transcripts": directory,
@@ -434,7 +435,7 @@ class ToolSession:
         key = _task_digest(task)
         if any(_task_digest(accepted.task) == key for accepted in self.tools.accepted):
             raise ToolError("This task is already accepted")
-        problems = _problems(task, self.tools.solver_engine, self.config)
+        problems = _unsupported(task, self.tools.solver_engine, self.config)
         if problems:
             return _result({"accepted": False, "problems": problems})
         evidence = self.tools.evidence[key]
@@ -622,7 +623,8 @@ def review_content(
             "failed_answers": [_clip(answer, limit=300) for answer in failed_answers][:REVIEW_ANSWERS],
             "shared_failed_answers": {answer: count for answer, count in shared.most_common() if count > 1},
         },
-        "adversary_runs": adversary_runs[:REVIEW_ANSWERS],
+        # Passed runs first, so that the limit never hides a shortcut from the review.
+        "adversary_runs": sorted(adversary_runs, key=lambda run: not run["passed"])[:REVIEW_ANSWERS],
         "accepted_tasks": [_public_task(other) for other in accepted],
     }
 
@@ -672,8 +674,8 @@ def _solver_spec(task: TaskSpec, config: AgenticConfig) -> TaskRolloutSpec:
     )
 
 
-def _problems(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -> list[str]:
-    """What keeps the agent's tools from running ``task``."""
+def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -> list[str]:
+    """What keeps the agent's tools from running ``task``, which ``rollout`` and ``submit`` refuse."""
     problems = []
     if task.answer_type not in ANSWER_TYPES:
         problems.append(f"The answer type must be one of {sorted(ANSWER_TYPES)}, not {task.answer_type}")
@@ -758,7 +760,7 @@ def _failure(rollout: Rollout) -> str:
 def _commands(rollout: Rollout) -> list[str]:
     """The arguments of each tool call in ``rollout``, for example the shell commands of an adversary."""
     return [
-        _clip(str(call.get("function", {}).get("arguments")), limit=200)
+        _clip(str((call.get("function") or {}).get("arguments")), limit=200)
         for conversation in rollout.conversations
         for message in conversation.messages
         for call in message.get("tool_calls") or ()
@@ -775,10 +777,8 @@ def _transcript(rollout: Rollout, grade: GradeResult | None) -> str:
     lines = [json.dumps(header, default=str)]
     for conversation in rollout.conversations:
         for number, message in enumerate(conversation.messages):
-            calls = [
-                f"<tool call> {call.get('function', {}).get('name')}({call.get('function', {}).get('arguments')})"
-                for call in message.get("tool_calls") or ()
-            ]
+            functions = [call.get("function") or {} for call in message.get("tool_calls") or ()]
+            calls = [f"<tool call> {function.get('name')}({function.get('arguments')})" for function in functions]
             text = " ".join([str(message.get("content") or ""), *calls]).strip()
             lines.append(f"[{number}] {message.get('role')}: {text}")
     return "\n".join(lines) + "\n"

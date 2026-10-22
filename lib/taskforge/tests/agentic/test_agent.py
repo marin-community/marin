@@ -101,8 +101,9 @@ class ScriptedAgent:
 
 @dataclass
 class Solver:
-    """Solves every second task attempt. The adversary role answers 0."""
+    """Solves every second task attempt and answers ``wrong`` in the others. The adversary role answers 0."""
 
+    wrong: str = "1"
     attempts: itertools.count = field(default_factory=itertools.count)
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
@@ -112,7 +113,7 @@ class Solver:
         if told(ADVERSARY_PROMPT):
             answer = "0"
         else:
-            answer = EXPECTED if next(self.attempts) % 2 == 0 else "1"
+            answer = EXPECTED if next(self.attempts) % 2 == 0 else self.wrong
         return ModelTurn({"role": "assistant", "content": answer}, (), (), None, "stop", usage=TokenUsage(5, 1))
 
 
@@ -143,6 +144,21 @@ class LoopingSolver:
             "function": {"name": "shell", "arguments": arguments},
         }
         message = {"role": "assistant", "content": "", "tool_calls": [tool_call]}
+        return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(5, 1))
+
+
+@dataclass
+class NullCallSolver:
+    """Makes a tool call whose function is null, then answers 0."""
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        if request.messages[-1].get("role") == "tool":
+            return ModelTurn({"role": "assistant", "content": "0"}, (), (), None, "stop", usage=TokenUsage(5, 1))
+        message = {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call-1", "type": "function", "function": None}],
+        }
         return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(5, 1))
 
 
@@ -357,6 +373,54 @@ async def test_a_solver_that_runs_out_of_turns_fails_its_run():
     [rollout] = tool_replies(result, "call-2")
     evidence = rollout["results"][TASK]["evidence"]
     assert (evidence["solver_runs"], evidence["solver_passes"], evidence["solver_format_failures"]) == (1, 0, 0)
+
+
+async def test_the_pass_rate_of_a_rollout_counts_only_graded_answers():
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("rollout", paths=[TASK], n=4, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=4, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=Solver(wrong="")))
+
+    [rollout] = tool_replies(result, "call-2")
+    reply = rollout["results"][TASK]
+    assert (reply["graded"], reply["format_failures"], reply["pass_rate"]) == (2, 2, 1.0)
+
+
+async def test_rollout_refuses_a_task_that_submit_cannot_accept():
+    example = example_build.task_spec(TASK_ID)
+    shared = example.resources.model_copy(update={"all": example.resources.worker, "worker": ()})
+    task = example.model_copy(update={"resources": shared})
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
+        call("rollout", paths=[TASK], n=1, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [refusal] = tool_replies(result, "call-2")
+    assert "not in resources.all" in refusal["error"]
+    assert result.spend.solver_rollouts == 0
+
+
+async def test_a_solver_tool_call_with_no_function_is_saved():
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("rollout", paths=[TASK], n=1, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=NullCallSolver()))
+
+    [rollout] = tool_replies(result, "call-2")
+    assert result.failure is None
+    assert "results" in rollout
 
 
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():

@@ -3,15 +3,24 @@
 
 """The settings of an agentic Taskforge session: the models, the limits, the gate, and the tool budget."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any, Protocol
 
 from rolloutengine.models import Model, RolloutLimits
 from shellbox.machine import MachineFactory
 
 from taskforge.agentic.gate import Gate
-from taskforge.agentic.parallel import ParallelWeb
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
+
+
+class Web(Protocol):
+    """Web search and page reading for the agent's web tools, for example ``ParallelWeb``."""
+
+    async def search(self, objective: str, queries: Sequence[str]) -> dict[str, Any]: ...
+
+    async def extract(self, urls: Sequence[str], objective: str) -> dict[str, Any]: ...
 
 
 @dataclass(frozen=True)
@@ -37,7 +46,7 @@ class AgenticConfig:
     judge: ModelClient
     """The independent reviewer that ``submit`` asks last."""
     judge_policy: LLMPolicy
-    web: ParallelWeb
+    web: Web
     agent_limits: RolloutLimits
     solver_limits: RolloutLimits
     gate: Gate
