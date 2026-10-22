@@ -37,6 +37,7 @@ publishing. Reuse passing checks while their inputs remain unchanged.
 | `run-ferries` | Canary and daily ferry recipes, interpretation, and closure | Uses Iris for execution; CI failure diagnosis follows its diagnosis-only procedure |
 | `ab-test-zephyr` | Controlled Zephyr comparisons with equivalent workloads | Measures stage efficiency and latency; monitoring belongs to Iris |
 | `profile-training` | Training-profile capture and interpretation | Measures bottlenecks; implementation changes use the relevant domain workflow |
+| `audit-grader` | Audits of code checks, LLM judges, and RL rewards against their task text, with score effects and a blinded error-rate estimate | Recommends a fix or a replacement; the fix is ordinary implementation, and routine grader changes need no audit |
 
 ## Access and applications
 

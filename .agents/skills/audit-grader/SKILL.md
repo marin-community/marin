@@ -202,5 +202,5 @@ contract that it breaks, the share of verdicts that it affects, and its status
 in the reference grader. When the share needs a panel that has not run, name
 the stored field that would measure it. List the decision entries for the
 evaluation's maintainers. Recommend one action: admit the grader, fix it, or
-replace the benchmark. Post the report in the issue, following the issues
-guide in the `writing-style` skill.
+replace the benchmark. Post the report in the issue, following
+`docs/dev-guide/writing-style/issues.md`.
