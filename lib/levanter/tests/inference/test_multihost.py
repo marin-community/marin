@@ -39,7 +39,7 @@ def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutd
                     num_heads=2, num_kv_heads=1, num_experts_per_token=2, head_dim=8,
                     max_seq_len=16, attention_implementation="reference")
                 model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), cfg, key=jax.random.key(17))
-                config = InferenceEngineConfig(max_seq_len=16, page_size=4, max_pages=4,
+                config = InferenceEngineConfig(max_seq_len=24, page_size=4, max_pages=6,
                     max_seqs=1, max_seqs_in_prefill=1, max_prefill_size=2,
                     max_queued_tokens=16, max_rounds=1)
                 class FailingEngine(MultiHostInferenceEngine):
@@ -48,9 +48,14 @@ def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutd
                 engine_class = FailingEngine if sys.argv[3] == "execution-error" else MultiHostInferenceEngine
                 engine = engine_class.from_model_with_config(model, None, config, axis_resources={})
                 if rank == 0:
+                    params = SeqDecodingParams(
+                        max_num_tokens=np.array(4, np.int32), stop_tokens=None,
+                        temperature=np.array(0, np.float32), top_p=np.array(1, np.float32),
+                        key=np.array([0, 19311], np.uint32))
                     for invalid in (lambda: engine.generate([]),
                                     lambda: engine.score_token_logprobs([0], 0),
-                                    lambda: engine.score_token_logprobs([0] * 17, 1)):
+                                    lambda: engine.score_token_logprobs([0] * 25, 1),
+                                    lambda: engine.generate([Request([0] * 17, 0, params, 1)])):
                         try:
                             invalid()
                         except ValueError:

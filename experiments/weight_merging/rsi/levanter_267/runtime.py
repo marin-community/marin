@@ -29,6 +29,15 @@ from levanter.utils.mesh import MeshConfig
 from rigging.filesystem.storage_path import StoragePath
 
 
+class ProbeEngine(MultiHostInferenceEngine):
+    """Retain raw IDs so the smoke can verify HTTP usage and stop stripping."""
+
+    def generate(self, requests, step_callback=None):
+        result = super().generate(requests, step_callback=step_callback)
+        self.last_generated_tokens = result.tokens
+        return result
+
+
 def _post(url, payload):
     request = urllib.request.Request(
         url,
@@ -126,6 +135,7 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
     long_prompt = tokenizer.decode(tokens[:2050], skip_special_tokens=False)
     if tokenizer.encode(long_prompt, add_special_tokens=False) != tokens[:2050]:
         raise ValueError("Long-decode prompt does not round-trip through the tokenizer")
+    start = time.monotonic()
     long_smoke = _post(
         local + "/v1/completions",
         dict(
@@ -136,7 +146,18 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
             seed=19311,
         ),
     )
+    raw_ids = engine.last_generated_tokens[0]
+    long_smoke["generated_token_ids"] = raw_ids
+    expected_first = max(result.top_token_logprobs[2050], key=result.top_token_logprobs[2050].get)
+    long_smoke["cached_first_token_id"] = expected_first
+    long_smoke["first_token_matches_cached_score"] = bool(raw_ids and raw_ids[0] == expected_first)
+    long_smoke["wall_seconds"] = time.monotonic() - start
     _save(output, "long-decode.json", long_smoke)
+    count = long_smoke["usage"]["completion_tokens"]
+    finish = long_smoke["choices"][0]["finish_reason"]
+    legitimate_stop = count > 0 and raw_ids[-1] in config.eos_token_ids and finish == "stop"
+    if long_smoke["usage"]["prompt_tokens"] != 2050 or count != len(raw_ids) or (count != 2 and not legitimate_stop):
+        raise RuntimeError("Long-prompt decode did not generate two tokens or terminate on EOS")
 
 
 def run(mode, model_path, output, item, max_seq_len):
@@ -185,12 +206,12 @@ def run(mode, model_path, output, item, max_seq_len):
                 max_seqs=1,
                 max_seqs_in_prefill=1,
                 max_prefill_size=256,
-                max_queued_tokens=16,
+                max_queued_tokens=max_seq_len,
                 max_tokens_per_round=16,
                 max_rounds=8,
             ),
         )
-        engine = MultiHostInferenceEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
+        engine = ProbeEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
         if jax.process_index() != 0:
             engine.worker_loop()
             _record_memory(output, "complete")

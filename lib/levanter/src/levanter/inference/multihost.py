@@ -119,6 +119,8 @@ class MultiHostInferenceEngine(InferenceEngine):
                 raise ValueError("Generation count exceeds configured sequence slots")
             if not request.prompt_tokens or len(request.prompt_tokens) > self.config.max_seq_len:
                 raise ValueError("Prompt must be nonempty and fit the configured sequence length")
+            if len(request.prompt_tokens) > self.config.max_queued_tokens:
+                raise ValueError("Prompt exceeds configured admission queue capacity")
             stops = request.decode_params.stop_tokens
             if stops is not None:
                 if (
