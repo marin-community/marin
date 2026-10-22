@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, fields
@@ -640,11 +641,13 @@ class _SkyRLLaunchResponse(BaseModel):
 
 
 def skyrl_cpu_command(*arguments: str) -> list[str]:
-    """Return argv for SkyRL's frozen CPU environment using the current Python."""
+    """Return argv for SkyRL's frozen CPU environment using its declared Python requirement."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
-    uv_version = (workspace_root / SKYRL_PROJECT / ".uv-version").read_text().strip()
+    project_root = workspace_root / SKYRL_PROJECT
+    uv_version = (project_root / ".uv-version").read_text().strip()
+    python_requirement = tomllib.loads((project_root / "pyproject.toml").read_text())["project"]["requires-python"]
     return [
         "uv",
         "tool",
@@ -652,14 +655,14 @@ def skyrl_cpu_command(*arguments: str) -> list[str]:
         "--from",
         f"uv=={uv_version}",
         "--python",
-        sys.executable,
+        python_requirement,
         "--no-python-downloads",
         "uv",
         "run",
         "--project",
-        str(workspace_root / SKYRL_PROJECT),
+        str(project_root),
         "--python",
-        sys.executable,
+        python_requirement,
         "--no-python-downloads",
         "--frozen",
         "--extra",
