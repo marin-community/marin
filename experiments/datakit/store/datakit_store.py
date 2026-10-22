@@ -252,8 +252,32 @@ class _FilterStats:
         }
 
 
+def _keep_document(
+    doc_id: str,
+    contaminated: bool,
+    exact_duplicates: set[str],
+    verified_duplicates: set[str],
+    stats: _FilterStats,
+) -> bool:
+    """Apply the store's ordered selection decisions to one document."""
+    stats.records_in += 1
+    if contaminated:
+        stats.contaminated_dropped += 1
+        return False
+    if doc_id in verified_duplicates:
+        stats.fuzzy_duplicate_dropped += 1
+        return False
+    if doc_id in exact_duplicates:
+        stats.exact_duplicate_dropped += 1
+        return False
+    stats.records_out += 1
+    return True
+
+
 @dataclasses.dataclass(frozen=True)
 class _SurvivingDocument:
+    id: str
+    normalized_row: int
     cluster: int
     quality: int
     input_ids: np.ndarray
@@ -380,26 +404,17 @@ def _iter_surviving_docs(
             raise RuntimeError(
                 f"{where}: tokenize holds more documents than decon rows ({n_decon}) -- co-partitioning broken"
             )
-        stats.records_in += 1
         position, doc_idx = doc_idx, doc_idx + 1
         if doc_id != expected_ids[position]:
             raise RuntimeError(
                 f"{where}: tokenize/decon id mismatch at document {position}: "
                 f"{doc_id!r} != {expected_ids[position]!r} -- co-partitioning broken"
             )
-        if contaminated[position]:
-            stats.contaminated_dropped += 1
+        if not _keep_document(doc_id, bool(contaminated[position]), exact_duplicates, verified_duplicates, stats):
             continue
-        # Verified attributes mark only the members a full-text comparison
-        # confirmed, so membership alone decides.
-        if doc_id in verified_duplicates:
-            stats.fuzzy_duplicate_dropped += 1
-            continue
-        if doc_id in exact_duplicates:
-            stats.exact_duplicate_dropped += 1
-            continue
-        stats.records_out += 1
         yield _SurvivingDocument(
+            id=doc_id,
+            normalized_row=position,
             cluster=int(cluster_vals[position]),
             quality=int(quality_buckets[position]),
             input_ids=ids,
