@@ -4,9 +4,8 @@
 """Controller operations that perform exact, on-demand Attempt I/O."""
 
 import secrets
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from typing import Protocol
 
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -28,7 +27,6 @@ from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointRow
 from iris.cluster.controller.worker_health import WorkerLiveness
 from iris.cluster.federation.manager import FederationManager
-from iris.cluster.federation.peer import FederationPeer
 from iris.cluster.process_status import get_process_status as local_process_status
 from iris.cluster.runtime.profile import (
     DEFAULT_PROFILE_DURATION_SECONDS,
@@ -40,8 +38,6 @@ from iris.cluster.types import JobName, TaskAttempt, WorkerId
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.rpc.auth import FEDERATION_PEER_ROLE
 from iris.time_proto import duration_from_proto, timestamp_to_proto
-
-Response = TypeVar("Response")
 
 _PROFILE_RPC_TIMEOUT_MARGIN_MS = 30_000
 _SYSTEM_CONTROLLER_TARGET = "/system/controller"
@@ -166,11 +162,9 @@ def _profile_attempt(
         target.task_id.require_task()
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
-    task = _task_with_attempts(dependencies, target.task_id, request.target)
-
-    proxied = _proxy_if_federated(dependencies, target.task_id, lambda peer: peer.profile_task(request))
-    if proxied is not None:
-        return proxied
+    task, handle = _task_with_attempts(dependencies, target.task_id, request.target)
+    if handle is not None:
+        return dependencies.runtime.federation.proxy_to_peer(handle.peer_id, lambda peer: peer.profile_task(request))
     attempt_id = target.attempt_id if target.attempt_id is not None else task.current_attempt_id
     task_target = _resolve_task_target(dependencies, task, attempt_id, wire_name=request.target)
     response = dependencies.runtime.backend.profile_task(
@@ -247,10 +241,11 @@ def exec_in_container(
         raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
 
     _authorize_task_owner(dependencies, task_id)
-    task = _task_with_attempts(dependencies, task_id, request.task_id)
-    proxied = _proxy_if_federated(dependencies, task_id, lambda peer: peer.exec_in_container(request))
-    if proxied is not None:
-        return proxied
+    task, handle = _task_with_attempts(dependencies, task_id, request.task_id)
+    if handle is not None:
+        return dependencies.runtime.federation.proxy_to_peer(
+            handle.peer_id, lambda peer: peer.exec_in_container(request)
+        )
 
     worker_request = worker_pb2.Worker.ExecInContainerRequest(
         task_id=request.task_id,
@@ -278,10 +273,11 @@ def _task_process_status(
         task_id.require_task()
     except ValueError as error:
         raise ConnectError(Code.INVALID_ARGUMENT, f"Invalid target: {target}") from error
-    task = _task_with_attempts(dependencies, task_id, target)
-    proxied = _proxy_if_federated(dependencies, task_id, lambda peer: peer.get_process_status(request))
-    if proxied is not None:
-        return proxied
+    task, handle = _task_with_attempts(dependencies, task_id, target)
+    if handle is not None:
+        return dependencies.runtime.federation.proxy_to_peer(
+            handle.peer_id, lambda peer: peer.get_process_status(request)
+        )
     task_target = _resolve_task_target(dependencies, task, task.current_attempt_id, wire_name=target)
     try:
         return dependencies.runtime.backend.get_process_status(task_target, request)
@@ -302,13 +298,15 @@ def _task_with_attempts(
     dependencies: AttemptDependencies,
     task_id: JobName,
     wire_name: str,
-) -> tasks.TaskWithAttempts:
+) -> tuple[tasks.TaskWithAttempts, reads.FederatedHandle | None]:
+    """Read the task and, when its root job was handed off to a peer, the handle to proxy through."""
     _authorize_federated_debug_target(dependencies, task_id.root_job)
     with dependencies.db.read_snapshot() as tx:
         task = tasks.read_task_with_attempts(tx, task_id)
+        handle = reads.federated_handle(tx, task_id.root_job)
     if task is None:
         raise ConnectError(Code.NOT_FOUND, f"Task {wire_name} not found")
-    return task
+    return task, handle
 
 
 def _authorize_task_owner(dependencies: AttemptDependencies, task_id: JobName) -> None:
@@ -334,18 +332,6 @@ def _authorize_federated_debug_target(dependencies: AttemptDependencies, root_jo
     if handoff is not None and handoff.requester_id == identity.user_id:
         return
     raise ConnectError(Code.PERMISSION_DENIED, f"Peer {identity.user_id!r} did not federate job {root_job}")
-
-
-def _proxy_if_federated(
-    dependencies: AttemptDependencies,
-    task_id: JobName,
-    call: Callable[[FederationPeer], Response],
-) -> Response | None:
-    with dependencies.db.read_snapshot() as snapshot:
-        handle = reads.federated_handle(snapshot, task_id.root_job)
-    if handle is None:
-        return None
-    return dependencies.runtime.federation.proxy_to_peer(handle.peer_id, call)
 
 
 def _resolve_task_target(

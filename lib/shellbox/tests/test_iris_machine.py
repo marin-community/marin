@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import pwd
+import re
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -49,6 +50,22 @@ class FailingRpc:
         return SimpleNamespace(exit_code=0, stdout="", stderr="", error="Task /user/shellbox/0 is not running")
 
 
+class RecordingRpc(LocalRpc):
+    """Runs execs locally and records each script it was sent."""
+
+    def __init__(self):
+        self.scripts: list[str] = []
+
+    def exec_in_container(self, request, timeout_ms):
+        self.scripts.append(request.command[-1])
+        return super().exec_in_container(request, timeout_ms)
+
+    def scratch_files(self) -> list[Path]:
+        """The ``/tmp/.shellbox-*`` paths any recorded script named that still exist."""
+        names = {name for script in self.scripts for name in re.findall(r"/tmp/\.shellbox-[0-9a-f]{32}[\w.-]*", script)}
+        return [Path(name) for name in sorted(names) if Path(name).exists()]
+
+
 class RefusingRpc(LocalRpc):
     """Fails the first ``refusals`` execs with ``code`` before running anything, then runs them locally."""
 
@@ -76,18 +93,18 @@ class LocalTask:
 
     def status(self):
         return SimpleNamespace(
-            state=self.state, error_message="" if self.state is TaskState.RUNNING else "container exited"
+            task_id=self.task_id,
+            state=self.state,
+            error_message="" if self.state is TaskState.RUNNING else "container exited",
         )
 
 
 class LocalJob:
     def __init__(self, task: LocalTask | None = None):
+        self.job_id = JobName.from_wire("/user/shellbox")
         self.cancelled = False
         self.killed = threading.Event()
         self.task = task
-
-    def tasks(self):
-        return [] if self.task is None else [self.task]
 
     def cancel(self):
         self.cancelled = True
@@ -113,11 +130,19 @@ class RecordingClient(LocalClient):
 
 
 class TaskClient(LocalClient):
+    """Submits ``job`` and answers ListTasks for it; it has no per-task status RPC to poll."""
+
     def __init__(self, job: LocalJob):
         self.job = job
+        self.task_listings = 0
 
     def submit(self, **kwargs):
         return self.job
+
+    def list_tasks(self, job_id):
+        assert job_id == self.job.job_id
+        self.task_listings += 1
+        return [] if self.job.task is None else [self.job.task.status()]
 
 
 class LocalEndpoint:
@@ -180,8 +205,8 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     task_id = JobName.from_wire("/fixture/sandbox/0")
     status = task_status_from_proto(job_pb2.TaskStatus(task_id=task_id.to_wire(), state=job_pb2.TASK_STATE_RUNNING))
     job = LocalJob()
-    job.tasks = lambda: [SimpleNamespace(task_id=task_id, status=lambda: status)]
     client = LocalClient()
+    client.list_tasks = lambda job_id: [status]
     submitted_environments = []
 
     def submit(**kwargs):
@@ -420,3 +445,106 @@ def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> No
             await machine.close()
 
     asyncio.run(scenario())
+
+
+def test_command_runs_and_returns_its_output_in_one_exec(tmp_path: Path) -> None:
+    """Each exec is a controller RPC, so a command with small output must cost exactly one."""
+    rpc = RecordingRpc()
+    machine, _ = local_machine(tmp_path, rpc)
+
+    result = asyncio.run(machine.run(Command(("sh", "-c", "printf out; printf err >&2; exit 3"))))
+
+    assert (result.exit_code, result.stdout, result.stderr) == (3, b"out", b"err")
+    assert len(rpc.scripts) == 1
+    assert rpc.scratch_files() == []
+
+
+def test_output_beyond_one_transfer_chunk_is_read_back_up_to_the_limit(tmp_path: Path) -> None:
+    rpc = RecordingRpc()
+    machine, _ = local_machine(tmp_path, rpc)
+    limit = 2 * iris_backend.TRANSFER_CHUNK_BYTES + 5
+    script = f"head -c {limit + 100} /dev/zero | tr '\\000' x; printf small >&2"
+
+    result = asyncio.run(machine.run(Command(("sh", "-c", script), output_limit_bytes=limit)))
+
+    assert result.stdout == b"x" * limit
+    assert result.stdout_truncated
+    assert (result.stderr, result.stderr_truncated) == (b"small", False)
+    assert rpc.scratch_files() == []
+
+
+def test_a_command_in_a_missing_directory_fails_with_its_shell_error(tmp_path: Path) -> None:
+    machine, _ = local_machine(tmp_path)
+
+    result = asyncio.run(machine.run(Command(("true",), cwd=str(tmp_path / "missing"))))
+
+    assert result.exit_code == 1
+    assert b"missing" in result.stderr
+
+
+@pytest.mark.parametrize("payload_bytes", [16, 3 * 64 * 1024])
+def test_directory_round_trips_through_upload_and_download(tmp_path: Path, payload_bytes: int) -> None:
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested" / "data.bin").write_bytes(os.urandom(payload_bytes))
+    (source / "top.txt").write_text("top")
+    rpc = RecordingRpc()
+    machine, _ = local_machine(tmp_path, rpc)
+
+    async def scenario() -> None:
+        await machine.upload(source, str(tmp_path / "remote"))
+        await machine.download(str(tmp_path / "remote"), tmp_path / "back")
+
+    asyncio.run(scenario())
+
+    for relative in ("nested/data.bin", "top.txt"):
+        assert (tmp_path / "back" / relative).read_bytes() == (source / relative).read_bytes()
+    assert rpc.scratch_files() == []
+
+
+def test_small_transfers_take_one_exec_each(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "grader.py").write_text("print('ok')\n")
+    rpc = RecordingRpc()
+    machine, _ = local_machine(tmp_path, rpc)
+
+    asyncio.run(machine.upload(source, str(tmp_path / "remote")))
+    uploaded_directory = len(rpc.scripts)
+    asyncio.run(machine.upload(source / "grader.py", str(tmp_path / "copy" / "grader.py")))
+    uploaded_file = len(rpc.scripts) - uploaded_directory
+    asyncio.run(machine.download(str(tmp_path / "copy" / "grader.py"), tmp_path / "reward.py"))
+    downloaded_file = len(rpc.scripts) - uploaded_directory - uploaded_file
+
+    assert (uploaded_directory, uploaded_file, downloaded_file) == (1, 1, 1)
+    assert (tmp_path / "reward.py").read_text() == "print('ok')\n"
+
+
+def test_factory_polls_a_starting_sandbox_with_task_listings_alone(monkeypatch, tmp_path):
+    task = LocalTask(TaskState.PENDING)
+    job = LocalJob(task)
+    client = TaskClient(job)
+    original_list_tasks = client.list_tasks
+
+    def list_tasks(job_id):
+        if client.task_listings == 2:
+            task.state = TaskState.RUNNING
+        return original_list_tasks(job_id)
+
+    client.list_tasks = list_tasks  # type: ignore[method-assign]
+    monkeypatch.setattr(iris_backend, "START_POLL_BACKOFF", ExponentialBackoff(initial=0.001, maximum=0.001))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+    spec = MachineSpec(source=RegistryImage("ubuntu:24.04"), workdir=str(tmp_path / "workspace"))
+
+    async def scenario():
+        machine = await factory.create(spec)
+        try:
+            assert machine.task.task_id == task.task_id
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+    assert client.task_listings == 3

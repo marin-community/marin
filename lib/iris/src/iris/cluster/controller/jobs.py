@@ -678,19 +678,24 @@ def _validate_launch_capacity(
                 f"structure the work as a launcher job that admits tasks gradually.",
             )
 
-    if launch.job_id.parent is None:
-        return
     with dependencies.db.read_snapshot() as snapshot:
-        parent_state = reads.get_job_state(snapshot, launch.job_id.parent)
+        _require_live_parent(snapshot, launch.job_id)
+
+
+def _require_live_parent(tx: Tx, job_id: JobName) -> None:
+    """Reject a child job whose parent is absent or terminal."""
+    if job_id.parent is None:
+        return
+    parent_state = reads.get_job_state(tx, job_id.parent)
     if parent_state is None:
         raise ConnectError(
             Code.FAILED_PRECONDITION,
-            f"Cannot submit job: parent job {launch.job_id.parent} is absent from the database",
+            f"Cannot submit job: parent job {job_id.parent} is absent from the database",
         )
     if parent_state in TERMINAL_JOB_STATES:
         raise ConnectError(
             Code.FAILED_PRECONDITION,
-            f"Cannot submit job: parent job {launch.job_id.parent} has terminated "
+            f"Cannot submit job: parent job {job_id.parent} has terminated "
             f"(state={job_pb2.JobState.Name(parent_state)})",
         )
 
@@ -870,6 +875,9 @@ def _insert_local_job(
                 Code.ALREADY_EXISTS,
                 f"Job {launch.job_id} already exists (concurrent submission)",
             )
+        # Re-check under the write lock: a parent cancel that committed after
+        # admission would otherwise strand this child PENDING under a KILLED parent.
+        _require_live_parent(cur, launch.job_id)
         ops.job.submit(
             cur,
             job_id=launch.job_id,
