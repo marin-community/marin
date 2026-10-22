@@ -558,7 +558,6 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
     source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)").replace(
         declared, declared + "    global encoded_numbers\n", 1
     )
-    assert source.count("global encoded_numbers") == 1
     expected = "NameError: name 'encoded_numbers' is not defined at numbers, " + program_line(
         source, "content_base64=encoded_numbers"
     )
@@ -566,13 +565,9 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
 
 
 async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
-    """A step raising a missing file's error is a program bug, not the storage fault the OSError pass-through covers.
-
-    The restricted loader gives a program no ``open``, so the step raises the error itself.
-    """
+    """The restricted loader excludes ``open``, so the step raises FileNotFoundError directly."""
     missing = '    raise FileNotFoundError(2, "No such file or directory", "/workspace/does-not-exist.txt")\n'
     source = SOURCE.replace("    return TaskResource(\n", missing + "    return TaskResource(\n", 1)
-    assert source != SOURCE
     expected = (
         "FileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt' at numbers, "
         + program_line(source, "does-not-exist")

@@ -44,9 +44,11 @@ Outside Iris, `--run` submits a 4-CPU coordinator with 16 GB RAM and 64 GB disk.
 through the Marin hub to their target cluster. The coordinator runs the same module and arguments
 inside Iris, where `--run` executes the artifact graph. This preserves one construction and
 validation path. The submitter forwards `DAYTONA_API_KEY`, `DAYTONA_RL_API_KEY`,
-`DAYTONA_EVAL_API_KEY`, `HF_TOKEN`, and `WANDB_API_KEY` when they
-are present in its environment. The RL and eval keys let rollout and evaluation
-workloads use separate Daytona credentials.
+`DAYTONA_EVAL_API_KEY`, and `TOGETHER_API_KEY` when present in its environment.
+The RL and eval keys let rollout and evaluation use separate Daytona credentials.
+Iris forwards available HF/W&B/CoreWeave credentials and the current application-secret
+bundle as read-only files; ordinary child jobs inherit that bundle by default.
+See [secret delivery](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
 
 ## One Hydra launch document
 
@@ -178,6 +180,15 @@ Use artifact dependencies for model and data handoffs. A raw checkpoint path hid
 can point at an incomplete export. Keep resume behavior and terminal export explicit. Use Marin's
 temporary-storage helper for checkpoints and trajectories so paths have a bounded lifetime and do
 not repeat a source bucket prefix.
+
+SkyRL keeps the two most recent recovery checkpoints by default. For an RSI loop
+that needs only the latest recovery point, set
+`retention=SkyRLRetentionPolicy(resume_checkpoint_count=1)` in `SkyRLSpec`.
+Marin translates this policy to `trainer.max_ckpts_to_keep`; standalone SkyRL
+recipes can set that field directly. Cleanup runs after the replacement checkpoint
+has uploaded and its latest-checkpoint marker has been published. Pending HF
+exports and the selected best native checkpoint remain protected beyond this
+rolling window. Each successful Marin run also produces a durable terminal export.
 
 The temporary checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old
