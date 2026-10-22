@@ -9,6 +9,9 @@ import pytest
 import numpy as np
 import ray
 from ray.actor import ActorHandle
+from omegaconf import OmegaConf
+from rolloutengine.models import ModelTurn
+from taskcompendium.grading_result import GradeResult, Outcome
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
@@ -25,6 +28,8 @@ from skyrl_train.rollouts.context import RolloutRequestSpec, TrainingContext
 from skyrl_train.rollouts.loader import PromptLoader, PromptOrder, SeededPasses
 from skyrl_train.rollouts.payloads import MemoryPayloads, PayloadStore
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
+from skyrl_train.rollouts.task_projections import WholeTaskProjection
+from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
 
 from tests.cpu.task_specs import lowered_task, task_input, text_task
@@ -154,25 +159,26 @@ async def _next_uids(context: TrainingContext) -> list[str]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topk", [0, 128])
 async def test_training_task_persists_capture_costs_with_its_rollout(topk):
-    ids = np.zeros((4, 128), dtype=np.int32)
-    scores = np.zeros((4, 128), dtype=np.float32)
-    outputs = [SimpleNamespace(steps=[SimpleNamespace(turn=SimpleNamespace(metadata={
-        "student_topk_indices": ids, "behavior_topk_logprobs": scores,
-    }))])]
-    batch = {
-        "response_ids": [[11, 12, 13, 14]],
-        "score_probe_positions": [np.array([3], dtype=np.int32)],
-        "score_probe_indices": [ids[3:]],
-        "score_probe_logprobs": [scores[3:]],
-    }
+    ids = np.tile(np.arange(128, dtype=np.int32), (4, 1))
+    scores = np.full((4, 128), -np.log(128), dtype=np.float32)
+    logprobs = tuple(float(value) for value in scores[:, 0])
+    response = (11, 12, 13, 14)
+    messages = ({"role": "assistant", "content": "answer"},)
+    turn = ModelTurn(
+        message=messages[0], text="answer", prompt_token_ids=(1,), response_token_ids=response,
+        logprobs=logprobs, stop_reason="stop",
+        metadata={"student_topk_indices": ids, "behavior_topk_logprobs": scores} if topk else {},
+    )
+    grade = GradeResult(status=Outcome.GRADED, reward=1.0)
+    outputs = [TrainingRollout(
+        task_id="prompt", messages=messages, prompt_token_ids=(1,), response_token_ids=response,
+        loss_mask=(1, 1, 1, 1), logprobs=logprobs, grade=grade, stop_reason="stop",
+        steps=(TrainingStep(turn, TrainingTransition(done=True, reward=1.0, grade=grade), 3, messages),),
+    )]
 
     class Worker(TaskRolloutWorker):
         async def generate(self, request):
             return outputs
-
-        async def training_batch(self, request, generated):
-            assert generated is outputs
-            return batch
 
     class Writer:
         async def write_rollout(self, lease, group):
@@ -180,7 +186,13 @@ async def test_training_task_persists_capture_costs_with_its_rollout(topk):
 
     worker = object.__new__(Worker)
     worker.closing, worker.active_requests = False, set()
-    request = TaskRequestBatch(rows=(), sampling_params={"logprobs": topk}, score_centering_probe_tokens=32)
+    worker.trajectory_runner_cfg = OmegaConf.create({"apply_overlong_filtering": False, "sampling_params": {"logprobs": topk}})
+    worker.projection = WholeTaskProjection(worker.trajectory_runner_cfg, SimpleNamespace(eos_token_id=2))
+    worker.trajectory_sink = None
+    request = TaskRequestBatch(
+        rows=(task_input(lowered_task(text_task("prompt"))),), sampling_params={"logprobs": topk},
+        score_centering_probe_tokens=1 if topk else 0,
+    )
     task = RolloutTask(RolloutLease("lease", 7, 8), {"uid": "prompt"}, request)
     writer = Writer()
     assert await worker.run_task(task, writer) == 4
@@ -195,7 +207,7 @@ async def test_training_task_persists_capture_costs_with_its_rollout(topk):
         assert metrics["score_centering_capture/collection_seconds_sum"] >= 0
         assert metrics["score_centering_capture/assembly_seconds_sum"] >= 0
     else:
-        assert metrics == {}
+        assert not any(name.startswith("score_centering_capture/") for name in metrics)
 
 
 @pytest.mark.asyncio
