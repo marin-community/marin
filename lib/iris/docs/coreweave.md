@@ -408,10 +408,12 @@ leave every other node permanently cold.
 
 `storage.local_state_dir` controls controller SQLite storage. When it is empty,
 Iris creates a controller state PVC. When set, it mounts that directory from the
-node through `hostPath`. The controller selects its configured scale group, with
-no hostname pin, so a replacement Pod can land on a different node and restore
-from `storage.remote_state_dir`. Changes after the restored checkpoint can be
-lost. On the original node, startup reuses a healthy local DB only if its
+node through `hostPath`. `controller.coreweave.hostname` pins the controller to
+the host holding that state; the Deployment retains both the scale-group selector
+and the hostname selector on subsequent deploys. RNO2A, US-EAST-02A, and US-EAST-08A
+configure this pin. Without one, a replacement Pod can land on a different node
+and restore from `storage.remote_state_dir`. Changes after the restored checkpoint
+can be lost. On the original node, startup reuses a healthy local DB only if its
 checkpoint marker matches the selected remote checkpoint (or no remote
 checkpoint exists). Startup selects the latest remote checkpoint unless
 `--checkpoint-path` supplies an explicit one.
@@ -420,8 +422,12 @@ To retain the original node during a manual rollout, update the Kubernetes
 Deployment's Pod template with both a `kubernetes.io/hostname` node selector and
 the intended image in one patch, keeping the `Recreate` strategy. Adding the
 selector alone triggers a rollout, so a combined patch avoids an extra restart.
-`iris cluster controller restart` recreates the Deployment from configuration
-and removes manual placement changes.
+Also set `controller.coreweave.hostname` in the cluster configuration so
+`iris cluster controller restart` preserves the placement on later deploys.
+
+If a pinned node fails, restore its availability or explicitly move the controller
+and restore its state before changing the hostname. The pin deliberately prevents
+automatic relocation onto a different local disk.
 
 ## Credentials Summary
 

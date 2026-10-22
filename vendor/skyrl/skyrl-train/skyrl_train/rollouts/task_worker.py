@@ -4,22 +4,17 @@ import asyncio
 import numpy as np
 import math
 import os
-import shutil
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
-from functools import partial
 from typing import Any, Protocol
 from uuid import uuid4
 
 from jinja2 import TemplateError
-from daytona import AsyncDaytona, DaytonaConfig, DaytonaError
+from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
-from shellbox.backends.docker.machine import DockerMachineFactory
-from shellbox.backends.daytona.machine import DaytonaMachineFactory
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader
@@ -40,6 +35,7 @@ from rolloutengine.models import (
 )
 from rolloutengine.engine import RolloutEngine
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
+from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
@@ -661,15 +657,7 @@ class TaskRolloutWorkerSpec:
                 ),
                 int(runner_config.sampling_params.max_generate_length),
             )
-        factories: dict[str, MachineFactory] = {"shellsim": ShellSimMachineFactory()}
-        daytona = self.config.environment.task_sessions.get("daytona")
-        if daytona is not None:
-            factories[Backend.DAYTONA] = DaytonaMachineFactory(
-                client_factory=partial(AsyncDaytona, DaytonaConfig(api_key=os.environ[daytona.api_key_env])),
-                ttl_minutes=int(daytona.ttl_minutes),
-            )
-        if shutil.which("docker") is not None:
-            factories[Backend.DOCKER] = DockerMachineFactory()
+        factories = task_machine_factories(self.config.environment.task_sessions)
         if harbor is not None:
             if harbor.environment.type != EnvironmentType.DOCKER:
                 factories[HARBOR_MACHINE_BACKEND] = harbor.machine_factory()

@@ -6,8 +6,8 @@ Its manifest SHA256 is `7a5f1047648a90262514a663168580610b9f6bbe1522b2c38b7578bb
 each downloaded file must match the manifest's byte count and SHA256.
 CatCount CI steps supply the repository's CoreWeave credentials and S3 endpoint
 through the shared remote I/O factory. A successful download prints
-`CAT_COUNT_POLICY source=s3`. Tests skip when credentials are absent, as on fork
-PRs; download and integrity errors with credentials present fail the test.
+`CAT_COUNT_POLICY source=s3`. Tests skip when credentials are absent, as on
+external PRs; download and integrity errors with credentials present fail the test.
 CI never pretrains the policy.
 
 PR CI runs ten normal training steps on seed 0 with the positive assertions.
@@ -16,7 +16,7 @@ staleness and optimizer updates. At some resumed evaluation the mean train and
 held-out reward must be at least 0.65 and at least 0.3 above its initial value.
 The resume run uses 100 steps.
 
-Regenerate from the repository root in the frozen CPU environment:
+Regenerate from `vendor/skyrl` in the frozen CPU environment:
 
 ```bash
 uv sync --frozen --group dev --group harbor-test --extra cpu --extra telemetry

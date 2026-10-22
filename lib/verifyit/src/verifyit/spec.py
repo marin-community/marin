@@ -29,6 +29,7 @@ DEFAULT_WORKSPACE = "/app"
 
 
 class Mode(StrEnum):
+    UNSOLVABLE = "unsolvable"
     STRUCTURED_EXACT = "structured_exact"
     PREDICTED_ACTION = "predicted_action"
     MCQ = "mcq"
@@ -95,6 +96,14 @@ class FunctionCall:
 
     name: str
     arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class UnsolvableSpec:
+    """A private task label requiring a validated terminal ejection for credit."""
+
+    output: str = DEFAULT_OUTPUT
+    empty_output: EmptyOutputPolicy = field(default=EmptyOutputPolicy.ZERO, kw_only=True)
 
 
 @dataclass(frozen=True)
@@ -341,7 +350,8 @@ class ScriptSpec:
 
 
 Spec = (
-    StructuredExactSpec
+    UnsolvableSpec
+    | StructuredExactSpec
     | PredictedActionSpec
     | McqSpec
     | MathSpec
@@ -378,6 +388,9 @@ class ModeDescriptor:
 
 
 MODE_DESCRIPTORS: dict[Mode, ModeDescriptor] = {
+    Mode.UNSOLVABLE: ModeDescriptor(
+        UnsolvableSpec, "grade_unsolvable", CandidateEntrypoints("validate_unsolvable", "grade_unsolvable_candidate")
+    ),
     Mode.STRUCTURED_EXACT: ModeDescriptor(
         StructuredExactSpec,
         "grade_structured_exact",

@@ -24,38 +24,13 @@ try:
 except ImportError:
     orjson = None
 
-# litellm is retained ONLY for its off-hot-path, synchronous registry/type
-# utilities (model-info + supported-params lookups, the Message type). The
-# COMPLETION TRANSPORT is openai.AsyncOpenAI (see _get_openai_client / call).
-# Because we never call litellm.acompletion/aresponses anymore, litellm's async
-# LoggingWorker and its TTL-recreated aiohttp client cache are never exercised,
-# so the two FD-leak SIGABRT signatures they caused are gone at the root — which
-# is why the three litellm-specific monkeypatches (async-logging-worker
-# neutralizer, http-client-cache pin, orphan-task reaper) that used to live here
-# have been deleted rather than ported.
-from harbor.llms._litellm_setup import litellm  # Configures litellm before use
-from litellm import Message
-from litellm.litellm_core_utils.get_supported_openai_params import (
-    get_supported_openai_params,
-)
-from litellm.utils import get_model_info
-from pydantic import BaseModel
-from tenacity import (
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-)
-
-from harbor_config.model_name import split_provider_model_name
-
 from harbor.literal import extract_literal_from_response
 from harbor.llms.base import (
     BaseLLM,
     ContextBudgetExceededError,
     ContextLengthExceededError,
-    LLMResponse,
     LLMRequestTimeoutError,
+    LLMResponse,
     OpenAITransportConnectTimeoutError,
     OutputLengthExceededError,
 )
@@ -69,7 +44,14 @@ from harbor.models.metric import UsageInfo
 from harbor.telemetry.observer import FAILURE_KIND_LLM_REQUEST, record_failure
 from harbor.utils.artifact_writer import get_artifact_writer
 from harbor.utils.logger import logger
-
+from harbor_config.model_name import split_provider_model_name
+from pydantic import BaseModel
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 _DEFAULT_OPENAI_CONNECT_TIMEOUT_SEC = 20.0
 _OPENAI_CONNECT_TIMEOUT_ENV = "HARBOR_OPENAI_CONNECT_TIMEOUT_SEC"
@@ -178,7 +160,7 @@ def _timeout_phase(error: openai.APITimeoutError) -> str:
 
 
 def _is_retryable_llm_error(error: BaseException) -> bool:
-    """Retry policy for ``LiteLLM.call``.
+    """Retry policy for ``OpenAILLM.call``.
 
     Only the dedicated OpenAI connection-timeout subtype is retried among request
     timeouts. It represents a failure before request bytes reached the server.
@@ -223,33 +205,6 @@ def _loads_raw_response(content: bytes, text: str) -> dict[str, Any]:
     return json.loads(text)
 
 
-# This is used as a fallback for when the model does not support response_format
-
-STRUCTURED_RESPONSE_PROMPT_TEMPLATE = """
-You must respond in the following JSON format.
-
-Here is the json schema:
-
-```json
-{schema}
-```
-
-Here is the prompt:
-
-{prompt}
-"""
-
-
-# --- openai.AsyncOpenAI request-param whitelists (drop_params replacement) ---
-# litellm was invoked with drop_params=True, which SILENTLY discarded any
-# top-level request param the endpoint doesn't accept (e.g. the
-# ``previous_response_id`` chat.chat always forwards on the chat path, or
-# provider-only knobs). openai's typed ``create(...)`` instead raises TypeError
-# on an unexpected keyword, so we mirror drop_params by filtering completion
-# kwargs down to the params the openai SDK actually accepts before dispatch.
-# Non-standard fields (vLLM's ``return_token_ids``, ``session_id``, anthropic
-# ``thinking``, chat-template kwargs) are delivered via ``extra_body``, which the
-# SDK forwards into the JSON body verbatim.
 _OPENAI_CHAT_PARAMS = frozenset(
     {
         "messages",
@@ -383,7 +338,7 @@ _CLIENT_ONLY_LLM_KWARGS = frozenset(
 # few tokens off the vLLM-reported max_model_len so the effective limit sits
 # just below the hard wall and a +/-1 boundary prompt can never render past it.
 # Default 8 tokens; override via HARBOR_VLLM_CONTEXT_SAFETY_BUFFER. Only ever
-# applied to the live vLLM limit (the hard wall), never to the registry value.
+# applied to the live vLLM limit (the hard wall), never to the configured value.
 try:
     _VLLM_CONTEXT_SAFETY_BUFFER = int(
         os.environ.get("HARBOR_VLLM_CONTEXT_SAFETY_BUFFER", "8")
@@ -394,59 +349,8 @@ if _VLLM_CONTEXT_SAFETY_BUFFER < 0:
     _VLLM_CONTEXT_SAFETY_BUFFER = 0
 
 
-# --- Process-global context-limit caches (coordinator-loop probe elimination) ---
-# The vLLM `max_model_len` (per endpoint) and the resolved context limit (per
-# endpoint+model) are CONSTANT for the life of a server. Under RL rollout
-# generation ~168 trials per coordinator churn through short-lived LiteLLM
-# instances; a purely PER-INSTANCE cache still lets each new instance's FIRST
-# `get_model_context_limit()` fire a SYNCHRONOUS `httpx.Client(timeout=10).get(/v1/models)`
-# inline on the coordinator asyncio loop (a live v0j py-spy pinned this as the
-# DOMINANT loop blocker — a steady stream of loop-blocking GETs, worse than the
-# litellm executor preamble). Caching the probe result and the resolved limit
-# PROCESS-GLOBALLY (keyed by base_url / base_url+model) collapses this to at most
-# ONE probe per endpoint for the whole process; every subsequent instance reads
-# the dict with zero HTTP, so the per-instance first-probe cost is eliminated.
 _VLLM_MAX_MODEL_LEN_CACHE: dict[str, int | None] = {}
-_RESOLVED_CONTEXT_LIMIT_CACHE: dict[tuple[str, str], int] = {}
 
-
-# --- Transport router: AsyncOpenAI (OpenAI protocol) vs litellm fallback ---
-# 101b1400 swapped the completion transport to openai.AsyncOpenAI, which speaks
-# ONLY the OpenAI wire protocol. That is correct for RL/served-vLLM (every RL
-# request is `hosted_vllm/*` against a vLLM `/v1` endpoint) but would break a
-# caller hitting a NATIVE non-OpenAI provider (native Anthropic `claude-*` via
-# the Anthropic API, native Gemini/Vertex/Bedrock/Cohere/...). litellm is still
-# installed (registry/type utilities), so native requests fall back to
-# `litellm.acompletion` — the pre-101b1400 dispatch, preserved so the change is
-# a NO-OP for those callers.
-#
-# The decision is a PURE FUNCTION of the request params (provider prefix +
-# api_base): ZERO HTTP, ZERO runtime probe/poll — a string check, computed once
-# per (model, api_base) and memoized. Safe-by-default: we route to AsyncOpenAI
-# ONLY when we can CONFIDENTLY prove OpenAI-compat; on ANY ambiguity (unknown
-# provider, no OpenAI-compat signal) we fall back to litellm rather than risk
-# sending a non-OpenAI request to AsyncOpenAI and crashing the job.
-#
-# Known-native prefixes are listed for documentation/readability; the predicate
-# does not depend on the list being exhaustive (anything not provably
-# OpenAI-compat routes to litellm regardless).
-_NATIVE_NON_OPENAI_PROVIDERS = frozenset(
-    {
-        "anthropic",
-        "gemini",
-        "vertex_ai",
-        "bedrock",
-        "cohere",
-        "palm",
-        "mistral",
-        "together_ai",
-        "replicate",
-        "ai21",
-        "sagemaker",
-        "watsonx",
-    }
-)
-_ROUTE_IS_OPENAI_CACHE: dict[tuple[str, str], bool] = {}
 
 # Reasoning markers emitted inline by models served through text completions,
 # where vLLM's chat-serving reasoning parser does not run.
@@ -508,17 +412,8 @@ def _suffix_not_already_generated(
 def _is_openai_compatible_route(
     provider_prefix: str | None, api_base: str | None
 ) -> bool:
-    """Return True => dispatch via AsyncOpenAI (OpenAI protocol); False => litellm.
-
-    Pure, HTTP-free routing predicate. OpenAI-compat is proved by EITHER a
-    known OpenAI-protocol provider prefix (`hosted_vllm`/`openai`) OR an explicit
-    OpenAI-compatible ``/v1`` api_base (which covers a served-vLLM endpoint with
-    no prefix and OpenAI-compatible proxies). Everything else — a known native
-    provider, an unknown/absent prefix with no ``/v1`` api_base — is ambiguous
-    and routes to the litellm fallback (safe default: never send a possibly
-    non-OpenAI request to AsyncOpenAI).
-    """
-    if provider_prefix in ("hosted_vllm", "openai"):
+    """Identify OpenAI-compatible endpoints and unprefixed OpenAI models."""
+    if provider_prefix in (None, "hosted_vllm", "openai"):
         return True
     if api_base:
         low = api_base.rstrip("/").lower()
@@ -527,7 +422,7 @@ def _is_openai_compatible_route(
     return False
 
 
-class LiteLLM(BaseLLM):
+class OpenAILLM(BaseLLM):
     # One-shot guard for the Task-A rollout-logprobs-empty diagnostic (see call()).
     # Class-level so the warning fires at most once per worker process under
     # high-concurrency rollout generation.
@@ -552,8 +447,6 @@ class LiteLLM(BaseLLM):
         self._temperature = temperature
         self._model_info = model_info
         self._logger = logger.getChild(__name__)
-        # Lazily-created, long-lived AsyncOpenAI client (one per instance, reused
-        # for the whole run — replaces litellm's TTL-recreated http-client cache).
         self._openai_client: AsyncOpenAI | None = None
         self._request_sequence = 0
 
@@ -572,69 +465,22 @@ class LiteLLM(BaseLLM):
             self._provider_prefix = "hosted_vllm"
             self._canonical_model_name, self._model_info = hosted_vllm_validation
 
-        # Only use canonical model name for hosted_vllm; other providers like
-        # openrouter need the full prefixed name for LiteLLM registry lookups.
-        self._litellm_model_name = (
-            self._canonical_model_name
-            if self._provider_prefix == "hosted_vllm"
-            else model_name
-        )
-
-        # Register custom model if model_info is provided (registry lookups only;
-        # this does NOT touch the completion transport).
-        if self._model_info is not None:
-            try:
-                litellm.register_model({self._litellm_model_name: self._model_info})
-                self._logger.debug(
-                    f"Registered custom model '{model_name}' with info: {self._model_info}"
-                )
-            except Exception as e:
-                self._logger.warning(
-                    f"Failed to register custom model '{model_name}': {e}"
-                )
-
-        self._supported_params = get_supported_openai_params(self._litellm_model_name)
         self._api_base = api_base
+        self._use_openai_transport = _is_openai_compatible_route(
+            self._provider_prefix, api_base
+        )
         self._session_id = session_id
         self._collect_rollout_details = collect_rollout_details
         self._max_thinking_tokens = max_thinking_tokens
         self._reasoning_effort = reasoning_effort
         self._token_in_token_out_templates: dict[str, _TokenContinuationTemplate] = {}
 
-        if self._supported_params is not None:
-            self._supports_response_format = "response_format" in self._supported_params
-        else:
-            self._supports_response_format = False
-
         self._use_responses_api = use_responses_api
-        self._structured_response_prompt_template = STRUCTURED_RESPONSE_PROMPT_TEMPLATE
-
-        # Static, HTTP-free transport routing decision (see
-        # _is_openai_compatible_route). Memoized process-globally per
-        # (model, api_base) — the route is a constant for the life of a
-        # (model, endpoint) pair, like the context-limit caches above.
-        route_key = (self._model_name, self._api_base or "")
-        if route_key in _ROUTE_IS_OPENAI_CACHE:
-            self._use_openai_transport = _ROUTE_IS_OPENAI_CACHE[route_key]
-        else:
-            self._use_openai_transport = _is_openai_compatible_route(
-                self._provider_prefix, self._api_base
-            )
-            _ROUTE_IS_OPENAI_CACHE[route_key] = self._use_openai_transport
-
-    @property
-    def _lookup_model_name(self) -> str:
-        """Get the model name to use for lookups in LiteLLM's model database.
-
-        Returns the canonical model name (without provider prefix) if available,
-        otherwise falls back to the original model name.
-        """
-        return self._litellm_model_name or self._model_name
 
     @property
     def _display_name(self) -> str:
         """Get a display name for logging that shows both canonical and original names if different."""
-        lookup_name = self._lookup_model_name
+        lookup_name = self._canonical_model_name
         if lookup_name != self._model_name:
             return f"{lookup_name} (from '{self._model_name}')"
         return lookup_name
@@ -725,15 +571,11 @@ class LiteLLM(BaseLLM):
         ]
 
     def _get_openai_client(self) -> AsyncOpenAI:
-        """Return the lazily-built, long-lived AsyncOpenAI client for this LLM.
-
-        Pointed at the vLLM ``/v1`` endpoint (``self._api_base``); when no
-        api_base is configured the SDK default (OpenAI) is used. ``max_retries=0``
-        because harbor owns its OWN tenacity retry/backoff around ``call()`` — the
-        SDK must not double-retry. Created once and reused for the whole run
-        (single persistent ``httpx.AsyncClient``), replacing litellm's
-        TTL-recreated aiohttp client cache — the residual slow FD leak.
-        """
+        """Reuse one OpenAI client; Harbor owns retries and request timeouts."""
+        if not _is_openai_compatible_route(self._provider_prefix, self._api_base):
+            raise ValueError(
+                "Configure an OpenAI-compatible api_base for this provider"
+            )
         if self._openai_client is None:
             api_key = (
                 self._llm_kwargs.get("api_key")
@@ -792,11 +634,9 @@ class LiteLLM(BaseLLM):
     def _get_vllm_max_model_len(self) -> int | None:
         """Query the live vLLM server's `max_model_len` via `/v1/models`.
 
-        For models served by vLLM under a custom/hashed name (e.g. RL-finetune
-        checkpoints served as `served_model_name=<hash>`), the registry has no
-        entry, so `get_model_info` falls back to a 1e6 context limit — which
-        silently disables the proactive context-length guard. The vLLM server
-        itself is the ground truth, so we read its `max_model_len` directly.
+        The server's max_model_len is authoritative for served checkpoints.
+        Use it to bound explicit model_info limits and avoid oversized requests
+        when model_info is unavailable.
         Cached per instance AND process-globally (see _VLLM_MAX_MODEL_LEN_CACHE);
         returns None when no vLLM api_base is set or the probe fails.
         """
@@ -805,7 +645,7 @@ class LiteLLM(BaseLLM):
         if hasattr(self, "_cached_vllm_max_model_len"):
             return self._cached_vllm_max_model_len
 
-        # Process-global cache keyed by endpoint: identical for every LiteLLM
+        # Process-global cache keyed by endpoint: identical for every OpenAILLM
         # instance pointing at this vLLM server, so a fresh instance never
         # re-probes (no inline /v1/models GET on the coordinator loop). See the
         # _VLLM_MAX_MODEL_LEN_CACHE comment above.
@@ -842,44 +682,25 @@ class LiteLLM(BaseLLM):
         """Get the context limit (max input tokens) for the current model.
 
         Prefers the live vLLM server's `max_model_len` (the value vLLM actually
-        enforces), falling back to the model registry, then to a large constant.
+        enforces), falling back to model_info, then to a large constant.
         When both are available we take the smaller (most conservative).
 
         Returns:
             int: The maximum input tokens the model can accept, or a fallback value if unavailable.
         """
-        # The context limit is CONSTANT for the life of this LiteLLM instance
+        # The context limit is CONSTANT for the life of this OpenAILLM instance
         # (fixed model + fixed vLLM server). Memoize the final resolved limit so
         # every subsequent per-turn check is a pure attribute read and issues NO
         # HTTP.
         if getattr(self, "_cached_context_limit", None) is not None:
             return self._cached_context_limit
 
-        # Process-global resolved-limit cache keyed by (endpoint, model). The
-        # context limit is constant per (server, model), so once ANY instance
-        # resolves it, every future short-lived instance reuses it without
-        # re-running EITHER the /v1/models probe or the registry lookup on the
-        # coordinator loop. Complements _VLLM_MAX_MODEL_LEN_CACHE so churning RL
-        # instances contribute zero loop-blocking work after the first resolve.
-        global_key = (self._api_base or "", self._lookup_model_name)
-        cached_global = _RESOLVED_CONTEXT_LIMIT_CACHE.get(global_key)
-        if cached_global is not None:
-            self._cached_context_limit = cached_global
-            return cached_global
-
         fallback_context_limit = 1000000
 
-        registry_limit: int | None = None
-        try:
-            model_info = get_model_info(self._lookup_model_name)
-            registry_limit = model_info.get("max_input_tokens")
-            # Fallback to max_tokens if max_input_tokens not available
-            if registry_limit is None:
-                registry_limit = model_info.get("max_tokens")
-        except Exception as e:
-            self._logger.debug(
-                f"Failed to retrieve model info for '{self._display_name}': {e}."
-            )
+        model_info = self._model_info or {}
+        configured_limit = model_info.get("max_input_tokens") or model_info.get(
+            "max_tokens"
+        )
 
         vllm_limit = self._get_vllm_max_model_len()
         # Shave the safety buffer off the live vLLM wall so a +/-1 BPE boundary
@@ -887,18 +708,17 @@ class LiteLLM(BaseLLM):
         if vllm_limit is not None and _VLLM_CONTEXT_SAFETY_BUFFER:
             vllm_limit = max(1, vllm_limit - _VLLM_CONTEXT_SAFETY_BUFFER)
 
-        candidates = [c for c in (registry_limit, vllm_limit) if c]
+        candidates = [c for c in (configured_limit, vllm_limit) if c]
         if candidates:
             self._cached_context_limit = min(candidates)
-            _RESOLVED_CONTEXT_LIMIT_CACHE[global_key] = self._cached_context_limit
             return self._cached_context_limit
 
         self._logger.warning(
             f"No context limit available for '{self._display_name}' from the vLLM "
-            f"server or LiteLLM registry. Using fallback context limit: {fallback_context_limit}"
+            f"server or model_info. Using fallback context limit: {fallback_context_limit}"
         )
         # Do NOT memoize the fallback: it means both the vLLM probe and the
-        # registry were unavailable this call (e.g. server not up yet). Leaving
+        # configured limit were unavailable this call (e.g. server not up yet). Leaving
         # it uncached lets a later call resolve the real limit once ready.
         return fallback_context_limit
 
@@ -908,22 +728,7 @@ class LiteLLM(BaseLLM):
         Returns:
             int | None: The maximum output tokens the model can generate, or None if unavailable.
         """
-        try:
-            model_info = get_model_info(self._lookup_model_name)
-            max_output_tokens = model_info.get("max_output_tokens")
-
-            if max_output_tokens is None:
-                # Model info exists but doesn't have max_output_tokens
-                self._logger.debug(
-                    f"Model '{self._display_name}' info found but missing max_output_tokens field."
-                )
-
-            return max_output_tokens
-        except Exception as e:
-            self._logger.debug(
-                f"Failed to retrieve model info for '{self._display_name}': {e}."
-            )
-            return None
+        return (self._model_info or {}).get("max_output_tokens")
 
     def _clean_value(self, value):
         match value:
@@ -955,7 +760,7 @@ class LiteLLM(BaseLLM):
     ) -> str:
         """Serialize the raw request+response (with logprobs/token_ids).
 
-        Replaces litellm's ``logger_fn`` post_api_call hook: only reached when a
+        Called after an API response: only reached when a
         ``logging_path`` is given (Terminus-2 passes None by default via
         ``enable_episode_logging=False``, so the RL hot path never writes). Any
         api key present in the request is hashed, never persisted in the clear.
@@ -1009,7 +814,7 @@ class LiteLLM(BaseLLM):
     async def call(
         self,
         prompt: str,
-        message_history: list[dict[str, Any] | Message] = [],
+        message_history: list[dict[str, Any]] = [],
         response_format: dict | type[BaseModel] | None = None,
         logging_path: Path | UPath | None = None,
         **kwargs,
@@ -1027,22 +832,9 @@ class LiteLLM(BaseLLM):
                 prompt, message_history, response_format, logging_path, **kwargs
             )
 
-        # previous_response_id is only meaningful for the Responses API; on the
-        # chat path litellm+drop_params silently dropped it. Do the same here so
-        # the always-forwarded (chat.chat) None value never reaches create().
         kwargs.pop("previous_response_id", None)
         completion_kwargs: dict[str, Any] | None = None
         request_metadata: LLMRequestMetadata | None = None
-
-        if response_format is not None and not self._supports_response_format:
-            if isinstance(response_format, dict):
-                schema = json.dumps(response_format, indent=2)
-            else:
-                schema = json.dumps(response_format.model_json_schema(), indent=2)
-            prompt = self._structured_response_prompt_template.format(
-                schema=schema, prompt=prompt
-            )
-            response_format = None
 
         # Prepare messages with caching for Anthropic models
         messages = message_history + [{"role": "user", "content": prompt}]
@@ -1133,13 +925,6 @@ class LiteLLM(BaseLLM):
                 extra_body["session_id"] = self._session_id
 
             try:
-                # Executor-free async dispatch. OpenAI-compat routes (RL /
-                # served-vLLM) go straight to the vLLM /v1 endpoint via
-                # AsyncOpenAI (no litellm sync preamble on the event loop's
-                # 32-wide default executor), returning the byte-exact raw vLLM
-                # JSON dict so the vendor token_ids/prompt_token_ids survive.
-                # Native non-OpenAI routes (anthropic/gemini/...) fall back to
-                # litellm.acompletion (see _dispatch_chat / _acreate_chat_litellm).
                 response = await self._dispatch_chat(completion_kwargs)
             except openai.BadRequestError as e:
                 # If provider (e.g., OpenAI) rejects extra_body parameters, retry without them.
@@ -1197,12 +982,6 @@ class LiteLLM(BaseLLM):
         extra = None
 
         if self._collect_rollout_details:
-            # Reuse the interceptor's raw-JSON extractor so the in-process and
-            # proxy capture paths converge on ONE parser: it reads
-            # choice.provider_specific_fields.token_ids || choice.token_ids,
-            # top-level prompt_token_ids, and choice.logprobs.content[].logprob —
-            # exactly the vLLM fields the litellm path read, keeping the
-            # rollout_details byte-identical (TIS-critical).
             literal = extract_literal_from_response(response)
             prompt_token_ids = literal["prompt_token_ids"]
             completion_token_ids = literal["completion_token_ids"]
@@ -1212,8 +991,8 @@ class LiteLLM(BaseLLM):
             # Emit the actual response-choice shape ONCE per process so the next
             # run reveals whether vLLM dropped `logprobs` vs the engine genuinely
             # not emitting them. Free at 300-concurrent (gated + one-shot).
-            if not logprobs and not LiteLLM._logprob_diag_emitted:
-                LiteLLM._logprob_diag_emitted = True
+            if not logprobs and not OpenAILLM._logprob_diag_emitted:
+                OpenAILLM._logprob_diag_emitted = True
                 try:
                     choices = response.get("choices", []) or []
                     ch0 = choices[0] if choices else None
@@ -1227,9 +1006,11 @@ class LiteLLM(BaseLLM):
                         "[TIS-diag] rollout logprobs EMPTY despite collect_rollout_details. "
                         "choice0_keys=%s logprobs_type=%s logprobs_repr=%.300s "
                         "completion_token_ids_present=%s provider_specific_fields_keys=%s",
-                        sorted(ch0.keys())
-                        if isinstance(ch0, dict)
-                        else type(ch0).__name__,
+                        (
+                            sorted(ch0.keys())
+                            if isinstance(ch0, dict)
+                            else type(ch0).__name__
+                        ),
                         type(lp).__name__,
                         repr(lp),
                         completion_token_ids is not None,
@@ -1422,7 +1203,7 @@ class LiteLLM(BaseLLM):
     ) -> dict[str, Any]:
         """Dispatch a chat completion and return the byte-exact raw vLLM JSON.
 
-        Streaming stays OFF on this path (as under litellm). Filters kwargs down
+        Streaming stays disabled on this path. Filters kwargs down
         to the params the openai SDK accepts (drop_params replacement) and reads
         the raw response body via ``with_raw_response`` so vLLM's vendor fields
         (``token_ids`` / ``prompt_token_ids``) reach the extractor un-coerced.
@@ -1474,77 +1255,11 @@ class LiteLLM(BaseLLM):
             raise
 
     async def _dispatch_chat(self, completion_kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Route a chat completion to the transport chosen at construction.
-
-        OpenAI-compat (RL / served-vLLM) -> AsyncOpenAI (the 101b1400 fast path).
-        Native non-OpenAI (anthropic/gemini/...) -> litellm.acompletion fallback.
-        The decision (``self._use_openai_transport``) is a static, HTTP-free
-        string check made once in ``__init__`` (see _is_openai_compatible_route).
-        Both seams return a plain dict, so the caller's parsing is transport-agnostic.
-        """
         try:
-            if self._use_openai_transport:
-                return await self._acreate_chat_raw(completion_kwargs)
-            return await self._acreate_chat_litellm(completion_kwargs)
+            return await self._acreate_chat_raw(completion_kwargs)
         except Exception as error:
             record_failure(FAILURE_KIND_LLM_REQUEST, error)
             raise
-
-    async def _acreate_chat_litellm(
-        self, completion_kwargs: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Dispatch a NATIVE (non-OpenAI) chat completion via litellm.acompletion.
-
-        The compatibility fallback for providers AsyncOpenAI cannot speak (native
-        Anthropic ``claude-*``, Gemini/Vertex, Bedrock, Cohere, ...). Preserves
-        the pre-101b1400 litellm dispatch so those callers are a NO-OP: litellm
-        routes by the FULL provider-prefixed model name (not the canonical vLLM
-        served name the openai path uses), reads api_base/api_key from the
-        constructor, mirrors the old ``drop_params=True``, and carries ``thinking``
-        as a top-level litellm param (the shared prep stages it in extra_body for
-        the openai transport, so we move it back here).
-
-        This path runs WITHOUT the retired litellm FD-leak monkeypatches. That is
-        acceptable because native calls are RARE + LOW-concurrency (a few eval
-        baselines / a datagen teacher), whereas the FD leak only manifested under
-        sustained high-concurrency RL rollout (~169 trials/coordinator). Do NOT
-        re-add the monkeypatches unless this path becomes high-concurrency.
-
-        Returns a plain dict (litellm ModelResponse.model_dump()) so the shared
-        response-parsing tail in ``call()`` handles both transports identically.
-        """
-        if completion_kwargs.get("stream"):
-            raise NotImplementedError("Streaming is not supported for T bench yet")
-        kw = dict(completion_kwargs)
-        # litellm routes on the provider-PREFIXED name (e.g. anthropic/claude-...,
-        # openrouter/...), not the canonical served name the openai path uses.
-        kw["model"] = self._litellm_model_name
-        kw["drop_params"] = True
-        if self._api_base:
-            kw["api_base"] = self._api_base
-        # Restore the client-config kwargs litellm consumes that _build_base_kwargs
-        # strips for the openai transport (openai reads these off the client, not
-        # the request; litellm reads them off the call).
-        for k in ("api_key", "custom_llm_provider", "num_retries", "mock_response"):
-            if k in self._llm_kwargs:
-                kw[k] = self._llm_kwargs[k]
-        # `thinking` is a top-level litellm param; the shared prep placed it in
-        # extra_body (the openai transport's passthrough). Move it back so the
-        # native path matches the pre-101b1400 request byte-for-byte.
-        extra_body = kw.get("extra_body")
-        if isinstance(extra_body, dict) and "thinking" in extra_body:
-            extra_body = dict(extra_body)
-            kw["thinking"] = extra_body.pop("thinking")
-            if extra_body:
-                kw["extra_body"] = extra_body
-            else:
-                kw.pop("extra_body", None)
-        response = await litellm.acompletion(**kw)
-        if hasattr(response, "model_dump"):
-            return response.model_dump()
-        if isinstance(response, dict):
-            return response
-        return dict(response)
 
     async def _acreate_response(self, responses_kwargs: dict[str, Any]):
         """Dispatch a Responses API call, returning the parsed openai Response."""
@@ -1756,7 +1471,7 @@ class LiteLLM(BaseLLM):
     async def _call_responses(
         self,
         prompt: str,
-        message_history: list[dict[str, Any] | Message] = [],
+        message_history: list[dict[str, Any]] = [],
         response_format: dict | type[BaseModel] | None = None,
         logging_path: Path | UPath | None = None,
         **kwargs,

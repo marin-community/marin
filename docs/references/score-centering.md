@@ -10,9 +10,9 @@ through its reconciled source `f66a6fdccc5d1b9e8aa1c687e24d641a067b165d`.
 That revision merges SkyRL main `82396a73` and adapts its published task-harness
 API; the archived PR head remains `ef1adaf25`.
 The active runtime remains under `vendor/skyrl`, with its independent lock,
-isolated executable and verified Iris source bundle. See
+isolated executable, editable Marin libraries from this checkout and standard Iris workspace bundle. See
 [launching RL experiments](rl-launching.md) and
-[SkyRL migration](../dev-guide/skyrl-migration.md) for packaging and provenance.
+[SkyRL runtime](../dev-guide/skyrl.md) for packaging and provenance.
 
 ## Enable SC
 
