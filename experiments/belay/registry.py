@@ -27,12 +27,14 @@ from pathlib import Path
 import yaml
 
 REGISTRY_DIR = Path(__file__).parent / "registry"
+RECIPES_DIR = REGISTRY_DIR / "recipes"
 ID_RE = re.compile(r"^X\d{4}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 # A trial id is local to its experiment; elsewhere a trial is cited as "<experiment id>.<trial id>", e.g. X0014.t005.
 TRIAL_ID_RE = re.compile(r"^t\d{3}$")
-# A git commit SHA, full or abbreviated to at least 10 characters.
 COMMIT_RE = re.compile(r"[0-9a-f]{10,40}")
+# A control id is local to its recipe; a trial cites it as "<recipe id>.<control id>", e.g. ckpt1.c001.
+CONTROL_ID_RE = re.compile(r"^c\d{3}$")
 # One list shared with the intake bot (scripts/ci/belay_intake.py), which reads it from this branch.
 CATEGORIES: tuple[str, ...] = tuple(json.loads((REGISTRY_DIR / "categories.json").read_text()))
 
@@ -98,6 +100,8 @@ class Trial:
     date: str
     comment_url: str
     baseline: str | None = None
+    baseline_control: str | None = None
+    """The control the delta is measured against, as ``<recipe id>.<control id>``, e.g. ``ckpt1.c001``."""
     steps: int | None = None
     delta: tuple[float, ...] = ()
     loss: tuple[float, ...] = ()
@@ -121,6 +125,34 @@ class Event:
     note: str | None = None
     candidate: str | None = None
     as_adopted: str | None = None
+
+
+@dataclass(frozen=True)
+class Control:
+    """Baseline runs of a recipe, shared by every trial measured against them."""
+
+    id: str
+    wandb: tuple[str, ...]
+    loss: tuple[float, ...]
+    """Paloma macro loss, one per run, in the order of ``wandb``."""
+    rung: str
+    steps: int
+    commit: str | None = None
+
+
+@dataclass(frozen=True)
+class Recipe:
+    """A training recipe that variants are added to and compared against, with its control runs."""
+
+    id: str
+    name: str
+    branch: str
+    commit: str
+    controls: tuple[Control, ...] = ()
+
+    @property
+    def filename(self) -> str:
+        return f"{self.id}.yaml"
 
 
 @dataclass(frozen=True)
@@ -153,7 +185,7 @@ def _build(cls, data: dict):
     unknown = set(data) - set(fields)
     if unknown:
         raise ValueError(f"{cls.__name__}: unknown keys {sorted(unknown)}")
-    nested = {"papers": Paper, "trials": Trial, "events": Event}
+    nested = {"papers": Paper, "trials": Trial, "events": Event, "controls": Control}
     kwargs = {}
     for key, value in data.items():
         if value is None:
@@ -200,23 +232,87 @@ def _plain(value):
     return value
 
 
-def load_experiment(path: Path) -> Experiment:
+def _load(cls, path: Path):
+    """``cls`` from the YAML file at ``path``, whose name must match the record's ``filename``."""
     with open(path) as f:
         data = yaml.safe_load(f)
     try:
-        experiment = _build(Experiment, data)
+        record = _build(cls, data)
     except ValueError as e:
         raise ValueError(f"{path.name}: {e}") from e
-    if path.name != experiment.filename:
-        raise ValueError(f"{path.name}: file must be named {experiment.filename}")
-    return experiment
+    if path.name != record.filename:
+        raise ValueError(f"{path.name}: file must be named {record.filename}")
+    return record
+
+
+def load_experiment(path: Path) -> Experiment:
+    return _load(Experiment, path)
 
 
 def load_registry(directory: Path = REGISTRY_DIR) -> list[Experiment]:
-    """Every experiment in ``directory``, in id order, validated."""
+    """Every experiment in ``directory``, in id order, validated, with each ``baseline_control`` checked against the
+    recipes in ``directory / "recipes"``."""
     experiments = sorted((load_experiment(p) for p in directory.glob("X*.yaml")), key=lambda e: e.id)
     validate(experiments)
+    check_baseline_controls(experiments, load_recipes(directory / "recipes"))
     return experiments
+
+
+def load_recipe(path: Path) -> Recipe:
+    return _load(Recipe, path)
+
+
+def load_recipes(directory: Path = RECIPES_DIR) -> list[Recipe]:
+    """Every recipe in ``directory``, in id order, validated."""
+    recipes = sorted((load_recipe(p) for p in directory.glob("*.yaml")), key=lambda r: r.id)
+    validate_recipes(recipes)
+    return recipes
+
+
+def _check_commit(where: str, commit: object) -> None:
+    # YAML reads an unquoted all-digit SHA as an int.
+    if not isinstance(commit, str):
+        raise ValueError(f"{where}: commit {commit!r} was read as a number; quote it in the YAML")
+    if not COMMIT_RE.fullmatch(commit):
+        raise ValueError(f"{where}: commit {commit!r} must be a lowercase hex SHA of 10 to 40 characters")
+
+
+def validate_recipes(recipes: list[Recipe]) -> None:
+    """Raise ValueError on the first malformed recipe or control."""
+    seen = set()
+    for r in recipes:
+        if not SLUG_RE.match(r.id) or r.id in seen:
+            raise ValueError(f"{r.id}: recipe id must be a unique lowercase name")
+        seen.add(r.id)
+        _check_commit(r.id, r.commit)
+        control_ids = [c.id for c in r.controls]
+        if bad := [i for i in control_ids if not CONTROL_ID_RE.match(i)]:
+            raise ValueError(f"{r.id}: control ids {bad} must look like c001")
+        if len(set(control_ids)) != len(control_ids):
+            raise ValueError(f"{r.id}: duplicate control ids")
+        for c in r.controls:
+            if not c.wandb or len(c.loss) != len(c.wandb):
+                raise ValueError(f"{r.id}.{c.id}: needs at least one W&B run and one loss per run")
+            if c.commit is not None:
+                _check_commit(f"{r.id}.{c.id}", c.commit)
+
+
+def check_baseline_controls(experiments: list[Experiment], recipes: list[Recipe]) -> None:
+    """Raise ValueError if a trial's ``baseline_control`` names a control no recipe has, or one run at a different rung
+    or step count than the trial."""
+    controls = {f"{r.id}.{c.id}": c for r in recipes for c in r.controls}
+    for e in experiments:
+        for t in e.trials:
+            if t.baseline_control is None:
+                continue
+            control = controls.get(t.baseline_control)
+            if control is None:
+                raise ValueError(f"{e.id}.{t.id}: baseline_control {t.baseline_control!r} is not a recipe control")
+            if control.rung != t.rung or (t.steps is not None and control.steps != t.steps):
+                raise ValueError(
+                    f"{e.id}.{t.id}: baseline_control {t.baseline_control!r} ran {control.rung} for {control.steps} "
+                    f"steps, but the trial ran {t.rung} for {t.steps}"
+                )
 
 
 def validate(experiments: list[Experiment]) -> None:
@@ -244,15 +340,8 @@ def validate(experiments: list[Experiment]) -> None:
         if numbers != sorted(set(numbers)):
             raise ValueError(f"{e.id}: trial ids must increase down the file, with no repeats")
         for t in e.trials:
-            if t.commit is None:
-                continue
-            # YAML reads an unquoted all-digit SHA as an int.
-            if not isinstance(t.commit, str):
-                raise ValueError(f"{e.id}.{t.id}: commit {t.commit!r} was read as a number; quote it in the YAML")
-            if not COMMIT_RE.fullmatch(t.commit):
-                raise ValueError(
-                    f"{e.id}.{t.id}: commit {t.commit!r} must be a lowercase hex SHA of 10 to 40 characters"
-                )
+            if t.commit is not None:
+                _check_commit(f"{e.id}.{t.id}", t.commit)
 
 
 def write_experiment(experiment: Experiment, directory: Path = REGISTRY_DIR) -> Path:

@@ -23,6 +23,7 @@ trials:
   date: '2026-10-15'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184043489
   baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  baseline_control: ckpt1.c001
   steps: 2760
   delta:
   - 0.0005
@@ -45,6 +46,7 @@ trials:
   date: '2026-10-15'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184043489
   baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  baseline_control: ckpt1.c001
   steps: 2760
   delta:
   - 0.0216
@@ -68,6 +70,7 @@ trials:
   date: '2026-10-15'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184043489
   baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  baseline_control: ckpt1.c001
   steps: 2760
   delta:
   - 0.023
@@ -91,6 +94,7 @@ trials:
   date: '2026-10-15'
   comment_url: https://github.com/marin-community/marin/issues/9451#issuecomment-6184043489
   baseline: Belay Ckpt 1 belay-X0217-ctrl-s0/s1 (3.0269 / 3.0315)
+  baseline_control: ckpt1.c001
   steps: 2760
   delta:
   - 0.024
