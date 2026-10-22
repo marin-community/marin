@@ -452,6 +452,25 @@ class ToolRefusal(Exception):
     """A tool call the session refuses; its message goes back to the model as ``error: ...``."""
 
 
+def candidate_file(raw: str, content: str) -> TaskResource:
+    """The ``TaskResource`` for a candidate's file at ``raw``, a path relative to the machine root.
+
+    Raises:
+        ToolRefusal: ``raw`` is absolute, escapes the root or fails ``TaskResource`` validation, with the
+            form the task takes, so the author can fix the call.
+    """
+    relative = PurePosixPath(raw)
+    if not raw.strip() or relative.is_absolute() or ".." in relative.parts:
+        raise ToolRefusal(
+            f"grading refused: {raw!r} is not a path inside the task machine; file paths are relative to the "
+            "machine root, for example workspace/report.md"
+        )
+    try:
+        return draft_module.file(raw, content)
+    except ValueError as error:
+        raise ToolRefusal(f"grading refused: {raw!r} is not a path the task can hold: {error}") from error
+
+
 @dataclass(frozen=True)
 class Submission:
     path: str
@@ -693,11 +712,12 @@ class AuthorSession:
         )
 
     async def run_grade_candidate(self, arguments: Mapping[str, object]) -> str:
+        """Grade a candidate reply and its files against the last draft; a file path the task cannot hold is refused."""
         draft = self.last_draft
         if draft is None:
             raise ToolRefusal("no draft built in this session yet; run_build the program first")
         grader = step_output(draft, self.build.store_root, GRADER_STEP, Grader)
-        files = [draft_module.file(str(f["path"]), str(f["content"])) for f in _list_argument(arguments, "files")]
+        files = [candidate_file(str(f["path"]), str(f["content"])) for f in _list_argument(arguments, "files")]
         try:
             grade = await host_retried(lambda: self._grade(draft, grader, str(arguments["reply"]), files))
         except (ModelUnavailable, BuildInfrastructureFailure):
@@ -805,8 +825,8 @@ class AuthorSession:
                 "run_grade_candidate",
                 "Grade a candidate answer against the task the last successful run_build built, as validation "
                 "would. reply: the candidate's final reply; files: optional files the candidate leaves in the task "
-                "machine, each {path relative to the machine root, content}. Returns status, reward and the "
-                "grader's diagnostics.",
+                "machine, each {path, content} with the path relative to the machine root (workspace/report.md, "
+                "not /workspace/report.md). Returns status, reward and the grader's diagnostics.",
                 _schema(
                     {
                         "reply": {"type": "string"},
