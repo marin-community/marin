@@ -20,7 +20,8 @@ from cloud.iris.open_mopd_fidelity import (
     load_config,
     validate_output_uri,
 )
-from cloud.iris.runtime_bundle import resolve_launcher_source
+from cloud.iris.paths import PROJECT_ROOT
+from rigging.provenance import Provenance, launch_provenance
 
 DEFAULT_CONFIG = Path(__file__).with_name("configs") / "open_mopd_evaluation.json"
 TASK_MODULE = "cloud.iris.open_mopd_evaluation_task"
@@ -94,7 +95,7 @@ class EvaluationLaunchPlan:
     gate: str
     job_name: str
     gpu_slice: str
-    source_digest: str
+    provenance: Provenance
     source_commit: str
     protocol_source_commit: str
     model_repository: str | None
@@ -362,17 +363,16 @@ def build_plan(
     validate_model_source(checkpoint_uri, model_export_uri, model_export_identity)
     normalized_checkpoint_uri = checkpoint_uri.rstrip("/") if checkpoint_uri is not None else None
     normalized_model_export_uri = model_export_uri.rstrip("/") if model_export_uri is not None else None
-    source = resolve_launcher_source()
     if not re.fullmatch(r"[^@]+@sha256:[0-9a-f]{64}", task_image):
         raise ValueError("--task-image must be a digest-addressed image reference")
     selected_slice = gpu_slice or config.hardware.gpu
     gpu_count(selected_slice)
     try:
-        task_config = config_path.resolve().relative_to(source.root)
-        fidelity_path = (source.root / config.fidelity_config).resolve().relative_to(source.root)
+        task_config = config_path.resolve().relative_to(PROJECT_ROOT)
+        fidelity_path = (PROJECT_ROOT / config.fidelity_config).resolve().relative_to(PROJECT_ROOT)
     except ValueError as error:
         raise ValueError("Evaluation and fidelity configs must be inside the checkout bundled by Iris") from error
-    fidelity = load_config(source.root / fidelity_path)
+    fidelity = load_config(PROJECT_ROOT / fidelity_path)
     planned_completions, maximum_output_tokens = evaluation_scale(config, gate)
     job_name = evaluation_job_name(gate, output_uri)
     omissions = list(config.known_omissions)
@@ -391,8 +391,6 @@ def build_plan(
         selected_slice,
         "--task-image",
         task_image,
-        "--source-digest",
-        source.digest,
     )
     if normalized_checkpoint_uri is not None and checkpoint_step is not None:
         task_args += ("--checkpoint-uri", normalized_checkpoint_uri, "--checkpoint-step", str(checkpoint_step))
@@ -442,7 +440,7 @@ def build_plan(
         gate=gate,
         job_name=job_name,
         gpu_slice=selected_slice,
-        source_digest=source.digest,
+        provenance=launch_provenance(),
         source_commit=fidelity.source.commit,
         protocol_source_commit=config.protocol.source_commit,
         model_repository=(

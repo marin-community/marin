@@ -12,7 +12,7 @@ import sys
 import tempfile
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -42,13 +42,6 @@ _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 SKYRL_PROJECT = Path("vendor/skyrl")
-
-
-def skyrl_runtime_digest() -> str:
-    """Ask the isolated executable to identify its checked-out source and lock."""
-    completed = _run_launcher(_project_command("source-digest"))
-    completed.check_returncode()
-    return completed.stdout.strip()
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -83,13 +76,6 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
             f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
             "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
         )
-
-
-@dataclass(frozen=True)
-class SkyRLRuntime:
-    """Digest of the current SkyRL source, assets, and independent lock."""
-
-    source_digest: str = field(init=False, default_factory=skyrl_runtime_digest)
 
 
 @dataclass(frozen=True)
@@ -415,7 +401,6 @@ class SkyRLSpec:
     name: str
     version: str
     config_yaml: str
-    runtime: SkyRLRuntime
     model: ArtifactHfModel
     train_data: tuple[SkyRLDataSource, ...]
     validation_data: tuple[SkyRLDataSource, ...]
@@ -664,6 +649,8 @@ def _project_command(*arguments: str) -> list[str]:
         "--project",
         str(workspace_root / SKYRL_PROJECT),
         "--frozen",
+        "--extra",
+        "cpu",
         "--no-group",
         "dev",
         "marinskyrl",
@@ -801,7 +788,6 @@ def _launch_config_yaml(
             "export_hf": export_hf,
         },
         "runtime": {
-            "source_digest": spec.runtime.source_digest,
             "profile": _declared_config_value(recipe, "trainer.strategy"),
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
