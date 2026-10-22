@@ -13,6 +13,8 @@ import threading
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from rigging.provenance import launch_provenance
+
 from cloud.iris.artifacts import fs_and_path, read_json
 from marinskyrl.resource_locator import relative_resource_path
 from cloud.iris.open_mopd_fidelity import (
@@ -526,7 +528,6 @@ def argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-uri", required=True)
     parser.add_argument("--gpu-slice", required=True)
     parser.add_argument("--task-image", required=True)
-    parser.add_argument("--source-digest", required=True)
     parser.add_argument("--work-root", type=Path, default=Path("/tmp/open-mopd-fidelity"))
     parser.add_argument("--sync-interval", type=int, default=300)
     return parser
@@ -543,7 +544,6 @@ def main(argv: list[str] | None = None) -> int:
         "gate": args.gate,
         "steps": GATES[args.gate],
         "task_image": args.task_image,
-        "source_digest": args.source_digest,
         "gpu_slice": args.gpu_slice,
     }
     existing_manifest = read_json(join_resource_path(args.output_uri, CONTROL_MANIFEST_NAME))
@@ -560,6 +560,7 @@ def main(argv: list[str] | None = None) -> int:
     command = training_command(config, inputs, args.gate, output, world_size=world_size)
     manifest = {
         **identity,
+        "provenance": asdict(launch_provenance()),
         "command": command,
         "runtime": runtime_inventory(inputs.source),
         "source_patches": source_patches,

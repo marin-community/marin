@@ -16,7 +16,7 @@ from rigging.server_auth import ANONYMOUS_ADMIN, VerifiedIdentity, get_verified_
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from sqlalchemy import Row, bindparam, func, select
 
-from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore
+from iris.cluster.bundle import MAX_BUNDLE_SIZE_BYTES, BundleStore, BundleUploadError
 from iris.cluster.config import user_admitted
 from iris.cluster.constraints import (
     Constraint,
@@ -29,7 +29,6 @@ from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
 from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
-from iris.cluster.controller.budget import budget_user_id
 from iris.cluster.controller.codec import reconstruct_launch_job_request, resource_spec_from_job_row
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
@@ -219,11 +218,13 @@ def peer_status(cluster: str, handoff_state: int | None, has_reported_tasks: boo
     return job_pb2.PEER_STATUS_ASSIGNED
 
 
-def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int) -> str:
+def _federated_pending_reason(cluster: str, handoff_state: int | None, peer_status: int, peer_reachable: bool) -> str:
     """Return the user-visible reason for a pending federated job."""
     if handoff_state == int(HandoffState.QUEUED_HANDOFF):
         if not cluster:
             return "Queued for a federation peer to report free capacity"
+        if not peer_reachable:
+            return f"Peer {cluster} is unreachable; queued until it reconnects"
         return f"Queued for peer {cluster} to report free capacity"
     if peer_status == job_pb2.PEER_STATUS_PENDING_SCHEDULING:
         return f"Awaiting acceptance by peer {cluster}"
@@ -549,7 +550,7 @@ def _launch_identity(
         job_id=job_id,
         received_handoff=received_handoff,
         submitting_user=submitting_user,
-        budget_user=budget_user_id(job_id, submitting_user),
+        budget_user=job_id.user,
     )
 
 
@@ -905,7 +906,10 @@ def launch_job(
     if existing is not None:
         return existing
 
-    request = _store_launch_payload(dependencies, request)
+    try:
+        request = _store_launch_payload(dependencies, request)
+    except BundleUploadError as exc:
+        raise ConnectError(Code.UNAVAILABLE, f"Job {launch.job_id} creation failed: {exc}") from exc
     request = _inject_resource_constraints(request)
     routed = _route_launch(dependencies, request, launch)
     if routed is not None:
@@ -1069,7 +1073,9 @@ def _job_to_proto(
     current_peer_status = peer_status(job.cluster, handoff_state, task_summary is not None)
     pending_reason = job.error or ""
     if job.state == job_pb2.JOB_STATE_PENDING and is_federated(job.cluster):
-        pending_reason = _federated_pending_reason(job.cluster, handoff_state, current_peer_status)
+        pending_reason = _federated_pending_reason(
+            job.cluster, handoff_state, current_peer_status, dependencies.runtime.federation.peer_reachable(job.cluster)
+        )
     elif job.state == job_pb2.JOB_STATE_PENDING:
         sched_reason = dependencies.runtime.get_job_scheduling_diagnostics(job.job_id.to_wire())
         pending_reason = sched_reason or "Pending scheduler feedback"
