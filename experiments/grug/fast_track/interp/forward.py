@@ -215,6 +215,7 @@ def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mul
         check_vma=False,
     )
     o = _bspec(kernel(*args))
+    out["kda_o"] = o
     o = attn.o_norm(o.astype(x.dtype))
     gate = jax.nn.sigmoid(jnp.einsum("bsd,de->bse", x, attn.w_g))
     o = o * rearrange(gate, "... (n d) -> ... n d", d=HEAD_DIM)
@@ -280,7 +281,9 @@ def _mla_branch(attn: CausalSelfAttention, x, seg, token_ids, mask, head_mult, h
     contrib = _mix(hm, c_proj + c_ve, head_mean[None, None]).astype(x.dtype)
     # The value-embedding share of each (possibly ablated) head: the mean replacement is all projection.
     ve_contrib = (hm * c_ve).astype(x.dtype)
-    out.update(q=q, k=k, v_proj=v_proj, ve=ve, ve_weight=ve_w, rel_bias=rel_bias, head_gate=gate[..., 0])
+    out.update(
+        q=q, k=k, v_proj=v_proj, ve=ve, ve_weight=ve_w, rel_bias=rel_bias, head_gate=gate[..., 0], head_contrib=contrib
+    )
     return contrib, ve_contrib
 
 
@@ -351,6 +354,8 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, capacity: int, 
         router_bias=mlp.router_bias.astype(jnp.float32),
         selected=selected,
         combine=combine,
+        used_combine=used,
+        weight_rank=rank,
         routed_input=routed_input,
         slot_token=slot_token,
         slot_rank=slot_slot,
@@ -366,6 +371,11 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, capacity: int, 
         shared_pre_conv=shared_out,
     )
     return routed, shared_out
+
+
+def replicate(tree):
+    """One device: every weight replicated, so the per-head and per-expert einsums need no sharding rules."""
+    return jax.tree.map(lambda x: reshard(x, P(*([None] * x.ndim))) if eqx.is_array(x) else x, tree)
 
 
 def _final_logits(model: Transformer, hidden: jax.Array) -> jax.Array:
@@ -390,8 +400,7 @@ def trace_forward(
     cfg = model.config
     eps = cfg.layer_norm_eps
     b, s = tokens.shape
-    # One device: replicate every weight so the per-head and per-expert einsums need no sharding rules.
-    model = jax.tree.map(lambda x: reshard(x, P(*([None] * x.ndim))) if eqx.is_array(x) else x, model)
+    model = replicate(model)
     seg = reshard(segment_ids, P(_BATCH, None))
     long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=(seg, seg))
     lower, valid = fa4_cute_segment_bounds(long_mask, batch_size=b, seq_len=s, sliding_window=None)
