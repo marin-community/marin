@@ -10,7 +10,7 @@ and both similarities, so pool building can apply its own thresholds without res
 
 import argparse
 import json
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 
 from finestore.schema import arrow_schema
 from fray.types import ResourceConfig
@@ -43,29 +43,31 @@ def task_label(row: dict) -> dict:
     subjects = [match for match in (row["matches"] or {}).get("subjects") or [] if match["facet"] == SUBJECT_FACET]
     if len(subjects) > 1:
         raise ValueError(f"Task {row['source_id']}/{row['task_id']} has {len(subjects)} {SUBJECT_FACET} matches")
-    label = {
-        "content_hash": row["content_hash"],
-        "source_id": row["source_id"],
-        "task_id": row["task_id"],
-        "intended_use": row["intended_use"],
-        "subject_id": None,
-        "subject_similarity": None,
-        "capability_id": None,
-        "capability_similarity": None,
-    }
+    label = TaskLabel(
+        content_hash=row["content_hash"],
+        source_id=row["source_id"],
+        task_id=row["task_id"],
+        intended_use=row["intended_use"],
+        subject_id=None,
+        subject_similarity=None,
+        capability_id=None,
+        capability_similarity=None,
+    )
     if row["description_status"] != "ready" or not subjects:
-        return label
+        return asdict(label)
     match = subjects[0]
     best = match["candidates"][0]
     if best["capability_id"] != match["capability_id"]:
         raise ValueError(f"Task {row['task_id']}: top capability candidate disagrees with its match")
-    return {
-        **label,
-        "subject_id": match["subject_id"],
-        "subject_similarity": match["membership_similarity"],
-        "capability_id": best["capability_id"],
-        "capability_similarity": best["similarity"],
-    }
+    return asdict(
+        replace(
+            label,
+            subject_id=match["subject_id"],
+            subject_similarity=match["membership_similarity"],
+            capability_id=best["capability_id"],
+            capability_similarity=best["similarity"],
+        )
+    )
 
 
 def extract_labels(context: ZephyrContext, release: AlignmentRelease, release_uri: str, output_root: str) -> list[str]:

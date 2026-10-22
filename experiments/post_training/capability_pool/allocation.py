@@ -181,15 +181,15 @@ def allocate(
         try:
             quotas, taskforge = _allocate(active, supply, pool_size, arms)
             break
-        except _ApportionError:
+        except _ApportionError as error:
             found = shortfalls(active, supply, pool_size, arms)
             if policy is InfeasiblePolicy.ERROR or not found:
-                raise InfeasibleTargetError(found, max_pool_size(active, supply, arms)) from None
+                raise InfeasibleTargetError(found, max_pool_size(active, supply, arms)) from error
             for node in sorted({item.node_id for item in found}):
                 del active[node]
                 dropped.append(node)
             if not active:
-                raise InfeasibleTargetError(found, 0) from None
+                raise InfeasibleTargetError(found, 0) from error
     weight_sum = sum(active.values())
     return Allocation(
         weights={node: weight / weight_sum for node, weight in active.items()},

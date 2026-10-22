@@ -61,7 +61,7 @@ CANDIDATE_COLUMNS = [
     "subject_similarity",
     "capability_id",
     "capability_similarity",
-    "leaf",
+    "label_node",
     "target_node",
     "excluded_by",
 ]
@@ -290,19 +290,19 @@ def resolve_candidates(
     targets = hierarchy.target_map(recipe.target)
     excluded = index.filter(pl.col("pool_source") == PoolSource.EXCLUDED.value)
     pool = index.filter(pl.col("pool_source") != PoolSource.EXCLUDED.value).join(labels, on="content_hash", how="left")
-    leaf = partial(label_node, subject_distance=recipe.subject_distance, capability_distance=recipe.capability_distance)
-    leaves = [
-        tag if source == PoolSource.TASKFORGE.value else leaf(subject, subject_sim, capability, capability_sim)
+    place = partial(label_node, subject_distance=recipe.subject_distance, capability_distance=recipe.capability_distance)
+    placements = [
+        tag if source == PoolSource.TASKFORGE.value else place(subject, subject_sim, capability, capability_sim)
         for source, tag, subject, subject_sim, capability, capability_sim in pool.select(
             "pool_source", "tag", "subject_id", "subject_similarity", "capability_id", "capability_similarity"
         ).iter_rows()
     ]
-    unknown = sorted({node for node in leaves if node is not None and node not in hierarchy.nodes})
+    unknown = sorted({node for node in placements if node is not None and node not in hierarchy.nodes})
     if unknown:
         raise ValueError(f"Labels name nodes outside the Atlas hierarchy: {unknown[:10]}")
     pool = pool.with_columns(
-        pl.Series("leaf", leaves, dtype=pl.String),
-        pl.Series("target_node", [targets.get(node) if node else None for node in leaves], dtype=pl.String),
+        pl.Series("label_node", placements, dtype=pl.String),
+        pl.Series("target_node", [targets.get(node) if node else None for node in placements], dtype=pl.String),
         pl.Series(
             "order",
             [seeded_order(value or "", recipe.seed)[0] for value in pool["content_hash"]],
@@ -318,8 +318,8 @@ def resolve_candidates(
         ("held_out", held_out),
         ("unlabelled", tasktrove & pl.col("eval").is_null()),
         ("evaluation_source", tasktrove & pl.col("eval").fill_null(False)),
-        ("untagged", ~tasktrove & pl.col("leaf").is_null()),
-        ("out_of_scope", tasktrove & pl.col("leaf").is_null()),
+        ("untagged", ~tasktrove & pl.col("label_node").is_null()),
+        ("out_of_scope", tasktrove & pl.col("label_node").is_null()),
         ("outside_target", pl.col("target_node").is_null()),
     ]
     reason = pl.lit(None, dtype=pl.String)
@@ -423,11 +423,7 @@ def materialize(chosen: pl.DataFrame, rewrites: Mapping[PoolSource, RowRewrite])
 
 
 def arm_rows(chosen: pl.DataFrame, specs: pl.DataFrame) -> pl.DataFrame:
-    return (
-        chosen.join(specs, on=["path", "task_id"], maintain_order="left")
-        .rename({"leaf": "label_node"})
-        .select(OUTPUT_COLUMNS)
-    )
+    return chosen.join(specs, on=["path", "task_id"], maintain_order="left").select(OUTPUT_COLUMNS)
 
 
 def node_report(allocation: Allocation, supply: Mapping[str, Supply], arms: Mapping[str, pl.DataFrame]) -> list[dict]:
