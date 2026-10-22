@@ -334,7 +334,7 @@ def test_render_is_token_exact_on_real_tokenizers(family, source_name):
     single think tokens; no turn carries a spurious empty think block."""
     if not _hf_reachable():
         pytest.skip("HF hub unreachable")
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer  # noqa: PLC0415 - optional dep guard
 
     tokens = FAMILY_TOKEN_MAPS[family]
     repo, revision = _HF_REVISIONS[family]
