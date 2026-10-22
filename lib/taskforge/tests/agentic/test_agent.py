@@ -24,7 +24,14 @@ from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
 from taskforge.agentic.parallel import ParallelWeb
 from taskforge.agentic.prompts import ADVERSARY_PROMPT, GUESS_PROMPT
-from taskforge.agentic.tools import MAX_EMPTY_BUDGET_CALLS, OPTION_PROBLEM, BlindSolution, OptionList, TaskReview
+from taskforge.agentic.tools import (
+    MAX_EMPTY_BUDGET_CALLS,
+    MAX_UNFINISHED_REVIEWS,
+    OPTION_PROBLEM,
+    BlindSolution,
+    OptionList,
+    TaskReview,
+)
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.client import Completion, ContextExhausted, FinishReason, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
@@ -335,15 +342,21 @@ class CutJudge(AcceptingJudge):
         raise StructuredOutputError(CutReplyError("cut off"), (cut,))
 
 
-async def test_a_cut_judge_reply_fails_the_submit_and_counts_its_tokens():
-    script = (*SCRIPT, call("finish", report="done"))
+async def test_cut_judge_replies_count_their_tokens_and_refuse_a_version_at_last():
+    submits = tuple(call("submit", path=TASK) for _ in range(MAX_UNFINISHED_REVIEWS + 1))
+    script = (*SCRIPT, *submits, call("finish", report="done"))
+    budget = ToolBudget(solver_rollouts=40, judge_calls=2 * (MAX_UNFINISHED_REVIEWS + 1), web_calls=0)
     async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        config = agentic_config(ScriptedAgent(script), budget, web)
         result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=CutJudge()))
 
-    [submit] = tool_replies(result, "call-10")
-    assert "no valid reply" in submit["error"]
-    assert result.spend.judge_tokens == 132_072
+    [first] = tool_replies(result, "call-10")
+    assert "no valid reply" in first["error"]
+    [last] = tool_replies(result, f"call-{9 + MAX_UNFINISHED_REVIEWS}")
+    assert "did not finish a review of this version" in last["error"]
+    [again] = tool_replies(result, f"call-{10 + MAX_UNFINISHED_REVIEWS}")
+    assert "refused this version" in again["error"]
+    assert result.spend.judge_tokens == MAX_UNFINISHED_REVIEWS * 132_072
 
 
 async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():

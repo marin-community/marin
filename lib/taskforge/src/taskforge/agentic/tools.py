@@ -114,6 +114,10 @@ JUDGE_CALLS_PER_REVIEW = 2
 """A review is a blind solve and the review itself."""
 REVIEW_FILE_CHARS = 20_000
 """The most characters of each solver file that the judge reads: it must see a synopsis or a table to judge it."""
+MAX_UNFINISHED_REVIEWS = 3
+"""Submits of one task version whose review the judge did not finish, after which ``submit`` refuses the version. In
+a 30-idea run, four versions got 3 to 7 unfinished reviews and none of them a finished one, and the two versions that
+got one later got it after 2 and 3 unfinished reviews."""
 MAX_EMPTY_BUDGET_CALLS = 3
 """Calls on an empty budget after which the tools stop the session, so that an agent cannot loop on the refusal."""
 EARLY_FINISH_BUDGET_SHARE = 0.5
@@ -145,6 +149,10 @@ MARKUP = re.compile(r"[*`]")
 
 class ToolError(Exception):
     """A mistake of the agent, which the tool gives back to it as an error."""
+
+
+class UnfinishedReviewError(ToolError):
+    """The judge gave no valid reply, for example a reply that the output limit cut off."""
 
 
 class BudgetExhausted(ToolError):
@@ -291,6 +299,7 @@ class TaskforgeTools:
         # The digests of the task versions that a review refused. Another submit of such a version only asks for a
         # new review, and enough of them accept a flawed task.
         self.refused: set[str] = set()
+        self.unfinished_reviews: Counter[str] = Counter()
         self.report: str | None = None
         self.spend = ToolSpend()
         self.empty_budget_calls = 0
@@ -546,7 +555,17 @@ class ToolSession:
             )
             return _result({"accepted": False, "problems": [problem]})
         # The review comes last, so it sees all the evidence of this version of the task.
-        review = await self._review(task, key, evidence)
+        try:
+            review = await self._review(task, key, evidence)
+        except UnfinishedReviewError:
+            self.tools.unfinished_reviews[key] += 1
+            if self.tools.unfinished_reviews[key] < MAX_UNFINISHED_REVIEWS:
+                raise
+            self.tools.refused.add(key)
+            raise ToolError(
+                f"The reviewers did not finish a review of this version {MAX_UNFINISHED_REVIEWS} times, so submit "
+                "refuses it: change the task, for example make it shorter or clearer"
+            ) from None
         if not review.accept:
             self.tools.refused.add(key)
             return _result({"accepted": False, "review": review.model_dump(mode="json")})
@@ -663,7 +682,7 @@ class ToolSession:
         except StructuredOutputError as error:
             # A reply that the output limit cut off is the most expensive judge call, so it counts too.
             self._count_judge_tokens(error.completions)
-            raise ToolError(f"The reviewer gave no valid reply; try again: {error}") from error
+            raise UnfinishedReviewError(f"The reviewer gave no valid reply; try again: {error}") from error
         except ContextExhausted as error:
             raise ToolError(
                 "The reviewer cannot read this task: its prompt and files are too long. Make them shorter."
