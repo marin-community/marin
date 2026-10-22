@@ -164,11 +164,11 @@ spec, so a move of either is a single-site change.
   picks the host's container backend for an image, the local backend for Linux processes without
   one, and ShellSim otherwise, so a lowered spec is bound to its host. A grader with an environment,
   other than a judge, takes a verifier machine; no other grader does. `limits` is a `RolloutLimits`
-  from `rollout_limits(...)`, which sets no token budget. The spec names the harness `SHELL_HARNESS`,
+  from `rollout_limits(...)`, which sets no token budget. The spec names the harness `TOOL_HARNESS`,
   and `lower` rejects what `RolloutEngine.check` rejects (`draft.check`).
 - `spec.draft.rollout_engine(factories, *, command_timeout)` is the `RolloutEngine` every Taskforge
   rollout runs on: the factories and RolloutEngine's `ShellHarness(command_timeout=...)` registered as
-  `SHELL_HARNESS`. The shell command timeout belongs to the harness registration, not to the spec, and
+  `TOOL_HARNESS`. The shell command timeout belongs to the harness registration, not to the spec, and
   each run passes its model: `engine.run_task(spec, model)` returns a `GradedRollout`.
 - `spec.controls.Control` is one labeled candidate submission (`kind`, `category`, `concern`,
   `author`, a `Transcript` or `Workspace` payload, an `Expectation`). `concern` is `reference`,
