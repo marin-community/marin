@@ -216,7 +216,6 @@ async def test_chat_completion_retry_accumulates_and_sends_continuations(exact_p
     second_call = engines[0].calls[1]
     third_call = engines[0].calls[2]
 
-    # First call should be identical to original json (no continuation flags)
     assert first_call["json"] == {**original["json"], "return_token_ids": True}
     assert first_call["headers"] == original["headers"]
     if compact:
@@ -226,27 +225,21 @@ async def test_chat_completion_retry_accumulates_and_sends_continuations(exact_p
     assert first_call["json"]["messages"] == [{"role": "user", "content": "Hi"}]
     assert first_call["json"]["max_tokens"] == 8
 
-    # Second/third calls should be continuation requests
     for call in (second_call, third_call):
         if exact_prompt is not None:
             assert call["json"]["_skyrl_exact_prompt_token_ids"] == [1, 2, 3, 4, 5, 11]
         assert call["headers"] == original["headers"]
-        # Flags
         assert call["json"].get("continue_final_message") is True
         assert call["json"].get("add_generation_prompt") is False
-        # Accumulated assistant message appended with content "A"
         assert call["json"]["messages"][-1] == {"role": "assistant", "content": "A"}
-        # Original user message preserved
         assert call["json"]["messages"][0] == {"role": "user", "content": "Hi"}
         # Remaining max_tokens reduced by 1 (we already generated one token)
         assert call["json"].get("max_tokens") == 7
-        # Other params preserved
         assert call["json"]["model"] == "dummy-model"
         assert call["json"]["logprobs"] is True
         assert call["json"]["top_logprobs"] == 1
         assert call["json"]["return_tokens_as_token_ids"] is True
 
-    # Final response should accumulate content/logprobs/token_ids and usage
     choice = out["choices"][0]
     assert choice["finish_reason"] == "stop"
     assert choice["message"]["content"] == "AB"
@@ -263,7 +256,6 @@ async def test_chat_completion_retry_accumulates_and_sends_continuations(exact_p
     assert choice["token_ids"] == [11, 12]
     assert choice[CHOICE_POLICY_STEPS_KEY] == [7, 8]
 
-    # usage: prompt_tokens from base (5), completion_tokens summed (2), total 7
     assert out["usage"]["prompt_tokens"] == 5
     assert out["usage"]["completion_tokens"] == 2
     assert out["usage"]["total_tokens"] == 7
