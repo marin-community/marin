@@ -10,6 +10,7 @@ import click
 from huggingface_hub import get_token
 
 from rigging.filesystem.storage_path import StoragePath
+from rigging.secrets import get_secret
 
 REMOTE_CLUSTER = "cw-us-east-02a"
 
@@ -33,11 +34,10 @@ def run_remote_transfer(
         remote_command.append("--no-clobber")
     remote_command.extend(urls)
 
-    # Iris forwards HF_TOKEN from the submitter's environment. A token saved by
-    # `hf auth login` is otherwise only present on this machine, not the worker.
+    # A saved Hub login exists only on the submitter; expose it to client forwarding.
     environment = os.environ.copy()
     if any(StoragePath(url).scheme == "hf" for url in urls):
-        token = get_token()
+        token = get_secret("HF_TOKEN") or get_token()
         if token:
             environment["HF_TOKEN"] = token
 

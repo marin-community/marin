@@ -193,18 +193,29 @@ def _build_task_script(request: job_pb2.RunTaskRequest) -> str:
 
 
 def test_task_output_policy_adds_uploader_and_dedicated_volume() -> None:
+    request = make_run_req("/user/job/0", attempt_uid="0123456789abcdef")
+    request.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
     manifest = _build_pod_manifest(
-        make_run_req("/user/job/0", attempt_uid="0123456789abcdef"),
-        pod_config(logship_image="iris-controller", task_outputs=TaskOutputPolicy()),
+        request,
+        pod_config(logship_image="iris-controller", task_outputs=TaskOutputPolicy(), require_coreweave_credentials=True),
     )
 
     uploader = next(container for container in manifest["spec"]["containers"] if container["name"] == "output-uploader")
     mounts = {mount["name"]: mount["mountPath"] for mount in uploader["volumeMounts"]}
     env = {entry["name"]: entry["value"] for entry in uploader["env"]}
-    assert mounts == {"task-outputs": "/iris/outputs", "output-control": "/iris/output-control"}
+    assert mounts == {
+        "task-outputs": "/iris/outputs",
+        "output-control": "/iris/output-control",
+        "job-storage-secrets": "/run/rigging/storage-secrets",
+    }
     assert env["IRIS_ATTEMPT_UID"] == "0123456789abcdef"
     assert env["IRIS_TASK_OUTPUT_TTL_DAYS"] == "7"
     assert output_policy_from_environment(env) == TaskOutputPolicy()
+    task = next(container for container in manifest["spec"]["containers"] if container["name"] == "task")
+    task_env = {entry["name"]: entry.get("value") for entry in task["env"]}
+    for container_env in (env, task_env):
+        assert container_env["AWS_SHARED_CREDENTIALS_FILE"].endswith("/.aws-credentials")
+        assert not {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "CW_KEY_ID", "CW_KEY_SECRET"} & container_env.keys()
 
 
 def test_succeeded_pod_reports_uploader_archive() -> None:
@@ -404,11 +415,16 @@ def test_build_pod_manifest_env_vars():
     assert "IRIS_ADVERTISE_HOST" in env_names
 
 
-def test_build_pod_manifest_env_secret_adds_envfrom():
+def test_build_pod_manifest_secret_is_required_and_read_only():
     req = make_run_req("/test-job/0")
-    manifest = _build_pod_manifest(req, pod_config(env_secret_name="iris-task-env"))
+    req.environment.secrets["custom"] = "secret-value"
+    manifest = _build_pod_manifest(req, pod_config())
     container = manifest["spec"]["containers"][0]
-    assert container["envFrom"] == [{"secretRef": {"name": "iris-task-env", "optional": True}}]
+    assert "envFrom" not in container
+    assert {"name": "job-secrets", "mountPath": "/run/rigging/secrets", "readOnly": True} in container["volumeMounts"]
+    volume = next(v for v in manifest["spec"]["volumes"] if v["name"] == "job-secrets")
+    assert volume["secret"]["secretName"].endswith("-secrets")
+    assert volume["secret"]["defaultMode"] == 0o440
 
 
 def test_build_pod_manifest_no_env_secret_omits_envfrom():
@@ -1033,11 +1049,11 @@ def test_legacy_gvisor_pod_preserves_runtime_and_cluster_resources():
     req = make_run_req("/my-job/task-0")
     req.container_profile = 5
     req.environment.env_vars["TASK_VAR"] = "1"
+    req.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
     config = pod_config(
         controller_address="http://ctrl:8080",
         task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
         task_outputs=TaskOutputPolicy(),
-        env_secret_name="iris-task-env",
         service_account="iris-task",
         host_network=True,
     )
@@ -1051,7 +1067,9 @@ def test_legacy_gvisor_pod_preserves_runtime_and_cluster_resources():
     assert env["TASK_VAR"] == "1"
     assert env["MARIN_PREFIX"] == "s3://bucket/prefix"
     assert env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
-    assert any(source["secretRef"]["name"] == "iris-task-env" for source in task["envFrom"])
+    assert any(m["name"] == "job-secrets" and m["readOnly"] for m in task["volumeMounts"])
+    uploader = next(c for c in spec["containers"] if c["name"] == "output-uploader")
+    assert any(m["name"] == "job-storage-secrets" and m["readOnly"] for m in uploader["volumeMounts"])
     assert spec["serviceAccountName"] == "iris-task"
     assert "hostNetwork" not in spec
     assert "dnsPolicy" not in spec
@@ -1079,7 +1097,7 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
         controller_address="http://ctrl:8080",
         task_env={"MARIN_PREFIX": "s3://bucket/prefix"},
         task_outputs=TaskOutputPolicy(),
-        env_secret_name="iris-task-env",
+        require_coreweave_credentials=True,
         service_account="iris-task",
         host_network=True,
     )
@@ -1094,8 +1112,10 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert "MARIN_PREFIX" not in env
     assert "IRIS_CONTROLLER_ADDRESS" not in env
     assert "envFrom" not in task
+    assert not any("secret" in volume for volume in spec["volumes"])
     assert "serviceAccountName" not in spec
     assert spec["automountServiceAccountToken"] is False
+    assert spec["enableServiceLinks"] is False
     assert "hostNetwork" not in spec
     assert not [v for v in spec["volumes"] if "hostPath" in v and v["name"] in {m.name for m in STANDARD_MOUNTS}]
     assert [c["name"] for c in spec["containers"]] == ["task"]
@@ -1846,3 +1866,9 @@ def test_pod_manifest_floors_an_unset_band_at_interactive():
     req = make_run_req("/test-job/0", priority=job_pb2.PRIORITY_BAND_INHERIT)
     manifest = _build_pod_manifest(req, pod_config())
     assert manifest["spec"]["priorityClassName"] == "iris-interactive"
+
+
+def test_coreweave_retry_without_stored_keys_is_rejected() -> None:
+    request = make_run_req("/user/queued-before-upgrade/0", attempt_id=1)
+    update = _rejected_dispatch(request, pod_config(require_coreweave_credentials=True))
+    assert "https://console.coreweave.com/object-storage/access-keys" in update.error

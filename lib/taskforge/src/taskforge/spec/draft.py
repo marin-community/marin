@@ -85,20 +85,8 @@ LOCAL_READ_ONLY = "read_only"
 LOCAL_COPY_ON_WRITE = "copy_on_write"
 """shellbox's ``SystemDirectories.COPY_ON_WRITE``, the mode ``sandbox.factories.local_sandbox`` sets."""
 LOCAL_UNWRITABLE_ROOTS: Mapping[str, tuple[str, ...]] = {
-    LOCAL_READ_ONLY: (
-        "/bin",
-        "/etc",
-        "/lib",
-        "/lib32",
-        "/lib64",
-        "/libx32",
-        "/opt",
-        "/run/systemd/resolve",
-        "/sbin",
-        "/sys",
-        "/usr",
-    ),
-    LOCAL_COPY_ON_WRITE: ("/run/systemd/resolve", "/sys"),
+    LOCAL_READ_ONLY: ("/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/sys", "/usr"),
+    LOCAL_COPY_ON_WRITE: ("/sys",),
 }
 """The host directories a local machine cannot write, by its factory's system-directory mode.
 
@@ -573,8 +561,8 @@ def host_requirements(
     backend, unless one of the absolute paths in ``writes`` (everything staged or written on the
     machine) falls under ``LOCAL_UNWRITABLE_ROOTS`` for the factory's ``system_directories``, in which
     case it keeps the image on the host's container backend, as it does without a local factory. A
-    copy-on-write factory, the one Taskforge builds on Iris, leaves only ``/sys`` and the resolver's
-    directory out, so a task shipping files to ``/opt`` runs locally; a factory that does not state
+    copy-on-write factory, the one Taskforge builds on Iris, leaves only ``/sys`` out, so a task shipping
+    files to ``/usr`` runs locally; a factory that does not state
     its mode is taken as read-only, shellbox's default. A package machine (``requirements(packages=...)``)
     runs on the local backend only, its packages installed into a uv venv at machine start; on a
     host without a local factory, ``RolloutEngine.check`` rejects it as an unknown factory. Every

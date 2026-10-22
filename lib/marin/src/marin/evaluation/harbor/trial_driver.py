@@ -18,6 +18,7 @@ from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any
 
+import fsspec.config
 import yaml
 from harbor.agents.factory import AgentFactory  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-import]
@@ -34,6 +35,7 @@ from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyre
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.config_discovery import find_project_root
+from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.harbor.agent_context import (
@@ -523,6 +525,9 @@ def _diagnostic(exc: Exception) -> str:
 
 def main() -> None:
     try:
+        # Harbor uses UPath directly, so configure its filesystem credentials
+        # before parsing remote job paths or starting artifact writers.
+        fsspec.config.conf.setdefault("s3", {}).update(s3_credential_options())
         command = sys.argv[1]
         if command == "preflight":
             _preflight(Path(sys.argv[2]))

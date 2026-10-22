@@ -28,6 +28,7 @@ from harbor.environments.docker import (
     write_resources_compose_file,
 )
 from harbor.environments.docker.compose_env import (
+    DOCKER_CLIENT_ENVIRONMENT,
     ComposeInfraEnvVars,
     legacy_log_mount_env_vars,
     merge_compose_env,
@@ -328,13 +329,13 @@ class DockerEnvironment(BaseEnvironment):
         return self._env_vars.main_image_name
 
     def _compose_infra_env_vars(self) -> dict[str, str]:
-        env_vars = self._env_vars.to_env_dict(include_os_env=False)
+        env_vars = self._env_vars.to_env_dict()
         if not self._use_prebuilt:
             env_vars.pop("PREBUILT_IMAGE_NAME", None)
         env_vars.update(legacy_log_mount_env_vars(self._mounts, host_value="source"))
         return env_vars
 
-    def _compose_env_vars(self, include_os_env: bool = True) -> dict[str, str]:
+    def _compose_env_vars(self, include_client_env: bool = True) -> dict[str, str]:
         user_env: dict[str, str] = {}
         if self._compose_task_env:
             user_env.update(self._compose_task_env)
@@ -343,7 +344,15 @@ class DockerEnvironment(BaseEnvironment):
 
         infra = self._compose_infra_env_vars()
         env_vars = merge_compose_env(
-            base_env=os.environ if include_os_env else None,
+            base_env=(
+                {
+                    name: os.environ[name]
+                    for name in DOCKER_CLIENT_ENVIRONMENT
+                    if name in os.environ
+                }
+                if include_client_env
+                else None
+            ),
             user_env=user_env,
             infra_env=infra,
             logger=self.logger,
@@ -376,7 +385,7 @@ class DockerEnvironment(BaseEnvironment):
             full_command.extend(["-f", str(path.resolve().absolute())])
         full_command.extend(command)
 
-        env = self._compose_env_vars(include_os_env=True)
+        env = self._compose_env_vars()
 
         process = await asyncio.create_subprocess_exec(
             *full_command,
@@ -655,7 +664,7 @@ class DockerEnvironment(BaseEnvironment):
 
         variables = " ".join(
             f"export {k}={shlex.quote(str(v))}"
-            for k, v in self._compose_env_vars(include_os_env=False).items()
+            for k, v in self._compose_env_vars(include_client_env=False).items()
         )
 
         # Build the -f flags for docker compose
