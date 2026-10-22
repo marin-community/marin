@@ -26,6 +26,7 @@ _PREFIX_CHARS_PER_TOKEN = 8
 _MIN_OUTPUT_TOKENS = 4096
 _REASONING_RESERVE = 4096
 _OUTPUT_BUDGET_MULTIPLIER = 2
+_MIN_OUTPUT_BUDGET = _OUTPUT_BUDGET_MULTIPLIER * _MIN_OUTPUT_TOKENS
 
 
 class GraphWalksBenchmark(BaseBenchmark):
@@ -64,8 +65,8 @@ class GraphWalksBenchmark(BaseBenchmark):
             raise ValueError("GraphWalks requires the served model's tokenizer")
         generation = canonical_generation_kwargs(options.generation)
         cap = generation.pop("max_gen_toks", None) or options.max_tokens or self.max_tokens
-        if context <= 8192 + _CONTEXT_MARGIN or cap < 8192:
-            raise ValueError("GraphWalks requires room for the prompt and at least 8192 output tokens")
+        if context <= _MIN_OUTPUT_BUDGET + _CONTEXT_MARGIN or cap < _MIN_OUTPUT_BUDGET:
+            raise ValueError(f"GraphWalks requires room for the prompt and at least {_MIN_OUTPUT_BUDGET} output tokens")
         with ExitStack() as stack:
             files = []
             for filename in GRAPHWALKS_FILES:

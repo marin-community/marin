@@ -150,26 +150,22 @@ class LMBackend:
             prompt = self.model.apply_chat_template(prompt, **request.chat_template)
         parameters = canonical_generation_kwargs(request.generation)
         do_sample = parameters.pop("do_sample", None)
-        if isinstance(self.model, TemplateAPI):
-            if "source_do_sample" in request.metadata:
-                if request.metadata["source_do_sample"] is False:
-                    parameters["temperature"] = 0.0
-                    parameters.pop("seed", None)
-                overrides = configured_generation_overrides(self.model)
-                if overrides.get("do_sample") is True and "temperature" not in overrides:
-                    parameters.pop("temperature", None)
-                parameters.update(overrides)
-                parameters.pop("do_sample", None)
-            if request.output_token_cap is not None:
-                parameters["max_gen_toks"] = min(
-                    parameters.get("max_gen_toks", request.output_token_cap), request.output_token_cap,
-                )
-            output = await self._api_request(request, prompt, parameters)
-            return clean_fastchat_response(self.model, conversation, output)
+        if isinstance(self.model, TemplateAPI) and "source_do_sample" in request.metadata:
+            if request.metadata["source_do_sample"] is False:
+                parameters["temperature"] = 0.0
+                parameters.pop("seed", None)
+            overrides = configured_generation_overrides(self.model)
+            if overrides.get("do_sample") is True and "temperature" not in overrides:
+                parameters.pop("temperature", None)
+            parameters.update(overrides)
+            parameters.pop("do_sample", None)
         if request.output_token_cap is not None:
             parameters["max_gen_toks"] = min(
                 parameters.get("max_gen_toks", request.output_token_cap), request.output_token_cap,
             )
+        if isinstance(self.model, TemplateAPI):
+            output = await self._api_request(request, prompt, parameters)
+            return clean_fastchat_response(self.model, conversation, output)
         if do_sample is False:
             parameters["temperature"] = 0.0
         args = (prompt, parameters)
