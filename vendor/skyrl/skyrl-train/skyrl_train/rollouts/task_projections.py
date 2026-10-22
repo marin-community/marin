@@ -168,14 +168,17 @@ def _student_topk(rollout: TrainingRollout) -> AlignedStudentTopK | None:
             raise RolloutContractError("Student top-K evidence must align with model tokens")
         keep = np.asarray(rollout.loss_mask[start : start + length], dtype=np.bool_)
         generated.extend(np.asarray(step.turn.response_token_ids)[keep].tolist())
-        admitted_candidates.append(np.asarray(step_candidates)[keep])
-        admitted_scores.append(np.asarray(step_scores)[keep])
+        all_trainable = bool(keep.all())
+        admitted_candidates.append(np.asarray(step_candidates) if all_trainable else np.asarray(step_candidates)[keep])
+        admitted_scores.append(np.asarray(step_scores) if all_trainable else np.asarray(step_scores)[keep])
+    indices = admitted_candidates[0] if len(admitted_candidates) == 1 else np.concatenate(admitted_candidates)
+    scores = admitted_scores[0] if len(admitted_scores) == 1 else np.concatenate(admitted_scores)
     return align_student_topk(
         rollout.response_token_ids,
         rollout.loss_mask,
         generated,
-        np.concatenate(admitted_candidates),
-        np.concatenate(admitted_scores),
+        indices,
+        scores,
     )
 
 

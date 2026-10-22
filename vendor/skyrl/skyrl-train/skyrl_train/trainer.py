@@ -400,6 +400,7 @@ class RayPPOTrainer:
         self._ftpo_stopped = False
         self._shutdown_complete = False
         self._last_score_probe_time: float | None = None
+        self._last_score_probe_step: int | None = None
         self._restored_rollout_state: TrainingContextState | None = None
         self.global_step = 0
         self.loaded_checkpoint_path: str | None = None
@@ -2238,13 +2239,14 @@ class RayPPOTrainer:
         if score_width:
             if rollout_logprobs_tensor is None:
                 raise ValueError("score centering requires sampled behavior log probabilities on every batch")
-            ids, scores = collate_score_centering(
-                trajectory_batch,
-                response_ids,
-                response_masks_tensor,
-                score_width,
-                sampled_logprobs=rollout_logprobs_tensor,
-            )
+            with Timer("score_centering_collation", self.all_timings, log_events=False):
+                ids, scores = collate_score_centering(
+                    trajectory_batch,
+                    response_ids,
+                    response_masks_tensor,
+                    score_width,
+                    sampled_logprobs=rollout_logprobs_tensor,
+                )
             score_tensors = {"score_topk_indices": ids, "score_behavior_logprobs": scores}
         # Policy steps are bounded by leases, so a batch without leases keeps zero staleness.
         policy_steps = None
@@ -2264,7 +2266,13 @@ class RayPPOTrainer:
             self.all_metrics.update(_token_staleness_metrics(rollout_staleness_tensor, loss_masks_tensor, policy_steps))
         probe_reason = score_centering_probe_unavailable_reason(self.cfg)
         self.all_metrics["score_centering_probe/available"] = float(probe_reason is None)
+        self.all_metrics["score_centering_probe/interval"] = float(self.cfg.trainer.algorithm.score_centering_probe.interval)
         self.all_metrics["score_centering_probe/observed"] = 0.0
+        self.all_metrics["score_centering_probe/sampled_tokens"] = 0.0
+        if self._last_score_probe_step is not None:
+            self.all_metrics["score_centering_probe/steps_since_previous"] = float(
+                self.global_step - self._last_score_probe_step
+            )
         if "score_probe_positions" in trajectory_batch:
             if probe_reason is not None:
                 raise ValueError(f"Received score probe evidence when probes are unavailable: {probe_reason}")
@@ -2275,8 +2283,6 @@ class RayPPOTrainer:
                     self.cfg.trainer.algorithm.score_centering_probe.topk,
                     sampled_logprobs=rollout_logprobs_tensor,
                 )
-            self.all_metrics["score_centering_probe/observed"] = 1.0
-            self.all_metrics["score_centering_probe/sampled_tokens"] = 0.0
             if probe_tensors:
                 positions = probe_tensors["score_probe_positions"]
                 probe_tensors["score_probe_source_steps"] = (
@@ -2291,7 +2297,13 @@ class RayPPOTrainer:
                 "rewards": rewards_tensor,
                 "loss_mask": loss_masks_tensor,
                 "rollout_logprobs": rollout_logprobs_tensor,
-                "rollout_staleness": rollout_staleness_tensor,
+                # Lease ages bound unstamped tokens but do not establish their
+                # generating weights. Keep those tokens out of fresh TIM buckets.
+                "rollout_staleness": (
+                    torch.where(policy_steps >= 0, rollout_staleness_tensor, -1)
+                    if policy_steps is not None
+                    else torch.full_like(rollout_staleness_tensor, -1)
+                ),
                 "is_last_step": (
                     torch.tensor(trajectory_batch["is_last_step"], dtype=torch.bool)
                     if trajectory_batch.get("is_last_step", None) is not None
@@ -2302,6 +2314,10 @@ class RayPPOTrainer:
         )
         training_input.update(distillation_tensors)
         training_input.update(score_tensors)
+        if score_tensors:
+            self.all_metrics["score_centering_capture/learner_input_bytes"] = float(
+                sum(tensor.numel() * tensor.element_size() for tensor in score_tensors.values())
+            )
         ftpo = ftpo_config(self.cfg.trainer.algorithm)
         if ftpo is not None:
             candidates, scores, _ = collate_student_selected_rollout(
@@ -2885,16 +2901,23 @@ class RayPPOTrainer:
             training_input["advantages"].gather(1, positions),
             valid,
             training_input.pop("score_probe_source_steps"),
+            response_positions=positions,
+            response_lengths=training_input["response_mask"].sum(-1),
             training_step=self.global_step,
             loss_tokens=int(training_input["loss_mask"].bool().sum()),
             tis_cap=score_centering_tis_cap(self.cfg.trainer.algorithm),
             eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
             eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
         )
-        now = time.monotonic()
-        if self._last_score_probe_time is not None:
-            metrics["score_centering_probe/seconds_since_previous"] = now - self._last_score_probe_time
-        self._last_score_probe_time = now
+        if metrics["score_centering_probe/observed"]:
+            now = time.monotonic()
+            if self._last_score_probe_time is not None and self._last_score_probe_step is not None:
+                metrics["score_centering_probe/seconds_since_previous"] = now - self._last_score_probe_time
+                metrics["score_centering_probe/steps_since_previous"] = float(
+                    self.global_step - self._last_score_probe_step
+                )
+            self._last_score_probe_time = now
+            self._last_score_probe_step = self.global_step
         self.all_metrics.update(metrics)
 
     @torch.no_grad()
@@ -3040,6 +3063,9 @@ class RayPPOTrainer:
             if old_selected.shape != training_input["score_behavior_logprobs"].shape:
                 raise ValueError("old-trainer top-K log probabilities must align with captured behavior evidence")
             training_input["score_old_logprobs"] = old_selected
+            self.all_metrics["score_centering_capture/learner_returned_head_bytes"] = float(
+                old_selected.numel() * old_selected.element_size()
+            )
         values = values[: len(sequences_all)] if values is not None else None
 
         if "ftpo_chosen_mask" in training_input:
@@ -3061,6 +3087,7 @@ class RayPPOTrainer:
                     training_input["rollout_logprobs"],
                     training_input["loss_mask"],
                     rollout_staleness,
+                    training_input["response_mask"],
                     eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
                     eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
                 )

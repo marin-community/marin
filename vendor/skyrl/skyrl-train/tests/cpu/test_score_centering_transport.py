@@ -12,6 +12,21 @@ from skyrl_train.inference_engines.base import CHOICE_POLICY_STEPS_KEY, Inferenc
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.response_topk import CHAT_TOPK_WIDTH_KEY, CHOICE_TOPK_KEY, ResponseTopK
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
+from skyrl_train.trajectory_runners.selected_topk import align_student_topk
+
+
+@pytest.mark.parametrize("mask,expected_ids,expected_scores", [
+    ([1, 1], [[3, 7], [4, 8]], [[-1.0, -2.0], [-3.0, -4.0]]),
+    ([1, 0, 1], [[3, 7], [-1, -1], [4, 8]], [[-1.0, -2.0], [0.0, 0.0], [-3.0, -4.0]]),
+])
+def test_numeric_heads_remain_aligned_across_masked_response_positions(mask, expected_ids, expected_scores):
+    response_ids = [11, 12] if len(mask) == 2 else [11, 99, 12]
+    ids = np.array([[3, 7], [4, 8]], dtype=np.int32)
+    scores = np.array([[-1, -2], [-3, -4]], dtype=np.float32)
+    result = align_student_topk(response_ids, mask, [11, 12], ids, scores)
+    np.testing.assert_array_equal(result.indices, expected_ids)
+    np.testing.assert_array_equal(result.topk_logprobs, expected_scores)
+    assert align_student_topk(response_ids, mask, [12, 11], ids, scores) is None
 
 
 def _make_min_cfg():

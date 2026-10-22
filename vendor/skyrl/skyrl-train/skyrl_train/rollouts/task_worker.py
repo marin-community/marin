@@ -72,6 +72,8 @@ from skyrl_train.rollouts.task_projections import (
     logprobs_requested,
 )
 from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
+from skyrl_train.metric_names import SCORE_CAPTURE_METRIC_PREFIX
+from skyrl_train.utils import Timer
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
@@ -536,8 +538,47 @@ class TaskRolloutWorker:
 
     async def run(self, input_batch: TaskRequestBatch) -> TrajectoryBatch:
         with self._active_request():
-            outputs = await self.generate(input_batch)
-            return await self.training_batch(input_batch, outputs)
+            topk = (input_batch.sampling_params or {}).get("logprobs")
+            if not topk or topk < 0:
+                outputs = await self.generate(input_batch)
+                return await self.training_batch(input_batch, outputs)
+            with Timer("score_capture_collection", log_events=False) as collection:
+                outputs = await self.generate(input_batch)
+            with Timer("score_capture_assembly", log_events=False) as assembly:
+                batch = await self.training_batch(input_batch, outputs)
+            # These are admitted-request stage walls and numeric payload bytes.
+            # Concurrent collection can overlap training and other requests.
+            heads = [
+                (step.turn.metadata["student_topk_indices"], step.turn.metadata["behavior_topk_logprobs"])
+                for output in outputs
+                for step in output.steps
+                if step.turn.metadata.get("student_topk_indices") is not None
+            ]
+            exported = [
+                row
+                for name in (
+                    "student_topk_indices",
+                    "behavior_topk_logprobs",
+                    "score_probe_positions",
+                    "score_probe_indices",
+                    "score_probe_logprobs",
+                )
+                for row in (batch.get(name) or [])
+                if row is not None
+            ]
+            metrics = {
+                "requests": 1.0,
+                "probe_requests": float(bool(input_batch.score_centering_probe_tokens)),
+                "collection_seconds_sum": collection.duration,
+                "assembly_seconds_sum": assembly.duration,
+                "captured_tokens": float(sum(len(ids) for ids, _ in heads)),
+                "captured_head_bytes": float(sum(ids.nbytes + scores.nbytes for ids, scores in heads)),
+                "exported_head_bytes": float(sum(row.nbytes for row in exported)),
+            }
+            rollout_metrics = batch.get("rollout_metrics") or {}
+            rollout_metrics.update({SCORE_CAPTURE_METRIC_PREFIX + key: value for key, value in metrics.items()})
+            batch["rollout_metrics"] = rollout_metrics
+            return batch
 
     async def training_batch(self, request: TaskRequestBatch, outputs: Sequence[TrainingRollout]) -> TrajectoryBatch:
         with rollout_phase("assemble"):

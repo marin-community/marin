@@ -16,6 +16,7 @@ import numpy as np
 import torch
 
 from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
+from skyrl_train.utils.importance_ratio_diagnostics import LONG_RESPONSE_TOKENS, POSITION_WINDOW
 from skyrl_train.distillation_adapters import collate_student_selected_rollout
 from skyrl_train.trajectory_runners.types import TrajectoryBatch
 
@@ -262,6 +263,8 @@ def hypothetical_score_probe(
     valid: torch.Tensor,
     source_steps: torch.Tensor,
     *,
+    response_positions: torch.Tensor,
+    response_lengths: torch.Tensor,
     training_step: int,
     loss_tokens: int,
     tis_cap: float,
@@ -286,7 +289,7 @@ def hypothetical_score_probe(
     )
     count = int(valid.sum())
     metrics = {
-        "observed": 1.0,
+        "observed": float(count > 0),
         "sampled_tokens": float(count),
         "sampled_responses": float(valid.any(-1).sum()),
         "loss_tokens": float(loss_tokens),
@@ -312,6 +315,17 @@ def hypothetical_score_probe(
     values = correction[valid]
     age = training_step - source_steps[valid]
     known = source_steps[valid] >= 0
+    lengths = response_lengths.unsqueeze(-1).expand_as(valid)[valid]
+    positions = response_positions[valid]
+    long_response = lengths >= LONG_RESPONSE_TOKENS
+    metrics.update(
+        sampled_response_length_mean=float(lengths.float().mean()),
+        sampled_response_length_max=float(lengths.max()),
+        first256_tokens=float((positions < POSITION_WINDOW).sum()),
+        last256_tokens=float((positions >= lengths - POSITION_WINDOW).sum()),
+        long_response_tokens=float(long_response.sum()),
+        long_responses=float((valid.any(-1) & (response_lengths >= LONG_RESPONSE_TOKENS)).sum()),
+    )
     if torch.any(age[known] < 0):
         raise ValueError("score probe source version is ahead of the learner snapshot")
     ordinary = -advantages[valid] * delta.clamp(max=math.log(tis_cap)).exp()
@@ -336,11 +350,15 @@ def hypothetical_score_probe(
             ),
         }
     )
-    for name, selected in (("fresh", known & (age == 0)), ("stale", known & (age > 0))):
+    for name, selected in (("fresh", known & (age == 0)), ("stale", known & (age > 0)), ("unknown", ~known)):
         metrics[f"{name}_source_tokens"] = float(selected.sum())
         if selected.any():
             metrics[f"{name}_old_behavior_log_ratio_abs_mean"] = float(delta[selected].abs().mean())
             metrics[f"{name}_hypothetical_loss_abs_mean"] = float(values[selected].abs().mean())
+        selected_long = selected & long_response
+        metrics[f"long_response/{name}_tokens"] = float(selected_long.sum())
+        if selected_long.any():
+            metrics[f"long_response/{name}_old_behavior_log_ratio_abs_mean"] = float(delta[selected_long].abs().mean())
     if known.any():
         metrics["source_age_mean"] = float(age[known].float().mean())
         metrics["source_age_max"] = float(age[known].max())

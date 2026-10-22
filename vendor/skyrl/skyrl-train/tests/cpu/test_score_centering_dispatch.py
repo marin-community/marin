@@ -148,7 +148,10 @@ async def _next_uids(context: TrainingContext) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeated_steps(ray_module, start_buffer):
+@pytest.mark.parametrize("interval,expected_steps", [(0, []), (2, [1, 3, 5]), (3, [1, 4])])
+async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeated_steps(
+    ray_module, start_buffer, interval, expected_steps
+):
     requests = []
 
     class Workers(_Workers):
@@ -164,7 +167,7 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
         max_in_flight=3,
         max_staleness_steps=0,
         request_spec=RolloutRequestSpec(
-            SAMPLES_PER_PROMPT, {"logprobs": 0}, probe_interval=2, probe_topk=128, probe_tokens=32
+            SAMPLES_PER_PROMPT, {"logprobs": 0}, probe_interval=interval, probe_topk=128, probe_tokens=32
         ),
     )
     context.start()
@@ -173,7 +176,7 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
             await context.publish(step)
             assert len(await _next_uids(context)) == 3
         sampled = [request for request in requests if request.score_centering_probe_tokens]
-        assert [request.batch_metadata.global_step for request in sampled] == [1, 3, 5]
+        assert [request.batch_metadata.global_step for request in sampled] == expected_steps
         assert all(
             request.score_centering_probe_tokens == 32 and request.sampling_params["logprobs"] == 128
             for request in sampled

@@ -33,14 +33,13 @@ def align_student_topk(
         return None
     if list(generated_ids) != [token_id for token_id, keep in zip(response_ids, loss_mask, strict=True) if keep]:
         return None
-    width = len(candidate_ids[0])
-    if width == 0:
-        raise ValueError("student top-K candidate width must be positive")
-    if any(
-        len(ids) != width or len(scores) != width for ids, scores in zip(candidate_ids, candidate_scores, strict=True)
-    ):
-        raise ValueError("student top-K candidate widths must agree across tokens")
     candidate_ids_array = np.asarray(candidate_ids)
+    candidate_scores_array = np.asarray(candidate_scores, dtype=np.float32)
+    if candidate_ids_array.ndim != 2 or candidate_scores_array.shape != candidate_ids_array.shape:
+        raise ValueError("student top-K candidate widths must agree across tokens")
+    width = candidate_ids_array.shape[1]
+    if not width:
+        raise ValueError("student top-K candidate width must be positive")
     if not np.issubdtype(candidate_ids_array.dtype, np.integer):
         candidate_ids_array = candidate_ids_array.astype(np.int64)
     id_dtype = (
@@ -48,9 +47,16 @@ def align_student_topk(
         if candidate_ids_array.min() >= np.iinfo(np.int32).min and candidate_ids_array.max() <= np.iinfo(np.int32).max
         else np.int64
     )
+    # A single-turn response usually already has aligned contiguous numeric
+    # heads. Their consumers read them; only masked/tool positions need padding.
+    if len(response_ids) == len(generated_ids):
+        return AlignedStudentTopK(
+            np.ascontiguousarray(candidate_ids_array, dtype=id_dtype),
+            np.ascontiguousarray(candidate_scores_array),
+        )
     aligned_ids = np.full((len(response_ids), width), INVALID_TOPK_INDEX, dtype=id_dtype)
     aligned_scores = np.zeros((len(response_ids), width), dtype=np.float32)
     generated_positions = np.flatnonzero(loss_mask)
     aligned_ids[generated_positions] = candidate_ids_array
-    aligned_scores[generated_positions] = np.asarray(candidate_scores, dtype=np.float32)
+    aligned_scores[generated_positions] = candidate_scores_array
     return AlignedStudentTopK(aligned_ids, aligned_scores)

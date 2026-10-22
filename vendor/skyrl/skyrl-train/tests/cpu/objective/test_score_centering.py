@@ -14,6 +14,7 @@ from skyrl_train.objective.score_centering import (
 from skyrl_train.training_batch import TrainingBatchIterator, TrainingInputBatch
 from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.objective.losses import PolicyLossInputs, ppo_policy_loss
+from skyrl_train.utils.importance_ratio_diagnostics import mismatch_ratio_metrics
 
 
 def test_score_evidence_survives_collation_serialization_and_microbatching(tmp_path):
@@ -101,6 +102,8 @@ def test_hypothetical_probe_reports_nonzero_tis_correction_and_source_strata():
         advantages,
         valid,
         torch.tensor([[7, 4, -1, 0]]),
+        response_positions=torch.tensor([[0, 1024, 4095, 0]]),
+        response_lengths=torch.tensor([4096]),
         training_step=7,
         loss_tokens=1000,
         tis_cap=2.0,
@@ -129,6 +132,12 @@ def test_hypothetical_probe_reports_nonzero_tis_correction_and_source_strata():
     assert metrics["score_centering_probe/coverage"] == 0.003
     assert metrics["score_centering_probe/sampled_tis_clipped_fraction"] == 1.0
     assert metrics["score_centering_probe/current_equals_old"] == 1.0
+    assert metrics["score_centering_probe/long_responses"] == 1
+    assert metrics["score_centering_probe/long_response_tokens"] == 3
+    assert metrics["score_centering_probe/first256_tokens"] == 1
+    assert metrics["score_centering_probe/last256_tokens"] == 1
+    for source in ("fresh", "stale", "unknown"):
+        assert metrics[f"score_centering_probe/long_response/{source}_tokens"] == 1
     flat_rewards = hypothetical_score_probe(
         head,
         behavior_head,
@@ -137,6 +146,8 @@ def test_hypothetical_probe_reports_nonzero_tis_correction_and_source_strata():
         torch.zeros_like(advantages),
         valid,
         torch.tensor([[7, 4, -1, 0]]),
+        response_positions=torch.tensor([[0, 1024, 4095, 0]]),
+        response_lengths=torch.tensor([4096]),
         training_step=7,
         loss_tokens=1000,
         tis_cap=2.0,
@@ -150,6 +161,35 @@ def test_hypothetical_probe_reports_nonzero_tis_correction_and_source_strata():
         == metrics["score_centering_probe/unit_advantage_loss_abs_mean"]
     )
     assert flat_rewards["score_centering_probe/unit_advantage_loss_abs_mean"] > 0
+
+
+def test_mismatch_keeps_unknown_ages_and_long_response_tails_separate():
+    response = torch.ones((3, 4096), dtype=torch.bool)
+    response[0, 2:] = False
+    mask = torch.zeros_like(response)
+    mask[0, :2] = True
+    mask[1, [0, 1024, 4095]] = True
+    mask[2, [0, 4095]] = True
+    delta = torch.full(response.shape, torch.nan, dtype=torch.float64)
+    delta[0, :2] = 0.1
+    delta[1, [0, 1024, 4095]] = torch.tensor([0.2, -0.4, 0.6], dtype=torch.float64)
+    delta[2, 4095] = -2.0
+    ages = torch.full(response.shape, -1)
+    ages[0] = 0
+    ages[1] = 3
+    metrics = mismatch_ratio_metrics(delta, torch.zeros_like(delta), mask, ages, response)
+    prefix = "policy/mismatch/"
+    assert metrics[prefix + "pooled/selected_tokens"] == 7
+    assert metrics[prefix + "pooled/finite_tokens"] == 6
+    assert metrics[prefix + "staleness0/selected_tokens"] == 2
+    assert metrics[prefix + "staleness0/log_ratio_abs_mean"] == pytest.approx(0.1)
+    assert metrics[prefix + "unknown/selected_tokens"] == 2
+    assert metrics[prefix + "unknown/finite_tokens"] == 1
+    assert metrics[prefix + "unknown/response_ge2048/log_ratio_abs_mean"] == 2.0
+    assert metrics[prefix + "staleness3/response_ge2048/selected_tokens"] == 3
+    assert metrics[prefix + "staleness3/response_ge2048/log_ratio_abs_mean"] == pytest.approx(0.4)
+    assert metrics[prefix + "staleness3/pos_last256/selected_tokens"] == 1
+    assert metrics[prefix + "staleness0/response_ge2048/selected_tokens"] == 0
 
 
 def test_compact_probe_collation_keeps_only_requested_valid_positions_and_missing_rows():
@@ -208,11 +248,13 @@ def test_sc_off_optimizer_is_identical_after_hypothetical_probe_consumes_its_evi
                 "rollout_logprobs": rollout,
                 "advantages": torch.tensor([[2.0, -1.0, 0.0, 1.0]]),
                 "loss_mask": torch.tensor([[1, 1, 0, 1]]),
+                "response_mask": torch.ones((1, 4), dtype=torch.bool),
                 "correction_weights": (old - rollout).exp().clamp(max=2.0),
             }
         )
         trainer = object.__new__(RayPPOTrainer)
         trainer.cfg, trainer.all_metrics, trainer._last_score_probe_time, trainer.global_step = config, {}, None, 4
+        trainer._last_score_probe_step = None
         if enabled:
             batch.update(
                 {

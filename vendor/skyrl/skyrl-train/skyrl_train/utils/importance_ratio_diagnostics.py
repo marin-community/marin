@@ -13,6 +13,7 @@ from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
 
 # Absolute-position bucket width; the async RL dashboard reads pos_first256 and pos_last256 by name.
 POSITION_WINDOW = 256
+LONG_RESPONSE_TOKENS = 2048
 
 
 LOG_RATIO_TAIL_CAPACITY = 8192
@@ -23,6 +24,7 @@ LOG_RATIO_COLLAPSE = math.log(1e-5)
 
 # Mismatch staleness buckets and each one's inclusive lower bound.
 MISMATCH_STALENESS_BUCKETS = (
+    ("unknown", -1),
     ("staleness0", 0),
     ("staleness1", 1),
     ("staleness2", 2),
@@ -138,6 +140,7 @@ def mismatch_ratio_metrics(
     rollout_logprobs: torch.Tensor,
     loss_mask: torch.Tensor,
     rollout_staleness: torch.Tensor,
+    response_mask: torch.Tensor,
     *,
     eps_clip_low: float = 0.2,
     eps_clip_high: float = 0.2,
@@ -148,22 +151,26 @@ def mismatch_ratio_metrics(
     bucket = torch.zeros(mask.shape, dtype=torch.uint8)
     for index, (_, lower) in enumerate(MISMATCH_STALENESS_BUCKETS):
         bucket[staleness >= lower] = index
-    first, last = _position_masks(mask)
-    # A token's group is its staleness bucket times four plus its position class:
+    response = response_mask.detach().cpu() > 0
+    first, last = _position_masks(response)
+    long_response = (response.sum(-1, keepdim=True) >= LONG_RESPONSE_TOKENS).expand_as(mask)
+    # A token's group records its source age, response length, and position class:
     # 1 in the first window, 2 in the last window, 3 in both and 0 in neither.
-    groups = torch.masked_select(4 * bucket + first.to(torch.uint8) + 2 * last.to(torch.uint8), mask).long()
+    groups = torch.masked_select(
+        8 * bucket + 4 * long_response.to(torch.uint8) + first.to(torch.uint8) + 2 * last.to(torch.uint8), mask
+    ).long()
     # CPU float64 and masking before subtraction avoid padded NaNs.
     values = (
         torch.masked_select(learner_logprobs.detach().cpu(), mask).double()
         - torch.masked_select(rollout_logprobs.detach().cpu(), mask).double()
     )
     grid = {
-        key: total.view(len(MISMATCH_STALENESS_BUCKETS), 4)
-        for key, total in _grouped_moments(values, groups, 4 * len(MISMATCH_STALENESS_BUCKETS)).items()
+        key: total.view(len(MISMATCH_STALENESS_BUCKETS), 2, 4)
+        for key, total in _grouped_moments(values, groups, 8 * len(MISMATCH_STALENESS_BUCKETS)).items()
     }
     position_classes = {f"first{POSITION_WINDOW}": [1, 3], f"last{POSITION_WINDOW}": [2, 3], "middle": [0]}
     # Only these two buckets get the sorted statistics; the others take moments from the grid.
-    staleness0 = groups < 4
+    staleness0 = torch.masked_select(staleness, mask) == 0
     pooled = ratio_statistics(values, eps_clip_low=eps_clip_low, eps_clip_high=eps_clip_high)
     full_statistics = {
         "pooled": pooled,
@@ -174,8 +181,8 @@ def mismatch_ratio_metrics(
     bucket_rows = {"pooled": slice(None)}
     bucket_rows.update({name: slice(index, index + 1) for index, (name, _) in enumerate(MISMATCH_STALENESS_BUCKETS)})
 
-    def moments(rows: slice, classes: list[int]) -> dict[str, float]:
-        return _moment_metrics({key: total[rows][:, classes].sum().item() for key, total in grid.items()})
+    def moments(rows: slice, classes: list[int], lengths: slice = slice(None)) -> dict[str, float]:
+        return _moment_metrics({key: total[rows][:, lengths][:, :, classes].sum().item() for key, total in grid.items()})
 
     result = {}
     for name, rows in bucket_rows.items():
@@ -187,6 +194,10 @@ def mismatch_ratio_metrics(
             for key in ("selected_tokens", "finite_tokens", "log_ratio_abs_mean", "frac_outside_0_5_2"):
                 if key in stats:
                     result[f"{prefix}pos_{position}/{key}"] = stats[key]
+        long_stats = moments(rows, [0, 1, 2, 3], slice(1, 2))
+        for key in ("selected_tokens", "finite_tokens", "log_ratio_abs_mean", "frac_outside_0_5_2"):
+            if key in long_stats:
+                result[f"{prefix}response_ge{LONG_RESPONSE_TOKENS}/{key}"] = long_stats[key]
     return result
 
 
