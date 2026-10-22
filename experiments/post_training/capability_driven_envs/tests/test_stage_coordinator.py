@@ -34,7 +34,16 @@ from taskforge.stage40_build_with_program.run import (
     run_build,
 )
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
-from taskforge.stage60_review.decision import Accept, BandOutcome, Decision
+from taskforge.stage50_validate.evidence import RewardStats
+from taskforge.stage50_validate.round import (
+    Lowering,
+    LoweringStatus,
+    SolverEvidence,
+    ValidationContext,
+    ValidationResult,
+)
+from taskforge.stage60_review.decision import BandOutcome
+from taskforge.stage60_review.rules import BandRules, default_review
 from taskforge.stage_coordinator.coordinator import StageCoordinator, WorkpieceBudget, run_workpiece
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
@@ -103,12 +112,10 @@ async def task(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
     return task_spec(context.workpiece_id)
 
 
-async def validate(draft: TaskDraft) -> dict[str, int]:
-    return {"graded": 4, "solved": 2}
-
-
-async def review(summary: object) -> Decision:
-    return Accept(band=BandOutcome.IN_BAND)
+async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
+    stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
+    lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
+    return ValidationResult(context.workpiece_id, context.round, lowering, SolverEvidence((), stats, {}), (), (), None)
 
 
 async def no_repair(proposal: TaskProposal, verdict: Verdict) -> TaskProposal:
@@ -124,7 +131,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         load_program=load_program,
         build=run_build,
         validate=validate,
-        review=review,
+        review=default_review,
     )
     model = UnusedModel()
     sampling = LLMPolicy()
@@ -143,6 +150,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         budget=WorkpieceBudget(
             max_triage_repairs=0, max_build_revisions=0, max_validation_retries=0, max_modify_rounds=0
         ),
+        band=BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND})),
         root=tmp_path,
         event_store=JsonEventStore(tmp_path),
         model=model,
