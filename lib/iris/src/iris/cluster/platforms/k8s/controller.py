@@ -637,7 +637,7 @@ class K8sControllerProvider:
         default_env = _build_s3_task_env(self._config.object_storage_endpoint) if self._s3_enabled else {}
         storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
         if self._s3_enabled or storage_health is not None:
-            self.ensure_storage_secret(_resolve_s3_credentials())
+            self.ensure_secret(STORAGE_SECRET_NAME, _resolve_s3_credentials())
         storage_environment = {
             **default_env,
             **config.defaults.task_env,
@@ -667,7 +667,7 @@ class K8sControllerProvider:
             )
 
         if self._prepared_controller_env:
-            self.ensure_controller_env_secret(self._prepared_controller_env)
+            self.ensure_secret(CONTROLLER_SECRET_NAME, self._prepared_controller_env)
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
@@ -1021,13 +1021,13 @@ class K8sControllerProvider:
 
     # -- Storage credential delivery ----------------------------------------
 
-    def ensure_storage_secret(self, values: dict[str, str]) -> None:
-        """Create credentials for Iris storage components, separate from configuration."""
+    def ensure_secret(self, name: str, values: dict[str, str]) -> None:
+        """Create file-mounted credentials separately from rendered configuration."""
         self._kubectl.apply_json(
             {
                 "apiVersion": "v1",
                 "kind": "Secret",
-                "metadata": {"name": STORAGE_SECRET_NAME, "namespace": self._namespace},
+                "metadata": {"name": name, "namespace": self._namespace},
                 "type": "Opaque",
                 "data": {k: base64.b64encode(v.encode()).decode() for k, v in values.items()},
             }
@@ -1042,22 +1042,6 @@ class K8sControllerProvider:
         service_cidr = config.kubernetes_provider.service_cidr
         for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
             self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
-
-    def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
-        """Create the iris-controller-secrets Secret holding the controller's own credentials.
-
-        Only the controller Deployment references it, so a task pod cannot read the
-        cluster's signing key.
-        """
-        self._kubectl.apply_json(
-            {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {"name": CONTROLLER_SECRET_NAME, "namespace": self._namespace},
-                "type": "Opaque",
-                "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
-            }
-        )
 
     # -- Deployment readiness --------------------------------------------------
 
