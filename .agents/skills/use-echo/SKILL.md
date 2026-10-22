@@ -5,11 +5,10 @@ description: Search Marin prior work and maintain Echo knowledge or incident rec
 
 # Use Echo
 
-Use this entry point for prior-work search and knowledge publication. Read
-[incident records](references/incidents.md) when a live service, production run,
-or shared operational system failed or degraded and required diagnosis or
-mitigation. That procedure owns the incident definition, record format, and
-update lifecycle; ordinary search does not require publishing a note.
+Use this entry point for prior-work search and knowledge publication. For live
+incidents, read [incident records](references/incidents.md), which defines when
+to publish, how to format the record, and how to update it. Ordinary search does
+not require publishing a note.
 
 Search Echo before rediscovering prior work. Cite canonical Echo, GitHub, or
 Discord URLs for the evidence you use.

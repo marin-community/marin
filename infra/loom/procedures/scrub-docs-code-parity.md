@@ -1,11 +1,6 @@
----
-schedule_cron: "0 0 2 * * *"
-schedule_tz: America/New_York
----
-
 # scrub-docs-code-parity
 
-Use this procedure on scheduled scrub turns for docs/code parity in `marin-community/marin`.
+Use this procedure when explicitly assigned a docs/code parity scrub in `marin-community/marin`.
 
 ## Focus
 

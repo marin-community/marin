@@ -1,11 +1,6 @@
----
-schedule_cron: "0 10 2 * * *"
-schedule_tz: America/New_York
----
-
 # scrub-reflection-self-improvement
 
-Use this procedure on scheduled scrub turns to identify and land high-leverage improvements in `marin-community/marin`.
+Use this procedure when explicitly assigned a repository self-improvement scrub in `marin-community/marin`.
 
 ## Focus
 

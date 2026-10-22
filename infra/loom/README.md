@@ -106,9 +106,9 @@ Repository-owned task procedures live in `procedures/`:
 - [Docs/code parity](procedures/scrub-docs-code-parity.md),
   [experiment summaries](procedures/scrub-experiment-issue-tldrs.md), and
   [self-improvement](procedures/scrub-reflection-self-improvement.md), for
-  explicitly assigned scheduler work. Their procedures retain the harness
-  result footer and, where declared, schedule metadata. Schedulers must name
-  the procedure path in the assignment; these files are not discoverable skills.
+  explicitly assigned work. These scrubs are manual procedures; recurring
+  execution requires a Loom watch that names the procedure path. They retain
+  the harness result footer but register no schedule.
 
 The `pr-review` and `pr-holistic-review` profiles both use `review-pr`, selecting
 its correctness and holistic reporting contracts respectively. Profile

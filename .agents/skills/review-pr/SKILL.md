@@ -55,7 +55,8 @@ only its reference:
 
 With `--comment`, choose the requested contract; default to correctness
 comments when no contract is named. Without `--comment`, return findings in
-the conversation and use the correctness reference's telemetry procedure.
+the conversation and emit the selected mode's telemetry event; a normal review
+uses the correctness event.
 Keep the mode-specific telemetry names and comment markers: automation and
 historical dashboards use those protocol identifiers.
 

@@ -266,8 +266,8 @@ condition, each dropped patch is truly obsolete, Marin edits are scoped to the
 refresh, and no text overclaims validation evidence.
 
 Open one draft `marin-community/marin` PR via `.agents/skills/manage-pr/SKILL.md`,
-request the descriptor's `blocker_assignee` as reviewer, and follow the commit
-skill's monitoring loop to an exit condition. The GPU guide names the adoption
+request the descriptor's `blocker_assignee` as reviewer, and follow the
+`manage-pr` monitoring loop to an exit condition. The GPU guide names the adoption
 PR evidence. For the other forks, include the selected base, staged tip SHA,
 rollback and date tags, pending admin promotion, e2e outcome, and unresolved
 risks; in `<details>`, include the base-selection evidence and carry/drop/fix table with

@@ -37,6 +37,7 @@ Use the [workflow catalog](docs/dev-guide/agent-workflows.md) to choose the
 skill that owns the requested outcome. Shared testing, writing, documentation,
 and evidence policy lives in the linked guides. CI and scheduler procedures
 live in `infra/loom/procedures/` and apply only when assigned.
+When adding, removing, or renaming skills, update the catalog and all callers.
 
 External fork refreshes use [refresh-fork](.agents/skills/refresh-fork/SKILL.md).
 For vLLM GPU wheels, read its [trigger and test table](.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
@@ -172,10 +173,9 @@ uv run --no-project infra/ci/run_tests.py
 
 ## Agent Artifacts
 
-- Publish a live infrastructure incident through `use-echo`'s incident procedure
-  when a service, production run, or shared operational system failed or degraded and required
-  diagnosis or mitigation. Do not use Echo as a work log for ordinary code
-  debugging or implementation.
+- Publish live infrastructure incidents through
+  [use-echo's incident procedure](.agents/skills/use-echo/references/incidents.md).
+  It defines which events need a record, its format, and its update lifecycle.
 - Keep user-facing and reusable product documentation in `docs/`. Record
   research progress in the task's existing issue, PR, report, or durable session
   channel. These are distinct from incident records.

@@ -1,15 +1,9 @@
 # Diagnose an infrastructure fault
 
 Keep working notes in the active task. Do not add repository debug-log files.
-At the start of a fresh investigation, use `use-echo` when repository policy
-requires prior-work search. During continued diagnosis or mitigation of the
-same incident, reuse results already read instead of invoking `use-echo`
-again unless the scope or freshness requirement changes or the user asks for a
-new search. After diagnosing a live infrastructure incident, use
-`use-echo`'s incident procedure to publish its standalone record and link it from the
-associated PR or issue. A code bug or local debugging session is not an
-incident unless it caused a service, production run, or shared operational
-system to fail or degrade.
+Use `use-echo` for prior-work search and its
+[incident procedure](../../use-echo/references/incidents.md) for incident
+classification and publication.
 
 ## Infrastructure faults
 
@@ -30,9 +24,3 @@ return to the active Iris or [Zephyr monitoring](monitor-zephyr.md) loop.
 
 For an explicitly requested Gemini analysis of an oversized log, read
 `docs/references/logscan.md` before sending data to the service.
-
-## Code bugs
-
-For code bugs, reproduce the failure, identify the smallest falsifiable
-hypothesis, change one cause at a time, and test the behavior that failed. Let
-exceptions propagate unless added context changes the diagnosis.
