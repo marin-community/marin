@@ -3,7 +3,11 @@
 
 import json
 
-from experiments.datakit.scripts.metadata_artifact_inventory import audit_provider_routes, sanitize_metadata
+from experiments.datakit.scripts.metadata_artifact_inventory import (
+    audit_provider_routes,
+    recover_harrier_embeddings,
+    sanitize_metadata,
+)
 
 
 def test_secret_redaction_preserves_provider_provenance():
@@ -51,3 +55,40 @@ def test_provider_audit_reads_original_legacy_provenance(tmp_path):
     assert route["provider_kind"] == "hugging_face"
     assert route["split_order_status"] == "not_verified"
     assert report["sources_with_verified_split_order"] == 0
+
+
+def test_harrier_metadata_uses_frozen_cluster_reference_and_reports_missing(tmp_path):
+    embedded = tmp_path / "stored-embedding"
+    embedded.mkdir()
+    metadata = {
+        "source_key": "normalized/source/outputs/main",
+        "model_name": "provider/frozen-model",
+        "model_revision": "frozen-revision",
+        "embedding_dim": 1024,
+        "quantization_scale": 0.3 / 127,
+        "quantization_range": 0.3,
+    }
+    (embedded / ".artifact.json").write_text(json.dumps({"result": metadata}))
+    paths = [embedded.as_uri(), (tmp_path / "missing-embedding").as_uri()]
+    sources = [
+        {"marin_source": name, "source_key": metadata["source_key"], "artifact_roots": {"cluster": name}}
+        for name in ("stored", "missing")
+    ]
+    report = recover_harrier_embeddings(
+        {
+            "store_uri": "s3://bucket/marin/datakit/store_frozen",
+            "sources": sources,
+            "records": {
+                name: {"status": "found", "record": {"result": {"embedding_output_dir": path}}}
+                for name, path in zip(("stored", "missing"), paths, strict=True)
+            },
+        }
+    )
+    stored, missing = report["sources"]
+    assert stored["harrier_embedding_provenance"] == {
+        "artifact": embedded.as_uri(),
+        **{key: value for key, value in metadata.items() if key != "source_key"},
+    }
+    assert stored["harrier_embedding_metadata_status"] == "available"
+    assert stored["harrier_embedding_document_coverage"] == "not_examined"
+    assert missing["harrier_embedding_metadata_status"] == "missing_metadata"

@@ -26,6 +26,7 @@ and token chunking:
 | `source_id` | The upstream ID retained by normalization, when available. Stored as a JSON-encoded string because its type varies across sources. |
 | `source_rows` | A nonempty, ordered list of upstream row locators: `source_ref`, `row_offset`, `file`, and `file_row_offset`. These identify the source-manifest entry, zero-based split row, provider file, and zero-based row within that file. None may be null. |
 | `cluster_id` | The document's topic cluster. |
+| `harrier_embedding` | The stored 1,024-dimensional Harrier vector as `int8`, or null when no stored vector is available. |
 | `quality_score` | Its stored quality classifier score. |
 | `content_type` | The classifier label used to calibrate that score. |
 | `quality_bucket` | The quality bucket used by the final store. |
@@ -50,13 +51,32 @@ and its 384 task partitions. A separate export ledger would retain normalized
 shard paths, row offsets, and task IDs for validation. These internal
 coordinates would stay out of the public document rows.
 
+We should include the existing Harrier embeddings so users can cluster or
+analyze the selected documents without running the embedding model again.
+These are quantized vectors, not the original floating-point model outputs.
+The release manifest must pin the embedding artifact, model repository and
+revision, dimension, quantization scale and range, and the input preprocessing.
+Multiplying the stored `int8` values by the recorded scale gives approximate
+floating-point vectors. We should preserve the stored bytes.
+
+Harrier skipped dedup noncanonical documents, so its shards can have fewer rows
+than the normalized shards. Embeddings must be joined by document ID, with the
+same vector carried to repeated selected occurrences. We must report coverage
+and null counts per source; a missing vector must not silently become zeros or
+cause a selected document to disappear. Filling gaps would be a separate
+embedding job. At 1,024 bytes per vector, the vectors add about 1.024 TB per
+billion populated rows before Parquet overhead and compression. The trial
+should measure their compressed size and coverage before the full export.
+
 A source manifest would accompany the rows. It would record provider dataset
 names, revisions, file selections, and the code and parameters needed to
 construct normalized text. A release manifest would identify the exact input
 artifacts, tokenizer, classifier versions, quality calibration cutpoints,
 fuzzy-dedup exemptions, and shard assignment. We should include other existing
 classifier scores where available, with their model provenance; the prototype
-currently exports the quality score, content-type label, and topic assignment.
+exports the quality score, content-type label, and topic assignment, with an
+optional Harrier shard input for testing the embedding join. Existing trial
+results below predate that embedding input and do not establish its coverage.
 
 ## How reconstruction would work
 
@@ -121,7 +141,8 @@ The exporter would repeat that selection using the existing normalized and
 attribute shards. It would reuse the stored deduplication and contamination
 decisions and classifier outputs. It must verify document IDs and order when
 joining the shards, then apply the same exemptions and bucket assignment as
-the original build.
+the original build. Harrier embeddings are a separate sparse ID join and must
+not participate in the dense row-count or positional-alignment checks.
 
 For this store, quality buckets are calculated from the score using
 content-type-specific cutpoints: score thresholds chosen separately for each
@@ -178,6 +199,13 @@ Complete split-wide file ordering and row counts have not yet been verified
 across the catalog, so the audit does not establish global offsets for every
 source.
 
+An embedding metadata audit recovered the pinned Harrier model, revision,
+dimension, and quantization parameters for 291 sources. The remaining source,
+`common-crawl-focus-2026-22`, points to a repacked embedding artifact whose
+metadata omits those fields; its recorded parent artifacts were unavailable.
+That provenance gap remains open. This audit read artifact metadata and did
+not measure selected-document embedding coverage.
+
 Selection and normalization used separate samples. Both operations passed
 sampled checks across all 292 sources. They do not yet show a complete provider-download-to-selected-text
 round trip: some replay inputs had already undergone source-specific
@@ -195,7 +223,11 @@ row and sampled lookups through Hugging Face `/rows` where the coordinates
 use `hf_viewer_parquet` and the Viewer serves the pinned revision. Otherwise,
 sampled reads from pinned provider files must pass. Both routes must reproduce
 the normalized hash after transformation.
-Multirow sources must pass with all their contributing rows.
+Multirow sources must pass with all their contributing rows. Harrier vectors
+must match the stored embedding rows, carry their frozen model and quantization
+provenance, and have measured coverage for every source. The release must
+distinguish confirmed missing vectors from a trial scan that stopped at its
+read budget.
 We need to recover and document
 transform provenance where artifacts came from dirty working trees or older
 metadata records; the store's commit alone does not pin those transforms.

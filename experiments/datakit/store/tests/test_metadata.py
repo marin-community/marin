@@ -129,3 +129,109 @@ def test_metadata_export_uses_frozen_store_calibration_and_default_fallback(tmp_
         pq.write_table(pa.table({"id": list(reversed(ids)), "content_type": types}), paths["content_type"])
         with pytest.raises(RuntimeError, match="dense id/order mismatch"):
             export_metadata_shard(manifest, str(tmp_path / "bad"), cluster_view=2, max_rows=10)
+
+
+@pytest.fixture
+def embedding_inputs(tmp_path):
+    ids = ["a", "a", "b", "c", "drop"]
+    tables = {
+        "normalized": {"id": ids},
+        "decontam": {"id": ids, "contaminated": [False, False, False, False, True]},
+        "cluster": {"id": ids, "cluster_2": [0, 1, 1, 0, 0]},
+        "quality": {"id": ids, "quality_bucket": [2] * 5, "score": [0.5] * 5},
+    }
+    paths = {}
+    for name, data in tables.items():
+        path = str(tmp_path / f"{name}.parquet")
+        pq.write_table(pa.table(data), path)
+        paths[name] = path
+    path = str(tmp_path / "embedding.parquet")
+    schema = pa.schema([("id", pa.string()), ("embedding", pa.list_(pa.int8(), 1024))])
+    vectors = {"a": list(range(-127, 128)) * 4 + [0, 1, 2, 3], "c": [17] * 1024}
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                {"id": "unselected", "embedding": [8] * 1024},
+                {"id": "c", "embedding": vectors["c"]},
+                {"id": "a", "embedding": vectors["a"]},
+            ],
+            schema=schema,
+        ),
+        path,
+        row_group_size=1,
+    )
+    provenance = {
+        "artifact": "frozen-harrier-artifact",
+        "model_name": "microsoft/harrier-oss-v1-0.6b",
+        "model_revision": "frozen-revision",
+        "embedding_dim": 1024,
+        "quantization_scale": 0.3 / 127,
+        "quantization_range": 0.3,
+    }
+    manifest = ShardManifest(
+        **paths,
+        marin_source="source",
+        exact_dedup="",
+        dedup="",
+        bucket_edges=None,
+        harrier_embedding=path,
+        harrier_embedding_provenance=provenance,
+    )
+    return manifest, vectors
+
+
+def test_sparse_embedding_export_joins_by_id_and_preserves_quantized_coordinates(tmp_path, embedding_inputs):
+    manifest, vectors = embedding_inputs
+    parquet = pq.ParquetFile(manifest.harrier_embedding)
+    selected_bytes = sum(
+        parquet.metadata.row_group(group).column(column).total_compressed_size for group in (1, 2) for column in (0, 1)
+    )
+    report = export_metadata_shard(
+        manifest, str(tmp_path / "out"), cluster_view=2, max_rows=10, batch_size=1, max_embedding_bytes=selected_bytes
+    )
+    rows = [row for output in report["outputs"] for row in pq.read_table(output["path"]).to_pylist()]
+    rows.sort(key=lambda row: row["normalized_row"])
+    assert [row["harrier_embedding"] for row in rows] == [vectors["a"], vectors["a"], None, vectors["c"]]
+    assert [row["normalized_row"] for row in rows] == [0, 1, 2, 3]
+    coverage = report["harrier_embedding"]
+    assert coverage["embedded_occurrences"] == 3 and coverage["missing_occurrences"] == 1
+    assert coverage["null_occurrences"] == 1
+    assert coverage["unmatched_distinct_ids"] == 1 and coverage["status"] == "incomplete"
+    assert not coverage["budget_exhausted"] and coverage["projected_bytes"] > 0
+    assert coverage["provenance"] == manifest.harrier_embedding_provenance
+
+
+def test_sparse_embedding_budget_leaves_unexamined_ids_unresolved(tmp_path, embedding_inputs):
+    manifest, _ = embedding_inputs
+    report = export_metadata_shard(manifest, str(tmp_path / "out"), cluster_view=2, max_rows=10, max_embedding_bytes=1)
+    coverage = report["harrier_embedding"]
+    assert coverage["budget_exhausted"] and coverage["projected_bytes"] == 0
+    assert coverage["embedded_occurrences"] == 0 and coverage["unresolved_occurrences"] == 4
+    assert coverage["missing_occurrences"] is None
+    assert all(
+        row["harrier_embedding"] is None
+        for output in report["outputs"]
+        for row in pq.read_table(output["path"]).to_pylist()
+    )
+
+
+@pytest.mark.parametrize("fault", ["dimension", "dtype", "null_coordinate", "conflicting_duplicate"])
+def test_sparse_embedding_export_rejects_corrupt_selected_vectors(tmp_path, embedding_inputs, fault):
+    manifest, vectors = embedding_inputs
+    embedding_type = pa.list_(pa.int8(), 1023 if fault == "dimension" else 1024)
+    if fault == "dtype":
+        embedding_type = pa.list_(pa.float32(), 1024)
+    vector = vectors["a"][:1023] if fault == "dimension" else list(vectors["a"])
+    if fault == "null_coordinate":
+        vector[7] = None
+    rows = [{"id": "a", "embedding": vector}]
+    if fault == "conflicting_duplicate":
+        rows.append({"id": "a", "embedding": [1] * 1024})
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=pa.schema([("id", pa.string()), ("embedding", embedding_type)])),
+        manifest.harrier_embedding,
+        row_group_size=1,
+    )
+    with pytest.raises(ValueError, match="Harrier"):
+        export_metadata_shard(manifest, str(tmp_path / "bad"), cluster_view=2, max_rows=10)
+    assert not (tmp_path / "bad").exists()

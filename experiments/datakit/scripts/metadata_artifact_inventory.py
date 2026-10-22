@@ -200,6 +200,50 @@ def inventory(store_record: dict, *, workers: int = 8, cache_dir: str | None = N
     }
 
 
+def recover_harrier_embeddings(report: dict, *, workers: int = 8) -> dict:
+    """Read embedding provenance named by frozen cluster artifacts, without data shards.
+
+    Missing or incomplete metadata is reported separately from document vector
+    coverage. Metadata availability does not establish which documents have vectors.
+    """
+    report = sanitize_metadata(report)
+    records = report["records"]
+    prefix = str(StoragePath(report["store_uri"]).parent.parent)
+    paths = {}
+    for source in report["sources"]:
+        cluster = records.get(source["artifact_roots"]["cluster"], {}).get("record", {}).get("result", {})
+        path = cluster.get("embedding_output_dir")
+        paths[source["marin_source"]] = _absolute(prefix, path) if path else None
+    pending = sorted({path for path in paths.values() if path and path not in records})
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        records.update(executor.map(_read_record, pending))
+    facts = ("model_name", "model_revision", "embedding_dim", "quantization_scale", "quantization_range")
+    statuses = Counter()
+    for source in report["sources"]:
+        path = paths[source["marin_source"]]
+        status = records.get(path, {})
+        metadata = status.get("record", {}).get("result", {})
+        provenance = {"artifact": path, **{key: metadata.get(key) for key in facts}} if path else None
+        source["harrier_embedding_artifact"] = path
+        source["harrier_embedding_provenance"] = provenance
+        if path is None:
+            availability = "not_recorded"
+        elif status.get("status") != "found":
+            availability = "missing_metadata"
+        elif any(metadata.get(key) is None or metadata.get(key) == "" for key in facts):
+            availability = "incomplete_metadata"
+        elif metadata.get("source_key") != source["source_key"]:
+            availability = "source_key_mismatch"
+        else:
+            availability = "available"
+        source["harrier_embedding_metadata_status"] = availability
+        source["harrier_embedding_document_coverage"] = "not_examined"
+        statuses[availability] += 1
+    report["harrier_embedding_metadata_status"] = dict(statuses)
+    report["metadata_status_counts"] = dict(Counter(item["status"] for item in records.values()))
+    return report
+
+
 def audit_provider_routes(
     report: dict, *, fetch_sidecars: bool = False, workers: int = 8, original_prefix: str | None = None
 ) -> dict:
@@ -311,6 +355,7 @@ def main() -> None:
     parser.add_argument("--store-record", type=Path)
     parser.add_argument("--inventory", type=Path, help="Audit an existing inventory instead of rereading all artifacts")
     parser.add_argument("--provider-audit", action="store_true")
+    parser.add_argument("--harrier-embeddings", action="store_true", help="Recover frozen embedding metadata only")
     parser.add_argument("--fetch-provider-sidecars", action="store_true")
     parser.add_argument("--original-prefix", help="Explicit original artifact prefix for copied metadata lookups")
     parser.add_argument("--output", type=Path, required=True)
@@ -323,6 +368,8 @@ def main() -> None:
         if args.store_record is None:
             parser.error("Supply --store-record or --inventory")
         report = inventory(json.loads(args.store_record.read_text()), workers=args.workers, cache_dir=args.cache_dir)
+    if args.harrier_embeddings:
+        report = recover_harrier_embeddings(report, workers=args.workers)
     if args.provider_audit:
         report = audit_provider_routes(
             report,
@@ -340,6 +387,7 @@ def main() -> None:
                     "metadata_status_counts",
                     "sources_with_provider_references",
                     "sources_with_verified_split_order",
+                    "harrier_embedding_metadata_status",
                 )
                 if key in report
             }

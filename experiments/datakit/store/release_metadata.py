@@ -14,7 +14,12 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datakit.scripts.metadata_upstream_locators import SourceManifest, validate_locator_mapping
-from experiments.datakit.store.metadata import METADATA_SCHEMA, ShardManifest, export_metadata_shard
+from experiments.datakit.store.metadata import (
+    DEFAULT_EMBEDDING_READ_BYTES,
+    METADATA_SCHEMA,
+    ShardManifest,
+    export_metadata_shard,
+)
 
 SOURCE_ROW_TYPE = pa.struct(
     [
@@ -38,6 +43,7 @@ def export_release_metadata_shard(
     *,
     cluster_view: int,
     max_rows: int,
+    max_embedding_bytes: int = DEFAULT_EMBEDDING_READ_BYTES,
 ) -> dict:
     """Join a normalized-shard provenance sidecar and reject incomplete row mappings.
 
@@ -53,7 +59,9 @@ def export_release_metadata_shard(
         if key != source_manifest.sha256:
             raise ValueError("Source catalog key does not match its pinned file manifest")
     with tempfile.TemporaryDirectory(prefix="metadata-release-") as temporary:
-        result = export_metadata_shard(manifest, temporary, cluster_view=cluster_view, max_rows=max_rows)
+        result = export_metadata_shard(
+            manifest, temporary, cluster_view=cluster_view, max_rows=max_rows, max_embedding_bytes=max_embedding_bytes
+        )
         buckets = []
         selected = {}
         for output in result["outputs"]:
@@ -95,6 +103,7 @@ def export_release_metadata_shard(
         report = {
             "status": "passed",
             "selected_occurrences": len(selected),
+            "harrier_embedding": result["harrier_embedding"],
             "outputs": outputs,
             "source_manifests": sorted(source_manifests),
             "source_catalog": prefix_join(output_dir, "sources.json"),

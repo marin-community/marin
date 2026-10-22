@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+from dataclasses import replace
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -61,6 +63,9 @@ def test_release_preserves_occurrences_and_verified_upstream_coordinates(tmp_pat
         assert not {"text", "input_ids", "normalized_row", "normalized_shard"}.intersection(table.column_names)
         exported.extend(table.to_pylist())
     assert result["selected_occurrences"] == 2
+    assert result["harrier_embedding"]["status"] == "not_requested"
+    assert result["harrier_embedding"]["null_occurrences"] == 2
+    assert all(row["harrier_embedding"] is None for row in exported)
     assert [row["source_rows"] for row in exported] == [row["source_rows"] for row in rows]
     assert (tmp_path / "release" / "_complete.json").is_file()
 
@@ -86,3 +91,39 @@ def test_release_refuses_to_publish_incomplete_or_wrong_coordinates(tmp_path, re
             max_rows=64,
         )
     assert not (tmp_path / "release").exists()
+
+
+def test_release_preserves_harrier_vectors_and_upstream_locators(tmp_path, release_inputs):
+    selection, source, rows = release_inputs
+    vector = [i % 255 - 127 for i in range(1024)]
+    path = tmp_path / "embedding.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [{"id": rows[0]["id"], "embedding": vector}],
+            schema=pa.schema([("id", pa.string()), ("embedding", pa.list_(pa.int8(), 1024))]),
+        ),
+        path,
+    )
+    selection = replace(
+        selection,
+        harrier_embedding=str(path),
+        harrier_embedding_provenance={
+            "artifact": "frozen-harrier",
+            "model_name": "harrier",
+            "model_revision": "pinned",
+            "embedding_dim": 1024,
+            "quantization_scale": 0.3 / 127,
+            "quantization_range": 0.3,
+        },
+    )
+    sidecar = tmp_path / "upstream.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), sidecar)
+    result = export_release_metadata_shard(
+        selection, str(sidecar), {source.sha256: source}, str(tmp_path / "release"), cluster_view=40, max_rows=64
+    )
+    exported = [row for output in result["outputs"] for row in pq.ParquetFile(output["path"]).read().to_pylist()]
+    assert [row["harrier_embedding"] for row in exported] == [vector, vector]
+    assert [row["source_rows"] for row in exported] == [row["source_rows"] for row in rows]
+    assert result["harrier_embedding"]["embedded_occurrences"] == 2
+    assert result["harrier_embedding"]["status"] == "complete"
+    assert result["harrier_embedding"]["provenance"] == selection.harrier_embedding_provenance

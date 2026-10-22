@@ -17,7 +17,7 @@ from marin.datakit.normalize import generate_id
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
-from experiments.datakit.scripts.metadata_artifact_inventory import inventory, read_metadata
+from experiments.datakit.scripts.metadata_artifact_inventory import inventory, read_metadata, recover_harrier_embeddings
 from experiments.datakit.scripts.metadata_source_replay import recipe_from_inventory, run_source_replay
 from experiments.datakit.store.metadata import ShardManifest, export_metadata_shard
 
@@ -34,10 +34,19 @@ def probe_source(
     max_rows: int,
     replay_rows: int,
     replay_bytes: int,
+    include_harrier_embeddings: bool = False,
 ) -> dict:
     """Check real selection alignment and separately replay real normalization inputs."""
     name = source["marin_source"]
-    report = {"source": name}
+    report = {
+        "source": name,
+        "harrier_embedding": {
+            "requested": include_harrier_embeddings,
+            "metadata_status": source.get("harrier_embedding_metadata_status", "not_examined"),
+            "artifact": source.get("harrier_embedding_artifact"),
+            "document_coverage": "not_examined",
+        },
+    }
     prefix = str(StoragePath(recovered["store_uri"]).parent.parent)
     roots = source["artifact_roots"]
     records = recovered["records"]
@@ -46,6 +55,12 @@ def probe_source(
         decon_dir = records[roots["decontam"]]["record"]["result"]["main_output_dir"]
         cluster_dir = records[roots["cluster"]]["record"]["result"]["output_dir"]
         normalized = prefix_join(_absolute(prefix, source["source_key"]), filename)
+        embedding_artifact = (
+            source.get("harrier_embedding_artifact")
+            if include_harrier_embeddings and source.get("harrier_embedding_metadata_status") == "available"
+            else None
+        )
+        report["harrier_embedding"]["included"] = embedding_artifact is not None
         manifest = ShardManifest(
             marin_source=name,
             normalized=normalized,
@@ -60,6 +75,8 @@ def probe_source(
                 else prefix_join(_absolute(prefix, source["verified_fuzzy_dedup"]["attr_dir"]), filename)
             ),
             bucket_edges=recovered["bucket_edges"],
+            harrier_embedding=prefix_join(embedding_artifact, filename) if embedding_artifact else "",
+            harrier_embedding_provenance=source.get("harrier_embedding_provenance") if embedding_artifact else None,
         )
         exported = export_metadata_shard(
             manifest,
@@ -68,6 +85,8 @@ def probe_source(
             max_rows=max_rows,
             batch_size=min(max_rows, 64),
         )
+        if embedding_artifact:
+            report["harrier_embedding"]["document_coverage"] = "bounded_sample_examined"
         # Readback is intentionally labelled separately from independent input replay.
         hashes_checked = 0
         fs, resolved = filesystem_for(normalized)
@@ -110,6 +129,7 @@ def main() -> None:
     parser.add_argument("--replay-bytes", type=int, default=16 * 1024 * 1024)
     parser.add_argument("--original-inputs", action="store_true", help="Use recorded input locations before mirroring")
     parser.add_argument("--sources", help="Optional comma-separated frozen source subset")
+    parser.add_argument("--harrier-embeddings", action="store_true", help="Export available stored Harrier vectors")
     args = parser.parse_args()
     if not args.output:
         raise ValueError("Specify --output or run with IRIS_OUTPUT_DIR")
@@ -117,6 +137,8 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     store = read_metadata(prefix_join(args.store, ".artifact.json"))
     recovered = inventory(store)
+    if args.harrier_embeddings:
+        recovered = recover_harrier_embeddings(recovered, workers=args.workers)
     (output / "inventory.json").write_text(json.dumps(recovered, indent=2))
     sources = recovered["sources"]
     if args.original_inputs:
@@ -138,6 +160,7 @@ def main() -> None:
             max_rows=args.max_rows,
             replay_rows=args.replay_rows,
             replay_bytes=args.replay_bytes,
+            include_harrier_embeddings=args.harrier_embeddings,
         )
         print(
             json.dumps(
@@ -159,6 +182,11 @@ def main() -> None:
         "sources_examined": len(results),
         "selection_status": dict(Counter(row["selection"]["status"] for row in results)),
         "normalization_replay_status": dict(Counter(row["normalization_replay"]["status"] for row in results)),
+        "harrier_embedding_requested": args.harrier_embeddings,
+        "harrier_embedding_metadata_status": recovered.get("harrier_embedding_metadata_status", {}),
+        "harrier_embedding_sample_status": dict(
+            Counter(row["selection"].get("harrier_embedding", {}).get("status", "not_run") for row in results)
+        ),
         "scope": (
             "real artifact alignment and staged normalization-input replay; "
             "upstream transforms and full token order separate"
