@@ -14,7 +14,9 @@ from typing import Any
 from pydantic import BaseModel
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from taskcompendium.grader import verifyit_package
 from taskcompendium.models import VerifyitGrader
+from verifyit.spec import ExactSpec
 
 from taskforge.agentic import example_build
 from taskforge.agentic.agent import AgentResult, generate_tasks
@@ -348,6 +350,43 @@ async def test_a_control_that_the_answer_format_rejects_is_no_control():
     [empty], [submit] = tool_replies(result, "call-2"), tool_replies(result, "call-4")
     assert empty["control"] is False
     assert "controls" in submit["missing"]
+
+
+async def test_rollout_refuses_solver_rollouts_past_the_cap_of_a_version():
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("rollout", paths=[TASK], n=12, role="solver"),
+        call("rollout", paths=[TASK], n=8, role="solver"),
+        call("rollout", paths=[TASK], n=4, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=24, judge_calls=0, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [refusal], [rollout] = tool_replies(result, "call-3"), tool_replies(result, "call-4")
+    assert "A version gets at most 16 solver rollouts" in refusal["error"]
+    assert rollout["results"][TASK]["evidence"]["solver_runs"] == 16
+    assert result.spend.solver_rollouts == 16
+
+
+async def test_a_failed_answer_whose_last_line_passes_is_a_format_failure():
+    # An exact grader compares the whole answer, so the work before the answer fails it.
+    exact = verifyit_package(ExactSpec(expected=(EXPECTED,))).grader
+    task = example_build.task_spec(TASK_ID).model_copy(update={"grader": exact})
+    script = (
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
+        call("rollout", paths=[TASK], n=4, role="solver"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=4, judge_calls=0, web_calls=0), web)
+        solver = Solver(wrong=f"I added the changes of the item.\n\n**{EXPECTED}**")
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=solver))
+
+    [rollout] = tool_replies(result, "call-2")
+    evidence = rollout["results"][TASK]["evidence"]
+    assert (evidence["solver_runs"], evidence["solver_passes"], evidence["solver_format_failures"]) == (2, 2, 2)
 
 
 async def test_the_solver_of_the_example_task_has_python():

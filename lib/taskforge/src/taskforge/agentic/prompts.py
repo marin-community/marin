@@ -71,8 +71,9 @@ evidence until you run the tools on it again. submit tells you what is missing o
 
 # How to work well
 
-- A solver answer that the answer format rejects, for example JSON in a code fence, is a format failure. It is not \
-a measure of difficulty, and the pass rate does not count it. Many format failures show an unclear format instruction.
+- A solver answer that the answer format rejects, for example JSON in a code fence, is a format failure. So is a \
+failed answer whose last line passes, for example the answer after a paragraph of work. It is not a measure of \
+difficulty, and the pass rate does not count it. Many format failures show an unclear format instruction.
 - A pass rate of 0 usually shows a broken grader, a wrong reference answer, or an ambiguous prompt. Read the \
 transcripts before you make a task harder or easier. If the failed solvers agree on one wrong answer, the prompt is \
 probably ambiguous: correct the prompt, not the difficulty.
