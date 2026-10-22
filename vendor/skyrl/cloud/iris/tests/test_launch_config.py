@@ -64,7 +64,6 @@ def _raw_config() -> dict[str, Any]:
             "export_hf": True,
         },
         "runtime": {
-            "source_digest": "a" * 64,
             "profile": "megatron",
             "entrypoint": "skyrl_train.entrypoints.main_base",
         },

@@ -24,14 +24,12 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
-    SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
     TaskTroveDataSource,
     TaskTroveSelection,
     TaskTroveTagMatch,
     run_skyrl,
-    skyrl_runtime_digest,
     skyrl_step,
     skyrl_temporary_run_path,
     validate_megatron_geometry,
@@ -158,7 +156,6 @@ def _spec() -> SkyRLSpec:
         name="users/tester/tests/iceball-rl",
         version="2026.08.01",
         config_yaml=_config_yaml(),
-        runtime=SkyRLRuntime(),
         model=ArtifactHfModel(
             step=_model_step(),
             tokenizer_uri="Qwen/Qwen3-0.6B-Base",
@@ -235,7 +232,6 @@ def test_skyrl_launch_reserves_capacity_for_config_derived_draft_trainer() -> No
     spec = dataclasses.replace(
         _spec(),
         config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(),
         topology=SkyRLTopology(
             num_nodes=6,
             gpus_per_node=8,
@@ -311,7 +307,6 @@ def test_skyrl_separate_reference_reserves_capacity_and_renders_distinct_roles()
     spec = dataclasses.replace(
         _spec(),
         config_yaml=yaml.safe_dump(recipe),
-        runtime=SkyRLRuntime(),
         topology=topology,
     )
     step = skyrl_step(spec, _execution())
@@ -406,7 +401,6 @@ def test_skyrl_temporary_run_path_does_not_repeat_bucket_name(monkeypatch: pytes
 
 
 def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -> None:
-    expected_source_digest = skyrl_runtime_digest()
     step = skyrl_step(_spec(), _execution(), export_hf=True)
     config = step.build_config(
         StepContext.for_run(
@@ -454,7 +448,6 @@ def test_run_skyrl_returns_explicit_hf_export(monkeypatch: pytest.MonkeyPatch) -
     assert launch["iris"]["timeout"] == 1800
     assert launch["schema_version"] == 1
     assert launch["run"]["export_hf"] is True
-    assert launch["runtime"]["source_digest"] == expected_source_digest
     assert launch["iris"]["allocation"] == {
         "num_nodes": 1,
         "gpus_per_node": 4,
@@ -646,7 +639,6 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
     with pytest.raises(ValueError, match="equal micro_forward_batch_size_per_gpu"):
         dataclasses.replace(
             base,
-            runtime=SkyRLRuntime(),
             topology=dataclasses.replace(base.topology, role_plan=plan),
             config_yaml=yaml.safe_dump(recipe),
         )
@@ -654,7 +646,6 @@ def test_megatron_microbatch_mismatch_fails_before_launch() -> None:
     recipe["trainer"]["micro_forward_batch_size_per_gpu"] = 2
     dataclasses.replace(
         base,
-        runtime=SkyRLRuntime(),
         topology=dataclasses.replace(base.topology, role_plan=plan),
         config_yaml=yaml.safe_dump(recipe),
     )
