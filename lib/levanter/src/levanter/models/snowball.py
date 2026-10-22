@@ -40,6 +40,7 @@ from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -240,6 +241,11 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
+        if self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
+            raise ValueError(
+                f"snowball cannot use moe_implementation={self.moe_implementation!r}: it requires "
+                "pooled_transport_capacity_factor, which SnowballConfig does not set"
+            )
         _ = self.inferred_head_dim
 
     @property
