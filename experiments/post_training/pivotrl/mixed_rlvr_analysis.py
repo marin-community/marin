@@ -39,7 +39,6 @@ from dotenv import dotenv_values
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 
-from experiments.post_training.pivotrl.mixed_rlvr_arms import ORIGINAL_SEED
 from experiments.post_training.pivotrl.mixed_rlvr_evals import EVALCHEMY, HARBOR, REFERENCE
 
 logger = logging.getLogger(__name__)
@@ -398,7 +397,7 @@ def plot(
                 mec=color if seed else "white",
                 mew=1.2 if seed else 0.7,
                 zorder=3,
-                label=f"{base.upper()} · {description} (seed {seed or ORIGINAL_SEED})",
+                label=f"{base.upper()} · {description}",
             )
         ax.set_title(f"{title}  ", loc="left", fontsize=10, fontweight="bold", color="#111111")
         ax.text(
@@ -419,7 +418,8 @@ def plot(
         ax.set_xlabel("RL step")
     for ax in axes[:, 0]:
         ax.set_ylabel("Δ accuracy vs reference (pts" + (", 80% CI)" if bands else ")"))
-    # A replicate may have points on some panels only, so the legend gathers every series drawn on any panel.
+    # One legend entry per arm: replicates share their arm's colour and differ only in line style. A replicate may have
+    # points on some panels only, so the legend gathers every series drawn on any panel.
     legend: dict[str, object] = {}
     for ax in axes.flat:
         for handle, label in zip(*ax.get_legend_handles_labels(), strict=True):
