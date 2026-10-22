@@ -12,8 +12,8 @@ other egress. Ingress is not restricted.
   other tasks), cluster nodes, ``kubernetes_provider.cilium.egress_endpoints``,
   and Iris's base allowlist plus ``defaults.egress_allowlist.allow``.
 - ``<pod>-egress``, one per task attempt whose job has its own rules, applied
-  by the controller before the pod and deleted with the pod's other
-  resources.
+  by the controller before the pod and owned by it, so Kubernetes deletes it
+  with the pod.
 
 Domains become ``toFQDNs`` selectors and DNS rules. Cilium's DNS proxy answers
 every name the pod's policies do not list with REFUSED, so looking up an
@@ -32,7 +32,6 @@ from iris.cluster.runtime.sandbox import TaskNetwork
 from iris.rpc import job_pb2
 
 ALLOWLIST_POLICY_NAME = "iris-egress-allowlist"
-TASK_POLICY_SUFFIX = "-egress"
 
 _API_VERSION = "cilium.io/v2"
 _KIND = "CiliumNetworkPolicy"
@@ -72,10 +71,6 @@ def allowlist_policy_manifest(
     return _policy(ALLOWLIST_POLICY_NAME, namespace, {EGRESS_LABEL: TaskNetwork.ALLOWLIST.value}, egress)
 
 
-def task_policy_name(pod_name: str) -> str:
-    return f"{pod_name}{TASK_POLICY_SUFFIX}"
-
-
 def task_policy_manifest(
     pod_name: str,
     namespace: str,
@@ -88,7 +83,7 @@ def task_policy_manifest(
     if domains:
         egress.insert(0, _dns_section(domains))
     selector = {EGRESS_LABEL: TaskNetwork.ALLOWLIST.value, **pod_labels}
-    return _policy(task_policy_name(pod_name), namespace, selector, egress)
+    return _policy(f"{pod_name}-egress", namespace, selector, egress)
 
 
 def _policy(name: str, namespace: str, selector: Mapping[str, str], egress: list[dict]) -> dict:

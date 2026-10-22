@@ -34,12 +34,10 @@ from iris.cluster.backends.k8s.tasks import (
     _sanitize_label_value,
     _task_hash,
 )
-from iris.cluster.config import EgressAllowlistConfig, TaskOutputPolicy
+from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.egress import parse_egress_rules
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
-from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest, task_policy_name
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
 from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.types import JobName
@@ -1418,24 +1416,6 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     # Recent resources preserved.
     assert k8s.get_json(K8sResource.PODS, "recent-succeeded-pod") is not None
     assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
-
-
-def test_gc_deletes_a_terminal_pods_egress_policy(k8s):
-    provider = K8sTaskProvider(
-        descriptor=k8s_backend_descriptor(),
-        kubectl=k8s,
-        pods=pod_config(egress_allowlist=EgressAllowlistConfig()),
-        cluster_scan_interval=0.0,
-    )
-    old_ts = (datetime.now(UTC) - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    _seed_terminal_pod(k8s, "old-pod", "Succeeded", "aabbccdd11223344", old_ts)
-    k8s.apply_json(task_policy_manifest("old-pod", "iris", {}, parse_egress_rules(["pypi.org"])))
-
-    provider.collect_garbage()
-    provider.collect_garbage()
-
-    assert k8s.get_json(K8sResource.CILIUM_NETWORK_POLICIES, task_policy_name("old-pod")) is None
-    provider.close()
 
 
 def test_gc_retains_old_pod_until_after_output_uploader_finishes(provider, k8s):

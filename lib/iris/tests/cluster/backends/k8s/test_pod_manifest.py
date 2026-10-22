@@ -1190,9 +1190,11 @@ def test_allowlist_job_rules_reach_only_its_own_pod():
         for name in port.get("rules", {}).get("dns", [])
     ]
 
-    # The policy selects this attempt's pod and no other task's.
+    # The policy selects this attempt's pod and no other task's, and is deleted with it.
     assert selector.items() <= pod["metadata"]["labels"].items()
     assert {LABEL_TASK_HASH, "iris.attempt_id"} <= selector.keys()
+    [owner] = policy["metadata"]["ownerReferences"]
+    assert (owner["kind"], owner["uid"]) == ("Pod", pod["metadata"]["uid"])
     assert by_destination == {
         "api.openai.com": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
         "*.example.com": None,

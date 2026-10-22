@@ -90,7 +90,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
-from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest, task_policy_name
+from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -2840,19 +2840,19 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
+        task_policy = None
         if run_req.egress_allow and manifest["metadata"]["labels"].get(EGRESS_LABEL) == TaskNetwork.ALLOWLIST.value:
-            # Before the pod, so its first connections already see the job's rules.
-            self.kubectl.apply_json(
-                task_policy_manifest(
-                    pod_name,
-                    self.pods.namespace,
-                    {
-                        _LABEL_TASK_HASH: manifest["metadata"]["labels"][_LABEL_TASK_HASH],
-                        _LABEL_ATTEMPT_ID: manifest["metadata"]["labels"][_LABEL_ATTEMPT_ID],
-                    },
-                    run_req.egress_allow,
-                )
+            task_policy = task_policy_manifest(
+                pod_name,
+                self.pods.namespace,
+                {
+                    _LABEL_TASK_HASH: manifest["metadata"]["labels"][_LABEL_TASK_HASH],
+                    _LABEL_ATTEMPT_ID: manifest["metadata"]["labels"][_LABEL_ATTEMPT_ID],
+                },
+                run_req.egress_allow,
             )
+            # Before the pod, so its first connections already see the job's rules.
+            self.kubectl.apply_json(task_policy)
 
         task_id = run_req.task_id
         if _is_coordinator_task(run_req):
@@ -2869,30 +2869,34 @@ class K8sTaskProvider:
 
         self.kubectl.apply_json(manifest)
         job_secrets = task_secret_values(run_req.environment)
-        if job_secrets:
-            # Create the Pod first so its UID can own the Secret even if dispatch
-            # is interrupted. The required volume holds task startup until apply.
+        if job_secrets or task_policy is not None:
+            # The Pod owns its Secret and policy, so Kubernetes deletes them with
+            # the Pod however it is removed. The required Secret volume holds
+            # task startup until the Secret exists.
             pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
             if pod is None:
-                raise KubectlError(f"Pod {pod_name} disappeared before credential delivery")
-            self.kubectl.apply_json(
-                {
-                    "apiVersion": "v1",
-                    "kind": "Secret",
-                    "metadata": {
-                        "name": _task_secret_name(pod_name),
-                        "namespace": self.pods.namespace,
-                        "ownerReferences": [
-                            {"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}
-                        ],
-                    },
-                    "type": "Opaque",
-                    "data": {
-                        name: base64.b64encode(value.encode()).decode()
-                        for name, value in secret_file_contents(job_secrets).items()
-                    },
-                }
-            )
+                raise KubectlError(f"Pod {pod_name} disappeared before its Secret and policy were applied")
+            owner = [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}]
+            if task_policy is not None:
+                task_policy["metadata"]["ownerReferences"] = owner
+                self.kubectl.apply_json(task_policy)
+            if job_secrets:
+                self.kubectl.apply_json(
+                    {
+                        "apiVersion": "v1",
+                        "kind": "Secret",
+                        "metadata": {
+                            "name": _task_secret_name(pod_name),
+                            "namespace": self.pods.namespace,
+                            "ownerReferences": owner,
+                        },
+                        "type": "Opaque",
+                        "data": {
+                            name: base64.b64encode(value.encode()).decode()
+                            for name, value in secret_file_contents(job_secrets).items()
+                        },
+                    }
+                )
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
@@ -3042,8 +3046,6 @@ class K8sTaskProvider:
                 self.kubectl.delete(K8sResource.CONFIGMAPS, f"{pod_name}-wf", wait=False)
                 self.kubectl.delete(K8sResource.PDBS, _pdb_name(pod_name), wait=False)
                 self.kubectl.delete(K8sResource.SECRETS, _task_secret_name(pod_name), wait=False)
-                if self.pods.egress_allowlist is not None:
-                    self.kubectl.delete(K8sResource.CILIUM_NETWORK_POLICIES, task_policy_name(pod_name), wait=False)
                 cleaned.add(pod_name)
         except KubectlError:
             # Keep failed cleanup queued without preventing the terminal-pod sweep.
