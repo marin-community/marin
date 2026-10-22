@@ -167,10 +167,6 @@ def _reshard_sequence(x: jax.Array, axis: str | None) -> jax.Array:
     return reshard(x, P(spec[0], axis, *spec[2:]))
 
 
-def _activation_reshard(x: jax.Array) -> jax.Array:
-    return reshard(x, _activation_spec())
-
-
 def _hf_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
     for name in names:
         if hasattr(config, name):
