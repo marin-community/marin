@@ -7,8 +7,8 @@ A rule names one destination, a DNS name, a one-label wildcard pattern or a
 CIDR network, and optionally the TCP ports it admits. Users write rules as
 strings (``iris job run --egress-allow``, ``IrisClient.submit(egress_allow=)``,
 ``defaults.egress_allowlist.allow``); :func:`parse_egress_rule`
-turns one into a ``job_pb2.EgressRule``, and the controller re-validates every
-rule it receives with :func:`validate_egress_rule`.
+turns one into a ``job_pb2.EgressRule``, and the controller re-validates a
+submitted job's rules with :func:`validate_egress_rules`.
 
 Syntax: ``DEST[:PORT[,PORT...]]``, where ``DEST`` is ``api.openai.com``,
 ``*.openai.com``, ``203.0.113.0/24`` or a bare address. An IPv6 destination
@@ -17,7 +17,7 @@ with ports goes in brackets: ``[2001:db8::/32]:443``.
 
 import ipaddress
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 
 from iris.rpc import job_pb2
 
@@ -100,9 +100,20 @@ def parse_egress_rule(text: str) -> job_pb2.EgressRule:
 def parse_egress_rules(texts: Iterable[str]) -> list[job_pb2.EgressRule]:
     """Parse rules in order, rejecting a list longer than ``MAX_EGRESS_RULES``."""
     rules = [parse_egress_rule(text) for text in texts]
+    _check_rule_count(rules)
+    return rules
+
+
+def validate_egress_rules(rules: Sequence[job_pb2.EgressRule]) -> None:
+    """Raise ValueError for more than ``MAX_EGRESS_RULES`` rules or any invalid rule."""
+    _check_rule_count(rules)
+    for rule in rules:
+        validate_egress_rule(rule)
+
+
+def _check_rule_count(rules: Sequence[job_pb2.EgressRule]) -> None:
     if len(rules) > MAX_EGRESS_RULES:
         raise ValueError(f"At most {MAX_EGRESS_RULES} egress rules are allowed; got {len(rules)}")
-    return rules
 
 
 def validate_egress_rule(rule: job_pb2.EgressRule) -> None:

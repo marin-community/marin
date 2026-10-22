@@ -820,7 +820,7 @@ class TaskAttempt:
             timeout_seconds=timeout_seconds,
             mounts=list(isolation.mounts),
             network_mode=docker_network_mode(isolation.network),
-            resolv_conf=self._resolv_conf(isolation.network),
+            resolv_conf=self._prepare_resolv_conf(isolation.network),
             workdir_host_path=self.workdir,
             output_host_path=self.output_dir,
             task_id=self.task_id.to_wire(),
@@ -836,16 +836,16 @@ class TaskAttempt:
         self._container_handle = self._runtime.create_container(config)
         logger.info("Container handle created for task %s", self.task_id)
 
-    def _resolv_conf(self, network: TaskNetwork) -> Path | None:
-        """The resolv.conf replacing the container's, starting an ALLOWLIST task's DNS filter.
+    def _prepare_resolv_conf(self, network: TaskNetwork) -> Path | None:
+        """Return the resolv.conf to mount over the container's, if any.
 
-        Docker's embedded resolver on the INTERNET bridge forwards to the VM's
-        resolver, the metadata server the host filter blocks, and relies on NAT
-        rules gVisor's network stack does not apply, so INTERNET tasks use the
-        public resolvers bootstrap names. Without a filter manager, as in local
-        process runtimes, an ALLOWLIST task resolves every name.
+        Starts the DNS filter of an ALLOWLIST task. Without a filter manager,
+        as in local process runtimes, an ALLOWLIST task resolves every name.
         """
         if network is TaskNetwork.INTERNET:
+            # Docker's embedded resolver on the bridge forwards to the metadata
+            # server, which the host filter blocks, and relies on NAT rules
+            # gVisor does not apply. Bootstrap's file names public resolvers.
             return Path(EGRESS_RESOLV_CONF)
         if network is TaskNetwork.ALLOWLIST and self._egress_dns is not None:
             assert self.workdir is not None

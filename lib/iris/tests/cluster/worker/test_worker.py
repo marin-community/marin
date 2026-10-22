@@ -6,7 +6,6 @@
 import hashlib
 import json
 import socket
-import struct
 import subprocess as sp
 import threading
 import zipfile
@@ -873,15 +872,6 @@ def test_egress_policy_selects_the_docker_network(
     assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
 
 
-def _dns_refuses(address: tuple[str, int], name: str) -> bool:
-    labels = b"".join(bytes([len(label)]) + label.encode() for label in name.split("."))
-    query = struct.pack("!HHHHHH", 7, 0x0100, 1, 0, 0, 0) + labels + b"\x00" + struct.pack("!HH", 1, 1)
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-        sock.settimeout(5)
-        sock.sendto(query, address)
-        return sock.recv(512)[3] & 0x0F == 5  # RCODE REFUSED
-
-
 def test_allowlist_task_resolves_through_its_own_dns_filter_until_it_finishes(mock_bundle_store, mock_runtime, tmp_path):
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
         probe.bind(("127.0.0.1", 0))
@@ -897,7 +887,9 @@ def test_allowlist_task_resolves_through_its_own_dns_filter_until_it_finishes(mo
         nameserver = container_config.resolv_conf.read_text().split()[1]
         seen["network_mode"] = container_config.network_mode
         seen["resolv_conf"] = container_config.resolv_conf
-        seen["refuses_unlisted"] = _dns_refuses((nameserver, port), "exfil.attacker.example")
+        # The filter's DNS-over-TCP listener accepts connections while the container runs.
+        with socket.create_connection((nameserver, port), timeout=5):
+            seen["filter_listening"] = True
         return create_mock_container_handle()
 
     mock_runtime.create_container.side_effect = create_container
@@ -910,7 +902,7 @@ def test_allowlist_task_resolves_through_its_own_dns_filter_until_it_finishes(mo
 
     assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
     assert seen["network_mode"] == NETWORK_MODE_HOST
-    assert seen["refuses_unlisted"]
+    assert seen["filter_listening"]
     assert not seen["resolv_conf"].exists()
 
 

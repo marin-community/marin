@@ -96,12 +96,14 @@ class TaskIsolation:
             task's Iris client act as the job's owner.
         include_shared_caches: The node-shared download caches.
         include_service_account: On Kubernetes, the pod service account and its token.
-        network: What the task's network reaches. Outside CLUSTER, a Docker
-            worker runs the task on the filtered egress network (INTERNET) or
-            with no network (NONE), and a Kubernetes pod gets no host network
-            and carries the label its network policy selects. Under INTERNET
-            and NONE the pod also runs without the log-shipping and
-            output-upload sidecars, which would share the task's network.
+        network: What the task's network reaches. A Docker worker runs an
+            INTERNET task on the filtered egress network, a NONE task with no
+            network, and a CLUSTER or ALLOWLIST task on the host network, with
+            ALLOWLIST's DNS filtered. A Kubernetes pod outside CLUSTER gets no
+            host network, except a multi-host GPU ALLOWLIST pod, and carries
+            the label its network policy selects. Under INTERNET and NONE the
+            pod also runs without the log-shipping and output-upload sidecars,
+            which would share the task's network.
     """
 
     include_cluster_env: bool

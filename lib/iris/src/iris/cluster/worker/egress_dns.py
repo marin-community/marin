@@ -392,7 +392,9 @@ class EgressDnsFilters:
             dns_filter = self._filters.pop(key, None)
         if dns_filter is not None:
             dns_filter.stop()
-        shutil.rmtree(self._state_root / key, ignore_errors=True)
+        state_dir = self._state_root / key
+        if state_dir.exists():
+            shutil.rmtree(state_dir)
 
     def close(self) -> None:
         """Stop every filter but keep its state, so the next worker can restore it."""

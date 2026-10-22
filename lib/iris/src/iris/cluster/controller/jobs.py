@@ -35,7 +35,7 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.schema import jobs_table, tasks_table
-from iris.cluster.egress import MAX_EGRESS_RULES, parse_egress_rules, validate_egress_rule
+from iris.cluster.egress import parse_egress_rules, validate_egress_rules
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
@@ -661,10 +661,7 @@ def _validate_egress(request: controller_pb2.Controller.LaunchJobRequest) -> Non
     placement is known (:func:`_resolve_egress_default`).
     """
     try:
-        if len(request.egress_allow) > MAX_EGRESS_RULES:
-            raise ValueError(f"At most {MAX_EGRESS_RULES} egress rules are allowed; got {len(request.egress_allow)}")
-        for rule in request.egress_allow:
-            validate_egress_rule(rule)
+        validate_egress_rules(request.egress_allow)
         if request.egress_allow and request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
             request.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
         if request.egress_allow and request.egress_policy != job_pb2.EGRESS_POLICY_ALLOWLIST:
