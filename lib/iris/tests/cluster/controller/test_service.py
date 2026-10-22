@@ -15,7 +15,7 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fsspec.implementations.local import LocalFileSystem
-from iris.cluster.backends.k8s.tasks import coreweave_storage_error
+from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     Constraint,
@@ -33,6 +33,7 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -45,6 +46,7 @@ from iris.testing.controller import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
+from iris.testing.k8s import k8s_backend_descriptor, pod_config
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
@@ -1593,8 +1595,24 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
     assert response.job_id == child_id.to_wire()
 
 
+@pytest.fixture
+def coreweave_backend(mock_controller):
+    backend = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=InMemoryK8sService(namespace="iris"),
+        pods=pod_config(require_coreweave_credentials=True),
+    )
+    mock_controller.backend = backend
+    try:
+        yield backend
+    finally:
+        backend.close()
+
+
 @pytest.mark.parametrize("env", [{}, {"CW_KEY_ID": "user-key"}, {"CW_KEY_ID": "user-key", "CW_KEY_SECRET": ""}])
-def test_coreweave_launch_rejects_missing_user_keys(state, log_client, mock_controller, tmp_path, monkeypatch, env):
+def test_coreweave_launch_rejects_missing_user_keys(
+    state, log_client, mock_controller, coreweave_backend, tmp_path, monkeypatch, env
+):
     monkeypatch.setenv("CW_KEY_ID", "operator-key")
     monkeypatch.setenv("CW_KEY_SECRET", "operator-secret")
     service = ControllerServiceImpl(
@@ -1603,7 +1621,6 @@ def test_coreweave_launch_rejects_missing_user_keys(state, log_client, mock_cont
         log_client=log_client,
         db=state._db,
         endpoint_service=EndpointServiceImpl(db=state._db),
-        job_environment_check=coreweave_storage_error,
     )
     request = make_job_request("missing-cw-keys")
     request.environment.env_vars.update(env)

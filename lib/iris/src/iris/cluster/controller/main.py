@@ -22,7 +22,6 @@ from finelog.deploy.config import derive_endpoint_uri, load_finelog_config
 from rigging.log_setup import configure_logging
 from rigging.timing import Duration, Timestamp
 
-from iris.cluster.backends.k8s.tasks import coreweave_storage_error
 from iris.cluster.composer import make_backend
 from iris.cluster.config import IrisClusterConfig, load_config, resolve_config_secrets, resolve_principal_references
 from iris.cluster.controller.auth import create_controller_auth, require_persistent_signing_key
@@ -266,7 +265,6 @@ def run_controller_serve(
         endpoints=endpoints,
         autoscaler_evaluation_interval=cluster_config.defaults.autoscaler.evaluation_interval,
         cluster_id=cluster_config.name,
-        job_environment_check=coreweave_storage_error if cluster_config.platform.coreweave is not None else None,
         dashboard_url=cluster_config.dashboard_url,
         federation_public_parent=cluster_config.federation_public_parent,
         peers=cluster_config.peers,

@@ -321,6 +321,9 @@ class RpcTaskBackend:
             autoscaler_state=self.autoscaler.persistable_state(),
         )
 
+    def job_environment_error(self, environment: job_pb2.EnvironmentConfig, container_profile: int) -> str | None:
+        return None
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         if self.autoscaler is None:
             return None

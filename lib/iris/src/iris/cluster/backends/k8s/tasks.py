@@ -2481,6 +2481,11 @@ class K8sTaskProvider:
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
+    def job_environment_error(self, environment: job_pb2.EnvironmentConfig, container_profile: int) -> str | None:
+        if not self.pods.require_coreweave_credentials or container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+            return None
+        return coreweave_storage_error(environment.env_vars)
+
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
 

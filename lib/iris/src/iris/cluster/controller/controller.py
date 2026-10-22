@@ -122,7 +122,6 @@ from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
 from iris.cluster.runtime.sandbox import task_isolation
 from iris.cluster.types import (
-    JobEnvironmentCheck,
     JobName,
     PendingTask,
     UserBudgetDefaults,
@@ -334,8 +333,6 @@ class ControllerConfig:
     dry_run: bool = False
     """Start in dry-run mode: compute scheduling but suppress all side effects."""
 
-    job_environment_check: JobEnvironmentCheck | None = None
-
     user_budget_defaults: UserBudgetDefaults = field(default_factory=UserBudgetDefaults)
     """Default budget settings applied when a new user is first seen."""
 
@@ -504,7 +501,6 @@ class Controller:
             endpoint_service=self._endpoint_service,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
-            job_environment_check=config.job_environment_check,
             capability_url_config=CapabilityUrlConfig(
                 cluster_name=config.cluster_id,
                 local_origin=config.dashboard_url,

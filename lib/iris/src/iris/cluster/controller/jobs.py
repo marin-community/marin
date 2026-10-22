@@ -44,7 +44,6 @@ from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
     USER_JOB_STATES,
-    JobEnvironmentCheck,
     JobName,
     UserBudgetDefaults,
     is_federated,
@@ -104,7 +103,6 @@ class JobDependencies:
     bundles: BundleStore
     auth: ControllerAuth
     user_budget_defaults: UserBudgetDefaults
-    job_environment_check: JobEnvironmentCheck | None = None
 
 
 class JobStatusRow(Protocol):
@@ -899,14 +897,12 @@ def launch_job(
 
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
-    if (
-        plan.disposition == SubmitDisposition.LOCAL
-        and dependencies.job_environment_check is not None
-        and request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX
-    ):
-        storage_error = dependencies.job_environment_check(request.environment.env_vars)
-        if storage_error:
-            raise ConnectError(Code.INVALID_ARGUMENT, storage_error)
+    if plan.disposition == SubmitDisposition.LOCAL:
+        environment_error = dependencies.runtime.backend.job_environment_error(
+            request.environment, request.container_profile
+        )
+        if environment_error:
+            raise ConnectError(Code.INVALID_ARGUMENT, environment_error)
 
     existing = _prepare_job_slot(dependencies, request, launch)
     if existing is not None:

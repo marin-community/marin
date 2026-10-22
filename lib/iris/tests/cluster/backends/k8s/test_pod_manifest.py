@@ -192,8 +192,9 @@ def _build_task_script(request: job_pb2.RunTaskRequest) -> str:
     return _build_pod_manifest(request, pod_config())["spec"]["containers"][0]["command"][2]
 
 
-def test_task_output_policy_adds_uploader_and_dedicated_volume() -> None:
-    request = make_run_req("/user/job/0", attempt_uid="0123456789abcdef")
+@pytest.mark.parametrize("attempt_id", [0, 1])
+def test_task_output_policy_adds_uploader_and_dedicated_volume(attempt_id: int) -> None:
+    request = make_run_req("/user/job/0", attempt_id=attempt_id, attempt_uid="0123456789abcdef")
     request.environment.env_vars.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
     manifest = _build_pod_manifest(
         request,
@@ -1856,7 +1857,8 @@ def test_pod_manifest_floors_an_unset_band_at_interactive():
     assert manifest["spec"]["priorityClassName"] == "iris-interactive"
 
 
-def test_coreweave_dispatch_rejects_queued_job_without_personal_keys() -> None:
-    request = make_run_req("/user/queued-before-upgrade/0")
+@pytest.mark.parametrize("attempt_id", [0, 1])
+def test_coreweave_dispatch_rejects_legacy_job_without_personal_keys(attempt_id: int) -> None:
+    request = make_run_req("/user/queued-before-upgrade/0", attempt_id=attempt_id)
     update = _rejected_dispatch(request, pod_config(require_coreweave_credentials=True))
     assert "https://console.coreweave.com/object-storage/access-keys" in update.error

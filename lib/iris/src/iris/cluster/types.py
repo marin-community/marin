@@ -17,7 +17,7 @@ import hashlib
 import os
 import sys
 import urllib.parse
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -42,8 +42,6 @@ from iris.resources.state import (
     TERMINAL_TASK_STATES as NATIVE_TERMINAL_TASK_STATES,
 )
 from iris.rpc import controller_pb2, job_pb2
-
-type JobEnvironmentCheck = Callable[[Mapping[str, str]], str | None]
 
 
 class AcceleratorType(StrEnum):

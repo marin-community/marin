@@ -1389,6 +1389,9 @@ class _ScriptedProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
+    def job_environment_error(self, environment: job_pb2.EnvironmentConfig, container_profile: int) -> str | None:
+        return None
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
@@ -1464,6 +1467,9 @@ class _UnreachableProvider:
         self.remove_capacity_calls.append(list(request.worker_ids))
         siblings = [WorkerId(sibling) for dead in request.worker_ids for sibling in self.siblings.get(str(dead), [])]
         return RemoveCapacityResult(sibling_workers=siblings)
+
+    def job_environment_error(self, environment: job_pb2.EnvironmentConfig, container_profile: int) -> str | None:
+        return None
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
