@@ -69,6 +69,39 @@ def _local_completions_payload(stops: list[str]) -> dict:
     )
 
 
+@pytest.mark.parametrize("context_cap, expected_tokens", [(None, 1), (256, 1), (0, 0)])
+def test_loglikelihood_payload_preserves_echo_controls_with_generation_overrides(context_cap, expected_tokens):
+    adapter = object.__new__(LocalCompletionsAPI)
+    adapter.model = "served-model"
+    adapter._max_gen_toks = 256
+    robust_api.configure_generation_overrides(adapter, {"max_gen_toks": 256, "temperature": 0.7, "top_p": 0.9})
+    kwargs = {} if context_cap is None else {"_evalchemy_context_output_cap": context_cap}
+
+    payload = adapter._create_payload(messages="Question: yes", generate=False, gen_kwargs=kwargs)
+
+    assert payload == {
+        "model": "served-model",
+        "prompt": "Question: yes",
+        "temperature": 0,
+        "max_tokens": expected_tokens,
+        "logprobs": 1,
+        "seed": 1234,
+        "echo": True,
+    }
+
+
+def test_chat_payload_keeps_generation_overrides_with_default_generate_flag():
+    adapter = object.__new__(LocalChatCompletion)
+    adapter.model = "served-model"
+    adapter._max_gen_toks = 32
+    robust_api.configure_generation_overrides(adapter, {"max_gen_toks": 256, "temperature": 0.7})
+
+    payload = adapter._create_payload(messages=[{"role": "user", "content": "Question"}], gen_kwargs={})
+
+    assert payload["max_tokens"] == 256
+    assert payload["temperature"] == 0.7
+
+
 def test_gpt5_payload_uses_openai_provider_generation_controls():
     payload = _openai_payload("gpt-5")
 
