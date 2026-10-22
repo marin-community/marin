@@ -46,6 +46,12 @@ def _save(output, name, value):
     print("ARTIFACT", str(StoragePath(output) / name), flush=True)
 
 
+def _record_memory(output, stage):
+    devices = [dict(device_id=device.id, stats=device.memory_stats()) for device in jax.local_devices()]
+    _save(output, f"memory-{stage}-rank{jax.process_index()}.json", devices)
+    print("DEVICE_MEMORY", stage, json.dumps(devices), flush=True)
+
+
 def _load_model(mode, model_path, tokenizer, max_seq_len):
     if mode == "tiny":
         cfg = SnowballConfig(
@@ -116,7 +122,7 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
             dropped_assignments=np.asarray(engine.gen_state.cache.dropped_assignments).tolist(),
         ),
     )
-    # Use the generation scheduler's q_len=1 path after a production-window-length prompt too.
+    # Exercise the production scheduler's padded decode path after a >2048-token prompt too.
     long_prompt = tokenizer.decode(tokens[:2050], skip_special_tokens=False)
     if tokenizer.encode(long_prompt, add_special_tokens=False) != tokens[:2050]:
         raise ValueError("Long-decode prompt does not round-trip through the tokenizer")
@@ -158,6 +164,7 @@ def run(mode, model_path, output, item, max_seq_len):
             json.dumps(dict(seconds=time.monotonic() - start, mesh=dict(trainer.device_mesh.shape))),
             flush=True,
         )
+        _record_memory(output, "model-loaded")
         page_size = 128
         pages = (max_seq_len + page_size - 1) // page_size
         generation_config = json.loads((StoragePath(model_path) / "generation_config.json").read_text())
@@ -186,6 +193,7 @@ def run(mode, model_path, output, item, max_seq_len):
         engine = MultiHostInferenceEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
         if jax.process_index() != 0:
             engine.worker_loop()
+            _record_memory(output, "complete")
             return
         context = InferenceContext(model, tokenizer, engine, config)
         server = InferenceServer(config, context, InferenceServer._create_app(context))
@@ -242,4 +250,5 @@ def run(mode, model_path, output, item, max_seq_len):
             if http_thread.is_alive():
                 raise RuntimeError("HTTP server did not shut down; refusing to desynchronize workers")
             engine.shutdown_workers()
+        _record_memory(output, "complete")
         _save(output, "complete.json", dict(mode=mode, success=True))
