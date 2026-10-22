@@ -59,6 +59,7 @@ from skyrl_train.utils.utils import (
 )
 from skyrl_train.weight_sync.expert_block.sender import ExpertBlockSender
 from skyrl_train.weight_sync.weight_extractor import validate_weight_sync_mode
+from skyrl_train.io import io
 from skyrl_train.workers.grug_validation import GrugValidationSnapshot
 from skyrl_train.workers.megatron.megatron_model_wrapper import (
     MegatronForwardMicroBatch,
@@ -96,12 +97,16 @@ def _validate_grug_router_policy(model_type: str | None, transformer_config_kwar
         )
 
 
+ROUTER_POLICY_MANIFEST_FILENAME = "router_policy.json"
+
+
 def _write_router_policy_manifest(cfg, model_type: str) -> None:
-    """Record the run's router policy (R1) beside its exports."""
-    export_root = cfg.trainer.export_path
-    os.makedirs(export_root, exist_ok=True)
-    manifest_path = os.path.join(export_root, "router_policy.json")
-    with open(manifest_path, "w") as handle:
+    """Record the run's router policy (weights trained, bias frozen, no aux loss) beside its exports."""
+    export_root = str(cfg.trainer.export_path)
+    io.makedirs(export_root, exist_ok=True)
+    separator = "/" if io.is_cloud_path(export_root) else os.sep
+    manifest_path = export_root.rstrip("/\\") + separator + ROUTER_POLICY_MANIFEST_FILENAME
+    with io.open_file(manifest_path, "w") as handle:
         json.dump(router_policy_manifest(model_type), handle, indent=2, sort_keys=True)
 
 
@@ -517,8 +522,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
     def init_model(self, model_path, num_training_steps: int = 1e9):
         """Initialize the model, optimizer, and scheduler for the policy worker."""
         self._initialize_policy_modules(model_path, mode=_MegatronInitMode.TRAINING)
-        # The frozen selection bias is router level R1's contract; snapshot the
-        # buffers so every optimizer step can assert they are byte-identical.
+        # The selection bias stays frozen while the router weights train; snapshot
+        # the buffers so every optimizer step can assert they are byte-identical.
         self._expert_bias_snapshot = snapshot_expert_bias(self.actor_module[0])
         if self._expert_bias_snapshot and self.strategy.is_rank_0():
             _write_router_policy_manifest(self.cfg, self.strategy.hf_config.model_type)
@@ -587,10 +592,11 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         )
 
     def verify_router_observations(self, model_path: str) -> int:
-        """Drive every Grug router under the telemetry observer and recompute its selections.
+        """Drive every Grug router under the telemetry observer and audit the emission.
 
-        Returns the number of selection mismatches between the emitted observations
-        and a top-(k+1) recomputation from each observation's own router inputs.
+        Returns the number of failures: selection mismatches between the emitted
+        observations and a top-(k+1) recomputation from each observation's own
+        router inputs, plus routers whose expert_bias changed during the forward.
         """
         self._initialize_policy_modules(model_path, mode=_MegatronInitMode.CHECKPOINT_EXPORT)
         from skyrl_train.models.grug_megatron import GrugTopKRouter, _grug_topk_indices  # noqa: PLC0415
@@ -682,7 +688,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         ftpo=experience.ftpo,
                         rollout_routed_experts=experience.rollout_routed_experts,
                         pair_roles=experience.pair_roles,
-                        data_source_ids=getattr(experience, "data_source_ids", None),
+                        data_source_ids=experience.get("data_source_ids"),
                     )
                 )
 
