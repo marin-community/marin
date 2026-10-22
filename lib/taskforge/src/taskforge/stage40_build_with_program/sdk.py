@@ -266,11 +266,12 @@ class GraderDraft(BaseModel):
 
     kind: Literal["decision_model", "llm_as_judge", "exact", "numeric", "math", "mcq", "script"] = Field(
         description="decision_model: a decision model compares the whole reply with reference_reply against "
-        "rubric (the default; the reply needs no fixed format); "
+        "rubric (the usual choice for a reply a person reads; the reply needs no fixed format); "
         "llm_as_judge: a model judge applies rubric to a reply whose prose is the product; exact, "
         "numeric, math or mcq: a generic check of a final reply that is one value in an unambiguous format, "
-        "graded in process; script: a Python grader program, only for what only code can probe (running "
-        "solver-written code, executing files)."
+        "graded in process; script: a Python grader program, for a deliverable with a strict structure the "
+        "requester specified whose graded parts are all deterministic, or for what only execution can judge; "
+        "never for prose."
     )
     rubric: Rubric | None = Field(
         description="For decision_model and llm_as_judge, the rubric: what a correct reply delivers, one item per "
@@ -294,7 +295,8 @@ class GraderDraft(BaseModel):
     tolerance: float = Field(description="For numeric, the absolute tolerance; otherwise 0.")
     answer_contract: str = Field(
         description="For decision_model, the deliverable statement: what the solver hands back, in the "
-        "requester's words, with no answer block, labelled fields or fixed layout the work itself does not have. "
+        "requester's words, with no answer block, labelled fields or fixed layout the work itself does not have, "
+        "or that the requester would specify. "
         "For the other kinds, the exact output format the solver must follow. Written as requirements for the "
         "instruction; never describe grading, parsing, credit or tolerances."
     )
