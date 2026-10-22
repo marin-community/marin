@@ -380,6 +380,7 @@ class Terminus2(BaseAgent):
         proactive_summarization_threshold: int = 8000,
         max_thinking_tokens: int | None = None,
         model_info: dict | None = None,
+        tokenizer_encoding: str | None = None,
         trajectory_config: TrajectoryConfig | None = None,
         trajectory_dump_cadence: str | None = None,
         tmux_pane_width: int = 160,
@@ -427,6 +428,9 @@ class Terminus2(BaseAgent):
                 - input_cost_per_token: Cost per input token (optional)
                 - output_cost_per_token: Cost per output token (optional)
                 (default: None)
+            tokenizer_encoding: Explicit tiktoken encoding for local token estimates
+                when the endpoint does not support /tokenize. Required for model
+                names tiktoken cannot identify. Counts remain estimates.
             trajectory_config: Optional TrajectoryConfig containing trajectory-related configurations.
                 Available options:
                 - raw_content (bool): If True, dump raw LLM responses into trajectory without
@@ -495,6 +499,11 @@ class Terminus2(BaseAgent):
         self._parser_name = parser_name
         self._collect_rollout_details = collect_rollout_details
         self._reasoning_effort = reasoning_effort
+        self._token_encoding = (
+            tiktoken.get_encoding(tokenizer_encoding)
+            if tokenizer_encoding is not None
+            else None
+        )
         resolved_model_info = self._resolve_model_info(self.model_alias, model_info)
 
         self._llm = self._init_llm(
@@ -832,8 +841,9 @@ class Terminus2(BaseAgent):
         history only for the request) are included in the count so budget
         accounting matches the real request size.
 
-        Local estimates are available only for models recognized by tiktoken.
-        Custom served models require the server's tokenizer and chat template.
+        Local estimates use an explicitly configured tokenizer_encoding or
+        tiktoken's encoder for recognized OpenAI models. Custom served models
+        should use the server's tokenizer and chat template for exact counts.
         """
         # No messages yet (e.g. the proactive-summarization check on the very
         # first episode, before the initial prompt has been appended to the
@@ -906,12 +916,16 @@ class Terminus2(BaseAgent):
         messages = list(chat.messages)
         if extra_messages:
             messages.extend(extra_messages)
-        try:
-            encoding = tiktoken.encoding_for_model(self.model_alias.split("/", 1)[-1])
-        except KeyError:
-            raise ValueError(
-                "Token counting requires a vLLM endpoint for this model"
-            ) from None
+        encoding = self._token_encoding
+        if encoding is None:
+            try:
+                encoding = tiktoken.encoding_for_model(
+                    self.model_alias.split("/", 1)[-1]
+                )
+            except KeyError:
+                raise ValueError(
+                    f"Configure tokenizer_encoding for {self.model_alias!r} when the endpoint has no /tokenize route"
+                ) from None
         return OPENAI_CHAT_REPLY_PRIMING_TOKENS + sum(
             OPENAI_CHAT_TOKENS_PER_MESSAGE
             + sum(len(encoding.encode(str(value))) for value in message.values())

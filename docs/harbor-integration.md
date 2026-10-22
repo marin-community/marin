@@ -19,6 +19,12 @@ Harbor does not look up limits or prices in a model registry. Agent CLI-reported
 costs and built-in prices for Cursor models remain available. Otherwise,
 CLI-agent cost estimates remain unset when `model_info` omits prices.
 
+For a proxy without `/tokenize`, set the Terminus agent kwarg
+`tokenizer_encoding` to the tiktoken encoding selected for local estimates,
+such as `cl100k_base`. This is required for model names tiktoken cannot identify,
+including Claude and Gemini names. These estimates do not reproduce the
+provider's private tokenizer; use a server token-count endpoint for exact counts.
+
 LiteLLM is excluded from installation in the workspace and standalone evaluation
 environments, including as a transitive dependency. Mini-SWE uses Harbor's OpenAI
 model adapter. The recording proxy translates Anthropic Messages and OpenAI
