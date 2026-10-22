@@ -138,7 +138,9 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
     )
     coordinator = StageCoordinator(
         stages=stages,
-        budget=WorkpieceBudget(max_triage_repairs=0, max_build_revisions=0, max_validation_retries=0),
+        budget=WorkpieceBudget(
+            max_triage_repairs=0, max_build_revisions=0, max_validation_retries=0, max_modify_rounds=0
+        ),
         root=tmp_path,
         event_store=JsonEventStore(tmp_path),
         model=model,

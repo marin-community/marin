@@ -38,7 +38,8 @@ effective limits and the command timeout. The builder's verifier deadline and ma
 
 The attempt file holds the whole ``Rollout``, every conversation and its steps included: a validation
 round is reviewed from its files alone, and the final reply, the tool calls and the per-turn usage are
-read from the steps.
+read from the steps. ``attempt_outcome`` reads the outcome back from the file. The file is written whole
+or not at all (``write_evidence``), and an attempt cancelled before its outcome writes none.
 
 The answer format is part of the task (``TaskSpec.answer_format``), so ``input_hash`` covers it
 with the rest of the task. A task whose format cannot carry its answer for its grader
@@ -62,11 +63,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
+from rigging.filesystem.atomic import atomic_rename
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, Rollout, RolloutStep, TaskRolloutSpec, TraceMode
 from shellbox.machine import MachineFactory
+from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import CONVERSATION_ANSWERS, TaskSpec
 from taskcompendium.submission import submission_compatibility
 
@@ -403,6 +406,28 @@ def _rollout_record(rollout: Rollout) -> dict[str, Any]:
     return record
 
 
+def attempt_outcome(payload: bytes) -> Outcome:
+    """The outcome an attempt file holds: the inverse of ``outcome_json``."""
+    record = json.loads(payload)
+    grade = None if record["grade"] is None else _GRADE.validate_python(record["grade"])
+    rollout = None if record["rollout"] is None else _rollout_from_record(record["rollout"])
+    if record["outcome"] == "graded":
+        assert rollout is not None and grade is not None, "a graded attempt records its rollout and grade"
+        return Graded(rollout, grade, record["candidate_code_error"])
+    return Ungraded(Cause(record["cause"]), record["detail"], rollout, grade)
+
+
+def _rollout_from_record(record: dict[str, Any]) -> Rollout:
+    outputs = {path: base64.b64decode(content) for path, content in record["outputs"].items()}
+    return _ROLLOUT.validate_python({**record, "outputs": outputs})
+
+
+_GRADE: TypeAdapter[GradeResult] = TypeAdapter(GradeResult)
+_ROLLOUT: TypeAdapter[Rollout] = TypeAdapter(Rollout)
+
+
 def write_evidence(path: Path, payload: bytes) -> None:
+    """Write ``payload`` to ``path`` through a temporary sibling, so the file is whole or absent."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(payload)
+    with atomic_rename(str(path)) as temp:
+        Path(temp).write_bytes(payload)

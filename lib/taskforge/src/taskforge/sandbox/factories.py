@@ -120,7 +120,7 @@ def local_sandbox() -> LocalSandbox:
     """Probe once whether bubblewrap can sandbox commands here (it needs root or user namespaces on Linux).
 
     The factory overlays the host's system directories copy-on-write in each machine, so a generated task
-    that writes under ``/opt`` or another system directory, through a file it ships or a setup command,
+    that writes under a system directory such as ``/usr``, through a file it ships or a setup command,
     runs on bubblewrap instead of falling back to a container. The overlay needs overlayfs and a temporary
     directory off overlayfs; a host without them has no local factory. Writes keep file permissions, so a
     write into a root-owned directory needs a root task, as on Iris under the PRIVILEGED profile.
