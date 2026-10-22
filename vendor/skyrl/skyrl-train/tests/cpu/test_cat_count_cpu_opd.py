@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from examples.cat_count.synthetic_teacher import TeacherNoise
 
-from tests.cpu.test_cat_count_cpu_canary import RUN_TIMEOUT_SECONDS, cat_count_policy, runs  # noqa: F401
+from tests.cpu.tiny_training.cat_count import RUN_TIMEOUT_SECONDS
 from tests.cpu.tiny_training.cat_count_opd import evaluation_scores, run_cat_count_opd
 from tests.cpu.tiny_training.experiment import read_metrics
 
@@ -20,7 +20,7 @@ NOISY = TeacherNoise(jitter=0.5)
 
 
 def distill(
-    runs,  # noqa: F811
+    forkserver_context,
     root: Path,
     model: Path,
     noise: TeacherNoise,
@@ -31,7 +31,7 @@ def distill(
     swap_routes: bool = False,
 ) -> list[dict]:
     start = time.perf_counter()
-    process = runs.Process(
+    process = forkserver_context.Process(
         target=run_cat_count_opd,
         args=(root, model, noise),
         kwargs={"steps": steps, "seed": seed, "words": words, "swap_routes": swap_routes},
@@ -52,8 +52,8 @@ def endpoints(records: list[dict]) -> tuple[dict, dict]:
     return evaluations[0], evaluations[-1]
 
 
-def test_cat_count_cpu_opd_learns_from_a_noisy_teacher(tmp_path, cat_count_policy, runs):  # noqa: F811
-    records = distill(runs, tmp_path / "opd", cat_count_policy, NOISY, steps=GATE_STEPS)
+def test_cat_count_cpu_opd_learns_from_a_noisy_teacher(tmp_path, cat_count_policy, forkserver_context):
+    records = distill(forkserver_context, tmp_path / "opd", cat_count_policy, NOISY, steps=GATE_STEPS)
     before, after = endpoints(records)
     print(f"CAT_COUNT_CPU_OPD seed=0 before={before} after={after}")
     assert before["step"] == 0 and after["step"] == GATE_STEPS
@@ -73,17 +73,19 @@ def test_cat_count_cpu_opd_learns_from_a_noisy_teacher(tmp_path, cat_count_polic
 
 @pytest.mark.nightly
 @pytest.mark.parametrize("seed", [0, 1])
-def test_cat_count_cpu_opd_flipped_teacher_unlearns(tmp_path, cat_count_policy, runs, seed):  # noqa: F811
+def test_cat_count_cpu_opd_flipped_teacher_unlearns(tmp_path, cat_count_policy, forkserver_context, seed):
     flipped = TeacherNoise(jitter=NOISY.jitter, flipped=True)
-    before, after = endpoints(distill(runs, tmp_path / "flipped", cat_count_policy, flipped, steps=10, seed=seed))
+    before, after = endpoints(
+        distill(forkserver_context, tmp_path / "flipped", cat_count_policy, flipped, steps=10, seed=seed)
+    )
     print(f"CAT_COUNT_CPU_OPD seed={seed} flipped before={before} after={after}")
     assert after["eval/train/avg_score"] < before["eval/train/avg_score"]
     assert after["eval/heldout/avg_score"] < before["eval/heldout/avg_score"]
     assert after["eval/train/environment/cat_count/exact"] == 0
 
 
-def test_cat_count_cpu_mopd_routes_each_word_to_its_expert(tmp_path, cat_count_policy, runs):  # noqa: F811
-    records = distill(runs, tmp_path / "mopd", cat_count_policy, NOISY, steps=MOPD_STEPS, words=WORDS)
+def test_cat_count_cpu_mopd_routes_each_word_to_its_expert(tmp_path, cat_count_policy, forkserver_context):
+    records = distill(forkserver_context, tmp_path / "mopd", cat_count_policy, NOISY, steps=MOPD_STEPS, words=WORDS)
     evaluations = evaluation_scores(records, WORDS)
     before, after = evaluations[0], evaluations[-1]
     print(f"CAT_COUNT_CPU_MOPD seed=0 before={before} after={after}")
@@ -104,8 +106,10 @@ def test_cat_count_cpu_mopd_routes_each_word_to_its_expert(tmp_path, cat_count_p
 
 
 @pytest.mark.nightly
-def test_cat_count_cpu_mopd_swapped_routes_teach_the_wrong_word(tmp_path, cat_count_policy, runs):  # noqa: F811
-    records = distill(runs, tmp_path / "swapped", cat_count_policy, NOISY, steps=20, words=WORDS, swap_routes=True)
+def test_cat_count_cpu_mopd_swapped_routes_teach_the_wrong_word(tmp_path, cat_count_policy, forkserver_context):
+    records = distill(
+        forkserver_context, tmp_path / "swapped", cat_count_policy, NOISY, steps=20, words=WORDS, swap_routes=True
+    )
     evaluations = evaluation_scores(records, WORDS)
     before, after = evaluations[0], evaluations[-1]
     print(f"CAT_COUNT_CPU_MOPD seed=0 swapped before={before} after={after}")
