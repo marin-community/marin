@@ -32,6 +32,8 @@ SCOREABLE = {None, "AgentTimeoutError", "ContextLengthExceededError", "NonZeroAg
 
 def recovery_reason(row: dict) -> str | None:
     error = row["exception_type"]
+    if row.get("manual_review", {}).get("decision") == "exclude_infrastructure_failure":
+        return "reviewed_infrastructure_failure"
     if any(
         name.rsplit(".", 1)[-1] in TRANSPORT_CLASSES
         for log in row.get("agent_logs", [])
@@ -60,7 +62,10 @@ def apply_reviews(report: dict, reviews: list[dict]) -> None:
             log["sha256"] for log in row.get("agent_logs", [])
         }:
             raise ValueError(f"review evidence differs from audit: {row['task_name']}")
-        if review["decision"] != "retain_scored_model_failure" or not review["evidence"]:
+        if (
+            review["decision"] not in {"retain_scored_model_failure", "exclude_infrastructure_failure"}
+            or not review["evidence"]
+        ):
             raise ValueError(f"unsupported review decision: {row['task_name']}")
         row["manual_review"] = review
 

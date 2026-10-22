@@ -83,3 +83,28 @@ def test_review_retains_model_failure_only_for_exact_source_evidence():
     assert recovery == [row["task_name"]]
     with pytest.raises(ValueError, match="evidence differs"):
         prepare["apply_reviews"](report, [dict(review, result_sha256="another-trial")])
+
+
+def test_review_excludes_scored_infrastructure_failure_only_for_exact_source_evidence():
+    row = {
+        "task_name": "broken-agent-install",
+        "sha256": "result-digest",
+        "reward": 0,
+        "exception_type": "NonZeroAgentExitCodeError",
+        "agent_logs": [{"sha256": "log-digest", "terminal_error_classes": ["ImportError"]}],
+    }
+    report = {"model": "model", "trials": [row]}
+    review = {
+        "model": "model",
+        "task_name": row["task_name"],
+        "result_sha256": "result-digest",
+        "agent_log_sha256": "log-digest",
+        "decision": "exclude_infrastructure_failure",
+        "evidence": "Agent startup could not import a required package before the task began.",
+    }
+    prepare["apply_reviews"](report, [review])
+    retained, recovery = prepare["partition"](report, {row["task_name"]})
+    assert retained == []
+    assert recovery == [row["task_name"]]
+    with pytest.raises(ValueError, match="evidence differs"):
+        prepare["apply_reviews"](report, [dict(review, agent_log_sha256="different-log")])

@@ -76,6 +76,10 @@ then run `combine.py --manifest OLD_MANIFEST.json --recovery-results OLD_RESULTS
 with `--reviews REVIEWS.json` when required.
 Retained tasks must have audited numeric rewards; infrastructure-affected and
 unfinished tasks are assigned to exactly one new shard.
+When a numeric verifier reward follows an agent startup failure, attach a
+hash-bound `exclude_infrastructure_failure` manual review. The recovery audit
+excludes that trial despite the reward; it does not apply the decision to other
+trials with the same exception type.
 
 Run `shard.py --audit AUDIT.json --base-config CONFIG.yaml --source-root ROOT
 --count 4 --output DIRECTORY`. It writes a retained-task manifest, a combined
