@@ -108,7 +108,21 @@ def public_trial(trial: dict) -> dict:
         if not fs.exists(trajectory_path):
             continue
         trajectory_payload = fs.cat(trajectory_path)
-        trajectory = json.loads(trajectory_payload)
+        trajectory_sha256 = hashlib.sha256(trajectory_payload).hexdigest()
+        try:
+            trajectory = json.loads(trajectory_payload)
+        except json.JSONDecodeError:
+            # Timed-out attempts can leave a zero-byte or truncated trajectory.
+            attempts.append(
+                {
+                    "attempt": attempt_path.rsplit("/", 1)[-1],
+                    "trajectory_uri": "s3://" + trajectory_path,
+                    "trajectory_sha256": trajectory_sha256,
+                    "trajectory_bytes": len(trajectory_payload),
+                    "parse_status": "invalid_json",
+                }
+            )
+            continue
         info = trajectory.get("info") or {}
         # The full mini-swe-agent config contains the signed Iris proxy URL.
         safe_trajectory = {
@@ -120,7 +134,7 @@ def public_trial(trial: dict) -> dict:
             {
                 "attempt": attempt_path.rsplit("/", 1)[-1],
                 "trajectory_uri": "s3://" + trajectory_path,
-                "trajectory_sha256": hashlib.sha256(trajectory_payload).hexdigest(),
+                "trajectory_sha256": trajectory_sha256,
                 "trajectory": redact(safe_trajectory),
             }
         )
@@ -152,7 +166,7 @@ def export(manifest: dict, output: Path, workers: int, repo_id: str | None, mode
         with ThreadPoolExecutor(max_workers=workers) as pool:
             with destination.open("wb") as raw, compressor.stream_writer(raw) as compressed:
                 for index, row in enumerate(pool.map(public_trial, arm["trials"]), start=1):
-                    missing += not row["attempts"]
+                    missing += not any("trajectory" in attempt for attempt in row["attempts"])
                     compressed.write((json.dumps(row, ensure_ascii=False) + "\n").encode())
                     if index % 50 == 0:
                         print(f"{arm['model']} {arm['arm']}: {index}/{len(arm['trials'])}", flush=True)
