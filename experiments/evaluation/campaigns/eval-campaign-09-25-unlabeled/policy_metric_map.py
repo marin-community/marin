@@ -11,6 +11,8 @@ recorded benchmark metadata.
 CRUXEval's record metric combines directions while its published metric uses only
 output trials. SOTOPIA's published metric is computed across a model cohort after
 the Harbor reward record is written.
+PIQA's pinned task reports both `acc` and `acc_norm`; evaluator metadata selects
+`acc`, while the publication policy uses the length-normalized `acc_norm`.
 """
 
 from collections.abc import Mapping
@@ -42,7 +44,7 @@ POLICY_METRICS_2026_10_16: Mapping[str, PolicyMetric] = MappingProxyType(
         "mbppplus": _evalchemy("MBPPPlus", "pass@1", "pass_at_1"),
         "olympiadbench": _evalchemy("OlympiadBench", "accuracy_avg", "accuracy"),
         "gsm8k-0shot": _evalchemy("gsm8k", "exact_match", "accuracy"),
-        "piqa": _evalchemy("piqa", "acc_norm", "normalized_accuracy"),
+        "piqa": _evalchemy("piqa", "acc", "accuracy", "acc_norm"),
         "winogrande": _evalchemy("winogrande", "acc", "accuracy"),
         "boolq": _evalchemy("boolq", "acc", "accuracy"),
         "truthfulqa": _evalchemy("truthfulqa_mc2", "acc", "accuracy"),
