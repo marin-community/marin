@@ -54,6 +54,16 @@ The pinned Ray release has no Intel macOS wheel.
 The `skyrl-wheel` unit lane checks the independent lock and runs the packaging,
 launch configuration, checkpoint export, and verifier tests in SkyRL's CPU
 environment. Changes to its editable dependencies also select this lane.
+The lane discovers `test_*.py` files directly in `infra/tests`, `cloud/iris/tests`,
+and `skyrl-gym/tests`; new files matching these globs need no workflow edit. The
+pytest configuration excludes the `docker` marker. Run these tests locally
+from `vendor/skyrl`:
+
+```bash
+uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 \
+  pytest -q infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py
+```
+
 Check the lock locally with:
 
 ```bash
