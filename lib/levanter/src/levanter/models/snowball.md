@@ -95,3 +95,5 @@ temporarily pads whole GQA groups when required by the kernel's head tiling
 result back to the logical heads. This adds temporary memory beyond the stored
 KV cache, which uses 66,560 BF16 bytes per cached token per chip for the full
 26-layer model. Set explicit cache limits before benchmarking.
+
+Cached generation currently accepts one sequence per batch without clones. The HTTP launcher sets `max_seqs=1`, so concurrent requests queue as separate batches. Prefill reserves the full prompt's pages, then computes bounded chunks with absolute positions and cumulative cache lengths. Only the final prompt chunk samples a continuation; earlier chunks do not consume the generation budget.

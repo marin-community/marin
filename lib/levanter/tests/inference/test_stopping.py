@@ -110,3 +110,43 @@ def test_host_prng_key_matches_legacy_threefry_seed_mapping(x64):
     with jax.enable_x64(x64):
         for seed in (0, 17, 19311, 2**32 - 1, 2**32 + 7, -1):
             np.testing.assert_array_equal(_host_prng_key(seed), jax.random.PRNGKey(seed))
+
+
+@pytest.mark.asyncio
+async def test_single_sequence_server_serializes_concurrent_requests():
+    config = InferenceServerConfig(
+        service=InferenceEngineConfig(
+            max_seq_len=16,
+            max_pages=4,
+            page_size=4,
+            max_seqs=1,
+            max_seqs_in_prefill=1,
+            max_prefill_size=4,
+            max_queued_tokens=8,
+            max_tokens_per_round=1,
+            max_rounds=1,
+        )
+    )
+    with use_test_mesh(mesh=config.trainer.device_mesh):
+        model = ScriptedModel(jnp.array([4, 5, 6, 7], jnp.int32))
+        tokenizer = ScriptedTokenizer()
+        batches = []
+
+        class SingleSequenceEngine(InferenceEngine):
+            def generate(self, requests, step_callback=None):
+                assert len(requests) == 1
+                batches.append(requests[0].prompt_tokens)
+                return super().generate(requests, step_callback=step_callback)
+
+        engine = SingleSequenceEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
+        context = InferenceContext(model, tokenizer, engine, config)
+        futures = [asyncio.get_running_loop().create_future() for _ in range(8)]
+        context.start()
+        try:
+            for index, future in enumerate(futures):
+                context.submit_request([index], 2, 0, 1, None, 19311, future)
+            results = await asyncio.wait_for(asyncio.gather(*futures), timeout=60)
+            assert len(batches) == 8
+            assert all(result[0].completion_tokens == 2 for result in results)
+        finally:
+            context.shutdown()

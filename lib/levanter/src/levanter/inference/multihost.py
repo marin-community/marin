@@ -24,6 +24,7 @@ from levanter.inference.engine import GenerationResult, InferenceEngine, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.snowball import SnowballCache
 from levanter.inference.snowball_scoring import score_cached
+from levanter.inference.snowball_prefill import prefill_cached
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,11 @@ class MultiHostInferenceEngine(InferenceEngine):
         super().__init__(**kwargs)
         self._command_lock = threading.Lock()
 
+    def _prefill_batch(self, batch):
+        if isinstance(self.gen_state.cache, SnowballCache):
+            return prefill_cached(self, batch)
+        return super()._prefill_batch(batch)
+
     def _dispatch(self, command):
         if command["op"] == "generate":
             result = super().generate([_decode_request(r) for r in command["requests"]])
@@ -112,6 +118,8 @@ class MultiHostInferenceEngine(InferenceEngine):
             raise RuntimeError("Only process zero may submit inference batches")
         if not requests:
             raise ValueError("Generation batch must not be empty")
+        if isinstance(self.gen_state.cache, SnowballCache) and (len(requests) != 1 or requests[0].n_generations != 1):
+            raise ValueError("Snowball cached generation supports one sequence per batch without clones")
         if len({r.request_id for r in requests}) != len(requests):
             raise ValueError("Request IDs must be unique within a batch")
         for request in requests:

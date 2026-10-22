@@ -4,7 +4,9 @@
 """Bounded single-slice Levanter Snowball smoke; dry run unless --submit is given."""
 
 import argparse
+import hashlib
 import json
+import subprocess
 import time
 from pathlib import Path
 
@@ -32,7 +34,7 @@ def _resolve(resolver, name):
         return ResolveResult(name=name)
 
 
-def run_host(mode, model, output, item, max_seq_len):
+def run_host(mode, model, output, item, max_seq_len, source_commit):
     info = get_job_info()
     ctx = iris_ctx()
     slice_id, variant, _, worker_id, _ = _probe_tpu_metadata()
@@ -56,7 +58,7 @@ def run_host(mode, model, output, item, max_seq_len):
         if {m["slice"] for m in metadata} != {slice_id} or len({m["worker"] for m in metadata}) != 4:
             raise RuntimeError(f"Gang is not one slice with four distinct hosts: {metadata}")
         print("SINGLE_SLICE_VERIFIED", json.dumps(metadata), flush=True)
-        run(mode, model, output, item, max_seq_len)
+        run(mode, model, output, item, max_seq_len, source_commit)
     finally:
         ctx.registry.unregister(registration)
 
@@ -71,18 +73,32 @@ def main():
     )
     parser.add_argument("--output", required=True)
     parser.add_argument("--item", type=Path)
+    parser.add_argument("--oracle", type=Path, help="Pinned item303 oracle artifact for hash/token validation")
     parser.add_argument("--max-seq-len", type=int, default=6144)
     parser.add_argument("--runtime-minutes", type=int, default=90)
     parser.add_argument("--name", default="levanter267-v4-32-tiny")
     args = parser.parse_args()
     if not 1 <= args.runtime_minutes <= 240:
         parser.error("Runtime must be bounded to at most four hours")
-    if args.mode != "tiny" and not args.item:
-        parser.error("The numerics item is required for full-model runs")
+    if args.mode != "tiny" and (not args.item or not args.oracle):
+        parser.error("The numerics item and pinned oracle are required for full-model runs")
     # Reads and outputs stay in the reserved slice's region. No implicit cross-region mirror.
     if not args.model.startswith("gs://marin-us-central2/") or not args.output.startswith("gs://marin-us-central2/"):
         parser.error("This launcher only permits us-central2 model and output paths")
+    source_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    if args.submit and subprocess.run(["git", "diff", "--quiet", "HEAD"], check=False).returncode:
+        parser.error("Commit tracked source changes before submitting a reproducible probe")
     item = json.loads(args.item.read_text()) if args.item else None
+    if item is not None and args.oracle is not None:
+        oracle = json.loads(args.oracle.read_text())
+        if str(oracle["id"]) != str(item["id"]):
+            parser.error("Oracle and numerical item IDs differ")
+        item = dict(
+            item,
+            expected_input_sha256=oracle["input_sha256"],
+            oracle_sha256=hashlib.sha256(args.oracle.read_bytes()).hexdigest(),
+            expected_token_ids=[row["token_id"] for row in oracle["tokens"]],
+        )
     resource = ResourceConfig.with_tpu(
         "v4-32",
         cpu=32,
@@ -95,6 +111,7 @@ def main():
     print(
         json.dumps(
             dict(
+                source_commit=source_commit,
                 name=args.name,
                 mode=args.mode,
                 hosts=4,
@@ -117,7 +134,7 @@ def main():
             job = client.submit(
                 name=args.name,
                 entrypoint=Entrypoint.from_callable(
-                    run_host, args.mode, args.model, args.output, item, args.max_seq_len
+                    run_host, args.mode, args.model, args.output, item, args.max_seq_len, source_commit
                 ),
                 resources=convert_resources(resource),
                 constraints=convert_constraints(resource),

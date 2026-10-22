@@ -9,6 +9,7 @@ import logging
 import threading
 import time
 import urllib.request
+import uuid
 
 import equinox as eqx
 import haliax as hax
@@ -98,8 +99,22 @@ def _load_model(mode, model_path, tokenizer, max_seq_len):
 def _capture_numerics(engine, tokenizer, item, output, config, local):
     text = item["prompt"] + item["completion"]
     tokens = tokenizer.encode(text, add_special_tokens=False)
-    if len(tokens) != 5279:
-        raise ValueError(f"Item303 tokenization mismatch: {len(tokens)} != 5279")
+    input_sha = hashlib.sha256(text.encode()).hexdigest()
+    matches = input_sha == item["expected_input_sha256"] and tokens == item["expected_token_ids"]
+    _save(
+        output,
+        "input-validation.json",
+        dict(
+            input_sha256=input_sha,
+            expected_input_sha256=item["expected_input_sha256"],
+            token_ids=tokens,
+            expected_token_count=len(item["expected_token_ids"]),
+            oracle_sha256=item["oracle_sha256"],
+            matched=matches,
+        ),
+    )
+    if not matches or len(tokens) != 5279:
+        raise ValueError("Item303 input hash or token IDs differ from the pinned oracle")
     start = time.monotonic()
     result = engine.score_token_logprobs(tokens, 1)
     elapsed = time.monotonic() - start
@@ -156,11 +171,16 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
     count = long_smoke["usage"]["completion_tokens"]
     finish = long_smoke["choices"][0]["finish_reason"]
     legitimate_stop = count > 0 and raw_ids[-1] in config.eos_token_ids and finish == "stop"
-    if long_smoke["usage"]["prompt_tokens"] != 2050 or count != len(raw_ids) or (count != 2 and not legitimate_stop):
-        raise RuntimeError("Long-prompt decode did not generate two tokens or terminate on EOS")
+    if (
+        long_smoke["usage"]["prompt_tokens"] != 2050
+        or count != len(raw_ids)
+        or (count != 2 and not legitimate_stop)
+        or not long_smoke["first_token_matches_cached_score"]
+    ):
+        raise RuntimeError("Long-prompt decode failed continuation count, EOS, or cached-first-token consistency")
 
 
-def run(mode, model_path, output, item, max_seq_len):
+def run(mode, model_path, output, item, max_seq_len, source_commit):
     logging.basicConfig(level=logging.INFO)
     info = get_job_info()
     initialize_jax()
@@ -178,6 +198,10 @@ def run(mode, model_path, output, item, max_seq_len):
     with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
         start = time.monotonic()
         tokenizer = load_tokenizer(model_path)
+        if jax.process_index() == 0:
+            files = ("tokenizer.json", "tokenizer_config.json", "generation_config.json")
+            hashes = {name: hashlib.sha256((StoragePath(model_path) / name).read_bytes()).hexdigest() for name in files}
+            _save(output, "tokenizer-provenance.json", dict(model_path=model_path, sha256=hashes))
         model = _load_model(mode, model_path, tokenizer, max_seq_len)
         jax.block_until_ready(model)
         print(
@@ -217,7 +241,21 @@ def run(mode, model_path, output, item, max_seq_len):
             _record_memory(output, "complete")
             return
         context = InferenceContext(model, tokenizer, engine, config)
-        server = InferenceServer(config, context, InferenceServer._create_app(context))
+        app = InferenceServer._create_app(context)
+        provenance = dict(
+            run_id=uuid.uuid4().hex,
+            source_commit=source_commit,
+            serve_job=str(info.job_id),
+            model_path=model_path,
+            model_revision=model_path.rstrip("/").rsplit("@", 1)[-1],
+        )
+        _save(output, "run-provenance.json", provenance)
+
+        @app.get("/levanter267/run")
+        async def run_provenance():
+            return provenance
+
+        server = InferenceServer(config, context, app)
         context.start()
         http_thread = threading.Thread(target=server.serve, daemon=True)
         http_thread.start()
@@ -261,6 +299,7 @@ def run(mode, model_path, output, item, max_seq_len):
             if item is not None:
                 _capture_numerics(engine, tokenizer, item, output, config, local)
             if mode == "serve":
+                print("AWAITING_EXTERNAL_NUMERICS_REVIEW; evaluator requires an accepted gate report", flush=True)
                 http_thread.join()
         finally:
             if registration is not None:

@@ -921,6 +921,8 @@ class InferenceEngine:
     def _prefill_prompts(
         self,
         requests: Sequence[Request],
+        *,
+        buffer_size: int | None = None,
     ) -> PrefillWork | None:
         """Pack prompt work into a single PrefillWork structure for downstream device execution."""
 
@@ -930,9 +932,10 @@ class InferenceEngine:
         max_seq_len = decode_state.tokens.axis_size("position")
         max_slots = decode_state.max_seqs
 
-        queue_tokens = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
-        queue_slot_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
-        queue_pos_ids = np.full((max_prefill_size,), INVALID, dtype=jnp.int32)
+        queue_size = max_prefill_size if buffer_size is None else buffer_size
+        queue_tokens = np.full((queue_size,), INVALID, dtype=jnp.int32)
+        queue_slot_ids = np.full((queue_size,), INVALID, dtype=jnp.int32)
+        queue_pos_ids = np.full((queue_size,), INVALID, dtype=jnp.int32)
 
         work_slot_ids = np.full((max_slots,), INVALID, dtype=np.int32)
         clone_targets = np.full((max_slots,), INVALID, dtype=np.int32)
