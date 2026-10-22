@@ -26,6 +26,7 @@ from marin.datakit.download.rollout_transforms import (
     checked_openai_chat_document,
     load_parquet_batched,
     render_role_message,
+    repair_orphan_reasoning_closers,
     text_document,
 )
 from marin.datakit.normalize import normalize_step
@@ -101,7 +102,15 @@ def row_to_doc(row: dict) -> list[dict]:
         counters.pipeline.update_counter("swe_zero_12m/dropped", 1)
         return []
 
-    text = "\n\n".join(render_role_message(m) for m in messages)
+    rendered = []
+    for message in messages:
+        if message.get("role") == "assistant":
+            content, repairs = repair_orphan_reasoning_closers(message.get("content") or "")
+            if repairs:
+                counters.pipeline.update_counter("swe_zero_12m/orphan_reasoning_closes_repaired", repairs)
+            message = {**message, "content": content}
+        rendered.append(render_role_message(message))
+    text = "\n\n".join(rendered)
 
     counters.pipeline.update_counter("swe_zero_12m/kept", 1)
     return [text_document(text, HF_DATASET_ID)]
@@ -154,6 +163,9 @@ def row_to_chat_doc(row: dict) -> list[dict]:
             counters.pipeline.update_counter("swe_zero_12m/chat_malformed_filtered", 1)
             return []
         reasoning = _THOUGHT_PREFIX.sub("", match.group("reasoning"), count=1).strip()
+        reasoning, repairs = repair_orphan_reasoning_closers(reasoning)
+        if repairs:
+            counters.pipeline.update_counter("swe_zero_12m/chat/orphan_reasoning_closes_repaired", repairs)
         reasoning_content = f"<think>{reasoning}</think>" if reasoning else ""
         command = match.group("command").strip()
         if (
@@ -240,7 +252,7 @@ def download_swe_zero_12m_step() -> StepSpec:
             input_path=dl.output_path,
             output_path=output_path,
         ),
-        hash_attrs={"version": "v1"},
+        hash_attrs={"version": "v2"},
     )
 
 
@@ -259,7 +271,7 @@ def swe_zero_12m_chat_normalize_steps() -> tuple[StepSpec, ...]:
         name="processed-chat/swe-zero-12m-trajectories",
         deps=[dl],
         fn=lambda output_path: transform_chat(dl.output_path, output_path),
-        hash_attrs={"version": "2026.09.10.preserve-system-instructions"},
+        hash_attrs={"version": "2026.10.22.repair-orphan-reasoning-closes"},
     )
     return processed, normalize_chat_step(
         output_schema=CHAT_SCHEMA, name="normalized-chat/swe-zero-12m", download=processed

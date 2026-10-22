@@ -27,6 +27,7 @@ TOOL_WRAPPER = re.compile(r"</?tool_(?:call|response)(?:[: >])", re.IGNORECASE)
 REASONING_START = "<|start_think|>"
 REASONING_END = "<|end_think|>"
 REASONING_TOKEN = re.compile(r"<\|(?:start|end)_think\|>")
+REASONING_MARKUP_TAG = re.compile(r"</?(?:think|thinking)>", re.IGNORECASE)
 CHAT_ROLE_ALIASES = MappingProxyType(
     {
         "bot": Role.ASSISTANT,
@@ -73,11 +74,7 @@ def text_document(text: str, source: str) -> dict:
 
 def _check_source_markup(value: object) -> None:
     if isinstance(value, str):
-        if (
-            CHAT_CONTROL_TOKEN.search(value)
-            or REASONING_TOKEN.search(value)
-            or re.search(r"</?think>", value, re.IGNORECASE)
-        ):
+        if CHAT_CONTROL_TOKEN.search(value) or REASONING_TOKEN.search(value) or REASONING_MARKUP_TAG.search(value):
             raise ValueError(f"Source data contains unexpected control or reasoning tokens: {value!r}")
     elif isinstance(value, dict):
         for key, item in value.items():
@@ -86,6 +83,32 @@ def _check_source_markup(value: object) -> None:
     elif isinstance(value, list):
         for item in value:
             _check_source_markup(item)
+
+
+def repair_orphan_reasoning_closers(text: str) -> tuple[str, int]:
+    """Replace unmatched reasoning close tags with paragraph breaks."""
+    open_tags: list[str] = []
+    parts: list[str] = []
+    previous_end = 0
+    repairs = 0
+    for match in REASONING_MARKUP_TAG.finditer(text):
+        parts.append(text[previous_end : match.start()])
+        tag = match.group().lower()
+        if tag.startswith("</"):
+            if open_tags and open_tags[-1] == tag[2:-1]:
+                open_tags.pop()
+                parts.append(match.group())
+            else:
+                parts.append("\n\n")
+                repairs += 1
+        else:
+            open_tags.append(tag[1:-1])
+            parts.append(match.group())
+        previous_end = match.end()
+    if not repairs:
+        return text, 0
+    parts.append(text[previous_end:])
+    return "".join(parts), repairs
 
 
 def normalize_reasoning_tokens(text: str) -> str:

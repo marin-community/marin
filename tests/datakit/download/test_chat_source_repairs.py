@@ -12,11 +12,13 @@ from marin.datakit.download import massive, openthoughts4_code
 from marin.datakit.download.agenttrove import row_to_chat_doc as agenttrove_row_to_chat_doc
 from marin.datakit.download.coderforge import row_to_chat_doc as coderforge_row_to_chat_doc
 from marin.datakit.download.davinci_dev import env_row_to_chat_doc as davinci_row_to_chat_doc
+from marin.datakit.download.davinci_dev import env_row_to_doc as davinci_row_to_doc
 from marin.datakit.download.gpt_oss_rollouts import row_to_chat_doc as gpt_oss_row_to_chat_doc
 from marin.datakit.download.nemotron_terminal import row_to_chat_doc as nemotron_terminal_row_to_chat_doc
 from marin.datakit.download.numinamath_tir import row_to_chat_doc as numinamath_row_to_chat_doc
 from marin.datakit.download.swe_rebench_openhands import row_to_chat_doc as openhands_row_to_chat_doc
 from marin.datakit.download.swe_zero_12m import row_to_chat_doc as swe_zero_row_to_chat_doc
+from marin.datakit.download.swe_zero_12m import row_to_doc as swe_zero_row_to_doc
 
 
 @pytest.mark.parametrize("adapter", [agenttrove_row_to_chat_doc, nemotron_terminal_row_to_chat_doc])
@@ -148,6 +150,23 @@ def test_davinci_filters_source_control_tokens() -> None:
         ],
     }
     assert davinci_row_to_chat_doc(row) == []
+
+
+def test_davinci_text_repairs_orphan_close_without_changing_user_or_tool() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "The literal </think> is in this file."},
+            {"role": "assistant", "content": "<think>Plan.</think>Start.</think>Continue."},
+            {"role": "tool", "content": "Output: </think>"},
+        ]
+    }
+
+    [document] = davinci_row_to_doc(row)
+    assert document["text"] == (
+        "<user>\nThe literal </think> is in this file.\n</user>\n\n"
+        "<assistant>\n<think>Plan.</think>Start.\n\nContinue.\n</assistant>\n\n"
+        "<tool>\nOutput: </think>\n</tool>"
+    )
 
 
 def test_coderforge_filters_protocol_wrapped_tool_observations() -> None:
@@ -347,6 +366,31 @@ def test_swe_zero_converts_reasoning_bash_and_observation() -> None:
     assert messages[5]["content"] == [{"type": "text", "text": "The edit is complete."}]
     assert messages[-1]["channel"] == "final"
     assert messages[-1]["content"] == [{"type": "text", "text": "Task complete."}]
+
+
+def test_swe_zero_text_and_chat_repair_orphan_thinking_closes() -> None:
+    row = {
+        "messages": [
+            {"role": "user", "content": "Find the literal </thinking>."},
+            {
+                "role": "assistant",
+                "content": (
+                    "THOUGHT: First.</thinking>Second.</thinking>Third.\n"
+                    "```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```"
+                ),
+            },
+        ]
+    }
+
+    [text_document] = swe_zero_row_to_doc(row)
+    assert text_document["text"] == (
+        "<user>\nFind the literal </thinking>.\n</user>\n\n"
+        "<assistant>\nTHOUGHT: First.\n\nSecond.\n\nThird.\n"
+        "```bash\necho COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\n```\n</assistant>"
+    )
+    chat_row = {"messages": [{"role": "user", "content": "Find the file."}, row["messages"][1]]}
+    [chat_document] = swe_zero_row_to_chat_doc(chat_row)
+    assert chat_document["messages"][-2]["content"] == [{"type": "text", "text": "First.\n\nSecond.\n\nThird."}]
 
 
 def test_swe_zero_does_not_treat_inspecting_completion_marker_as_completion() -> None:

@@ -8,6 +8,7 @@ from marin.datakit.download.rollout_transforms import (
     openai_chat_messages,
     render_tool_call,
     render_tool_message,
+    repair_orphan_reasoning_closers,
 )
 from openai_harmony import Role
 
@@ -55,6 +56,18 @@ def test_legacy_function_call_becomes_harmony_recipient_and_arguments():
 def test_source_adapter_rejects_malformed_reasoning(content):
     with pytest.raises(ValueError):
         openai_chat_messages([{"role": "assistant", "content": content}])
+
+
+@pytest.mark.parametrize("tag", ["<thinking>", "</thinking>"])
+def test_source_adapter_rejects_thinking_markup(tag):
+    with pytest.raises(ValueError, match="unexpected control or reasoning tokens"):
+        openai_chat_messages([{"role": "user", "content": f"This contains {tag}."}])
+
+
+def test_repair_orphan_reasoning_closers_counts_removed_tags():
+    repaired, count = repair_orphan_reasoning_closers("<think>Valid.</think>First.</thinking>Second.</thinking>Third.")
+    assert repaired == "<think>Valid.</think>First.\n\nSecond.\n\nThird."
+    assert count == 2
 
 
 def test_source_adapter_rejects_repeated_call_ids_before_discarding_them():
