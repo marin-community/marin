@@ -20,9 +20,11 @@ Training hooks use the existing `hf_save_dtype` setting: `bfloat16` selects
 `bf16`, `float32` selects `fp32`, and `null` selects `preserve`. The vendored
 SkyRL checkpoint export request stores `release_precision` and
 `release_policy_version` with the checkpoint path and step. It also stores a
-40-character source Hugging Face commit when the source is a Hub model, explicit
-EOS IDs, generation controls, and a chat template when supplied. A retry must
-use the same persisted request.
+40-character source Hugging Face commit when Hub metadata contributes to the
+release, explicit EOS IDs, generation controls, and a chat template when
+supplied. If an optional reference config is unavailable and the exporter uses
+its local architecture config, it records no Hub source. A retry must use the
+same persisted request.
 
 ## Metadata and validation
 

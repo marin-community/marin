@@ -1080,8 +1080,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         return save_reference_code
 
-    def _build_hf_config_dict(self, model: ModelWithHfSerializationMixin) -> dict:
-        """Construct the Hugging Face config dictionary for the provided model."""
+    def _build_hf_config_dict(self, model: ModelWithHfSerializationMixin) -> tuple[dict, HfConfig | None]:
+        """Construct the Hugging Face config and report source metadata used."""
         config = model.config.to_hf_config(model.Vocab.size)
         dict_config = config.to_dict()
 
@@ -1130,7 +1130,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         dict_config = _add_legacy_rope_keys(dict_config)
 
-        return dict_config
+        return dict_config, base_config
 
     def save_pretrained(
         self,
@@ -1181,7 +1181,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
         save_reference_code_flag = self._resolve_save_reference_code(save_reference_code)
-        dict_config = self._build_hf_config_dict(model)
+        dict_config, source_config = self._build_hf_config_dict(model)
         policy = ReleasePolicy(PrecisionMode(release_precision))
         is_grug = dict_config.get("model_type") == "grug_moe"
         if is_grug:
@@ -1227,8 +1227,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if not is_grug and tokenizer.eos_token_id is not None:
                 checkpoint_metadata["eos_token_ids"] = [tokenizer.eos_token_id]
             source_ref = self.reference_checkpoint
-            if source_ref is not None and _is_hf_model_id(source_ref.model_name_or_path):
+            if (
+                source_ref is not None
+                and _is_hf_model_id(source_ref.model_name_or_path)
+                and (source_config is not None or is_grug)
+            ):
                 revision = source_ref.revision
+                if not is_hf_commit(revision) and source_config is not None:
+                    cached_commit = getattr(source_config, "_commit_hash", None)
+                    if is_hf_commit(cached_commit):
+                        revision = cached_commit
                 if not is_hf_commit(revision):
 
                     def resolve_source_commit() -> str:

@@ -13,3 +13,6 @@ module-name = "marin_hf_release"
 
 [dependency-groups]
 test = ["pytest", "numpy", "ml-dtypes", "safetensors[numpy]>=0.4.2,<0.7.0"]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib -m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"

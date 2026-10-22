@@ -142,7 +142,7 @@ def test_hf_release_resolves_hub_source_without_treating_storage_as_hub(
         result = model.config.to_hf_config(model.Vocab.size).to_dict()
         result["bos_token_id"] = self.tokenizer.bos_token_id
         result["eos_token_id"] = self.tokenizer.eos_token_id
-        return result
+        return result, SimpleNamespace(_commit_hash=None)
 
     monkeypatch.setattr(hf_checkpoints.HFCheckpointConverter, "_build_hf_config_dict", config_without_source_lookup)
 
@@ -529,7 +529,7 @@ def test_gpt2_converter_uses_configured_tokenizer_without_hub(local_gpt2_tokeniz
     assert converter.tokenizer is not None  # loaded from the local directory, not the Hub
 
 
-def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tokenizer_path, monkeypatch):
+def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
     """An HF outage must not block a checkpoint save: with a local tokenizer the config is still
     produced and `architectures` is derived from the model type rather than the reference."""
     _simulate_hub_offline(monkeypatch)
@@ -539,10 +539,13 @@ def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tok
 
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
-        dict_config = converter._build_hf_config_dict(model)
+        dict_config, source_config = converter._build_hf_config_dict(model)
+        converter.save_pretrained(model, str(tmp_path), save_reference_code=False)
 
     assert dict_config["model_type"] == "gpt2"
     assert dict_config["architectures"] == ["GPT2LMHeadModel"]
+    assert source_config is None
+    assert json.loads((tmp_path / "hf_release_request.json").read_text())["source_model"] is None
 
 
 def test_save_pretrained_writes_transformers4_and_5_rope_keys(tmp_path):
