@@ -25,6 +25,18 @@ config:
     github.trigger_allowed_user_ids: "306337490"
     slack.effort: agent-default
     slack.profile: slack
+  # Public OAuth clients of the connector. People enter these ids in claude.ai
+  # and Claude Code, so never rename one; see README.md.
+  marin-loom:oauthClients:
+    claude-ai:
+      name: claude.ai
+      redirectUris:
+        - https://claude.ai/api/mcp/auth_callback
+        - https://claude.com/api/mcp/auth_callback
+    claude-code:
+      name: Claude Code
+      redirectUris:
+        - http://localhost/callback
   marin-loom:remoteMcps:
     - identity: /marina/api
       label: Marina API
