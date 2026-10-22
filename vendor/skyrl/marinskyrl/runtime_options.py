@@ -56,6 +56,18 @@ class PolicyLossType(StrEnum):
     IMPORTANCE_SAMPLING = "importance_sampling"
 
 
+class SamplingKind(StrEnum):
+    """The ``data.sampling.kind`` prompt orders; unset means seeded passes."""
+
+    DOMAIN_WEIGHTED = "domain-weighted"
+    NAIVE = "naive"
+    THOMPSON = "thompson"
+    LEARNABILITY = "learnability"
+    GRADE_UNIFORM = "grade-uniform"
+    GRADE_ADAPTIVE = "grade-adaptive"
+    GRADE_PRIOR = "grade-prior"
+
+
 PREFERENCE_PAIR_ENV_CLASS = "preference_pair"
 FIXED_COMPLETION_ENV_CLASS = "fixed_completion"
 

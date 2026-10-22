@@ -17,10 +17,10 @@ from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marinskyrl.environment_contract import TrainingType
-from marinskyrl.runtime_options import PolicyLossType
+from marinskyrl.runtime_options import PolicyLossType, SamplingKind
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
-from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
-from skyrl_train.dataset import PromptDataset
+from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder
+from skyrl_train.dataset import FixedCompletionsDataset, PromptDataset
 from skyrl_train.domain_sampling import DomainWeightedOrder
 from skyrl_train.dynamic_sampling import (
     DynamicSamplingType,
@@ -49,30 +49,47 @@ from skyrl_train.telemetry import GeneratedWork, record_generated_work, record_r
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
 from skyrl_train.config.objective_spec import rollout_logprobs_required
+from skyrl_train.config.training_budget import ResponseCaps, response_caps
 from skyrl_train.utils.algorithm_registry import PolicyLossRegistry
 
 _T = TypeVar("_T")
 
 
+# The backend sampling key that caps one generation, as vLLM and SGLang spell it.
+_OUTPUT_LIMIT_KEYS = ("max_tokens", "max_new_tokens")
+
+
 @dataclass(frozen=True)
 class RolloutRequestSpec:
-    """How the coordinator turns one prompt into a trajectory request."""
+    """How the coordinator turns one prompt into a trajectory request.
+
+    With per-task response caps, each request caps generation at its prompt's ``data_source`` cap.
+    """
 
     samples_per_prompt: int
     sampling_params: dict
+    response_caps: ResponseCaps
 
     @classmethod
     def from_config(cls, config: DictConfig) -> RolloutRequestSpec:
         return cls(
             samples_per_prompt=config.generator.n_samples_per_prompt,
             sampling_params=get_sampling_params_for_backend(config.generator.backend, config.generator.sampling_params),
+            response_caps=response_caps(config),
         )
 
     def request(self, prompt: dict, policy_step: int) -> TrajectoryRequestBatch:
         request, _ = prepare_trajectory_request(
-            [prompt], self.samples_per_prompt, self.sampling_params, "train", policy_step
+            [prompt], self.samples_per_prompt, self._sampling_params(prompt), "train", policy_step
         )
         return request
+
+    def _sampling_params(self, prompt: dict) -> dict:
+        if not self.response_caps.by_data_source:
+            return self.sampling_params
+        (key,) = (key for key in _OUTPUT_LIMIT_KEYS if key in self.sampling_params)
+        cap = self.response_caps.for_source(prompt["input"].metadata.data_source)
+        return {**self.sampling_params, key: cap}
 
 
 @dataclass(frozen=True)
@@ -101,6 +118,12 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
     """Build the loader's prompt order: seeded passes by default, or the ``data.sampling`` order."""
     sampling = config.data.sampling
     if sampling.kind is None:
+        routes = dataset.teacher_routes() if isinstance(dataset, FixedCompletionsDataset) else set()
+        if len(routes) > 1:
+            raise ValueError(
+                f"fixed-completion rows span teacher routes {sorted(routes)}; seeded passes leave each batch's "
+                "route mix to chance, so set data.sampling.kind=domain-weighted with data.sampling.domain_weights"
+            )
         return SeededPasses(len(dataset), seed=config.trainer.seed, shuffle=config.data.shuffle)
     if config.trainer.step_wise_training:
         raise ValueError("data.sampling.kind requires one group per prompt; step_wise_training is not supported")

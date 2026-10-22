@@ -4,7 +4,7 @@ Fixed-data SFT reads expert completions from the training parquet instead of
 generating rollouts. Text rows carry a message-list prompt and completion text;
 tokenized rows carry a complete conversation with assistant masks so tool
 observations and the expert's exact tokenization survive. Rows may carry a
-``data_source`` task tag and a ``teacher_route`` for joint-run routing.
+``data_source`` task tag (required) and an optional ``teacher_route`` for joint-run routing.
 """
 
 from collections.abc import Mapping
@@ -16,7 +16,8 @@ from loguru import logger
 from transformers import PreTrainedTokenizerBase
 
 from marinskyrl.runtime_options import FIXED_COMPLETION_ENV_CLASS, FixedCompletionFormat
-from skyrl_train.dataset.dataset import PromptDataset, read_prompt_files
+from skyrl_train.config.training_budget import ResponseCaps
+from skyrl_train.dataset.dataset import ROUTE_COLUMN, PromptDataset, prompt_token_ids, read_prompt_files
 from skyrl_train.dataset.preference_pairs import completion_text
 from skyrl_train.task_inputs import FixedCompletionInput, TrajectoryMetadata
 
@@ -59,9 +60,10 @@ def tokenized_completion(row: Mapping[str, Any], *, max_sequence_length: int) ->
 class FixedCompletionsDataset(PromptDataset):
     """Load text completions or validate complete tokenized conversations with assistant masks.
 
-    Text rows are tokenized and length-filtered. Tokenized rows preserve all tokens,
-    tool observations and supervision masks; invalid rows raise instead of being
-    dropped. Per-row environment overrides are removed in both formats.
+    Every row must fit its task's response cap and carry a nonempty ``data_source``; a row that
+    does not raises instead of being dropped, so the rows trained are exactly the rows in the files.
+    Text completions must end with the tokenizer's EOS token. Per-row environment overrides are
+    removed in both formats.
     """
 
     def __init__(
@@ -69,12 +71,18 @@ class FixedCompletionsDataset(PromptDataset):
         tokenizer: PreTrainedTokenizerBase,
         *,
         data_format: FixedCompletionFormat,
-        max_completion_length: int,
+        response_caps: ResponseCaps,
         **kwargs,
     ):
         self.data_format = data_format
-        self.max_completion_length = max_completion_length
+        self.response_caps = response_caps
         super().__init__(tokenizer=tokenizer, **kwargs)
+
+    def teacher_routes(self) -> set[str]:
+        """The distinct ``teacher_route`` values; empty when rows carry no route."""
+        if ROUTE_COLUMN not in self.dataframe.column_names:
+            return set()
+        return {str(route) for route in self.dataframe.unique(ROUTE_COLUMN)}
 
     def collate_fn(self, rows) -> list[dict]:
         tokenized = self.data_format is FixedCompletionFormat.TOKENIZED
@@ -90,8 +98,8 @@ class FixedCompletionsDataset(PromptDataset):
                         metadata=TrajectoryMetadata(
                             uid=uid,
                             metric_class=FIXED_COMPLETION_ENV_CLASS,
-                            data_source=extra.get("data_source"),
-                            teacher_route=extra.get("teacher_route"),
+                            data_source=extra["data_source"],
+                            teacher_route=extra.get(ROUTE_COLUMN),
                         ),
                         completion_loss_mask=tuple(mask) if mask is not None else None,
                     ),
@@ -100,56 +108,83 @@ class FixedCompletionsDataset(PromptDataset):
         return inputs
 
     def _read_files_and_tokenize(self):
-        if self.data_format is FixedCompletionFormat.TOKENIZED:
-            self.dataframe = read_prompt_files(self.datasets)
-            if "env_class" in self.dataframe.column_names:
-                self.dataframe = self.dataframe.remove_columns("env_class")
-            budget = self.max_prompt_length + self.max_completion_length
-
-            def split(row):
-                tokens = tokenized_completion(row, max_sequence_length=budget)
-                if len(tokens.response_ids) > self.max_completion_length:
-                    raise ValueError(
-                        f"tokenized completion response span needs {len(tokens.response_ids)} tokens but the "
-                        f"{self.max_completion_length}-token response cap is exhausted; filter the row at dataset load instead"
-                    )
-                return {
-                    self.prompt_key: tokens.prompt_ids,
-                    "completion_input_ids": tokens.response_ids,
-                    "completion_assistant_masks": tokens.loss_mask,
-                }
-
-            self.dataframe = self.dataframe.map(
-                split, num_proc=self.num_workers, desc="Validating tokenized completions"
-            )
-            self.dataframe = self.dataframe.remove_columns(("input_ids", "assistant_masks"))
-            logger.info(
-                "Loaded {} tokenized fixed completions without retokenization or filtering", len(self.dataframe)
-            )
-            return
-        super()._read_files_and_tokenize()
-        if "completion" not in self.dataframe.column_names:
-            raise ValueError("fixed-completion text data requires a 'completion' column")
+        self.dataframe = read_prompt_files(self.datasets)
         if "env_class" in self.dataframe.column_names:
             self.dataframe = self.dataframe.remove_columns("env_class")
-        if self.max_completion_length <= 0:
-            raise ValueError("max_completion_length must be positive")
+        tokenized = self.data_format is FixedCompletionFormat.TOKENIZED
+        required = ("input_ids", "assistant_masks") if tokenized else (self.prompt_key, "completion")
+        missing = [column for column in (*required, "data_source") if column not in self.dataframe.column_names]
+        if missing:
+            raise ValueError(f"fixed-completion {self.data_format} data requires columns {missing}")
+        if tokenized:
+            self._split_tokenized_rows()
+        else:
+            self._validate_text_rows()
+        logger.info("Loaded {} {} fixed completions without filtering", len(self.dataframe), self.data_format)
 
-        tokenizer = self.tokenizer
-        budget = self.max_completion_length
+    def _split_tokenized_rows(self) -> None:
+        caps = self.response_caps
+        max_prompt_length = self.max_prompt_length
 
-        def normalize(row):
-            return {"completion": completion_text(row["completion"], "completion")}
+        def split(row, index):
+            data_source = _data_source(row, index)
+            cap = caps.for_source(data_source)
+            tokens = tokenized_completion(row, max_sequence_length=max_prompt_length + cap)
+            if len(tokens.response_ids) > cap:
+                raise ValueError(
+                    f"tokenized fixed-completion row {index} ({data_source}) has a {len(tokens.response_ids)}-token "
+                    f"response span over its {cap}-token response cap"
+                )
+            return {
+                self.prompt_key: tokens.prompt_ids,
+                "completion_input_ids": tokens.response_ids,
+                "completion_assistant_masks": tokens.loss_mask,
+            }
 
-        def fits(row) -> bool:
-            return len(tokenizer(row["completion"], add_special_tokens=False)["input_ids"]) <= budget
-
-        self.dataframe = self.dataframe.map(normalize, num_proc=self.num_workers, desc="Normalizing completions")
-        before = len(self.dataframe)
-        self.dataframe = self.dataframe.filter(fits, num_proc=self.num_workers, desc="Filtering fixed completions")
-        logger.info(
-            "Fixed-completion dataset kept {} of {} rows within the {}-token response cap",
-            len(self.dataframe),
-            before,
-            budget,
+        self.dataframe = self.dataframe.map(
+            split, with_indices=True, num_proc=self.num_workers, desc="Validating tokenized completions"
         )
+        self.dataframe = self.dataframe.remove_columns(("input_ids", "assistant_masks"))
+
+    def _validate_text_rows(self) -> None:
+        tokenizer = self.tokenizer
+        eos_token_id = tokenizer.eos_token_id
+        if eos_token_id is None:
+            raise ValueError("fixed-completion text rows require a tokenizer with an EOS token")
+        caps = self.response_caps
+        max_prompt_length = self.max_prompt_length
+        prompt_key = self.prompt_key
+
+        def validate(row, index):
+            data_source = _data_source(row, index)
+            prompt_length = len(prompt_token_ids(tokenizer, row[prompt_key]))
+            if prompt_length > max_prompt_length:
+                raise ValueError(
+                    f"fixed-completion row {index} ({data_source}) has a {prompt_length}-token prompt over "
+                    f"trainer.max_prompt_length={max_prompt_length}"
+                )
+            completion = completion_text(row["completion"], "completion")
+            ids = tokenizer(completion, add_special_tokens=False)["input_ids"]
+            cap = caps.for_source(data_source)
+            if not ids or len(ids) > cap:
+                raise ValueError(
+                    f"fixed-completion row {index} ({data_source}) has a {len(ids)}-token completion outside "
+                    f"its [1, {cap}]-token response cap"
+                )
+            if ids[-1] != eos_token_id:
+                raise ValueError(
+                    f"fixed-completion row {index} ({data_source}) does not end with the tokenizer EOS token "
+                    f"{tokenizer.eos_token!r}; a completion that never ends trains the model not to stop"
+                )
+            return {"completion": completion}
+
+        self.dataframe = self.dataframe.map(
+            validate, with_indices=True, num_proc=self.num_workers, desc="Validating text completions"
+        )
+
+
+def _data_source(row: Mapping[str, Any], index: int) -> str:
+    data_source = row["data_source"]
+    if not isinstance(data_source, str) or not data_source:
+        raise ValueError(f"fixed-completion row {index} requires a nonempty data_source task tag, got {data_source!r}")
+    return data_source
