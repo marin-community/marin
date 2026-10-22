@@ -3,8 +3,6 @@
 
 """Raw Hero data views for bounded pipeline trials."""
 
-import math
-
 from levanter.data.text.datasets import LmDataConfig
 from marin.execution.lazy import StepContext
 
@@ -22,7 +20,6 @@ def raw_hero_data_config(*, ctx: StepContext, schedule_steps: int, batch_size: i
         total_steps=schedule_steps,
         batch_size=batch_size,
         max_seq_len=max_seq_len,
-        # Bypass FLOP-based simulated epoching before its budget validation.
-        experiment_flops=math.inf,
+        enable_simulated_epoching=False,
         validation=(),
     )

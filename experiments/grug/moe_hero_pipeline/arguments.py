@@ -94,6 +94,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("diagnostic-layers requires full-hero and a positive layer count")
     if args.sequence_length is not None and args.sequence_length < 1:
         parser.error("sequence-length must be positive")
+    if args.data_schedule_steps is not None and not args.real_data:
+        parser.error("data-schedule-steps requires real-data")
     if args.real_data and not args.main_hero_recipe:
         parser.error("real-data requires main-hero-recipe")
     if args.real_data and (args.data_schedule_steps is None or args.data_schedule_steps < args.steps):

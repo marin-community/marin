@@ -173,6 +173,11 @@ sequences in the smallest component. Main weights, component order and the
 1 GB jagged-array read cache. Component lengths are reported in the logs; this
 command creates no data artifacts or checkpoints.
 
+The diagnostic fetches one batch at a time on demand, including its compilation
+sample, without production prefetch queues. Component lengths are fetched
+concurrently. Each pipeline stage reads the same rows from storage, and batches
+remain replicated across stages. Stage-selective loading remains unimplemented.
+
 The runner closes the disposable compilation-sample iterator before compiling,
 then opens the training iterator at the checkpoint step. It closes that
 iterator on success and failure. A pipeline resume keeps `--seed` and

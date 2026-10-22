@@ -13,6 +13,8 @@ from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_de
 from iris.jax.multigpu import MultiGpuHook
 from iris.resources.state import is_job_finished
 from iris.rpc import job_pb2
+from rigging.provenance import launch_provenance
+from rigging.telemetry.probes.nccl_client import NCCL_RAS_ENABLE_ENV
 from rigging.timing import Duration, ExponentialBackoff
 
 from experiments.grug.moe_hero_pipeline.runtime.apply_overlay import JAXPP_COMMIT
@@ -22,7 +24,6 @@ _GPUS_PER_NODE = 4
 _TASK_TIMEOUT = 7200
 _QUEUE_TIMEOUT = 43200
 _FINALIZATION_GRACE = 600
-_COORDINATOR_TIMEOUT = 54000
 
 
 def wait_for_gang(job: Job) -> None:
@@ -89,6 +90,7 @@ def main():
         ]
     )
     replicas, coscheduling = resolve_multinode_defaults(None, f"GB200x{_GPUS_PER_NODE}", nodes)
+    provenance = launch_provenance()
     contract = dict(
         run_id=args.run_id,
         gpu_count=nodes * _GPUS_PER_NODE,
@@ -96,14 +98,14 @@ def main():
         priority="BATCH",
         topology=coscheduling.group_by,
         command=command,
-        main_base="89ac0d7705",
+        source_commit=provenance.base_commit,
+        source_dirty=provenance.dirty,
         source_model="moe_hero_ep.hero_recipe.HERO_MODEL_CONFIG",
-        runtime="JAX 0.11.1 + Marin ARM PJRT; JAXPP 328f75a + pinned host/startup overlay",
+        runtime=f"JAX 0.11.1 + Marin ARM PJRT; JAXPP {JAXPP_COMMIT} + pinned host/startup overlay",
         validation="experimental: JAXPP's declared JAX <=0.11.0 cap is overridden",
         queue_timeout_seconds=_QUEUE_TIMEOUT,
         task_timeout_seconds=_TASK_TIMEOUT,
         finalization_grace_seconds=_FINALIZATION_GRACE,
-        coordinator_timeout_seconds=_COORDINATOR_TIMEOUT,
     )
     print(json.dumps(contract), flush=True)
     if args.dry_run:
@@ -125,8 +127,10 @@ def main():
         "print(torch.__version__, torch.cuda.get_device_capability())'\n"
     )
     environment = EnvironmentSpec(
-        extras=["pipeline"],
         env_vars={
+            NCCL_RAS_ENABLE_ENV: "1",
+            "NCCL_DEBUG": "WARN",
+            "NCCL_DEBUG_TIMESTAMP": "[%F %T.%3f]",
             "WANDB_MODE": "disabled",
             "JAX_ENABLE_PGLE": "false",
             "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",

@@ -4,6 +4,7 @@
 """Bounded Hero pipeline trial with optional checkpoint save and resume."""
 
 import argparse
+import asyncio
 import dataclasses
 import importlib
 import itertools
@@ -23,15 +24,16 @@ from fray.device_flops import device_flops_for_jax_device
 from iris.jax.init import initialize_jax
 from jax.sharding import Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
-from jaxpp import api as pp
 from jaxpp import dime2, env_vars
 from levanter.cutlass_kernel_cache import install as install_cutlass_cache
 from levanter.data.loader import DataLoader
+from levanter.data.mixture import MixtureDataset
 from levanter.data.text.examples import GrugLmExample
 from levanter.pipeline import reshape_batch_into_microbatches
 from levanter.schedule import BatchSchedule
 from levanter.store.jagged_array import set_jagged_array_read_cache_bytes
 from levanter.utils.jax_utils import barrier_sync_named, multihost_allgather_sync
+from levanter.utils.thread_utils import blocking_wait
 from marin.execution.lazy import StepContext
 
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
@@ -46,7 +48,6 @@ from experiments.grug.moe_hero_ep.train import (
     _apply_hero_ep_runtime_defaults,
     _compute_flops,
     build_train_dataset,
-    build_train_loader,
     verify_ragged_pjrt,
 )
 from experiments.grug.moe_hero_pipeline.arguments import parse_args
@@ -62,6 +63,7 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
     make_automatic_pipeline_step,
     make_pipeline_mesh,
     park_pipeline_state,
+    place_automatic_mpmd_batch,
     precompile_automatic_mpmd_step,
     prepare_automatic_mpmd_step,
     restore_pipeline_state,
@@ -283,14 +285,21 @@ def _optimizer_and_contract(
     return optimizer, optimizer_contract
 
 
+async def _component_lengths(dataset: MixtureDataset) -> dict[str, int]:
+    lengths = await asyncio.gather(*(component.async_len() for component in dataset.datasets.values()))
+    return dict(zip(dataset.datasets, lengths, strict=True))
+
+
 def _real_data_loader(
     args: argparse.Namespace, model_config: GrugModelConfig, batch_size: int, mesh: Mesh
 ) -> DataLoader[GrugLmExample]:
     set_jagged_array_read_cache_bytes(HERO_TENSORSTORE_CACHE_BYTES)
-    # Resolve the adopted input only; this loader creates no output artifacts.
+    # Resolve only the adopted input; no independent regional output prefix is used.
+    source = HARRIER_MIX_2026_08_18_STORE.adopt_source
+    assert source is not None
     ctx = StepContext.for_run(
         output_path=".",
-        prefix="s3://marin-us-east-02a/marin",
+        prefix=source,
         deps=(HARRIER_MIX_2026_08_18_STORE,),
     )
     data_config = raw_hero_data_config(
@@ -306,7 +315,7 @@ def _real_data_loader(
         batch_schedule=batch_schedule,
         key=jax.random.PRNGKey(args.seed),
     )
-    component_lengths = {name: len(component.as_sync_dataset()) for name, component in dataset.datasets.items()}
+    component_lengths = blocking_wait(_component_lengths(dataset))
     if any(length == 0 for length in component_lengths.values()):
         raise ValueError(f"Raw Hero data contains an empty component: {component_lengths}")
     _log(
@@ -315,7 +324,18 @@ def _real_data_loader(
         simulated_epoching=False,
         component_lengths=component_lengths,
     )
-    return build_train_loader(dataset, batch_schedule=batch_schedule, mesh=mesh)
+    # Short diagnostics fetch one batch on demand, including the compile sample.
+    # Production prefetch depths can otherwise retain gigabytes on every stage.
+    return DataLoader(
+        dataset,
+        batch_schedule.schedule,
+        max_buffered_batches=0,
+        mesh=mesh,
+        axis_resources={"__BATCH__": BATCH_AXES},
+        fetch_batch_size=1,
+        batch_axis_name="__BATCH__",
+        allow_nondivisible_batch_size=False,
+    )
 
 
 def main() -> None:
@@ -501,9 +521,7 @@ def main() -> None:
                 with jax.set_mesh(mesh):
                     denominator = jnp.sum(batch.loss_weight)
                     batches = reshape_batch_into_microbatches(batch, args.microbatches)
-                batches, denominator = pp.spmd_to_mpmd_reshard(
-                    mpmd_mesh, (batches, denominator), compiled_step.in_shardings[0][1:3]
-                )
+                batches, denominator = place_automatic_mpmd_batch(compiled_step, batches, denominator, mpmd_mesh)
             started = time.monotonic()
             state, metrics = compiled_step(state, batches, denominator)
             jax.block_until_ready((state, metrics))
