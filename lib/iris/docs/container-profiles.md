@@ -110,6 +110,11 @@ parent must be privileged because nested `runsc` creates user/mount namespaces.
 
 ## Sandbox jobs
 
+Kubernetes sandbox pods disable service links, so kubelet does not inject environment
+variables for other Services in their namespace. Kubernetes may still supply its
+standard API Service variables; these carry an address, not a credential. The pod
+has no service-account token, and its egress policy blocks cluster addresses.
+
 `SANDBOX` is for a job whose commands come from a model or another untrusted
 source, such as a shellbox machine. A task normally assembles its environment
 from three places: the cluster (`defaults.task_env`, `defaults.inject_env`, and

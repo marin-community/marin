@@ -3345,7 +3345,7 @@ class RayPPOTrainer:
 
     def _cleanup_old_checkpoints(self):
         max_ckpts = self.cfg.trainer.max_ckpts_to_keep
-        # Disabled (the default): keep all checkpoints. The payload is a no-op at
+        # A negative limit keeps all checkpoints. The payload is a no-op at
         # this value, so skip the per-node Ray lease entirely. Leasing a fresh
         # worker on every node with hard affinity can fail on a CPU-saturated
         # cluster for no benefit.
