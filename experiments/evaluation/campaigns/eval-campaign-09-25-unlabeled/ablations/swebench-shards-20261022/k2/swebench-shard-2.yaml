@@ -1,0 +1,136 @@
+n_concurrent_trials: 16
+n_attempts: 1
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+- name: mini-swe-agent
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    version: 2.1.0
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 16384
+datasets:
+- name: swebench-verified
+  version: '1.0'
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/38742b0f9f411c95e0c01468785cac7bb77c9894/registry.json
+  task_names:
+  - astropy__astropy-13453
+  - astropy__astropy-14309
+  - astropy__astropy-14598
+  - django__django-10554
+  - django__django-11095
+  - django__django-11163
+  - django__django-11265
+  - django__django-11333
+  - django__django-11490
+  - django__django-11603
+  - django__django-11815
+  - django__django-11885
+  - django__django-12125
+  - django__django-12262
+  - django__django-12308
+  - django__django-12708
+  - django__django-12965
+  - django__django-13112
+  - django__django-13212
+  - django__django-13343
+  - django__django-13401
+  - django__django-13551
+  - django__django-13786
+  - django__django-13820
+  - django__django-14007
+  - django__django-14053
+  - django__django-14238
+  - django__django-14351
+  - django__django-14493
+  - django__django-14631
+  - django__django-14915
+  - django__django-15103
+  - django__django-15252
+  - django__django-15368
+  - django__django-15499
+  - django__django-15561
+  - django__django-15732
+  - django__django-15930
+  - django__django-16032
+  - django__django-16136
+  - django__django-16333
+  - django__django-16560
+  - django__django-16661
+  - django__django-16899
+  - django__django-17029
+  - matplotlib__matplotlib-20488
+  - matplotlib__matplotlib-22865
+  - matplotlib__matplotlib-23412
+  - matplotlib__matplotlib-24627
+  - matplotlib__matplotlib-25122
+  - matplotlib__matplotlib-25479
+  - matplotlib__matplotlib-26342
+  - psf__requests-1724
+  - pydata__xarray-3305
+  - pydata__xarray-4094
+  - pydata__xarray-4966
+  - pydata__xarray-6744
+  - pydata__xarray-7233
+  - pylint-dev__pylint-6386
+  - pylint-dev__pylint-7277
+  - pytest-dev__pytest-10356
+  - pytest-dev__pytest-7205
+  - pytest-dev__pytest-7490
+  - scikit-learn__scikit-learn-10297
+  - scikit-learn__scikit-learn-12973
+  - scikit-learn__scikit-learn-13496
+  - scikit-learn__scikit-learn-14983
+  - scikit-learn__scikit-learn-25931
+  - sphinx-doc__sphinx-10449
+  - sphinx-doc__sphinx-11510
+  - sphinx-doc__sphinx-7748
+  - sphinx-doc__sphinx-8056
+  - sphinx-doc__sphinx-8459
+  - sphinx-doc__sphinx-8621
+  - sphinx-doc__sphinx-9230
+  - sphinx-doc__sphinx-9461
+  - sphinx-doc__sphinx-9673
+  - sympy__sympy-13031
+  - sympy__sympy-13647
+  - sympy__sympy-14248
+  - sympy__sympy-15349
+  - sympy__sympy-16450
+  - sympy__sympy-17655
+  - sympy__sympy-19495
+  - sympy__sympy-20428
+  - sympy__sympy-20916
+  - sympy__sympy-21930
+  - sympy__sympy-23262
+  - sympy__sympy-24661
+verifier:
+  override_timeout_sec: 300
