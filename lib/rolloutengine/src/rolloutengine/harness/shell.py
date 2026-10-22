@@ -305,25 +305,36 @@ class ShellHarness:
             usage = _ToolUsage(task, machine, shell_tool)
         turn = await session.start(task_prompt(task, shell_tool, definitions))
         try:
-            while True:
-                if usage is not None:
-                    usage.observe(turn)
-                    error = _unparsed_tool_call(turn)
-                    if error is not None and usage.parse_retry < self.max_parse_retries:
-                        usage.parse_retry += 1
-                        turn = await session.reply((_parse_error_message(error, usage.shell_tool),))
-                        continue
-                transition = await _call_tools(task, machine, tools, context.events, turn)
-                if transition.done:
-                    metrics = transition.metrics if usage is None else {**transition.metrics, **await usage.metrics()}
-                    session.record(observations=transition.observations, metrics=metrics)
-                    return
-                turn = await session.reply(transition.observations)
+            await self._tool_loop(context, session, tools, usage, turn)
         except RolloutEnded:
             # A limit or a failed model request ends the attempt; its tool usage still belongs to the last step.
             if usage is not None:
                 session.record(metrics=await usage.metrics())
             raise
+
+    async def _tool_loop(
+        self,
+        context: HarnessContext,
+        session: ModelSession,
+        tools: Mapping[str, ToolProviderSession],
+        usage: "_ToolUsage | None",
+        turn: ModelTurn,
+    ) -> None:
+        """Run each turn's tool calls and reply until a turn ends the attempt; retry unparsed shell-tool calls."""
+        while True:
+            if usage is not None:
+                usage.observe(turn)
+                error = _unparsed_tool_call(turn)
+                if error is not None and usage.parse_retry < self.max_parse_retries:
+                    usage.parse_retry += 1
+                    turn = await session.reply((_parse_error_message(error, usage.shell_tool),))
+                    continue
+            transition = await _call_tools(context.task, context.machine, tools, context.events, turn)
+            if transition.done:
+                metrics = transition.metrics if usage is None else {**transition.metrics, **await usage.metrics()}
+                session.record(observations=transition.observations, metrics=metrics)
+                return
+            turn = await session.reply(transition.observations)
 
 
 async def _link_working_directory(machine: Machine, task: TaskSpec) -> None:
@@ -404,6 +415,7 @@ class _ToolUsage:
         try:
             message = assistant_message(turn.message)
         except (TypeError, ValueError):
+            # _call_tools ends the attempt on this turn and records it as invalid_assistant_message.
             return
         if not isinstance(message, AssistantToolCalls):
             return
