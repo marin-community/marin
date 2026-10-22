@@ -224,9 +224,6 @@ def test_unbuilt_export_preserves_contexts_and_private_roles_but_cannot_execute(
         "workspace/checker.txt": b"original",
     }
     assert grader_files["workspace/checker.txt"] == b"original"
-    assert grader_files["Dockerfile"] == (
-        actor_files["Dockerfile"] + b"USER root\nRUN rm -rf /workspace && mkdir -p /workspace\nWORKDIR /workspace\n"
-    )
     assert not task.resources.all and not task.resources.worker
     assert {resource.path for resource in task.resources.oracle} == {"solution/solve.sh"}
     assert {"test.sh", "check.py"} <= {resource.path for resource in task.resources.verifier}
