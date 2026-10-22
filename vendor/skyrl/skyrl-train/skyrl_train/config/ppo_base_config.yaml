@@ -545,3 +545,18 @@ trajectory_runner:
     # Workers start one at a time, this long after the previous one is up, so their imports and tokenizer loads
     # from a shared filesystem do not overlap; zero starts them all at once.
     start_interval_seconds: 2.0
+    # Each worker times a sandbox canary (create a machine on `backend`, run `true`, close it) one at a time, and
+    # its event-loop lag. The pool warns in the driver log when a canary is slow, fails or times out, logs an error
+    # when a worker stops reporting, and logs rollout_workers/* metrics each step (rollouts/sandbox_health.py).
+    sandbox_health:
+      enabled: true
+      backend: local # workers without this task backend run no canary
+      canary_interval_seconds: 10
+      canary_timeout_seconds: 60
+      event_loop_lag_interval_seconds: 1.0
+      collect_interval_seconds: 30
+      # A worker's baseline is the median of its first canaries under slow_seconds; a canary is slow above the
+      # lower of slow_seconds and slow_baseline_ratio times that baseline.
+      baseline_samples: 30
+      slow_baseline_ratio: 10.0
+      slow_seconds: 2.0

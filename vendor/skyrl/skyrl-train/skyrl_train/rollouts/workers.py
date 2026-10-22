@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -17,6 +18,15 @@ from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.rollout_observability import RolloutTimings, current_rollout_observation, measure_rollout
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter
+from skyrl_train.rollouts.sandbox_health import (
+    MachineFactorySource,
+    SandboxHealthConfig,
+    SandboxHealthProbe,
+    SandboxHealthWatch,
+    WorkerHealthReport,
+    WorkerReport,
+    stop_task,
+)
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.base import TrajectoryRunner
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
@@ -100,15 +110,24 @@ class RolloutWorker:
         self._runner = spec.build(tokenizer_from_config(spec.config), shard)
         if sink is not None:
             self._runner.set_trajectory_sink(sink)
+        health = SandboxHealthConfig.from_config(spec.config)
+        runner = self._runner
+        factory = runner.machine_factory(health.backend) if isinstance(runner, MachineFactorySource) else None
+        self._health = SandboxHealthProbe(health, factory, host=socket.gethostname())
 
     async def startup(self) -> None:
         asyncio.get_running_loop().set_default_executor(
             ThreadPoolExecutor(max_workers=self._executor_threads, thread_name_prefix="rollout-worker")
         )
         await self._runner.startup()
+        self._health.start()
 
     async def shutdown(self) -> None:
+        await self._health.stop()
         await self._runner.shutdown()
+
+    async def sandbox_health_report(self) -> WorkerHealthReport:
+        return self._health.report()
 
     async def run(
         self, input_batch: TrajectoryRequestBatch, observe: bool
@@ -159,6 +178,8 @@ class RolloutWorkerPool:
         self._last_progress: list[float | None] = [None] * resources.num_workers
         self._routing = asyncio.Condition()
         self._eval_session_active = False
+        self._health = SandboxHealthWatch(SandboxHealthConfig.from_config(spec.config))
+        self._health_task: asyncio.Task[None] | None = None
 
     def set_trajectory_sink(self, sink: RetentionSink) -> None:
         """Retain trajectories inside each worker, where its runner produces them.
@@ -170,6 +191,8 @@ class RolloutWorkerPool:
         self._sink = sink
 
     async def startup(self) -> None:
+        if self._health.config.enabled:
+            self._health_task = asyncio.create_task(self._health.run(self._health_reports), name="sandbox-health")
         count = self._resources.num_workers
         interval = self._resources.start_interval_seconds
         if interval == 0:
@@ -194,6 +217,8 @@ class RolloutWorkerPool:
         )
 
     async def shutdown(self) -> None:
+        await stop_task(self._health_task)
+        self._health_task = None
         actors, self._actors = self._actors, []
         # Kill every worker before reporting any that failed to shut down cleanly.
         results = await asyncio.gather(*(actor.shutdown.remote() for actor in actors), return_exceptions=True)
@@ -202,6 +227,16 @@ class RolloutWorkerPool:
         errors = [result for result in results if isinstance(result, Exception)]
         if errors:
             raise ExceptionGroup("rollout worker shutdown failed", errors)
+
+    async def sandbox_health_metrics(self, prefix: str) -> dict[str, float]:
+        """Collect every worker's sandbox canary and event-loop readings, and summarize them since the last call."""
+        if not self._health.config.enabled:
+            return {}
+        await self._health.collect(self._health_reports())
+        return self._health.step_metrics(prefix)
+
+    def _health_reports(self) -> list[WorkerReport]:
+        return [actor.sandbox_health_report.remote for actor in self._actors]
 
     async def run(self, input_batch: TrajectoryRequestBatch) -> TrajectoryBatch:
         return await self._observed(
