@@ -56,6 +56,7 @@ from iris.cluster.constraints import (
     merge_constraints,
     region_constraint,
 )
+from iris.cluster.egress import parse_egress_rules
 from iris.cluster.log_keys import build_log_source
 from iris.cluster.types import (
     CoschedulingConfig,
@@ -934,6 +935,7 @@ class IrisClient:
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+        egress_allow: Sequence[str] = (),
         submit_argv: list[str] | None = None,
     ) -> Job:
         """Submit a job with automatic job_id hierarchy.
@@ -967,10 +969,17 @@ class IrisClient:
                 ``environment.env_vars`` and ``environment.setup_scripts``, no
                 workspace bundle, and skips parent env inheritance (see
                 ``EnvironmentSpec.to_sandbox_proto``).
-            egress_policy: What the job's network reaches: CLUSTER, INTERNET
-                (public addresses only) or NONE. UNSPECIFIED resolves to
-                INTERNET for SANDBOX and CLUSTER otherwise; SANDBOX rejects
-                CLUSTER.
+            egress_policy: What the job's network reaches: CLUSTER, ALLOWLIST,
+                INTERNET (public addresses only) or NONE. UNSPECIFIED inherits
+                the parent job's policy, or takes the cluster's default:
+                INTERNET for SANDBOX, ALLOWLIST on a Kubernetes cluster whose
+                allowlist is the default (except multi-task GPU jobs), and
+                CLUSTER otherwise. SANDBOX rejects CLUSTER and ALLOWLIST.
+            egress_allow: Destinations an ALLOWLIST job may reach beyond the
+                cluster's allowlist, such as ``"api.openai.com"``,
+                ``"*.anthropic.com:443"`` or ``"203.0.113.0/24"`` (syntax in
+                ``iris.cluster.egress``). Rules with an UNSPECIFIED policy
+                select ALLOWLIST.
 
         Returns:
             Job handle for the submitted job
@@ -1084,6 +1093,7 @@ class IrisClient:
                 priority_band=priority_band,
                 container_profile=container_profile,
                 egress_policy=egress_policy,
+                egress_allow=parse_egress_rules(egress_allow),
                 submit_argv=submit_argv,
             )
         except ConnectError as e:

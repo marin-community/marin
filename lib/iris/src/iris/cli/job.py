@@ -44,6 +44,7 @@ from iris.cluster.constraints import (
     region_constraint,
     zone_constraint,
 )
+from iris.cluster.egress import parse_egress_rules
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
 from iris.cluster.redaction import redact_submit_argv
 from iris.cluster.tpu_topology import get_tpu_topology
@@ -230,6 +231,14 @@ def parse_gpu_spec(spec: str) -> tuple[str, int]:
         f"Expected a known variant (e.g., H100), VARIANTxCOUNT (e.g., H100x8), "
         f"or a bare count (e.g., 8). Known variants: {known}"
     )
+
+
+def _validate_egress_allow(ctx: click.Context, param: click.Parameter, value: tuple[str, ...]) -> tuple[str, ...]:
+    try:
+        parse_egress_rules(value)
+    except ValueError as e:
+        raise click.BadParameter(str(e)) from e
+    return value
 
 
 def _find_closest(value: str, known: set[str]) -> str | None:
@@ -590,6 +599,7 @@ def run_iris_job(
     task_image: str | None = None,
     container_profile: str | None = None,
     egress_policy: str | None = None,
+    egress_allow: Sequence[str] = (),
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -715,6 +725,7 @@ def run_iris_job(
         priority_band=priority_band,
         container_profile=profile,
         egress_policy=egress,
+        egress_allow=egress_allow,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
@@ -744,6 +755,7 @@ def _submit_and_wait_job(
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
     egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+    egress_allow: Sequence[str] = (),
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
@@ -785,6 +797,7 @@ def _submit_and_wait_job(
         priority_band=priority_band,
         container_profile=container_profile,
         egress_policy=egress_policy,
+        egress_allow=egress_allow,
         submit_argv=submit_argv,
         task_image=task_image,
     )
@@ -993,9 +1006,23 @@ Examples:
     type=click.Choice(EGRESS_POLICY_NAMES, case_sensitive=False),
     default=None,
     help=(
-        "What the job's network reaches (default: EGRESS_POLICY_INTERNET for SANDBOX, "
-        "EGRESS_POLICY_CLUSTER otherwise). INTERNET reaches public addresses only and NONE "
-        "nothing; neither reaches the controller, so the task cannot launch child jobs."
+        "What the job's network reaches (default: the parent job's policy, else the cluster's: "
+        "INTERNET for SANDBOX, ALLOWLIST where the cluster's allowlist is the default, CLUSTER "
+        "otherwise). CLUSTER is unrestricted. ALLOWLIST reaches Iris services, other tasks and "
+        "allowlisted destinations. INTERNET reaches public addresses only and NONE nothing; "
+        "neither reaches the controller, so the task cannot launch child jobs."
+    ),
+)
+@click.option(
+    "--egress-allow",
+    "egress_allow",
+    multiple=True,
+    metavar="DEST[:PORT[,PORT...]]",
+    callback=_validate_egress_allow,
+    help=(
+        "Repeatable. A destination an ALLOWLIST job may reach beyond the cluster allowlist: a "
+        "domain (api.openai.com), a one-label wildcard (*.openai.com) or a CIDR "
+        "(203.0.113.0/24), optionally limited to TCP ports. Implies --egress-policy allowlist."
     ),
 )
 @click.option(
@@ -1052,6 +1079,7 @@ def run(
     task_image: str | None,
     container_profile: str | None,
     egress_policy: str | None,
+    egress_allow: tuple[str, ...],
     cancel_on_exit: bool,
     include: tuple[str, ...],
     exclude: tuple[str, ...],
@@ -1116,6 +1144,7 @@ def run(
             task_image=task_image,
             container_profile=container_profile,
             egress_policy=egress_policy,
+            egress_allow=egress_allow,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,

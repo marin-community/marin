@@ -54,6 +54,7 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
+from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -322,7 +323,15 @@ class RpcTaskBackend:
         )
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST:
+            return (
+                "Egress policy allowlist needs a Kubernetes cluster with an egress allowlist; this cluster "
+                "runs Docker workers. Use --egress-policy cluster or internet, or submit to a CoreWeave cluster."
+            )
         return None
+
+    def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
+        return resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         if self.autoscaler is None:

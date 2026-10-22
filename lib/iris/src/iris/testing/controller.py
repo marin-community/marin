@@ -93,6 +93,7 @@ from iris.cluster.federation.manager import FederationManager
 from iris.cluster.platforms.gcp.fake import InMemoryGcpService
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
 from iris.cluster.platforms.types import CloudSliceState
+from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.service_mode import ServiceMode
 from iris.cluster.types import (
     DEFAULT_BACKEND_ID,
@@ -179,6 +180,9 @@ class FakeProvider:
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
         return None
 
+    def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
+        return resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
@@ -221,6 +225,9 @@ class MockController:
         self.backend.descriptor = worker_backend_descriptor()
         self.backend.job_feasibility.return_value = None
         self.backend.validate_job.return_value = None
+        self.backend.default_egress_policy.side_effect = lambda request: resolve_egress_policy(
+            request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED
+        )
         self.backend.runtime_image.return_value = ""
         self.worker_health = WorkerHealthTracker()
         self.backend_observation = BackendObservation()

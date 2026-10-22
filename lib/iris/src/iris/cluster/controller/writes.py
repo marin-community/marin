@@ -283,6 +283,7 @@ def insert_job_config(
     task_image: str,
     container_profile: int = 0,
     egress_policy: int = 0,
+    egress_allow_json: list[str] | None = None,
     submit_argv_json: list | None = None,
     fail_if_exists: bool = False,
 ) -> None:
@@ -313,6 +314,7 @@ def insert_job_config(
             task_image=task_image,
             container_profile=container_profile,
             egress_policy=egress_policy,
+            egress_allow_json=egress_allow_json if egress_allow_json is not None else [],
             submit_argv_json=submit_argv_json if submit_argv_json is not None else [],
             fail_if_exists=fail_if_exists,
         )

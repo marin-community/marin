@@ -527,6 +527,10 @@ class TaskBackend(Protocol):
         """Validate backend requirements; return an error for an invalid job, or None."""
         ...
 
+    def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
+        """The egress policy a root job with an UNSPECIFIED policy runs under here."""
+        ...
+
     def get_process_status(
         self,
         target: TaskTarget,

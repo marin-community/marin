@@ -33,7 +33,7 @@ from iris.cluster.backends.k8s.output_contract import (
     OUTPUT_RELEASE_PATH,
     output_uploader_environment,
 )
-from iris.cluster.config import NodeHealthConfig, TaskOutputPolicy
+from iris.cluster.config import EgressAllowlistConfig, NodeHealthConfig, TaskOutputPolicy
 from iris.cluster.controller.backend import (
     AutoscaleRequest,
     AutoscaleResult,
@@ -78,6 +78,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
     gpu_gang_rack_slice_size,
 )
+from iris.cluster.platforms.k8s.egress_allowlist import task_policy_manifest, task_policy_name
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
@@ -121,7 +122,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
+from iris.cluster.runtime.sandbox import TaskNetwork, resolve_egress_policy, task_isolation
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.stats.emitter import PeriodicEmitter
 from iris.cluster.stats.tables import (
@@ -550,6 +551,9 @@ class PodConfig:
     # UNSPECIFIED is treated as INTERACTIVE. Defaults to the iris-{band} classes
     # Iris creates at startup; override via kubernetes_provider.priority_classes.
     priority_class_names: dict[int, str] = field(default_factory=lambda: dict(_DEFAULT_PRIORITY_CLASS_NAMES))
+    # Enables EGRESS_POLICY_ALLOWLIST: the cluster's allowlist and whether it is
+    # the default. None rejects ALLOWLIST jobs.
+    egress_allowlist: EgressAllowlistConfig | None = None
 
 
 def _build_task_script(run_req: job_pb2.RunTaskRequest) -> str:
@@ -1061,7 +1065,7 @@ def _build_pod_manifest(
     # pod share its network, so the task can use any route a sidecar has: a
     # finelog route exposes every job's logs, and the uploader needs the env
     # Secret's object-store keys and a route to the object store.
-    sidecars = isolation.network is TaskNetwork.CLUSTER
+    sidecars = isolation.network in (TaskNetwork.CLUSTER, TaskNetwork.ALLOWLIST)
     init_containers: list[dict] = []
     if sidecars:
         init_containers.append(
@@ -2482,9 +2486,31 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST and self.pods.egress_allowlist is None:
+            return (
+                "Egress policy allowlist is not enabled on this cluster (kubernetes_provider.egress_allowlist); "
+                "use --egress-policy cluster"
+            )
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
         return validate_coreweave_credentials(request.environment.env_vars)
+
+    def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
+        """ALLOWLIST when the cluster's allowlist is the default, else the profile's default.
+
+        GPU jobs with more than one task keep the cluster network: host
+        networking carries their InfiniBand traffic, and it bypasses pod policy.
+        """
+        allowlist = self.pods.egress_allowlist
+        multi_host_gpu = get_gpu_count(request.resources.device) > 0 and request.replicas > 1
+        if (
+            allowlist is None
+            or not allowlist.default
+            or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+            or multi_host_gpu
+        ):
+            return resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
+        return job_pb2.EGRESS_POLICY_ALLOWLIST
 
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
@@ -2771,6 +2797,20 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
+        if run_req.egress_allow:
+            # Before the pod, so its first connections already see the job's rules.
+            self.kubectl.apply_json(
+                task_policy_manifest(
+                    pod_name,
+                    self.pods.namespace,
+                    {
+                        _LABEL_TASK_HASH: manifest["metadata"]["labels"][_LABEL_TASK_HASH],
+                        _LABEL_ATTEMPT_ID: manifest["metadata"]["labels"][_LABEL_ATTEMPT_ID],
+                    },
+                    run_req.egress_allow,
+                )
+            )
+
         task_id = run_req.task_id
         if _is_coordinator_task(run_req):
             # Protect the retry as soon as its pod appears, even if GC removes the old PDB.
@@ -2933,6 +2973,8 @@ class K8sTaskProvider:
             for pod_name in pending:
                 self.kubectl.delete(K8sResource.CONFIGMAPS, f"{pod_name}-wf", wait=False)
                 self.kubectl.delete(K8sResource.PDBS, _pdb_name(pod_name), wait=False)
+                if self.pods.egress_allowlist is not None:
+                    self.kubectl.delete(K8sResource.CILIUM_NETWORK_POLICIES, task_policy_name(pod_name), wait=False)
                 cleaned.add(pod_name)
         except KubectlError:
             # Keep failed cleanup queued without preventing the terminal-pod sweep.

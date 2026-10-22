@@ -25,6 +25,13 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {
+        # Per-attempt egress policies for ALLOWLIST jobs with their own rules,
+        # created before the pod and deleted with its ConfigMap and PDB.
+        "apiGroups": ["cilium.io"],
+        "resources": ["ciliumnetworkpolicies"],
+        "verbs": ["get", "list", "create", "update", "patch", "delete"],
+    },
+    {
         "apiGroups": ["policy"],
         "resources": ["poddisruptionbudgets"],
         "verbs": ["get", "list", "create", "update", "patch", "delete"],

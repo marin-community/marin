@@ -160,6 +160,9 @@ def docker_network_mode(network: TaskNetwork) -> str:
         return NETWORK_MODE_HOST
     if network is TaskNetwork.NONE:
         return NETWORK_MODE_NONE
+    if network is TaskNetwork.ALLOWLIST:
+        # The controller rejects ALLOWLIST on Docker-worker clusters at submission.
+        raise ValueError("Egress policy allowlist needs a Kubernetes cluster; Docker workers cannot enforce it")
     if not Path(EGRESS_RESOLV_CONF).exists():
         raise ValueError(
             f"Egress policy internet needs the worker's host egress filter, and {EGRESS_RESOLV_CONF} is "

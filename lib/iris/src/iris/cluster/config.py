@@ -31,6 +31,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSeriali
 from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
 from rigging.timing import Duration
 
+from iris.cluster.egress import parse_egress_rule
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
 from iris.cluster.tpu_topology import TPU_FAMILY_VARIANT_PREFIX, get_tpu_topology, tpu_variant_name
 from iris.cluster.types import (
@@ -685,6 +686,38 @@ class NodeHealthConfig(_Config):
     max_cordoned_nodes: int = Field(default=1, ge=0)
 
 
+class EgressEndpointsConfig(_Config):
+    """Pods outside the Iris namespace that ALLOWLIST tasks may reach, such as a node-local cache."""
+
+    namespace: str
+    labels: dict[str, str] = Field(default_factory=dict)  # empty selects every pod in the namespace
+
+
+class EgressAllowlistConfig(_Config):
+    """Enables ``EGRESS_POLICY_ALLOWLIST`` on a Kubernetes cluster whose CNI is Cilium.
+
+    An ALLOWLIST task reaches DNS, every pod in the Iris namespace (controller,
+    finelog, other tasks), cluster nodes, Iris's base allowlist
+    (``iris.cluster.egress.BASE_EGRESS_ALLOWLIST``), ``allow``,
+    ``endpoints`` and its job's own rules.
+    """
+
+    # Resolve an UNSPECIFIED egress policy to ALLOWLIST for every job except
+    # SANDBOX jobs and GPU jobs with more than one task, which keep host
+    # networking for InfiniBand.
+    default: bool = False
+    # Cluster additions to the base allowlist, in egress rule syntax.
+    allow: list[str] = Field(default_factory=list)
+    endpoints: list[EgressEndpointsConfig] = Field(default_factory=list)
+
+    @field_validator("allow")
+    @classmethod
+    def _valid_rules(cls, value: list[str]) -> list[str]:
+        for rule in value:
+            parse_egress_rule(rule)  # ValueError on a malformed rule — fail at load
+        return value
+
+
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
@@ -699,6 +732,7 @@ class KubernetesProviderConfig(_Config):
     # carrier-grade NAT and link-local ranges, which sandbox internet egress
     # already excludes.
     service_cidr: str = ""
+    egress_allowlist: EgressAllowlistConfig | None = None
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
 

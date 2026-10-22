@@ -168,6 +168,7 @@ class RemoteClusterClient:
         priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
         container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
         egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
+        egress_allow: Sequence[job_pb2.EgressRule] = (),
         submit_argv: list[str] | None = None,
     ) -> JobName:
         if replicas < 1:
@@ -199,6 +200,7 @@ class RemoteClusterClient:
             priority_band=priority_band,
             container_profile=container_profile,
             egress_policy=egress_policy,
+            egress_allow=egress_allow,
             submit_argv=submit_argv or [],
             client_revision_date=client_revision_date(),
         )

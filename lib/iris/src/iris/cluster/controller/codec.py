@@ -15,6 +15,7 @@ from typing import Any, NamedTuple, Protocol
 from google.protobuf import json_format
 
 from iris.cluster.constraints import Constraint, get_device_variant
+from iris.cluster.egress import parse_egress_rules
 from iris.cluster.types import get_gpu_count, get_tpu_count
 from iris.rpc import controller_pb2, job_pb2
 
@@ -178,6 +179,7 @@ def reconstruct_launch_job_request(
         task_image=job.task_image,
         container_profile=job.container_profile,
         egress_policy=job.egress_policy,
+        egress_allow=parse_egress_rules(job.egress_allow_json),
         fail_if_exists=job.fail_if_exists,
     )
     req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))

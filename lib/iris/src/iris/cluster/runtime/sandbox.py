@@ -39,35 +39,48 @@ class TaskNetwork(StrEnum):
     """What a task's network can reach (``job_pb2.EgressPolicy``, resolved).
 
     CLUSTER is the cluster network: the node's host network where configured,
-    the controller, workers and other pods. INTERNET (public addresses only)
-    and NONE both exclude the controller, workers, other pods and the metadata
-    server.
+    the controller, workers and other pods. ALLOWLIST keeps the controller,
+    other tasks and cluster nodes but reaches outside the cluster only through
+    the cluster's allowlist and the job's own rules. INTERNET (public addresses
+    only) and NONE both exclude the controller, workers, other pods and the
+    metadata server.
     """
 
     CLUSTER = "cluster"
     INTERNET = "internet"
     NONE = "none"
+    ALLOWLIST = "allowlist"
 
 
 _NETWORKS: dict[int, TaskNetwork] = {
     job_pb2.EGRESS_POLICY_CLUSTER: TaskNetwork.CLUSTER,
     job_pb2.EGRESS_POLICY_INTERNET: TaskNetwork.INTERNET,
     job_pb2.EGRESS_POLICY_NONE: TaskNetwork.NONE,
+    job_pb2.EGRESS_POLICY_ALLOWLIST: TaskNetwork.ALLOWLIST,
 }
+
+# Policies that withhold the controller and cluster network, which SANDBOX requires.
+_SANDBOX_POLICIES = frozenset({job_pb2.EGRESS_POLICY_INTERNET, job_pb2.EGRESS_POLICY_NONE})
 
 
 def resolve_egress_policy(profile: int, egress_policy: int) -> job_pb2.EgressPolicy:
     """Resolve UNSPECIFIED to the profile's default: INTERNET for SANDBOX, CLUSTER otherwise.
 
-    Raises ValueError for an unknown policy or a SANDBOX job on the cluster network.
+    The controller resolves UNSPECIFIED before storing a job, applying its
+    backend's default (see ``TaskBackend.default_egress_policy``); this
+    fallback only covers callers that never stored one.
+
+    Raises ValueError for an unknown policy or a SANDBOX job on a policy that
+    reaches the controller.
     """
     sandbox = profile == job_pb2.CONTAINER_PROFILE_SANDBOX
     if egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
         return job_pb2.EGRESS_POLICY_INTERNET if sandbox else job_pb2.EGRESS_POLICY_CLUSTER
     if egress_policy not in _NETWORKS:
         raise ValueError(f"Unknown egress policy {egress_policy}")
-    if sandbox and egress_policy == job_pb2.EGRESS_POLICY_CLUSTER:
-        raise ValueError("Container profile sandbox cannot use egress policy cluster")
+    if sandbox and egress_policy not in _SANDBOX_POLICIES:
+        name = _NETWORKS[egress_policy].value
+        raise ValueError(f"Container profile sandbox cannot use egress policy {name}")
     return job_pb2.EgressPolicy.ValueType(egress_policy)
 
 
@@ -85,10 +98,10 @@ class TaskIsolation:
         include_service_account: On Kubernetes, the pod service account and its token.
         network: What the task's network reaches. Outside CLUSTER, a Docker
             worker runs the task on the filtered egress network (INTERNET) or
-            with no network (NONE), and a Kubernetes pod gets no host network,
-            carries the label its NetworkPolicy selects, and runs without the
-            log-shipping and output-upload sidecars, which would share the
-            task's network.
+            with no network (NONE), and a Kubernetes pod gets no host network
+            and carries the label its network policy selects. Under INTERNET
+            and NONE the pod also runs without the log-shipping and
+            output-upload sidecars, which would share the task's network.
     """
 
     include_cluster_env: bool

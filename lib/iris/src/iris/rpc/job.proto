@@ -684,7 +684,10 @@ enum ContainerProfile {
 // workers, other tasks and the cloud metadata server, and a task under either
 // runs without the Kubernetes log-shipping and output-upload sidecars.
 enum EgressPolicy {
-  // Resolves to INTERNET for a SANDBOX job and CLUSTER for every other profile.
+  // Resolved by the controller that runs the job: INTERNET for a SANDBOX job;
+  // ALLOWLIST on a Kubernetes cluster whose allowlist is the default, except for
+  // GPU jobs with more than one task; CLUSTER otherwise. A child job that sets
+  // neither a policy nor rules inherits its parent's.
   EGRESS_POLICY_UNSPECIFIED = 0;
   // The cluster network: the node's host network where configured, the
   // controller, workers and other tasks. Not allowed for SANDBOX.
@@ -695,6 +698,26 @@ enum EgressPolicy {
   EGRESS_POLICY_INTERNET = 2;
   // No network beyond DNS on Kubernetes; loopback only on Docker workers.
   EGRESS_POLICY_NONE = 3;
+  // Kubernetes only. The controller, finelog and other tasks in the Iris
+  // namespace, cluster nodes, and the domains and networks on the cluster's
+  // allowlist and the job's egress_allow rules. Everything else is denied. The
+  // pod runs on the pod network, so it gets no InfiniBand devices. Not allowed
+  // for SANDBOX.
+  EGRESS_POLICY_ALLOWLIST = 4;
+}
+
+// A destination an ALLOWLIST task may reach beyond the cluster's allowlist.
+message EgressRule {
+  oneof destination {
+    // A DNS name ("api.openai.com") or a pattern whose "*" stands for exactly
+    // one label ("*.openai.com" matches "api.openai.com", not "openai.com" or
+    // "a.b.openai.com").
+    string domain = 1;
+    // An IPv4 or IPv6 network in CIDR notation ("203.0.113.0/24").
+    string cidr = 2;
+  }
+  // TCP ports the rule admits. Empty admits every port and protocol.
+  repeated int32 ports = 3;
 }
 
 // ============================================================================
@@ -753,4 +776,8 @@ message RunTaskRequest {
   // that the task's own Iris client presents to the controller. Empty for a
   // profile that withholds it (SANDBOX) or a controller without a JWT signer.
   string task_token = 17;
+
+  // The job's destinations beyond the cluster allowlist. Set only with
+  // EGRESS_POLICY_ALLOWLIST.
+  repeated EgressRule egress_allow = 18;
 }

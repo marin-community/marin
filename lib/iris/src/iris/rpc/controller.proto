@@ -120,9 +120,13 @@ message Controller {
     // when auth is enabled; see service.LaunchJob.
     iris.job.ContainerProfile container_profile = 37;
 
-    // What the job's network can reach. UNSPECIFIED => INTERNET for a SANDBOX
-    // job and CLUSTER for every other profile; SANDBOX rejects CLUSTER.
+    // What the job's network can reach. UNSPECIFIED resolves as documented on
+    // iris.job.EgressPolicy; SANDBOX rejects CLUSTER and ALLOWLIST.
     iris.job.EgressPolicy egress_policy = 39;
+
+    // Destinations beyond the cluster allowlist. Requires ALLOWLIST; with an
+    // UNSPECIFIED policy, rules select ALLOWLIST.
+    repeated iris.job.EgressRule egress_allow = 40;
 
     // Set only when a federation parent hands a whole job off to this cluster as
     // a peer. Its presence marks the job as peer-owned: the receiving controller
