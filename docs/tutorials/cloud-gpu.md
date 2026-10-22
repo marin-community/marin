@@ -65,8 +65,9 @@ multi-node job.
 
 ## Keep data on CoreWeave
 
-CoreWeave task pods receive `MARIN_PREFIX` and object-storage credentials from
-the cluster. Use that prefix for inputs, outputs, and caches. Use a
+CoreWeave task pods receive `MARIN_PREFIX` from the cluster and use your personal
+object-storage credentials. Export `CW_KEY_ID` and `CW_KEY_SECRET` before
+submitting; Iris delivers them as files. Use that prefix for inputs, outputs, and caches. Use a
 lifecycle-managed path for disposable data:
 
 ```python
@@ -90,11 +91,11 @@ when `MARIN_TEMP_PREFIX` is set.
 Do not read or copy data from GCS while running on CoreWeave without explicit
 user approval. The transfer can incur egress charges.
 
-The checkout's `.marin.yaml` supplies job-specific values such as W&B or
-Hugging Face credentials. For CoreWeave tasks, export your personal `CW_KEY_ID`
-and `CW_KEY_SECRET` before submitting. Create them on the
-[CoreWeave console Access Keys page](https://console.coreweave.com/object-storage/access-keys).
-Iris forwards both values to the job and rejects submissions missing either value.
+The checkout's `.marin.yaml` supplies job environment configuration. Iris forwards
+available HF/W&B/CoreWeave credentials from your client into the file-delivered secrets
+bundle. Pass other credentials through `EnvironmentSpec.secrets`; see the
+[secret-delivery reference](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
+Iris does not supply cluster default application credentials.
 
 ## Watch the job
 
