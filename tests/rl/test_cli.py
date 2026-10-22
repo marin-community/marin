@@ -81,37 +81,51 @@ def test_coordinator_request_requires_a_skyrl_step() -> None:
         _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
 
 
-def test_coordinator_forwards_only_declared_secrets_and_requires_them():
-    execution = dataclasses.replace(_execution(), required_env_vars=("JUDGE_KEY",))
-    args = ([_step(execution)], "experiments.test_rl", ("--run",), 1, Path("/workspace/marin"))
-    _, request = _coordinator_request(*args, {"JUDGE_KEY": "test-key", "UNRELATED_SECRET": "not-forwarded"})
-    assert request.environment.env_vars["JUDGE_KEY"] == "test-key"
-    assert "UNRELATED_SECRET" not in request.environment.env_vars
-    with pytest.raises(KeyError, match="JUDGE_KEY"):
-        _coordinator_request(*args, {})
-
-
-def test_rl_launch_forwards_dedicated_daytona_credential(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])
+def test_rl_launch_requires_and_forwards_credentials_before_submission(
+    monkeypatch: pytest.MonkeyPatch, missing_name: str | None
+) -> None:
     client = MagicMock(spec=IrisClient)
     monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
     monkeypatch.delenv("IRIS_TASK_ID", raising=False)
-    monkeypatch.setenv("DAYTONA_RL_API_KEY", "test-rl-key")
-    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "test-eval-key")
-    monkeypatch.setenv("DAYTONA_API_KEY", "test-other-key")
+    expected_env = {
+        "DAYTONA_RL_API_KEY": "test-rl-key",
+        "DAYTONA_EVAL_API_KEY": "test-eval-key",
+        "DAYTONA_API_KEY": "test-other-key",
+        "HF_TOKEN": "test-hf-token",
+        "TOGETHER_API_KEY": "test-together-key",
+        "WANDB_API_KEY": "test-wandb-key",
+        "JUDGE_KEY": "test-judge-key",
+        "EVAL_KEY": "test-custom-eval-key",
+    }
+    for name, value in expected_env.items():
+        monkeypatch.setenv(name, value)
+    if missing_name is not None:
+        monkeypatch.delenv(missing_name)
     monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
 
     @click.command()
     @rl_build_options
-    def main() -> ArtifactStep[Artifact]:
-        return _step(_execution())
+    def main() -> list[ArtifactStep[Artifact]]:
+        train = _step(dataclasses.replace(_execution(), required_env_vars=("JUDGE_KEY",)))
+        evaluate = dataclasses.replace(
+            _step(dataclasses.replace(_execution(), required_env_vars=("EVAL_KEY",))),
+            name="checkpoints/test-eval",
+        )
+        return [train, evaluate]
 
     result = CliRunner().invoke(main, ["--version", "2026.10.07", "--run"])
 
+    if missing_name is not None:
+        assert result.exit_code != 0
+        assert isinstance(result.exception, KeyError)
+        assert result.exception.args == (missing_name,)
+        client.submit.assert_not_called()
+        return
+
     assert result.exit_code == 0, result.output
     environment = client.submit.call_args.kwargs["environment"]
-    assert environment.env_vars["DAYTONA_RL_API_KEY"] == "test-rl-key"
-    assert environment.env_vars["DAYTONA_EVAL_API_KEY"] == "test-eval-key"
-    assert environment.env_vars["DAYTONA_API_KEY"] == "test-other-key"
+    assert expected_env.items() <= environment.env_vars.items()
     assert "UNRELATED_SECRET" not in environment.env_vars
 
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable
@@ -56,12 +57,33 @@ def test_artifact_hf_model_rejects_literal_object_store_dot_segments(relative_pa
         ArtifactHfModel(_model_step(), "test/model", "revision", relative_path=relative_path)
 
 
-def test_artifact_hf_model_root_preserves_the_artifact_locator() -> None:
-    spec = dataclasses.replace(_spec(), model=dataclasses.replace(_spec().model, relative_path=""))
-    step = skyrl_step(spec, _execution())
-    config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
-    launch = yaml.safe_load(config.launch_config_yaml)
-    assert launch["inputs"]["model"]["uri"] == "tests/iceball-sft@2026.08.01"
+@pytest.mark.parametrize(
+    ("relative_path", "expected_path"),
+    [("", ""), ("hf/checkpoint-10", "hf/checkpoint-10"), (None, "hf/checkpoint-20")],
+)
+def test_artifact_hf_model_resolves_root_explicit_path_and_discovery(
+    tmp_path: Path, relative_path: str | None, expected_path: str
+) -> None:
+    root = tmp_path / "model"
+    for name, modified in (("checkpoint-10", 10), ("checkpoint-20", 20)):
+        export = root / "hf" / name
+        export.mkdir(parents=True)
+        (export / "config.json").write_text("{}")
+        (export / "tokenizer_config.json").write_text("{}")
+        os.utime(export / "config.json", (modified, modified))
+    # A config without tokenizer metadata is not a discoverable HF export.
+    (root / "config.json").write_text("{}")
+    model = ArtifactHfModel(
+        ArtifactStep.adopt("tests/model", "2026.08.01", str(root), kind=LevanterCheckpoint),
+        "test/tokenizer",
+        "revision",
+        relative_path=relative_path,
+    )
+    ctx = StepContext.for_run(str(tmp_path / "output"), str(tmp_path), deps=model.deps())
+
+    resolved = model.resolve(ctx)
+
+    assert resolved.uri == str(root / expected_path)
 
 
 def _data_step() -> ArtifactStep[Artifact]:
