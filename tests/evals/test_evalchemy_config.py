@@ -637,9 +637,10 @@ def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypat
     assert "--max_tokens" not in cmd
 
 
-def test_unset_budget_loglikelihood_task_gets_no_gen_kwargs(monkeypatch):
+@pytest.mark.parametrize("max_gen_toks", [None, 256])
+def test_loglikelihood_task_excludes_generation_overrides(monkeypatch, max_gen_toks):
     monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
-    config = _payload(_config(max_gen_toks=None))
+    config = _payload(_config(max_gen_toks=max_gen_toks, extra_gen_kwargs={"temperature": "0.7"}))
     cmd = build_command(config, config["tasks"][0], "/opt/py", 40960)  # arc_easy, loglikelihood
 
     assert "--gen_kwargs" not in cmd
