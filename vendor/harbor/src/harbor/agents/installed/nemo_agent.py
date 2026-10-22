@@ -31,11 +31,6 @@ Usage:
       --ae AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \\
       --ae AWS_DEFAULT_REGION=us-east-1
 
-    # LiteLLM (universal proxy)
-    harbor run --dataset simpleqa --agent nemo-agent \\
-      --model litellm/openai/gpt-4o --ak llm_type=litellm \\
-      --ae LITELLM_API_KEY=$LITELLM_API_KEY
-
     # Specific release
     harbor run --dataset bfcl --agent nemo-agent ... --ak version=1.6.0
 
@@ -50,7 +45,7 @@ Usage:
 
 Agent kwargs (--ak):
     llm_type: LLM provider type. One of: nim (default), openai, azure_openai,
-              aws_bedrock, litellm, huggingface_inference, dynamo.
+              aws_bedrock, huggingface_inference, dynamo.
     version: Pin nvidia-nat to a specific PyPI release (e.g., "1.6.0")
     nat_repo: Install nvidia-nat from a git URL (fork, branch, commit hash).
               Format: "git+https://github.com/<user>/NeMo-Agent-Toolkit.git@<ref>"
@@ -63,7 +58,6 @@ Environment variables (--ae) by provider:
     azure_openai:           AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_VERSION
     aws_bedrock:            AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN,
                             AWS_DEFAULT_REGION, AWS_REGION
-    litellm:                LITELLM_API_KEY, LITELLM_BASE_URL
     huggingface_inference:  HF_TOKEN, HF_ENDPOINT_URL
     dynamo:                 DYNAMO_API_KEY, DYNAMO_BASE_URL
 """
@@ -75,7 +69,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-
 from harbor.agents.installed.base import (
     BaseInstalledAgent,
     CliFlag,
@@ -127,10 +120,6 @@ _LLM_PROVIDERS: dict[str, _ProviderSpec] = {
             "AWS_DEFAULT_REGION",
             "AWS_REGION",
         ),
-    ),
-    "litellm": _ProviderSpec(
-        api_key_env="LITELLM_API_KEY",
-        base_url_env="LITELLM_BASE_URL",
     ),
     "huggingface_inference": _ProviderSpec(
         api_key_env="HF_TOKEN",
@@ -253,7 +242,8 @@ class NemoAgent(BaseInstalledAgent):
             environment,
             command=(
                 f"{path_setup}; "
-                f"uv pip install --python /opt/nvidia-nat-venv/bin/python {pip_spec}"
+                "uv pip install --constraints <(echo 'litellm<0') "
+                f"--python /opt/nvidia-nat-venv/bin/python {pip_spec}"
             ),
             timeout_sec=300,
         )
@@ -304,7 +294,8 @@ class NemoAgent(BaseInstalledAgent):
                 result = await environment.exec(
                     command=(
                         'export PATH="/opt/nvidia-nat-venv/bin:$HOME/.local/bin:$PATH"; '
-                        f"uv pip install --python /opt/nvidia-nat-venv/bin/python "
+                        "uv pip install --constraints <(echo 'litellm<0') "
+                        "--python /opt/nvidia-nat-venv/bin/python "
                         f"{shlex.quote(workflow_package)}"
                     ),
                     env={"DEBIAN_FRONTEND": "noninteractive"},
