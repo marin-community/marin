@@ -22,7 +22,7 @@ from taskcompendium.models import (
 from rolloutengine.chat import ChatModel
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.prefill import PrefillHarness
-from rolloutengine.harness.shell import ShellHarness, ToolCallResult, ToolContext
+from rolloutengine.harness.tools import ToolCallResult, ToolContext, ToolHarness
 from rolloutengine.models import (
     Continuation,
     GradedRolloutInterrupted,
@@ -159,7 +159,7 @@ async def test_a_managed_agent_runs_host_tools_against_a_chat_endpoint_with_no_m
         grader=NoGrader(reason="The agent's work has no grader"),
     )
     engine = RolloutEngine(
-        {}, {"agent": ShellHarness(command_timeout=None, tools={LOOKUP_INTERFACE: Lookup({"a": "12"})})}
+        {}, {"agent": ToolHarness(command_timeout=None, tools={LOOKUP_INTERFACE: Lookup({"a": "12"})})}
     )
 
     result = await engine.run_task(
@@ -176,7 +176,7 @@ async def test_a_managed_agent_runs_host_tools_against_a_chat_endpoint_with_no_m
 
 async def test_a_response_without_usage_is_a_model_failure():
     server = ChatServer([completion({"content": "12"}, usage=False)])
-    engine = RolloutEngine({}, {"agent": ShellHarness(command_timeout=None)})
+    engine = RolloutEngine({}, {"agent": ToolHarness(command_timeout=None)})
     spec = rollout_spec(arithmetic_task(), harness="agent", trace=TraceMode.MESSAGES, max_total_tokens=100)
 
     with pytest.raises(GradedRolloutInterrupted) as caught:

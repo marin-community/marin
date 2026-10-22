@@ -1,10 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The built-in shell harness.
-
-This supplies a single shell tool on the task machine as well as specified host tools.
-"""
+"""The model/tool loop for optional shell access and registered host tools."""
 
 import json
 import math
@@ -172,7 +169,7 @@ def _provider_tools(
 
 
 @dataclass(frozen=True, kw_only=True)
-class ShellHarness:
+class ToolHarness:
     """Serve a shell tool on the task machine and host tools from registered providers, and end on a final response."""
 
     command_timeout: float | None

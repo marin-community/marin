@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from rolloutengine.harness.shell import task_prompt
+from rolloutengine.harness.tools import task_prompt
 from rolloutengine.models import TaskRolloutSpec
 from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from skyrl_gym.task_records import episode_prompt

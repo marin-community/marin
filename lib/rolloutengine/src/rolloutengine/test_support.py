@@ -20,7 +20,7 @@ from taskcompendium.models import (
 from verifyit.spec import NumericSpec
 
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.harness.tools import ToolHarness
 from rolloutengine.models import (
     GradedRollout,
     MachineRuntimeSpec,
@@ -133,10 +133,10 @@ class ModelEngine:
 
 
 def engine(model, machine_factories=None, *, harnesses=None, observer=None) -> ModelEngine:
-    """Run ``model.complete`` with a shell harness under ``SHELL``, unless ``harnesses`` replaces it."""
+    """Run ``model.complete`` with the tool harness under ``SHELL``, unless ``harnesses`` replaces it."""
     rollout_engine = RolloutEngine(
         {} if machine_factories is None else machine_factories,
-        {SHELL: ShellHarness(command_timeout=None), **({} if harnesses is None else harnesses)},
+        {SHELL: ToolHarness(command_timeout=None), **({} if harnesses is None else harnesses)},
         observer=observer,
     )
     return ModelEngine(rollout_engine, model.complete)

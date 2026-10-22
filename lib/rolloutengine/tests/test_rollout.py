@@ -69,8 +69,8 @@ from verifyit.spec import (
 from rolloutengine.cleanup import finish_cleanup
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.external import AgentHarness
-from rolloutengine.harness.shell import WORKSPACE_INSTRUCTION, ShellHarness, ToolCallResult, ToolContext
 from rolloutengine.harness.step import StepHarness
+from rolloutengine.harness.tools import WORKSPACE_INSTRUCTION, ToolCallResult, ToolContext, ToolHarness
 from rolloutengine.machines import task_machine
 from rolloutengine.models import (
     AttemptEnded,
@@ -295,7 +295,7 @@ def judge_url(judge_server) -> str:
 
 
 def shell_harnesses(**options) -> dict:
-    return {SHELL: ShellHarness(**{"command_timeout": None, **options})}
+    return {SHELL: ToolHarness(**{"command_timeout": None, **options})}
 
 
 @pytest.mark.parametrize("answer,reward", [("12", 1.0), ("13", 0.0)])
@@ -2803,7 +2803,7 @@ async def test_a_harness_runs_alone_on_a_local_machine():
     model = ReplayModel([shell_call("echo 12 > /workspace/answer"), {"role": "assistant", "content": "Done."}])
     async with task_machine(task, FixtureImageFactory(), machine_runtime(), cleanup_timeout=5) as machine:
         rollout = await harness_rollout(
-            ShellHarness(command_timeout=None), task, model.complete, machine=machine, limits=rollout_limits()
+            ToolHarness(command_timeout=None), task, model.complete, machine=machine, limits=rollout_limits()
         )
         written = await machine.run(Command(("cat", "/workspace/answer")))
     assert written.stdout == b"12\n"

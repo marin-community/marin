@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel
-from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.harness.tools import ToolHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec, TraceMode
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.shell import ShellToolConfig
@@ -50,12 +50,12 @@ def rollout_spec(
     )
 
 
-def shell_harness(name: str) -> ShellHarness:
+def shell_harness(name: str) -> ToolHarness:
     """Restore the shell configuration encoded in a task's harness name."""
     if not name.startswith(_SHELLBOX_PREFIX):
         raise ValueError(f"Not a Shellbox harness: {name!r}")
     settings = ShellHarnessSettings.model_validate_json(name[len(_SHELLBOX_PREFIX) :])
-    return ShellHarness(
+    return ToolHarness(
         command_timeout=settings.command_timeout,
         shell_tool=settings.shell_tool,
     )

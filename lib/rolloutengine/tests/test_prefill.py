@@ -16,7 +16,7 @@ from verifyit.spec import StructureClosureSpec
 
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.prefill import PrefillHarness
-from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.harness.tools import ToolHarness
 from rolloutengine.models import GradedRolloutInterrupted, ModelTurn
 from rolloutengine.test_support import ReplayModel, arithmetic_task, rollout_spec
 
@@ -117,7 +117,7 @@ async def test_finished_assistant_history_keeps_ordinary_chat_and_tool_harness_s
     assert chat_request(task)["messages"][-1]["role"] == "user"
     assert "extra_body" not in chat_request(task)
     model = ReplayModel([{"role": "assistant", "content": "12"}])
-    result = await RolloutEngine({}, {"shell": ShellHarness(command_timeout=None)}).run_task(
+    result = await RolloutEngine({}, {"shell": ToolHarness(command_timeout=None)}).run_task(
         rollout_spec(task, harness="shell"), model.complete
     )
     assert result.grade.reward == 1

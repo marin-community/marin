@@ -12,7 +12,7 @@ from taskcompendium.models import TaskSpec
 
 from rolloutengine.cleanup import _retain_task
 from rolloutengine.harness.core import HarnessContext, ModelSession
-from rolloutengine.harness.shell import task_prompt
+from rolloutengine.harness.tools import task_prompt
 from rolloutengine.models import ModelTurn, Prompt, RolloutEnded, RolloutLimits
 
 

@@ -12,7 +12,7 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Dataset
-from rolloutengine.harness.shell import task_prompt as marin_task_prompt
+from rolloutengine.harness.tools import task_prompt as marin_task_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task

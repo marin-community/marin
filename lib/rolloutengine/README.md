@@ -6,9 +6,9 @@ outputs, and its grade.
 
 ```python
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.harness.tools import ToolHarness
 
-engine = RolloutEngine(machine_factories, {"shellbox": ShellHarness(command_timeout=30)})
+engine = RolloutEngine(machine_factories, {"shellbox": ToolHarness(command_timeout=30)})
 result = await engine.run_task(spec, model)
 ```
 
@@ -23,10 +23,10 @@ result = await engine.run_task(spec, model)
   its key.
 - A harness does not grade. The engine grades the last conversation that has a model turn with the task's
   grader. A harness can attach its own step data, such as rewards for training, with `record(data=...)`.
-- Built-in harnesses: `ShellHarness` serves a shell tool on the task machine and host tools from registered
+- Built-in harnesses: `ToolHarness` serves a shell tool on the task machine and host tools from registered
   providers; `AgentHarness` runs an agent that owns its prompts and tool loop, for example an installed agent
   behind an HTTP proxy; `StepHarness` runs an `Episode` that returns the first prompt and handles each turn.
-  Without interactive tools, `ShellHarness` answers an ordinary conversation and finishes after one response.
+  Without interactive tools, `ToolHarness` answers an ordinary conversation and finishes after one response.
   `PrefillHarness` continues the final assistant text once. Select it explicitly for unfinished assistant
   messages; it can advertise final tool schemas but cannot execute tools.
 - `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the
