@@ -45,6 +45,8 @@ src/taskforge/
                                program_sdk.py: `sdk_exports`, the SDK's names for the loader, and
                                `load_program`;
                                infrastructure.py: host failures told apart from program failures;
+                               failure_text.py: the failure text an author reads, led by the program's
+                               frame that raised it, and `BuildCrash`;
                                template/standard.py: the standard six-step program;
                                glm_author.py: GlmAuthor and its prompts;
                                step_store.py: step keys, memos, the memo store and `memoized`;
@@ -385,7 +387,10 @@ candidate against the last draft the session built (`run_grade_candidate`), and 
 web when the proposal lists research. Every load of a program (`run_loader`, `run_build`, `submit`)
 goes through the session's `ProgramLoader`, by default `stage30_author.load_process` in a child process
 bounded by `LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the
-caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A host failure never
+caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A build whose step
+raised reaches the model as `failure_text`'s text: the program file, line, step and source line that
+raised it, the error, then its traceback's tail, the same from a build in a child process, whose
+`BuildCrash` carries the head the child wrote. A host failure never
 reaches the model: `run_build` and `run_grade_candidate` retry a `BuildInfrastructureFailure` up to
 `HOST_RETRIES` times with a doubling backoff (at once re-raising a cause in `HOST_REJECTIONS`), then
 re-raise it like `ModelUnavailable`, so the round ends without a record and spends no revision; a
@@ -511,7 +516,8 @@ workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it
     draft/                         task.json, provenance.json
-    build-failures/<k>.txt         the k-th build or author failure: its step and program line, then its traceback
+    build-failures/<k>.txt         the k-th build or author failure: where the program raised it (file, line,
+                                   step, source line) and the error, then its traceback's tail
     validation.json                the summary returned by validate
     decision.json                  the decision returned by review
 store/                             the step store: blobs/, workpieces/<workpiece_id>/steps/

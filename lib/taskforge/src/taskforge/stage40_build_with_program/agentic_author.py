@@ -17,23 +17,23 @@ program that never built in
 the session is refused once, with the loader's result and the reason, and accepted when submitted
 again; an accepted submission ends the loop through ``run_agent``'s ``stop`` callback.
 
-The model sees a build's failure (the step's message, or the crashing program line first) and a
-grade's diagnostics, never a host failure or an expired clock. A ``BuildInfrastructureFailure`` in
-``run_build`` or ``run_grade_candidate`` is run again up to ``HOST_RETRIES`` times with a doubling
-backoff from ``HOST_RETRY_BACKOFF`` inside the tool, at once re-raised for a cause in
-``HOST_REJECTIONS``, and then re-raised like ``ModelUnavailable``: the author call ends without a
-record, so it spends no revision and a relaunch hands the workspace to a fresh session. A
-``BuildExpired`` in ``run_build`` (a wall, step or grader clock) is re-raised at once, without a
-retry, and ends the call the same way, so the driver holds the workpiece as abandoned instead of asking
-for a rewrite. An ``OSError`` raised outside the program's frames (``infrastructure.storage_fault``: the
-step store failed, or a blob or memo is missing or corrupt) is re-raised at once too, as the
-coordinator's build stage does, since no program change repairs the store. A failed build still writes
-its ``run.json``, ``status: "infrastructure"`` for the host's, ``status: "expired"`` with its ``clock``
-for an expiry and ``status: "storage"`` for a storage fault. A loader child the host killed
-(``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``. A proposal whose
-solver machine the session's services cannot provide (``infrastructure.machine_available``: a
-container on a host without an image builder, a package machine without the local backend) raises
-before the session starts, so the author never adapts the task to the host.
+The model sees a build's failure (the step's message, or for a crash the program's frame that raised it and
+the error, then the traceback's tail) and a grade's diagnostics, never a host failure or an expired clock. A
+``BuildInfrastructureFailure`` in ``run_build`` or ``run_grade_candidate`` is run again up to
+``HOST_RETRIES`` times with a doubling backoff from ``HOST_RETRY_BACKOFF`` inside the tool, at once
+re-raised for a cause in ``HOST_REJECTIONS``, and then re-raised like ``ModelUnavailable``: the author call
+ends without a record, so it spends no revision and a relaunch hands the workspace to a fresh session. A
+``BuildExpired`` in ``run_build`` (a wall, step or grader clock) is re-raised at once, without a retry, and
+ends the call the same way, so the driver holds the workpiece as abandoned instead of asking for a rewrite.
+An ``OSError`` raised outside the program's frames (``infrastructure.storage_fault``: the step store failed,
+or a blob or memo is missing or corrupt) is re-raised at once too, as the coordinator's build stage does,
+since no program change repairs the store. A failed build still writes its ``run.json``,
+``status: "infrastructure"`` for the host's, ``status: "expired"`` with its ``clock`` for an expiry and
+``status: "storage"`` for a storage fault. A loader child the host killed (``LoaderProcessFailed``) raises the same
+failure with cause ``BUILD_PROCESS``. A proposal whose solver machine the session's services cannot provide
+(``infrastructure.machine_available``: a container on a host without an image builder, a package machine
+without the local backend) raises before the session starts, so the author never adapts the task to the
+host.
 
 ``AgenticAuthor`` is the coordinator's ``Author``: each call runs sessions in the context's round until
 one submits, and returns the submitted file's bytes as the program's source, which the coordinator
@@ -72,7 +72,7 @@ import shutil
 import time
 import traceback
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -107,6 +107,7 @@ from taskforge.stage40_build_with_program.context import (
     BuildInfrastructureFailure,
     RLEnvBuildContext,
 )
+from taskforge.stage40_build_with_program.failure_text import failure_head, failure_text
 from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
 from taskforge.stage40_build_with_program.infrastructure import (
     HOST_REJECTIONS,
@@ -384,12 +385,18 @@ def _traceback_tail(error: BaseException) -> str:
     return "".join(traceback.format_exception(error))[-TOOL_OUTPUT_CHARS:]
 
 
-def _failure_text(error: Exception) -> tuple[str, str | None, str]:
+def _failed_build(error: Exception, path: str, source: str, steps: Collection[str]) -> tuple[str, str | None, str]:
     """A failed in-session build the host did not fail and no clock ended, as (status, step, text) for ``run.json``
-    and the model."""
+    and the model.
+
+    A ``BuildFailure`` is its step's message. Any other error is a crash, whose text leads with the frame of
+    the program at ``path`` that raised it, then the error (``failure_text.failure_head``), above the tail of
+    its traceback.
+    """
     if isinstance(error, BuildFailure):
         return "build_failure", error.step, error.message
-    return "crash", None, _traceback_tail(error)
+    head = failure_head(error, {program_file(source)}, steps, shown_as=path)
+    return "crash", None, failure_text(head, error, TOOL_OUTPUT_CHARS)
 
 
 class SessionStop(StrEnum):
@@ -656,7 +663,7 @@ class AuthorSession:
                 _write_json(run_dir / RUN_FILE, record)
                 self.builds.append(record)
                 raise
-            status, step, text = _failure_text(error)
+            status, step, text = _failed_build(error, raw, source, program.steps)
             record |= {"status": status, "step": step}
             record |= {"wall": time.monotonic() - started, "steps": ledger_steps(ledger, offset), "text": text}
             _write_json(run_dir / RUN_FILE, record)
@@ -825,7 +832,8 @@ class AuthorSession:
                 "Build the task with a program file, exactly as the build stage will: the real model, machines and step "
                 "store. Steps whose source and inputs are unchanged load their stored output. path: the program "
                 "file; invalidate: optional step names to rerun even when stored. Returns each step's cache status "
-                "and wall, then the failure (the step's message, or the crashing program line first) or a digest "
+                "and wall, then the failure (the step's message, or for a crash the program file, line and source line "
+                "that raised it, the error and the traceback's tail) or a digest "
                 "of the built task. After a build the library grades the empty answer itself: a reward above the "
                 "grader's declared rejection_ceiling fails the build in the grader step.",
                 _schema({"path": PATH_ARGUMENT, "invalidate": {"type": "array", "items": {"type": "string"}}}, ["path"]),

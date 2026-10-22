@@ -538,27 +538,28 @@ async def test_a_build_failure_costs_a_revision_and_the_next_one_rejects_the_wor
     revision = author.revisions[-1]
     assert revision is not None
     assert revision.detail.startswith(
-        "BuildFailure: the numbers do not multiply to the answer at broken, program line "
-        + str(inspect.getsourcelines(broken.fn)[1] + 2)
-        + ': raise BuildFailure("the numbers do not multiply to the answer")\n'
+        f"program.py:{inspect.getsourcelines(broken.fn)[1] + 2}, in step broken: "
+        'raise BuildFailure("the numbers do not multiply to the answer")\n'
+        "BuildFailure: the numbers do not multiply to the answer\n\n"
     )
 
 
 NUMBERS_FILE = 'InlineFile(content_base64=base64.b64encode(b"6 7\\n").decode())'
 
 
-def program_line(source: str, text: str) -> str:
-    """The ``program line N: <line>`` part of a failure's first line, for the line of ``source`` holding ``text``."""
+def program_frame(source: str, text: str, step: str) -> str:
+    """The program frame that leads a failure's head, for the line of ``source`` holding ``text`` in ``step``."""
     lines = source.splitlines()
     number = next(number for number, line in enumerate(lines, start=1) if text in line)
-    return f"program line {number}: {lines[number - 1].strip()}"
+    return f"program.py:{number}, in step {step}: {lines[number - 1].strip()}"
 
 
-async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
-    """Run a workpiece authoring ``source`` to its rejection, and return the first line of its failure text.
+async def failure_heads(root: Path, source: str) -> tuple[str, str, str]:
+    """Run a workpiece authoring ``source`` to its rejection, and return the head of its failure text.
 
-    It returns the line from ``build-failures/1.txt``, from the revision detail the second author
-    call received, and from the ``failure`` attr of the first ``BUILD_FAILED`` event.
+    It returns the head, the text before the first blank line, from ``build-failures/1.txt`` and from
+    the revision detail the second author call received, and the ``failure`` attr of the first
+    ``BUILD_FAILED`` event.
     """
     author = SourceAuthor(source)
     log = InMemoryEventLog()
@@ -571,7 +572,7 @@ async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
     text = (root / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR / "1.txt").read_text()
     assert text == revision.detail
     built = next(event for event in log.events() if event.kind == "build_failed")
-    return text.splitlines()[0], revision.detail.splitlines()[0], built.attrs["failure"]
+    return text.partition("\n\n")[0], revision.detail.partition("\n\n")[0], built.attrs["failure"]
 
 
 async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp_path):
@@ -580,10 +581,11 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
     source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)").replace(
         declared, declared + "    global encoded_numbers\n", 1
     )
-    expected = "NameError: name 'encoded_numbers' is not defined at numbers, " + program_line(
-        source, "content_base64=encoded_numbers"
+    expected = (
+        program_frame(source, "content_base64=encoded_numbers", "numbers")
+        + "\nNameError: name 'encoded_numbers' is not defined"
     )
-    assert await failure_first_lines(tmp_path, source) == (expected,) * 3
+    assert await failure_heads(tmp_path, source) == (expected,) * 3
 
 
 async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
@@ -591,19 +593,33 @@ async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
     missing = '    raise FileNotFoundError(2, "No such file or directory", "/workspace/does-not-exist.txt")\n'
     source = SOURCE.replace("    return TaskResource(\n", missing + "    return TaskResource(\n", 1)
     expected = (
-        "FileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt' at numbers, "
-        + program_line(source, "does-not-exist")
+        program_frame(source, "does-not-exist", "numbers")
+        + "\nFileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt'"
     )
-    assert await failure_first_lines(tmp_path, source) == (expected,) * 3
+    assert await failure_heads(tmp_path, source) == (expected,) * 3
 
 
 async def test_a_library_error_called_from_a_step_still_reports_the_program_line(tmp_path):
     source = SOURCE.replace(NUMBERS_FILE, '"6 7"')
     assert source != SOURCE
-    first_line, detail_line, attr = await failure_first_lines(tmp_path, source)
-    assert first_line == detail_line == attr
-    assert first_line.startswith("ValidationError: 1 validation error for TaskResource in library code at pydantic/")
-    assert first_line.endswith(", called from numbers, " + program_line(source, "return TaskResource("))
+    head, detail_head, attr = await failure_heads(tmp_path, source)
+    assert head == detail_head == attr
+    frame, library, error = head.split("\n")
+    assert frame == program_frame(source, "return TaskResource(", "numbers")
+    assert library.startswith("raised in library code at pydantic/")
+    assert error == "ValidationError: 1 validation error for TaskResource"
+
+
+async def test_a_step_failing_under_two_dependents_reports_its_own_program_line(tmp_path):
+    """Both later steps await ``numbers``; its failure keeps the frame where the step raised it."""
+    raising = '    rows = {}["rows"]\n    return TaskResource(\n'
+    source = SOURCE.replace("    return TaskResource(\n", raising, 1).replace(
+        "async def grader(context: RLEnvBuildContext)",
+        "async def grader(context: RLEnvBuildContext, numbers: TaskResource)",
+    )
+    assert source.count('{}["rows"]') == 1 and "numbers: TaskResource) -> Grader" in source
+    head, detail_head, attr = await failure_heads(tmp_path, source)
+    assert head == detail_head == attr == program_frame(source, '{}["rows"]', "numbers") + "\nKeyError: 'rows'"
 
 
 CUT_REPLY = Completion(

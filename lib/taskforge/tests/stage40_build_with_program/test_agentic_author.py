@@ -549,6 +549,32 @@ async def test_an_os_error_the_program_raises_reaches_the_author(tmp_path, autho
     assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] != "storage"
 
 
+async def test_a_crashing_step_leads_the_build_result_with_the_program_line_that_raised_it(tmp_path, author):
+    """``sources`` raises while two later steps await it; the result names its line before any traceback frame."""
+    raising = '    return Sources(notes="", findings=({}["rows"],))'
+    crashing = PROGRAM.replace('    return Sources(notes="", findings=())', raising).replace(
+        "assemble(context: RLEnvBuildContext, grader: Grader)",
+        "assemble(context: RLEnvBuildContext, sources: Sources, grader: Grader)",
+    )
+    line = crashing.splitlines().index(raising) + 1
+    workpiece = tmp_path / "workpiece"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "draft.py", "content": crashing})),
+        turn(("run_build", {"path": "draft.py"})),
+        turn(("submit", {"path": "draft.py", "notes": "n"})),
+        turn(("submit", {"path": "draft.py", "notes": "n"})),
+    )
+    await author(workpiece, model)
+
+    built = tool_outputs(model)[1]
+    preamble, _, failure = built.partition("\n\n")
+    assert preamble.startswith("build failed (crash)\nsteps: ")
+    head, _, trace = failure.partition("\n\n")
+    assert head == f"draft.py:{line}, in step sources: {raising.strip()}\nKeyError: 'rows'"
+    assert trace.startswith("Traceback (most recent call last)") and raising.strip() in trace
+    assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["text"] == failure
+
+
 async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_reference(tmp_path, author):
     model = ScriptedModel(
         turn(("read_file", {"path": "../workpiece.json"}), ("write_file", {"path": "reference/sdk.md", "content": "x"})),
