@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Load the capability catalog as a ``CapabilityIdea`` per capability, and build each idea's prompt record.
+"""Load the capability catalog as a ``CapabilityIdea`` per capability.
 
 A catalog file holds a ``catalog_version``, a list of ``curricula`` and an optional
 ``learning_progression`` of prerequisite edges. Each entry in ``curricula`` wraps a ``curriculum``
@@ -12,6 +12,7 @@ with a ``subject_id``, a ``subject_name`` and ``sections``. The loader turns eve
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
+from taskforge.capability import CapabilityIdea
 from taskforge.content_hash import digest
 
 CAPABILITY_KIND = "capability"
@@ -68,25 +69,6 @@ class CatalogDocument(BaseModel):
     learning_progression: Progression | None = None
 
 
-class CapabilityIdea(BaseModel):
-    """A catalog capability with the learning-progression edges leading into it.
-
-    ``capability`` and ``prerequisite_edges`` hold the catalog's JSON objects as read, because the
-    prompt shows them to the model verbatim. ``capability_hash`` is the ``taskforge.content_hash.digest``
-    of ``capability``.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    capability_id: str
-    subject_id: str
-    subject_name: str
-    catalog_version: str
-    capability: dict[str, object]
-    prerequisite_edges: tuple[dict[str, object], ...]
-    capability_hash: str
-
-
 def example_catalog_path() -> Path:
     """The path of this package's example catalog, ``data/example_catalog.json``."""
     return Path(__file__).resolve().parent / "data" / EXAMPLE_CATALOG_FILE
@@ -127,21 +109,3 @@ def load_capability_ideas(path: Path) -> dict[str, CapabilityIdea]:
                 capability_hash=digest(record),
             )
     return ideas
-
-
-def capability_idea_record(idea: CapabilityIdea) -> dict[str, object]:
-    """Build the JSON object the prompt shows for ``idea``: its catalog identifiers and capability record.
-
-    The record gets the prerequisite edges under ``learning_progression``.
-    """
-    return {
-        "capability_id": idea.capability_id,
-        "subject_id": idea.subject_id,
-        "subject_name": idea.subject_name,
-        "catalog_version": idea.catalog_version,
-        "capability_hash": idea.capability_hash,
-        "record": {
-            **idea.capability,
-            "learning_progression": {"catalog_version": idea.catalog_version, "edges": list(idea.prerequisite_edges)},
-        },
-    }

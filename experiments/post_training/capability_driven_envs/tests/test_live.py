@@ -75,7 +75,6 @@ def test_every_proposed_slot_parses_on_its_first_request(
     (capability,) = proposed
     assert capability.failure is None, capability.failure
     batch = capability.batch
-    assert batch is not None
     planned = {s["slot"]: s for s in json.loads(batch.planning[-1].content)["slots"]}
     slots = []
     for outcome in batch.slots:

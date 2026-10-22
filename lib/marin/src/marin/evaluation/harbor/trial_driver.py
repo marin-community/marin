@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Validate and execute Harbor policies inside the pinned external environment."""
+"""Validate and execute Harbor policies inside its isolated runtime environment."""
 
 import asyncio
 import hashlib
@@ -33,6 +33,7 @@ from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
+from rigging.config_discovery import find_project_root
 from rigging.filesystem.storage_path import StoragePath
 
 from marin.evaluation.harbor.agent_context import (
@@ -41,12 +42,13 @@ from marin.evaluation.harbor.agent_context import (
     MODEL_INFO_KEY,
     reconciled_model_info,
 )
-from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
+from marin.evaluation.harbor.provenance import vendored_harbor_source
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
 _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
+_OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 _PI_ACP_REGISTRY_ID = "pi-acp"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
@@ -265,11 +267,15 @@ def _agent_config(
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
     if agent.name == _OPENCODE_AGENT:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
+    runtime_env = agent.env
+    if agent.name is not None and is_acp_registry_shorthand(agent.name):
+        runtime_env = {**agent.env, _OPENAI_BASE_URL_ENV: endpoint_url}
     return AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
             "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
             "kwargs": runtime_kwargs,
+            "env": runtime_env,
         },
         extra="forbid",
     )
@@ -381,12 +387,16 @@ def _stable_policy_json(config: JobConfig) -> str:
 
 
 def _harbor_config_commit() -> str:
-    distribution_name = importlib.metadata.packages_distributions()["harbor_config"][0]
-    direct_url = json.loads(importlib.metadata.distribution(distribution_name).read_text("direct_url.json") or "{}")
-    commit = direct_url.get("vcs_info", {}).get("commit_id")
-    if not isinstance(commit, str) or len(commit) != FULL_GIT_COMMIT_LENGTH:
-        raise ValueError("Harbor distribution does not identify its pinned commit")
-    return commit
+    workspace_root = find_project_root(Path(__file__))
+    if workspace_root is None:
+        raise ValueError("Harbor driver requires a Marin workspace to locate its vendored source")
+    project = workspace_root / "vendor/harbor"
+    direct_url = json.loads(importlib.metadata.distribution("harbor").read_text("direct_url.json") or "{}")
+    if direct_url.get("url") != project.resolve().as_uri() or not Path(
+        inspect.getfile(JobConfig)
+    ).resolve().is_relative_to(project / "src"):
+        raise ValueError(f"Harbor distribution must use the vendored source at {project}")
+    return vendored_harbor_source(project).commit
 
 
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:

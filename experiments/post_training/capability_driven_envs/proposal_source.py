@@ -25,7 +25,7 @@ repair request under the same regex. The repair request keeps the prior reply as
 and quotes the parse error. A slot the plan marks null becomes a proposal with ``null_reason`` set
 and costs no model call.
 
-Both prompts quote ``catalog.capability_idea_record(idea)``.
+Both prompts quote ``taskforge.capability.capability_idea_record(idea)``.
 """
 
 import asyncio
@@ -36,6 +36,7 @@ from textwrap import indent
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy, Message
@@ -63,8 +64,6 @@ from taskforge.stage10_proposal.model import (
     source_text,
 )
 from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal
-
-from experiments.post_training.capability_driven_envs.catalog import CapabilityIdea, capability_idea_record
 
 CUT_OFF = "cut off by the output limit"
 SLOT_MODEL_ERRORS = (ModelUnavailable, ModelRequestRejected)
@@ -476,6 +475,19 @@ def null_slot_proposal(idea: CapabilityIdea, slot: PlannedSlot) -> SlotProposal:
     return SlotProposal(slot.slot, parse(render(TaskProposal(header=header, body=body))), (), (), None)
 
 
+def plan_request(idea: CapabilityIdea, n: int, environments: frozenset[Environment]) -> tuple[Message, ...]:
+    """Build the first planning request for ``n`` slots on a host that runs ``environments``, as sent.
+
+    It is the system prompt, ``plan_prompt``, and the final user turn holding the plan type's field
+    instruction, which ``complete_structured`` appends to the messages it is given.
+    """
+    return (
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": plan_prompt(idea, n, environments)},
+        {"role": "user", "content": schema_instruction(slot_plan_type(n, environments))},
+    )
+
+
 async def plan_slots(
     model: ModelClient, policy: LLMPolicy, idea: CapabilityIdea, n: int, environments: frozenset[Environment]
 ) -> PlannedPortfolio:
@@ -484,15 +496,10 @@ async def plan_slots(
     Raises:
         StructuredOutputError: the output limit cut the plan off, or every reply failed validation.
     """
-    plan_type = slot_plan_type(n, environments)
-    messages: list[Message] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": plan_prompt(idea, n, environments)},
-    ]
-    result = await model.complete_structured(messages, plan_type, policy)
-    # The library appends the field instruction as the final user turn; the record keeps what was sent.
-    instruction: Message = {"role": "user", "content": schema_instruction(plan_type)}
-    return PlannedPortfolio(result.value, (*messages, instruction), result.completions)
+    request = plan_request(idea, n, environments)
+    # complete_structured appends the field instruction itself, so the call gets the turns before it.
+    result = await model.complete_structured(list(request[:-1]), slot_plan_type(n, environments), policy)
+    return PlannedPortfolio(result.value, request, result.completions)
 
 
 async def author_proposal(

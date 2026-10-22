@@ -15,7 +15,7 @@ from types import MappingProxyType
 from typing import Any, Protocol
 
 from pydantic import JsonValue
-from shellbox.machine import Machine
+from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine
 from taskcompendium.chat import assistant_message
 from taskcompendium.models import (
     ANSWER_CALL_NAME,
@@ -177,6 +177,8 @@ class ShellHarness:
 
     command_timeout: float | None
     """The limit of each shell command. A timed-out command returns an observation, and the model can continue."""
+    output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES
+    """The most bytes of stdout, and of stderr, that a shell command returns to the model."""
     shell_tool: ShellToolConfig = DEFAULT_SHELL_TOOL
     """The shell interface for tasks that declare the shell capability without binding a tool of their own."""
     tools: Mapping[str, ToolProvider] = NO_TOOLS
@@ -185,6 +187,9 @@ class ShellHarness:
     def __post_init__(self) -> None:
         if self.command_timeout is not None and not (math.isfinite(self.command_timeout) and self.command_timeout > 0):
             raise ValueError(f"The command timeout must be a positive, finite number: {self.command_timeout!r}")
+        # Machines treat a negative limit differently, for example ShellSim slices with it and returns most of a stream.
+        if self.output_limit_bytes <= 0:
+            raise ValueError(f"The output limit must be a positive number of bytes: {self.output_limit_bytes!r}")
 
     def check(self, task: TaskSpec, limits: RolloutLimits) -> None:
         shell_tool = resolve_shell_tool(task, self.shell_tool)
@@ -209,7 +214,9 @@ class ShellHarness:
         sessions: dict[str, ToolProviderSession] = {}
         tools: dict[str, ToolProviderSession] = {}
         if machine is not None and shell_tool is not None:
-            tools[shell_tool.definition.name] = _ShellToolSession(machine, shell_tool, self.command_timeout)
+            tools[shell_tool.definition.name] = _ShellToolSession(
+                machine, shell_tool, self.command_timeout, self.output_limit_bytes
+            )
         for name, bound in provider_tools.items():
             if bound.requirement_name not in sessions:
                 provider_session = await bound.provider.open(ToolContext(machine, bound.requirement))
@@ -229,14 +236,18 @@ class ShellHarness:
 class _ShellToolSession:
     """Serve the shell tool as a ``ToolProviderSession`` that runs commands on the task machine."""
 
-    def __init__(self, machine: Machine, tool: BoundShellTool, command_timeout: float | None):
+    def __init__(self, machine: Machine, tool: BoundShellTool, command_timeout: float | None, output_limit_bytes: int):
         self.machine = machine
         self.tool = tool
         self.command_timeout = command_timeout
+        self.output_limit_bytes = output_limit_bytes
 
     async def call(self, name: str, arguments: dict[str, JsonValue]) -> ToolCallResult:
         call = FunctionCall(name=name, arguments=arguments)
-        return ToolCallResult(await run_shell_call(self.machine, call, self.tool, timeout=self.command_timeout))
+        observation = await run_shell_call(
+            self.machine, call, self.tool, timeout=self.command_timeout, output_limit_bytes=self.output_limit_bytes
+        )
+        return ToolCallResult(observation)
 
     async def close(self) -> None:
         pass

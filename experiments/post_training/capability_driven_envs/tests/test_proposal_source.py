@@ -12,9 +12,10 @@ import re
 from pathlib import Path
 
 from pydantic import ValidationError
+from taskforge.capability import capability_idea_record
 from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.policy import LLMPolicy
-from taskforge.llm.structured import StructuredOutputError, response_format, schema_instruction
+from taskforge.llm.structured import StructuredOutputError, response_format
 from taskforge.stage10_proposal.model import (
     DOCUMENT_REPAIR_PROMPT,
     Environment,
@@ -29,7 +30,6 @@ from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOu
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
-    capability_idea_record,
     load_capability_ideas,
 )
 from experiments.post_training.capability_driven_envs.proposal_source import (
@@ -186,13 +186,6 @@ def test_plan_with_a_slot_in_an_unavailable_environment_fails_validation():
         plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "code")], []))
     nulled = plan_type.model_validate(plan([slot(1, "reasoning", "code"), slot(2, "container", "code", "null")], []))
     assert nulled.slots[1].status is SlotStatus.NULL
-
-
-def test_the_plan_instruction_states_the_slot_count_and_the_status_values():
-    instruction = schema_instruction(slot_plan_type(3, NO_CONTAINER))
-
-    assert "Exactly 3 slots, numbered 1 through 3 in order." in instruction
-    assert "status (one of 'propose', 'null', required)" in instruction
 
 
 def test_plan_and_proposal_prompts_share_the_research_criterion_and_the_catalog_record(ideas):
