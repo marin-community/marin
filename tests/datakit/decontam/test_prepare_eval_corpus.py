@@ -294,33 +294,6 @@ def test_lmh_manifest_is_immutable_within_a_corpus_version(tmp_path, monkeypatch
     assert manifest_path.read_bytes() == original_bytes
 
 
-def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monkeypatch):
-    task = types.SimpleNamespace(
-        test_docs=lambda: [{"question": "What is two plus two?", "answer": "4"}],
-        validation_docs=lambda: [],
-        training_docs=lambda: [],
-        doc_to_text=lambda doc: doc["question"],
-        doc_to_target=lambda doc: doc["answer"],
-    )
-    lm_eval = types.ModuleType("lm_eval")
-    lm_eval_tasks = types.ModuleType("lm_eval.tasks")
-    lm_eval_tasks.get_task_dict = lambda _names: {"example-task": task}
-    lm_eval.tasks = lm_eval_tasks
-    monkeypatch.setitem(sys.modules, "lm_eval", lm_eval)
-    monkeypatch.setitem(sys.modules, "lm_eval.tasks", lm_eval_tasks)
-    monkeypatch.setattr(prepare_eval_corpus, "marin_prefix", lambda: str(tmp_path))
-    monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
-    monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["example-task"])
-    monkeypatch.setattr(prepare_eval_corpus, "REQUIRED_LMH_TASKS", ("example-task",))
-
-    manifest = prepare_eval_corpus._prepare_lmh()
-
-    artifact_path = tmp_path / prepare_eval_corpus.EVALS_RELATIVE / "lmh/example-task/eval.parquet"
-    assert artifact_path.exists()
-    assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 1}]
-    assert manifest["required_tasks"] == {"example-task": ["example-task"]}
-
-
 def _fake_task(docs: list[dict]) -> types.SimpleNamespace:
     return types.SimpleNamespace(
         test_docs=lambda: docs,
@@ -329,6 +302,33 @@ def _fake_task(docs: list[dict]) -> types.SimpleNamespace:
         doc_to_text=lambda doc: doc["question"],
         doc_to_target=lambda doc: doc["answer"],
     )
+
+
+def _use_fake_lm_eval(monkeypatch, tmp_path, get_task_dict, task_names: list[str], required: tuple[str, ...]) -> None:
+    lm_eval = types.ModuleType("lm_eval")
+    lm_eval_tasks = types.ModuleType("lm_eval.tasks")
+    lm_eval_tasks.get_task_dict = get_task_dict
+    lm_eval.tasks = lm_eval_tasks
+    monkeypatch.setitem(sys.modules, "lm_eval", lm_eval)
+    monkeypatch.setitem(sys.modules, "lm_eval.tasks", lm_eval_tasks)
+    monkeypatch.setattr(prepare_eval_corpus, "marin_prefix", lambda: str(tmp_path))
+    monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
+    monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: task_names)
+    monkeypatch.setattr(prepare_eval_corpus, "REQUIRED_LMH_TASKS", required)
+
+
+def test_lmh_artifacts_are_stored_below_the_versioned_corpus_root(tmp_path, monkeypatch):
+    task = _fake_task([{"question": "What is two plus two?", "answer": "4"}])
+    _use_fake_lm_eval(
+        monkeypatch, tmp_path, lambda _names: {"example-task": task}, ["example-task"], required=("example-task",)
+    )
+
+    manifest = prepare_eval_corpus._prepare_lmh()
+
+    artifact_path = tmp_path / prepare_eval_corpus.EVALS_RELATIVE / "lmh/example-task/eval.parquet"
+    assert artifact_path.exists()
+    assert manifest["artifacts"] == [{"task": "example-task", "artifact": "example-task/eval.parquet", "records": 1}]
+    assert manifest["required_tasks"] == {"example-task": ["example-task"]}
 
 
 def _load_required_group(names: list[str]) -> dict:
@@ -355,16 +355,9 @@ def _reject_required_group(names: list[str]) -> dict:
     ids=["task-load-fails", "one-leaf-has-no-docs"],
 )
 def test_lmh_required_task_failure_does_not_seal_manifest(tmp_path, monkeypatch, get_task_dict):
-    lm_eval = types.ModuleType("lm_eval")
-    lm_eval_tasks = types.ModuleType("lm_eval.tasks")
-    lm_eval_tasks.get_task_dict = get_task_dict
-    lm_eval.tasks = lm_eval_tasks
-    monkeypatch.setitem(sys.modules, "lm_eval", lm_eval)
-    monkeypatch.setitem(sys.modules, "lm_eval.tasks", lm_eval_tasks)
-    monkeypatch.setattr(prepare_eval_corpus, "marin_prefix", lambda: str(tmp_path))
-    monkeypatch.setattr(prepare_eval_corpus, "patch_hf_dataset_loading", lambda: None)
-    monkeypatch.setattr(prepare_eval_corpus, "_lmh_task_names", lambda: ["optional-task", "required-group"])
-    monkeypatch.setattr(prepare_eval_corpus, "REQUIRED_LMH_TASKS", ("required-group",))
+    _use_fake_lm_eval(
+        monkeypatch, tmp_path, get_task_dict, ["optional-task", "required-group"], required=("required-group",)
+    )
 
     with pytest.raises(ValueError, match="required-group"):
         prepare_eval_corpus._prepare_lmh()
