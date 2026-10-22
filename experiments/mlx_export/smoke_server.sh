@@ -94,13 +94,13 @@ case "$CONTENT" in *18*|*rain*) pass "5 tool round trip answered from result" ;;
 
 # 6. streaming: reasoning deltas and tool-call deltas
 STREAM=$(chat '{"model":"default_model","max_tokens":2048,"stream":true,"messages":[{"role":"user","content":"Is 391 prime? Think carefully."}]}')
-echo "$STREAM" | grep -q '"reasoning"' && pass "6a streaming reasoning deltas" || fail "no reasoning delta in stream"
+grep -q '"reasoning"' <<<"$STREAM" && pass "6a streaming reasoning deltas" || fail "no reasoning delta in stream"
 # An answer given without thinking streams as content, as with vLLM's grug reasoning parser.
 STREAM=$(chat '{"model":"default_model","max_tokens":256,"stream":true,"messages":[{"role":"user","content":"Name the capital of France in one word."}]}')
 CONTENT=$(echo "$STREAM" | sed -n 's/^data: //p' | grep -v '^\[DONE\]' | jq -r '.choices[0].delta.content // empty' | tr -d '\n')
 [ -n "$CONTENT" ] && pass "6c streamed answer is content ($CONTENT)" || fail "streamed answer has no content: $(echo "$STREAM" | head -c 400)"
 STREAM=$(chat "{\"model\":\"default_model\",\"max_tokens\":512,\"stream\":true,\"chat_template_kwargs\":{\"enable_thinking\":false},\"tools\":[$TOOLS],\"messages\":[{\"role\":\"user\",\"content\":\"Weather in Paris?\"}]}")
-echo "$STREAM" | grep -q '"tool_calls"' && pass "6b streaming tool-call deltas" || fail "no tool_calls delta in stream"
+grep -q '"tool_calls"' <<<"$STREAM" && pass "6b streaming tool-call deltas" || fail "no tool_calls delta in stream"
 
 # 7. ~20k token prompt completes; report prefill/decode tok/s and RSS
 PROMPT_FILE=$WORK/long_prompt.txt
