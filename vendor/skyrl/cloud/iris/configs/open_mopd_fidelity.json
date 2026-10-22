@@ -1,0 +1,195 @@
+{
+  "schema_version": 4,
+  "source": {
+    "repository": "https://github.com/BytedTsinghua-SIA/Open-MOPD.git",
+    "commit": "4809a96cf85a869106ff0ff3f37d0a51e12010ae"
+  },
+  "artifacts": {
+    "student": {
+      "repository": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-MixSFT",
+      "revision": "c9e7bad031667828656ead188d7e8ea162c048a4",
+      "lfs_files": [
+        {
+          "path": "model.safetensors",
+          "size": 6675571824,
+          "sha256": "b5d4c1d8ae80f5b9086ef460ff1b63746e729beea7571b769f438ebd1d29f1c3"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17208861,
+          "sha256": "ab4da6b2aa68247e9c0fa9b97fc7fcc796505038d01f7e144522a65ce0dbd2e5"
+        }
+      ]
+    },
+    "teachers": [
+      {
+        "domain": "math",
+        "repository": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Math",
+        "revision": "5e901bb626b69d711074d2832c41ce1aa4232da8",
+        "lfs_files": [
+          {
+            "path": "model-00001-of-00002.safetensors",
+            "size": 4976845048,
+            "sha256": "58a59f697a741fd6116a2a54113ff92296dd6664fd2ab9d9e5a320d6a7e962e6"
+          },
+          {
+            "path": "model-00002-of-00002.safetensors",
+            "size": 1698726680,
+            "sha256": "3591afca018294909ede299f6f4b1b4ff10e9a5305e81b082b71fd2d5bc72b88"
+          },
+          {
+            "path": "tokenizer.json",
+            "size": 17208861,
+            "sha256": "ab4da6b2aa68247e9c0fa9b97fc7fcc796505038d01f7e144522a65ce0dbd2e5"
+          }
+        ]
+      },
+      {
+        "domain": "code",
+        "repository": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-Code",
+        "revision": "e2ce9beec52381350edcdaefebfd08ea67c21b42",
+        "lfs_files": [
+          {
+            "path": "model-00001-of-00002.safetensors",
+            "size": 4961052512,
+            "sha256": "2efde267ed92049a47b2aef12e8e35d56682c9ce9b7d1ca0b9dc86d657147b33"
+          },
+          {
+            "path": "model-00002-of-00002.safetensors",
+            "size": 1714519216,
+            "sha256": "d86610e738e4a14c59ff7ed321e42a9bfb590da6a7c69fd93dd8837f4e1e301b"
+          },
+          {
+            "path": "tokenizer.json",
+            "size": 17208861,
+            "sha256": "ab4da6b2aa68247e9c0fa9b97fc7fcc796505038d01f7e144522a65ce0dbd2e5"
+          }
+        ]
+      },
+      {
+        "domain": "if",
+        "repository": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-RL-IF",
+        "revision": "8948051a805883e2db988cae4522de3c29d1d112",
+        "lfs_files": [
+          {
+            "path": "model-00001-of-00002.safetensors",
+            "size": 4501789360,
+            "sha256": "419342e9e4833496a02546266d6f309d9a27ecaa325dc232bf0ed1b320f73aa0"
+          },
+          {
+            "path": "model-00002-of-00002.safetensors",
+            "size": 2173782392,
+            "sha256": "c1ed4f250043e0eb92801e01562ecc948106753f47340fa1c6ccdce5bf6e7a45"
+          },
+          {
+            "path": "tokenizer.json",
+            "size": 17208861,
+            "sha256": "ab4da6b2aa68247e9c0fa9b97fc7fcc796505038d01f7e144522a65ce0dbd2e5"
+          }
+        ]
+      }
+    ],
+    "evaluation_reference": {
+      "repository": "BytedTsinghua-SIA/Open-MOPD-SmolLM3-3B-Final",
+      "revision": "228a146a5d95f00136057347ac4810e6635061b6",
+      "lfs_files": [
+        {
+          "path": "model-00001-of-00002.safetensors",
+          "size": 4847832520,
+          "sha256": "600b2761f601e75bdf1c5ca87190d41b912d52f7e1840747f5bbb1b702d9cfde"
+        },
+        {
+          "path": "model-00002-of-00002.safetensors",
+          "size": 1827739232,
+          "sha256": "58d4889ed8004a7cc8632a32dc90fb6782fe2e6b6b57b5805bffd6ebea7ad80c"
+        },
+        {
+          "path": "tokenizer.json",
+          "size": 17208861,
+          "sha256": "ab4da6b2aa68247e9c0fa9b97fc7fcc796505038d01f7e144522a65ce0dbd2e5"
+        }
+      ]
+    },
+    "dataset": {
+      "repository": "BytedTsinghua-SIA/Open-MOPD-Data",
+      "revision": "9e897efe3257599d4300e2d5ee865a1cc714af87",
+      "path": "rl_prompt_mix/train.parquet",
+      "size": 935454839,
+      "sha256": "5243f3e61e7c0841a102389e509bd0822405c27f949e4d04cb7dd1615d4e5b2e"
+    },
+    "validation_dataset": {
+      "repository": "BytedTsinghua-SIA/Open-MOPD-Data",
+      "revision": "9e897efe3257599d4300e2d5ee865a1cc714af87",
+      "path": "eval/math/aime24.parquet",
+      "size": 101589,
+      "sha256": "8a72185376a9aba48c7434216fc955f6b4d12e534839cf6eacc4cff5669dcaef"
+    }
+  },
+  "hardware": {
+    "gpu": "A100x8",
+    "cpu": 120,
+    "memory": "900GB",
+    "disk": "1TB"
+  },
+  "environment": {
+    "python": "3.12",
+    "packages": {
+      "absl-py": "2.3.1",
+      "appdirs": "1.4.4",
+      "emoji": "2.15.0",
+      "torch": "2.8.0",
+      "vllm": "0.11.0",
+      "ray": "2.55.1",
+      "transformers": "4.57.6",
+      "protobuf": "3.20.3",
+      "flash-attn": "2.8.1",
+      "flashinfer-python": "0.3.1",
+      "fsspec": "2025.9.0",
+      "immutabledict": "4.3.1",
+      "jsonlines": "4.0.0",
+      "langdetect": "1.0.9",
+      "nltk": "3.9.2",
+      "s3fs": "2025.9.0",
+      "syllapy": "0.7.2",
+      "tempdir": "0.7.1",
+      "wget": "3.2"
+    }
+  },
+  "training": {
+    "train_batch_size": 1024,
+    "mini_batch_size": 256,
+    "ppo_epochs": 1,
+    "micro_batch_size_per_gpu": 1,
+    "learning_rate": 1.5e-6,
+    "gradient_clip": 1.0,
+    "entropy_coefficient": 0.0,
+    "loss_aggregation": "token-mean",
+    "prompt_limit": 2048,
+    "response_limit": 16384,
+    "domain_response_limits": [16384, 16384, 2048],
+    "top_k": 16,
+    "nucleus_p": 0.99,
+    "temperature": 1.0,
+    "teacher_temperature": 1.0,
+    "clip_low": 0.2,
+    "clip_high": 0.28,
+    "domain_weights": [2, 2, 1],
+    "target_gradient_shares": [0.3333333333333333, 0.3333333333333333, 0.3333333333333333],
+    "gap_following_alpha": 1.0,
+    "save_every": 2,
+    "eval_every": 2,
+    "eval_temperature": 0.6,
+    "eval_nucleus_p": 0.95,
+    "eval_samples": 1
+  },
+  "gates": {
+    "one_step": 1,
+    "paper_checkpoint": 200,
+    "paper_schedule": 600
+  },
+  "known_deviations": [
+    "The released patched verl tree exposes one global response length; this launcher patches per-request generation to cap IF at 2K while retaining 16K for math/code.",
+    "The release does not pin a digest-addressed CUDA task image or a complete Python lockfile.",
+    "The model card identifies the released final model as step 200 while paper Table 8 specifies 600 total steps."
+  ]
+}

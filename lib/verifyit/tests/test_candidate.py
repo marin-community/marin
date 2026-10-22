@@ -7,7 +7,7 @@ import json
 from dataclasses import asdict, dataclass
 
 import pytest
-from verifyit.candidate import Candidate, candidate_spec, grade_candidate
+from verifyit.candidate import Candidate, candidate_spec, grade_candidate, grade_ejection_candidate
 from verifyit.grade import InvalidTask, Status, run
 from verifyit.json_comparison import NumericTypePolicy
 from verifyit.spec import (
@@ -35,6 +35,12 @@ class DispatchCase:
 
 DISPATCH_CASES = {
     Mode.EXACT: DispatchCase({"expected": ["The Answer"]}, "the   answer", "other", {}),
+    Mode.STRUCTURE_CLOSURE: DispatchCase(
+        {"prefix": '{"a":', "expected": '{"a":1}', "format": "json"},
+        "1}",
+        "}",
+        {},
+    ),
     Mode.NUMERIC: DispatchCase(
         {"expected": "10", "tolerance_abs": 0.01, "tolerance_rel": 0.0}, "The answer is 10.005", "10.02", {}
     ),
@@ -83,6 +89,30 @@ def test_in_process_and_file_grading_from_json_and_toml_contracts(mode, tmp_path
         (tmp_path / "answer.txt").write_text(text)
         verdict = run(spec_path, tmp_path)
         assert (verdict.status, verdict.reward) == (Status.SCORED, expected)
+
+
+@pytest.mark.parametrize("candidate", ["42", "I cannot solve this task.", "eject", ""])
+def test_unsolvable_normal_answers_score_zero_in_process_and_from_files(candidate, tmp_path):
+    spec = candidate_spec(Mode.UNSOLVABLE, {})
+    spec_path = tmp_path / "verifier.toml"
+    spec_path.write_text(render_spec(spec))
+    (tmp_path / "answer.txt").write_text(candidate)
+    for verdict in (grade_candidate(spec, candidate, {}), run(spec_path, tmp_path)):
+        assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0)
+    ejection = grade_ejection_candidate(spec)
+    assert (ejection.status, ejection.reward) == (Status.SCORED, 1.0)
+
+
+@pytest.mark.parametrize("mode", sorted(DISPATCH_CASES))
+def test_ejection_receives_no_credit_for_solvable_tasks(mode):
+    spec = candidate_spec(mode, DISPATCH_CASES[mode].parameters)
+    verdict = grade_ejection_candidate(spec)
+    assert (verdict.status, verdict.reward) == (Status.SCORED, 0.0)
+
+
+def test_ejection_does_not_mask_invalid_task_configuration():
+    verdict = grade_ejection_candidate(ExactSpec(expected=()))
+    assert (verdict.status, verdict.reward) == (Status.INVALID_TASK, 0.0)
 
 
 @pytest.mark.parametrize(

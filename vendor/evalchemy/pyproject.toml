@@ -1,0 +1,110 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "evalchemy"
+version = "0.1.0"
+description = "Endpoint evaluation runtime vendored by Marin"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "lm-eval[api,math] @ git+https://github.com/EleutherAI/lm-evaluation-harness@v0.4.12",
+    "transformers>=5.17,<6",
+    "sentencepiece",
+    "protobuf",
+    "datasets",
+    "huggingface_hub",
+    "numpy",
+    "pydantic>=2",
+    "pyyaml",
+    "loguru",
+    "regex",
+    "s3fs",
+    "loky>=3.7.0",
+    "marin-finestore",
+    "marin-rigging",
+    "torch==2.11.0",
+]
+
+[project.scripts]
+evalchemy = "eval.serve_eval.cli:main"
+
+[project.optional-dependencies]
+serve-eval = []
+bigcodebench = []
+cruxeval = []
+humaneval = []
+humanevalplus = []
+ifeval = ["nltk", "langdetect", "absl-py", "immutabledict"]
+ifbench = ["nltk", "emoji", "syllapy"]
+livebench = ["nltk", "langdetect", "immutabledict", "lark", "pyext @ git+https://github.com/penfever/PyExt"]
+mbpp = []
+mbppplus = []
+mtbench = []
+mixeval = []
+mrcr = ["tiktoken"]
+multiple = ["regex"]
+repobench = ["fuzzywuzzy"]
+swebench = ["swebench>=3.0.4"]
+wildbench = []
+alpaca-eval = ["alpaca-eval", "patsy"]
+zeroeval = []
+aime24 = []
+aime25 = []
+aiw = []
+amc23 = []
+codeelo = []
+codeforces = []
+financebench = []
+gpqadiamond = []
+gsm8kperturbed = []
+hle = []
+hmmt = []
+jeebench = []
+livecodebench = []
+livecodebenchv5 = []
+livecodebenchv5-official = []
+math500 = []
+mmlupro = []
+nupa-loose = ["ijson"]
+nupa5k-loose = ["ijson"]
+olympiadbench = []
+olympiadbenchdeterministic = []
+olympiadbenchfull = []
+simpleqa = []
+simpleqamini = []
+benchmarks = ["evalchemy[aime24,aime25,aiw,amc23,bigcodebench,codeelo,codeforces,cruxeval,financebench,gpqadiamond,gsm8kperturbed,hle,hmmt,humaneval,humanevalplus,ifbench,ifeval,jeebench,livebench,livecodebench,livecodebenchv5,livecodebenchv5-official,math500,mbpp,mbppplus,mmlupro,mrcr,mtbench,mixeval,multiple,nupa-loose,nupa5k-loose,olympiadbench,olympiadbenchdeterministic,olympiadbenchfull,repobench,simpleqa,simpleqamini,swebench,wildbench,alpaca-eval,zeroeval]"]
+
+[dependency-groups]
+test = ["pytest>=8.3.2", "pytest-timeout", "pytest-mock", "zstandard"]
+dev = [{ include-group = "test" }]
+
+[tool.uv]
+exclude-dependencies = ["litellm"]
+
+[tool.uv.sources]
+marin-finestore = { path = "../../lib/finestore", editable = true }
+marin-rigging = { path = "../../lib/rigging", editable = true }
+alpaca-eval = { path = "eval/chat_benchmarks/alpaca_eval", editable = true }
+torch = [
+    { url = "https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+]
+
+[tool.hatch.build]
+dev-mode-dirs = [".", "packages/evalchemy-config/src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["eval", "packages/evalchemy-config/src/evalchemy_config"]
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+pythonpath = ["."]
+timeout = 60
+addopts = "-m 'not slow and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual'"
+markers = ["slow: long-running local tests", "integration: external service integration", "data_integration: downloads external benchmark data", "cluster: live cluster resources", "requires_cluster: live cluster resources", "docker: container execution", "manual: operator-run tests"]
