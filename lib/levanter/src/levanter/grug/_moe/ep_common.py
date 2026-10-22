@@ -29,15 +29,14 @@ def _combine_gather_sum_impl(
         weights = jnp.where(keep, combine_weights, 0)
         return sonic_gather_sum_masked(send_output, gather_indices, weights, output_dtype=output_dtype)
 
+    # A Python loop over the top-k routes lets XLA fuse every gather and the float32 sum into one pass; a fori_loop
+    # rereads and rewrites the float32 accumulator once per route (5% of a June Snowball step on MI355X).
     out = jnp.zeros((tokens_per_shard, hidden_dim), dtype=jnp.float32)
-
-    def add_route(route_index, out):
+    for route_index in range(topk):
         rows = send_output[jnp.minimum(gather_indices[:, route_index], send_output.shape[0] - 1)]
         rows = jnp.where(keep[:, route_index, None], rows, 0)
-        weight = combine_weights[:, route_index, None].astype(jnp.float32)
-        return out + rows.astype(jnp.float32) * weight
-
-    return jax.lax.fori_loop(0, topk, add_route, out).astype(output_dtype)
+        out = out + rows.astype(jnp.float32) * combine_weights[:, route_index, None].astype(jnp.float32)
+    return out.astype(output_dtype)
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(4,))
