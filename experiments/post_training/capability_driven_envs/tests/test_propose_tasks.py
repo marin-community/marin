@@ -94,7 +94,11 @@ def test_a_plan_invalid_after_its_repair_fails_only_its_capability(tmp_path: Pat
 
     summary = json.loads((output / SUMMARY_FILE).read_text())
     assert "slot 1 is proposed in container" in summary[CAPABILITY_ID]
-    assert list((output / CAPABILITY_ID).iterdir()) == []
+    directory = output / CAPABILITY_ID
+    assert sorted(path.name for path in directory.iterdir()) == ["plan.completions.json", "plan.request.json"]
+    assert json.loads((directory / "plan.request.json").read_text()) == model.requests[0].messages
+    completions = json.loads((directory / "plan.completions.json").read_text())
+    assert [completion["content"] for completion in completions] == [unrunnable, unrunnable]
 
 
 def test_a_slot_whose_model_runs_out_of_retries_fails_alone_and_keeps_the_plan_and_its_sibling(tmp_path: Path):

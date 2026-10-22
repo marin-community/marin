@@ -20,7 +20,8 @@ rejected, the driver records the error as that capability's failure. A slot whos
 fails is a slot failure, and the capability keeps its plan and its other slots. Either way the
 driver still writes the run's outputs:
 
-* ``OUTPUT_DIR/<capability id>/`` with ``plan.request.json`` and ``plan.completions.json``, and per
+* ``OUTPUT_DIR/<capability id>/`` with ``plan.request.json`` and ``plan.completions.json`` (the
+  invalid plan replies when the plan stays invalid, and none when the planning call fails), and per
   slot ``slot-NN.request.json``, ``slot-NN.completions.json``, then ``slot-NN.md`` and
   ``slot-NN.verdict.json`` for a proposal, or ``slot-NN.failure.txt`` for a slot failure.
 * ``OUTPUT_DIR/summary.json``, mapping each capability id to its failure or to the decision or
@@ -66,24 +67,22 @@ from experiments.post_training.capability_driven_envs.generate_tasks import (
     endpoint_source,
     selected_ideas,
 )
-from experiments.post_training.capability_driven_envs.proposal_source import CapabilitySource
+from experiments.post_training.capability_driven_envs.proposal_source import CapabilitySource, plan_request
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_BULK_TOKEN_ENV
 
 logger = logging.getLogger(__name__)
-
-PLAN_ERRORS = (StructuredOutputError, ModelRequestRejected, ModelUnavailable)
-"""The planning-call errors that fail one capability's proposals, rather than the run."""
 
 
 @dataclass(frozen=True)
 class ProposedCapability:
     """A capability's proposal batch and the verdict of each proposal, by slot, or the error that stopped it.
 
-    ``batch`` is ``None``, and ``verdicts`` empty, when planning failed.
+    When planning failed, ``failure`` holds the error, ``verdicts`` is empty, and ``batch`` holds the
+    planning request, the invalid plan replies (none when the planning call itself failed), and no slots.
     """
 
     capability_id: str
-    batch: ProposalBatch | None
+    batch: ProposalBatch
     verdicts: Mapping[int, Verdict]
     failure: str | None
 
@@ -92,13 +91,18 @@ async def propose_capability(source: CapabilitySource, idea: CapabilityIdea, slo
     """Propose ``slots`` slots for ``idea`` and triage every proposal with ``preflight``.
 
     A planning call that fails, or a plan still invalid after its repair, becomes the capability's
-    ``failure``. The function returns it in place of raising it, so the other capabilities proceed.
-    A slot's model errors are already slot failures in the batch.
+    ``failure``, with the planning request and the plan replies received. The function returns it in
+    place of raising it, so the other capabilities proceed. A slot's model errors are already slot
+    failures in the batch.
     """
     try:
         batch = await source.propose(idea, slots)
-    except PLAN_ERRORS as error:
-        return ProposedCapability(idea.capability_id, None, {}, str(error))
+    except StructuredOutputError as error:
+        planning = ProposalBatch(plan_request(idea, slots, source.environments), error.completions, ())
+        return ProposedCapability(idea.capability_id, planning, {}, str(error))
+    except (ModelRequestRejected, ModelUnavailable) as error:
+        planning = ProposalBatch(plan_request(idea, slots, source.environments), (), ())
+        return ProposedCapability(idea.capability_id, planning, {}, str(error))
     verdicts = {s.slot: await preflight(s.proposal) for s in batch.slots if isinstance(s, SlotProposal)}
     return ProposedCapability(idea.capability_id, batch, verdicts, None)
 
@@ -125,7 +129,6 @@ def capability_summary(proposed: ProposedCapability) -> str | dict[str, str]:
     """Summarize ``proposed`` as its failure, or as each slot's decision or slot failure."""
     if proposed.failure is not None:
         return proposed.failure
-    assert proposed.batch is not None
     return {
         str(outcome.slot): (
             str(proposed.verdicts[outcome.slot].decision) if isinstance(outcome, SlotProposal) else outcome.error
@@ -140,8 +143,6 @@ def write_outputs(output_dir: Path, proposed: Sequence[ProposedCapability]) -> N
         directory = output_dir / capability.capability_id
         directory.mkdir()
         batch = capability.batch
-        if batch is None:
-            continue
         (directory / "plan.request.json").write_text(json.dumps(list(batch.planning_request), indent=2))
         (directory / "plan.completions.json").write_text(pretty_json(batch.planning))
         for outcome in batch.slots:
