@@ -1129,8 +1129,10 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert manifest["metadata"]["labels"][EGRESS_LABEL] == label
 
 
-def _allowlist_request(num_tasks: int = 1, gpus: int = 0, rules: Sequence[str] = ()) -> job_pb2.RunTaskRequest:
-    req = make_run_req("/my-job/task-0", num_tasks=num_tasks)
+def _allowlist_request(
+    num_tasks: int = 1, gpus: int = 0, rules: Sequence[str] = (), attempt_uid: str = "0123456789abcdef"
+) -> job_pb2.RunTaskRequest:
+    req = make_run_req("/my-job/task-0", num_tasks=num_tasks, attempt_uid=attempt_uid)
     req.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
     req.egress_allow.extend(parse_egress_rules(rules))
     if gpus:
@@ -1169,12 +1171,15 @@ def test_allowlist_pod_leaves_the_host_network_unless_it_needs_infiniband(num_ta
     assert any(c["name"] == "log-shipper" for c in spec["initContainers"])
 
 
-def test_allowlist_job_rules_reach_only_its_own_pod():
+def test_allowlist_job_rules_reach_only_their_own_attempt():
     updates, resources = _dispatch(
         _allowlist_request(rules=["api.openai.com:443", "*.example.com", "203.0.113.0/24"]), _allowlist_config()
     )
+    # A resubmitted job reuses the task ID and attempt number while the earlier policy may still exist.
+    _, resubmitted = _dispatch(_allowlist_request(attempt_uid="fedcba9876543210"), _allowlist_config())
     assert updates == []
     [pod] = resources[K8sResource.PODS]
+    [other_pod] = resubmitted[K8sResource.PODS]
     [policy] = resources[K8sResource.CILIUM_NETWORK_POLICIES]
     spec = policy["spec"]
     selector = spec["endpointSelector"]["matchLabels"]
@@ -1190,9 +1195,9 @@ def test_allowlist_job_rules_reach_only_its_own_pod():
         for name in port.get("rules", {}).get("dns", [])
     ]
 
-    # The policy selects this attempt's pod and no other task's, and is deleted with it.
+    # The policy selects this attempt's pod and no other, and is deleted with it.
     assert selector.items() <= pod["metadata"]["labels"].items()
-    assert {LABEL_TASK_HASH, "iris.attempt_id"} <= selector.keys()
+    assert not selector.items() <= other_pod["metadata"]["labels"].items()
     [owner] = policy["metadata"]["ownerReferences"]
     assert (owner["kind"], owner["uid"]) == ("Pod", pod["metadata"]["uid"])
     assert by_destination == {

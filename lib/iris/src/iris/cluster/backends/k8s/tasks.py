@@ -190,6 +190,8 @@ _LABEL_ATTEMPT_ID = IRIS_ATTEMPT_ID_LABEL
 # Collision-resistant hash of the full (unsanitized) task_id; 16 hex chars (64 bits).
 _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
+# Unique per attempt, even when a resubmitted job reuses the task ID and attempt number.
+_LABEL_ATTEMPT_UID = "iris.attempt_uid"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
@@ -1029,6 +1031,8 @@ def _build_pod_manifest(
         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
         _LABEL_JOB_ID: job_id,
     }
+    if run_req.attempt_uid:
+        labels[_LABEL_ATTEMPT_UID] = run_req.attempt_uid
     node_selector = _constraints_to_node_selector(run_req.constraints)
     if managed_label:
         labels[managed_label] = "true"
@@ -2842,13 +2846,13 @@ class K8sTaskProvider:
 
         task_policy = None
         if run_req.egress_allow and manifest["metadata"]["labels"].get(EGRESS_LABEL) == TaskNetwork.ALLOWLIST.value:
+            # A stale policy can outlive its pod briefly; selecting on the attempt
+            # UID keeps it from granting its rules to a resubmitted job's pod.
+            assert run_req.attempt_uid, "a job's own egress rules need the attempt UID to select its pod"
             task_policy = task_policy_manifest(
                 pod_name,
                 self.pods.namespace,
-                {
-                    _LABEL_TASK_HASH: manifest["metadata"]["labels"][_LABEL_TASK_HASH],
-                    _LABEL_ATTEMPT_ID: manifest["metadata"]["labels"][_LABEL_ATTEMPT_ID],
-                },
+                {_LABEL_ATTEMPT_UID: run_req.attempt_uid},
                 run_req.egress_allow,
             )
             # Before the pod, so its first connections already see the job's rules.
