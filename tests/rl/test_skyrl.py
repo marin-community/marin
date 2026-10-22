@@ -6,6 +6,9 @@ from __future__ import annotations
 import dataclasses
 import io
 import json
+import os
+import shlex
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -30,6 +33,7 @@ from marin.rl.skyrl import (
     TaskTroveSelection,
     TaskTroveTagMatch,
     run_skyrl,
+    skyrl_cpu_command,
     skyrl_step,
     skyrl_temporary_run_path,
     validate_megatron_geometry,
@@ -55,18 +59,77 @@ def _data_step() -> ArtifactStep[Artifact]:
     )
 
 
-def test_nested_launcher_does_not_inherit_parent_python_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PYTHONPATH", "/parent/workspace")
-    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", "/parent/environment")
-    command = [
-        sys.executable,
-        "-c",
-        "import json, os; print(json.dumps({key: os.environ.get(key) for key in "
-        "['PYTHONPATH', 'UV_PROJECT_ENVIRONMENT']}))",
-    ]
-    result = run_launcher_for_test(command)
+def test_nested_launcher_does_not_inherit_parent_python_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    real_uv = str(Path(real_uv).resolve())
+    python_version = list(sys.version_info[:2])
+    workspace = tmp_path / "workspace"
+    project = workspace / "vendor" / "skyrl"
+    project.mkdir(parents=True)
+    (workspace / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=[]\nexclude=["vendor/skyrl"]\n')
+    (project / "pyproject.toml").write_text(
+        '[project]\nname="launcher-environment-test"\nversion="0.0.0"\n'
+        f'requires-python="=={python_version[0]}.{python_version[1]}.*"\ndependencies=[]\n'
+        "[project.optional-dependencies]\ncpu=[]\n[dependency-groups]\ndev=[]\n[tool.uv]\npackage=false\n"
+    )
+    (project / ".uv-version").write_bytes(
+        (Path(__file__).resolve().parents[2] / "vendor/skyrl/.uv-version").read_bytes()
+    )
+    (workspace / ".python-version").write_text("3.12.999\n")
+    monkeypatch.setenv("UV_OFFLINE", "1")
+    monkeypatch.setenv("UV_NO_INDEX", "1")
+    monkeypatch.setenv("UV_CACHE_DIR", str(tmp_path / "cache"))
+    subprocess.run(
+        [real_uv, "lock", "--project", str(project), "--python", sys.executable, "--no-python-downloads"],
+        check=True,
+        capture_output=True,
+    )
+    # Isolate tool installation; real UV still selects both interpreters and
+    # executes the frozen project, with no index or Python downloads.
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    dispatcher = binaries / "uv"
+    dispatcher.write_text(
+        "#!/bin/sh\nset -eu\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        f'    --python) {shlex.quote(real_uv)} python find "$2" --no-python-downloads >/dev/null; shift 2 ;;\n'
+        f'    uv) shift; exec {shlex.quote(real_uv)} "$@" ;;\n'
+        "    *) shift ;;\n"
+        "  esac\n"
+        "done\n"
+    )
+    dispatcher.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binaries) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setattr("marin.rl.skyrl.__file__", str(workspace / "lib/marin/src/marin/rl/skyrl.py"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "incompatible-parent-python"))
+    for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
+        monkeypatch.setenv(key, "/parent/environment")
+    monkeypatch.chdir(workspace)
+    result = run_launcher_for_test(
+        skyrl_cpu_command(
+            "python",
+            "-c",
+            "import json, os, sys; from pathlib import Path; "
+            "print(json.dumps({'python': list(sys.version_info[:2]), 'cwd': str(Path.cwd()), "
+            "'environment': {key: os.environ.get(key) for key in "
+            "['PYTHONPATH', 'PYTHONHOME', 'UV_PROJECT_ENVIRONMENT', 'VIRTUAL_ENV']}}))",
+        )
+    )
     assert result.returncode == 0
-    assert json.loads(result.stdout) == {"PYTHONPATH": None, "UV_PROJECT_ENVIRONMENT": None}
+    assert json.loads(result.stdout) == {
+        "python": python_version,
+        "cwd": str(workspace),
+        "environment": {
+            "PYTHONPATH": None,
+            "PYTHONHOME": None,
+            "UV_PROJECT_ENVIRONMENT": None,
+            "VIRTUAL_ENV": str(project / ".venv"),
+        },
+    }
 
 
 def test_rl_model_resolution_uses_the_recorded_export_instead_of_newer_siblings(tmp_path: Path) -> None:
