@@ -158,8 +158,7 @@ def select_native_closure_tasks(
     """Balance families, then controls, after full-contract dedup and holdout removal.
 
     Native IDs, exact effective token prompts and complete contracts establish
-    holdout overlap; generic task.context text is never an exclusion key. Keep
-    compact metadata for the census and bounded selected payloads on a second pass.
+    holdout overlap; generic task.context text is never an exclusion key.
     """
     digests = {
         "train": _verified_digest(train_path, expected_train_sha256),

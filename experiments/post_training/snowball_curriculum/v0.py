@@ -27,6 +27,8 @@ from experiments.post_training.snowball_curriculum.selection import (
     write_selection,
 )
 
+TARGET_TASKS = 100_000
+
 BEN_SOURCE_FAMILIES = {
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_calendar_v2": "calendar",
     "MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_comp_coding": "competitive_coding",
@@ -143,7 +145,7 @@ def run(
     sources: Sequence[SourceSpec],
     recipe: dict,
     output: str,
-    target: int = 100_000,
+    target: int = TARGET_TASKS,
     seed: int = 0,
     holdout_sources: Sequence[SourceSpec] = (),
 ) -> None:
@@ -195,7 +197,7 @@ def main() -> None:
     )
     parser.add_argument("--recipe", required=True, help="JSON: extensions, family_weights, difficulty_by_source")
     parser.add_argument("--output", required=True)
-    parser.add_argument("--target", type=int, default=100_000)
+    parser.add_argument("--target", type=int, default=TARGET_TASKS)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     recipe = json.loads(StoragePath(args.recipe).read_bytes())

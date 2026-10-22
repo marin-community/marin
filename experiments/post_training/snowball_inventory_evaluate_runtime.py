@@ -31,10 +31,9 @@ from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.prefill import PrefillHarness
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import TaskRolloutSpec
-from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
+from skyrl_gym.rollout_specs import restore_harness
 from skyrl_gym.verification import VerificationResult, VerificationStatus, normalized_verifier_score
 from skyrl_train.dataset.tasks import TaskDataset
 from skyrl_train.hf_export_schema import HFExportRequest
@@ -222,7 +221,6 @@ def preflight(request: dict) -> dict:
         raise ValueError("Tokenizer chat template differs from its admitted cache identity")
     sessions = config.skyrl.environment.task_sessions
     factories = task_machine_factories(sessions)
-    prefill = PrefillHarness()
     source = config.inputs.validation_data[0]
     uri = str(StoragePath(str(source.uri)) / str(source.relative_path))
     tasks = []
@@ -247,12 +245,7 @@ def preflight(request: dict) -> dict:
                 if spec.task.id != row["task_id"]:
                     raise ValueError("Panel pairing task ID differs from the runtime contract")
                 if spec.harness not in engines:
-                    if spec.harness == "prefill":
-                        harness = prefill
-                    elif is_shell_harness(spec.harness):
-                        harness = shell_harness(spec.harness)
-                    else:
-                        raise ValueError("Evaluation panel has an unsupported harness")
+                    harness = restore_harness(spec.harness)
                     engines[spec.harness] = RolloutEngine(factories, {spec.harness: harness})
                 engines[spec.harness].check(spec)
                 if isinstance(spec.task.grader, ScriptGrader):

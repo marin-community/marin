@@ -35,12 +35,10 @@ from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.provenance import launch_provenance
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.core import Harness
-from rolloutengine.harness.prefill import PrefillHarness
 from rolloutengine.machines import _machine_spec
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Backend, MachineFactory
-from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
+from skyrl_gym.rollout_specs import restore_harness
 from skyrl_train.dataset.tasks import TaskDataset
 from skyrl_train.tokenizer import tokenizer_from_config
 from taskcompendium.grading import grade_answer
@@ -242,7 +240,6 @@ def inventory_representatives(
     path: Path,
     report: ProbeReport,
     factories: Mapping[str, MachineFactory],
-    prefill: PrefillHarness,
     judge_connection: JudgeConnection,
 ) -> tuple[dict[str, TaskRolloutSpec], TaskSpec | None]:
     scripts = {}
@@ -257,13 +254,7 @@ def inventory_representatives(
             report.contract_source_id = source
             report.contract_task_id = spec.task.id
             if spec.harness not in engines:
-                harness: Harness
-                if is_shell_harness(spec.harness):
-                    harness = shell_harness(spec.harness)
-                elif spec.harness == "prefill":
-                    harness = prefill
-                else:
-                    raise ValueError("The inventory has an unconfigured harness")
+                harness = restore_harness(spec.harness)
                 engines[spec.harness] = RolloutEngine(factories, {spec.harness: harness})
             engines[spec.harness].check(spec.model_copy(update={"judge_connection": judge_connection}))
             report.engine_checks += 1
@@ -340,13 +331,12 @@ async def probe(
         report.factory_backends = sorted(factories)
         factory = factories[Backend.LOCAL]
         report.phase = "engine_contract_validation"
-        prefill = PrefillHarness()
         remote_judge = task_sessions["remote_judge"]
         judge_connection = JudgeConnection(remote_judge["base_url"], os.environ[remote_judge["api_key_env"]])
         # Verifyit selects the model at the process boundary; its per-call connection
         # carries only credentials. Keep the composed model without changing task graders.
         os.environ[MODEL_ENV] = config.runtime.task_env[MODEL_ENV]
-        scripts, native = inventory_representatives(path, report, factories, prefill, judge_connection)
+        scripts, native = inventory_representatives(path, report, factories, judge_connection)
         validation_canaries = {}
         tokenizer = preflight_tokenizer(config)
         if expected_tokenizer_template_sha256 is not None:
@@ -385,7 +375,7 @@ async def probe(
                 for row in batch.to_pylist():
                     spec = TaskRolloutSpec.model_validate_json(row["task_rollout_spec"])
                     if spec.harness not in engines:
-                        harness = prefill if spec.harness == "prefill" else shell_harness(spec.harness)
+                        harness = restore_harness(spec.harness)
                         engines[spec.harness] = RolloutEngine(factories, {spec.harness: harness})
                     engines[spec.harness].check(spec.model_copy(update={"judge_connection": judge_connection}))
                     report.validation_rows += 1

@@ -11,7 +11,6 @@ from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
 from rigging.telemetry.serialization import json_bytes
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.prefill import PrefillHarness
 from rolloutengine.models import GradedRolloutInterrupted, ModelRequest, ModelTurn, RolloutOperation, TaskRolloutSpec
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -23,10 +22,7 @@ from taskcompendium.models import (
     verifyit_spec,
 )
 from verifyit.spec import StructureClosureSpec
-from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
-
-
-PREFILL_HARNESS = "prefill"
+from skyrl_gym.rollout_specs import PREFILL_HARNESS, is_shell_harness, restore_harness
 
 
 def spec_digest(spec: TaskRolloutSpec) -> str:
@@ -170,7 +166,7 @@ async def regrade_answer(
             text=record.response_text,
         )
 
-    harness = PrefillHarness() if original_spec.harness == PREFILL_HARNESS else shell_harness(original_spec.harness)
+    harness = restore_harness(original_spec.harness)
     engine = RolloutEngine(factories, {original_spec.harness: harness})
     try:
         async with asyncio.timeout(timeout):

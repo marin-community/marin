@@ -18,10 +18,9 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.prefill import PrefillHarness
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
-from skyrl_gym.rollout_specs import rollout_spec, shell_harness
+from skyrl_gym.rollout_specs import restore_harness, rollout_spec, shell_harness
 from skyrl_train.dataset.tasks import TaskDataset, task_prompt, task_prompt_token_count
 from skyrl_train.tokenizer import create_tokenizer
 from taskcompendium.identity import canonical_sha256
@@ -158,9 +157,7 @@ def freeze_panel(
         prepared = panel_record(row, index)
         record, audit = prepared.record, prepared.audit
         spec = TaskRolloutSpec.model_validate_json(record["task_rollout_spec"])
-        RolloutEngine(
-            factories, {spec.harness: PrefillHarness() if spec.harness == "prefill" else shell_harness(spec.harness)}
-        ).check(spec)
+        RolloutEngine(factories, {spec.harness: restore_harness(spec.harness)}).check(spec)
         length = task_prompt_token_count(tokenizer, task_prompt(spec), "prompt")
         if length > max_prompt_tokens:
             raise ValueError(f"Panel prompt exceeds the selected tokenizer budget: {spec.task.id}")

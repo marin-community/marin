@@ -6,14 +6,12 @@ from typing import Any
 from rolloutengine.harness.tools import task_prompt
 from rolloutengine.harness.prefill import prefill_prompt
 from rolloutengine.models import TaskRolloutSpec
-from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
+from skyrl_gym.rollout_specs import PREFILL_HARNESS, is_shell_harness, shell_harness
 from skyrl_gym.task_records import episode_prompt
 from taskcompendium.runtime.shell import resolve_shell_tool
 
 from skyrl_train.inference_engines.base import ConversationType
 from skyrl_train.rollouts.group_grader import GroupGraderSpec
-
-PREFILL_HARNESS = "prefill"
 
 
 @dataclass(frozen=True)

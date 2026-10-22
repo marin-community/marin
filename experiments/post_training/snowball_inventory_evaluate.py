@@ -71,6 +71,7 @@ EVAL_ROLE_PLAN = replace(
     n_samples_per_prompt=1,
 )
 WORKER_MODULE = "experiments.post_training.snowball_inventory_evaluate_runtime"
+DEFAULT_MAX_NEW_TOKENS = 4096
 
 
 @dataclass(frozen=True)
@@ -116,7 +117,7 @@ class EvaluationConfig:
     launch: SkyRLRunConfig
     panel_sha256: str
     output_path: str
-    max_new_tokens: int = 4096
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS
     family_counts: dict[str, int] | None = None
     expected_model_manifest_identity: str | None = None
     recovery: SavedAnswerRecovery | None = None
@@ -267,28 +268,38 @@ def run_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
             "dataset_uids": preflight["dataset_uids"],
         },
     )
-    tasks = [PanelTask(**row) for row in preflight["tasks"]]
-    outcomes = [EvaluationOutcome(**row) for row in records["outcomes"]]
-    summary = summarize_panel(tasks, outcomes)
+    result = persisted_evaluation(config, preflight, records, {})
+    if not result.complete:
+        raise ValueError(f"Evaluation coverage is incomplete; diagnostic report: {result.report_uri}")
+    return result
+
+
+def persisted_evaluation(
+    config: EvaluationConfig, preflight: dict, records: dict, additional_metadata: dict
+) -> InventoryEvaluation:
+    """Persist paired diagnostics before returning their coverage status."""
+    summary = summarize_panel(
+        [PanelTask(**row) for row in preflight["tasks"]],
+        [EvaluationOutcome(**row) for row in records["outcomes"]],
+    )
     summary.update(
         model=asdict(config.launch.model),
         panel_sha256=config.panel_sha256,
-        launch_config_sha256=hashlib.sha256(prepared.launch_config_yaml.encode()).hexdigest(),
+        launch_config_sha256=hashlib.sha256(preflight["launch_config_yaml"].encode()).hexdigest(),
         model_manifest_identity=preflight["model_manifest_identity"],
         protocol=preflight["protocol"],
         pairing_contract_field=preflight["pairing_contract_field"],
+        **additional_metadata,
     )
     report_uri = prefix_join(config.output_path, "report.json")
     with StoragePath(report_uri).open("wt") as target:
         json.dump(summary, target, indent=2, allow_nan=False)
-    if not summary["complete"]:
-        raise ValueError(f"Evaluation coverage is incomplete; diagnostic report: {report_uri}")
     return InventoryEvaluation(
         path=config.output_path,
         report_uri=report_uri,
         pairing_identity=summary["pairing_identity"],
         model_uri=config.launch.model.uri,
-        complete=True,
+        complete=summary["complete"],
     )
 
 
@@ -364,29 +375,8 @@ def run_recoverable_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
         },
         timeout=config.recovery.total_timeout + 5 * 60,
     )
-    summary = summarize_panel(
-        [PanelTask(**row) for row in preflight["tasks"]],
-        [EvaluationOutcome(**row) for row in records["outcomes"]],
-    )
-    summary.update(
-        model=asdict(config.launch.model),
-        panel_sha256=config.panel_sha256,
-        launch_config_sha256=hashlib.sha256(prepared.launch_config_yaml.encode()).hexdigest(),
-        model_manifest_identity=preflight["model_manifest_identity"],
-        protocol=preflight["protocol"],
-        pairing_contract_field=preflight["pairing_contract_field"],
-        recovery=records["recovery"],
-        required_score_coverage=1.0,
-    )
-    report_uri = prefix_join(config.output_path, "report.json")
-    with StoragePath(report_uri).open("wt") as target:
-        json.dump(summary, target, indent=2, allow_nan=False)
-    return InventoryEvaluation(
-        path=config.output_path,
-        report_uri=report_uri,
-        pairing_identity=summary["pairing_identity"],
-        model_uri=config.launch.model.uri,
-        complete=summary["complete"],
+    return persisted_evaluation(
+        config, preflight, records, {"recovery": records["recovery"], "required_score_coverage": 1.0}
     )
 
 
@@ -513,7 +503,7 @@ def checkpoint_export_step(training_config_uri: str, step: int, version: str) ->
     )
 
 
-def evaluation_recipe(max_new_tokens: int = 4096) -> dict:
+def evaluation_recipe(max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS) -> dict:
     recipe = smoke_recipe(PROMPT_TOKEN_BUDGET + max_new_tokens, max_new_tokens, role_plan=EVAL_ROLE_PLAN, max_steps=1)
     recipe["entrypoint"] = "generate"
     recipe["trainer"].update(
@@ -554,7 +544,12 @@ def evaluation_recipe(max_new_tokens: int = 4096) -> dict:
 @click.option("--panel-sha256", required=True)
 @click.option("--training-config-uri")
 @click.option("--checkpoint-step", type=click.IntRange(min=1))
-@click.option("--max-new-tokens", type=click.Choice([4096, 8192]), default=4096, show_default=True)
+@click.option(
+    "--max-new-tokens",
+    type=click.Choice([DEFAULT_MAX_NEW_TOKENS, 8192]),
+    default=DEFAULT_MAX_NEW_TOKENS,
+    show_default=True,
+)
 @rl_build_options
 def main(
     model_uri: str,
@@ -564,7 +559,7 @@ def main(
     panel_sha256: str,
     training_config_uri: str | None,
     checkpoint_step: int | None,
-    max_new_tokens: int = 4096,
+    max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
 ) -> ArtifactStep[InventoryEvaluation]:
     if (training_config_uri is None) != (checkpoint_step is None):
         raise click.BadParameter("training-config-uri and checkpoint-step must be supplied together")
