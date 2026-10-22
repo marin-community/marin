@@ -222,3 +222,36 @@ data-dependent numerical failures in runtime diagnosis rather than guessing at t
 
 For live submission, monitoring, or recovery, follow the `launch-rl` and `use-iris` skills and
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
+
+## Snowball inventory
+
+`experiments.post_training.inventory.train` starts RL from Datakit SFT revision
+`fe666478454e79fe6027a0bab0388d9abd68f51a`, using its tokenizer at the same revision.
+The regional model's `.marinskyrl-model-manifest.json` identity is
+`sha256:ecfcd3dd667d4f2cd0829552f6ca52b2daf186c65a2a17b7b4336dbbdc9b221a`.
+The data dependency prepares all 100,000 training tasks and a fixed heldout panel of
+100 tasks, with 20 per family. Its separate `full_validation.parquet` retains all 910
+heldout source tasks.
+
+Print the three-update qualification plan:
+
+```bash
+uv run python -m experiments.post_training.inventory.train \
+  --version 2026.10.22.3 --data-version 2026.10.22.2 --steps 3 \
+  --train-source "$TRAIN_SOURCE" --validation-source "$VALIDATION_SOURCE"
+```
+
+Set the source URIs to the published training and heldout Parquet files. The data
+producer checks their fixed source digests and counts. Add `--run` to submit.
+Use a fresh run version and `--steps 25` or `--steps 50` for
+subsequent iterations; the default is 25. Reuse the data version while its source and
+lowering remain unchanged.
+
+Every run uses 40 H100s, 128 prompt groups per update and four samples per group.
+It uses synchronous RLOO-N, a 24,576-token request window and an 8,192-token response
+limit. Native task evaluation scores the fixed 100 tasks before training and after
+the final update. The final update commits a resumable checkpoint and produces a
+durable HF export. The launch document and saved evaluation results retain the
+standard artifact and source provenance. Local grader execution requires the
+privileged container profile; remote-judge tasks require the configured judge
+credentials.
