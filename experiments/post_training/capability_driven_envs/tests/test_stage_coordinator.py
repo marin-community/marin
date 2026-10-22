@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
 from taskcompendium.models import TaskSpec
+from taskforge.capability import capability_idea_record
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage20_triage.verdict import accept
@@ -27,11 +28,7 @@ from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventSto
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import Terminal
 
-from experiments.post_training.capability_driven_envs.catalog import (
-    capability_idea_record,
-    example_catalog_path,
-    load_capability_ideas,
-)
+from experiments.post_training.capability_driven_envs.catalog import example_catalog_path, load_capability_ideas
 from experiments.post_training.capability_driven_envs.example_program import task_spec
 
 CAPABILITY = "d43.culinary.scaling"

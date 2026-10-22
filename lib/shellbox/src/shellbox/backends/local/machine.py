@@ -27,8 +27,6 @@ from collections.abc import Iterable
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
-from bubblewrap_bin import bwrap_path
-
 from shellbox.backends.local import launch
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
 from shellbox.machine import (
@@ -229,10 +227,20 @@ def _sandbox_argv(
 
 def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
     """``bwrap`` alone, or the bundled bwrap followed by any bwrap on ``PATH``; the caller probes each in turn."""
+    if sys.platform != "linux":
+        raise SandboxUnavailable("The local bubblewrap backend requires Linux")
+    # This dependency is installed only on Linux.
+    from bubblewrap_bin import bwrap_path  # noqa: PLC0415
+
     if bwrap is not None:
         return (bwrap,)
+    bundled = ()
+    if sys.platform == "linux":
+        from bubblewrap_bin import bwrap_path  # noqa: PLC0415  (optional Linux-only dependency)
+
+        bundled = (bwrap_path(),)
     system = shutil.which("bwrap")
-    return (bwrap_path(), *(() if system is None else (Path(system),)))
+    return (*bundled, *(() if system is None else (Path(system),)))
 
 
 def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:

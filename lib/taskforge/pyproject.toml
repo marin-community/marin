@@ -23,6 +23,8 @@ dependencies = [
     "click",
     "marin-iris",
     "jsonschema>=4.20",
+    # Its failed-run analysis is a Zephyr pipeline over the rollout records of rolloutengine.
+    "marin-zephyr",
 ]
 
 [dependency-groups]

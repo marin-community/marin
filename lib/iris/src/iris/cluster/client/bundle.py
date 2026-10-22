@@ -8,6 +8,7 @@ import os
 import re
 import subprocess
 import tempfile
+import tomllib
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -79,6 +80,18 @@ def _merge_exclude(extra: re.Pattern[str] | None, defaults: re.Pattern[str] = DE
     return re.compile(f"(?x:{defaults.pattern})|(?:{extra.pattern})")
 
 
+def _workspace_bundle_config(workspace: Path) -> tuple[re.Pattern[str] | None, tuple[str, ...]]:
+    project_path = workspace / "pyproject.toml"
+    if not project_path.is_file():
+        return None, ()
+    with project_path.open("rb") as project_file:
+        project = tomllib.load(project_file)
+    config = project.get("tool", {}).get("iris", {}).get("bundle", {})
+    patterns = config.get("exclude", [])
+    exclude = re.compile("|".join(f"(?:{pattern})" for pattern in patterns)) if patterns else None
+    return exclude, tuple(config.get("include", []))
+
+
 def collect_workspace_files(
     workspace: str | Path,
     *,
@@ -94,24 +107,32 @@ def collect_workspace_files(
     metadata, notebooks, and local Rust builds, including tracked files. Falls
     back to the same pattern-based exclusion when git is unavailable.
 
+    ``[tool.iris.bundle]`` in the workspace's ``pyproject.toml`` can include
+    runtime assets with globs and exclude paths with regular expressions.
+    Explicit ``extra_includes`` override repository exclusions.
+
     Args:
         workspace: Root directory to bundle.
         exclude: Extra regex to exclude (merged with DEFAULT_EXCLUDE).
         extra_includes: Globs for required files, including gitignored files and
-            files under tests or docs. Explicit excludes and ALWAYS_EXCLUDE still apply.
+            files under tests or docs. Caller ``exclude`` and ALWAYS_EXCLUDE still apply.
 
     Returns:
         Sorted list of absolute paths.
     """
     workspace = Path(workspace)
     merged = _merge_exclude(exclude)
-
     files = _get_git_non_ignored_files(workspace, merged)
     if files is None:
         files = {
             f for f in workspace.rglob("*") if f.is_file() and not _should_exclude(str(f.relative_to(workspace)), merged)
         }
-    _include_generated_build_artifacts(workspace, files, _merge_exclude(exclude, ALWAYS_EXCLUDE), extra_includes)
+    explicit_exclude = _merge_exclude(exclude, ALWAYS_EXCLUDE)
+    repository_exclude, repository_includes = _workspace_bundle_config(workspace)
+    _include_bundle_files(workspace, files, explicit_exclude, (*GENERATED_ARTIFACT_GLOBS, *repository_includes))
+    if repository_exclude is not None:
+        files = {f for f in files if not _should_exclude(f.relative_to(workspace).as_posix(), repository_exclude)}
+    _include_bundle_files(workspace, files, explicit_exclude, extra_includes)
     return sorted(f for f in files if f.is_file())
 
 
@@ -175,15 +196,15 @@ def _get_git_non_ignored_files(
         return None
 
 
-def _include_generated_build_artifacts(
+def _include_bundle_files(
     workspace: Path,
     files: set[Path],
     exclude: re.Pattern[str],
-    extra_includes: Sequence[str] = (),
+    patterns: Sequence[str],
 ) -> None:
-    """Add generated RPC files and explicitly requested runtime files."""
+    """Add files matching runtime artifact or explicit caller globs."""
     added = 0
-    for pattern in [*GENERATED_ARTIFACT_GLOBS, *extra_includes]:
+    for pattern in patterns:
         for path in workspace.glob(pattern):
             if path.is_file() and path not in files and not _should_exclude(str(path.relative_to(workspace)), exclude):
                 files.add(path)
