@@ -97,6 +97,7 @@ principals:
   human-078: CiQAKk3j6WbcxChnEfJCLfRSmD6l+B3CrUQ/O/IxI4up5x8BQU8SPgCdtF6igo+dyPLIUcU0R7WPpe9SfmCSxMvV0HCXM8E8sg8bEAkI0LmW5XoyyVyFloBDfDlF/gJJn8R4zCTT
   human-079: CiQAKk3j6a9jzBuL3jeNAmdtt+PqvHjgUMneuS2jSE9b40PZvA0SPQCdtF6iQXgQPMSO4xLJXDLhTAVQs/+J+Mi3tlRPwL4s+DHS5ORL1PmLkaC6szLBZ5Bcof11vk55cl1Iivs=
   human-080: CiQAKk3j6Q36Q1IVGKVULIjHzgXp1tLvlOH/1v8VVVG9Q5JuFBcSPQCdtF6i4kNB+ybtG8xqpBKPj/GKvjr1O/WIsf+x284yWjqZBPNdTXqaY3x2Y1wQ8fvnmWOpIAAviOMlA6I=
+  human-081: CiQAKk3j6aOrsX4wJ851kiDydmT5oiYiDwVJkAbQfXtgx9TWoKYSRQCdtF6i1ML4VD/xUJTrB3KGtKMlGX4FeNx0PSCvdtMxePLkysWb6FNODCgQOUHP1QpRmTEoPHv6soLy85QVNySBspXMLQ==
 custom_roles:
 - role_id: marinGcpResourcePreviewer
   title: Marin GCP Resource Previewer
@@ -912,6 +913,7 @@ project_grants:
 - role: projects/hai-gcp-models/roles/marinPulumiAdmin
   members:
   - principal: human-076
+  - principal: human-081
 - role: projects/hai-gcp-models/roles/marin_agent
   members:
   - serviceAccount:eczech-agent@hai-gcp-models.iam.gserviceaccount.com
@@ -957,6 +959,7 @@ project_grants:
   - principal: human-077
   - principal: human-078
   - principal: human-080
+  - principal: human-081
 - role: projects/hai-gcp-models/roles/ray1
   members:
   - serviceAccount:748532799086-compute@developer.gserviceaccount.com

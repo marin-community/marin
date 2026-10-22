@@ -516,3 +516,99 @@ def test_training_source_cache_reuses_data_across_combined_and_panel_requests(tr
     assert combined.status_code == panel.status_code == 200
     assert panel.json() == [row for row in combined.json() if row["section"] == "loss"]
     assert len(queries) == 4
+
+
+def test_accelerator_home_views_share_live_windows_and_preserve_aggregations(monkeypatch) -> None:
+    database = duckdb.connect()
+    database.execute(
+        """CREATE TABLE "telemetry_v1.node_agent"(
+            cluster VARCHAR, node_name VARCHAR, service VARCHAR, name VARCHAR,
+            attributes_json VARCHAR, timestamp_ms BIGINT, value DOUBLE)"""
+    )
+    database.execute("CREATE MACRO json_get(document, key) AS json_extract_string(document, '$.' || key)")
+    database.executemany(
+        'INSERT INTO "telemetry_v1.node_agent" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [
+            ("cw-a", "node-a", "iris-node-agent", metric, json.dumps({"gpu_uuid": gpu}), timestamp, value)
+            for metric, gpu, timestamp, value in [
+                ("gpu_power_watts", "GPU-0", 1_050_000, 100.0),
+                ("gpu_power_watts", "GPU-0", 1_051_000, 300.0),
+                ("gpu_power_watts", "GPU-1", 1_050_000, 400.0),
+                ("gpu_utilization_percent", "GPU-0", 1_050_000, 20.0),
+                ("gpu_utilization_percent", "GPU-0", 1_051_000, 40.0),
+                ("gpu_utilization_percent", "GPU-1", 1_050_000, 90.0),
+            ]
+        ],
+    )
+    source, queries, _ = _source_and_queries(database)
+    monkeypatch.setattr("server.time.time", lambda: 1200.1)
+    with TestClient(_app(source)) as client:
+        results = {}
+        for index, view in enumerate(("power", "gpus", "power_series", "utilization_series")):
+            response = client.get(
+                "/finelog/marin/v1/accelerator/overview",
+                params={
+                    "clusters": "cw-a",
+                    "from": 600_001 + index,
+                    "to": 1_200_001 + index,
+                    "bucket_ms": 30_000,
+                    "view": view,
+                },
+            )
+            assert response.status_code == 200, response.text
+            results[view] = response.json()
+    assert len(queries) == 2
+    assert results["power"] == [{"section": "power", "value": 0.7}]
+    assert results["gpus"] == [{"section": "gpus", "value": 2}]
+    assert results["power_series"] == [{"section": "power_series", "t": 1_050_000, "series": "cw-a", "value": 0.6}]
+    assert results["utilization_series"][0]["value"] == pytest.approx(50.0)
+
+    # Historical boundaries remain exact, including a sample at the right edge.
+    with TestClient(_app(source)) as client:
+        for end, expected in ((1_051_000, 0.5), (1_051_001, 0.7)):
+            response = client.get(
+                "/finelog/marin/v1/accelerator/overview",
+                params={"clusters": "cw-a", "from": 600_001, "to": end, "bucket_ms": 30_000, "view": "power"},
+            )
+            assert response.status_code == 200, response.text
+            assert response.json() == [{"section": "power", "value": expected}]
+    assert len(queries) == 4
+
+
+def test_jobs_home_views_query_only_state_and_events() -> None:
+    database = duckdb.connect()
+    database.execute(
+        """CREATE TABLE "iris.task_state"(
+            ts TIMESTAMP, cluster VARCHAR, root_job_id VARCHAR,
+            pending BIGINT, assigned BIGINT, building BIGINT, running BIGINT,
+            oldest_pending_age_ms BIGINT, oldest_building_age_ms BIGINT)"""
+    )
+    database.execute(
+        """CREATE TABLE "iris.task_event"(
+            ts TIMESTAMP, cluster VARCHAR, task_id VARCHAR, attempt_id BIGINT,
+            reason VARCHAR, source VARCHAR, message VARCHAR, count BIGINT, type VARCHAR)"""
+    )
+    database.execute("CREATE MACRO to_timestamp_millis(ms) AS TIMESTAMP '1970-01-01' + ms * INTERVAL 1 MILLISECOND")
+    database.execute("CREATE MACRO date_bin(width, moment) AS time_bucket(width, moment)")
+    database.execute(
+        """INSERT INTO "iris.task_state" VALUES
+        ('1970-01-01 00:00:01', 'cw-a', '', 2, 0, 1, 3, 0, 0),
+        ('1970-01-01 00:00:01', 'cw-a', 'stuck-job', 1, 0, 0, 0, 1000000, 0)"""
+    )
+    database.execute(
+        """INSERT INTO "iris.task_event" VALUES
+        ('1970-01-01 00:00:01', 'cw-a', 'task', 0, 'Failed', 'worker', 'failure', 2, 'Warning')"""
+    )
+    source, queries, _ = _source_and_queries(database)
+    params = {"clusters": "cw-a", "jobs": "__none__", "from": 0, "to": 60_000, "bucket_ms": 30_000}
+    with TestClient(_app(source)) as client:
+        results = {}
+        for view in ("fleet_tasks", "stuck_jobs", "queue_depth", "warning_reasons"):
+            response = client.get("/finelog/marin/v1/jobs/overview", params={**params, "view": view})
+            assert response.status_code == 200, response.text
+            results[view] = response.json()
+    assert len(queries) == 2
+    assert results["fleet_tasks"] == [{"section": "fleet_tasks", "running": 3, "building": 1, "pending": 2}]
+    assert results["stuck_jobs"] == [{"section": "stuck_jobs", "stuck": 1}]
+    assert results["queue_depth"][0]["value"] == 2
+    assert results["warning_reasons"][0]["value"] == 2
