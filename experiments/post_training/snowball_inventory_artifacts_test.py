@@ -81,7 +81,7 @@ def completed_run(launch):
     )
 
 
-@pytest.mark.parametrize("kind", ["inventory", "evaluation"])
+@pytest.mark.parametrize("kind", ["inventory", "evaluation", "recoverable_evaluation"])
 def test_nested_preflight_can_grade_with_only_explicit_child_credentials(kind, launch, tmp_path, monkeypatch):
     monkeypatch.setenv("JUDGE_API_KEY", "test-judge-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "test-eval-key")
@@ -141,8 +141,10 @@ def test_nested_preflight_can_grade_with_only_explicit_child_credentials(kind, l
                 launch,
                 "panel-sha",
                 str(tmp_path),
+                recovery=evaluation.SavedAnswerRecovery(600, 900) if kind == "recoverable_evaluation" else None,
             )
-            result = evaluation.run_evaluation(config)
+            runner = evaluation.run_evaluation if kind == "evaluation" else evaluation.run_recoverable_evaluation
+            result = runner(config)
             assert result.complete
             assert json.loads((tmp_path / "report.json").read_text())["families"]["calendar"]["scored"] == 1
     assert client.submissions == 1

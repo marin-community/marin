@@ -336,6 +336,7 @@ def run_recoverable_evaluation(config: EvaluationConfig) -> InventoryEvaluation:
     if not preflight_path.exists():
         remote(
             preflight_evaluation,
+            env_vars=preflight_environment(config.launch.launch_config_yaml),
             resources=ResourceConfig.with_cpu(cpu=4, ram="32GB", disk="32GB", container_profile=CONTAINER_PROFILE),
         )(config)
     preflight = json.loads(preflight_path.read_text())
