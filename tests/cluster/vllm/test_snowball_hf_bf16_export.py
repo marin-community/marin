@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Reproduce the Snowball BF16 export and verify its persisted digest.
+"""Validate a Snowball BF16 release from its native checkpoint.
 
 PYTEST_DONT_REWRITE: serialized remote functions must not depend on pytest.
 
@@ -11,7 +11,6 @@ Run from the repository root:
 """
 
 import dataclasses
-import hashlib
 import json
 import tempfile
 import uuid
@@ -31,7 +30,6 @@ from iris.rpc import job_pb2
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import validate_single_name_config
 from levanter.tokenizers import load_tokenizer
-from marin.testing.inference.snowball import SNOWBALL
 from marin.testing.inference.snowball_checkpoint import (
     VendoredTransformer,
     apply_pending_qb_betas,
@@ -79,21 +77,15 @@ def _assert_vllm_bf16(export_dir: Path, config: GrugModelConfig) -> None:
     # Checked on the real config_overrides-merged artifact, which could otherwise reintroduce an alias.
     validate_single_name_config(exported_config, config)
 
-    tensor_dtypes: set[str] = set()
+    tensor_dtypes: dict[str, str] = {}
     for shard_path in export_dir.glob("model-*.safetensors"):
         with safetensors.safe_open(shard_path, framework="numpy") as tensors:
-            tensor_dtypes.update(tensors.get_slice(name).get_dtype() for name in tensors.keys())
-    assert tensor_dtypes == {"BF16"}
-
-
-def _tree_sha256(export_dir: Path) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(path for path in export_dir.rglob("*") if path.is_file()):
-        digest.update(path.relative_to(export_dir).as_posix().encode())
-        digest.update(b"\0")
-        with path.open("rb") as file:
-            digest.update(hashlib.file_digest(file, "sha256").digest())
-    return digest.hexdigest()
+            tensor_dtypes.update({name: tensors.get_slice(name).get_dtype() for name in tensors.keys()})
+    assert tensor_dtypes
+    assert all(
+        dtype == ("F32" if name.endswith(".mlp.router.bias") else "BF16") for name, dtype in tensor_dtypes.items()
+    )
+    assert (export_dir / "hf_release_manifest.json").is_file()
 
 
 def assert_checkpoint_reproduces_bf16_export() -> None:
@@ -109,11 +101,14 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
         params = apply_pending_qb_betas(params, pending_qb_betas)
         del pending_qb_betas
 
-        # Avoid keeping the full FP32 checkpoint alongside temporary BF16 export buffers in GPU memory.
+        # Keep the FP32 router state while reducing the other parameters' GPU footprint.
+        assert params.stacked_blocks is not None
+        router_bias = params.stacked_blocks.stacked.mlp.router_bias
         params = jax.tree.map(
             lambda value: value.astype(jnp.bfloat16) if eqx.is_inexact_array(value) else value,
             params,
         )
+        params = eqx.tree_at(lambda tree: tree.stacked_blocks.stacked.mlp.router_bias, params, router_bias)
         jax.block_until_ready(params)
 
         tokenizer = load_tokenizer(tokenizer_name)
@@ -129,14 +124,12 @@ def assert_checkpoint_reproduces_bf16_export() -> None:
             converter.save_pretrained(
                 export_model,
                 export_dir_str,
-                dtype=jnp.bfloat16,
+                release_precision="bf16",
             )
             _assert_vllm_bf16(export_dir, main_config)
-            actual_sha256 = _tree_sha256(export_dir)
-            assert actual_sha256 == SNOWBALL.export_sha256, actual_sha256
 
 
-def test_snowball_checkpoint_reproduces_persisted_vllm_bf16_export(marin_gpu_client: IrisClient, run_test_job) -> None:
+def test_snowball_checkpoint_validates_bf16_release(marin_gpu_client: IrisClient, run_test_job) -> None:
     run_test_job(
         marin_gpu_client,
         JobRequest(

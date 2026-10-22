@@ -10,6 +10,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import equinox as eqx
@@ -38,6 +39,7 @@ from transformers import GPT2Config as HfGpt2Config
 import levanter.compat.hf_export as hf_export
 import levanter.compat.hf_checkpoints as hf_checkpoints
 from levanter.compat.hf_checkpoints import (
+    RepoRef,
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
@@ -120,6 +122,45 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
             nano_model,
             loaded_model,
         )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_model", "expected_commit"),
+    [
+        ("memory://source/model", None, None),
+        ("test/source-model", "test/source-model", "a" * 40),
+    ],
+)
+def test_hf_release_resolves_hub_source_without_treating_storage_as_hub(
+    local_gpt2_tokenizer_path, monkeypatch, tmp_path, source, expected_model, expected_commit
+):
+    config = Gpt2Config(hidden_dim=32, num_heads=1, num_layers=1, use_flash_attention=False)
+    converter = config.hf_checkpoint_converter(ref_checkpoint=local_gpt2_tokenizer_path)
+    converter = converter.replaced(reference_checkpoint=RepoRef(source))
+
+    def config_without_source_lookup(self, model):
+        result = model.config.to_hf_config(model.Vocab.size).to_dict()
+        result["bos_token_id"] = self.tokenizer.bos_token_id
+        result["eos_token_id"] = self.tokenizer.eos_token_id
+        return result
+
+    monkeypatch.setattr(hf_checkpoints.HFCheckpointConverter, "_build_hf_config_dict", config_without_source_lookup)
+
+    def model_info(repo_id, revision):
+        assert repo_id == "test/source-model"
+        assert revision is None
+        return SimpleNamespace(sha="a" * 40)
+
+    monkeypatch.setattr(
+        hf_checkpoints.HfApi, "model_info", lambda self, repo_id, revision: model_info(repo_id, revision)
+    )
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(8))
+        converter.save_pretrained(model, str(tmp_path), save_reference_code=False)
+
+    request = json.loads((tmp_path / "hf_release_request.json").read_text())
+    assert request["source_model"] == expected_model
+    assert request["source_model_commit"] == expected_commit
 
 
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):

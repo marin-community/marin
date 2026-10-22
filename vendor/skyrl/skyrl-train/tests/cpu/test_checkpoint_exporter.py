@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import torch
+from omegaconf import OmegaConf
 
 from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers
 from skyrl_train.hf_export_schema import HFUploadMode
@@ -10,6 +11,8 @@ from skyrl_train.hf_model_io import verify_hf_model_export
 from skyrl_train.hf_release_export import ReleaseExportOptions
 from marin_hf_release import PrecisionMode
 from skyrl_train.hf_publisher import HuggingFacePublisher
+from skyrl_train.hf_export import read_hf_export_request
+from skyrl_train.trainer import RayPPOTrainer
 
 
 class FakePolicyExportWorkers:
@@ -103,6 +106,40 @@ def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
         model_path=str(source_model),
         eos_token_ids=[1],
     )
+
+
+def test_trainer_persists_resolved_omegaconf_export_metadata(tmp_path):
+    checkpoint_path = tmp_path / "checkpoints" / "global_step_12"
+    checkpoint_path.mkdir(parents=True)
+    (checkpoint_path / "trainer_state.pt").write_bytes(b"completed")
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = OmegaConf.create(
+        {
+            "trainer": {
+                "ckpt_path": str(tmp_path / "checkpoints"),
+                "export_path": str(tmp_path / "exports"),
+                "placement": {"policy_num_nodes": 1, "policy_num_gpus_per_node": 1},
+                "policy": {
+                    "model": {
+                        "path": "s3://test-bucket/source",
+                        "source_uri": None,
+                        "source_identity": None,
+                    }
+                },
+                "hf_generation_eos_token_ids": [1, 2],
+                "hf_generation_controls": {"temperature": 0.7, "nested": {"max_length": 32}},
+            }
+        }
+    )
+    trainer.global_step = 12
+
+    trainer._handle_hf_export()
+    trainer._handle_hf_export()
+
+    request = read_hf_export_request(str(checkpoint_path))
+    assert request is not None
+    assert request.eos_token_ids == [1, 2]
+    assert request.generation_controls == {"temperature": 0.7, "nested": {"max_length": 32}}
 
 
 def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path):

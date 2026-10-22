@@ -28,6 +28,7 @@ import humanfriendly
 import jax
 import jax.numpy as jnp
 import mergedeep
+import numpy as np
 import requests
 import transformers.utils.hub
 from fsspec import AbstractFileSystem
@@ -44,6 +45,7 @@ from huggingface_hub.file_download import repo_folder_name
 from huggingface_hub.utils import EntryNotFoundError, GatedRepoError, HFValidationError
 from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
+from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
 from marin_hf_release import (
@@ -1174,6 +1176,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
         All initialized JAX processes must call this with the same model and options.
         Shard and metadata writer failures propagate to every process through matched collectives.
         """
+        if "dtype" in hf_upload_kwargs:
+            raise ValueError("Use release_precision to select an HF release dtype")
         logger.info(f"Saving HF-compatible checkpoint to {path}")
 
         save_reference_code_flag = self._resolve_save_reference_code(save_reference_code)
@@ -1223,10 +1227,21 @@ class HFCheckpointConverter(Generic[LevConfig]):
             if not is_grug and tokenizer.eos_token_id is not None:
                 checkpoint_metadata["eos_token_ids"] = [tokenizer.eos_token_id]
             source_ref = self.reference_checkpoint
-            if source_ref is not None and not os.path.exists(source_ref.model_name_or_path):
+            if source_ref is not None and _is_hf_model_id(source_ref.model_name_or_path):
                 revision = source_ref.revision
                 if not is_hf_commit(revision):
-                    raise ValueError("HF release source model must be pinned to a 40-character commit")
+
+                    def resolve_source_commit() -> str:
+                        commit = HfApi().model_info(source_ref.model_name_or_path, revision=revision).sha
+                        if commit is None or not is_hf_commit(commit):
+                            raise ValueError("HF release source model did not resolve to a 40-character commit")
+                        return commit
+
+                    resolved = run_on_export_writer(resolve_source_commit)
+                    commit_bytes = np.frombuffer((resolved or "0" * 40).encode("ascii"), dtype=np.uint8)
+                    revision = bytes(multihost_utils.broadcast_one_to_all(commit_bytes)).decode("ascii")
+                if not is_hf_commit(revision):
+                    raise ValueError("HF release source model did not resolve to a 40-character commit")
                 source_model, source_model_commit = source_ref.model_name_or_path, revision
             else:
                 source_model, source_model_commit = None, None
