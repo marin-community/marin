@@ -220,6 +220,10 @@ class MachineTerminated(RuntimeError):
     """The machine ended before ``close``: killed, expired, preempted, or lost with its host."""
 
 
+class CommandStartTimeout(RuntimeError):
+    """The machine could not start a command in time, an infrastructure failure; ``Command.timeout`` had not begun."""
+
+
 class Machine(Protocol):
     """One writable task environment. Files persist until close."""
 

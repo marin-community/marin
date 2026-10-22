@@ -25,7 +25,7 @@ import signal
 import sys
 import tarfile
 import tempfile
-from collections.abc import Iterable
+from collections.abc import AsyncIterator, Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -39,6 +39,7 @@ from shellbox.machine import (
     Backend,
     Command,
     CommandSemantics,
+    CommandStartTimeout,
     ExecutionRequirements,
     ExitReason,
     HostImage,
@@ -117,6 +118,8 @@ PROBE_TIMEOUT = 30
 SANDBOX_SCRIPT = "echo ready; exec >/dev/null 2>&1; while :; do sleep 86400 & wait; done"
 """The program that holds a machine's namespaces. As the PID namespace's first process, signals from commands do
 not reach it, and its ``wait`` collects the processes that commands leave behind."""
+COMMAND_START_TIMEOUT = 60
+"""Seconds a command may take to start in its machine's sandbox. Its own timeout starts once it has started."""
 STOP_GRACE = 10
 """Seconds a launcher has to kill its command's process group and report, after which it is killed itself."""
 OUTPUT_GRACE = 5
@@ -390,6 +393,16 @@ def _exited(pidfd: int) -> bool:
     return bool(poller.poll(0))
 
 
+@contextlib.asynccontextmanager
+async def _starting(deadline: float) -> AsyncIterator[None]:
+    """Raise ``CommandStartTimeout`` when the block, part of starting a command, runs past the loop time ``deadline``."""
+    try:
+        async with asyncio.timeout_at(deadline):
+            yield
+    except TimeoutError as error:
+        raise CommandStartTimeout(f"The command did not start within {COMMAND_START_TIMEOUT} seconds") from error
+
+
 class _Pipes(NamedTuple):
     """The read ends of a command launcher's pipes."""
 
@@ -651,8 +664,10 @@ class LocalMachine:
         fields = [os.fsencode(field) for variable in environment.items() for field in variable]
         if any(b"\0" in field for field in fields):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
-        process, pipes = await self._launch(command, fields, _command_account(command.user))
-        return await self._communicate(process, pipes, command)
+        start_deadline = asyncio.get_running_loop().time() + COMMAND_START_TIMEOUT
+        async with _starting(start_deadline):
+            process, pipes = await self._launch(command, fields, _command_account(command.user))
+        return await self._communicate(process, pipes, command, start_deadline)
 
     async def _launch(
         self, command: Command, environment: list[bytes], account: pwd.struct_passwd | None
@@ -709,8 +724,13 @@ class LocalMachine:
                 os.close(fd)
         return process, pipes
 
-    async def _communicate(self, process: asyncio.subprocess.Process, pipes: _Pipes, command: Command) -> Result:
-        """Write the command's input, collect its output and report, and stop it if its timeout expires."""
+    async def _communicate(
+        self, process: asyncio.subprocess.Process, pipes: _Pipes, command: Command, start_deadline: float
+    ) -> Result:
+        """Write the command's input, collect its output and report, and stop it if its timeout expires.
+
+        The command must report that it started by the loop time ``start_deadline``; its timeout starts then.
+        """
         assert process.stdin is not None
         stdout, stderr = _Output(command.output_limit_bytes), _Output(command.output_limit_bytes)
         unread = list(pipes)
@@ -729,9 +749,12 @@ class LocalMachine:
                 status = await reader(pipes.status)
                 for output, fd in ((stdout, pipes.stdout), (stderr, pipes.stderr)):
                     collecting.append(asyncio.create_task(output.collect(await reader(fd))))
+                async with _starting(start_deadline):
+                    # The command reports that it started just before it executes its program.
+                    started = await status.read(1)
                 async with asyncio.timeout(command.timeout):
                     # The launcher closes its status pipe when it exits, once the command's process group has ended.
-                    report = await status.read()
+                    report = started + await status.read()
                 await _end_input(process, sending)
                 await process.wait()
             except BaseException as interruption:

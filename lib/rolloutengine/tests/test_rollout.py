@@ -416,6 +416,40 @@ class BlockingFactory(RecordingShellSimFactory):
 
 
 @dataclass
+class _BlockedMachine:
+    machine: Machine
+    factory: "BlockingCommandFactory"
+
+    async def run(self, command):
+        if not self.factory.entered.is_set():
+            self.factory.entered.set()
+            await self.factory.release.wait()
+        return await self.machine.run(command)
+
+    async def upload(self, source, target):
+        await self.machine.upload(source, target)
+
+    async def download(self, source, target):
+        await self.machine.download(source, target)
+
+    async def close(self):
+        await self.machine.close()
+
+
+@dataclass
+class BlockingCommandFactory(RecordingShellSimFactory):
+    """Block the first command of machine number ``blocked``, counted from 0, until ``release`` is set."""
+
+    blocked: int = 1
+    entered: asyncio.Event = field(default_factory=asyncio.Event)
+    release: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def create(self, spec):
+        machine = await super().create(spec)
+        return _BlockedMachine(machine, self) if len(self.machines) - 1 == self.blocked else machine
+
+
+@dataclass
 class FirstTurnModel(ReplayModel):
     """Answer the first request, and wait on each later one until it is cancelled. ``blocked`` is set then."""
 
@@ -435,7 +469,7 @@ def report_task(**update) -> TaskSpec:
 @pytest.mark.parametrize("deadline", ["attempt_timeout", "verifier_timeout"])
 async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     # The verifier machine is the second machine, so grading blocks after the outputs are captured.
-    factory = BlockingFactory()
+    factory = BlockingCommandFactory()
     harness = StepHarness(lambda context: OutputWritingEpisode(context, "echo ready > /workspace/report.txt"))
     spec = rollout_spec(
         report_task(output_paths=("/workspace/report.txt",)),
@@ -456,6 +490,37 @@ async def test_deadline_during_grading_keeps_captured_outputs(deadline):
     expected = RolloutOperation.ATTEMPT if deadline == "attempt_timeout" else RolloutOperation.GRADE
     assert caught.value.operation == expected
     assert caught.value.rollout.outputs == {"/workspace/report.txt": b"ready\n"}
+
+
+@dataclass
+class SlowFactory(RecordingShellSimFactory):
+    """Take ``delay`` seconds to create each machine."""
+
+    delay: float = 0.0
+
+    async def create(self, spec):
+        await asyncio.sleep(self.delay)
+        return await super().create(spec)
+
+
+async def test_verifier_deadline_excludes_verifier_machine_startup():
+    # Creating the verifier machine takes longer than the whole verifier deadline.
+    task = arithmetic_task(grader=ScriptGrader(argv=("sh", "-c", "echo 1"), environment=GRADER_ENVIRONMENT))
+    result = await engine(
+        ReplayModel([{"role": "assistant", "content": "12"}]), {"local": SlowFactory(delay=1.0)}
+    ).run_task(rollout_spec(task, verifier_machine=machine_runtime(startup_timeout=30), verifier_timeout=0.5))
+    assert result.grade.reward == 1.0
+
+
+async def test_verifier_machine_startup_timeout_is_not_a_verifier_timeout():
+    task = arithmetic_task(grader=ScriptGrader(argv=("sh", "-c", "echo 1"), environment=GRADER_ENVIRONMENT))
+    with pytest.raises(RolloutInterrupted) as caught:
+        await engine(ReplayModel([{"role": "assistant", "content": "12"}]), {"local": SlowFactory(delay=1.0)}).run_task(
+            rollout_spec(task, verifier_machine=machine_runtime(startup_timeout=0.2), verifier_timeout=30)
+        )
+    assert caught.value.operation == RolloutOperation.GRADE
+    assert isinstance(caught.value.__cause__, TimeoutError)
+    assert caught.value.grade.failure is None
 
 
 async def test_output_capture_over_the_file_budget_interrupts_grading():
@@ -1852,8 +1917,8 @@ async def test_one_task_supports_independent_turn_deadlines():
 )
 async def test_deadlines_keep_generated_tokens_and_close_episodes(phase, budget):
     closed = asyncio.Event()
-    # A sandbox grader blocks while its verifier machine starts, the only machine of this attempt.
-    factory = BlockingFactory(blocked=0)
+    # A sandbox grader blocks in its first command on the verifier machine, the only machine of this attempt.
+    factory = BlockingCommandFactory(blocked=0)
     entered = factory.entered
 
     class Episode:

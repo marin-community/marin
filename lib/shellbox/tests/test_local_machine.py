@@ -19,6 +19,7 @@ from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 import pytest
+from shellbox.backends.local import machine as local_machine
 from shellbox.backends.local.launch import COMMAND_NICENESS
 from shellbox.backends.local.machine import (
     NPROC_HEADROOM,
@@ -38,6 +39,7 @@ from shellbox.backends.local.python_environment import (
 )
 from shellbox.machine import (
     Command,
+    CommandStartTimeout,
     DockerImage,
     ExitReason,
     HostImage,
@@ -363,6 +365,28 @@ def test_timeout_kills_the_command_and_its_descendants(factory):
     # run() returns only once the output pipes close, so a surviving grandchild would hold it past the test timeout.
     command = Command(("sh", "-c", "sleep 3600 & wait"), timeout=1, stdin=b"unread")
     assert run_command(factory, command) == Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+
+
+def test_a_commands_timeout_starts_once_it_has_started(factory, monkeypatch):
+    # A launcher that takes longer to start the command than the command's timeout.
+    monkeypatch.setattr(local_machine, "LAUNCH_SOURCE", "import time\ntime.sleep(2)\n" + local_machine.LAUNCH_SOURCE)
+    result = run_command(factory, Command(("echo", "ran"), timeout=1))
+    assert (result.exit_code, result.stdout, result.reason) == (0, b"ran\n", ExitReason.EXITED)
+
+
+def test_a_command_that_cannot_start_in_time_raises_and_leaves_the_machine_usable(factory, monkeypatch):
+    slow = "import time\ntime.sleep(30)\n" + local_machine.LAUNCH_SOURCE
+
+    async def scenario(machine: LocalMachine) -> Result:
+        with monkeypatch.context() as patched:
+            patched.setattr(local_machine, "LAUNCH_SOURCE", slow)
+            patched.setattr(local_machine, "COMMAND_START_TIMEOUT", 1)
+            with pytest.raises(CommandStartTimeout):
+                await machine.run(Command(("true",), timeout=60))
+        return await machine.run(Command(("echo", "ran")))
+
+    result = on_machine(factory, SPEC, scenario)
+    assert (result.exit_code, result.stdout) == (0, b"ran\n")
 
 
 def test_a_commands_process_group_ends_with_it_and_a_process_that_leaves_it_lasts_until_close(factory):
