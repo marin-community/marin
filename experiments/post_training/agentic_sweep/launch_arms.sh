@@ -15,7 +15,7 @@ HF_EXPORT_SCHEDULE=epoch2-and-final
 while (( $# )); do
   case "$1" in
     --run) MODE=--run; shift ;;
-    --data-variant) DATA_VARIANT=${2:?data variant: high, low or matched-relay}; shift 2 ;;
+    --data-variant) DATA_VARIANT=${2:?data variant: high, low, matched-relay or contributor}; shift 2 ;;
     --context-length) CONTEXT_LENGTH=${2:?training context length}; shift 2 ;;
     --hf-export-schedule) HF_EXPORT_SCHEDULE=${2:?HF export schedule}; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
@@ -23,7 +23,7 @@ while (( $# )); do
 done
 case "$PARENT" in v0|v0.1) ;; *) echo "Unknown parent: $PARENT" >&2; exit 1 ;; esac
 case "$ARM" in plain|rs-multi|relay|recovery|plateau) ;; *) echo "Unknown arm: $ARM" >&2; exit 1 ;; esac
-case "$DATA_VARIANT" in high|low|matched-relay) ;; *) echo "Unknown data variant: $DATA_VARIANT" >&2; exit 1 ;; esac
+case "$DATA_VARIANT" in high|low|matched-relay|contributor) ;; *) echo "Unknown data variant: $DATA_VARIANT" >&2; exit 1 ;; esac
 if [[ "$DATA_VARIANT" == matched-relay && "$ARM" != plain ]]; then
   echo "The matched-relay comparator uses plain training" >&2
   exit 1
