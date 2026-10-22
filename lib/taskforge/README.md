@@ -628,8 +628,15 @@ retries and backoff, the control writer's sampling, the adversary policy and the
 (`preflight`) and control writing start together; each of the `settings.k` solver trials starts once the
 lowering is done, without waiting for the controls; each control's replay and each of the
 `settings.adversary.k` adversary trials start once both the lowered spec and the controls exist, without
-waiting for a solver trial. Every unit is idempotent on its own file, so a relaunch runs only the units
-whose files are missing:
+waiting for a solver trial. The round returns once every unit has ended, unless a violated control
+decides it early: while `context.modify_rounds_left` is above zero, the first control whose replay comes
+back violated, or whose attempt file already holds a violation, cancels every solver and adversary trial
+that has not ended, and the round returns once the other control replays end. Its result's `early`, an
+`EarlyDecision`, names that control and the cancelled trials (`solver/<i>`, `adversary/<i>`), which the
+result's `solver` and `adversary` leave out. A cancelled attempt writes no attempt file, so a later round
+on the same files runs those trials again. With no MODIFY round left the round waits for every trial,
+since the workpiece's final record needs complete evidence. Every unit is idempotent on its own file, so
+a relaunch runs only the units whose files are missing:
 
 ```
 <round_dir>/validation/<draft>/lowered.json                  the lowering, for one host and set of backends
@@ -651,8 +658,8 @@ holds every decision input without the rollouts: the lowering's status
 (`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
 backend fallback; each solver trial's status, reward, cause and attempt file, with the reward totals
 and ungraded causes of its `Evidence`; each control's verdict (`met`, `violated`, `ungraded`), reward
-and cause; and each adversary trial's status, cause, claim and submissions with their grades and rewards.
-`write_validation(round_dir, result)` writes it to `<round_dir>/validation.json`, and
+and cause; each adversary trial's status, cause, claim and submissions with their grades and rewards; and
+the early decision, if any. `write_validation(round_dir, result)` writes it to `<round_dir>/validation.json`, and
 `load_validation(round_dir)` reads it back. The round itself writes no `validation.json`: the stage
 coordinator, the file's one writer, writes the result its validate function returns.
 
@@ -686,7 +693,9 @@ A `Modify` carries one finding per violated control, naming its kind, id, reward
 `Retry` names the cause that left the most solver trials and controls ungraded, with their count. The
 solve rate is the solved share of the graded solver trials: below `BandRules.low` it is `too_hard`,
 above `BandRules.high` `too_easy`, and in between, both ends included, `in_band`; `BandRules.accepted`
-lists the places review accepts. Adversary trials decide nothing yet: whether a passing submission is
+lists the places review accepts. A round decided early holds the violated control that closed it, so
+the second row decides it: its cancelled trials never count as incomplete evidence, nor its partial
+solver trials as a solve rate. Adversary trials decide nothing yet: whether a passing submission is
 a shortcut is the arbiter's judgement, which a later rule will read.
 
 ## Testing

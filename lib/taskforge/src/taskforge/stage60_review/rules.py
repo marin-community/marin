@@ -15,6 +15,10 @@
 4. Band. The solve rate of the solver trials, placed against the caller's ``BandRules``:
    ``Accept(band)`` for a place the rules accept, else ``Reject(TASK)``.
 
+A round its violated control decided early (``ValidationResult.early``) left trials cancelled, and rule 2
+decides it: its cancelled trials are never read as incomplete evidence, nor its partial solver trials as a
+solve rate.
+
 Adversary trials decide nothing here: whether a passing submission is a shortcut is the arbiter's
 judgement, which a later rule will read.
 """
@@ -69,7 +73,8 @@ async def default_review(result: ValidationResult, context: ReviewContext) -> De
     """Decide on ``result`` by the module's rule table.
 
     Raises:
-        ValueError: the evidence is complete and no solver trial was graded, so no solve rate exists.
+        ValueError: the result was decided early on a control it does not hold as violated, or the evidence is
+            complete and no solver trial was graded, so no solve rate exists.
     """
     lowering = result.lowering
     if lowering.status is LoweringStatus.REFUSED:
@@ -82,6 +87,11 @@ async def default_review(result: ValidationResult, context: ReviewContext) -> De
         return Modify(findings)
     if findings:
         return Reject(RejectKind.TASK, findings)
+    if result.early is not None:
+        raise ValueError(
+            f"{result.workpiece_id} round {result.round} was decided early on control {result.early.control}, "
+            "which it does not hold as violated"
+        )
     solver = result.solver
     assert solver is not None, "a lowered round has solver evidence"
     ungraded = Counter(solver.ungraded)

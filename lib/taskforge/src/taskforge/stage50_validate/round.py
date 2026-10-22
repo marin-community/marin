@@ -7,8 +7,15 @@ adversary trials as units of one graph.
 Lowering (``preflight``) and control writing (``write_controls``) start together. Each solver trial starts
 as soon as the lowering is done and does not wait for the controls. Control replay and each adversary trial
 (``adversary.run_adversary_trial``) start once both the lowered spec and the controls exist, and wait for no
-solver trial. The result waits for every unit. A unit that raises cancels the others and the round raises its
-error; the files the finished units wrote stay for the relaunch.
+solver trial. A unit that raises cancels the others and the round raises its error; the files the finished units
+wrote stay for the relaunch.
+
+The result waits for every unit, except when a violated control decides the round early. While the workpiece has
+a MODIFY round left (``ValidationContext.modify_rounds_left``), the first control whose replay, or whose file, is
+violated cancels every solver and adversary trial that has not ended, and the round returns once the remaining
+control replays end. The result's ``EarlyDecision`` names that control and the cancelled trials, which the result
+leaves out. A cancelled attempt writes no attempt file, so a later round on the same files runs those trials again.
+Without a MODIFY round left, a violated control decides nothing early and the round waits for complete evidence.
 
 The round takes two inputs besides the draft and its models: the ``ValidationContext`` a stage coordinator owns
 (the workpiece, the round, its directory, the proposal it built, the step store, the MODIFY rounds left) and the
@@ -54,7 +61,7 @@ trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial``
 
 import asyncio
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -245,9 +252,22 @@ class AdversaryResult:
 
 
 @dataclass(frozen=True)
+class EarlyDecision:
+    """A round its first violated control decided before every trial ended.
+
+    ``control`` is the id of that control, and ``cancelled`` names each solver and adversary trial the round
+    stopped, as ``solver/<i>`` or ``adversary/<i>``; none of them is in the round's result.
+    """
+
+    control: str
+    cancelled: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ValidationResult:
     """A validation round, written as ``validation.json``: ``solver`` is ``None`` and ``controls`` and
-    ``adversary`` empty when the lowering was rejected."""
+    ``adversary`` empty when the lowering was rejected. ``early`` is set when a violated control decided the
+    round before every trial ended, and ``solver`` and ``adversary`` then hold only the trials that ended."""
 
     workpiece_id: str
     round: int
@@ -255,6 +275,7 @@ class ValidationResult:
     solver: SolverEvidence | None
     controls: tuple[ControlResult, ...]
     adversary: tuple[AdversaryResult, ...]
+    early: EarlyDecision | None
 
 
 @dataclass(frozen=True)
@@ -305,14 +326,29 @@ async def validate_round(
         async with asyncio.TaskGroup() as group:
             lowering = group.create_task(_lowering_unit(draft, settings, directory))
             controls = group.create_task(_controls_unit(draft, context, settings, controls_model, directory))
-            group.create_task(_solver_units(lowering, context, settings, solver_model, directory))
-            group.create_task(_replay_units(lowering, controls, context, settings, directory))
-            group.create_task(_adversary_units(lowering, controls, context, settings, adversary_model, directory))
+            trials = {
+                f"{TrialKind.SOLVER}/{index}": group.create_task(
+                    _solver_unit(lowering, context, settings, solver_model, directory, str(index))
+                )
+                for index in range(settings.k)
+            } | {
+                f"{TrialKind.ADVERSARY}/{index}": group.create_task(
+                    _adversary_unit(lowering, controls, context, settings, adversary_model, directory, str(index))
+                )
+                for index in range(settings.adversary.k)
+            }
+            closing = _EarlyClose(armed=context.modify_rounds_left > 0, trials=trials)
+            group.create_task(_replay_units(lowering, controls, context, settings, directory, closing))
     except BaseExceptionGroup as failure:
         if len(failure.exceptions) == 1:
             raise failure.exceptions[0] from None
         raise
-    return _result(context, settings, lowering.result(), controls.result(), directory)
+    cancelled = tuple(name for name, task in trials.items() if task.cancelled())
+    early = None
+    if cancelled:
+        assert closing.control is not None, f"{context.workpiece_id}: trials {cancelled} were cancelled undecided"
+        early = EarlyDecision(closing.control, cancelled)
+    return _result(context, settings, lowering.result(), controls.result(), directory, early)
 
 
 def write_validation(round_dir: Path, result: ValidationResult) -> None:
@@ -372,24 +408,43 @@ async def _controls_unit(
     return load_controls(directory)
 
 
-async def _solver_units(
+@dataclass
+class _EarlyClose:
+    """Cancels the round's ``trials`` that have not ended on its first violated control, when ``armed``.
+
+    A round is armed while the workpiece has a MODIFY round left; without one it waits for every trial.
+    ``control`` records the control that closed the round.
+    """
+
+    armed: bool
+    trials: Mapping[str, asyncio.Task[None]]
+    control: str | None = None
+
+    def violated(self, control_id: str) -> None:
+        if not self.armed or self.control is not None:
+            return
+        self.control = control_id
+        for task in self.trials.values():
+            task.cancel()
+
+
+async def _solver_unit(
     lowering: asyncio.Task[_Lowered],
     context: ValidationContext,
     settings: ValidationSettings,
     model: TrialModel,
     directory: Path,
+    trial: str,
 ) -> None:
     if not await _inputs_ready(lowering):
         return
     lowered = lowering.result()
     if lowered.spec is None:
         return
-    spec, evidence_dir = lowered.spec, _trials_dir(directory, settings, lowered.spec)
-    async with asyncio.TaskGroup() as group:
-        for index in range(settings.k):
-            plan = _resumed_plan(context, settings, TrialKind.SOLVER, evidence_dir, str(index), _any_attempt, 0)
-            if plan is not None:
-                group.create_task(run_trial(spec, plan, settings.engine, model, str(index)))
+    evidence_dir = _trials_dir(directory, settings, lowered.spec)
+    plan = _resumed_plan(context, settings, TrialKind.SOLVER, evidence_dir, trial, _any_attempt, 0)
+    if plan is not None:
+        await run_trial(lowered.spec, plan, settings.engine, model, trial)
 
 
 async def _replay_units(
@@ -398,6 +453,7 @@ async def _replay_units(
     context: ValidationContext,
     settings: ValidationSettings,
     directory: Path,
+    closing: _EarlyClose,
 ) -> None:
     if not await _inputs_ready(lowering, controls):
         return
@@ -408,18 +464,36 @@ async def _replay_units(
     check_replayable(spec.task, control_set, settings.engine.max_turns)
     async with asyncio.TaskGroup() as group:
         for control in control_set:
-            plan = _resumed_plan(context, settings, TrialKind.CONTROL, evidence_dir, control.id, _any_attempt, 0)
-            if plan is not None:
-                group.create_task(replay_control(spec, control, plan, settings.engine))
+            group.create_task(_control_unit(spec, control, context, settings, evidence_dir, closing))
 
 
-async def _adversary_units(
+async def _control_unit(
+    spec: TaskRolloutSpec,
+    control: Control,
+    context: ValidationContext,
+    settings: ValidationSettings,
+    evidence_dir: Path,
+    closing: _EarlyClose,
+) -> None:
+    """Replay ``control`` unless its file holds its last attempt, and report a violation to ``closing``."""
+    plan = _resumed_plan(context, settings, TrialKind.CONTROL, evidence_dir, control.id, _any_attempt, 0)
+    if plan is None:
+        _, outcome = _final_attempt(evidence_dir, TrialKind.CONTROL, control.id)
+        verdict = control_outcome(control, outcome).verdict
+    else:
+        verdict = (await replay_control(spec, control, plan, settings.engine)).verdict
+    if verdict is ControlVerdict.VIOLATED:
+        closing.violated(control.id)
+
+
+async def _adversary_unit(
     lowering: asyncio.Task[_Lowered],
     controls: asyncio.Task[tuple[Control, ...]],
     context: ValidationContext,
     settings: ValidationSettings,
     model: ModelClient,
     directory: Path,
+    trial: str,
 ) -> None:
     if not await _inputs_ready(lowering, controls):
         return
@@ -433,15 +507,11 @@ async def _adversary_units(
     def under_brief(payload: bytes) -> bool:
         return adversary_record(payload).brief == brief
 
-    async with asyncio.TaskGroup() as group:
-        for index in range(policy.k):
-            trial = str(index)
-            graded_submissions = _numbered_dirs(evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR)
-            floor = graded_submissions[-1] + 1 if graded_submissions else 0
-            plan = _resumed_plan(context, settings, TrialKind.ADVERSARY, evidence_dir, trial, under_brief, floor)
-            if plan is not None:
-                run = run_adversary_trial(spec, brief, policy, plan, settings.engine, model, trial, settings.max_retries)
-                group.create_task(run)
+    graded_submissions = _numbered_dirs(evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR)
+    floor = graded_submissions[-1] + 1 if graded_submissions else 0
+    plan = _resumed_plan(context, settings, TrialKind.ADVERSARY, evidence_dir, trial, under_brief, floor)
+    if plan is not None:
+        await run_adversary_trial(spec, brief, policy, plan, settings.engine, model, trial, settings.max_retries)
 
 
 def _any_attempt(payload: bytes) -> bool:
@@ -520,32 +590,40 @@ def _result(
     lowered: _Lowered,
     controls: tuple[Control, ...],
     directory: Path,
+    early: EarlyDecision | None,
 ) -> ValidationResult:
-    """The round's result, read back from its unit files."""
+    """The round's result, read back from the unit files of every trial ``early`` did not cancel."""
     if lowered.spec is None:
         rejected = Lowering(LoweringStatus.REJECTED, lowered.detail, (), None, None)
-        return ValidationResult(context.workpiece_id, context.round, rejected, None, (), ())
+        return ValidationResult(context.workpiece_id, context.round, rejected, None, (), (), None)
     trial_digest = _trial_digest(settings, lowered.spec)
     status = LoweringStatus.REFUSED if lowered.refusals else LoweringStatus.LOWERED
     lowering = Lowering(status, "", lowered.refusals, lowered.fallback, trial_digest)
     trials_dir = _trials_dir(directory, settings, lowered.spec)
+    cancelled = set() if early is None else set(early.cancelled)
+    solver = [str(index) for index in range(settings.k) if f"{TrialKind.SOLVER}/{index}" not in cancelled]
+    adversary = [
+        str(index) for index in range(settings.adversary.k) if f"{TrialKind.ADVERSARY}/{index}" not in cancelled
+    ]
     return ValidationResult(
         context.workpiece_id,
         context.round,
         lowering,
-        _solver_evidence(context, settings, trials_dir),
+        _solver_evidence(context, trials_dir, solver),
         _control_results(context, _replay_dir(trials_dir, controls), controls),
-        tuple(_adversary_result(context, trials_dir, str(index)) for index in range(settings.adversary.k)),
+        tuple(_adversary_result(context, trials_dir, trial) for trial in adversary),
+        early,
     )
 
 
-def _solver_evidence(context: ValidationContext, settings: ValidationSettings, evidence_dir: Path) -> SolverEvidence:
-    finals = [_final_attempt(evidence_dir, TrialKind.SOLVER, str(index)) for index in range(settings.k)]
+def _solver_evidence(context: ValidationContext, evidence_dir: Path, trials: list[str]) -> SolverEvidence:
+    finals = [_final_attempt(evidence_dir, TrialKind.SOLVER, trial) for trial in trials]
     evidence = Evidence({TrialKind.SOLVER: tuple(outcome for _, outcome in finals)})
     status = evidence.status
     return SolverEvidence(
         trials=tuple(
-            _trial_result(str(index), outcome, _relative(context, path)) for index, (path, outcome) in enumerate(finals)
+            _trial_result(trial, outcome, _relative(context, path))
+            for trial, (path, outcome) in zip(trials, finals, strict=True)
         ),
         stats=evidence.reward_stats(TrialKind.SOLVER),
         ungraded=dict(status.causes) if isinstance(status, Incomplete) else {},

@@ -18,6 +18,7 @@ from taskforge.stage50_validate.outcome import Cause
 from taskforge.stage50_validate.round import (
     AdversaryResult,
     ControlResult,
+    EarlyDecision,
     Lowering,
     LoweringStatus,
     SolverEvidence,
@@ -70,8 +71,9 @@ def result(
     evidence: SolverEvidence | None = IN_BAND,
     controls: tuple[ControlResult, ...] = (MET,),
     adversary: tuple[AdversaryResult, ...] = (),
+    early: EarlyDecision | None = None,
 ) -> ValidationResult:
-    return ValidationResult("workpiece", 0, lowering, evidence, controls, adversary)
+    return ValidationResult("workpiece", 0, lowering, evidence, controls, adversary, early)
 
 
 def context(modify_rounds_left: int = 1) -> ReviewContext:
@@ -122,6 +124,20 @@ async def test_a_violated_control_decides_before_incomplete_evidence():
     decision = await default_review(incomplete, context())
 
     assert isinstance(decision, Modify) and len(decision.findings) == 1
+
+
+@pytest.mark.parametrize(("modify_rounds_left", "decided"), [(1, Modify), (0, Reject)])
+async def test_a_round_decided_early_is_decided_by_its_violated_control_never_as_incomplete_evidence(
+    modify_rounds_left, decided
+):
+    """The round cancelled three of four solver trials, so the solver evidence alone is no measurement."""
+    early = result(
+        evidence=solver(1, 0),
+        controls=(MET, VIOLATED),
+        early=EarlyDecision(VIOLATED.id, ("solver/1", "solver/2", "solver/3", "adversary/0")),
+    )
+
+    assert isinstance(await default_review(early, context(modify_rounds_left)), decided)
 
 
 async def test_incomplete_evidence_retries_for_the_cause_that_left_the_most_solver_trials_and_controls_ungraded():

@@ -19,7 +19,7 @@ from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import AnswerType, PlainText, Source
 from verifyit.spec import ExactSpec
 
-from taskforge.ledger.records import EntryKind
+from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
 from taskforge.llm.client import Completion, FinishReason, ModelClient, StructuredResult, ToolCall, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
@@ -38,6 +38,7 @@ from taskforge.stage50_validate.adversary import AdversaryMode, AdversaryPolicy,
 from taskforge.stage50_validate.control_drafts import CONTROLS_STEP
 from taskforge.stage50_validate.controls import ControlVerdict
 from taskforge.stage50_validate.round import (
+    EarlyDecision,
     LoweringStatus,
     TrialStatus,
     ValidationContext,
@@ -285,6 +286,24 @@ class AdversaryScript:
 
 
 PROBES = (Submit("41"), Submit("42"), "I submitted the honest answer.\nNO_SHORTCUT")
+
+
+@dataclass
+class StepSignal:
+    """Records every entry in ``ledger`` and sets ``recorded`` once an entry for ``step`` is recorded."""
+
+    ledger: Ledger
+    step: str
+    recorded: asyncio.Event = field(default_factory=asyncio.Event)
+
+    def record(self, entry: LedgerEntry) -> None:
+        self.ledger.record(entry)
+        if entry.step == self.step:
+            self.recorded.set()
+
+
+VIOLATED_CONTROL = "N2-off-by-one"
+"""The control ``controls_reply("42")`` violates: a negative control replying the right answer."""
 
 
 def trial_steps(ledger, since: int = 0) -> set[str]:
@@ -589,3 +608,60 @@ async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(g
     (trial,) = result.adversary
     assert trial.status is TrialStatus.GRADED
     assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+
+
+async def test_a_violated_control_with_a_modify_round_left_cancels_the_held_trials_and_names_them(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    fake_glm.stream(content=controls_reply("42"))
+    controls_release = asyncio.Event()
+    solver = SolverModel(release=asyncio.Event())
+    context = round_context(tmp_path, modify_rounds_left=1)
+    settings = round_settings(ledger, k=2, adversary=adversary_policy(k=1))
+    running = asyncio.create_task(
+        validate_round(
+            built_draft(tmp_path / "store"),
+            context,
+            settings,
+            solver,
+            HeldClient(glm_client, controls_release),
+            AdversaryScript(PROBES, hold_at=0),
+        )
+    )
+    await asyncio.wait_for(solver.called.wait(), timeout=30)
+    controls_release.set()
+
+    result = await asyncio.wait_for(running, timeout=30)
+
+    assert result.early == EarlyDecision(VIOLATED_CONTROL, ("solver/0", "solver/1", "adversary/0"))
+    assert result.solver is not None and result.solver.trials == () and result.solver.ungraded == {}
+    assert result.adversary == ()
+    verdicts = {c.id: c.verdict for c in result.controls}
+    assert verdicts == {i: ControlVerdict.VIOLATED if i == VIOLATED_CONTROL else ControlVerdict.MET for i in CONTROL_IDS}
+    trials_dir = context.round_dir / Path(result.controls[0].attempt_file).parents[3]
+    assert not list(trials_dir.glob("solver/**/attempt-*.json"))
+    assert not list(trials_dir.glob("adversary/**/attempt-*.json"))
+    write_validation(context.round_dir, result)
+    assert load_validation(context.round_dir) == result
+
+
+async def test_without_a_modify_round_left_a_violated_control_waits_for_every_trial_to_end(
+    glm_client, fake_glm, ledger, tmp_path
+):
+    fake_glm.stream(content=controls_reply("42"))
+    signal = StepSignal(ledger, f"control/{VIOLATED_CONTROL}/0")
+    solver = SolverModel(release=signal.recorded)
+    context = round_context(tmp_path, modify_rounds_left=0)
+    settings = round_settings(signal, k=2, adversary=adversary_policy(k=1))
+
+    result = await asyncio.wait_for(
+        validate_round(built_draft(tmp_path / "store"), context, settings, solver, glm_client, AdversaryScript(PROBES)),
+        timeout=60,
+    )
+
+    assert result.early is None
+    assert result.solver is not None and [t.status for t in result.solver.trials] == [TrialStatus.GRADED] * 2
+    assert [t.status for t in result.adversary] == [TrialStatus.GRADED]
+    assert {c.id: c.verdict for c in result.controls}[VIOLATED_CONTROL] is ControlVerdict.VIOLATED
+    violated_ended = next(e.ended for e in ledger.entries if e.step == signal.step)
+    assert all(e.ended >= violated_ended for e in ledger.entries if e.step.startswith("solver/"))

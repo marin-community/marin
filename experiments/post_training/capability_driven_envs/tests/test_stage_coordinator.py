@@ -114,7 +114,7 @@ async def task(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
 async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
     stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
     lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
-    return ValidationResult(context.workpiece_id, context.round, lowering, SolverEvidence((), stats, {}), (), ())
+    return ValidationResult(context.workpiece_id, context.round, lowering, SolverEvidence((), stats, {}), (), (), None)
 
 
 async def no_repair(proposal: TaskProposal, verdict: Verdict) -> TaskProposal:
