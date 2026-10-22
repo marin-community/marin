@@ -4,6 +4,7 @@
 """Shared SFTSpec/ModelSource binding and bounded current-Hero adapter runtime."""
 
 import dataclasses
+import hashlib
 import json
 import logging
 import math
@@ -29,7 +30,7 @@ from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
 
@@ -292,8 +293,95 @@ def _checkpoint_timing(path: str, state, execution_id: str, started: float) -> d
     }
 
 
+class PendingAcquisition(BaseModel):
+    core_path: str
+    core_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+def pending_acquisition(config: HeroSftRunConfig, step: int) -> list[PendingAcquisition]:
+    """Recover the queue persisted before the exact resumed compact checkpoint."""
+    if config.resume_checkpoint is None:
+        return []
+    telemetry = StoragePath(config.resume_checkpoint).parent.parent / "telemetry"
+    path = telemetry / f"diagnostics-step-{step}.json"
+    if not path.exists():
+        # Checkpoints written before deferred acquisition have no pending queue.
+        return []
+    records = TypeAdapter(list[PendingAcquisition]).validate_json(path.read_text())
+    if len(records) > config.sft.num_steps:
+        raise ValueError("Deferred acquisition queue exceeds the bounded update schedule")
+    return records
+
+
+def complete_acquisition(
+    config: HeroSftRunConfig, frozen, final_state, mesh, pending: list[PendingAcquisition]
+) -> list[str]:
+    """Finalize saved-update diagnostics after the last gradient in this segment.
+
+    The caller must never execute another training gradient after this function:
+    ragged training and shorter acquisition executables share NCCL windows.
+    """
+    completed = []
+    for item in pending:
+        path = StoragePath(item.core_path)
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != item.core_sha256:
+            raise ValueError("Deferred acquisition core telemetry changed")
+        core = json.loads(raw)
+        if (
+            core["kind"] != "hero_sft_core_update"
+            or core["checkpoint_metadata_digest"] != config.reference.metadata_digest
+            or core["acquisition_panel_digest"] != config.acquisition_panel_digest
+            or core["data_manifest_digest"] != config.data_manifest_digest
+            or not 0 < core["update"] <= int(final_state.step)
+        ):
+            raise ValueError("Deferred acquisition changed its base, panel or schedule")
+        output = path.parent / f"update-{core['update']:06d}.json"
+        if output.exists():
+            record = json.loads(output.read_text())
+            if (
+                record.get("core_update_sha256") != item.core_sha256
+                or record.get("kind") != "hero_sft_raw_smoke_update"
+                or any(record.get(key) != value for key, value in core.items() if key != "kind")
+                or record["acquisition_diagnostic"]["panel_digest"] != config.acquisition_panel_digest
+            ):
+                raise ValueError("Finalized acquisition report differs from its exact core telemetry")
+            completed.append(str(output))
+            continue
+        if TypeAdapter(SftConfig).validate_python(core["sft_config"]) != config.sft:
+            raise ValueError("Unfinished acquisition changed its exact SFT schedule")
+        state = restore_sft_checkpoint(core["checkpoint"], final_state, config.reference, config.sft, mesh)
+        if (
+            int(state.step) != core["update"]
+            or int(state.processed_tokens) != core["processed_tokens_total"]
+            or int(state.supervised_tokens) != core["supervised_tokens_total"]
+        ):
+            raise ValueError("Acquisition checkpoint differs from the measured update counters")
+        diagnostic = config.diagnostic(frozen, state.params, config.sft, int(state.step))
+        if (
+            diagnostic["panel_digest"] != config.acquisition_panel_digest
+            or diagnostic["cases"] <= 0
+            or not 0 <= diagnostic["successes"] <= diagnostic["cases"]
+        ):
+            raise ValueError("Deferred acquisition differs from the pinned diagnostic panel")
+        record = {
+            **core,
+            "kind": "hero_sft_raw_smoke_update",
+            "core_update_sha256": item.core_sha256,
+            "diagnostic_successes": diagnostic["successes"],
+            "diagnostic_cases": diagnostic["cases"],
+            "acquisition_diagnostic": diagnostic,
+        }
+        if jax.process_index() == 0:
+            conditional_object(str(output)).write((json.dumps(record, indent=2) + "\n").encode(), expected_version=None)
+        completed.append(str(output))
+    return completed
+
+
 def _run_sft_local(config: HeroSftRunConfig) -> None:
     """Train only compact leaves; a token cap is checked before each update."""
+    if config.save_every_steps != 1:
+        raise ValueError("Deferred per-update acquisition requires a compact checkpoint after every update")
     trainer = config.trainer
     trainer.initialize()
     levanter.tracker.log_configuration(config)
@@ -336,6 +424,7 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                 or int(state.supervised_tokens) != reviewed.handoff.supervised_tokens
             ):
                 raise ValueError("Restored pilot state differs from its evaluated inspection and data cursor")
+        pending = pending_acquisition(config, int(state.step))
         gradient_step = make_sft_gradients(config.sft)
         optimizer_step = make_sft_optimizer_step(config.sft)
         compiled_gradient = None
@@ -440,11 +529,6 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
             duration = time.perf_counter() - started
             if not bool(jnp.isfinite(metrics["loss"])) or not bool(jnp.isfinite(metrics["gradient_norm"])):
                 raise RuntimeError(f"Nonfinite SFT loss or gradient at step {int(state.step)}")
-            diagnostic = config.diagnostic(frozen, state.params, config.sft, int(state.step))
-            if diagnostic["panel_digest"] != config.acquisition_panel_digest:
-                raise ValueError("Runtime acquisition diagnostic differs from the pinned measurement panel")
-            if diagnostic["cases"] <= 0 or not 0 <= diagnostic["successes"] <= diagnostic["cases"]:
-                raise ValueError("The fixed acquisition diagnostic returned invalid measured counts")
             activation_gradient_norm = float(jnp.linalg.norm(grads.input_delta))
             memory = [device.memory_stats() for device in jax.local_devices()]
             local_peaks = [
@@ -472,7 +556,7 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
             if jax.process_index() == 0:
                 record = {
                     "schema_version": 1,
-                    "kind": "hero_sft_raw_smoke_update",
+                    "kind": "hero_sft_core_update",
                     "execution_id": trainer.id,
                     "checkpoint_metadata_digest": config.reference.metadata_digest,
                     "measurement_identity_digest": measurement_identity,
@@ -486,7 +570,7 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                             "expert_axis_size": config.expert_axis_size,
                             "context_axis_size": config.context_axis_size,
                             "replica_axis_size": config.replica_axis_size,
-                            "diagnostic_panel_digest": diagnostic["panel_digest"],
+                            "diagnostic_panel_digest": config.acquisition_panel_digest,
                         }
                     ),
                     "update": int(state.step),
@@ -499,9 +583,16 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                     "optimizer_seconds": optimizer_seconds,
                     "loss": float(metrics["loss"]),
                     "gradient_norm": float(metrics["gradient_norm"]),
-                    "diagnostic_successes": diagnostic["successes"],
-                    "diagnostic_cases": diagnostic["cases"],
-                    "acquisition_diagnostic": diagnostic,
+                    "acquisition_panel_digest": config.acquisition_panel_digest,
+                    "data_manifest_digest": config.data_manifest_digest,
+                    "checkpoint": f"{config.output_path}/adapters/step-{int(state.step)}",
+                    "processed_tokens_total": int(state.processed_tokens),
+                    "supervised_tokens_total": int(state.supervised_tokens),
+                    "routing_metrics": {
+                        name: float(value)
+                        for name, value in metrics.items()
+                        if name.startswith("train/router/") and isinstance(value, jax.Array) and value.ndim == 0
+                    },
                     "input_batches_digest": input_batches_digest,
                     "input_batches_digest_kind": "pinned data config, data seed, and global batch",
                     "input_delta_gradient_norm": activation_gradient_norm,
@@ -513,14 +604,20 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                     "sequence_length": config.model.max_seq_len,
                     "missing_smoke_measurements": [] if memory_bytes is not None else ["peak_hbm_bytes"],
                 }
-                (telemetry_path / f"update-{int(state.step):06d}.json").write_text(json.dumps(record, indent=2) + "\n")
+                core_path = telemetry_path / f"core-update-{int(state.step):06d}.json"
+                core_raw = (json.dumps(record, indent=2) + "\n").encode()
+                conditional_object(str(core_path)).write(core_raw, expected_version=None)
+                pending.append(
+                    PendingAcquisition(core_path=str(core_path), core_sha256=hashlib.sha256(core_raw).hexdigest())
+                )
+                conditional_object(str(telemetry_path / f"diagnostics-step-{int(state.step)}.json")).write(
+                    TypeAdapter(list[PendingAcquisition]).dump_json(pending) + b"\n", expected_version=None
+                )
             levanter.tracker.log(
                 {
                     **metrics,
                     "sft/step_duration": duration,
                     "sft/optimizer_seconds": optimizer_seconds,
-                    "sft/acquisition_successes": diagnostic["successes"],
-                    "sft/acquisition_cases": diagnostic["cases"],
                     "sft/processed_tokens_total": int(state.processed_tokens),
                     "sft/supervised_tokens_total": int(state.supervised_tokens),
                     "sft/nonpadding_tokens_per_second": batch_tokens / duration,
@@ -549,6 +646,10 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
         if int(state.step) == 0:
             raise ValueError("Token cap permits no updates; choose a smaller batch or revise the budget before launch")
         if last_saved_step != int(state.step):
+            if jax.process_index() == 0:
+                conditional_object(str(telemetry_path / f"diagnostics-step-{int(state.step)}.json")).write(
+                    TypeAdapter(list[PendingAcquisition]).dump_json(pending) + b"\n", expected_version=None
+                )
             last_saved_checkpoint = f"{config.output_path}/adapters/step-{int(state.step)}"
             checkpoint_start = time.perf_counter()
             save_sft_checkpoint(last_saved_checkpoint, state, config.reference, config.sft)
@@ -560,6 +661,12 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                     )
                     + "\n"
                 )
+        # The leader published this queue before the completed checkpoint; every
+        # rank uses those same bytes for the collective acquisition executions.
+        pending = TypeAdapter(list[PendingAcquisition]).validate_json(
+            (telemetry_path / f"diagnostics-step-{int(state.step)}.json").read_text()
+        )
+        complete_acquisition(config, frozen, state, mesh, pending)
         native_path = f"{config.output_path}/export/step-{int(state.step)}"
         export_sft(native_path, frozen, state, config.reference, config.sft)
         assert last_saved_checkpoint is not None

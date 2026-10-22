@@ -98,6 +98,7 @@ def test_scanned_lora_outputs_and_gradients_match_dense_reference():
 def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_path):
     script = r"""
         import dataclasses
+        import hashlib
         import json
         import jax
         import jax.numpy as jnp
@@ -106,6 +107,9 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
         from jax.sharding import AxisType, Mesh, PartitionSpec
         from experiments.grug.moe_hero_ep.model import GrugModelConfig, Transformer, apply_qb_betas, LoraProjection
         from levanter.checkpoint import save_checkpoint
+        from levanter.trainer import TrainerConfig
+        from levanter.data.text.datasets import LmDataConfig
+        from fray.types import ResourceConfig
         from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
         from pathlib import Path
         from unittest.mock import patch
@@ -120,6 +124,7 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
         from experiments.grug.moe_hero_ep.sft_launch import (
             HeroSftCheckpoint, write_sft_handoff, HeroSftInspection, PilotInspection, PilotStop,
             pilot_inspection_due, read_pilot_inspection, save_pilot_inspection,
+            HeroSftRunConfig, PendingAcquisition, pending_acquisition, complete_acquisition,
         )
         from experiments.grug.moe_hero_ep.sft import (
             SftConfig, BaseReference, initialize_sft, sft_logits, sft_loss,
@@ -234,6 +239,72 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
                     expected_successes += int(np.argmax(values) == case.target_token_id)
                 assert diagnostic["successes"] == expected_successes and diagnostic["cases"] == 2
                 np.testing.assert_allclose(diagnostic["mean_nll"], np.mean(expected_losses), rtol=1e-6, atol=1e-6)
+                if context == 1:
+                    # Complete all gradients before another ragged executable (acquisition).
+                    # A diagnostic-phase interruption must recover pending exact states even
+                    # when the resumed segment has no gradients left to execute.
+                    deferred_root = Path(CHECKPOINT_ROOT) / "deferred"
+                    telemetry = deferred_root / "telemetry"
+                    telemetry.mkdir(parents=True)
+                    queued = []
+                    for saved in (state, resumed):
+                        update = int(saved.step)
+                        checkpoint = str(deferred_root / "adapters" / f"step-{update}")
+                        save_sft_checkpoint(checkpoint, saved, reference, sft)
+                        core = {
+                            "kind": "hero_sft_core_update", "update": update,
+                            "checkpoint": checkpoint,
+                            "checkpoint_metadata_digest": reference.metadata_digest,
+                            "acquisition_panel_digest": diagnostic_panel.panel_digest,
+                            "data_manifest_digest": "tiny-data",
+                            "sft_config": dataclasses.asdict(sft),
+                            "processed_tokens_total": int(saved.processed_tokens),
+                            "supervised_tokens_total": int(saved.supervised_tokens),
+                        }
+                        core_path = telemetry / f"core-update-{update:06d}.json"
+                        core_path.write_text(json.dumps(core))
+                        queued.append(PendingAcquisition(core_path=str(core_path),
+                            core_sha256=hashlib.sha256(core_path.read_bytes()).hexdigest()))
+                    calls = []
+                    interrupted = True
+                    def deferred_diagnostic(frozen_model, params, schedule, update):
+                        assert int(resumed.step) == 2  # Both training updates already exist.
+                        expected_state = state if update == 1 else resumed
+                        for actual, expected in zip(jax.tree.leaves(params),
+                                                     jax.tree.leaves(expected_state.params), strict=True):
+                            np.testing.assert_array_equal(actual, expected)
+                        calls.append(update)
+                        if update == 2 and interrupted:
+                            raise RuntimeError("interrupted acquisition")
+                        return acquisition(frozen_model, params, schedule, update)
+                    runtime = HeroSftRunConfig(reference, config, sft, LmDataConfig(),
+                        TrainerConfig(id="deferred-test", train_batch_size=4, num_train_steps=sft.num_steps),
+                        ResourceConfig.with_cpu(cpu=1, ram="1g"), str(deferred_root), expert, context, 1,
+                        10000, 1, (("loss",20.),), deferred_diagnostic, "tiny-data",
+                        diagnostic_panel.panel_digest, resume_checkpoint=str(deferred_root / "adapters" / "step-2"),
+                        resume_sft_config=sft)
+                    (telemetry / "diagnostics-step-2.json").write_text(
+                        json.dumps([item.model_dump() for item in queued]))
+                    try:
+                        complete_acquisition(runtime, frozen, resumed, mesh, queued)
+                    except RuntimeError as error:
+                        assert str(error) == "interrupted acquisition"
+                    else:
+                        raise AssertionError("Diagnostic interruption must propagate")
+                    first_report = (telemetry / "update-000001.json").read_bytes()
+                    assert not (telemetry / "update-000002.json").exists()
+                    interrupted = False
+                    recovered_queue = pending_acquisition(runtime, int(resumed.step))
+                    reports = complete_acquisition(runtime, frozen, resumed, mesh, recovered_queue)
+                    assert len(reports) == 2 and calls == [1,2,2]
+                    assert (telemetry / "update-000001.json").read_bytes() == first_report
+                    assert json.loads((telemetry / "update-000002.json").read_text())["update"] == 2
+                    assert int(resumed.step) == 2 and int(resumed.processed_tokens) == 2 * tokens.size
+                    assert compact_optimizer_report(resumed)["optimizer_step"] == 2
+                    changed_schedule = dataclasses.replace(runtime,
+                        sft=dataclasses.replace(sft,num_steps=sft.num_steps+2),resume_sft_config=sft)
+                    assert complete_acquisition(changed_schedule,frozen,resumed,mesh,recovered_queue) == reports
+                    assert calls == [1,2,2]  # Finished diagnostics survive a reviewed pilot schedule change.
                 assert merged.stacked_blocks.stacked.attn.lora_q is None
                 np.testing.assert_array_equal(merged.stacked_blocks.stacked.mlp.router_bias, original_qb)
                 if context == 1:

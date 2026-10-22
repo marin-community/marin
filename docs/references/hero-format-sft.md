@@ -314,6 +314,18 @@ inspect internal kernel allocations or require a general HLO absence certificate
 Independent numerical LoRA checks, finite updates and the declared diagnostic
 limits remain required for the bounded learning smoke.
 
+Acquisition evaluations run after the current invocation finishes its permitted
+gradient updates. Each evaluation restores the adapter and vocabulary parameters
+from that update's compact checkpoint. This path requires `save_every_steps=1`.
+Core update telemetry is saved before checkpoint publication; a queue pins those
+telemetry bytes by SHA256 and records unfinished acquisition measurements.
+Checkpoint restore recovers the queue even when no gradient updates remain.
+Final `update-N.json` reports are written after their acquisition measurements.
+This avoids alternating the large training executable and the smaller acquisition
+executable: overlapping NCCL symmetric-memory registrations can make the next
+training collective fail on the ragged backend
+([prior diagnosis](https://github.com/marin-community/marin/issues/8861#issuecomment-5531532861)).
+
 Smoke qualification pins the gradient-structure and compact-optimizer reports'
 raw SHA256 hashes and checks their execution, base and measurement identities.
 It checks FP32 output shapes for paired LoRA factors and selected vocabulary
