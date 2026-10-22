@@ -106,10 +106,15 @@ class AxolotlSpec:
     chat_template: str
     template_sha256: str
     seed: int
+    # The MoE router auxiliary loss: True trains the router through it (Qwen's
+    # pretraining rule); False records a deviation in the manifest.
+    output_router_logits: bool
     sequence_len: int = 32768
     per_device_batch_size: int = 1
     gradient_accumulation_steps: int = 64
     epochs: int = 1
+    # One conversation per sequence: the Stage 0 budget is matched in examples, and
+    # the #6839 masking canary is defined on unpacked sequences.
     # One conversation per sequence: the Stage 0 budget is matched in examples, and
     # the #6839 masking canary is defined on unpacked sequences.
     sample_packing: bool = False
@@ -180,9 +185,9 @@ def axolotl_config(spec: AxolotlSpec, *, scratch_output_dir: str) -> dict[str, A
         # Train-equals-serve: the shared template, inline.
         "chat_template": "jinja",
         "chat_template_jinja": spec.chat_template,
-        # Qwen's router aux loss is off by default; without it the router trains
-        # only through the LM loss.
-        **({"output_router_logits": True} if spec.base.architecture.startswith("qwen3") else {}),
+        # The router aux loss is explicit on the spec: without it the router
+        # trains only through the LM loss.
+        **({"output_router_logits": spec.output_router_logits} if spec.output_router_logits else {}),
         # FSDP2: parameters, gradients and optimizer state sharded across the node.
         "fsdp_version": 2,
         "fsdp": ["full_shard", "auto_wrap"],
@@ -388,8 +393,8 @@ def launch_axolotl(
         "sample_packing": spec.sample_packing,
         "template_sha256": spec.template_sha256,
         "router_rules": (
-            {"output_router_logits": True}
-            if spec.base.architecture.startswith("qwen3")
+            {"output_router_logits": spec.output_router_logits}
+            if spec.output_router_logits
             else {
                 "deviation": (
                     "NemotronH's correction bias is a frozen buffer; Axolotl does not update it "
