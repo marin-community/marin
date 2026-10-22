@@ -11,6 +11,7 @@ from typing import Any
 
 from loguru import logger
 
+from skyrl_train.dataset.dataset import prompt_token_ids
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat, completion_text, tokenized_pair
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch
@@ -19,20 +20,6 @@ from skyrl_train.trajectory_runners.types import (
     TrajectoryBatch,
     PreferenceRequestBatch,
 )
-
-
-def _token_ids(tokenizer, prompt) -> list[int]:
-    """Apply the chat template with a generation prompt, normalizing Transformers 5 returns."""
-    encoded = tokenizer.apply_chat_template(prompt, add_generation_prompt=True)
-    if isinstance(encoded, Mapping):
-        encoded = encoded.get("input_ids")
-    if hasattr(encoded, "tolist"):
-        encoded = encoded.tolist()
-    if isinstance(encoded, list) and len(encoded) == 1 and isinstance(encoded[0], list):
-        encoded = encoded[0]
-    if not isinstance(encoded, list):
-        raise TypeError(f"tokenizer chat template returned unsupported token IDs: {type(encoded).__name__}")
-    return [int(token) for token in encoded]
 
 
 class PreferencePairTrajectoryRunner:
@@ -76,7 +63,7 @@ class PreferencePairTrajectoryRunner:
 
     def _tokenize_pair(self, prompt, chosen: str, rejected: str) -> tuple[list[int], list[list[int]]]:
         """Tokenize one pair, failing loudly when either side exceeds the rollout budget."""
-        prompt_ids = _token_ids(self.tokenizer, prompt)
+        prompt_ids = prompt_token_ids(self.tokenizer, prompt)
         completions = []
         for field, text in (("chosen", chosen), ("rejected", rejected)):
             completion_ids = [int(token) for token in self.tokenizer(text, add_special_tokens=False)["input_ids"]]
