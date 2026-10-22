@@ -698,17 +698,17 @@ export default function (pi) {
             )
         except NonZeroAgentExitCodeError as error:
             error_lines = (
-                (error.result.stderr or "").splitlines()
+                (error.result.stderr or "").lower().splitlines()
                 if error.result is not None
                 else []
             )
-            if self._AUTHENTICATION_FAILURE_MARKER in error_lines:
+            if self._AUTHENTICATION_FAILURE_MARKER.lower() in error_lines:
                 raise ModelAuthenticationError(
                     "Pi could not authenticate to its model endpoint "
                     "(possibly an expired or invalid capability URL)",
                     result=error.result,
                 ) from error
-            if self._CONTEXT_LENGTH_FAILURE_MARKER in error_lines:
+            if self._CONTEXT_LENGTH_FAILURE_MARKER.lower() in error_lines:
                 raise ContextLengthExceededError(
                     "Pi exceeded the model's served context window"
                 ) from error
