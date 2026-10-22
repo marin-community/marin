@@ -90,6 +90,17 @@ SWE_NO_TOOL_CALL = (
 )
 HARNESS_FAITHFUL = "harness_faithful"
 WITH_FAILED_REPLY = "with_failed_reply"
+# The agent harness a trace ran under. v7 generation traces carry no harness field: SWE-smith ran mini-swe-agent 2.1.0
+# and TMax ran Terminus-2. Contributor traces (contributor.py) name theirs: Kimi SWE-smith ran Terminus-2, and Qwen
+# TMax ran mini-swe-agent with a `bash` tool call per turn, which keeps a rejected reply and answers "Format error".
+TERMINUS_2 = "terminus-2"
+MINI_SWE_AGENT = "mini-swe-agent-2.1"
+MINI_SWE_FORMAT_ERROR = "mini-swe-agent-bash-tool"
+V7_HARNESS = {"swesmith": MINI_SWE_AGENT, "tmax": TERMINUS_2}
+
+
+def harness(trace: dict) -> str:
+    return trace.get("harness") or V7_HARNESS[trace["family"]]
 PARSER = TerminusJSONPlainParser()
 
 

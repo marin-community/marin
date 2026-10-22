@@ -108,6 +108,11 @@ TOKENIZER_NOTE = (
 )
 # Pool v5, the frozen pool.
 POOL_MANIFEST_SHA256 = "7f3d6f7dbef1ed80d302f251540c72a5c548edb871fd0afed729653d7b6def68"
+# Pools a production build may read, by manifest sha256: pool v5 for the v7 generation, and the task #202 pilot set
+# for the contributor-data experiment (contributor.py). Epoch and recovery seeds include the pool's sha256.
+POOLS = {
+    POOL_MANIFEST_SHA256: "pool v5",
+}
 EPOCHS = 3
 # Replay for every arm: R = round(B / 4) supervised tokens (REPLAY_FRACTION_OF_B), so replay is about 20% of a split
 # (decided 2026-10-17).
@@ -354,14 +359,14 @@ class Candidate(NamedTuple):
 
 def clean_completion(trace: dict) -> bool:
     """The trial ended on the agent's own completion: its last assistant turn issues mini-swe-agent's submit command
-    (SWE-smith) or sets Terminus-2's task_complete to true (TMax), rather than being cut at the context limit."""
+    or sets Terminus-2's task_complete to true, by the trace's harness, rather than being cut at the context limit."""
     assistant = [m for m in trace["messages"] if m["role"] == "assistant"]
     if not assistant:
         return False
     last = (assistant[-1].get("content") or "") + json.dumps(assistant[-1].get("tool_calls") or [])
-    if trace["family"] == "swesmith":
-        return SWE_SUBMIT in last
-    return bool(TASK_COMPLETE.search(last))
+    if recovery.harness(trace) == recovery.TERMINUS_2:
+        return bool(TASK_COMPLETE.search(last))
+    return SWE_SUBMIT in last
 
 
 def think_tokens(rendered: RenderedTrace) -> int:
@@ -532,16 +537,16 @@ def cut_replay(
     }
 
 
-def epoch_seed(arm: str, epoch: int) -> str:
-    return f"{SEED}:{arm}:epoch-{epoch}:{POOL_MANIFEST_SHA256}"
+def epoch_seed(arm: str, epoch: int, pool_sha: str) -> str:
+    return f"{SEED}:{arm}:epoch-{epoch}:{pool_sha}"
 
 
-def write_epochs(out: Path, arm: str, rows_for_epoch, splits: dict) -> list[dict]:
+def write_epochs(out: Path, arm: str, rows_for_epoch, splits: dict, pool_sha: str) -> list[dict]:
     """Write train-epoch-<e> files, each a seeded permutation of its epoch's rows; return the index with epochs."""
     index = []
     for epoch in range(EPOCHS):
         epoch_index, splits[f"epoch-{epoch}"] = write_split(
-            out / f"train-epoch-{epoch}-prebuilt.jsonl.gz", rows_for_epoch(epoch), epoch_seed(arm, epoch)
+            out / f"train-epoch-{epoch}-prebuilt.jsonl.gz", rows_for_epoch(epoch), epoch_seed(arm, epoch, pool_sha)
         )
         index += [{"epoch": epoch} | item for item in epoch_index]
     return index
@@ -599,7 +604,7 @@ def parse_args() -> argparse.Namespace:
     inputs.add_argument("--traces", nargs="+", help="explicit rebuilt.jsonl files instead of --trace-prefix")
     parser.add_argument("--pool", required=True, help="pool tasks.jsonl")
     parser.add_argument(
-        "--pool-manifest", required=True, help="pool manifest.json (hash-checked against POOL_MANIFEST_SHA256)"
+        "--pool-manifest", required=True, help="pool manifest.json (hash-checked against POOLS)"
     )
     parser.add_argument("--replay", required=True, help="replay slice prefix (sweep_data)")
     parser.add_argument("--plain", help="built plain arm prefix (required for rs-multi, relay and recovery)")
@@ -663,6 +668,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if not args.test_inputs and not args.builder_commit:
         raise ValueError("--builder-commit is required unless --test-inputs")
+    # check_pins replaces these with the pinned pool's sha256 and notes.
+    args.pool_sha, args.pool_notes = POOL_MANIFEST_SHA256, None
     if args.traces is None:
         args.traces = finished_shards(args.trace_prefix, relay=args.arm == "relay")
         if not args.traces:
@@ -682,8 +689,10 @@ def check_pins(args: argparse.Namespace) -> None:
     if hashlib.sha256(replay_manifest).hexdigest() != REPLAY_MANIFEST_SHA256:
         raise ValueError(f"Replay is not the arms' replay artifact; use {REPLAY_URI}")
     pool_manifest = StoragePath(args.pool_manifest).read_bytes()
-    if hashlib.sha256(pool_manifest).hexdigest() != POOL_MANIFEST_SHA256:
-        raise ValueError("Pool manifest is not pool v5")
+    args.pool_sha = hashlib.sha256(pool_manifest).hexdigest()
+    if args.pool_sha not in POOLS:
+        raise ValueError(f"Pool manifest is not a pinned pool ({', '.join(POOLS.values())})")
+    args.pool_notes = json.loads(pool_manifest).get("notes")
     pool_hash = hashlib.sha256(StoragePath(args.pool).read_bytes()).hexdigest()
     if pool_hash != json.loads(pool_manifest)["file_sha256"]["tasks.jsonl"]:
         raise ValueError("tasks.jsonl does not match the pool manifest")
@@ -767,6 +776,7 @@ def build_rows(
     relay_families: list[str] | None = None,
     match_relay: dict | None = None,
     plain_selection: str = "first",
+    pool_sha: str = POOL_MANIFEST_SHA256,
 ) -> ArmRows:
     """Select the arm's attempts and write its split files into `out`.
 
@@ -798,7 +808,7 @@ def build_rows(
             }
         selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
         rows = [entry(kept[a.trial_id]) for _, a in sorted(chosen.items())] + replay.cut(replay_b)
-        index = write_epochs(out, "plain", lambda epoch: rows, splits)
+        index = write_epochs(out, "plain", lambda epoch: rows, splits, pool_sha)
         return ArmRows(selection, index, splits, b_tokens, extra)
     if arm == "validation":
         # One fixed set for every arm: GLM's first passing trace per held-out task, per family, no replay.
@@ -832,6 +842,7 @@ def build_rows(
             "rs-multi",
             lambda epoch: [entry(kept[a.trial_id]) for _, a in sorted(plan[epoch].items())] + replay_cut,
             splits,
+            pool_sha,
         )
         return ArmRows(selection, index, splits, b_tokens, {})
     budgets = plain_family_b(plain)
@@ -842,7 +853,7 @@ def build_rows(
     rows = [entry(kept[a.trial_id]) for a in chosen_episodes]
     if not component:
         rows += replay.cut(b_tokens)
-    index = write_epochs(out, "relay", lambda epoch: rows, splits)
+    index = write_epochs(out, "relay", lambda epoch: rows, splits, pool_sha)
     extra = {
         "relay_families": {
             family: {"plain_b": budgets[family], "achieved": totals[family], "delta": totals[family] - budgets[family]}
@@ -931,7 +942,7 @@ def build_recovery_rows(
     if b_tokens != plain["B_supervised_tokens"]:
         raise ValueError("Recovery B differs from plain's")
     selection = [{"task_id": task, "trial_id": a.trial_id, "sample": a.sample} for task, a in sorted(chosen.items())]
-    seed = f"{SEED}:recovery:{POOL_MANIFEST_SHA256}"
+    seed = f"{SEED}:recovery:{args.pool_sha}"
     recovered: dict[str, RenderedTrace] = {}
     stats = recovery.build_recovery(chosen, kept, tokenizer, args.recovery_swe_mode, seed, recovered)
     handoff, removed = [], set()
@@ -959,7 +970,7 @@ def build_recovery_rows(
     # Replay is cut at plain's B so its rows hash-match plain's, with or without handoff rows.
     rows += replay.cut(plain["B_supervised_tokens"])
     splits: dict = {}
-    index = write_epochs(out, "recovery", lambda epoch: rows, splits)
+    index = write_epochs(out, "recovery", lambda epoch: rows, splits, args.pool_sha)
     return ArmRows(selection, index, splits, b_tokens, {}), stats
 
 
@@ -1054,6 +1065,10 @@ def build_manifest(
     out: Path,
 ) -> dict[str, Any]:
     splits, b_tokens = rows.splits, rows.b_tokens
+    harnesses = {
+        family: sorted({recovery.harness(c.trace) for c in kept.values() if c.attempt.family == family})
+        for family in sorted({c.attempt.family for c in kept.values()})
+    }
     manifest = {
         "task": 211,
         "arm": args.arm,
@@ -1064,7 +1079,8 @@ def build_manifest(
         "max_sequence_tokens": CONTEXT,
         "batch_size": BATCH,
         "seed": SEED,
-        "pool_manifest_sha256": None if args.test_inputs else POOL_MANIFEST_SHA256,
+        "pool_manifest_sha256": None if args.test_inputs else args.pool_sha,
+        "pool_notes": args.pool_notes,
         "test_inputs": args.test_inputs,
         "dry_run": args.dry_run,
         "trace_prefix": args.trace_prefix,
@@ -1089,7 +1105,12 @@ def build_manifest(
         "candidates": candidate_counts(kept, dropped),
         "eligibility": eligible,
         "limitation": LIMITATION,
-        "family_notes": {family: FAMILY_NOTES[family] for family in sorted(eligible) if family in FAMILY_NOTES},
+        "family_notes": {
+            family: FAMILY_NOTES[family]
+            for family in sorted(eligible)
+            if family in FAMILY_NOTES and harnesses.get(family) == [recovery.V7_HARNESS[family]]
+        },
+        "harness": harnesses,
         "over_context_by_family": {
             family: reasons.get("over_context", 0)
             for family, reasons in sorted(
@@ -1203,7 +1224,16 @@ def main() -> None:
                 json.loads((StoragePath(args.match_relay) / "manifest.json").read_text()) if args.match_relay else None
             )
             rows = build_rows(
-                args.arm, kept, attempts, plain, replay, out, args.relay_families, match_relay, args.plain_selection
+                args.arm,
+                kept,
+                attempts,
+                plain,
+                replay,
+                out,
+                args.relay_families,
+                match_relay,
+                args.plain_selection,
+                args.pool_sha,
             )
         index_name = "validation-index.jsonl" if args.arm == "validation" else "train-index.jsonl"
         (out / index_name).write_text("".join(json.dumps(item) + "\n" for item in rows.index))
