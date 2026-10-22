@@ -17,10 +17,11 @@ as they are and may also call any stage directly::
 
 The Protocols defined here take positional-only parameters, so a caller's function may use its own
 parameter names. ``Author`` comes from ``stage30_author.author``, and the coordinator calls it with
-``proposal`` and ``revision`` in that order. The build stage calls ``load_program`` on the source
-the author returned, read back from ``authored/<k>/program.py``. The coordinator writes the summary returned by
-validate to ``validation.json`` and hands review the JSON read back from that file, so a resumed
-review receives the same value as a review in the first process.
+an ``AuthorContext`` for the workpiece and round, ``proposal`` and ``revision``, in that order. The
+build stage calls ``load_program`` on the source the author returned, read back from
+``authored/<k>/program.py``. The coordinator writes the summary returned by validate to
+``validation.json`` and hands review the JSON read back from that file, so a resumed review
+receives the same value as a review in the first process.
 """
 
 from dataclasses import dataclass

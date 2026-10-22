@@ -26,7 +26,14 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.spec.draft import assemble, requirements
 from taskforge.stage20_triage.verdict import accept
-from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
+from taskforge.stage30_author.author import (
+    PROGRAM_FILE,
+    AuthorContext,
+    AuthoredProgram,
+    Revision,
+    RevisionKind,
+    static_author,
+)
 from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
     RLEnvBuildProgram,
@@ -173,13 +180,15 @@ UNUSED_MODEL_DIGEST = model_digest(UnusedModel(), SAMPLING)
 
 
 class RecordingAuthor:
-    """Returns ``programs`` in turn, the last one from then on, and records each revision asked for."""
+    """Returns ``programs`` in turn, the last one from then on, and records each context and revision asked for."""
 
     def __init__(self, *programs: RLEnvBuildProgram):
         self.programs = list(programs)
+        self.contexts: list[AuthorContext] = []
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
+        self.contexts.append(context)
         self.revisions.append(revision)
         return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
 
@@ -191,7 +200,7 @@ class SourceAuthor:
         self.source = source
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(load_toy_program(self.source), self.source)
 
@@ -462,7 +471,7 @@ class CutAuthor:
         self.cuts = cuts
         self.revisions: list[Revision | None] = []
 
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def __call__(self, context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
             raise StructuredOutputError(ValueError("the reply was cut at the output limit"), (CUT_REPLY, CUT_REPLY))
@@ -507,7 +516,7 @@ async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_bu
     ]
 
 
-async def unavailable_author(proposal: object, revision: Revision | None) -> AuthoredProgram:
+async def unavailable_author(context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
     raise ModelUnavailable("the hold ran out", ())
 
 
@@ -612,7 +621,7 @@ async def test_an_unavailable_model_fails_the_workpiece_at_validation_and_a_rela
     assert exits(log) == [*ACCEPTED_EXITS[:4], ("terminal", "failed"), *ACCEPTED_EXITS[4:]]
 
 
-async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings(tmp_path):
+async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings_and_context(tmp_path):
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
 
@@ -625,4 +634,7 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
     assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
+    # The author stage and the build stage's call again, as the author returns no source, in each round.
+    directory = tmp_path / "workpieces" / WORKPIECE
+    assert author.contexts == [AuthorContext(WORKPIECE, 0, directory)] * 2 + [AuthorContext(WORKPIECE, 1, directory)] * 2
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()

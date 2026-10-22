@@ -3,8 +3,9 @@
 
 """Authors of build programs, the revisions they receive, and the program manifest.
 
-A caller awaits an author for a program in round 0 with the proposal and ``None``. In each later
-round the caller passes the ``Revision`` describing what went wrong in the previous one. The
+A caller awaits an author for a program with an ``AuthorContext``, the proposal, and ``None`` on
+the workpiece's first call. The context names the workpiece, its round and its directory. In each
+later call the caller passes the ``Revision`` describing what went wrong in the previous one. The
 author returns an ``AuthoredProgram``: the ``RLEnvBuildProgram`` to build next, with the Python
 source it loaded the program from. The coordinator writes that source to ``PROGRAM_FILE``, beside
 ``PROGRAM_MANIFEST_FILE``, in a directory of the author call, and the build stage loads the program
@@ -15,6 +16,7 @@ turns a program written by hand into an author returning no source.
 
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 
 from taskforge.stage30_author.program import RLEnvBuildProgram
@@ -53,8 +55,26 @@ class AuthoredProgram:
     source: str | None
 
 
+@dataclass(frozen=True)
+class AuthorContext:
+    """The workpiece an author call writes a program for.
+
+    Attributes:
+        workpiece_id: The workpiece's id.
+        round: The workpiece's round, which counts the review ``Modify`` decisions it followed.
+        workpiece_dir: The workpiece's directory. The coordinator's files in it are ``events.json``
+            and, in ``rounds/<n>/``, ``authored/``, ``draft/``, ``build-failures/``,
+            ``validation.json`` and ``decision.json``. An author keeps its own files in this
+            directory under any other name.
+    """
+
+    workpiece_id: str
+    round: int
+    workpiece_dir: Path
+
+
 class Author(Protocol):
-    async def __call__(self, proposal: object, revision: Revision | None) -> AuthoredProgram: ...
+    async def __call__(self, context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram: ...
 
 
 def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
@@ -75,10 +95,10 @@ def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
 
 
 def static_author(program: RLEnvBuildProgram) -> Author:
-    """Return an author that hands back ``program``, with no source, for every proposal and revision."""
+    """Return an author that hands back ``program``, with no source, for every call."""
     authored = AuthoredProgram(program, None)
 
-    async def author(proposal: object, revision: Revision | None) -> AuthoredProgram:
+    async def author(context: AuthorContext, proposal: object, revision: Revision | None) -> AuthoredProgram:
         return authored
 
     return author

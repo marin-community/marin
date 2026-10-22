@@ -30,8 +30,8 @@ src/taskforge/
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
                                verdict.py: Verdict, TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
-                               the program manifest;
+                               author.py: Revision, AuthoredProgram, AuthorContext, the Author protocol,
+                               `static_author`, the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
   stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
                                step_store.py: step keys, memos, the memo store and `memoized`;
@@ -302,7 +302,10 @@ the same budget. Its structured reply stayed invalid through the repair turns, a
 limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE, ...)`. Any other
 author error fails the workpiece at the author stage.
 
-The author returns an `AuthoredProgram`, the program with the Python source it came from. The
+The coordinator calls the author with an `AuthorContext` (the workpiece id, the round and the
+workpiece's directory), the proposal and the revision. An author keeps its own files in the
+workpiece's directory, under names the coordinator does not use (the layout below). The author
+returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
 workpiece's build and author failures so far, and the build stage loads the program from that file
 with `StageFunctions.load_program`, so the author runs once per revision. Each author call writes a
