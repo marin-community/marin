@@ -1,4 +1,0 @@
-interface:
-  display_name: "Simplify Code"
-  short_description: "Delete low-value tests and prose from diffs"
-  default_prompt: "Use $simplify-code to review this branch diff and remove low-value tests, prose, and leftover complexity."
