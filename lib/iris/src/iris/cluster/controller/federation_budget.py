@@ -167,16 +167,14 @@ class FederationBudgets:
                     self._reads.pop(user_id, None)
             raise
         with self._lock:
-            self._reads[user_id] = _BudgetRead((_with_spend(budget, budget.budget_spent),), self._now())
+            self._reads[user_id] = _BudgetRead((budget,), self._now())
 
     def _read_peer(self, peer_id: str) -> None:
         budgets = self._peers[peer_id].list_user_budgets(
             controller_pb2.Controller.ListUserBudgetsRequest(), timeout_ms=BUDGET_RPC_TIMEOUT.to_ms()
         )
         with self._lock:
-            self._reads[peer_id] = _BudgetRead(
-                tuple(_with_spend(budget, budget.budget_spent) for budget in budgets.users), self._now()
-            )
+            self._reads[peer_id] = _BudgetRead(tuple(budgets.users), self._now())
 
     def refresh(self, stop_event: threading.Event | None = None) -> None:
         """Refresh scheduling inputs without holding a DB transaction during RPCs."""

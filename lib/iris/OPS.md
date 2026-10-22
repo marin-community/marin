@@ -674,10 +674,7 @@ iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
 ```
 
-For federated clusters, edit budgets on the parent. `user budget list` reports
-local spend; `user budget get` returns the parent's effective budget and combined
-usage. See [shared budgets](docs/federation.md#shared-budgets) for parent credentials
-and behavior during outages.
+See [shared budgets](docs/federation.md#shared-budgets) for federation configuration.
 
 Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
 and forwards a signed assertion the controller verifies; the controller mints **no**

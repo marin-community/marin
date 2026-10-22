@@ -201,29 +201,20 @@ registered endpoint. The `scope=total` counter is exact; per-endpoint series are
 ## Shared budgets
 
 Set `budget_parent` on each child and list those children in the parent's
-`budget_peers`. Budget peers must also be routing peers. Production children use
-`marin`; the CI child uses `marin-dev`. Other routing peers do not count against
-that parent's budgets. Configure and edit limits on the parent; child-local
-budget edits are rejected.
+`budget_peers`, a subset of its routing peers. Configure and edit limits on the
+parent; child-local budget edits are rejected.
 
-The parent polls `ListUserBudgets` for local spend, including direct submissions
-and child jobs. Lists exclude mirrors and include active users without budget
-rows. `GetUserBudget` returns parent policy and combined usage, applying defaults
-for new users. Direct submissions and child jobs query that RPC before admission;
-handoffs from the budget parent reuse its check.
+`ListUserBudgets` reports local spend, including direct submissions and child
+jobs. `GetUserBudget` returns parent policy and combined usage. Direct submissions
+and child jobs query the parent before admission.
 
-Parent access uses the existing Iris config and credential resolver. CoreWeave
-controllers need ambient service-account credentials authorized for parent IAP,
+Child controllers need ambient service-account credentials authorized for parent IAP,
 such as a Workload Identity Federation ADC file supplied through
 `GOOGLE_APPLICATION_CREDENTIALS`. The parent reuses federation credentials for
 its child reads. Deploy both sides: older child lists omit unconfigured users.
 
-Reads run in the background with a ten-second RPC timeout. After 30 seconds
-without fresh peer usage, the parent pauses admission and new scheduling. Children
-pause new scheduling on stale parent policy. Existing attempts keep reconciling.
-The parent retains last-known spend and requires fresh reads after restart.
-Budgets remain soft priority limits: over-budget INTERACTIVE work runs as BATCH;
-SYSTEM and PRODUCTION are exempt, and running attempts keep their assigned band.
+After 30 seconds without fresh usage or policy, new scheduling pauses. An
+unreachable parent blocks child submissions. Existing attempts keep reconciling.
 
 ## Observing federation
 

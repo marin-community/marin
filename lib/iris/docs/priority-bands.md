@@ -88,8 +88,7 @@ Per-user budget tracking lives in
 exceeds their budget, INTERACTIVE submissions are silently downgraded to BATCH.
 SYSTEM and PRODUCTION are exempt.
 
-In a federation, parent policy applies to combined parent and budget-peer usage,
-including direct submissions. See [shared budgets](federation.md#shared-budgets).
+See [shared budgets](federation.md#shared-budgets) for federation configuration.
 
 ### Max-band caps and unlisted users
 
