@@ -68,6 +68,17 @@ from taskforge.stage40_build_with_program.run import (
 )
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import StoreCorruption
+from taskforge.stage50_validate.evidence import RewardStats
+from taskforge.stage50_validate.round import (
+    Lowering,
+    LoweringStatus,
+    SolverEvidence,
+    TrialResult,
+    TrialStatus,
+    ValidationContext,
+    ValidationResult,
+    load_validation,
+)
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
 from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
@@ -147,7 +158,6 @@ SERVICES = RLEnvBuildServices(
     reasoning_replay=ReasoningReplay.KEEP,
     agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
 )
-SUMMARY = {"graded": 4, "solved": 2}
 
 
 class UnusedModel:
@@ -232,8 +242,19 @@ SOURCE = "\n\n".join(
 """``PROGRAM`` as module text. The steps keep their text, so the loaded program has ``PROGRAM``'s digest."""
 
 
-async def validate(draft: TaskDraft) -> dict[str, int]:
-    return SUMMARY
+def passing_result(context: ValidationContext) -> ValidationResult:
+    """The round of ``context`` lowered, with four graded solver trials of which two solve the task."""
+    trials = tuple(
+        TrialResult(str(index), TrialStatus.GRADED, reward, None, f"solver/{index}/attempt-0.json")
+        for index, reward in enumerate((1.0, 0.0, 1.0, 0.0))
+    )
+    stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
+    lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
+    return ValidationResult(context.workpiece_id, context.round, lowering, SolverEvidence(trials, stats, {}), (), ())
+
+
+async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
+    return passing_result(context)
 
 
 async def review(summary: object) -> Decision:
@@ -739,16 +760,21 @@ async def test_a_relaunch_after_a_killed_re_author_builds_the_program_its_author
 
 
 class UnavailableOnce:
-    """A validate function whose first call finds the model unavailable."""
+    """A validate function whose call numbered ``failing`` finds the model unavailable, recording each context."""
 
-    def __init__(self) -> None:
-        self.calls = 0
+    def __init__(self, failing: int = 1) -> None:
+        self.failing = failing
+        self.contexts: list[ValidationContext] = []
 
-    async def __call__(self, draft: TaskDraft) -> dict[str, int]:
-        self.calls += 1
-        if self.calls == 1:
+    @property
+    def calls(self) -> int:
+        return len(self.contexts)
+
+    async def __call__(self, draft: TaskDraft, context: ValidationContext) -> ValidationResult:
+        self.contexts.append(context)
+        if self.calls == self.failing:
             raise ModelUnavailable("the hold ran out", ())
-        return SUMMARY
+        return passing_result(context)
 
 
 async def test_an_unavailable_model_fails_the_workpiece_at_validation_and_a_relaunch_resumes_there(tmp_path):
@@ -764,6 +790,37 @@ async def test_an_unavailable_model_fails_the_workpiece_at_validation_and_a_rela
     log = InMemoryEventLog()
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert exits(log) == [*ACCEPTED_EXITS[:4], ("terminal", "failed"), *ACCEPTED_EXITS[4:]]
+
+
+async def test_the_validate_stage_passes_each_round_its_directory_proposal_and_modify_rounds_left_across_a_relaunch(
+    tmp_path,
+):
+    validate_once = UnavailableOnce(failing=2)
+    decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
+
+    async def review_in_turn(summary: object) -> Decision:
+        return decisions.pop(0)
+
+    stages = replace(STAGES, author=RecordingAuthor(PROGRAM), validate=validate_once, review=review_in_turn)
+    with pytest.raises(ModelUnavailable):
+        await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, InMemoryEventLog())
+
+    log = InMemoryEventLog()
+    resumed = replace(stages, author=no_call, build=no_call)
+    assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    rounds = tmp_path / "workpieces" / WORKPIECE / "rounds"
+    first, second = (
+        ValidationContext(WORKPIECE, number, rounds / str(number), PROPOSAL, str(tmp_path / STORE_DIR), left)
+        for number, left in ((0, 1), (1, 0))
+    )
+    assert validate_once.contexts == [first, second, second]
+    assert load_validation(rounds / "1") == passing_result(second)
+    assert [(event.kind, event.round) for event in log.events()][-4:] == [
+        ("terminal", 1),
+        ("validated", 1),
+        ("decided", 1),
+        ("terminal", 1),
+    ]
 
 
 async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings(tmp_path):
@@ -1014,7 +1071,7 @@ async def test_run_workpieces_fails_a_workpiece_in_place_and_cancels_no_sibling_
     waiting: list[str] = []
     siblings_waiting, failed = asyncio.Event(), asyncio.Event()
 
-    async def validate_or_crash(draft: TaskDraft) -> dict[str, int]:
+    async def validate_or_crash(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
         if draft.task.id == "toy-1":
             await siblings_waiting.wait()
             failed.set()
@@ -1023,7 +1080,7 @@ async def test_run_workpieces_fails_a_workpiece_in_place_and_cancels_no_sibling_
         if len(waiting) == 2:
             siblings_waiting.set()
         await failed.wait()
-        return SUMMARY
+        return passing_result(context)
 
     stages = replace(STAGES, validate=validate_or_crash)
     terminals = await run_workpieces(coordinator(tmp_path, stages), arriving("toy-0", "toy-1", "toy-2"), RETRY)

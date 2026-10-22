@@ -34,6 +34,14 @@ from taskforge.stage40_build_with_program.run import (
     run_build,
 )
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
+from taskforge.stage50_validate.evidence import RewardStats
+from taskforge.stage50_validate.round import (
+    Lowering,
+    LoweringStatus,
+    SolverEvidence,
+    ValidationContext,
+    ValidationResult,
+)
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision
 from taskforge.stage_coordinator.coordinator import StageCoordinator, WorkpieceBudget, run_workpiece
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
@@ -102,8 +110,10 @@ async def task(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
     return task_spec(context.workpiece_id)
 
 
-async def validate(draft: TaskDraft) -> dict[str, int]:
-    return {"graded": 4, "solved": 2}
+async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
+    stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
+    lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
+    return ValidationResult(context.workpiece_id, context.round, lowering, SolverEvidence((), stats, {}), (), ())
 
 
 async def review(summary: object) -> Decision:

@@ -101,6 +101,7 @@ from taskforge.stage40_build_with_program.infrastructure import exception_chain,
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
+from taskforge.stage50_validate.round import VALIDATION_FILE, ValidationContext, write_validation
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, RejectKind, Retry
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
@@ -126,7 +127,6 @@ ROUNDS_DIR = "rounds"
 AUTHORED_DIR = "authored"
 REPAIRED_DIR = "repaired"
 FAILURES_DIR = "build-failures"
-VALIDATION_FILE = "validation.json"
 DECISION_FILE = "decision.json"
 BUDGET_DIGEST = "budget_digest"
 MODEL_DIGEST = "model_digest"
@@ -557,16 +557,29 @@ def _program_files(program: RLEnvBuildProgram) -> set[str]:
 
 
 async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
-    """Validate the round's draft and write the summary to ``validation.json``."""
+    """Validate the round's draft in the round's ``ValidationContext`` and write the result to ``validation.json``.
+
+    The context carries the MODIFY rounds the workpiece has left: ``max_modify_rounds`` less ``state.round``,
+    the ``Modify`` decisions already followed.
+    """
+    coordinator = workpiece.coordinator
     round_dir = workpiece.round_dir(state.round)
     draft = load_draft(round_dir / DRAFT_DIR)
     if digest(draft.task) != state.task_digest:
         raise ValueError(
             f"{workpiece.workpiece_id}: the stored draft has digest {digest(draft.task)}, not {state.task_digest}"
         )
-    summary = await workpiece.coordinator.stages.validate(draft)
-    _write(round_dir / VALIDATION_FILE, pretty_json(summary).encode())
-    attrs = {EXIT: Exit.VALIDATED, "summary_digest": digest(summary)}
+    context = ValidationContext(
+        workpiece_id=workpiece.workpiece_id,
+        round=state.round,
+        round_dir=round_dir,
+        proposal=workpiece.proposal_at(state),
+        store_root=str(coordinator.root / STORE_DIR),
+        modify_rounds_left=coordinator.budget.max_modify_rounds - state.round,
+    )
+    result = await coordinator.stages.validate(draft, context)
+    write_validation(round_dir, result)
+    attrs = {EXIT: Exit.VALIDATED, "result_digest": digest(result)}
     return WorkpieceEvent(EventKind.VALIDATED, state.round, state.task_digest, attrs)
 
 

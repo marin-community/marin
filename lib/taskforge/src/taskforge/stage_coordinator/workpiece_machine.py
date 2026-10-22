@@ -92,7 +92,7 @@ class EventKind(StrEnum):
     BUILT = "built"
     """digest: the task's. attrs: exit, program_digest, steps, hits."""
     VALIDATED = "validated"
-    """digest: the task's. attrs: exit, summary_digest."""
+    """digest: the task's. attrs: exit, result_digest (the ``ValidationResult``'s)."""
     DECIDED = "decided"
     """digest: the task's. attrs: exit, retries_used; band for accept; kind and reasons for reject;
     cause and count for retry and abandon; findings for modify."""

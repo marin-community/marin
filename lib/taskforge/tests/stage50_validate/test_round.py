@@ -42,8 +42,10 @@ from taskforge.stage50_validate.round import (
     TrialStatus,
     ValidationContext,
     ValidationResult,
+    ValidationSettings,
     load_validation,
     validate_round,
+    write_validation,
 )
 from taskforge.stage50_validate.trials import Deadlines, EngineSettings, RetryBackoff
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
@@ -128,19 +130,24 @@ def adversary_policy(k: int, submissions: int = 3, mode: AdversaryMode = Adversa
     )
 
 
-def round_context(
-    tmp_path: Path,
-    ledger,
-    k: int = 2,
-    deadlines: Deadlines | None = None,
-    adversary: AdversaryPolicy | None = None,
-) -> ValidationContext:
+def round_context(tmp_path: Path, modify_rounds_left: int = 0) -> ValidationContext:
     return ValidationContext(
         workpiece_id=WORKPIECE,
         round=0,
         round_dir=tmp_path / "round",
         proposal=parse(PROPOSAL),
         store_root=str(tmp_path / "store"),
+        modify_rounds_left=modify_rounds_left,
+    )
+
+
+def round_settings(
+    ledger,
+    k: int = 2,
+    deadlines: Deadlines | None = None,
+    adversary: AdversaryPolicy | None = None,
+) -> ValidationSettings:
+    return ValidationSettings(
         host=MachineHost.LAPTOP,
         engine=EngineSettings(
             factories={Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()},
@@ -306,10 +313,10 @@ async def test_solver_trials_start_before_the_controls_exist_and_replay_waits_fo
     fake_glm.stream(content=controls_reply("41"))
     release = asyncio.Event()
     solver = SolverModel()
-    context = round_context(tmp_path, ledger)
+    context, settings = round_context(tmp_path), round_settings(ledger)
     running = asyncio.create_task(
         validate_round(
-            built_draft(tmp_path / "store"), context, solver, HeldClient(glm_client, release), UncalledClient()
+            built_draft(tmp_path / "store"), context, settings, solver, HeldClient(glm_client, release), UncalledClient()
         )
     )
 
@@ -325,6 +332,7 @@ async def test_solver_trials_start_before_the_controls_exist_and_replay_waits_fo
     assert result.solver is not None and result.solver.stats.solved == 2 and result.solver.ungraded == {}
     assert [(c.id, c.verdict) for c in result.controls] == [(i, ControlVerdict.MET) for i in CONTROL_IDS]
     # validation.json holds the whole result without the attempt files it names.
+    write_validation(context.round_dir, result)
     for name in evidence_files(result):
         (context.round_dir / name).unlink()
     assert load_validation(context.round_dir) == result
@@ -332,28 +340,32 @@ async def test_solver_trials_start_before_the_controls_exist_and_replay_waits_fo
 
 async def test_a_relaunch_redoes_only_the_units_whose_files_are_missing(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
-    context = round_context(tmp_path, ledger)
-    first = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, UncalledClient())
+    context, settings = round_context(tmp_path), round_settings(ledger)
+    first = await validate_round(
+        built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, UncalledClient()
+    )
     assert first.solver is not None
     (context.round_dir / first.solver.trials[1].attempt_file).unlink()
     (context.round_dir / first.controls[1].attempt_file).unlink()
     recorded = len(ledger.entries)
 
     solver = SolverModel(allowed=frozenset({"solver/1/0"}))
-    again = await validate_round(built_draft(tmp_path / "store"), context, solver, UncalledClient(), UncalledClient())
+    again = await validate_round(
+        built_draft(tmp_path / "store"), context, settings, solver, UncalledClient(), UncalledClient()
+    )
 
     assert solver.steps == ["solver/1/0"]
     assert trial_steps(ledger, recorded) == {"solver/1/0", "control/N1-shortcut/0"}
     assert again == first
-    assert load_validation(context.round_dir) == first
 
 
 async def test_the_trials_of_another_lowered_spec_are_not_read_as_done(glm_client, fake_glm, ledger, tmp_path):
     """Other deadlines lower the same draft to another spec: its trials run in their own directory."""
     fake_glm.stream(content=controls_reply("41"))
     draft_of_round = built_draft(tmp_path / "store")
+    context = round_context(tmp_path)
     first = await validate_round(
-        draft_of_round, round_context(tmp_path, ledger), SolverModel(), glm_client, UncalledClient()
+        draft_of_round, context, round_settings(ledger), SolverModel(), glm_client, UncalledClient()
     )
     trials_dir = tmp_path / "round" / Path(evidence_files(first)[0]).parents[2]
     before = files_under(trials_dir)
@@ -361,7 +373,7 @@ async def test_the_trials_of_another_lowered_spec_are_not_read_as_done(glm_clien
     solver = SolverModel()
     longer = Deadlines(total_turn_timeout=40, attempt_timeout=80)
     other = await validate_round(
-        draft_of_round, round_context(tmp_path, ledger, deadlines=longer), solver, UncalledClient(), UncalledClient()
+        draft_of_round, context, round_settings(ledger, deadlines=longer), solver, UncalledClient(), UncalledClient()
     )
 
     assert other.lowering.task_digest != first.lowering.task_digest
@@ -373,13 +385,20 @@ async def test_the_trials_of_another_lowered_spec_are_not_read_as_done(glm_clien
 async def test_a_rewritten_control_set_is_replayed_again(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     fake_glm.stream(content=controls_reply("43"))
-    context = round_context(tmp_path, ledger)
-    first = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, UncalledClient())
+    context, settings = round_context(tmp_path), round_settings(ledger)
+    first = await validate_round(
+        built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, UncalledClient()
+    )
     (next(context.round_dir.rglob("controls.json"))).unlink()
     recorded = len(ledger.entries)
 
     again = await validate_round(
-        built_draft(tmp_path / "store"), context, SolverModel(allowed=frozenset()), glm_client, UncalledClient()
+        built_draft(tmp_path / "store"),
+        context,
+        settings,
+        SolverModel(allowed=frozenset()),
+        glm_client,
+        UncalledClient(),
     )
 
     assert trial_steps(ledger, recorded) == {f"control/{control_id}/0" for control_id in CONTROL_IDS}
@@ -392,10 +411,10 @@ async def test_a_rewritten_control_set_is_replayed_again(glm_client, fake_glm, l
 async def test_a_trial_cancelled_in_flight_leaves_no_attempt_and_is_rerun(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     fake_glm.stream(content=controls_reply("41"))
-    context = round_context(tmp_path, ledger, k=1)
+    context, settings = round_context(tmp_path), round_settings(ledger, k=1)
     hanging = SolverModel(release=asyncio.Event())
     running = asyncio.create_task(
-        validate_round(built_draft(tmp_path / "store"), context, hanging, glm_client, UncalledClient())
+        validate_round(built_draft(tmp_path / "store"), context, settings, hanging, glm_client, UncalledClient())
     )
     await asyncio.wait_for(hanging.called.wait(), timeout=30)
 
@@ -405,7 +424,9 @@ async def test_a_trial_cancelled_in_flight_leaves_no_attempt_and_is_rerun(glm_cl
 
     assert not [path for path in context.round_dir.rglob("*") if "/solver/" in str(path) and path.is_file()]
     solver = SolverModel()
-    result = await validate_round(built_draft(tmp_path / "store"), context, solver, glm_client, UncalledClient())
+    result = await validate_round(
+        built_draft(tmp_path / "store"), context, settings, solver, glm_client, UncalledClient()
+    )
     assert solver.steps == ["solver/0/0"]
     assert result.solver is not None and result.solver.ungraded == {}
     assert [trial.status for trial in result.solver.trials] == [TrialStatus.GRADED]
@@ -413,15 +434,21 @@ async def test_a_trial_cancelled_in_flight_leaves_no_attempt_and_is_rerun(glm_cl
 
 async def test_a_rejected_lowering_runs_no_trial_and_round_trips(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
-    context = round_context(tmp_path, ledger)
-    context = replace(context, engine=replace(context.engine, factories={}))
+    context, settings = round_context(tmp_path), round_settings(ledger)
+    settings = replace(settings, engine=replace(settings.engine, factories={}))
 
     result = await validate_round(
-        built_draft(tmp_path / "store"), context, SolverModel(allowed=frozenset()), glm_client, UncalledClient()
+        built_draft(tmp_path / "store"),
+        context,
+        settings,
+        SolverModel(allowed=frozenset()),
+        glm_client,
+        UncalledClient(),
     )
 
     assert result.lowering.status is LoweringStatus.REJECTED
     assert result.solver is None and result.controls == ()
+    write_validation(context.round_dir, result)
     assert load_validation(context.round_dir) == result
 
 
@@ -431,10 +458,17 @@ async def test_adversary_trials_start_once_lowering_and_controls_exist_and_wait_
     fake_glm.stream(content=controls_reply("41"))
     controls_release, solver = asyncio.Event(), SolverModel(release=asyncio.Event())
     adversary = AdversaryScript(PROBES)
-    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=1, mode=AdversaryMode.WHITEBOX))
+    context, settings = round_context(tmp_path), round_settings(
+        ledger, k=1, adversary=adversary_policy(k=1, mode=AdversaryMode.WHITEBOX)
+    )
     running = asyncio.create_task(
         validate_round(
-            built_draft(tmp_path / "store"), context, solver, HeldClient(glm_client, controls_release), adversary
+            built_draft(tmp_path / "store"),
+            context,
+            settings,
+            solver,
+            HeldClient(glm_client, controls_release),
+            adversary,
         )
     )
 
@@ -458,6 +492,7 @@ async def test_adversary_trials_start_once_lowering_and_controls_exist_and_wait_
     (trial,) = result.adversary
     assert (trial.status, trial.claim) == (TrialStatus.GRADED, Claim(ClaimKind.NO_SHORTCUT, "", ""))
     # validation.json holds the adversary field without the attempt files it names.
+    write_validation(context.round_dir, result)
     for name in evidence_files(result):
         (context.round_dir / name).unlink()
     assert load_validation(context.round_dir) == result
@@ -468,9 +503,11 @@ async def test_each_submission_is_graded_as_a_control_and_recorded_with_its_rewa
 ):
     fake_glm.stream(content=controls_reply("41"))
     adversary = AdversaryScript((Submit("41"), Submit("42"), "SHORTCUT: it accepts 42.\ngrader line: expected 42"))
-    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=1))
+    context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
 
-    result = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, adversary)
+    result = await validate_round(
+        built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, adversary
+    )
 
     (trial,) = result.adversary
     graded = [(s.ordinal, s.status, s.reward, s.passed) for s in trial.submissions]
@@ -487,9 +524,13 @@ async def test_each_submission_is_graded_as_a_control_and_recorded_with_its_rewa
 async def test_the_submission_budget_grades_no_submission_past_it(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     adversary = AdversaryScript((Submit("40"), Submit("41"), Submit("42"), "NO_SHORTCUT"))
-    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=1, submissions=2))
+    context, settings = round_context(tmp_path), round_settings(
+        ledger, k=1, adversary=adversary_policy(k=1, submissions=2)
+    )
 
-    result = await validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, adversary)
+    result = await validate_round(
+        built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, adversary
+    )
 
     (trial,) = result.adversary
     assert [s.ordinal for s in trial.submissions] == [1, 2]
@@ -501,9 +542,9 @@ async def test_the_submission_budget_grades_no_submission_past_it(glm_client, fa
 
 async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
-    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=2))
+    context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=2))
     first = await validate_round(
-        built_draft(tmp_path / "store"), context, SolverModel(), glm_client, AdversaryScript(PROBES)
+        built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, AdversaryScript(PROBES)
     )
     (context.round_dir / first.adversary[1].attempt_file).unlink()
     recorded = len(ledger.entries)
@@ -511,6 +552,7 @@ async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fa
     again = await validate_round(
         built_draft(tmp_path / "store"),
         context,
+        settings,
         SolverModel(allowed=frozenset()),
         UncalledClient(),
         AdversaryScript(PROBES),
@@ -527,10 +569,10 @@ async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fa
 
 async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
-    context = round_context(tmp_path, ledger, k=1, adversary=adversary_policy(k=1))
+    context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
     hanging = AdversaryScript(PROBES, hold_at=1)
     running = asyncio.create_task(
-        validate_round(built_draft(tmp_path / "store"), context, SolverModel(), glm_client, hanging)
+        validate_round(built_draft(tmp_path / "store"), context, settings, SolverModel(), glm_client, hanging)
     )
     await asyncio.wait_for(hanging.held.wait(), timeout=30)
 
@@ -542,7 +584,7 @@ async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(g
     # The cancelled attempt's graded submission stays, so the rerun is numbered after it.
     assert list(context.round_dir.rglob("adversary/0/submissions/0/control/s1/attempt-0.json"))
     result = await validate_round(
-        built_draft(tmp_path / "store"), context, SolverModel(), UncalledClient(), AdversaryScript(PROBES)
+        built_draft(tmp_path / "store"), context, settings, SolverModel(), UncalledClient(), AdversaryScript(PROBES)
     )
     (trial,) = result.adversary
     assert trial.status is TrialStatus.GRADED

@@ -13,7 +13,8 @@ as they are and may also call any stage directly::
     author        Author          ``stage30_author.author.static_author(program)``
     load_program  LoadProgram     ``stage40_build_with_program.program_sdk.load_program``
     build         Build           ``stage40_build_with_program.run.run_build``
-    validate      Validate        a caller's function
+    validate      Validate        ``stage50_validate.round.validate_round``, closed over the host's settings
+                                  and models
     review        Review          a caller's function
 
 The Protocols defined here take positional-only parameters, so a caller's function may use its own
@@ -22,9 +23,17 @@ name. ``Author`` comes from ``stage30_author.author``, and the coordinator calls
 ``proposal`` and ``revision`` in that order. The triage stage calls ``repair`` only on a REPAIR
 verdict within ``WorkpieceBudget.max_triage_repairs``, and triages the proposal it returns; under a
 budget of zero it never calls it. The build stage calls ``load_program`` on the source the author
-returned, read back from ``authored/<k>/program.py``. The coordinator writes the summary returned by
-validate to ``validation.json`` and hands review the JSON read back from that file, so a resumed
-review receives the same value as a review in the first process.
+returned, read back from ``authored/<k>/program.py``. The validate stage passes the draft with the
+round's ``ValidationContext``: the workpiece, the round, its directory, the proposal it built, the step
+store and the MODIFY rounds left. A caller's validate function closes over what the coordinator does
+not own, such as the host's ``ValidationSettings`` and the trial models::
+
+    async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
+        return await validate_round(draft, context, settings, solver_model, controls_model, adversary_model)
+
+The coordinator writes the ``ValidationResult`` returned by validate to ``validation.json``
+(``write_validation``), the file's one writer, and hands review the JSON read back from that file, so
+a resumed review receives the same value as a review in the first process.
 """
 
 from dataclasses import dataclass
@@ -39,6 +48,7 @@ from taskforge.stage30_author.author import Author
 from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDraft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
+from taskforge.stage50_validate.round import ValidationContext, ValidationResult
 from taskforge.stage60_review.decision import Decision
 
 
@@ -82,9 +92,9 @@ class Build(Protocol):
 
 
 class Validate(Protocol):
-    """Validate ``draft`` and return a JSON-serialisable summary for review."""
+    """Validate ``draft`` in the round ``context`` names and return the round's result for review."""
 
-    async def __call__(self, draft: TaskDraft, /) -> object: ...
+    async def __call__(self, draft: TaskDraft, context: ValidationContext, /) -> ValidationResult: ...
 
 
 class Review(Protocol):

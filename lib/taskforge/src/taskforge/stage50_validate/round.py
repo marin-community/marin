@@ -10,9 +10,13 @@ as soon as the lowering is done and does not wait for the controls. Control repl
 solver trial. The result waits for every unit. A unit that raises cancels the others and the round raises its
 error; the files the finished units wrote stay for the relaunch.
 
+The round takes two inputs besides the draft and its models: the ``ValidationContext`` a stage coordinator owns
+(the workpiece, the round, its directory, the proposal it built, the step store, the MODIFY rounds left) and the
+host's ``ValidationSettings`` (engine, deadlines, trial counts, retries, adversary policy, ledger), which a caller's
+validate function closes over.
+
 Each unit is idempotent on its own file, so a relaunch redoes only the units whose files are missing:
 
-    <round_dir>/validation.json                                the ValidationResult
     <round_dir>/validation/<draft>/lowered.json                the lowering
     <round_dir>/validation/<draft>/controls.json               the controls
     <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
@@ -36,12 +40,13 @@ number with the retries it has left. An attempt cancelled before its outcome wri
 ungraded.
 
 The result is read back from the unit files, each outcome through ``trials.attempt_outcome``, so a resumed
-round returns what an uninterrupted one would. ``validation.json`` holds every decision input and no rollout,
-which stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
+round returns what an uninterrupted one would. The result holds every decision input and no rollout, which
+stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
 trial its status, reward and cause, with the solver ``Evidence``'s reward totals and ungraded causes; per
 control its verdict and cause; and per adversary trial its status, cause, claim and every submission with its
 grade status, reward and whether it passed. Which passing submissions are shortcuts is review's judgement, not
-the round's. ``load_validation`` reads it without the evidence files.
+the round's. ``write_validation`` writes it to ``<round_dir>/validation.json``, and ``load_validation`` reads it
+back without the evidence files.
 
 A spec RolloutEngine rejects is ``REJECTED`` and no trial runs. A spec a factory refuses is ``REFUSED`` and its
 trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial`` records for it.
@@ -105,14 +110,31 @@ _ATTEMPT_FILE = re.compile(rf"{re.escape(ATTEMPT_PREFIX)}(\d+)\.json")
 
 @dataclass(frozen=True)
 class ValidationContext:
-    """What one validation round of a workpiece needs besides its draft and its models.
+    """What the stage coordinator knows of the round it validates.
 
     Attributes:
         workpiece_id: The workpiece the draft belongs to.
         round: The author, build and validation round.
-        round_dir: The round's directory; ``validation.json`` and ``validation/`` are written under it.
+        round_dir: The round's directory; ``validation/`` is written under it.
         proposal: The proposal the round built, which the controls follow.
         store_root: The build's step store, holding the draft's grader step output.
+        modify_rounds_left: The review ``Modify`` decisions the workpiece may still follow into a new round
+            (``WorkpieceBudget.max_modify_rounds`` less the rounds already spent).
+    """
+
+    workpiece_id: str
+    round: int
+    round_dir: Path
+    proposal: TaskProposal
+    store_root: str
+    modify_rounds_left: int
+
+
+@dataclass(frozen=True)
+class ValidationSettings:
+    """The validating host's settings, the same for every round it validates.
+
+    Attributes:
         host: Where the machine factories run.
         engine: The engine settings every trial and the preflight probe run under.
         deadlines: The deadlines of every trial and of the probe.
@@ -124,11 +146,6 @@ class ValidationContext:
         ledger: Where the trials and the control writing are recorded.
     """
 
-    workpiece_id: str
-    round: int
-    round_dir: Path
-    proposal: TaskProposal
-    store_root: str
     host: MachineHost
     engine: EngineSettings
     deadlines: Deadlines
@@ -259,15 +276,20 @@ class _Lowered:
 async def validate_round(
     draft: TaskDraft,
     context: ValidationContext,
+    settings: ValidationSettings,
     solver_model: TrialModel,
     controls_model: ModelClient,
     adversary_model: ModelClient,
 ) -> ValidationResult:
-    """Validate ``draft``, running only the units without a file, and write ``validation.json``.
+    """Validate ``draft``, running only the units without a file, and return the round's result.
+
+    A stage coordinator passes ``context``; a caller's validate function closes over ``settings`` and the models.
+    ``write_validation`` writes the result as ``validation.json``.
 
     Args:
         draft: The round's draft.
-        context: The round's settings.
+        context: The round, as its stage coordinator knows it.
+        settings: The validating host's settings.
         solver_model: The model of the solver trials.
         controls_model: The model that writes the controls.
         adversary_model: The model of the adversary trials.
@@ -280,22 +302,25 @@ async def validate_round(
     directory = context.round_dir / VALIDATION_DIR / digest(draft.task)
     try:
         async with asyncio.TaskGroup() as group:
-            lowering = group.create_task(_lowering_unit(draft, context, directory))
-            controls = group.create_task(_controls_unit(draft, context, controls_model, directory))
-            group.create_task(_solver_units(lowering, context, solver_model, directory))
-            group.create_task(_replay_units(lowering, controls, context, directory))
-            group.create_task(_adversary_units(lowering, controls, context, adversary_model, directory))
+            lowering = group.create_task(_lowering_unit(draft, settings, directory))
+            controls = group.create_task(_controls_unit(draft, context, settings, controls_model, directory))
+            group.create_task(_solver_units(lowering, context, settings, solver_model, directory))
+            group.create_task(_replay_units(lowering, controls, context, settings, directory))
+            group.create_task(_adversary_units(lowering, controls, context, settings, adversary_model, directory))
     except BaseExceptionGroup as failure:
         if len(failure.exceptions) == 1:
             raise failure.exceptions[0] from None
         raise
-    result = _result(context, lowering.result(), controls.result(), directory)
-    write_evidence(context.round_dir / VALIDATION_FILE, pretty_json(result).encode())
-    return result
+    return _result(context, settings, lowering.result(), controls.result(), directory)
+
+
+def write_validation(round_dir: Path, result: ValidationResult) -> None:
+    """Write ``result`` to ``round_dir`` as ``validation.json``, whole or not at all."""
+    write_evidence(round_dir / VALIDATION_FILE, pretty_json(result).encode())
 
 
 def load_validation(round_dir: Path) -> ValidationResult:
-    """Read the ``validation.json`` ``validate_round`` wrote to ``round_dir``."""
+    """Read the ``validation.json`` ``write_validation`` wrote to ``round_dir``."""
     return _RESULT.validate_json((round_dir / VALIDATION_FILE).read_bytes())
 
 
@@ -305,67 +330,72 @@ async def _inputs_ready(*inputs: asyncio.Task) -> bool:
     return all(not task.cancelled() and task.exception() is None for task in inputs)
 
 
-async def _lowering_unit(draft: TaskDraft, context: ValidationContext, directory: Path) -> _Lowered:
+async def _lowering_unit(draft: TaskDraft, settings: ValidationSettings, directory: Path) -> _Lowered:
     path = directory / LOWERED_FILE
-    backends = tuple(sorted(context.engine.factories))
+    backends = tuple(sorted(settings.engine.factories))
     if path.exists():
         done = _LOWERED.validate_json(path.read_bytes())
-        if done.host == context.host and done.backends == backends:
+        if done.host == settings.host and done.backends == backends:
             return done
-    write_evidence(path, pretty_json(await _lower(draft, context, backends)).encode())
+    write_evidence(path, pretty_json(await _lower(draft, settings, backends)).encode())
     return _LOWERED.validate_json(path.read_bytes())
 
 
-async def _lower(draft: TaskDraft, context: ValidationContext, backends: tuple[str, ...]) -> _Lowered:
-    engine = context.engine
+async def _lower(draft: TaskDraft, settings: ValidationSettings, backends: tuple[str, ...]) -> _Lowered:
+    engine = settings.engine
     try:
-        lowered = await preflight(draft.task, context.host, engine.factories, engine, context.deadlines)
+        lowered = await preflight(draft.task, settings.host, engine.factories, engine, settings.deadlines)
     except (ValueError, NotImplementedError) as error:
-        return _Lowered(context.host, backends, None, str(error), (), None)
+        return _Lowered(settings.host, backends, None, str(error), (), None)
     refusals = tuple(task_refusals(lowered.spec, engine.factories))
-    return _Lowered(context.host, backends, lowered.spec, "", refusals, lowered.fallback)
+    return _Lowered(settings.host, backends, lowered.spec, "", refusals, lowered.fallback)
 
 
-def _trial_digest(context: ValidationContext, spec: TaskRolloutSpec) -> str:
+def _trial_digest(settings: ValidationSettings, spec: TaskRolloutSpec) -> str:
     """The ``task_digest`` of ``spec`` as the round's trials run it."""
-    engine = context.engine
-    return task_digest(engine.apply(context.deadlines.apply(spec)), engine.command_timeout)
+    engine = settings.engine
+    return task_digest(engine.apply(settings.deadlines.apply(spec)), engine.command_timeout)
 
 
-def _trials_dir(directory: Path, context: ValidationContext, spec: TaskRolloutSpec) -> Path:
-    return directory / _trial_digest(context, spec)
+def _trials_dir(directory: Path, settings: ValidationSettings, spec: TaskRolloutSpec) -> Path:
+    return directory / _trial_digest(settings, spec)
 
 
 async def _controls_unit(
-    draft: TaskDraft, context: ValidationContext, model: ModelClient, directory: Path
+    draft: TaskDraft, context: ValidationContext, settings: ValidationSettings, model: ModelClient, directory: Path
 ) -> tuple[Control, ...]:
     if not (directory / CONTROLS_FILE).exists():
         grader = step_output(draft, context.store_root, GRADER_STEP, Grader)
-        record = CallLedger(context.ledger, context.workpiece_id, context.round, CONTROLS_STEP)
-        await write_controls(draft.task, grader, context.proposal, model, context.sampling, record, directory)
+        record = CallLedger(settings.ledger, context.workpiece_id, context.round, CONTROLS_STEP)
+        await write_controls(draft.task, grader, context.proposal, model, settings.sampling, record, directory)
     return load_controls(directory)
 
 
 async def _solver_units(
-    lowering: asyncio.Task[_Lowered], context: ValidationContext, model: TrialModel, directory: Path
+    lowering: asyncio.Task[_Lowered],
+    context: ValidationContext,
+    settings: ValidationSettings,
+    model: TrialModel,
+    directory: Path,
 ) -> None:
     if not await _inputs_ready(lowering):
         return
     lowered = lowering.result()
     if lowered.spec is None:
         return
-    spec, evidence_dir = lowered.spec, _trials_dir(directory, context, lowered.spec)
+    spec, evidence_dir = lowered.spec, _trials_dir(directory, settings, lowered.spec)
     async with asyncio.TaskGroup() as group:
-        for index in range(context.k):
-            plan = _resumed_plan(context, TrialKind.SOLVER, evidence_dir, str(index), _any_attempt, 0)
+        for index in range(settings.k):
+            plan = _resumed_plan(context, settings, TrialKind.SOLVER, evidence_dir, str(index), _any_attempt, 0)
             if plan is not None:
-                group.create_task(run_trial(spec, plan, context.engine, model, str(index)))
+                group.create_task(run_trial(spec, plan, settings.engine, model, str(index)))
 
 
 async def _replay_units(
     lowering: asyncio.Task[_Lowered],
     controls: asyncio.Task[tuple[Control, ...]],
     context: ValidationContext,
+    settings: ValidationSettings,
     directory: Path,
 ) -> None:
     if not await _inputs_ready(lowering, controls):
@@ -373,19 +403,20 @@ async def _replay_units(
     lowered, control_set = lowering.result(), controls.result()
     if lowered.spec is None:
         return
-    spec, evidence_dir = lowered.spec, _replay_dir(_trials_dir(directory, context, lowered.spec), control_set)
-    check_replayable(spec.task, control_set, context.engine.max_turns)
+    spec, evidence_dir = lowered.spec, _replay_dir(_trials_dir(directory, settings, lowered.spec), control_set)
+    check_replayable(spec.task, control_set, settings.engine.max_turns)
     async with asyncio.TaskGroup() as group:
         for control in control_set:
-            plan = _resumed_plan(context, TrialKind.CONTROL, evidence_dir, control.id, _any_attempt, 0)
+            plan = _resumed_plan(context, settings, TrialKind.CONTROL, evidence_dir, control.id, _any_attempt, 0)
             if plan is not None:
-                group.create_task(replay_control(spec, control, plan, context.engine))
+                group.create_task(replay_control(spec, control, plan, settings.engine))
 
 
 async def _adversary_units(
     lowering: asyncio.Task[_Lowered],
     controls: asyncio.Task[tuple[Control, ...]],
     context: ValidationContext,
+    settings: ValidationSettings,
     model: ModelClient,
     directory: Path,
 ) -> None:
@@ -394,8 +425,8 @@ async def _adversary_units(
     lowered, control_set = lowering.result(), controls.result()
     if lowered.spec is None:
         return
-    spec, evidence_dir = lowered.spec, _trials_dir(directory, context, lowered.spec)
-    policy = context.adversary
+    spec, evidence_dir = lowered.spec, _trials_dir(directory, settings, lowered.spec)
+    policy = settings.adversary
     brief = adversary_brief(spec, control_set, policy)
 
     def under_brief(payload: bytes) -> bool:
@@ -406,9 +437,9 @@ async def _adversary_units(
             trial = str(index)
             graded_submissions = _numbered_dirs(evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR)
             floor = graded_submissions[-1] + 1 if graded_submissions else 0
-            plan = _resumed_plan(context, TrialKind.ADVERSARY, evidence_dir, trial, under_brief, floor)
+            plan = _resumed_plan(context, settings, TrialKind.ADVERSARY, evidence_dir, trial, under_brief, floor)
             if plan is not None:
-                run = run_adversary_trial(spec, brief, policy, plan, context.engine, model, trial, context.max_retries)
+                run = run_adversary_trial(spec, brief, policy, plan, settings.engine, model, trial, settings.max_retries)
                 group.create_task(run)
 
 
@@ -418,6 +449,7 @@ def _any_attempt(payload: bytes) -> bool:
 
 def _resumed_plan(
     context: ValidationContext,
+    settings: ValidationSettings,
     kind: TrialKind,
     evidence_dir: Path,
     trial: str,
@@ -436,18 +468,18 @@ def _resumed_plan(
     spent = len(covered) if covered and covered[-1] == attempts[-1] else 0
     if spent:
         last = attempt_outcome(payloads[attempts[-1]])
-        if isinstance(last, Graded) or not last.retryable or spent > context.max_retries:
+        if isinstance(last, Graded) or not last.retryable or spent > settings.max_retries:
             return None
     return TrialPlan(
         workpiece_id=context.workpiece_id,
         round=context.round,
         kind=kind,
         k=1,
-        deadlines=context.deadlines,
-        max_retries=context.max_retries - spent,
-        retry_backoff=context.retry_backoff.schedule(),
+        deadlines=settings.deadlines,
+        max_retries=settings.max_retries - spent,
+        retry_backoff=settings.retry_backoff.schedule(),
         evidence_dir=evidence_dir,
-        ledger=context.ledger,
+        ledger=settings.ledger,
         first_attempt=max(floor, attempts[-1] + 1 if attempts else 0),
     )
 
@@ -482,28 +514,32 @@ def _replay_dir(trials_dir: Path, controls: tuple[Control, ...]) -> Path:
 
 
 def _result(
-    context: ValidationContext, lowered: _Lowered, controls: tuple[Control, ...], directory: Path
+    context: ValidationContext,
+    settings: ValidationSettings,
+    lowered: _Lowered,
+    controls: tuple[Control, ...],
+    directory: Path,
 ) -> ValidationResult:
     """The round's result, read back from its unit files."""
     if lowered.spec is None:
         rejected = Lowering(LoweringStatus.REJECTED, lowered.detail, (), None, None)
         return ValidationResult(context.workpiece_id, context.round, rejected, None, (), ())
-    trial_digest = _trial_digest(context, lowered.spec)
+    trial_digest = _trial_digest(settings, lowered.spec)
     status = LoweringStatus.REFUSED if lowered.refusals else LoweringStatus.LOWERED
     lowering = Lowering(status, "", lowered.refusals, lowered.fallback, trial_digest)
-    trials_dir = _trials_dir(directory, context, lowered.spec)
+    trials_dir = _trials_dir(directory, settings, lowered.spec)
     return ValidationResult(
         context.workpiece_id,
         context.round,
         lowering,
-        _solver_evidence(context, trials_dir),
+        _solver_evidence(context, settings, trials_dir),
         _control_results(context, _replay_dir(trials_dir, controls), controls),
-        tuple(_adversary_result(context, trials_dir, str(index)) for index in range(context.adversary.k)),
+        tuple(_adversary_result(context, trials_dir, str(index)) for index in range(settings.adversary.k)),
     )
 
 
-def _solver_evidence(context: ValidationContext, evidence_dir: Path) -> SolverEvidence:
-    finals = [_final_attempt(evidence_dir, TrialKind.SOLVER, str(index)) for index in range(context.k)]
+def _solver_evidence(context: ValidationContext, settings: ValidationSettings, evidence_dir: Path) -> SolverEvidence:
+    finals = [_final_attempt(evidence_dir, TrialKind.SOLVER, str(index)) for index in range(settings.k)]
     evidence = Evidence({TrialKind.SOLVER: tuple(outcome for _, outcome in finals)})
     status = evidence.status
     return SolverEvidence(

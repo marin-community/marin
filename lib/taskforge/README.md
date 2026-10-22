@@ -496,6 +496,13 @@ Python, as `static_author` returns, has no source, and the build stage asks the 
 `StageCoordinator` holds the build host's `RLEnvBuildServices` and the `ResearchRequirement`, and
 passes them to every build with its model, sampling policy and model digest.
 
+The validate stage calls `StageFunctions.validate(draft, context)` with the round's
+`ValidationContext`: the workpiece id, the round, the round directory, the proposal the round built,
+the step store, and the MODIFY rounds left, `max_modify_rounds` less the `Modify` decisions already
+followed. It returns a `ValidationResult`, which the coordinator writes to `validation.json`. The
+caller's function closes over what the coordinator does not own, the host's `ValidationSettings` and
+the trial models, as `validate_round(draft, context, settings, solver, controls, adversary)` takes them.
+
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
 digest and research requirement. A relaunch of the workpiece with another proposal, budget, model
 digest or research requirement raises `ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
@@ -510,7 +517,7 @@ workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.py        its source, when the author returned it
     draft/                         task.json, provenance.json
     build-failures/<k>.txt         the k-th build or author failure: its step and program line, then its traceback
-    validation.json                the summary returned by validate
+    validation.json                the ValidationResult returned by validate (`write_validation`)
     decision.json                  the decision returned by review
 store/                             the step store: blobs/, workpieces/<workpiece_id>/steps/
 ```
@@ -607,15 +614,19 @@ where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kin
 trials. `stage50_validate.controls.replay(spec, controls, plan, settings)` replays each control as
 one `CONTROL` trial named by its id.
 
-`stage50_validate.round.validate_round(draft, context, solver_model, controls_model, adversary_model)`
-runs one validation round from these parts as a graph of units. Lowering (`preflight`) and control
-writing start together; each of the `context.k` solver trials starts once the lowering is done, without
-waiting for the controls; each control's replay and each of the `context.adversary.k` adversary trials
-start once both the lowered spec and the controls exist, without waiting for a solver trial. Every unit is idempotent on its own file, so a relaunch runs only the units whose files are
-missing:
+`stage50_validate.round.validate_round(draft, context, settings, solver_model, controls_model,
+adversary_model)` runs one validation round from these parts as a graph of units. `context`, a
+`ValidationContext`, is what the stage coordinator knows of the round: the workpiece id, the round, its
+directory, the proposal it built, the step store and the MODIFY rounds the workpiece has left.
+`settings`, a `ValidationSettings`, is the validating host's: engine, deadlines, the solver trials `k`,
+retries and backoff, the control writer's sampling, the adversary policy and the ledger. Lowering
+(`preflight`) and control writing start together; each of the `settings.k` solver trials starts once the
+lowering is done, without waiting for the controls; each control's replay and each of the
+`settings.adversary.k` adversary trials start once both the lowered spec and the controls exist, without
+waiting for a solver trial. Every unit is idempotent on its own file, so a relaunch runs only the units
+whose files are missing:
 
 ```
-<round_dir>/validation.json                                  the ValidationResult
 <round_dir>/validation/<draft>/lowered.json                  the lowering, for one host and set of backends
 <round_dir>/validation/<draft>/controls.json                 the written controls
 <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
@@ -630,13 +641,15 @@ so no file of another task, lowered spec or control set counts as done. A trial 
 last attempt is graded, failed for a cause that is not retryable, or used its retries; otherwise it
 resumes at the next attempt with the retries it has left. Attempt files are written whole or not at
 all, and an attempt cancelled in flight writes none, so a cancelled trial runs again instead of
-counting as ungraded. The result is read back from the unit files (`trials.attempt_outcome`), and
-`validation.json` holds every decision input without the rollouts: the lowering's status
+counting as ungraded. The result is read back from the unit files (`trials.attempt_outcome`) and
+holds every decision input without the rollouts: the lowering's status
 (`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
 backend fallback; each solver trial's status, reward, cause and attempt file, with the reward totals
 and ungraded causes of its `Evidence`; each control's verdict (`met`, `violated`, `ungraded`) and
 cause; and each adversary trial's status, cause, claim and submissions with their grades and rewards.
-`load_validation(round_dir)` reads it back.
+`write_validation(round_dir, result)` writes it to `<round_dir>/validation.json`, and
+`load_validation(round_dir)` reads it back. The round itself writes no `validation.json`: the stage
+coordinator, the file's one writer, writes the result its validate function returns.
 
 An adversary trial (`stage50_validate.adversary.run_adversary_trial`) red-teams the grader as an agent
 loop with two tools: `shell` on a private task machine, started as the engine starts the solver's, and
