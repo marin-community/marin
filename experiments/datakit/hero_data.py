@@ -19,11 +19,12 @@ or use it as a dependency of a step you do intend to run::
     step = hero_data.tokenized("stack-v3", hero_data.NEMOTRON_TOKENIZER)
     data = read_artifact(step.output_path, TokenizedAttrData)
 
-:func:`normalized` and :func:`minhash` follow current code, so they track main
-as the registry moves. :func:`tokenized` pins the artifact version instead,
-because the tokenize hash includes one and it has changed under the runs that
-produced this data: each tokenizer was applied to the whole registry in a single
-fleet run, and each of those runs wrote a different version. The dedup stages,
+:func:`normalized` and :func:`minhash` normally follow current code. Sources
+whose transforms changed after the Hero data run retain their materialized
+source versions until the Hero data is rebuilt. :func:`tokenized` pins its
+artifact version because the tokenize hash includes it. Each tokenizer was
+applied to the whole registry in one fleet run, and those runs wrote different
+versions. The dedup stages,
 domain cluster assignment and decontamination are pinned to specific runs
 outright, as are the three leaves whose producers ran from branches:
 :func:`harrier`, :func:`fusion_scores` and :func:`content_type`. Those and
@@ -89,6 +90,13 @@ def pinned_map(stage: str) -> dict[str, str]:
 # The manifest records paths relative to the sole CoreWeave Datakit root.
 # Regeneration pins this prefix because some step hashes include resolved paths.
 MANIFEST_PREFIX = "s3://marin-us-east-02a/marin"
+
+# These Hero artifacts were built from the pre-repair transforms. Keep the
+# materialized paths until replacement normalize, tokenize, and store runs exist.
+_PROCESSED_VERSION_PINS = {
+    "swe-zero-12m": "v1",
+    "davinci-dev/env-native": "v1",
+}
 
 
 @dataclass(frozen=True)
@@ -191,19 +199,31 @@ def source_names() -> list[str]:
     return sorted(all_sources())
 
 
+def _pinned_normalize_step(source: str, step: StepSpec) -> StepSpec:
+    if source not in _PROCESSED_VERSION_PINS:
+        return step
+    [processed] = step.deps
+    processed = replace(
+        processed,
+        hash_attrs={**processed.hash_attrs, "version": _PROCESSED_VERSION_PINS[source]},
+        fn=_refuse_to_run,
+    )
+    return replace(step, deps=[processed], fn=_refuse_to_run)
+
+
 def _normalize_step(source: str) -> StepSpec:
-    return select_sources([source])[source]
+    return _pinned_normalize_step(source, select_sources([source])[source])
 
 
 def normalized(source: str) -> StepSpec:
-    """Return the normalized dataset for ``source``, as current code resolves it."""
+    """Return the normalized dataset for ``source`` at its Hero data version."""
     return _read_only(_normalize_step(source))
 
 
 def tokenize_step_for(source: str, tokenizer: TokenizerPin) -> StepSpec:
     """Return the runnable tokenize step for ``source`` under ``tokenizer``.
 
-    This is the step as current code builds it, at the current artifact version;
+    This uses the current tokenize artifact version over the Hero normalized source;
     :func:`tokenized` registers the leaves the fleet runs wrote, which sit at the
     version of their run. The score stage depends on this one, so a source whose
     leaf under ``tokenizer`` is gone is tokenized again before it is scored.
@@ -351,7 +371,7 @@ def all_paths() -> dict[str, str]:
     ``experiments/datakit/hero_data_paths.json``, so a change that moves a hero
     path fails there instead of silently repointing whoever reads it.
     """
-    sources = select_sources(None)
+    sources = {name: _pinned_normalize_step(name, step) for name, step in select_sources(None).items()}
     minhash_steps = zephyr_datakit_steps(sources).minhash
     paths = {
         "domain_cluster_assignment": domain_cluster_assignment().output_path,
