@@ -249,6 +249,7 @@ def rpc_client(
         address,
         timeout_ms=timeout_ms,
         interceptors=interceptors,
+        http_client=credentials.http_client() if credentials is not None else None,
         accept_compression=IRIS_RPC_COMPRESSIONS,
         send_compression=None,
     )
@@ -345,6 +346,8 @@ def _resolve_controller_url(
         try:
             logger.info("Establishing tunnel to controller...")
             tunnel_url = resources.enter_context(bundle.controller.tunnel(address=controller_address))
+            if config.credential_broker is not None:
+                tunnel_url = tunnel_url.replace("http://", "https://", 1)
             return tunnel_url, bundle
         except Exception as e:
             raise click.ClickException(f"Could not connect to controller: {e}") from e

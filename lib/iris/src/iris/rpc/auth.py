@@ -153,7 +153,8 @@ def authorize_resource_owner(resource_owner: str) -> VerifiedIdentity:
     identity = require_identity()
     if identity.role == "admin":
         return identity
-    if identity.user_id != resource_owner:
+    owner_id = identity.owner_id if identity.session_id is not None else identity.user_id
+    if owner_id != resource_owner:
         raise ConnectError(
             Code.PERMISSION_DENIED,
             f"User '{identity.user_id}' cannot access resources owned by '{resource_owner}'",

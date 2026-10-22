@@ -45,6 +45,7 @@ from rigging.secrets import get_secret
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
+TASK_S3_PROFILES_ENV = "MARIN_S3_CREDENTIAL_PROFILES"
 
 _S3_CONNECT_TIMEOUT = 30
 _S3_READ_TIMEOUT = 120
@@ -142,6 +143,20 @@ def fsspec_s3_conf(endpoint: str) -> dict:
         "client_kwargs": {"region_name": "auto"},
         "config_kwargs": config_kwargs,
         "listings_expiry_time": DEFAULT_LISTINGS_EXPIRY_TIME,
+    }
+
+
+def credential_profile_for_bucket(bucket: str) -> dict:
+    """Return s3fs options for a configured bucket, or {} when no profile is configured."""
+    routes = json.loads(os.environ.get(TASK_S3_PROFILES_ENV, "{}"))
+    route = routes.get(bucket)
+    if route is None:
+        return {}
+    return {
+        "profile": route["profile"],
+        "endpoint_url": route["endpoint"],
+        "client_kwargs": {"region_name": route["region"]},
+        "config_kwargs": {**fsspec_s3_conf(route["endpoint"])["config_kwargs"], **s3_python_config_kwargs()},
     }
 
 

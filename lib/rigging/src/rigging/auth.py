@@ -204,6 +204,12 @@ class RefreshingTokenProvider:
             self._retry_at = 0.0
             return token
 
+    def invalidate(self) -> None:
+        """Require a fresh exchange after the server rejects the cached credential."""
+        with self._lock:
+            self._expires_at = 0
+            self._retry_at = 0
+
     def run(self, stop: threading.Event) -> None:
         """Renew even when the client has no outgoing application requests."""
         while not stop.is_set():

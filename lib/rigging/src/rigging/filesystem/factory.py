@@ -24,7 +24,8 @@ from rigging.filesystem.cross_region import (
     _is_gcs_url,
 )
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
-from rigging.filesystem.s3_compat import s3_credential_options, s3_python_config_kwargs
+from rigging.filesystem.s3_compat import credential_profile_for_bucket, s3_credential_options, s3_python_config_kwargs
+from rigging.filesystem.storage_path import StoragePath
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +70,7 @@ def url_to_fs(url: str, **kwargs: Any) -> tuple[Any, str]:
     timeouts injected (#6487).
     """
     if url.startswith("s3://"):
-        kwargs = _s3_filesystem_options(kwargs)
+        kwargs = _s3_filesystem_options({**credential_profile_for_bucket(StoragePath(url).bucket), **kwargs})
     fs, path = fsspec.core.url_to_fs(url, **kwargs)
     if _fs_is_gcs(fs):
         fs = CrossRegionGuardedFS(fs)
@@ -94,7 +95,7 @@ def open_url(url: str, mode: str = "rb", **kwargs: Any) -> fsspec.core.OpenFile:
         guarded = CrossRegionGuardedFS(fs)
         guarded._guard_read(path)
     if url.startswith("s3://"):
-        kwargs = _s3_filesystem_options(kwargs)
+        kwargs = _s3_filesystem_options({**credential_profile_for_bucket(StoragePath(url).bucket), **kwargs})
     return cast(fsspec.core.OpenFile, fsspec.open(url, mode, **kwargs))
 
 

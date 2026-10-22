@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 import json
 import threading
 import time
@@ -46,7 +47,7 @@ from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import generate_ed25519_keypair
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse
+from starlette.responses import JSONResponse, RedirectResponse, StreamingResponse
 from starlette.routing import Route
 
 _ENDPOINT_NAME = "/system/native-test"
@@ -95,6 +96,85 @@ def _standalone_proxy(auth_config_json: str) -> NativeProxy:
     return proxy
 
 
+def test_task_revocation_bypasses_signature_cache_and_ambient_loopback_trust():
+    auth = create_controller_auth(AuthConfig(required=True), cluster_name="task-session-test")
+    assert auth.jwt_manager is not None
+    issuers, jwks = auth.jwt_manager.native_proxy_verification_material()
+    policy = NativeProxyAuthConfig(
+        mode=NativeProxyAuthMode.ENFORCING,
+        issuers=issuers,
+        jwks=jwks,
+        leeway_seconds=0,
+        cache_capacity=4096,
+        cache_ttl_seconds=60,
+        trusted_cidrs=("127.0.0.0/8",),
+        require_task_sessions=True,
+    )
+    token = auth.jwt_manager.signer.mint(
+        {
+            "sub": "submitter@example.test",
+            "role": "task",
+            "owner_id": "training",
+            "job_id": "/training/job",
+            "root_job_id": "/training/job",
+            "session_id": "attempt",
+            "session_generation": 0,
+        },
+        audience="iris",
+        ttl_seconds=900,
+    )
+    threads = ThreadContainer()
+    try:
+        upstream, _ = _start_upstream(threads)
+        with NativeProxy("127.0.0.1", 0, upstream, "handoff-secret", json.dumps(asdict(policy))) as proxy:
+            proxy.replace_registry(
+                json.dumps(
+                    {
+                        "generation": 1,
+                        "endpoints": [
+                            {
+                                "endpoint_id": "task-endpoint",
+                                "name": _ENDPOINT_NAME,
+                                "address": upstream,
+                                "link_access": True,
+                                "peer_id": None,
+                                "task_id": "/training/job/0",
+                                "timeout_seconds": None,
+                                "lease_deadline_epoch_ms": None,
+                            }
+                        ],
+                    }
+                )
+            )
+            decision = {"generation": 0, "deadline": Timestamp.now().epoch_seconds() + 60, "finalizing": False}
+            proxy.replace_task_sessions(json.dumps({"attempt": decision}))
+            with httpx.Client(base_url=proxy.address, timeout=2) as client:
+                assert client.get(f"/proxy/{_ENCODED_NAME}/echo").status_code == 401
+                headers = {"authorization": f"Bearer {token}"}
+                response = client.post(f"/proxy/{_ENCODED_NAME}/echo", content=b"task request", headers=headers)
+                assert response.status_code == 200
+                assert response.json()["body_bytes"] == len(b"task request")
+                endpoint_token = auth.jwt_manager.create_endpoint_token(
+                    _ENDPOINT_NAME, "session-endpoint", session=auth.jwt_manager.verify(token)
+                )
+                endpoint_headers = {"authorization": f"Bearer {endpoint_token}"}
+                assert client.post(f"/proxy/{_ENCODED_NAME}/echo", headers=endpoint_headers).status_code == 200
+                with client.stream("GET", f"/proxy/t/{endpoint_token}/{_ENCODED_NAME}/hold") as streaming:
+                    chunks = streaming.iter_bytes()
+                    assert next(chunks) == b"started"
+                    proxy.replace_task_sessions("{}")
+                    assert list(chunks) == []
+                proxy.replace_task_sessions("{}")
+                assert client.post(f"/proxy/{_ENCODED_NAME}/echo", headers=endpoint_headers).status_code == 401
+                assert client.post(f"/proxy/{_ENCODED_NAME}/echo", headers=headers).status_code == 401
+                assert (
+                    client.post("/iris.cluster.ControllerService/GetCurrentUser", json={}, headers=headers).status_code
+                    == 401
+                )
+    finally:
+        threads.stop()
+
+
 def _start_upstream(threads: ThreadContainer, iap_keys: dict[str, str] | None = None) -> tuple[str, list[bytes]]:
     received_bodies: list[bytes] = []
 
@@ -123,6 +203,13 @@ def _start_upstream(threads: ThreadContainer, iap_keys: dict[str, str] | None = 
     async def public_keys(_request: Request) -> JSONResponse:
         return JSONResponse(iap_keys or {})
 
+    async def hold(_request: Request) -> StreamingResponse:
+        async def chunks():
+            yield b"started"
+            await asyncio.Event().wait()
+
+        return StreamingResponse(chunks())
+
     server = uvicorn.Server(
         uvicorn.Config(
             Starlette(
@@ -130,6 +217,7 @@ def _start_upstream(threads: ThreadContainer, iap_keys: dict[str, str] | None = 
                     Route("/echo", echo, methods=["GET", "POST"]),
                     Route("/redirect", redirect),
                     Route("/reject", reject),
+                    Route("/hold", hold),
                     Route(_IAP_KEYS_PATH, public_keys),
                 ]
             ),

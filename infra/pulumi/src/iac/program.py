@@ -23,6 +23,7 @@ import pulumi_gcp as gcp
 import pulumi_kubernetes as k8s
 from finelog.deploy.config import GcpDeployment
 from iris.cluster.endpoints import gcp_instance_internal_ip
+from iris.cluster.platforms.k8s.credential_manifests import controller_certificate_manifests
 from iris.cluster.platforms.types import Labels
 from iris.cluster.platforms.vm_lifecycle import DEFAULT_CONTROLLER_PORT, controller_vm_name
 from rigging.auth import MARIN_DESKTOP_OAUTH_CLIENT
@@ -149,7 +150,11 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
     )
     rbac = IrisRbac(
         "rbac",
-        IrisRbacArgs(namespace=namespace, spec=coreweave_provisioning.rbac),
+        IrisRbacArgs(
+            namespace=namespace,
+            spec=coreweave_provisioning.rbac,
+            credential_broker=iris_config.credential_broker is not None,
+        ),
         k8s_provider=k8s_provider,
         imports=imports,
     )
@@ -196,7 +201,7 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
             f"cluster {cluster!r} has no controller.coreweave.service_name; "
             "TraefikAddon needs the controller Service the federation route backends onto"
         )
-    TraefikAddon(
+    ingress_addon = TraefikAddon(
         "traefik",
         TraefikAddonArgs(
             cluster=cluster,
@@ -209,6 +214,30 @@ def _build_coreweave(cluster: str, *, imports: ImportRegistrar) -> None:
         k8s_provider=k8s_provider,
         imports=imports,
     )
+
+    if iris_config.credential_broker is not None:
+        for manifest in controller_certificate_manifests(
+            namespace, controller_coreweave.service_name, iris_config.credential_broker.tls_secret
+        ):
+            k8s.apiextensions.CustomResource(
+                f"controller-{manifest['kind'].lower()}-{manifest['metadata']['name']}",
+                api_version=manifest["apiVersion"],
+                kind=manifest["kind"],
+                metadata=manifest["metadata"],
+                spec=manifest["spec"],
+                opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[ingress_addon, rbac.namespace]),
+            )
+        k8s.apiextensions.CustomResource(
+            "controller-upstream-tls",
+            api_version="traefik.io/v1alpha1",
+            kind="ServersTransport",
+            metadata={"name": "iris-controller", "namespace": namespace},
+            spec={
+                "serverName": f"{controller_coreweave.service_name}.{namespace}.svc.cluster.local",
+                "rootCAsSecrets": [iris_config.credential_broker.tls_secret],
+            },
+            opts=pulumi.ResourceOptions(provider=k8s_provider, depends_on=[ingress_addon, rbac.namespace]),
+        )
 
     federation_dns = coreweave_provisioning.federation_dns
     if federation_dns is not None:

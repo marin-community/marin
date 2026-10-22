@@ -18,7 +18,9 @@ from rigging.auth import StaticTokenProvider
 from rigging.credentials import ClientCredentials
 
 from iris.cluster.constraints import Constraint
+from iris.cluster.credential_process import TASK_CREDENTIAL_FILE_ENV
 from iris.cluster.runtime.env import IRIS_ATTEMPT_UID_ENV, IRIS_TASK_TOKEN_ENV, IRIS_WORKER_REGION_ENV
+from iris.cluster.task_credentials import task_credentials
 from iris.cluster.types import JobName, TaskAttempt
 from iris.rpc import job_pb2
 
@@ -41,6 +43,7 @@ class JobInfo:
 
     task_token: str | None = None
     """Controller-minted token this task's client presents as the job's owner."""
+    task_credential_file: str | None = None
 
     advertise_host: str = "127.0.0.1"
     """The externally visible host name to use when advertising services."""
@@ -66,6 +69,8 @@ class JobInfo:
     @property
     def credentials(self) -> ClientCredentials | None:
         """Credentials for RPCs from this task to its controller, if it was given a token."""
+        if self.task_credential_file:
+            return task_credentials(self.task_credential_file)
         if not self.task_token:
             return None
         return ClientCredentials(token_provider=StaticTokenProvider(self.task_token))
@@ -128,6 +133,7 @@ def get_job_info() -> JobInfo | None:
             worker_id=os.environ.get("IRIS_WORKER_ID"),
             controller_address=os.environ.get("IRIS_CONTROLLER_ADDRESS"),
             task_token=os.environ.get(IRIS_TASK_TOKEN_ENV),
+            task_credential_file=os.environ.get(TASK_CREDENTIAL_FILE_ENV),
             advertise_host=os.environ.get("IRIS_ADVERTISE_HOST", "127.0.0.1"),
             setup_scripts=(
                 json.loads(os.environ["IRIS_JOB_SETUP_SCRIPTS"]) if "IRIS_JOB_SETUP_SCRIPTS" in os.environ else None

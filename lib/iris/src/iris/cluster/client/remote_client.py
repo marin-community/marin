@@ -16,6 +16,7 @@ from connectrpc.interceptor import InterceptorSync
 from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from rigging.connect import proxy_path
+from rigging.credentials import ClientCredentials
 from rigging.timing import Deadline, Duration, ExponentialBackoff
 
 from iris.cluster.client.bundle import create_workspace_zip
@@ -87,6 +88,7 @@ class RemoteClusterClient:
         use_controller_proxy: bool = True,
         extra_bundle_includes: Sequence[str] = (),
         bundle_exclude: re.Pattern[str] | None = None,
+        ca_bundle: bytes | None = None,
     ):
         """Initialize RPC cluster operations.
 
@@ -114,6 +116,7 @@ class RemoteClusterClient:
         self._use_controller_proxy = use_controller_proxy
         self._client = ControllerServiceClientSync(
             address=controller_address,
+            http_client=ClientCredentials(ca_bundle=ca_bundle).http_client(),
             timeout_ms=timeout_ms,
             interceptors=interceptors,
             accept_compression=IRIS_RPC_COMPRESSIONS,
@@ -126,6 +129,7 @@ class RemoteClusterClient:
         self._endpoint_client = EndpointClient(
             EndpointServiceClientSync(
                 address=controller_address,
+                http_client=ClientCredentials(ca_bundle=ca_bundle).http_client(),
                 timeout_ms=timeout_ms,
                 interceptors=interceptors,
                 accept_compression=IRIS_RPC_COMPRESSIONS,
@@ -141,7 +145,8 @@ class RemoteClusterClient:
             LOG_SERVER_ENDPOINT_NAME,
             resolver=self.resolve_endpoint,
             timeout_ms=timeout_ms,
-            interceptors=interceptors,
+            interceptors=interceptors if use_controller_proxy else (),
+            ca_bundle=ca_bundle if use_controller_proxy else None,
         )
         # Deferred so CLI calls that never push status (submit_job, list_jobs,
         # get_status) don't spawn a finelog flush thread.

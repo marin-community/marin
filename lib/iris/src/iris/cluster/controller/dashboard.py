@@ -72,6 +72,7 @@ from iris.cluster.controller.native_proxy import (
     UPSTREAM_URL_HEADER,
 )
 from iris.cluster.controller.service import ControllerServiceImpl
+from iris.cluster.controller.task_sessions import TaskSessionBroker
 from iris.cluster.dashboard_common import (
     favicon_route,
     html_shell,
@@ -137,9 +138,8 @@ def _request_is_authenticated(policy: RequestAuthPolicy, request: Request) -> bo
     return True
 
 
-# Every control RPC is authenticated: users reach the controller only through IAP,
-# which authenticates each request at the edge. No RPC is exempt from the policy.
-_UNAUTHENTICATED_RPCS: frozenset[str] = frozenset()
+# Renewal authenticates its separate attempt capability inside the broker.
+_UNAUTHENTICATED_RPCS: frozenset[str] = frozenset({"RenewTaskSession"})
 
 
 def _check_csrf(request: Request) -> bool:
@@ -202,8 +202,10 @@ class ControllerDashboard:
         federated_handoff: FederatedEndpointHandoff | None = None,
         federation_owner_check: FederationOwnerCheck | None = None,
         proxy_decision_secret: str | None = None,
+        task_sessions: TaskSessionBroker | None = None,
     ):
         self._service = service
+        self._task_sessions = task_sessions
         # Defaults to the service's own backend; the two must share one instance
         # so a system endpoint registered on one is resolvable through the other.
         self._endpoint_service = endpoint_service or service.endpoint_service
@@ -252,6 +254,7 @@ class ControllerDashboard:
             cookie_name=SESSION_COOKIE,
             unauthenticated_methods=_UNAUTHENTICATED_RPCS,
             authorize=authorize_method,
+            authorize_request=self._task_sessions.authorize_request if self._task_sessions is not None else None,
         )
         controller_interceptors = [_ControllerDrainingInterceptor(self._draining), auth_interceptor, controller_timing]
         # AsyncServiceAdapter dispatches each sync handler to a thread.
@@ -473,10 +476,12 @@ class ControllerDashboard:
 
     @public
     def _bundle_download(self, request: Request) -> Response:
-        # Bundle IDs are SHA-256 hashes (256 bits of entropy) serving as
-        # capability URLs. Workers and K8s init-containers fetch via stdlib
-        # urlopen with no auth header support.
+        # Broker tasks authenticate against their job template. Other deployments
+        # retain content-addressed bundle URLs for worker bootstrap.
         bundle_id = request.path_params["bundle_id"]
+        denied = self._download_authorization(request, bundle_id)
+        if denied is not None:
+            return denied
         try:
             data = self._service.bundle_zip(bundle_id)
         except FileNotFoundError:
@@ -486,11 +491,26 @@ class ControllerDashboard:
     @public
     def _blob_download(self, request: Request) -> Response:
         blob_id = request.path_params["blob_id"]
+        denied = self._download_authorization(request, blob_id)
+        if denied is not None:
+            return denied
         try:
             data = self._service.blob_data(blob_id)
         except FileNotFoundError:
             return Response(f"Blob not found: {blob_id}", status_code=404)
         return Response(data, media_type="application/octet-stream")
+
+    def _download_authorization(self, request: Request, content_id: str) -> Response | None:
+        if self._task_sessions is None:
+            return None
+        try:
+            identity = self._auth_policy.resolve(
+                extract_bearer_token(dict(request.headers)), headers=dict(request.headers)
+            )
+            self._task_sessions.authorize_download(identity, content_id)
+        except (ValueError, ConnectError):
+            return Response("Download authorization required", status_code=403)
+        return None
 
 
 class _CredentialAuth(httpx.Auth):

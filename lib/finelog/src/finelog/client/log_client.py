@@ -23,6 +23,7 @@ from connectrpc.compression.gzip import GzipCompression
 from connectrpc.compression.zstd import ZstdCompression
 from connectrpc.errors import ConnectError
 from connectrpc.interceptor import Interceptor
+from rigging.credentials import ClientCredentials
 from rigging.log_setup import LOG_DATEFMT, LOG_FORMAT, LevelPrefixFormatter
 from rigging.timing import ExponentialBackoff, RateLimiter
 
@@ -576,11 +577,13 @@ class LogClient:
         resolver: Callable[[str], str] | None = None,
         timeout_ms: int = 10_000,
         interceptors: Iterable[Interceptor] = (),
+        ca_bundle: bytes | None = None,
     ) -> None:
         self._server_url = server_url
         self._resolver: Callable[[str], str] = resolver if resolver is not None else (lambda url: url)
         self._timeout_ms = timeout_ms
         self._interceptors = tuple(interceptors)
+        self._ca_bundle = ca_bundle
 
         self._lock = threading.Lock()
         self._closed = False
@@ -599,6 +602,7 @@ class LogClient:
         resolver: Callable[[str], str] | None = None,
         timeout_ms: int = 10_000,
         interceptors: Iterable[Interceptor] = (),
+        ca_bundle: bytes | None = None,
     ) -> "LogClient":
         """Construct a LogClient against ``endpoint``.
 
@@ -617,6 +621,7 @@ class LogClient:
             resolver=resolver,
             timeout_ms=timeout_ms,
             interceptors=interceptors,
+            ca_bundle=ca_bundle,
         )
 
     def close(self) -> None:
@@ -896,6 +901,7 @@ class LogClient:
         def create(address: str) -> StatsServiceClientSync:
             self._stats_client = StatsServiceClientSync(
                 address=address,
+                http_client=ClientCredentials(ca_bundle=self._ca_bundle).http_client(),
                 timeout_ms=self._timeout_ms,
                 interceptors=self._interceptors,
                 send_compression=_SEND_COMPRESSION,
@@ -909,6 +915,7 @@ class LogClient:
         def create(address: str) -> LogServiceClientSync:
             self._log_service_client = LogServiceClientSync(
                 address=address,
+                http_client=ClientCredentials(ca_bundle=self._ca_bundle).http_client(),
                 timeout_ms=self._timeout_ms,
                 interceptors=self._interceptors,
                 send_compression=_SEND_COMPRESSION,

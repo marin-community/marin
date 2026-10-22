@@ -413,6 +413,62 @@ class Controller(_message.Message):
     class RenewWorkerTokenRequest(_message.Message):
         __slots__ = ()
         def __init__(self) -> None: ...
+    class RenewTaskSessionRequest(_message.Message):
+        __slots__ = ("attempt_uid", "refresh_capability")
+        ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
+        REFRESH_CAPABILITY_FIELD_NUMBER: _ClassVar[int]
+        attempt_uid: str
+        refresh_capability: str
+        def __init__(self, attempt_uid: _Optional[str] = ..., refresh_capability: _Optional[str] = ...) -> None: ...
+    class RenewTaskSessionResponse(_message.Message):
+        __slots__ = ("token", "expires_at")
+        TOKEN_FIELD_NUMBER: _ClassVar[int]
+        EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+        token: str
+        expires_at: _time_pb2.Timestamp
+        def __init__(self, token: _Optional[str] = ..., expires_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    class GetTaskCredentialsRequest(_message.Message):
+        __slots__ = ("profile",)
+        PROFILE_FIELD_NUMBER: _ClassVar[int]
+        profile: str
+        def __init__(self, profile: _Optional[str] = ...) -> None: ...
+    class GetTaskCredentialsResponse(_message.Message):
+        __slots__ = ("access_key_id", "secret_access_key", "session_token", "expires_at")
+        ACCESS_KEY_ID_FIELD_NUMBER: _ClassVar[int]
+        SECRET_ACCESS_KEY_FIELD_NUMBER: _ClassVar[int]
+        SESSION_TOKEN_FIELD_NUMBER: _ClassVar[int]
+        EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+        access_key_id: str
+        secret_access_key: str
+        session_token: str
+        expires_at: _time_pb2.Timestamp
+        def __init__(self, access_key_id: _Optional[str] = ..., secret_access_key: _Optional[str] = ..., session_token: _Optional[str] = ..., expires_at: _Optional[_Union[_time_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    class ManageTaskSessionsRequest(_message.Message):
+        __slots__ = ("attempt_uid", "job_id", "principal", "action")
+        class Action(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+            __slots__ = ()
+            ACTION_UNSPECIFIED: _ClassVar[Controller.ManageTaskSessionsRequest.Action]
+            ROLLOVER: _ClassVar[Controller.ManageTaskSessionsRequest.Action]
+            DISABLE: _ClassVar[Controller.ManageTaskSessionsRequest.Action]
+            ENABLE: _ClassVar[Controller.ManageTaskSessionsRequest.Action]
+        ACTION_UNSPECIFIED: Controller.ManageTaskSessionsRequest.Action
+        ROLLOVER: Controller.ManageTaskSessionsRequest.Action
+        DISABLE: Controller.ManageTaskSessionsRequest.Action
+        ENABLE: Controller.ManageTaskSessionsRequest.Action
+        ATTEMPT_UID_FIELD_NUMBER: _ClassVar[int]
+        JOB_ID_FIELD_NUMBER: _ClassVar[int]
+        PRINCIPAL_FIELD_NUMBER: _ClassVar[int]
+        ACTION_FIELD_NUMBER: _ClassVar[int]
+        attempt_uid: str
+        job_id: str
+        principal: str
+        action: Controller.ManageTaskSessionsRequest.Action
+        def __init__(self, attempt_uid: _Optional[str] = ..., job_id: _Optional[str] = ..., principal: _Optional[str] = ..., action: _Optional[_Union[Controller.ManageTaskSessionsRequest.Action, str]] = ...) -> None: ...
+    class ManageTaskSessionsResponse(_message.Message):
+        __slots__ = ("affected",)
+        AFFECTED_FIELD_NUMBER: _ClassVar[int]
+        affected: int
+        def __init__(self, affected: _Optional[int] = ...) -> None: ...
     class RenewWorkerTokenResponse(_message.Message):
         __slots__ = ("token",)
         TOKEN_FIELD_NUMBER: _ClassVar[int]

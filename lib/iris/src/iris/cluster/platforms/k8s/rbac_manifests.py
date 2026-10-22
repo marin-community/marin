@@ -1,7 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Define Kubernetes namespace and RBAC manifests for Iris controllers."""
+"""Define Kubernetes namespace and RBAC manifests for Iris services."""
+
+from typing import NamedTuple
+
+NODE_AGENT_SERVICE_ACCOUNT = "iris-node-agent"
 
 TASK_SECRET_ROLE_NAME = "iris-task-secret-delivery"
 
@@ -39,8 +43,6 @@ CLUSTER_ROLE_RULES = [
         "verbs": ["get", "list", "watch", "create", "update", "patch", "delete"],
     },
     {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "list", "watch", "patch"]},
-    # The node agent reads its own kubelet's metrics/resource endpoint directly;
-    # the kubelet authorizes that read against the nodes/metrics subresource.
     {"apiGroups": [""], "resources": ["nodes/metrics"], "verbs": ["get"]},
     {
         "apiGroups": [""],
@@ -95,7 +97,7 @@ def namespace_manifest(namespace: str) -> dict:
 
 
 def service_account_manifest(namespace: str, service_account: str) -> dict:
-    """Return the controller's ServiceAccount."""
+    """Return a namespaced ServiceAccount."""
     return {
         "apiVersion": "v1",
         "kind": "ServiceAccount",
@@ -122,3 +124,36 @@ def cluster_role_binding_manifest(role_name: str, namespace: str, service_accoun
         "subjects": [{"kind": "ServiceAccount", "name": service_account, "namespace": namespace}],
         "roleRef": {"kind": "ClusterRole", "name": role_name, "apiGroup": "rbac.authorization.k8s.io"},
     }
+
+
+def node_agent_cluster_role_name(namespace: str) -> str:
+    return f"{NODE_AGENT_SERVICE_ACCOUNT}-{namespace}"
+
+
+class NodeAgentRbac(NamedTuple):
+    service_account: dict
+    cluster_role: dict
+    cluster_role_binding: dict
+
+
+def node_agent_rbac_manifests(namespace: str) -> NodeAgentRbac:
+    """Grant Kubernetes node collection and health publication separately."""
+    role_name = node_agent_cluster_role_name(namespace)
+    role = {
+        "apiVersion": "rbac.authorization.k8s.io/v1",
+        "kind": "ClusterRole",
+        "metadata": {"name": role_name},
+        "rules": [
+            # Node identity and the storage-health annotation written by the agent.
+            {"apiGroups": [""], "resources": ["nodes"], "verbs": ["get", "patch"]},
+            # Task Pods and DCGM exporters live in different namespaces.
+            {"apiGroups": [""], "resources": ["pods"], "verbs": ["list"]},
+            # The kubelet authorizes /metrics/resource against this subresource.
+            {"apiGroups": [""], "resources": ["nodes/metrics"], "verbs": ["get"]},
+        ],
+    }
+    return NodeAgentRbac(
+        service_account_manifest(namespace, NODE_AGENT_SERVICE_ACCOUNT),
+        role,
+        cluster_role_binding_manifest(role_name, namespace, NODE_AGENT_SERVICE_ACCOUNT),
+    )

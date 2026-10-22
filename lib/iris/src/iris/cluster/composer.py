@@ -116,6 +116,7 @@ def make_task_backend(
             pods=PodConfig(
                 namespace=namespace,
                 default_image=config.defaults.worker.default_task_image,
+                controller_ca_config_map=config.credential_broker.ca_config_map if config.credential_broker else "",
                 logship_image=config.controller.image,
                 service_account=kp.service_account or "",
                 host_network=kp.host_network,
@@ -123,7 +124,9 @@ def make_task_backend(
                 controller_address=kp.controller_address or None,
                 managed_label=managed_label,
                 task_env=dict(config.defaults.task_env),
-                require_coreweave_credentials=config.platform.coreweave is not None,
+                require_coreweave_credentials=(
+                    config.platform.coreweave is not None and config.credential_broker is None
+                ),
                 task_outputs=config.task_outputs.model_copy(deep=True) if config.task_outputs is not None else None,
                 local_queue=local_queue,
                 kueue_topologies=topologies or dict(_CW_DEFAULT_TOPOLOGIES),

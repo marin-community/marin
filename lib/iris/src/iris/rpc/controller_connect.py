@@ -19,6 +19,15 @@ from . import query_pb2 as query__pb2
 
 
 class ControllerService(Protocol):
+    async def renew_task_session(self, request: controller__pb2.Controller.RenewTaskSessionRequest, ctx: RequestContext) -> controller__pb2.Controller.RenewTaskSessionResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def get_task_credentials(self, request: controller__pb2.Controller.GetTaskCredentialsRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskCredentialsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
+    async def manage_task_sessions(self, request: controller__pb2.Controller.ManageTaskSessionsRequest, ctx: RequestContext) -> controller__pb2.Controller.ManageTaskSessionsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+
     async def launch_job(self, request: controller__pb2.Controller.LaunchJobRequest, ctx: RequestContext) -> controller__pb2.Controller.LaunchJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
 
@@ -115,6 +124,36 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
         super().__init__(
             service=service,
             endpoints=lambda svc: {
+                "/iris.cluster.ControllerService/RenewTaskSession": Endpoint.unary(
+                    method=MethodInfo(
+                        name="RenewTaskSession",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.RenewTaskSessionRequest,
+                        output=controller__pb2.Controller.RenewTaskSessionResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.renew_task_session,
+                ),
+                "/iris.cluster.ControllerService/GetTaskCredentials": Endpoint.unary(
+                    method=MethodInfo(
+                        name="GetTaskCredentials",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.GetTaskCredentialsRequest,
+                        output=controller__pb2.Controller.GetTaskCredentialsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.get_task_credentials,
+                ),
+                "/iris.cluster.ControllerService/ManageTaskSessions": Endpoint.unary(
+                    method=MethodInfo(
+                        name="ManageTaskSessions",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.ManageTaskSessionsRequest,
+                        output=controller__pb2.Controller.ManageTaskSessionsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=svc.manage_task_sessions,
+                ),
                 "/iris.cluster.ControllerService/LaunchJob": Endpoint.unary(
                     method=MethodInfo(
                         name="LaunchJob",
@@ -428,6 +467,66 @@ class ControllerServiceASGIApplication(ConnectASGIApplication[ControllerService]
 
 
 class ControllerServiceClient(ConnectClient):
+    async def renew_task_session(
+        self,
+        request: controller__pb2.Controller.RenewTaskSessionRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.RenewTaskSessionResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RenewTaskSession",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.RenewTaskSessionRequest,
+                output=controller__pb2.Controller.RenewTaskSessionResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def get_task_credentials(
+        self,
+        request: controller__pb2.Controller.GetTaskCredentialsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.GetTaskCredentialsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetTaskCredentials",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.GetTaskCredentialsRequest,
+                output=controller__pb2.Controller.GetTaskCredentialsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    async def manage_task_sessions(
+        self,
+        request: controller__pb2.Controller.ManageTaskSessionsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.ManageTaskSessionsResponse:
+        return await self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ManageTaskSessions",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.ManageTaskSessionsRequest,
+                output=controller__pb2.Controller.ManageTaskSessionsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     async def launch_job(
         self,
         request: controller__pb2.Controller.LaunchJobRequest,
@@ -1151,6 +1250,12 @@ class EndpointServiceClient(ConnectClient):
 
 
 class ControllerServiceSync(Protocol):
+    def renew_task_session(self, request: controller__pb2.Controller.RenewTaskSessionRequest, ctx: RequestContext) -> controller__pb2.Controller.RenewTaskSessionResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def get_task_credentials(self, request: controller__pb2.Controller.GetTaskCredentialsRequest, ctx: RequestContext) -> controller__pb2.Controller.GetTaskCredentialsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
+    def manage_task_sessions(self, request: controller__pb2.Controller.ManageTaskSessionsRequest, ctx: RequestContext) -> controller__pb2.Controller.ManageTaskSessionsResponse:
+        raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def launch_job(self, request: controller__pb2.Controller.LaunchJobRequest, ctx: RequestContext) -> controller__pb2.Controller.LaunchJobResponse:
         raise ConnectError(Code.UNIMPLEMENTED, "Not implemented")
     def get_job_status(self, request: controller__pb2.Controller.GetJobStatusRequest, ctx: RequestContext) -> controller__pb2.Controller.GetJobStatusResponse:
@@ -1217,6 +1322,36 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
     def __init__(self, service: ControllerServiceSync, interceptors: Iterable[InterceptorSync]=(), read_max_bytes: int | None = None, compressions: Iterable[Compression] | None = None) -> None:
         super().__init__(
             endpoints={
+                "/iris.cluster.ControllerService/RenewTaskSession": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="RenewTaskSession",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.RenewTaskSessionRequest,
+                        output=controller__pb2.Controller.RenewTaskSessionResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.renew_task_session,
+                ),
+                "/iris.cluster.ControllerService/GetTaskCredentials": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="GetTaskCredentials",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.GetTaskCredentialsRequest,
+                        output=controller__pb2.Controller.GetTaskCredentialsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.get_task_credentials,
+                ),
+                "/iris.cluster.ControllerService/ManageTaskSessions": EndpointSync.unary(
+                    method=MethodInfo(
+                        name="ManageTaskSessions",
+                        service_name="iris.cluster.ControllerService",
+                        input=controller__pb2.Controller.ManageTaskSessionsRequest,
+                        output=controller__pb2.Controller.ManageTaskSessionsResponse,
+                        idempotency_level=IdempotencyLevel.UNKNOWN,
+                    ),
+                    function=service.manage_task_sessions,
+                ),
                 "/iris.cluster.ControllerService/LaunchJob": EndpointSync.unary(
                     method=MethodInfo(
                         name="LaunchJob",
@@ -1530,6 +1665,66 @@ class ControllerServiceWSGIApplication(ConnectWSGIApplication):
 
 
 class ControllerServiceClientSync(ConnectClientSync):
+    def renew_task_session(
+        self,
+        request: controller__pb2.Controller.RenewTaskSessionRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.RenewTaskSessionResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="RenewTaskSession",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.RenewTaskSessionRequest,
+                output=controller__pb2.Controller.RenewTaskSessionResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def get_task_credentials(
+        self,
+        request: controller__pb2.Controller.GetTaskCredentialsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.GetTaskCredentialsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="GetTaskCredentials",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.GetTaskCredentialsRequest,
+                output=controller__pb2.Controller.GetTaskCredentialsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
+    def manage_task_sessions(
+        self,
+        request: controller__pb2.Controller.ManageTaskSessionsRequest,
+        *,
+        headers: Headers | Mapping[str, str] | None = None,
+        timeout_ms: int | None = None,
+    ) -> controller__pb2.Controller.ManageTaskSessionsResponse:
+        return self.execute_unary(
+            request=request,
+            method=MethodInfo(
+                name="ManageTaskSessions",
+                service_name="iris.cluster.ControllerService",
+                input=controller__pb2.Controller.ManageTaskSessionsRequest,
+                output=controller__pb2.Controller.ManageTaskSessionsResponse,
+                idempotency_level=IdempotencyLevel.UNKNOWN,
+            ),
+            headers=headers,
+            timeout_ms=timeout_ms,
+        )
+
     def launch_job(
         self,
         request: controller__pb2.Controller.LaunchJobRequest,

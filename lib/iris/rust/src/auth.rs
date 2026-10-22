@@ -31,6 +31,8 @@ pub enum NativeAuthMode {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct NativeAuthConfig {
+    #[serde(default)]
+    pub require_task_sessions: bool,
     pub mode: NativeAuthMode,
     pub issuers: Vec<String>,
     pub jwks: JwkSet,
@@ -65,6 +67,14 @@ pub struct VerifiedIdentity {
     /// The job_id which owns this token, or None.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub job_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub session_generation: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root_job_id: Option<String>,
     #[serde(skip)]
     pub endpoint: Option<String>,
     #[serde(skip)]
@@ -73,9 +83,13 @@ pub struct VerifiedIdentity {
     pub(crate) expires_at: u64,
 }
 
-#[derive(Debug)]
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+#[derive(Clone, Debug)]
 pub enum VerifyOutcome {
-    Verified(VerifiedIdentity),
+    Verified(Box<VerifiedIdentity>),
     Invalid,
     Missing,
     Anonymous,
@@ -110,6 +124,14 @@ struct Claims {
     endpoint: Option<String>,
     #[serde(default)]
     job_id: Option<String>,
+    #[serde(default)]
+    owner_id: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    session_generation: u64,
+    #[serde(default)]
+    root_job_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,11 +237,16 @@ impl NativeVerifier {
     }
 
     pub(crate) fn trusts_direct_peer(&self, peer_ip: IpAddr) -> bool {
-        peer_ip.is_loopback()
-            || self
-                .trusted_networks
-                .iter()
-                .any(|network| network.contains(&peer_ip))
+        !self.config.require_task_sessions
+            && (peer_ip.is_loopback()
+                || self
+                    .trusted_networks
+                    .iter()
+                    .any(|network| network.contains(&peer_ip)))
+    }
+
+    pub(crate) fn requires_task_sessions(&self) -> bool {
+        self.config.require_task_sessions
     }
 
     pub async fn verify_request(
@@ -242,7 +269,7 @@ impl NativeVerifier {
         {
             let key = *blake3::hash(assertion.as_bytes()).as_bytes();
             if let Some(identity) = self.cached_identity(&key) {
-                return VerifyOutcome::Verified(identity);
+                return VerifyOutcome::Verified(Box::new(identity));
             }
             self.stats.misses.fetch_add(1, Ordering::Relaxed);
             let verified = match &self.iap {
@@ -271,7 +298,7 @@ impl NativeVerifier {
     ) -> VerifyOutcome {
         let key = *blake3::hash(token.as_bytes()).as_bytes();
         if let Some(identity) = self.cached_identity(&key) {
-            return VerifyOutcome::Verified(identity);
+            return VerifyOutcome::Verified(Box::new(identity));
         }
         self.stats.misses.fetch_add(1, Ordering::Relaxed);
         self.cache_result(key, verify())
@@ -299,7 +326,7 @@ impl NativeVerifier {
         match result {
             Ok(identity) => {
                 self.cache.insert(key, identity.clone());
-                VerifyOutcome::Verified(identity)
+                VerifyOutcome::Verified(Box::new(identity))
             }
             Err(_) if matches!(self.config.mode, NativeAuthMode::Permissive) => {
                 VerifyOutcome::Anonymous
@@ -378,6 +405,10 @@ impl NativeVerifier {
                         role: "federation-peer".to_string(),
                         audience: None,
                         job_id: None,
+                        owner_id: None,
+                        session_id: None,
+                        session_generation: 0,
+                        root_job_id: None,
                         endpoint: None,
                         federation_peer: Some(peer_id.clone()),
                         expires_at: token_data.claims.exp,
@@ -409,6 +440,10 @@ impl NativeVerifier {
             role: claims.role,
             audience: claims.endpoint.clone().filter(|_| proxy_scope),
             job_id: claims.job_id.filter(|_| !proxy_scope),
+            owner_id: claims.owner_id,
+            session_id: claims.session_id,
+            session_generation: claims.session_generation,
+            root_job_id: claims.root_job_id,
             endpoint: claims.endpoint.filter(|_| proxy_scope),
             federation_peer: None,
             expires_at: claims.exp,
@@ -529,6 +564,10 @@ impl IapVerifier {
             },
             audience: None,
             job_id: None,
+            owner_id: None,
+            session_id: None,
+            session_generation: 0,
+            root_job_id: None,
             endpoint: None,
             federation_peer: None,
             expires_at: claims.exp,

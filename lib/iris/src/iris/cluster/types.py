@@ -128,8 +128,9 @@ LOCAL_ADMIN_SUBMITTER = "local_admin"
 
 A CIDR/loopback (null-auth) submitter authenticates as the anonymous admin rather
 than a person, so its jobs are attributed to this well-known principal. Per-cluster
-federation allowlists key on ``submitting_user``, so ``local_admin`` is admitted to
-a peer only if that peer's policy names it explicitly."""
+federation rejects this submitter instead of treating it as a delegated person."""
+
+UNVERIFIED_SUBMITTERS = frozenset({"", LOCAL_ADMIN_SUBMITTER, "anonymous"})
 
 
 def is_federated(cluster: str) -> bool:

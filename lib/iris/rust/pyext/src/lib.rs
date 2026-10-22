@@ -154,6 +154,14 @@ impl NativeProxy {
             .map_err(PyValueError::new_err)
     }
 
+    fn replace_task_sessions(&self, sessions_json: &str) -> PyResult<()> {
+        let sessions = serde_json::from_str(sessions_json)
+            .map_err(|error| PyValueError::new_err(format!("invalid task sessions: {error}")))?;
+        self.control
+            .replace_task_sessions(sessions)
+            .map_err(PyRuntimeError::new_err)
+    }
+
     fn pause_registry(&self) {
         self.control.pause_registry();
     }

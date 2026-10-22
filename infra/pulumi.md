@@ -71,6 +71,11 @@ deployment. `infra/loom` is one example: it builds an image, writes the image
 digest and runtime configuration to a durable VM, and runs its own readiness
 activation step.
 
+`infra/openbao` is a CoreWeave application mock with separate main/development
+stacks. It declares sealed server resources and renders public credential-policy
+payloads. Initialization, unseal, policy application and Iris client integration
+remain explicit operating and implementation steps; see its [README](openbao/README.md).
+
 ### 3. SaaS resource declarations
 
 SaaS projects record resources outside GCP. For example,

@@ -240,6 +240,34 @@ meta_table = Table(
 )
 
 
+task_sessions_table = Table(
+    "task_sessions",
+    metadata,
+    Column("attempt_uid", String, ForeignKey("task_attempts.attempt_uid", ondelete="CASCADE"), primary_key=True),
+    Column("generation", Integer, nullable=False, server_default="0"),
+    Column("finalizing_at_ms", TimestampMsType),
+)
+
+task_credential_blocks_table = Table(
+    "task_credential_blocks",
+    metadata,
+    Column("scope", String, primary_key=True),
+    Column("target", String, primary_key=True),
+)
+
+task_credential_audit_table = Table(
+    "task_credential_audit",
+    metadata,
+    Column("id", Integer, primary_key=True, autoincrement=True),
+    Column("at_ms", TimestampMsType, nullable=False),
+    Column("actor", String, nullable=False),
+    Column("action", String, nullable=False),
+    Column("scope", String, nullable=False),
+    Column("target", String, nullable=False),
+    Index("idx_task_credential_audit_at", "at_ms"),
+)
+
+
 jobs_table = Table(
     "jobs",
     metadata,

@@ -19,11 +19,13 @@ import time
 from dataclasses import dataclass
 
 from rigging.timing import Duration, Timestamp
+from sqlalchemy import delete
 
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.audit_logging import log_event
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.projections.endpoints import EndpointsProjection
+from iris.cluster.controller.schema import task_credential_audit_table
 from iris.cluster.controller.worker_health import WorkerHealthTracker
 from iris.cluster.types import TERMINAL_JOB_STATES, WorkerId, WorkerUsability
 
@@ -38,10 +40,17 @@ class PruneResult:
     workers_deleted: int = 0
     slices_deleted: int = 0
     endpoints_deleted: int = 0
+    credential_audits_deleted: int = 0
 
     @property
     def total(self) -> int:
-        return self.jobs_deleted + self.workers_deleted + self.slices_deleted + self.endpoints_deleted
+        return (
+            self.jobs_deleted
+            + self.workers_deleted
+            + self.slices_deleted
+            + self.endpoints_deleted
+            + self.credential_audits_deleted
+        )
 
 
 def _stopped(stop_event: threading.Event | None) -> bool:
@@ -165,6 +174,12 @@ def prune_old_data(
     """
     now = Timestamp.now()
     now_ms = now.epoch_ms()
+    with db.transaction() as tx:
+        audits_deleted = tx.execute(
+            delete(task_credential_audit_table).where(
+                task_credential_audit_table.c.at_ms < now.add(Duration.from_seconds(-30 * 86400))
+            )
+        ).rowcount
     result = PruneResult(
         jobs_deleted=_prune_terminal_jobs(db, now_ms - job_retention.to_ms(), stop_event, pause_between_s),
         workers_deleted=_prune_dead_workers(
@@ -176,14 +191,16 @@ def prune_old_data(
         ),
         slices_deleted=_prune_orphan_slices(db, now_ms - slice_retention.to_ms(), stop_event, pause_between_s),
         endpoints_deleted=_sweep_expired_endpoints(db, now),
+        credential_audits_deleted=audits_deleted,
     )
     if result.total > 0:
         logger.info(
-            "Pruned old data: %d jobs, %d workers, %d slices, %d endpoints",
+            "Pruned old data: %d jobs, %d workers, %d slices, %d endpoints, %d credential audit events",
             result.jobs_deleted,
             result.workers_deleted,
             result.slices_deleted,
             result.endpoints_deleted,
+            result.credential_audits_deleted,
         )
         db.optimize()
 

@@ -44,6 +44,7 @@ from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
+    UNVERIFIED_SUBMITTERS,
     USER_JOB_STATES,
     JobName,
     UserBudgetDefaults,
@@ -104,6 +105,7 @@ class JobDependencies:
     bundles: BundleStore
     auth: ControllerAuth
     user_budget_defaults: UserBudgetDefaults
+    require_task_sessions: bool = False
 
 
 class JobStatusRow(Protocol):
@@ -552,6 +554,8 @@ def _launch_identity(
     _authorize_launch(dependencies, identity, request, context, requested_job_id, received_handoff)
     job_id = _launch_job_id(dependencies, identity, requested_job_id, received_handoff)
     submitting_user = _launch_submitting_user(dependencies, identity, request, job_id)
+    if dependencies.require_task_sessions and submitting_user in UNVERIFIED_SUBMITTERS:
+        raise ConnectError(Code.PERMISSION_DENIED, "Credential broker jobs require an authenticated submitting user")
     return LaunchIdentity(
         job_id=job_id,
         received_handoff=received_handoff,

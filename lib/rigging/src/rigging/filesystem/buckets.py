@@ -27,6 +27,7 @@ from rigging.filesystem.cluster_config import BucketSpec, StoreType, data_bucket
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.paged_listing import with_listing
 from rigging.filesystem.s3_compat import (
+    credential_profile_for_bucket,
     credentials_hint,
     fsspec_s3_conf,
     s3_credentials,
@@ -94,6 +95,12 @@ def _s3_filesystem(spec: BucketSpec, upload_policy: S3UploadPolicy) -> s3fs.S3Fi
     The signing region is the bucket's own for CoreWeave, whose endpoint routes on it, and
     ``"auto"`` for R2, which ignores the AWS region scheme entirely.
     """
+    renewable = credential_profile_for_bucket(spec.name)
+    if renewable:
+        return s3fs.S3FileSystem(
+            **renewable,
+            fixed_upload_size=upload_policy is S3UploadPolicy.FIXED_PARTS,
+        )
     credentials = s3_credentials(spec.store)
     if credentials is None:
         raise MissingCredentials(f"no credentials for {spec.store} bucket {spec.name!r}: {credentials_hint(spec.store)}")

@@ -6,6 +6,7 @@
 Defines the ``iris`` Click group and registers all subcommands.
 """
 
+import base64
 import logging
 import sys
 
@@ -25,6 +26,8 @@ from iris.cli.connect import (
 )
 from iris.cluster.config import load_config
 from iris.cluster.platforms.k8s.controller import configure_client_s3
+from iris.cluster.platforms.k8s.service import CloudK8sService
+from iris.cluster.platforms.k8s.types import K8sResource
 from iris.rpc import controller_pb2
 from iris.rpc.proto_display import PRIORITY_BAND_NAMES, priority_band_name, priority_band_value
 
@@ -183,6 +186,80 @@ def login(ctx, headless):
 # ---------------------------------------------------------------------------
 # User budget management
 # ---------------------------------------------------------------------------
+
+
+@iris.command("operator-login")
+@click.option("--principal", required=True, help="Identity recorded for this Kubernetes operator session")
+@click.pass_context
+def operator_login(ctx: click.Context, principal: str) -> None:
+    """Cache a one-hour admin JWT using existing Kubernetes controller-Pod exec access."""
+    config = ctx.obj.get("config")
+    if config is None or config.credential_broker is None or config.kubernetes_provider is None:
+        raise click.ClickException("operator-login requires a broker-enabled Kubernetes cluster config")
+    kp = config.kubernetes_provider
+    platform = config.platform.coreweave
+    assert platform is not None
+    kubernetes = CloudK8sService(
+        namespace=kp.namespace or "iris",
+        kubeconfig_path=platform.kubeconfig_path or kp.kubeconfig or None,
+        context=platform.kube_context or kp.kube_context or None,
+    )
+    pods = kubernetes.list_json(K8sResource.PODS, labels={"app": "iris-controller"})
+    running = [pod for pod in pods if pod.get("status", {}).get("phase") == "Running"]
+    if len(running) != 1:
+        raise click.ClickException("operator-login requires exactly one running controller Pod")
+    result = kubernetes.exec(
+        running[0]["metadata"]["name"],
+        [
+            ".venv/bin/python",
+            "-m",
+            "iris.cluster.controller.operator_token",
+            "--config",
+            "/etc/iris/config.json",
+            "--principal",
+            principal,
+        ],
+        container="iris-controller",
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise click.ClickException("Controller rejected operator-token creation; inspect controller-Pod exec access")
+    token = result.stdout.strip()
+    if not token or len(token.split(".")) != 3:
+        raise click.ClickException("Controller returned an invalid operator-token response")
+    certificate = kubernetes.get_json(K8sResource.SECRETS, config.credential_broker.tls_secret)
+    if certificate is None:
+        raise click.ClickException("Controller TLS certificate is unavailable")
+    save_credentials(
+        CredentialRecord(
+            cluster=ctx.obj["cluster_name"],
+            endpoint=kp.controller_address,
+            token=token,
+            ca_bundle=base64.b64decode(certificate["data"]["ca.crt"]).decode(),
+        )
+    )
+    click.echo("Operator credential cached for one hour. Kubernetes Pod-exec authority granted this session.")
+
+
+@iris.command("task-sessions")
+@click.option("--attempt", "attempt_uid", default="", help="Exact task attempt UID")
+@click.option("--job", "job_id", default="", help="Job name, including its descendants")
+@click.option("--principal", default="", help="Verified submitting identity")
+@click.option("--action", type=click.Choice(["rollover", "disable", "enable"]), required=True)
+@click.pass_context
+def task_sessions(ctx: click.Context, attempt_uid: str, job_id: str, principal: str, action: str) -> None:
+    """Roll or disable task credentials (admin only). Select exactly one scope."""
+    request_type = controller_pb2.Controller.ManageTaskSessionsRequest
+    with rpc_client_for_ctx(ctx) as client:
+        response = client.manage_task_sessions(
+            request_type(
+                attempt_uid=attempt_uid,
+                job_id=job_id,
+                principal=principal,
+                action=request_type.Action.Value(action.upper()),
+            )
+        )
+    click.echo(f"Updated {response.affected} task sessions.")
 
 
 @iris.group()

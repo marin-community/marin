@@ -3,6 +3,8 @@
 
 """Thin protobuf adapter for the controller's operation modules."""
 
+from connectrpc.code import Code
+from connectrpc.errors import ConnectError
 from connectrpc.request import RequestContext
 from finelog.client import LogClient
 from rigging.timing import Timer
@@ -24,6 +26,7 @@ from iris.cluster.controller.backend import TaskBackend
 from iris.cluster.controller.db import ControllerDB
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.runtime_interface import ControllerRuntime
+from iris.cluster.controller.task_sessions import TaskSessionBroker
 from iris.cluster.stats.tables import (
     PROFILE_NAMESPACE,
     TASK_EVENT_NAMESPACE,
@@ -56,8 +59,10 @@ class ControllerServiceImpl:
         auth: ControllerAuth | None = None,
         user_budget_defaults: UserBudgetDefaults | None = None,
         capability_url_config: attempts.CapabilityUrlConfig | None = None,
+        task_sessions: TaskSessionBroker | None = None,
     ):
         self._db = db
+        self._task_sessions = task_sessions
         self._controller = controller
         self._endpoint_service = endpoint_service
         self._bundle_store = bundle_store
@@ -79,6 +84,7 @@ class ControllerServiceImpl:
             bundles=bundle_store,
             auth=resolved_auth,
             user_budget_defaults=resolved_budget_defaults,
+            require_task_sessions=task_sessions is not None,
         )
         self._federation = federation_service.FederationDependencies(db=db, runtime=controller)
         self._attempts = attempts.AttemptDependencies(
@@ -100,6 +106,21 @@ class ControllerServiceImpl:
 
     def bundle_zip(self, bundle_id: str) -> bytes:
         return self._bundle_store.get(bundle_id)
+
+    @property
+    def task_sessions(self) -> TaskSessionBroker:
+        if self._task_sessions is None:
+            raise ConnectError(Code.UNIMPLEMENTED, "Task credential broker is not configured")
+        return self._task_sessions
+
+    def renew_task_session(self, request: controller_pb2.Controller.RenewTaskSessionRequest, ctx: RequestContext):
+        return self.task_sessions.renew(request)
+
+    def get_task_credentials(self, request: controller_pb2.Controller.GetTaskCredentialsRequest, ctx: RequestContext):
+        return self.task_sessions.credentials(request)
+
+    def manage_task_sessions(self, request: controller_pb2.Controller.ManageTaskSessionsRequest, ctx: RequestContext):
+        return self.task_sessions.manage(request)
 
     def blob_data(self, blob_id: str) -> bytes:
         return self._bundle_store.get(blob_id)
