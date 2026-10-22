@@ -1075,7 +1075,8 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
                 iris_config.controller
             )
         with bundle.controller.tunnel(address=controller_address) as controller_url:
-            yield IrisClient.remote(controller_url, workspace=workspace)
+            # The sealed workspace already contains only the declared runtime files.
+            yield IrisClient.remote(controller_url, workspace=workspace, extra_bundle_includes=("**/*",))
 
     if args.target_cluster:
         # Federated submission MUST carry the IAP *user* identity: the controller rejects
@@ -1088,7 +1089,9 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         # Requires a completed `iris --cluster=marin login` (@openathena.ai).
         from iris.cli.connect import open_iris_client
 
-        client_cm = open_iris_client(config_file=Path(submit_cluster_config), workspace=workspace)
+        client_cm = open_iris_client(
+            config_file=Path(submit_cluster_config), workspace=workspace, extra_bundle_includes=("**/*",)
+        )
     else:
         client_cm = _direct_client()
 
@@ -1144,7 +1147,7 @@ def _ambient_in_cluster_client(workspace: Path) -> IrisClient | None:
     controller_url = os.environ.get("IRIS_CONTROLLER_URL")
     if not controller_url:
         return None
-    return IrisClient.in_cluster(controller_url, workspace=workspace)
+    return IrisClient.in_cluster(controller_url, workspace=workspace, extra_bundle_includes=("**/*",))
 
 
 def _seconds_to_duration(secs: int):
