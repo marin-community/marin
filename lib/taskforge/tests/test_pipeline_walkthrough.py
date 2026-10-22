@@ -41,7 +41,14 @@ from taskforge.stage10_proposal.model import (
 )
 from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage20_triage.verdict import TriageDecision, Verdict
-from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision, RevisionKind, static_author
+from taskforge.stage30_author.author import (
+    PROGRAM_FILE,
+    AuthorContext,
+    AuthoredProgram,
+    Revision,
+    RevisionKind,
+    static_author,
+)
 from taskforge.stage30_author.loader import SdkExports, load_program_source
 from taskforge.stage30_author.program import (
     RLEnvBuildProgram,
@@ -265,16 +272,22 @@ UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
 
 class RecordingAuthor:
-    """Returns ``programs`` in turn, the last one from then on, and records each revision and author state."""
+    """Returns ``programs`` in turn, the last one from then on, and records each context, revision and author state."""
 
     def __init__(self, *programs: RLEnvBuildProgram):
         self.programs = list(programs)
+        self.contexts: list[AuthorContext] = []
         self.revisions: list[Revision | None] = []
         self.states: list[Mapping[str, JsonValue]] = []
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
+        self.contexts.append(context)
         self.revisions.append(revision)
         self.states.append(author_state)
         return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None)
@@ -288,7 +301,11 @@ class SourceAuthor:
         self.revisions: list[Revision | None] = []
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(load_toy_program(self.source), self.source)
@@ -609,7 +626,11 @@ class CutAuthor:
         self.revisions: list[Revision | None] = []
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
@@ -656,7 +677,10 @@ async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_bu
 
 
 async def unavailable_author(
-    proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    context: AuthorContext,
+    proposal: TaskProposal,
+    revision: Revision | None,
+    author_state: Mapping[str, JsonValue],
 ) -> AuthoredProgram:
     raise ModelUnavailable("the hold ran out", ())
 
@@ -766,7 +790,7 @@ async def test_an_unavailable_model_fails_the_workpiece_at_validation_and_a_rela
     assert exits(log) == [*ACCEPTED_EXITS[:4], ("terminal", "failed"), *ACCEPTED_EXITS[4:]]
 
 
-async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings(tmp_path):
+async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings_and_context(tmp_path):
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
 
@@ -779,6 +803,9 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
     assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
+    # The author stage and the build stage's call again, as the author returns no source, in each round.
+    directory = tmp_path / "workpieces" / WORKPIECE
+    assert author.contexts == [AuthorContext(WORKPIECE, 0, directory)] * 2 + [AuthorContext(WORKPIECE, 1, directory)] * 2
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
 
 

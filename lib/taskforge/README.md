@@ -31,8 +31,8 @@ src/taskforge/
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
                                verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
-                               the program manifest;
+                               author.py: Revision, AuthoredProgram, AuthorContext, the Author protocol,
+                               `static_author`, the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
   stage40_build_with_program/  agentic_author.py: `author_round`, the agent session that writes, loads,
                                builds and grades a build program;
@@ -469,7 +469,7 @@ closes as rejected with the reason.
 An accept records the verdict's `author_state` on its `TRIAGED` event: a JSON mapping, empty
 unless the triage attached state such as findings or obligations for the author. The workpiece
 state folds it from the event, so a relaunch reads the same state, and the coordinator passes it
-to every author call as the `Author`'s third argument. The preflight attaches none, and the
+to every author call as the `Author`'s last argument. The preflight attaches none, and the
 package's authors ignore it.
 
 A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
@@ -479,6 +479,9 @@ invalid through the repair turns, as when the output limit cut it, and the next 
 again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
 author stage.
 
+The coordinator calls the author with an `AuthorContext` (the workpiece id, the round and the
+workpiece's directory), the proposal, the revision and the author state. An author keeps its own
+files in the workpiece's directory, under names the coordinator does not use (the layout below).
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
 workpiece's build and author failures so far, and the build stage loads the program from that file
