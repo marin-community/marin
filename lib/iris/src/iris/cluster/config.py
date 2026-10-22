@@ -887,6 +887,10 @@ class IrisClusterConfig(_OneofConfig):
     # through the parent, which relays it here. Empty keeps minted URLs on the local
     # origin. The parent recognizes the tag from its own ``peers`` map.
     federation_public_parent: str = ""
+    # Trusted parent whose policy governs direct and handed-off work.
+    budget_parent: str = ""
+    # Routing peers whose local usage counts against this cluster's budgets.
+    budget_peers: list[str] = Field(default_factory=list)
     # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
     # opaque dict so `provisioning:` can live in the cluster config file without
     # Iris depending on the IaC schema; iac.config owns the typed validation.
@@ -1140,6 +1144,16 @@ def _validate_peers(config: IrisClusterConfig) -> None:
     peer id must stay disjoint from it and the sentinel never collides with a real
     cluster id.
     """
+    if not set(config.budget_peers) <= config.peers.keys():
+        raise ValueError("budget_peers must name configured federation peers")
+    if config.budget_parent:
+        trusted_parents = config.auth.federation_peers if config.auth is not None else {}
+        if trusted_parents and config.budget_parent not in trusted_parents:
+            raise ValueError("budget_parent must name a trusted auth.federation_peers entry")
+        if config.user_budgets:
+            raise ValueError("Configure user_budgets on the budget parent")
+        if config.peers:
+            raise ValueError("A budget child cannot also delegate to federation peers")
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")

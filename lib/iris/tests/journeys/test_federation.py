@@ -61,6 +61,20 @@ def test_peer_outage_preserves_last_known_state_until_recovery_sync(federation: 
     assert federation.parent_job(job).state == job_pb2.JOB_STATE_SUCCEEDED
 
 
+def test_direct_peer_usage_reaches_parent_and_clears_after_completion(federation: FederationJourney) -> None:
+    job = federation.peer.submit("direct", tasks=2)
+    federation.run_peer()
+    federation.sync()
+    assert federation.parent.budget_spent("journey") == 12
+    assert federation.peer.budget_spent("journey") == 12
+
+    federation.succeed_on_peer(job[0])
+    federation.succeed_on_peer(job[1])
+    federation.sync()
+    assert federation.parent.budget_spent("journey") == 0
+    assert federation.peer.budget_spent("journey") == 0
+
+
 def test_unreachable_pinned_queue_reports_peer_outage_and_recovers(federation: FederationJourney) -> None:
     job = federation.submit("queued")
     waiting_reason = federation.parent_job(job).pending_reason

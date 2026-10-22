@@ -887,12 +887,14 @@ class Controller(_message.Message):
         peers: _containers.RepeatedCompositeFieldContainer[Controller.PeerSummary]
         def __init__(self, peers: _Optional[_Iterable[_Union[Controller.PeerSummary, _Mapping]]] = ...) -> None: ...
     class FederationSyncRequest(_message.Message):
-        __slots__ = ("requester_id", "cursor")
+        __slots__ = ("requester_id", "cursor", "budget_policy")
         REQUESTER_ID_FIELD_NUMBER: _ClassVar[int]
         CURSOR_FIELD_NUMBER: _ClassVar[int]
+        BUDGET_POLICY_FIELD_NUMBER: _ClassVar[int]
         requester_id: str
         cursor: str
-        def __init__(self, requester_id: _Optional[str] = ..., cursor: _Optional[str] = ...) -> None: ...
+        budget_policy: Controller.FederationBudgetPolicy
+        def __init__(self, requester_id: _Optional[str] = ..., cursor: _Optional[str] = ..., budget_policy: _Optional[_Union[Controller.FederationBudgetPolicy, _Mapping]] = ...) -> None: ...
     class FederationJobDelta(_message.Message):
         __slots__ = ("job_id", "summary", "changed_tasks", "tombstone")
         JOB_ID_FIELD_NUMBER: _ClassVar[int]
@@ -928,17 +930,42 @@ class Controller(_message.Message):
         metadata: _containers.ScalarMap[str, str]
         lease_remaining: _time_pb2.Duration
         def __init__(self, endpoint_id: _Optional[str] = ..., name: _Optional[str] = ..., address: _Optional[str] = ..., task_id: _Optional[str] = ..., access: _Optional[_Union[Controller.EndpointAccess, str]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., lease_remaining: _Optional[_Union[_time_pb2.Duration, _Mapping]] = ...) -> None: ...
+    class FederationBudgetPolicy(_message.Message):
+        __slots__ = ("users", "default_budget_limit", "default_max_band")
+        USERS_FIELD_NUMBER: _ClassVar[int]
+        DEFAULT_BUDGET_LIMIT_FIELD_NUMBER: _ClassVar[int]
+        DEFAULT_MAX_BAND_FIELD_NUMBER: _ClassVar[int]
+        users: _containers.RepeatedCompositeFieldContainer[Controller.GetUserBudgetResponse]
+        default_budget_limit: int
+        default_max_band: _job_pb2.PriorityBand
+        def __init__(self, users: _Optional[_Iterable[_Union[Controller.GetUserBudgetResponse, _Mapping]]] = ..., default_budget_limit: _Optional[int] = ..., default_max_band: _Optional[_Union[_job_pb2.PriorityBand, str]] = ...) -> None: ...
+    class FederationBudgetUsage(_message.Message):
+        __slots__ = ("budget_parent", "spend")
+        class SpendEntry(_message.Message):
+            __slots__ = ("key", "value")
+            KEY_FIELD_NUMBER: _ClassVar[int]
+            VALUE_FIELD_NUMBER: _ClassVar[int]
+            key: str
+            value: int
+            def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+        BUDGET_PARENT_FIELD_NUMBER: _ClassVar[int]
+        SPEND_FIELD_NUMBER: _ClassVar[int]
+        budget_parent: str
+        spend: _containers.ScalarMap[str, int]
+        def __init__(self, budget_parent: _Optional[str] = ..., spend: _Optional[_Mapping[str, int]] = ...) -> None: ...
     class FederationSyncResponse(_message.Message):
-        __slots__ = ("deltas", "next_cursor", "cursor_stale", "endpoints")
+        __slots__ = ("deltas", "next_cursor", "cursor_stale", "endpoints", "budget_usage")
         DELTAS_FIELD_NUMBER: _ClassVar[int]
         NEXT_CURSOR_FIELD_NUMBER: _ClassVar[int]
         CURSOR_STALE_FIELD_NUMBER: _ClassVar[int]
         ENDPOINTS_FIELD_NUMBER: _ClassVar[int]
+        BUDGET_USAGE_FIELD_NUMBER: _ClassVar[int]
         deltas: _containers.RepeatedCompositeFieldContainer[Controller.FederationJobDelta]
         next_cursor: str
         cursor_stale: bool
         endpoints: _containers.RepeatedCompositeFieldContainer[Controller.FederationEndpoint]
-        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ..., endpoints: _Optional[_Iterable[_Union[Controller.FederationEndpoint, _Mapping]]] = ...) -> None: ...
+        budget_usage: Controller.FederationBudgetUsage
+        def __init__(self, deltas: _Optional[_Iterable[_Union[Controller.FederationJobDelta, _Mapping]]] = ..., next_cursor: _Optional[str] = ..., cursor_stale: _Optional[bool] = ..., endpoints: _Optional[_Iterable[_Union[Controller.FederationEndpoint, _Mapping]]] = ..., budget_usage: _Optional[_Union[Controller.FederationBudgetUsage, _Mapping]] = ...) -> None: ...
     def __init__(self) -> None: ...
 
 class StringList(_message.Message):

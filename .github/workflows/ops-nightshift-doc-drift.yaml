@@ -36,8 +36,8 @@ jobs:
             fewer than three Markdown files, include its parent folder. Check
             code references, examples, internal links, and configuration
             options against current code. Fix meaningful drift under AGENTS.md
-            and the update-docs and commit skills. Open a PR with agent-generated
-            and nightshift labels for a supported correction; file an issue
+            documentation policy and the manage-pr skill. Open a PR with
+            agent-generated and nightshift labels for a supported correction; file an issue
             for larger documented gaps. Publish a typed result, including what
             was checked if no change was warranted.
           base: ${{ github.sha }}
