@@ -1,4 +1,4 @@
-"""Behavior tests for structured SkyRL launches."""
+"""Behavior tests for the structured SkyRL launch configuration."""
 
 from __future__ import annotations
 
@@ -8,6 +8,10 @@ from typing import Any
 
 import pytest
 import yaml
+from omegaconf import OmegaConf
+from rolloutengine.models import ModelTurn
+from skyrl_gym.answer_tasks import grade_gsm8k
+from skyrl_gym.task_sessions import AnswerTaskSession
 
 from cloud.iris import training_driver
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
@@ -17,13 +21,9 @@ from cloud.iris.rl_config_translation import (
     materialize_launch_config,
     parse_rl_config,
 )
-from marinskyrl.runtime_options import reference_model_required
-from omegaconf import OmegaConf
-from rolloutengine.models import ModelTurn
-from skyrl_gym.answer_tasks import grade_gsm8k
-from skyrl_gym.task_sessions import AnswerTaskSession
-from skyrl_train.dataset.tasks import source_row_task
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
+from skyrl_train.dataset.tasks import source_row_task
+from marinskyrl.runtime_options import reference_model_required
 
 
 def _raw_config() -> dict[str, Any]:

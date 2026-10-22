@@ -23,8 +23,8 @@ uv run python -m experiments.post_training.structure_closure.task_data \
 
 The task exporter writes ordinary TaskSpecs with a user instruction, assistant
 text prefix and `StructureClosureSpec` grader. Run them through RolloutEngine's
-`PrefillHarness`: register it as `"prefill"` in the engine's harness mapping and
-set `TaskRolloutSpec.harness="prefill"`. Ordinary chat rendering treats assistant
+`AssistantPrefixHarness`: register it as `"assistant_prefix"` in the engine's harness mapping and
+set `TaskRolloutSpec.harness="assistant_prefix"`. Ordinary chat rendering treats assistant
 messages as completed history. The model must return the raw continuation as assistant content. Parsed
 reasoning or tool actions are unscored by the harness.
 

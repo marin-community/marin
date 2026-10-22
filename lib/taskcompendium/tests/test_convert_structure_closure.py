@@ -72,7 +72,7 @@ def native_row():
     return row
 
 
-def test_native_converter_uses_text_prefill_and_preserves_private_resources_and_pipeline_audit(native_row):
+def test_native_converter_uses_assistant_prefix_and_preserves_private_resources_and_pipeline_audit(native_row):
     row = native_row()
     # Exercise the standard conversion boundary, which enforces supplied row identity.
     converted = convert_row(row, lambda raw, _context: structure_closure_task(raw), ConversionContext({}, None))
