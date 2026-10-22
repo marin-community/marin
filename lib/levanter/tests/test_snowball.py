@@ -276,7 +276,7 @@ def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(4))
         expected = to_torch_compatible_state_dict(model)
-        options = dict(save_tokenizer=False, save_reference_code=False, max_shard_size=4096, dtype=jnp.bfloat16)
+        options = dict(save_tokenizer=False, save_reference_code=False, max_shard_size=4096, release_precision="bf16")
         converter.save_pretrained(model, str(tmp_path), **options)
         index = json.loads((tmp_path / "model.safetensors.index.json").read_text())
         tensors = {}
@@ -287,16 +287,17 @@ def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output
             tensors.update(shard)
         assert tensors.keys() == expected.keys() == index["weight_map"].keys()
         for name, value in expected.items():
-            wanted = np.asarray(jnp.asarray(value, dtype=jnp.bfloat16))
+            dtype = jnp.float32 if name.endswith(".mlp.router.bias") else jnp.bfloat16
+            wanted = np.asarray(jnp.asarray(value, dtype=dtype))
             actual = tensors[name]
             assert actual.shape == wanted.shape and actual.dtype == wanted.dtype, name
             assert actual.tobytes() == wanted.tobytes(), name
         assert index["metadata"]["total_size"] == sum(value.nbytes for value in tensors.values())
-        assert json.loads((tmp_path / "config.json").read_text()) == json.loads(
-            json.dumps(cfg.to_hf_config(cfg.vocab_size).to_dict())
-        )
+        exported_config = json.loads((tmp_path / "config.json").read_text())
+        assert exported_config["dtype"] == "bfloat16"
+        validate_single_name_config(exported_config, cfg)
 
-        # Ordinary converter callers can intentionally overwrite a completed destination.
+        # Weight-only converter callers can overwrite an existing destination.
         filename = next(iter(index["weight_map"].values()))
         original = (tmp_path / filename).read_bytes()
         (tmp_path / filename).write_bytes(original[:-1] + bytes([original[-1] ^ 1]))

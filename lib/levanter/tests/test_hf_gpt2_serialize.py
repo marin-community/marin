@@ -204,7 +204,8 @@ def test_hf_save_to_fs_spec():
     with use_test_mesh():
         simple_model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
 
-        converter.save_pretrained(simple_model, "memory://model")
+        # memory:// tests weight I/O but cannot publish an atomic release marker.
+        converter.save_pretrained(simple_model, "memory://model", save_tokenizer=False)
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # now copy the model to tmp because loading from memory doesn't work
