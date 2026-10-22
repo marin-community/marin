@@ -139,9 +139,7 @@ def annotate_pilot(
             private, stage="quality", model=quality_model, submit=quality_submit, cache_root=cache_root
         )
         kept = {
-            row["content_hash"]: row["public_input"]
-            for key, row in public.items()
-            if quality[key].get("verdict") == "keep"
+            row.content_hash: row.public_input for key, row in public.items() if quality[key].get("verdict") == "keep"
         }
         annotations, annotation_traces = annotate_inputs(
             kept, stage="annotation", model=annotation_model, submit=annotation_submit, cache_root=cache_root
@@ -150,7 +148,7 @@ def annotate_pilot(
         descriptions = {}
         for row in rows:
             key = row["contract_id"]
-            content_hash = public[key]["content_hash"]
+            content_hash = public[key].content_hash
             annotation = annotations.get(content_hash) if quality[key].get("verdict") == "keep" else None
             sidecars.append(
                 {
