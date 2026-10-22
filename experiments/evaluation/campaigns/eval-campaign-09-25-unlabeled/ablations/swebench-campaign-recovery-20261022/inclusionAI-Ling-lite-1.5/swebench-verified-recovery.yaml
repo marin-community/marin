@@ -36,7 +36,7 @@ agents:
   kwargs:
     version: 2.1.0
     model_info:
-      max_input_tokens: 131072
+      max_input_tokens: 32768
       max_output_tokens: 16384
 datasets:
 - name: swebench-verified
