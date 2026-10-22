@@ -265,7 +265,7 @@ def test_manifest_records_hashes_template_hashes_and_stage_order(tmp_path):
 
         return iterator()
 
-    import experiments.post_training.stage0.convert as convert_module
+    import experiments.post_training.stage0.convert as convert_module  # noqa: PLC0415 - monkeypatched by this test
 
     original_sources = convert_module.STAGE0_SOURCES
     convert_module.STAGE0_SOURCES = tuple(specs[name] for name in STAGE_ORDER)
@@ -289,7 +289,7 @@ def test_manifest_records_hashes_template_hashes_and_stage_order(tmp_path):
 def test_token_maps_are_single_token_on_their_pinned_tokenizers(family):
     if not _hf_reachable():
         pytest.skip("HF hub unreachable")
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer  # noqa: PLC0415 - optional dep guard
 
     repo, revision = _HF_REVISIONS[family]
     tokenizer = AutoTokenizer.from_pretrained(repo, revision=revision)
