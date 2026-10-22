@@ -149,6 +149,12 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    of priority. Public-API completeness or unused option combinations alone are
    insufficient reasons to spend a nightshift run.
 
+   Trace the proposed replacement through the ordinary execution path. Account
+   for added bytes read, peak memory, network requests, repeated passes, and
+   latency. A format or edge-case fix that introduces full-file materialization
+   or extra work for common callers needs evidence that its benefit outweighs
+   that cost.
+
    Check open PRs by listing their changed files and filtering by the
    candidate's paths; `gh pr list --search` does not search changed paths.
    Read relevant issues and PR discussions. Defer work already covered by an
@@ -173,8 +179,9 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    defect or measure the cost before editing. Drop disproved candidates and
    reconsider the remaining ones. Follow applicable implementation and
    testing skills, and compare the changed behavior with the baseline using
-   the promised regression or measurement. Passing existing tests alone does
-   not establish the improvement. Use `update-docs` when guidance changes and
+   the promised regression or measurement. Measure newly added I/O or
+   materialization on representative input sizes. Passing existing tests alone
+   does not establish the improvement. Use `update-docs` when guidance changes and
    `commit` to publish a PR with `agent-generated` and `nightshift` labels.
    Do not merge it or file issues for unselected candidates.
 
