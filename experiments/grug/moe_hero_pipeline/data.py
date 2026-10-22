@@ -10,11 +10,7 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import harrier_mix_2026
 
 
 def raw_hero_data_config(*, ctx: StepContext, schedule_steps: int, batch_size: int, max_seq_len: int) -> LmDataConfig:
-    """Use the Hero mixture schedule without shrinking its component datasets.
-
-    A diagnostic execution limit must not simulate an entire training budget:
-    shrinking rare components for a few steps can leave empty dataset views.
-    """
+    """Use the Hero mixture schedule without shrinking component datasets."""
     return harrier_mix_2026_08_18_data_config(
         ctx=ctx,
         total_steps=schedule_steps,
