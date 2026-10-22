@@ -49,6 +49,7 @@ src/taskforge/
                                lowering.py: `lower`, a task lowered for the validating host;
                                control_drafts.py: `write_controls`, the controls of a draft round;
                                controls.py: control replay; outcome.py, evidence.py: outcomes and their totals
+                               round.py: `validate_round`, one validation round as a graph of units
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
@@ -544,6 +545,34 @@ retryable cause;
 where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kind)` totals the graded
 trials. `stage50_validate.controls.replay(spec, controls, plan, settings)` replays each control as
 one `CONTROL` trial named by its id.
+
+`stage50_validate.round.validate_round(draft, context, solver_model, controls_model)` runs one
+validation round from these parts as a graph of units. Lowering (`preflight`) and control writing
+start together; each of the `context.k` solver trials starts once the lowering is done, without
+waiting for the controls; each control's replay starts once both the lowered spec and the controls
+exist. Every unit is idempotent on its own file, so a relaunch runs only the units whose files are
+missing:
+
+```
+<round_dir>/validation.json                                  the ValidationResult
+<round_dir>/validation/<draft>/lowered.json                  the lowering, for one host and set of backends
+<round_dir>/validation/<draft>/controls.json                 the written controls
+<round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
+<round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
+```
+
+`<draft>` is `content_hash.digest` of the draft's task, `<task>` the `trials.task_digest` of the
+lowered spec as the round's trials run it, and `<controls>` `content_hash.digest` of the control set,
+so no file of another task, lowered spec or control set counts as done. A trial is done when its
+last attempt is graded, failed for a cause that is not retryable, or used its retries; otherwise it
+resumes at the next attempt with the retries it has left. Attempt files are written whole or not at
+all, and an attempt cancelled in flight writes none, so a cancelled trial runs again instead of
+counting as ungraded. The result is read back from the unit files (`trials.attempt_outcome`), and
+`validation.json` holds every decision input without the rollouts: the lowering's status
+(`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
+backend fallback; each solver trial's status, reward, cause and attempt file, with the reward totals
+and ungraded causes of its `Evidence`; and each control's verdict (`met`, `violated`, `ungraded`) and
+cause. `load_validation(round_dir)` reads it back.
 
 ## Testing
 
