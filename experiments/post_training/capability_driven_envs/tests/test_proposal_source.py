@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 from pydantic import ValidationError
+from taskforge.capability import capability_idea_record
 from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError, response_format
@@ -28,7 +29,6 @@ from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOu
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
-    capability_idea_record,
     load_capability_ideas,
 )
 from experiments.post_training.capability_driven_envs.proposal_source import (

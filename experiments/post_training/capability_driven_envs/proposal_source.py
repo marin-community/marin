@@ -24,7 +24,7 @@ repair request under the same regex. The repair request keeps the prior reply as
 and quotes the parse error. A slot the plan marks null becomes a proposal with ``null_reason`` set
 and costs no model call.
 
-Both prompts quote ``catalog.capability_idea_record(idea)``.
+Both prompts quote ``taskforge.capability.capability_idea_record(idea)``.
 """
 
 import asyncio
@@ -35,6 +35,7 @@ from textwrap import indent
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy, Message
@@ -60,8 +61,6 @@ from taskforge.stage10_proposal.model import (
     source_text,
 )
 from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal
-
-from experiments.post_training.capability_driven_envs.catalog import CapabilityIdea, capability_idea_record
 
 CUT_OFF = "cut off by the output limit"
 SLOT_MODEL_ERRORS = (ModelUnavailable, ModelRequestRejected)
