@@ -415,9 +415,11 @@ relaunch never resumes a session mid-way: a session directory without an `author
 
 From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
 raising an exception closes it as failed. `WorkpieceBudget` bounds the triage rewrites a workpiece
-may take, the build and author failures it may revise after, and the review retries it may
-follow. The coordinator spends the budget when it records the event, choosing repair or reject,
-revise or reject, retry or abandon.
+may take, the build and author failures it may revise after, the review retries it may follow,
+and the review `Modify` decisions it may follow into a new round. The coordinator spends the
+budget when it records the event, choosing repair or reject, revise or reject, retry or abandon,
+modify or reject. A `Modify` past `max_modify_rounds` exits reject with kind `budget`, so a budget
+of zero never takes the modify edge; the round number counts the `Modify` decisions followed.
 
 Triage returns a `Verdict`. The preflight's exits accept or reject, and a reject records the
 verdict's reasons. REPAIR is the surface described under Triage, and a `max_triage_repairs` of zero

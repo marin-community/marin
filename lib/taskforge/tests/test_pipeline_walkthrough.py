@@ -134,7 +134,7 @@ unambiguous. A solver that guesses cannot reach the product by chance often, and
 no hint of the answer. No condition makes this task impossible to build in ShellSim.
 """
 )
-BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_validation_retries=1)
+BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_validation_retries=1, max_modify_rounds=1)
 REPAIRING = replace(BUDGET, max_triage_repairs=1)
 """``BUDGET`` for a consumer using the REPAIR surface: one rewrite, then a REPAIR verdict rejects."""
 SAMPLING = LLMPolicy()
@@ -785,6 +785,29 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
     assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
+
+
+async def always_modify(summary: object) -> Decision:
+    return Modify(findings=("the file states the product",))
+
+
+@pytest.mark.parametrize(
+    ("max_modify_rounds", "decided"),
+    [(0, [(0, "reject")]), (1, [(0, "modify"), (1, "reject")])],
+    ids=["no rounds", "one round"],
+)
+async def test_a_modify_past_the_modify_rounds_rejects_the_workpiece_on_its_budget(tmp_path, max_modify_rounds, decided):
+    author = RecordingAuthor(PROGRAM)
+    stages = replace(STAGES, author=author, review=always_modify)
+    budget = replace(BUDGET, max_modify_rounds=max_modify_rounds)
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, stages, budget), WORKPIECE, PROPOSAL, log) is Terminal.REJECTED
+    assert [(event.round, event.attrs[EXIT]) for event in log.events() if event.kind == "decided"] == decided
+    closed = log.events()[-1]
+    assert (closed.attrs["terminal"], closed.attrs["kind"]) == ("rejected", RejectKind.BUDGET)
+    assert "the file states the product" in closed.attrs["reason"]
+    assert derive_state(log.events()).round == max_modify_rounds
 
 
 class TriageInTurn:
