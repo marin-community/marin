@@ -355,8 +355,9 @@ Non-sandbox CoreWeave jobs require both. Tasks and output uploaders receive the
 submitted pair under both `CW_*` and `AWS_*` names. Operator keys stay in the
 infrastructure-only `iris-storage-env` Secret for checkpoints and node health
 probes. Existing Pods retain their environment, but retries and preemption create
-new Pods and require personal keys. Before deploying this change, resume legacy
-jobs (including hero runs) with personal keys; queued jobs need resubmission.
+new Pods and require personal keys. Before deploying a controller that enforces
+submitter credentials, resume running jobs whose stored environment lacks keys
+(including hero runs) with personal keys. Resubmit queued jobs that lack keys.
 
 Task working directories and caches are node-local:
 
