@@ -82,7 +82,8 @@ class RouterLoadStats:
             metrics[f"{prefix}/entropy"] = float(-(load * load.clamp_min(1e-12).log()).sum())
             metrics[f"{prefix}/max_over_mean"] = float(counts.max()) / (total / self._num_experts)
             metrics[f"{prefix}/min_load"] = float(load.min())
-            metrics[f"{prefix}/experts_below_10pct_of_mean"] = float((load < 0.1).sum())
+            # The Stage 0 routing-health gate counts experts below 10% of the MEAN load.
+            metrics[f"{prefix}/experts_below_10pct_of_mean"] = float((counts < 0.1 * total / self._num_experts).sum())
         return metrics
 
 
@@ -131,7 +132,7 @@ def collision_metrics(norms: Mapping[int, float], task_tags: list[str | None]) -
 
 
 def named_expert_bias_buffers(model: nn.Module) -> list[tuple[str, torch.Tensor]]:
-    """Grug's per-layer ``expert_bias`` buffers, the frozen half of router level R1."""
+    """Grug's per-layer ``expert_bias`` buffers: frozen while the router weights train."""
     return [
         (name, buffer) for name, buffer in model.named_buffers(remove_duplicate=False) if name.endswith("expert_bias")
     ]
