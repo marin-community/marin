@@ -464,7 +464,8 @@ jobs:
     name: iris-e2e-smoke
     needs: select
     if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
-    runs-on: ubuntu-latest
+    # The locked Playwright release supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -485,7 +486,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          key: playwright-ubuntu-24.04-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Playwright browsers
         # Always run: `playwright install` only downloads browsers it does not already
@@ -526,13 +527,14 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "vendor/skyrl/uv.lock"
-      - name: Check independent lock, Marin contract, and built wheel
-        run: uv run --no-project python -m scripts.skyrl_migration check-vendor
-      - name: Exercise the isolated source bundle, launchers, and verifier
+      - name: Check independent lock
+        run: uv lock --project vendor/skyrl --check
+      - name: Exercise packaging, launchers, and verifier
         working-directory: vendor/skyrl
         run: |
-          uv run --isolated --frozen --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
-            cloud/iris/tests/test_vendored_runtime_bundle.py \
+          uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+            infra/tests/test_marinskyrl_packaging.py \
+            cloud/iris/tests/test_task_machine_config.py \
             cloud/iris/tests/test_ray_spill_policy.py \
             cloud/iris/tests/test_task_runtime_source_selection.py \
             cloud/iris/tests/test_task_runtime_debug_artifacts.py \

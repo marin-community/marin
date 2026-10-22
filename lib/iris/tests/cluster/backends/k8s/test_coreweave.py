@@ -268,10 +268,12 @@ def _seed_prerequisites(k8s: InMemoryK8sService, cluster_config: IrisClusterConf
     )
 
 
-def test_start_controller_creates_controller_resources():
+@pytest.mark.parametrize("hostname", ["", "controller-host"])
+def test_start_controller_creates_controller_resources(hostname):
     """start_controller creates the runtime resources that remain Iris-owned."""
     provider, k8s = _make_provider()
     cluster_config = _make_cluster_config(remote_state_dir="s3://test-bucket/bundles")
+    cluster_config.controller.coreweave.hostname = hostname
     cluster_config.endpoints["/system/log-server"] = EndpointSpec(uri="http://finelog:10001")
     _seed_prerequisites(k8s, cluster_config)
 
@@ -299,6 +301,7 @@ def test_start_controller_creates_controller_resources():
     assert node_selector == {
         "kubernetes.io/arch": "amd64",
         iris_labels.iris_scale_group: "cpu-erapids",
+        **({"kubernetes.io/hostname": hostname} if hostname else {}),
     }
 
     # Controller is stamped with the control-plane PriorityClass, and that class
