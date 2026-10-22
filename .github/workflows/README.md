@@ -117,7 +117,7 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    `nightshift`, including closed PRs and relevant feedback:
 
    ```bash
-   gh pr list --state all --label nightshift --limit 20 \
+   gh pr list --repo marin-community/marin --state all --label nightshift --limit 20 \
      --json number,title,state,createdAt,url,files
    ```
 
