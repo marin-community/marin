@@ -189,6 +189,11 @@ def test_artifact_fetch_rejects_parent_traversal(tmp_path) -> None:
     assert artifact.available is False
     assert "outside the run results directory" in (artifact.reason or "")
 
+    sotopia_artifact = fetch_artifact(str(results), "sotopia-summary://../secret")
+    assert sotopia_artifact.available is False
+    assert sotopia_artifact.text is None
+    assert fetch_artifact(str(results), "sotopia-summary://..").available is False
+
 
 def test_artifact_fetch_missing_object_degrades(tmp_path) -> None:
     results = tmp_path / "results"
@@ -409,3 +414,68 @@ def test_fetch_artifact_keys_cache_by_run(tmp_path):
     assert first.available and second.available
     assert json.loads(first.text)["run"] == "a"
     assert json.loads(second.text)["run"] == "b"
+
+
+def test_sotopia_summary_from_harbor_trial_is_available_to_sample_viewer(tmp_path) -> None:
+    results = tmp_path / "results"
+    task = "hf://open-athena/sotopia-hard-harbor"
+    trial_id = "sotopia-01h7vkqht745xap1a4ddv8h4__xwVQFXm"
+    sample = EvalSample(
+        task=task,
+        doc_id="sotopia-01h7vkqht745xap1a4ddv8h4",
+        kind=SampleKind.AGENTIC,
+        metrics={"reward": 0.309},
+        correct=False,
+    )
+    with EvaluationStore.open(str(results), writer_id="harbor") as store:
+        store.add_sample(sample, trial_id=trial_id)
+        store.seal()
+
+    summary = {
+        "transcript": [
+            [{"sender": "Environment", "receiver": "Alice", "message": "Your goal is to negotiate."}],
+            [{"sender": "Alice", "receiver": "Environment", "message": "Hello."}],
+        ],
+        "reasoning": "The agent partly met its goal.",
+        "scores": [{"goal": 4.0}, {"goal": 2.0}],
+        "overall_scores": [0.309, 0.2],
+        "evaluated_agent_index": 0,
+        "agent_ids": ["Alice", "Bob"],
+        "models": ["candidate", "partner"],
+        "environment_id": "environment-1",
+        "combo_id": "combo-1",
+        "context_budget": {"max_input_tokens": 32768, "max_prompt_tokens": 1200, "rejected_requests": 0},
+    }
+    trial_dir = results / "harbor_jobs" / "harbor_hf___open-athena_sotopia-hard-ha_c928c249d99a" / trial_id
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "result.json").write_text(json.dumps({"trial_relpath": f"{trial_id}/attempts/001"}))
+    summary_path = trial_dir / "attempts" / "001" / "agent" / "sotopia-summary.json"
+    summary_path.parent.mkdir(parents=True)
+    summary_path.write_text(json.dumps(summary))
+
+    page = fetch_samples(str(results), task, offset=0, limit=10, correct="all", primary_metric_name="reward")
+
+    assert page.rows[0].trajectory_uri is None
+    assert page.rows[0].summary_uri == f"sotopia-summary://{trial_id}"
+    assert page.model_dump(mode="json")["rows"][0]["summary_uri"] == page.rows[0].summary_uri
+    assert page.rows[0].metrics == {"reward": 0.309}
+    artifact = fetch_artifact(str(results), page.rows[0].summary_uri)
+    assert artifact.available
+    assert artifact.media_type == "application/json"
+    assert json.loads(artifact.text) == summary
+
+
+def test_sotopia_summary_does_not_use_superseded_attempt(tmp_path) -> None:
+    results = tmp_path / "results"
+    trial_id = "sotopia-trial"
+    trial_dir = results / "harbor_jobs" / "harbor_sotopia-hard_example" / trial_id
+    trial_dir.mkdir(parents=True)
+    (trial_dir / "result.json").write_text(json.dumps({"trial_relpath": f"{trial_id}/attempts/001"}))
+    old_summary = trial_dir / "attempts" / "000" / "agent" / "sotopia-summary.json"
+    old_summary.parent.mkdir(parents=True)
+    old_summary.write_text(json.dumps({"transcript": [[{"sender": "Alice", "message": "Old attempt"}]]}))
+
+    artifact = fetch_artifact(str(results), f"sotopia-summary://{trial_id}")
+
+    assert artifact.available is False
+    assert artifact.text is None
