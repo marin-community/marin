@@ -33,6 +33,5 @@ NEMOTRON_3_NANO_30B_A3B_BASE = AxolotlBaseModel(
 )
 
 AXOLOTL_BASES: dict[str, AxolotlBaseModel] = {
-    base.name: base
-    for base in (QWEN3_30B_A3B_BASE, QWEN35_35B_A3B_BASE, NEMOTRON_3_NANO_30B_A3B_BASE)
+    base.name: base for base in (QWEN3_30B_A3B_BASE, QWEN35_35B_A3B_BASE, NEMOTRON_3_NANO_30B_A3B_BASE)
 }

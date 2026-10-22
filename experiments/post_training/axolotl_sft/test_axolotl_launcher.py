@@ -26,6 +26,7 @@ from experiments.post_training.axolotl_sft.launcher import (
     EXPERT_PARALLEL_PLUGIN,
     SUPPORTED_ARCHITECTURES,
     TEMPLATE_INTEGRITY_PLUGIN,
+    AxolotlLaunchPayload,
     AxolotlOptimizer,
     AxolotlSpec,
     axolotl_config,
@@ -94,9 +95,10 @@ def test_config_builds_for_each_base_with_the_integrity_plugin_and_inline_templa
         assert config["optimizer"] == "adamw_torch_fused"
         assert config["learning_rate"] == "5e-6"
         assert config["datasets"] == [{"path": "gs://example/stage0/data-*.jsonl", "type": "chat_template"}]
-        assert config["fsdp_version"] == 2 and config["fsdp"] == ["full_shard", "auto_wrap"], (
-            "one process on 8 GPUs cannot hold a 30B MoE's Adam state"
-        )
+        assert config["fsdp_version"] == 2 and config["fsdp"] == [
+            "full_shard",
+            "auto_wrap",
+        ], "one process on 8 GPUs cannot hold a 30B MoE's Adam state"
         assert config["output_dir"].startswith("/scratch/"), "checkpoints must not be written to a shared mount"
 
 
@@ -136,9 +138,18 @@ def test_seed_is_required_and_optimizers_reject_silent_defaults():
     with pytest.raises(TypeError):
         AxolotlSpec(**kwargs)  # no seed default
     with pytest.raises(ValueError, match="positive"):
-        AxolotlOptimizer(learning_rate="0", weight_decay=0.0, adam_beta1=0.9, adam_beta2=0.95, lr_scheduler="cosine", warmup_steps=0)
+        AxolotlOptimizer(
+            learning_rate="0", weight_decay=0.0, adam_beta1=0.9, adam_beta2=0.95, lr_scheduler="cosine", warmup_steps=0
+        )
     with pytest.raises(ValueError, match=r"betas"):
-        AxolotlOptimizer(learning_rate="5e-6", weight_decay=0.0, adam_beta1=1.0, adam_beta2=0.95, lr_scheduler="cosine", warmup_steps=0)
+        AxolotlOptimizer(
+            learning_rate="5e-6",
+            weight_decay=0.0,
+            adam_beta1=1.0,
+            adam_beta2=0.95,
+            lr_scheduler="cosine",
+            warmup_steps=0,
+        )
 
 
 def test_fork_and_transformer_pins_recorded():
@@ -184,8 +195,6 @@ def test_printed_smoke_command_is_what_the_pod_runs():
 
 
 def test_payload_json_round_trips():
-    from experiments.post_training.axolotl_sft.launcher import AxolotlLaunchPayload
-
     spec = _spec(QWEN3_30B_A3B_BASE)
     payload = AxolotlLaunchPayload(
         config=axolotl_config(spec, scratch_output_dir="/scratch/axolotl/x"),
@@ -263,10 +272,10 @@ def test_fork_chat_template_strategy_produces_the_same_partition():
     ``ChatTemplateStrategy`` must derive the same supervised region on the shared
     template. Skipped honestly where axolotl is not installed."""
     axolotl = pytest.importorskip("axolotl")  # noqa: F841 - availability is the gate
+    from axolotl.prompt_strategies.chat_template import ChatTemplateStrategy  # noqa: PLC0415
     from transformers import AutoTokenizer
 
     from experiments.post_training.axolotl_sft.launcher import AXOLOTL_FORK_REPO  # noqa: F401
-    from axolotl.prompt_strategies.chat_template import ChatTemplateStrategy  # noqa: PLC0415
 
     base = QWEN3_30B_A3B_BASE
     tokens = FAMILY_TOKEN_MAPS[base.architecture]
@@ -278,9 +287,7 @@ def test_fork_chat_template_strategy_produces_the_same_partition():
         train_on_inputs=False,
         sequence_len=32768,
     )
-    rendered = tokenizer.apply_chat_template(
-        CANARY_CONVERSATION, chat_template=shared_template(tokens), tokenize=False
-    )
+    rendered = tokenizer.apply_chat_template(CANARY_CONVERSATION, chat_template=shared_template(tokens), tokenize=False)
     result = strategy.tokenize(rendered)
     labels = result["labels"] if isinstance(result, dict) else result
     supervised = tokenizer.decode([token for token in labels if token != -100])

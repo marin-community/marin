@@ -22,8 +22,9 @@ import gzip
 import hashlib
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 Message = dict[str, Any]
 
@@ -232,7 +233,9 @@ def build_manifest(
 
     entries = []
     for spec in sorted(STAGE0_SOURCES, key=lambda source: STAGE_ORDER.index(source.name)):
-        entries.append(convert_source(spec, output_dir, max_rows=max_rows, load_dataset=load_dataset, render_lengths=render_lengths))
+        entries.append(
+            convert_source(spec, output_dir, max_rows=max_rows, load_dataset=load_dataset, render_lengths=render_lengths)
+        )
     manifest = {
         "stage_order": list(STAGE_ORDER),
         "sources": entries,

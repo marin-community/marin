@@ -121,7 +121,9 @@ def test_shared_template_renders_reasoning_tools_and_turns_in_order():
     rendered = _render(CONVERSATION, GRUG_TOKENS)
     assert rendered.startswith("<|begin_of_text|>")
     assert "<|start_header_id|>system<|end_header_id|>\nbe brief<|eot_id|>" in rendered
-    assert "<|start_header_id|>assistant<|end_header_id|>\n<|start_think|>I should list the files.<|end_think|>" in rendered
+    assert (
+        "<|start_header_id|>assistant<|end_header_id|>\n<|start_think|>I should list the files.<|end_think|>" in rendered
+    )
     assert '<tool_call>\n{"name": "bash", "arguments": {"command": "ls"}}\n</tool_call>' in rendered
     assert "<|start_header_id|>tool<|end_header_id|>\n<tool_response>\na.txt\n</tool_response><|eot_id|>" in rendered
     # No name= attribute on tool responses, and exactly one think block per
@@ -157,21 +159,25 @@ def test_template_hash_distinguishes_families():
 
 def test_adapters_strip_both_marker_styles_into_reasoning_content():
     science = adapt_nemotron_science(
-        {"messages": [
-            {"role": "user", "content": "question"},
-            {"role": "assistant", "content": "<|start_think|>\nwork it out\n<|end_think|>\nThe answer is 4."},
-        ]}
+        {
+            "messages": [
+                {"role": "user", "content": "question"},
+                {"role": "assistant", "content": "<|start_think|>\nwork it out\n<|end_think|>\nThe answer is 4."},
+            ]
+        }
     )
     assert science[1]["reasoning_content"] == "work it out"
     assert science[1]["content"] == "The answer is 4."
     assert "<|start_think|>" not in science[1]["content"]
 
     terminal = adapt_nemotron_terminal(
-        {"conversations": [
-            {"role": "user", "content": "task"},
-            {"role": "assistant", "content": "<think>\nplan\n</think>run ls"},
-            {"role": "user", "content": "New Terminal Output: files"},
-        ]}
+        {
+            "conversations": [
+                {"role": "user", "content": "task"},
+                {"role": "assistant", "content": "<think>\nplan\n</think>run ls"},
+                {"role": "user", "content": "New Terminal Output: files"},
+            ]
+        }
     )
     assert terminal[1]["reasoning_content"] == "plan"
     assert terminal[1]["content"] == "run ls"
@@ -184,17 +190,21 @@ def test_unclosed_think_block_raises():
 
 
 def test_convert_source_filters_one_row_id_set_over_the_cap(tmp_path):
-    rows = iter([
-        {"messages": [{"role": "user", "content": "short"}, {"role": "assistant", "content": "ok"}]},
-        {"messages": [{"role": "user", "content": "long"}, {"role": "assistant", "content": "too long"}]},
-        {"messages": [{"role": "user", "content": "also short"}, {"role": "assistant", "content": "ok"}]},
-    ])
+    rows = iter(
+        [
+            {"messages": [{"role": "user", "content": "short"}, {"role": "assistant", "content": "ok"}]},
+            {"messages": [{"role": "user", "content": "long"}, {"role": "assistant", "content": "too long"}]},
+            {"messages": [{"role": "user", "content": "also short"}, {"role": "assistant", "content": "ok"}]},
+        ]
+    )
 
     def fake_load_dataset(repo, config, revision, split, streaming):
         return rows
 
     def fake_render_lengths(messages):
-        return {family: (MAX_RENDERED_TOKENS + 1 if messages[0]["content"] == "long" else 10) for family in FAMILY_TOKEN_MAPS}
+        return {
+            family: MAX_RENDERED_TOKENS + 1 if messages[0]["content"] == "long" else 10 for family in FAMILY_TOKEN_MAPS
+        }
 
     spec = SourceSpec(
         name="nemotron-science-reasoning",
@@ -211,7 +221,9 @@ def test_convert_source_filters_one_row_id_set_over_the_cap(tmp_path):
     with gzip.open(tmp_path / "nemotron-science-reasoning.jsonl.gz", "rt") as handle:
         lines = [json.loads(line) for line in handle]
     assert all(line["messages"][0]["content"] != "long" for line in lines)
-    assert [line["row_id"] for line in lines] == [row_id("nemotron-science-reasoning", line["messages"]) for line in lines]
+    assert [line["row_id"] for line in lines] == [
+        row_id("nemotron-science-reasoning", line["messages"]) for line in lines
+    ]
 
 
 def test_convert_source_raises_when_everything_is_dropped(tmp_path):
@@ -236,7 +248,9 @@ def test_convert_source_raises_when_everything_is_dropped(tmp_path):
 
 def test_manifest_records_hashes_template_hashes_and_stage_order(tmp_path):
     specs = {
-        name: SourceSpec(name=name, repo=f"example/{name}", revision="feedface", config=None, adapt=adapt_wildchat_rewild)
+        name: SourceSpec(
+            name=name, repo=f"example/{name}", revision="feedface", config=None, adapt=adapt_wildchat_rewild
+        )
         for name in STAGE_ORDER
     }
     calls: list[str] = []
@@ -256,7 +270,9 @@ def test_manifest_records_hashes_template_hashes_and_stage_order(tmp_path):
     original_sources = convert_module.STAGE0_SOURCES
     convert_module.STAGE0_SOURCES = tuple(specs[name] for name in STAGE_ORDER)
     try:
-        manifest = build_manifest(str(tmp_path), load_dataset=fake_load_dataset, render_lengths=lambda m: {f: 8 for f in FAMILY_TOKEN_MAPS})
+        manifest = build_manifest(
+            str(tmp_path), load_dataset=fake_load_dataset, render_lengths=lambda m: {f: 8 for f in FAMILY_TOKEN_MAPS}
+        )
     finally:
         convert_module.STAGE0_SOURCES = original_sources
     assert manifest["stage_order"] == list(STAGE_ORDER)

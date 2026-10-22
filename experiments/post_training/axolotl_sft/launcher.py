@@ -16,6 +16,7 @@ scratch directory is treated as durable.
 
 from __future__ import annotations
 
+import glob
 import hashlib
 import json
 import logging
@@ -25,6 +26,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
+import fsspec
 import yaml
 from fray.iris_backend import convert_resources, resolve_coscheduling, wrap_multiprocess
 from fray.types import ResourceConfig
@@ -266,7 +268,11 @@ def run_axolotl_training(payload_json: str) -> None:
     with open(config_path, "w") as handle:
         yaml.safe_dump(payload.config, handle, sort_keys=False)
 
-    command = training_command(config_path, nodes=int(os.environ.get("AXOLOTL_NODES", "1")), gpus_per_node=int(os.environ.get("AXOLOTL_GPUS", "8")))
+    command = training_command(
+        config_path,
+        nodes=int(os.environ.get("AXOLOTL_NODES", "1")),
+        gpus_per_node=int(os.environ.get("AXOLOTL_GPUS", "8")),
+    )
     logger.info("running %s", shlex.join(command))
     subprocess.run(command, check=True, cwd=workdir)
 
@@ -289,8 +295,6 @@ def _verify_template_integrity(payload: AxolotlLaunchPayload, output_dir: str) -
 
     The comparison is unconditional: every Stage 0 run carries the shared template.
     """
-    from transformers import AutoTokenizer
-
     tokenizer = AutoTokenizer.from_pretrained(output_dir)
     embedded = getattr(tokenizer, "chat_template", None)
     if embedded is None:
@@ -310,8 +314,6 @@ def _realized_token_counts(output_dir: str) -> dict[str, Any]:
     whose state carries none fails here rather than shipping a manifest that
     cannot be checked against the data budget.
     """
-    import glob
-
     state_paths = sorted(glob.glob(os.path.join(output_dir, "**", "trainer_state.json"), recursive=True))
     if not state_paths:
         raise ValueError(f"no trainer_state.json under {output_dir}; cannot record realized tokens")
@@ -332,8 +334,6 @@ def _realized_token_counts(output_dir: str) -> dict[str, Any]:
 
 def _upload(output_dir: str, manifest_path: str, output_root: str) -> None:
     """Upload the checkpoint, the trainer state and the manifest to ``output_root``."""
-    import fsspec
-
     filesystem = fsspec.filesystem("s3")
     target = f"{output_root.rstrip('/')}/{os.path.basename(output_dir)}"
     filesystem.put(output_dir, target, recursive=True)
@@ -454,8 +454,6 @@ _GPU_HOST_DISK_GB_PER_DEVICE = 512
 
 
 def __main__() -> None:  # pragma: no cover - entrypoint
-    import argparse
-
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
     smoke = subparsers.add_parser("smoke", help="submit a 20-step smoke run of one spec")
