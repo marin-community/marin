@@ -12,6 +12,7 @@ src/taskforge/
                                JsonEventStore;
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
+                               run.py: InfrastructureRetry, `run_workpieces`
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
   ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
@@ -495,6 +496,27 @@ A process killed mid-workpiece leaves `events.json` as the workpiece's last term
 leaves none, so the next run starts again from that terminal or from triage, and the step store
 serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
 planned with the ledger.
+
+## Running many workpieces
+
+`run_workpieces` in `stage_coordinator/run.py` runs every proposal of an async iterable of
+`(workpiece_id, proposal)` pairs through `run_workpiece`, starting each as the iterable yields it,
+so a proposal still being written holds back no workpiece. It sets no width: the stages' resource
+pools bound how much runs at once. Each workpiece runs in a wrapper that records its terminal and
+never raises, so a failed workpiece cancels none of its siblings.
+
+A workpiece stopped by a transient infrastructure failure runs again in-process after a backoff,
+resuming at the stage that raised, up to `InfrastructureRetry.max_attempts` attempts; each failed attempt
+leaves a `TERMINAL` failed event in its log. Only two failures qualify
+(`transient_infrastructure_failure`): `ModelUnavailable`, and a `BuildInfrastructureFailure` whose
+cause is not one of `HOST_REJECTIONS` (no factory or no image builder on this host). A
+`BuildExpired`, a storage fault, and every task or program failure leave the workpiece failed in
+place after one attempt, as `run_workpiece` leaves it.
+
+`run_workpieces` returns each started workpiece's terminal once the iterable is exhausted and every
+workpiece has one. A workpiece id yielded a second time raises `ValueError`, and an error reading the
+iterable is raised as it is; either way no later proposal starts, and the workpieces already started
+first run to their terminals.
 
 ## Testing
 

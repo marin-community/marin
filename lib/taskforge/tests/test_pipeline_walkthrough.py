@@ -8,9 +8,10 @@ holds the same program as module text, as an author writing Python would return 
 restricted loader.
 """
 
+import asyncio
 import base64
 import inspect
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, NoReturn
@@ -55,6 +56,7 @@ from taskforge.stage40_build_with_program.context import (
     ExpiredClock,
     RLEnvBuildContext,
 )
+from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.outputs import Grader
 from taskforge.stage40_build_with_program.run import (
     DRAFT_DIR,
@@ -79,6 +81,7 @@ from taskforge.stage_coordinator.coordinator import (
     run_workpiece,
 )
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
+from taskforge.stage_coordinator.run import InfrastructureRetry, run_workpieces
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import EXIT, Stage, Terminal, WorkpieceEvent, derive_state
 
@@ -949,3 +952,175 @@ async def test_the_default_triage_records_an_empty_author_state(tmp_path):
     )
     assert log.events()[1].attrs["author_state"] == "{}"
     assert (author.states, derive_state(log.events()).author_state) == ([{}, {}], {})
+
+
+RETRY = InfrastructureRetry(max_attempts=3, backoff_initial=0.001, backoff_maximum=0.001, backoff_factor=1.0)
+ARRIVAL_TIMEOUT = 10
+"""Seconds a proposal iterable waits for a workpiece's progress before the test fails instead of hanging."""
+
+
+async def arriving(*workpiece_ids: str) -> AsyncIterator[tuple[str, TaskProposal]]:
+    for workpiece_id in workpiece_ids:
+        yield workpiece_id, PROPOSAL
+
+
+def stored_log(root: Path, workpiece_id: str) -> InMemoryEventLog:
+    log = InMemoryEventLog()
+    log.restore(JsonEventStore(root).load(workpiece_id) or ())
+    return log
+
+
+class FailsFor:
+    """A build function raising ``error`` on the first ``times`` builds of ``workpiece_id``, counted in ``calls``.
+
+    Every other build runs ``run_build``.
+    """
+
+    def __init__(self, workpiece_id: str, times: int, error: Exception = HOST_FAILURE) -> None:
+        self.workpiece_id = workpiece_id
+        self.times = times
+        self.error = error
+        self.calls = 0
+
+    async def __call__(
+        self, program: RLEnvBuildProgram, proposal: TaskProposal, workpiece_id: str, *args: Any, **kwargs: Any
+    ) -> TaskDraft:
+        if workpiece_id == self.workpiece_id:
+            self.calls += 1
+            if self.calls <= self.times:
+                raise self.error
+        return await run_build(program, proposal, workpiece_id, *args, **kwargs)
+
+
+async def test_run_workpieces_fails_a_workpiece_in_place_and_cancels_no_sibling_in_flight(tmp_path):
+    waiting: list[str] = []
+    siblings_waiting, failed = asyncio.Event(), asyncio.Event()
+
+    async def validate_or_crash(draft: TaskDraft) -> dict[str, int]:
+        if draft.task.id == "toy-1":
+            await siblings_waiting.wait()
+            failed.set()
+            raise RuntimeError("the validator crashed")
+        waiting.append(draft.task.id)
+        if len(waiting) == 2:
+            siblings_waiting.set()
+        await failed.wait()
+        return SUMMARY
+
+    stages = replace(STAGES, validate=validate_or_crash)
+    terminals = await run_workpieces(coordinator(tmp_path, stages), arriving("toy-0", "toy-1", "toy-2"), RETRY)
+
+    assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": Terminal.FAILED, "toy-2": Terminal.ACCEPTED}
+    assert exits(stored_log(tmp_path, "toy-1")) == [*ACCEPTED_EXITS[:4], ("terminal", "failed")]
+    for sibling in ("toy-0", "toy-2"):
+        assert exits(stored_log(tmp_path, sibling)) == ACCEPTED_EXITS
+
+
+@pytest.mark.parametrize(
+    ("failures", "terminal", "builds"),
+    [(2, Terminal.ACCEPTED, 3), (5, Terminal.FAILED, 3)],
+    ids=["recovers", "attempts spent"],
+)
+async def test_run_workpieces_retries_a_host_failure_in_process_while_its_attempts_last(
+    tmp_path, failures, terminal, builds
+):
+    build = FailsFor("toy-1", failures)
+    terminals = await run_workpieces(
+        coordinator(tmp_path, replace(STAGES, build=build)), arriving("toy-0", "toy-1"), RETRY
+    )
+
+    assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": terminal}
+    assert build.calls == builds
+    log = stored_log(tmp_path, "toy-1")
+    assert exits(log).count(("terminal", "failed")) == min(failures, RETRY.max_attempts)
+    assert derive_state(log.events()).build_revisions == 0
+
+
+async def test_run_workpieces_retries_an_unavailable_model_at_the_stage_that_raised(tmp_path):
+    validate_once = UnavailableOnce()
+    stages = replace(STAGES, validate=validate_once)
+
+    assert await run_workpieces(coordinator(tmp_path, stages), arriving(WORKPIECE), RETRY) == {
+        WORKPIECE: Terminal.ACCEPTED
+    }
+    assert exits(stored_log(tmp_path, WORKPIECE)) == [*ACCEPTED_EXITS[:4], ("terminal", "failed"), *ACCEPTED_EXITS[4:]]
+    assert validate_once.calls == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        BuildInfrastructureFailure(InfrastructureCause.NO_FACTORY, "this host has no local machine factory"),
+        BuildExpired("ran for more than 1800 seconds without returning", ExpiredClock.STEP, "numbers"),
+    ],
+    ids=["host rejection", "expired clock"],
+)
+async def test_run_workpieces_does_not_retry_a_failure_another_attempt_would_meet_again(tmp_path, error):
+    build = FailsFor(WORKPIECE, RETRY.max_attempts, error)
+    stages = replace(STAGES, build=build)
+
+    assert await run_workpieces(coordinator(tmp_path, stages), arriving(WORKPIECE), RETRY) == {
+        WORKPIECE: Terminal.FAILED
+    }
+    assert build.calls == 1
+
+
+async def test_run_workpieces_starts_a_workpiece_before_the_next_proposal_arrives(tmp_path):
+    order: list[str] = []
+    triaged = asyncio.Event()
+
+    async def triage(proposal: TaskProposal) -> Verdict:
+        order.append("triaged")
+        triaged.set()
+        return await preflight(proposal)
+
+    async def proposals() -> AsyncIterator[tuple[str, TaskProposal]]:
+        yield "toy-0", PROPOSAL
+        async with asyncio.timeout(ARRIVAL_TIMEOUT):
+            await triaged.wait()
+        order.append("toy-1 arrives")
+        yield "toy-1", PROPOSAL
+
+    terminals = await run_workpieces(coordinator(tmp_path, replace(STAGES, triage=triage)), proposals(), RETRY)
+
+    assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": Terminal.ACCEPTED}
+    assert order == ["triaged", "toy-1 arrives", "triaged"]
+
+
+class SignallingStore(JsonEventStore):
+    """A JSON event store setting ``saved`` once it has saved a workpiece's events."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.saved = asyncio.Event()
+
+    def save(self, workpiece_id: str, events: tuple[WorkpieceEvent, ...]) -> None:
+        super().save(workpiece_id, events)
+        self.saved.set()
+
+
+async def test_run_workpieces_returns_only_once_its_proposals_are_exhausted_and_every_workpiece_is_terminal(tmp_path):
+    store = SignallingStore(tmp_path)
+
+    async def proposals() -> AsyncIterator[tuple[str, TaskProposal]]:
+        yield "toy-0", PROPOSAL
+        async with asyncio.timeout(ARRIVAL_TIMEOUT):
+            await store.saved.wait()
+        yield "toy-1", PROPOSAL
+
+    terminals = await run_workpieces(replace(coordinator(tmp_path), event_store=store), proposals(), RETRY)
+
+    assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": Terminal.ACCEPTED}
+    for workpiece_id in terminals:
+        assert exits(stored_log(tmp_path, workpiece_id)) == ACCEPTED_EXITS
+
+
+async def test_run_workpieces_refuses_a_repeated_workpiece_id_before_starting_it_and_finishes_the_first(tmp_path):
+    triage = TriageInTurn(TriageDecision.ACCEPT)
+    stages = replace(STAGES, triage=triage)
+
+    with pytest.raises(ValueError, match=f"workpiece {WORKPIECE} arrived a second time"):
+        await run_workpieces(coordinator(tmp_path, stages), arriving(WORKPIECE, WORKPIECE, "toy-1"), RETRY)
+    assert triage.proposals == [PROPOSAL]
+    assert exits(stored_log(tmp_path, WORKPIECE)) == ACCEPTED_EXITS
+    assert JsonEventStore(tmp_path).load("toy-1") is None
