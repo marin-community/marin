@@ -6,6 +6,7 @@ from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
+import numpy as np
 import ray
 from ray.actor import ActorHandle
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
@@ -16,12 +17,15 @@ from skyrl_train.rollouts.buffer import (
     RolloutBufferConfig,
     RolloutContentPolicy,
     RolloutGroup,
+    RolloutLease,
     RolloutTask,
     RolloutWriter,
 )
 from skyrl_train.rollouts.context import RolloutRequestSpec, TrainingContext
 from skyrl_train.rollouts.loader import PromptLoader, PromptOrder, SeededPasses
 from skyrl_train.rollouts.payloads import MemoryPayloads, PayloadStore
+from skyrl_train.rollouts.task_worker import TaskRolloutWorker
+from skyrl_train.trajectory_runners.types import TaskRequestBatch
 
 from tests.cpu.task_specs import lowered_task, task_input, text_task
 
@@ -145,6 +149,53 @@ async def _ignore(groups: list[RolloutGroup]) -> None:
 async def _next_uids(context: TrainingContext) -> list[str]:
     groups, _ = await context.next_batch(stall_timeout=STALL_TIMEOUT, on_admitted=_ignore)
     return [group.uid for group in groups]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("topk", [0, 128])
+async def test_training_task_persists_capture_costs_with_its_rollout(topk):
+    ids = np.zeros((4, 128), dtype=np.int32)
+    scores = np.zeros((4, 128), dtype=np.float32)
+    outputs = [SimpleNamespace(steps=[SimpleNamespace(turn=SimpleNamespace(metadata={
+        "student_topk_indices": ids, "behavior_topk_logprobs": scores,
+    }))])]
+    batch = {
+        "response_ids": [[11, 12, 13, 14]],
+        "score_probe_positions": [np.array([3], dtype=np.int32)],
+        "score_probe_indices": [ids[3:]],
+        "score_probe_logprobs": [scores[3:]],
+    }
+
+    class Worker(TaskRolloutWorker):
+        async def generate(self, request):
+            return outputs
+
+        async def training_batch(self, request, generated):
+            assert generated is outputs
+            return batch
+
+    class Writer:
+        async def write_rollout(self, lease, group):
+            self.group = group
+
+    worker = object.__new__(Worker)
+    worker.closing, worker.active_requests = False, set()
+    request = TaskRequestBatch(rows=(), sampling_params={"logprobs": topk}, score_centering_probe_tokens=32)
+    task = RolloutTask(RolloutLease("lease", 7, 8), {"uid": "prompt"}, request)
+    writer = Writer()
+    assert await worker.run_task(task, writer) == 4
+    assert writer.group.policy_step == 7
+    metrics = writer.group.trajectory_batch.get("rollout_metrics", {})
+    if topk:
+        assert metrics["score_centering_capture/requests"] == 1
+        assert metrics["score_centering_capture/probe_requests"] == 1
+        assert metrics["score_centering_capture/captured_tokens"] == 4
+        assert metrics["score_centering_capture/captured_head_bytes"] == 4096
+        assert metrics["score_centering_capture/exported_head_bytes"] == 1028
+        assert metrics["score_centering_capture/collection_seconds_sum"] >= 0
+        assert metrics["score_centering_capture/assembly_seconds_sum"] >= 0
+    else:
+        assert metrics == {}
 
 
 @pytest.mark.asyncio

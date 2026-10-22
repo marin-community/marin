@@ -646,8 +646,7 @@ class TaskRolloutWorker:
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
-            rollouts = await self.generate(task.request)
-            batch = await self.training_batch(task.request, rollouts)
+            batch = await self.run(task.request)
             return await write_trajectory_batch(task, writer, batch)
 
 
