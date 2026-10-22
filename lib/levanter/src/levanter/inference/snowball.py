@@ -18,7 +18,7 @@ from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import ragged_paged_attention
 from levanter.layers.kv_cache import KvPageCache, ListCache, PageCache
 
-from levanter.models.snowball import SnowballLMHeadModel
+from levanter.models.snowball import SnowballLMHeadModel, long_attention_layer_mask, rms_norm
 
 
 class SnowballCache(PageCache):
@@ -54,11 +54,6 @@ def _rotate(x, positions, theta):
     return jnp.concatenate([rotated, x[..., rotary_size:]], axis=-1)
 
 
-def _rms(x):
-    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
-    return (x * jax.lax.rsqrt(variance + 1e-6)).astype(x.dtype)
-
-
 def _linear(x, weight):
     return jnp.einsum("td,dh->th", x, weight, out_sharding=P())
 
@@ -67,8 +62,8 @@ def _attention(attn, x, cache, batch_info, positions, *, use_long):
     cfg = attn.cfg
     tokens = x.shape[0]
     dim = cfg.inferred_head_dim
-    q = _rms((_linear(x, attn.w_q)).reshape(tokens, cfg.num_heads, dim))
-    k = _rms((_linear(x, attn.w_k)).reshape(tokens, cfg.num_kv_heads, dim))
+    q = rms_norm((_linear(x, attn.w_q)).reshape(tokens, cfg.num_heads, dim))
+    k = rms_norm((_linear(x, attn.w_k)).reshape(tokens, cfg.num_kv_heads, dim))
     v = (_linear(x, attn.w_v)).reshape(tokens, cfg.num_kv_heads, dim)
     if not use_long:
         q, k = _rotate(q, positions, cfg.rope.theta), _rotate(k, positions, cfg.rope.theta)
@@ -113,7 +108,7 @@ def _moe(mlp, x, valid):
     x = _reshard_for_init(x, P("expert", None))
     valid = _reshard_for_init(valid, P("expert"))
     logits = (x @ mlp.router).astype(jnp.float32)
-    _, selected = jax.lax.top_k(logits + mlp.router_bias, cfg.num_experts_per_token + 1)
+    _, selected = jax.lax.top_k(logits + _reshard_for_init(mlp.router_bias, P()), cfg.num_experts_per_token + 1)
     selected = selected[:, :-1]
     weights = jax.nn.sigmoid(jnp.take_along_axis(logits, selected, axis=-1))
     weights = (weights * (2.5 / (jnp.sum(weights, axis=-1, keepdims=True) + 1e-9))).astype(x.dtype)
@@ -159,7 +154,7 @@ def decode(
     stacked_blocks = jax.tree.map(lambda *blocks: jnp.stack(blocks), *tf.blocks)
     stacked_pages = jnp.stack([layer.kv_pages.array for layer in cache.pages])
     page_axes = cache.pages[0].kv_pages.axes
-    schedule = ((jnp.arange(cfg.num_layers) % 4) == 3) | (jnp.arange(cfg.num_layers) == cfg.num_layers - 1)
+    schedule = long_attention_layer_mask(cfg.num_layers)
 
     def layer_step(carry, layer_inputs):
         hidden, drops = carry

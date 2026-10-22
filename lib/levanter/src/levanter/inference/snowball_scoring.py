@@ -13,6 +13,7 @@ import numpy as np
 
 from levanter.inference.engine import FIRST_TOKEN_LOGPROB, InferenceEngine, TokenSequenceLogprobs
 from levanter.inference.page_table import PageBatchInfo
+from levanter.models.snowball import SnowballLMHeadModel
 
 
 def score_cached(engine: InferenceEngine, token_ids, top_k: int) -> TokenSequenceLogprobs:
@@ -45,7 +46,9 @@ def score_cached(engine: InferenceEngine, token_ids, top_k: int) -> TokenSequenc
     tops = [{int(tokens[0]): FIRST_TOKEN_LOGPROB}]
     start = 0
     # Exercise single-query cached decode on both sides of the production window boundary.
-    single_query_positions = {2046, 2047, 2048, 2049, 2050}
+    assert isinstance(engine.model, SnowballLMHeadModel)
+    boundary = engine.model.config.sliding_window
+    single_query_positions = set(range(max(0, boundary - 2), boundary + 3))
     while start < len(tokens) - 1:
         length = min(chunk_size, len(tokens) - 1 - start)
         if start in single_query_positions:

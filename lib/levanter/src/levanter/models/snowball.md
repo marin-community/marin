@@ -83,9 +83,9 @@ and the job scheduler can fail the gang. Configure bounded runtime and no partia
 gang retries. Stop the HTTP execution thread before calling `shutdown_workers`.
 
 For Snowball, this engine also scores token logprobs through cached, chunked
-decode instead of the full-forward scoring helper. The item-303 diagnostic
-uses actual one-row query buffers around positions 2046–2050 and separately
-checks generation after a long prompt. A CPU test is not evidence of TPU
+decode instead of the full-forward scoring helper. Cached scoring also exercises actual one-row query buffers around the configured
+local-window boundary. The bounded experiment launcher separately checks
+generation after a long prompt. A CPU test is not evidence of TPU
 numerical parity; gate each serving backend against the pinned oracle before
 running evaluations.
 

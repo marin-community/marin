@@ -18,7 +18,7 @@ import numpy as np
 from iris.client.client import iris_ctx
 from iris.cluster.client.job_info import get_job_info
 from iris.jax.init import initialize_jax
-from levanter.compat.hf_checkpoints import HFCheckpointConverter
+from levanter.compat.hf_checkpoints import HFCheckpointConverter, RepoRef
 from levanter.inference.engine import InferenceEngineConfig
 from levanter.inference.multihost import MultiHostInferenceEngine
 from levanter.inference.openai import InferenceContext, InferenceServer, InferenceServerConfig
@@ -46,6 +46,93 @@ def _save(output, name, value):
     print("ARTIFACT", str(StoragePath(output) / name), flush=True)
 
 
+def _load_model(mode, model_path, tokenizer, max_seq_len):
+    if mode == "tiny":
+        cfg = SnowballConfig(
+            vocab_size=tokenizer.vocab_size,
+            hidden_dim=128,
+            intermediate_dim=128,
+            shared_expert_intermediate_dim=128,
+            num_experts=32,
+            num_layers=5,
+            max_seq_len=max_seq_len,
+            num_heads=20,
+            num_kv_heads=5,
+            head_dim=128,
+        )
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(13))
+        model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_array(x) else x, model)
+        # Router biases are fixed selection thresholds; retain their FP32 contract.
+        blocks = tuple(
+            eqx.tree_at(lambda b: b.mlp.router_bias, b, b.mlp.router_bias.astype(jnp.float32))
+            for b in model.transformer.blocks
+        )
+        model = eqx.tree_at(lambda m: m.transformer.blocks, model, blocks)
+    else:
+        converter = HFCheckpointConverter(
+            SnowballConfig,
+            reference_checkpoint=RepoRef(model_path),
+            tokenizer=tokenizer,
+            HfConfigClass=GrugMoeHfConfig,
+        )
+        # Preserve checkpoint dtypes, particularly the fixed FP32 routing biases.
+        model = converter.load_pretrained(SnowballLMHeadModel, dtype=None, axis_mapping={})
+    return model
+
+
+def _capture_numerics(engine, tokenizer, item, output, config, local):
+    text = item["prompt"] + item["completion"]
+    tokens = tokenizer.encode(text, add_special_tokens=False)
+    if len(tokens) != 5279:
+        raise ValueError(f"Item303 tokenization mismatch: {len(tokens)} != 5279")
+    start = time.monotonic()
+    result = engine.score_token_logprobs(tokens, 1)
+    elapsed = time.monotonic() - start
+    rows = []
+    for position, (token, logprob, tops) in enumerate(
+        zip(tokens, result.token_logprobs, result.top_token_logprobs, strict=True)
+    ):
+        top_id, top_value = max(tops.items(), key=lambda pair: pair[1])
+        rows.append(
+            dict(
+                position=position,
+                token_id=token,
+                token=tokenizer.decode([token], skip_special_tokens=False),
+                logprob=None if position == 0 else logprob,
+                top1_token_id=None if position == 0 else top_id,
+                top1_logprob=None if position == 0 else top_value,
+            )
+        )
+    _save(
+        output,
+        "303.json",
+        dict(
+            id=303,
+            input_sha256=hashlib.sha256(text.encode()).hexdigest(),
+            tokens=rows,
+            elapsed_seconds=elapsed,
+            tokens_per_second=(len(tokens) - 1) / elapsed,
+            usage=dict(prompt_tokens=len(tokens)),
+            dropped_assignments=np.asarray(engine.gen_state.cache.dropped_assignments).tolist(),
+        ),
+    )
+    # Use the generation scheduler's q_len=1 path after a production-window-length prompt too.
+    long_prompt = tokenizer.decode(tokens[:2050], skip_special_tokens=False)
+    if tokenizer.encode(long_prompt, add_special_tokens=False) != tokens[:2050]:
+        raise ValueError("Long-decode prompt does not round-trip through the tokenizer")
+    long_smoke = _post(
+        local + "/v1/completions",
+        dict(
+            model=config.model_name,
+            prompt=long_prompt,
+            max_tokens=2,
+            temperature=0,
+            seed=19311,
+        ),
+    )
+    _save(output, "long-decode.json", long_smoke)
+
+
 def run(mode, model_path, output, item, max_seq_len):
     logging.basicConfig(level=logging.INFO)
     info = get_job_info()
@@ -64,36 +151,7 @@ def run(mode, model_path, output, item, max_seq_len):
     with trainer.use_device_mesh(), hax.axis_mapping(trainer.compute_axis_mapping):
         start = time.monotonic()
         tokenizer = load_tokenizer(model_path)
-        if mode == "tiny":
-            cfg = SnowballConfig(
-                vocab_size=tokenizer.vocab_size,
-                hidden_dim=128,
-                intermediate_dim=128,
-                shared_expert_intermediate_dim=128,
-                num_experts=32,
-                num_layers=5,
-                max_seq_len=max_seq_len,
-                num_heads=20,
-                num_kv_heads=5,
-                head_dim=128,
-            )
-            model = SnowballLMHeadModel.init(hax.Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(13))
-            model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_array(x) else x, model)
-            # Router biases are fixed selection thresholds; retain their FP32 contract.
-            blocks = tuple(
-                eqx.tree_at(lambda b: b.mlp.router_bias, b, b.mlp.router_bias.astype(jnp.float32))
-                for b in model.transformer.blocks
-            )
-            model = eqx.tree_at(lambda m: m.transformer.blocks, model, blocks)
-        else:
-            converter = HFCheckpointConverter(
-                SnowballConfig,
-                reference_checkpoint=model_path,
-                tokenizer=tokenizer,
-                HfConfigClass=GrugMoeHfConfig,
-            )
-            # Preserve checkpoint dtypes, particularly the fixed FP32 routing biases.
-            model = converter.load_pretrained(SnowballLMHeadModel, dtype=None, axis_mapping={})
+        model = _load_model(mode, model_path, tokenizer, max_seq_len)
         jax.block_until_ready(model)
         print(
             "MODEL_READY",
@@ -172,56 +230,7 @@ def run(mode, model_path, output, item, max_seq_len):
             _save(output, "first-token.json", dict(response=smoke, wall_seconds=time.monotonic() - start))
             print("FIRST_SERVED_TOKEN", json.dumps(smoke), flush=True)
             if item is not None:
-                text = item["prompt"] + item["completion"]
-                tokens = tokenizer.encode(text, add_special_tokens=False)
-                if len(tokens) != 5279:
-                    raise ValueError(f"Item303 tokenization mismatch: {len(tokens)} != 5279")
-                start = time.monotonic()
-                result = engine.score_token_logprobs(tokens, 1)
-                elapsed = time.monotonic() - start
-                rows = []
-                for position, (token, logprob, tops) in enumerate(
-                    zip(tokens, result.token_logprobs, result.top_token_logprobs, strict=True)
-                ):
-                    top_id, top_value = max(tops.items(), key=lambda pair: pair[1])
-                    rows.append(
-                        dict(
-                            position=position,
-                            token_id=token,
-                            token=tokenizer.decode([token], skip_special_tokens=False),
-                            logprob=None if position == 0 else logprob,
-                            top1_token_id=None if position == 0 else top_id,
-                            top1_logprob=None if position == 0 else top_value,
-                        )
-                    )
-                _save(
-                    output,
-                    "303.json",
-                    dict(
-                        id=303,
-                        input_sha256=hashlib.sha256(text.encode()).hexdigest(),
-                        tokens=rows,
-                        elapsed_seconds=elapsed,
-                        tokens_per_second=(len(tokens) - 1) / elapsed,
-                        usage=dict(prompt_tokens=len(tokens)),
-                        dropped_assignments=np.asarray(engine.gen_state.cache.dropped_assignments).tolist(),
-                    ),
-                )
-                # Use the generation scheduler's q_len=1 path after a production-window-length prompt too.
-                long_prompt = tokenizer.decode(tokens[:2050], skip_special_tokens=False)
-                if tokenizer.encode(long_prompt, add_special_tokens=False) != tokens[:2050]:
-                    raise ValueError("Long-decode prompt does not round-trip through the tokenizer")
-                long_smoke = _post(
-                    local + "/v1/completions",
-                    dict(
-                        model=config.model_name,
-                        prompt=long_prompt,
-                        max_tokens=2,
-                        temperature=0,
-                        seed=19311,
-                    ),
-                )
-                _save(output, "long-decode.json", long_smoke)
+                _capture_numerics(engine, tokenizer, item, output, config, local)
             if mode == "serve":
                 http_thread.join()
         finally:

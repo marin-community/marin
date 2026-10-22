@@ -92,7 +92,7 @@ def test_expert_parallel_decode_preserves_order_and_does_not_drop_skewed_routes(
         import jax
         import jax.numpy as jnp
         import numpy as np
-        from jax.sharding import AxisType, Mesh
+        from jax.sharding import AxisType, Mesh, PartitionSpec as P, reshard
         from levanter.models.snowball import SnowballConfig, SnowballMoEMLP
         from levanter.inference.snowball import _moe
 
@@ -110,7 +110,7 @@ def test_expert_parallel_decode_preserves_order_and_does_not_drop_skewed_routes(
                 mlp = SnowballMoEMLP.init(cfg, key=jax.random.key(13))
                 # Every valid assignment targets expert shard zero under EP2.
                 mlp = eqx.tree_at(lambda m: m.router_bias, mlp,
-                                  jnp.array([1000., 1000., -1000., -1000.]))
+                                  reshard(jnp.array([1000., 1000., -1000., -1000.]), P("expert")))
                 output, drops = eqx.filter_jit(_moe)(mlp, x, valid)
                 np.testing.assert_array_equal(drops, [0, 0])
                 outputs.append(np.asarray(output))

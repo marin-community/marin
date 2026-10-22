@@ -75,7 +75,7 @@ class InferenceServerConfig:
     service: InferenceEngineConfig = field(default_factory=lambda: InferenceEngineConfig(4096))
 
     eos_token_ids: tuple[int, ...] = ()
-    """Termination IDs from the pinned generation configuration; resolved by the model loader."""
+    """Termination IDs supplied by the caller; an empty tuple disables automatic EOS stopping."""
 
     model_name: str = DEFAULT_MODEL_NAME
     """Model id this server advertises from ``/v1/models``."""
@@ -337,6 +337,9 @@ class InferenceContext:
 
         logger.info("Batch processing thread shutting down")
 
+    def _stop_sequences(self, request: InferenceRequest) -> List[List[int]]:
+        return list(request.stop_tokens or []) + [[token] for token in self.config.eos_token_ids]
+
     def _execute_batch(self, requests: InferenceBatch):
         """Execute a batch of inference requests"""
         service_requests = []
@@ -346,7 +349,7 @@ class InferenceContext:
 
         for i, req in enumerate(requests):
             # Each row is an alternative, left padded for suffix matching.
-            stops = list(req.stop_tokens or []) + [[token] for token in self.config.eos_token_ids]
+            stops = self._stop_sequences(req)
             stop_ids = None
             if stops:
                 width = max(map(len, stops))
@@ -389,7 +392,7 @@ class InferenceContext:
                 for _ in range(req.n_generations):
                     if output_idx < len(result.tokens):
                         raw_tokens = result.tokens[output_idx]
-                        stops = list(req.stop_tokens or []) + [[token] for token in self.config.eos_token_ids]
+                        stops = self._stop_sequences(req)
                         generated_tokens, stopped = _strip_stop_suffix(raw_tokens, stops)
                         text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
                         finish_reason = "stop" if stopped or len(raw_tokens) < req.max_tokens else "length"

@@ -1748,10 +1748,10 @@ def _do_tpu_ragged_paged_attention(
         cu_q_lens_arg: jax.Array,
         num_seqs_arg: jax.Array,
     ) -> jax.Array:
-        window_kwargs = {} if sliding_window is None else {"sliding_window": sliding_window}
+        kernel_kwargs = {} if sliding_window is None else {"sliding_window": sliding_window}
         if padded_kv_heads != original_kv_heads:
             # The v4 default stages too many replicated heads in VMEM at once.
-            window_kwargs.update(
+            kernel_kwargs.update(
                 num_kv_pages_per_block=min(4, page_indices.axis_size("page")),
                 num_queries_per_block=min(32, q.axis_size("position")),
             )
@@ -1764,7 +1764,7 @@ def _do_tpu_ragged_paged_attention(
             num_seqs_arg,
             sm_scale=1.0,
             soft_cap=soft_cap,
-            **window_kwargs,
+            **kernel_kwargs,
         )
 
     o = shard_map(
