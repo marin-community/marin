@@ -239,10 +239,10 @@ async def run_trial(
     after a backoff while it fails for a retryable cause, up to ``plan.max_retries`` times.
 
     Raises:
-        ValueError: the task has a decision-model grader and ``settings.decision`` is ``None``.
+        ValueError: the task has a decision-model grader and ``settings.decision`` is ``None``
+            (``require_decision_client``).
     """
-    if task_decision_grader(spec.task) is not None and settings.decision is None:
-        raise ValueError(f"task {spec.task.id!r} has a decision-model grader but this host has no decision client")
+    require_decision_client(spec.task, settings)
     spec = settings.apply(plan.deadlines.apply(spec))
     digest = task_digest(spec, settings.command_timeout)
     unsupported = submission_refusal(spec.task)
@@ -265,6 +265,16 @@ async def run_trial(
         retries += 1
         await asyncio.sleep(backoff.next_interval())
         attempt += 1
+
+
+def require_decision_client(task: TaskSpec, settings: EngineSettings) -> None:
+    """Refuse a decision-model task on a host that cannot grade it, before any attempt of a trial of it starts.
+
+    Raises:
+        ValueError: ``task`` has a decision-model grader and ``settings.decision`` is ``None``.
+    """
+    if task_decision_grader(task) is not None and settings.decision is None:
+        raise ValueError(f"task {task.id!r} has a decision-model grader but this host has no decision client")
 
 
 def refusal_detail(refusals: Sequence[Refusal]) -> str:

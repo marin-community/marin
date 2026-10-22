@@ -716,7 +716,11 @@ fresh machine. `AdversaryPolicy` sets the trials per round, the submissions per 
 them grades nothing), the turns, the sampling and the mode; the round's deadlines, retries and backoff
 apply. A `blackbox` adversary sees the task as the solver does; a `whitebox` one is also shown the
 grader's specification and verifier files, the round's controls with their expected rewards and the
-task's example answers. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
+task's example answers; for a decision-model grader, which has no files, the specification is what its
+decision model reads (the rubric and the reference among it), its question and levels, and the bar. A
+decision-model task's submissions are graded on the host as its solver trials are, and a host without a
+decision client refuses the adversary trial before its first attempt, as `run_trial` refuses a solver
+trial. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
 candidates and a final `NO_SHORTCUT` or `SHORTCUT:` line, recorded as the trial's claim. An attempt is
 graded with its last passing submission's grade, else its last submission's. Its attempt file holds the
 agent's whole rollout, the brief and every submission; an attempt under another brief, such as another
