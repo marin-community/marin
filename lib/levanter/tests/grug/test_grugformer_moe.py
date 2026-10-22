@@ -52,6 +52,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import (
     _unpermute_from_global_expert,
 )
 from levanter.grug._moe.ep_ring import _gather_dispatch_combine
+from levanter.grug._moe.ep_ring_filtered import _down_project_combine
 from levanter.grug._moe.sonic import sonic_gather_sum, sonic_scatter_rows
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.grug_moe import (
@@ -1864,9 +1865,9 @@ def test_ring_filtered_matches_ring_and_dense_with_drops(
     run_on_cpu_devices(script, device_count=8)
 
 
-def test_ring_filtered_expert_combine_keeps_bf16_sums_in_float32():
-    """The expert-side combine sums each received row's bf16 expert outputs in float32 and rounds once. Its
-    backward rounds each output-row gradient once and returns the float32 routing-weight gradient unrounded."""
+def test_combine_gather_sum_keeps_bf16_sums_in_float32():
+    """The weighted gather combine sums each output row's bf16 inputs in float32 and rounds once. Its backward
+    rounds each input-row gradient once and returns the float32 routing-weight gradient unrounded."""
     received_rows, topk, dispatch_rows, hidden = 6, 4, 16, 32
     rng = np.random.default_rng(0)
     # Dispatch rows hold 14 of the 24 (received row, k) assignments in random order; the last two are padding.
@@ -1909,6 +1910,79 @@ def test_ring_filtered_expert_combine_keeps_bf16_sums_in_float32():
     np.testing.assert_array_equal(np.asarray(out), np.asarray(expected_out, jnp.bfloat16))
     np.testing.assert_array_equal(np.asarray(src_gradient), np.asarray(expected_src_gradient, jnp.bfloat16))
     np.testing.assert_array_equal(np.asarray(weights_gradient), expected_weights_gradient)
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16], ids=["float32", "bfloat16"])
+def test_ring_filtered_down_project_combine_matches_autodiff(dtype, monkeypatch):
+    """The expert-side down projection and combine match autodiff through ``ragged_dot`` and the weighted
+    sum, although its routing-weight gradient comes from ``<hidden, dhidden> / weight`` instead of the expert
+    outputs. In float32 everything agrees to rounding. In bfloat16 the routing-weight gradient carries two
+    roundings (``dy`` and ``dhidden``) where autodiff's ``<cotangent, y>`` carries one, so its error against a
+    float32 reference stays within 1.5x of autodiff's. Padding dispatch rows and empty slots get no gradient."""
+    # Both sides use XLA's ragged_dot, so the comparison isolates the custom VJP from backend kernels.
+    monkeypatch.setenv("RAGGED_DOT_IMPL", "xla")
+    received_rows, topk, dispatch_rows, inter, hidden = 24, 4, 64, 16, 32
+    group_sizes = np.array([20, 0, 26, 10], np.int32)
+    kept = int(group_sizes.sum())
+    rng = np.random.default_rng(0)
+    # Dispatch rows hold `kept` of the (received row, k) assignments in random order; the rest are padding.
+    flat_idx = rng.permutation(received_rows * topk)[:dispatch_rows].astype(np.int32)
+    flat_idx[kept:] = received_rows * topk
+    inv = np.full(received_rows * topk, dispatch_rows, np.int32)
+    inv[flat_idx[:kept]] = np.arange(kept)
+    inv = inv.reshape(received_rows, topk)
+    activations = rng.normal(size=(dispatch_rows, inter)).astype(np.float32)
+    w2 = (rng.normal(size=(len(group_sizes), inter, hidden)) / np.sqrt(inter)).astype(np.float32)
+    # Positive weights, like the sigmoid or softmax routing weights the backend receives.
+    weights = rng.uniform(0.05, 1.0, (received_rows, topk)).astype(np.float32)
+    cotangent = rng.normal(size=(received_rows, hidden)).astype(np.float32)
+
+    def reference(activations, w2, weights):
+        y = ragged_dot(activations, w2, jnp.asarray(group_sizes), implementation="xla")
+        y = jnp.concatenate([y, jnp.zeros((1, hidden), y.dtype)])[jnp.asarray(inv)]
+        return jnp.einsum("njh,nj->nh", y.astype(jnp.float32), weights).astype(activations.dtype)
+
+    def expert_side(activations, w2, weights):
+        return _down_project_combine(
+            activations, w2, jnp.asarray(group_sizes), weights, jnp.asarray(inv), jnp.asarray(flat_idx)
+        )
+
+    def value_and_grads(fn, *args):
+        out, vjp = jax.vjp(fn, *args)
+        return out, vjp(jnp.asarray(cotangent, out.dtype))
+
+    args = (jnp.asarray(activations, dtype), jnp.asarray(w2, dtype), jnp.asarray(weights))
+    # TPU's ragged_dot rejects bfloat16 operands at the highest matmul precision, which only float32 needs.
+    with jax.default_matmul_precision("highest" if dtype == jnp.float32 else "default"):
+        out, grads = jax.jit(functools.partial(value_and_grads, expert_side))(*args)
+        expected_out, expected_grads = jax.jit(functools.partial(value_and_grads, reference))(*args)
+    with jax.default_matmul_precision("highest"):
+        f32_args = tuple(a.astype(jnp.float32) for a in args)
+        _, f32_grads = jax.jit(functools.partial(value_and_grads, reference))(*f32_args)
+
+    weights_grad = np.asarray(grads[2])
+    assert np.all(weights_grad[inv == dispatch_rows] == 0)
+    assert np.all(np.asarray(grads[0])[kept:] == 0)
+    # ragged_dot leaves rows past the last group unspecified, and its transpose on TPU writes them, so compare the
+    # activation gradient on the grouped rows only.
+    grads = (grads[0][:kept], *grads[1:])
+    expected_grads = (expected_grads[0][:kept], *expected_grads[1:])
+    f32_grads = (f32_grads[0][:kept], *f32_grads[1:])
+    if dtype == jnp.float32:
+        np.testing.assert_allclose(np.asarray(out), np.asarray(expected_out), rtol=1e-5, atol=1e-5)
+        for actual, expected in zip(grads, expected_grads, strict=True):
+            np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-5, atol=1e-5)
+        return
+
+    def relative_error(a, b):
+        a, b = np.asarray(a, np.float32), np.asarray(b, np.float32)
+        return np.linalg.norm(a - b) / np.linalg.norm(b)
+
+    np.testing.assert_array_equal(np.asarray(out), np.asarray(expected_out))
+    autodiff_error = relative_error(expected_grads[2], f32_grads[2])
+    assert relative_error(weights_grad, f32_grads[2]) <= 1.5 * autodiff_error
+    for actual, expected in zip(grads[:2], f32_grads[:2], strict=True):
+        assert relative_error(actual, expected) < 1e-2
 
 
 def _simulate_ragged_a2a(operands, outputs, params):
