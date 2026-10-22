@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import os
 from collections import defaultdict
 from datetime import timedelta
@@ -36,6 +37,11 @@ from skyrl_train.distributed.utils import init_worker_process_group_with_device
 from skyrl_train.mismatch_probe.modes import TRAINER_MODES
 from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_training_strategy
 from skyrl_train.timing_observability import PhaseBreakdown
+from skyrl_train.workers.megatron.router_telemetry import (
+    assert_bias_unchanged,
+    router_policy_manifest,
+    snapshot_expert_bias,
+)
 from marinskyrl.runtime_options import PolicyLossType
 from skyrl_train.training_batch import (
     TrainingBatchIterator,
@@ -74,6 +80,29 @@ from transformers import AutoConfig, AutoTokenizer
 
 from marinskyrl.hugging_face_retry import load_hugging_face_with_retry
 from marinskyrl.runtime_options import WeightSyncTransport
+
+
+def _validate_grug_router_policy(model_type: str | None, transformer_config_kwargs: dict) -> None:
+    """Reject an aux loss on Grug, whose router override bypasses mcore's balancing loss."""
+    if model_type != GRUG_MOE_MODEL_TYPE:
+        return
+    coeff = transformer_config_kwargs.get("moe_aux_loss_coeff")
+    if coeff is not None and float(coeff) != 0.0:
+        raise ValueError(f"Grug routing bypasses mcore's aux loss; moe_aux_loss_coeff must be 0, got {coeff}")
+    balancing = transformer_config_kwargs.get("moe_router_load_balancing_type")
+    if balancing is not None and str(balancing) != "none":
+        raise ValueError(
+            f"Grug routing bypasses mcore's load-balancing loss; moe_router_load_balancing_type must be none, got {balancing}"
+        )
+
+
+def _write_router_policy_manifest(cfg, model_type: str) -> None:
+    """Record the run's router policy (R1) beside its exports."""
+    export_root = cfg.trainer.export_path
+    os.makedirs(export_root, exist_ok=True)
+    manifest_path = os.path.join(export_root, "router_policy.json")
+    with open(manifest_path, "w") as handle:
+        json.dump(router_policy_manifest(model_type), handle, indent=2, sort_keys=True)
 
 
 class _MegatronInitMode(StrEnum):
@@ -121,6 +150,7 @@ class MegatronWorker:
         """
         hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True, revision=model_revision)
         validate_grug_training_strategy(getattr(hf_config, "model_type", None), "megatron")
+        _validate_grug_router_policy(getattr(hf_config, "model_type", None), transformer_config_kwargs)
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_path,
             trust_remote_code=True,
@@ -487,7 +517,11 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
     def init_model(self, model_path, num_training_steps: int = 1e9):
         """Initialize the model, optimizer, and scheduler for the policy worker."""
         self._initialize_policy_modules(model_path, mode=_MegatronInitMode.TRAINING)
-
+        # The frozen selection bias is router level R1's contract; snapshot the
+        # buffers so every optimizer step can assert they are byte-identical.
+        self._expert_bias_snapshot = snapshot_expert_bias(self.actor_module[0])
+        if self._expert_bias_snapshot and self.strategy.is_rank_0():
+            _write_router_policy_manifest(self.cfg, self.strategy.hf_config.model_type)
         # create profiler
         if self.cfg.trainer.policy.megatron_config.torch_profiler_config.enable:
             self.profiler = Profiler(self.cfg.trainer.policy.megatron_config.torch_profiler_config)
@@ -552,11 +586,55 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             ),
         )
 
+    def verify_router_observations(self, model_path: str) -> int:
+        """Drive every Grug router under the telemetry observer and recompute its selections.
+
+        Returns the number of selection mismatches between the emitted observations
+        and a top-(k+1) recomputation from each observation's own router inputs.
+        """
+        self._initialize_policy_modules(model_path, mode=_MegatronInitMode.CHECKPOINT_EXPORT)
+        from skyrl_train.models.grug_megatron import GrugTopKRouter, _grug_topk_indices  # noqa: PLC0415
+        from skyrl_train.models.router_instrumentation import observe_router_forwards  # noqa: PLC0415
+        from skyrl_train.workers.megatron.router_telemetry import RouterLoadStats  # noqa: PLC0415
+
+        module = self.actor_module[0]
+        if hasattr(module, "module"):
+            module = module.module
+        routers = [candidate for candidate in module.modules() if isinstance(candidate, GrugTopKRouter)]
+        if not routers:
+            raise ValueError("no GrugTopKRouter found under the model; the bridge did not install Grug routing")
+
+        stats = RouterLoadStats()
+        observations: list = []
+        mismatches = 0
+        generator = torch.Generator(device="cpu").manual_seed(3)
+        with observe_router_forwards(
+            lambda observation: (stats.observe(observation), observations.append(observation))
+        ):
+            for router in routers:
+                device = next(router.parameters()).device
+                dtype = next(router.parameters()).dtype
+                hidden = torch.randn(6, router.config.hidden_size, generator=generator).to(device=device, dtype=dtype)
+                before = router.expert_bias.detach().clone()
+                router(hidden)
+                if not torch.equal(router.expert_bias.detach(), before):
+                    mismatches += 1
+        total_selected = sum(int(counts.sum()) for counts in stats.counts().values())
+        expected_selected = len(routers) * 6 * routers[0].topk
+        if total_selected != expected_selected:
+            raise ValueError(f"telemetry recorded {total_selected} selections, expected {expected_selected}")
+        for observation in observations:
+            recomputed = _grug_topk_indices(observation.selection_logits, observation.selected_experts.shape[-1])
+            if not torch.equal(recomputed, observation.selected_experts):
+                mismatches += 1
+        return int(mismatches)
+
     def _ppo_train_impl(self, train_data, timing: PhaseBreakdown) -> "TrainingOutputBatch":
         """Train through Megatron Core's pipeline scheduler."""
         self._drain_r3_decentral_stagger(train_data)
         if self.model.router_replay is not None and train_data.routed_experts is None:
             raise ValueError("moe_router_replay is on but the batch carries no rollout_routed_experts")
+        self._data_source_names = train_data.metadata.get("data_source_names")
         dataloader = TrainingBatchIterator(train_data, self.cfg.trainer.micro_train_batch_size_per_gpu)
 
         micro_batches_per_mini_batch = gradient_accumulation_steps(
@@ -604,6 +682,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         ftpo=experience.ftpo,
                         rollout_routed_experts=experience.rollout_routed_experts,
                         pair_roles=experience.pair_roles,
+                        data_source_ids=getattr(experience, "data_source_ids", None),
                     )
                 )
 
@@ -638,6 +717,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         temperature=self.scoring_temperature,
                         timings=timing,
                         profiler=profiler,
+                        data_source_names=self._data_source_names,
                     )
 
                     if self.empty_cuda_cache:
@@ -652,6 +732,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                             consecutive_nonfinite_steps=self._consecutive_nonfinite_steps,
                             max_consecutive_nonfinite_steps=self.cfg.trainer.policy.max_consecutive_nonfinite_steps,
                         )
+                    assert_bias_unchanged(self.actor_module[0], self._expert_bias_snapshot)
                     checksum_mismatch = None
                     if self.cfg.trainer.policy.megatron_config.check_dp_weight_consistency:
                         with timing.span("megatron_dp_weight_checksum"):

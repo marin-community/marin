@@ -51,6 +51,7 @@ from torch import nn
 
 from skyrl_train.models.megatron_router_replay import RouterScoreType
 from skyrl_train.models.grug_shortconv import causal_short_conv
+from skyrl_train.models.router_instrumentation import NativeRouterObserverEmitter, emit_router_forward
 from skyrl_train.models.grug_moe import (
     GRUG_ATTN_GATE_SCALE,
     GRUG_GATED_NORM_RANK,
@@ -280,7 +281,7 @@ def _grug_topk_indices(biased_logits: torch.Tensor, topk: int) -> torch.Tensor:
     return indices[:, :topk]
 
 
-class GrugTopKRouter(TopKRouter):
+class GrugTopKRouter(NativeRouterObserverEmitter, TopKRouter):
     """Grug routing: biased top-(k+1) selection with sigmoid weights renormalized to a fixed sum.
 
     The persistent fp32 ``expert_bias`` buffer is Grug's frozen query bias. It
@@ -297,8 +298,10 @@ class GrugTopKRouter(TopKRouter):
     def routing(self, logits: torch.Tensor, padding_mask: torch.Tensor | None = None):
         logits = logits.view(-1, self.config.num_moe_experts).float()
         biased_logits = logits + self.expert_bias
+        natural_selected: torch.Tensor | None = None
         if self.router_replay is None:
             selected = _grug_topk_indices(biased_logits, self.topk)
+            natural_selected = selected
         else:
             # Grug overrides MCore's routing method, so its replay hook must be
             # called here. Selection uses biased logits; combine weights below
@@ -314,6 +317,14 @@ class GrugTopKRouter(TopKRouter):
         combine = combine * (GRUG_ROUTING_RENORM_SUM / (combine.sum(dim=-1, keepdim=True) + GRUG_ROUTER_RENORM_EPS))
         probs = torch.zeros_like(logits).scatter(1, selected, combine)
         routing_map = torch.zeros_like(logits, dtype=torch.bool).scatter(1, selected, True)
+        emit_router_forward(
+            router=self,
+            router_inputs=logits,
+            selection_logits=biased_logits,
+            natural_selected_experts=natural_selected if natural_selected is not None else selected,
+            selected_experts=selected,
+            combine_weights=combine,
+        )
         return probs, routing_map
 
     def forward(self, input: torch.Tensor, padding_mask: torch.Tensor | None = None):

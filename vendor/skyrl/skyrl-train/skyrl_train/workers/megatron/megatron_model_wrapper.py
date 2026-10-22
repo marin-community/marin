@@ -13,6 +13,13 @@ from megatron.core.distributed import DistributedDataParallel as MegatronDDP
 from megatron.core.distributed import finalize_model_grads
 from megatron.core.transformer.module import Float16Module
 
+from skyrl_train.models.router_instrumentation import observe_router_forwards
+from skyrl_train.workers.megatron.router_telemetry import (
+    RouterLoadStats,
+    merge_router_telemetry_metrics,
+    router_telemetry_enabled,
+)
+
 from skyrl_train.distributed.megatron.model_utils import (
     from_parallel_logits_to_logprobs,
     from_parallel_logits_to_logprobs_packed_sequences,
@@ -101,6 +108,7 @@ class MegatronPolicyMicroBatch:
     correction_weights: Optional[torch.Tensor] = None
     rollout_routed_experts: Optional[torch.Tensor] = None
     pair_roles: Optional[torch.Tensor] = None
+    data_source_ids: Optional[torch.Tensor] = None
 
 
 class MegatronModelWrapper:
@@ -480,6 +488,7 @@ class MegatronModelWrapper:
         temperature: float = 1.0,
         timings: PhaseBreakdown | None = None,
         profiler: Profiler | None = None,
+        data_source_names: Optional[List[str]] = None,
     ) -> List[dict]:
         """
         Run forward-backward over a full mini-batch consisting of multiple micro-batches.
@@ -499,6 +508,8 @@ class MegatronModelWrapper:
         forward_backward_func = get_forward_backward_func()
         log_ratio_monitor = None
         completed_microbatches = 0
+        telemetry = router_telemetry_enabled(self.cfg)
+        load_stats = RouterLoadStats() if telemetry else None
 
         def sum_data_parallel(value):
             torch.distributed.all_reduce(value, group=mpu.get_data_parallel_group(with_context_parallel=False))
@@ -651,16 +662,18 @@ class MegatronModelWrapper:
         batch_generator = make_batch_generator(micro_batches, vpp_size=len(self.actor_module))
 
         timing = timings or PhaseBreakdown("ppo_train", enabled=False)
-        with timing.span("megatron_forward_backward_scheduler"):
-            metrics_list = forward_backward_func(
-                forward_step_func=forward_step,
-                data_iterator=batch_generator,
-                model=self.actor_module,
-                num_microbatches=len(micro_batches),
-                seq_length=seq_len,
-                micro_batch_size=micro_batch_size,
-                forward_only=False,
-            )
+        observer = load_stats.observe if load_stats is not None else None
+        with observe_router_forwards(observer) if observer else nullcontext():
+            with timing.span("megatron_forward_backward_scheduler"):
+                metrics_list = forward_backward_func(
+                    forward_step_func=forward_step,
+                    data_iterator=batch_generator,
+                    model=self.actor_module,
+                    num_microbatches=len(micro_batches),
+                    seq_length=seq_len,
+                    micro_batch_size=micro_batch_size,
+                    forward_only=False,
+                )
 
         if self.router_replay is not None:
             # Fail before the optimizer step: a non-empty FIFO or a masked row
@@ -675,6 +688,15 @@ class MegatronModelWrapper:
             if mpu.is_pipeline_last_stage(ignore_virtual=True):
                 metrics_list[-1]["router_replay/hit_fraction"] = replay_metrics["hit_fraction"]
                 metrics_list[-1]["router_replay/sentinel_fraction"] = replay_metrics["sentinel_fraction"]
+
+        if load_stats is not None:
+            merge_router_telemetry_metrics(
+                self.actor_module,
+                load_stats,
+                [micro.data_source_ids for micro in micro_batches],
+                data_source_names,
+                metrics_list,
+            )
 
         # broadcast metrics to all pp ranks
         if not mpu.is_pipeline_last_stage(ignore_virtual=True):
