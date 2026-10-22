@@ -1,0 +1,13 @@
+secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
+config:
+  marin-openbao:deployment:
+    cluster: cw-us-west-04a
+    namespace: openbao-dev
+    hostname: bao-dev.oa.dev
+    image: ghcr.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+    storage_class: block
+    authority_pool: dev
+    exposure: internal
+    replicas: 1
+    storage_gb: 20
+    controller_namespace: iris-ci

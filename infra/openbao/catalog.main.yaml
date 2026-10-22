@@ -1,0 +1,4 @@
+clusters: [cw-us-east-02a, cw-us-east-08a, cw-rno2a, marin]
+profiles:
+  - name: model-reader-pilot
+    objects: [research/pilot-model-token]
