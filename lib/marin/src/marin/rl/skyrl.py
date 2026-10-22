@@ -644,12 +644,13 @@ def skyrl_cpu_command(*arguments: str) -> list[str]:
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
+    uv_version = (workspace_root / SKYRL_PROJECT / ".uv-version").read_text().strip()
     return [
         "uv",
         "tool",
         "run",
         "--from",
-        "uv==0.13.1",
+        f"uv=={uv_version}",
         "--python",
         sys.executable,
         "--no-python-downloads",
