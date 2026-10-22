@@ -124,7 +124,7 @@ class Expectation:
             raise ValueError(f"A control expects a graded result or a submission failure, not {self.status}")
         bounds = (self.reward_min, self.reward_max)
         if self.status == Outcome.SUBMISSION_FAILURE and bounds != (None, None):
-            raise ValueError("A submission failure has no reward bounds")
+            raise ValueError("A submission failure should not have reward bounds")
         for bound in bounds:
             if bound is not None and not (math.isfinite(bound) and 0 <= bound <= 1):
                 raise ValueError(f"Reward bound {bound} is outside [0, 1]")
