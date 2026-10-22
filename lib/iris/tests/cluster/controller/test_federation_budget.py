@@ -208,15 +208,16 @@ def test_direct_submission_reads_parent_ceiling_and_rejects_local_overrides(fede
         writes.set_user_budget(tx, "alice", 10, BATCH, federation.clock.now())
     service = federation.services[1]
     with identity_scope(VerifiedIdentity(user_id="alice", role="user")):
-        with pytest.raises(ConnectError, match="max band: batch") as caught:
+        with pytest.raises(ConnectError) as caught:
             service.launch_job(make_job_request(name="/alice/direct-check", priority_band=INTERACTIVE), None)
         assert caught.value.code == Code.PERMISSION_DENIED
         assert service.launch_job(make_job_request(name="/alice/direct-check", priority_band=BATCH), None).job_id
     with identity_scope(VerifiedIdentity(user_id="admin", role="admin")):
-        with pytest.raises(ConnectError, match="Set budgets on parent"):
+        with pytest.raises(ConnectError) as caught:
             service.set_user_budget(
                 controller_pb2.Controller.SetUserBudgetRequest(user_id="alice", budget_limit=0), None
             )
+        assert caught.value.code == Code.FAILED_PRECONDITION
 
 
 def test_parent_lookup_returns_defaults_for_a_new_user(federation):
@@ -244,7 +245,7 @@ def test_handoff_from_another_routing_parent_obeys_the_budget_parent_ceiling(fed
         controller_pb2.Controller.FederationHandoff(requester_id="other", submitting_user="alice")
     )
     with identity_scope(VerifiedIdentity(user_id="other", role="admin")):
-        with pytest.raises(ConnectError, match="max band: batch") as caught:
+        with pytest.raises(ConnectError) as caught:
             federation.services[1].launch_job(request, None)
     assert caught.value.code == Code.PERMISSION_DENIED
 

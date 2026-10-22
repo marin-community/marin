@@ -179,7 +179,7 @@ class FederationBudgets:
             )
 
     def refresh(self, stop_event: threading.Event | None = None) -> None:
-        """Refresh scheduling inputs with bounded RPCs before opening a DB snapshot."""
+        """Refresh scheduling inputs without holding a DB transaction during RPCs."""
         if self._parent is not None:
             with self.db.read_snapshot() as tx:
                 keys = self._required_users(tx)
