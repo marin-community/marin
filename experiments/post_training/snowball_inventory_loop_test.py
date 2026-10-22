@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from marin.execution.artifact import read_record
 from marin.execution.lazy import ArtifactStep, run
 from marin.training.training import LevanterCheckpoint
+from rigging.provenance import Provenance
 
 from experiments.post_training import snowball_inventory_loop as loop
 from experiments.post_training.snowball_inventory_compare import Initializer
@@ -104,8 +104,19 @@ def test_scoring_failure_preserves_export_and_warm_baseline_across_iterations(tm
     monkeypatch.setattr(loop, "comparison_step", training_step)
     monkeypatch.setattr(loop, "recoverable_evaluation_step", scoring_step)
     monkeypatch.setattr(loop, "run_recoverable_evaluation", score)
-    monkeypatch.setattr(loop, "SkyRLRuntime", lambda: SimpleNamespace(source_digest="frozen-runtime"))
+    provenance = Provenance("frozen-runtime", "fixture", True, None, None)
+    monkeypatch.setattr(loop, "launch_provenance", lambda: provenance)
+    runtime_lock = tmp_path / "runtime.lock"
+    runtime_lock.write_text("frozen-runtime-lock")
+    monkeypatch.setattr(loop, "RUNTIME_LOCK", runtime_lock)
     options = loop_options(tmp_path)
+    with pytest.raises(ValueError):
+        loop.iteration_step(**options)
+    provenance = replace(provenance, tree_hash="", dirty=False)
+    with pytest.raises(ValueError):
+        loop.iteration_step(**options)
+    assert calls == {"baseline": 0, "training": 0, "final": 0}
+    provenance = replace(provenance, tree_hash="frozen-runtime")
     Path(options["model_uri"]).mkdir()
     with pytest.raises(RuntimeError, match=r"1 step\(s\) failed"):
         run(loop.iteration_step(**options), max_concurrent=1)
@@ -120,3 +131,10 @@ def test_scoring_failure_preserves_export_and_warm_baseline_across_iterations(tm
     assert calls == {"baseline": 1, "training": 1, "final": 2}
     run(loop.iteration_step(**loop_options(tmp_path, max_steps=50, version="2026.10.21.2")), max_concurrent=1)
     assert calls == {"baseline": 1, "training": 2, "final": 3}
+
+    provenance = replace(provenance, tree_hash="changed-runtime")
+    run(loop.iteration_step(**loop_options(tmp_path, version="2026.10.21.3")), max_concurrent=1)
+    assert calls == {"baseline": 2, "training": 3, "final": 4}
+    runtime_lock.write_text("updated-runtime-lock")
+    run(loop.iteration_step(**loop_options(tmp_path, version="2026.10.21.4")), max_concurrent=1)
+    assert calls == {"baseline": 3, "training": 4, "final": 5}

@@ -177,6 +177,7 @@ def test_scoring_retry_reuses_first_launch_despite_fresh_artifact_attempt_id(tmp
                 "dataset_uids": {"0": "paired"},
                 "tasks": [{"task_id": "paired", "evaluation_family": "structural", "contract_id": "source"}],
                 "model_manifest_identity": "exact-model",
+                "runtime_tree_hash": "original-runtime",
                 "protocol": "fixed",
                 "pairing_contract_field": "source",
             }

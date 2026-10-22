@@ -81,8 +81,17 @@ def completed_run(launch):
     )
 
 
-@pytest.mark.parametrize("kind", ["inventory", "evaluation", "recoverable_evaluation"])
-def test_nested_preflight_can_grade_with_only_explicit_child_credentials(kind, launch, tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "kind,score",
+    [
+        ("inventory", 1.0),
+        ("evaluation", 1.0),
+        ("recoverable_evaluation", 1.0),
+        ("evaluation", None),
+        ("recoverable_evaluation", None),
+    ],
+)
+def test_nested_preflight_credentials_preserve_evaluation_diagnostics(kind, score, launch, tmp_path, monkeypatch):
     monkeypatch.setenv("JUDGE_API_KEY", "test-judge-key")
     monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "test-eval-key")
     monkeypatch.setenv("HF_TOKEN", "test-hf-key")
@@ -107,6 +116,7 @@ def test_nested_preflight_can_grade_with_only_explicit_child_credentials(kind, l
             "dataset_uids": {"uid": "task"},
             "tasks": [{"task_id": "task", "evaluation_family": "calendar", "contract_id": "contract"}],
             "model_manifest_identity": "manifest",
+            "runtime_tree_hash": "fixture-runtime",
             "protocol": {},
             "pairing_contract_field": "source_contract_id",
         }
@@ -121,7 +131,7 @@ def test_nested_preflight_can_grade_with_only_explicit_child_credentials(kind, l
         if action == "generation-state":
             return {"complete": True}
         return {
-            "outcomes": [{"task_id": "task", "score": 1.0, "stop_reason": "stop"}],
+            "outcomes": [{"task_id": "task", "score": score, "stop_reason": "stop"}],
             "source_dumps": [],
             "recovery": {"attempted": 0},
         }
@@ -144,9 +154,19 @@ def test_nested_preflight_can_grade_with_only_explicit_child_credentials(kind, l
                 recovery=evaluation.SavedAnswerRecovery(600, 900) if kind == "recoverable_evaluation" else None,
             )
             runner = evaluation.run_evaluation if kind == "evaluation" else evaluation.run_recoverable_evaluation
-            result = runner(config)
-            assert result.complete
-            assert json.loads((tmp_path / "report.json").read_text())["families"]["calendar"]["scored"] == 1
+            if kind == "evaluation" and score is None:
+                with pytest.raises(ValueError):
+                    runner(config)
+            else:
+                result = runner(config)
+                assert result.complete == (score is not None)
+            report = json.loads((tmp_path / "report.json").read_text())
+            assert report["families"]["calendar"]["scored"] == (0 if score is None else 1)
+            assert report["complete"] == (score is not None)
+            assert report["tasks"][0]["score"] == score
+            if kind == "recoverable_evaluation":
+                assert report["recovery"] == {"attempted": 0}
+                assert report["required_score_coverage"] == 1.0
     assert client.submissions == 1
     assert json.loads(evidence.read_text()) == {"judge_probe": "passed", "verifier_probe": "passed"}
 

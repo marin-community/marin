@@ -8,7 +8,10 @@ from transformers import PreTrainedTokenizerBase
 def prefill_token_ids(
     tokenizer: PreTrainedTokenizerBase, messages: list[dict[str, Any]], options: dict[str, Any]
 ) -> list[int]:
-    """Render the same public prefill for admission and raw completion transport."""
+    """Return token IDs continuing the final assistant message.
+
+    Requires explicit continue_final_message=True and add_generation_prompt=False.
+    """
     template = dict(options["extra_body"])
     if template.pop("continue_final_message") is not True or template.pop("add_generation_prompt") is not False:
         raise ValueError("Prefill rendering requires explicit assistant continuation without a new generation prompt")

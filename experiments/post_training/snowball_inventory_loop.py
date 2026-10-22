@@ -8,15 +8,17 @@ export finish before final scoring, so a verifier failure cannot destroy the
 training artifact or require repeating optimizer work.
 """
 
+import hashlib
 from dataclasses import asdict, replace
+from pathlib import Path
 
 import click
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
-from marin.rl.skyrl import SkyRLRuntime
 from marin.training.training import LevanterCheckpoint
+from rigging.provenance import launch_provenance
 
 from experiments.post_training.snowball_inventory_baseline import (
     CACHE_VERSION,
@@ -40,6 +42,7 @@ from experiments.post_training.snowball_inventory_evaluate import (
 from experiments.post_training.snowball_inventory_panel import DevelopmentPanel
 from experiments.post_training.snowball_inventory_train import CHECKPOINT_INTERVAL
 
+RUNTIME_LOCK = Path(__file__).resolve().parents[2] / "vendor" / "skyrl" / "uv.lock"
 SAVED_ANSWER_RECOVERY = SavedAnswerRecovery(per_answer_timeout=600, total_timeout=900)
 
 
@@ -73,6 +76,9 @@ def iteration_step(
     judge_model: str,
 ) -> ArtifactStep[InventoryEvaluation]:
     """Bind the reusable baseline, export-first training and downstream paired score."""
+    provenance = launch_provenance()
+    if provenance.dirty or not provenance.tree_hash.strip():
+        raise ValueError("Reusable initializer baselines require clean, identified launch provenance")
     source = INITIALIZERS[initializer]
     protocol = recoverable_evaluation_recipe(judge_base_url=judge_base_url, judge_model=judge_model)
     identity = BaselineIdentity(
@@ -85,7 +91,8 @@ def iteration_step(
         family_counts=panel.family_counts,
         evaluation_recipe=protocol,
         recovery_policy=asdict(SAVED_ANSWER_RECOVERY),
-        runtime_source_digest=SkyRLRuntime().source_digest,
+        runtime_tree_hash=provenance.tree_hash,
+        runtime_lock_sha256=hashlib.sha256(RUNTIME_LOCK.read_bytes()).hexdigest(),
         scoring_source_sha256=scoring_source_sha256(),
     )
     initial_model = ArtifactStep.adopt(

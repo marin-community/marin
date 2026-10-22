@@ -15,7 +15,7 @@ from datasets import Dataset
 from rolloutengine.harness.tools import task_prompt as marin_task_prompt
 from rolloutengine.harness.prefill import prefill_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
-from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
+from skyrl_gym.rollout_specs import PREFILL_HARNESS, is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
 from taskcompendium.models import EnvironmentRequirements, NoGrader, Source
 from taskcompendium.runtime.shell import resolve_shell_tool
@@ -25,7 +25,7 @@ from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count
 from skyrl_train.inference_engines.prefill import prefill_token_ids
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
-from skyrl_train.task_inputs import PREFILL_HARNESS, TaskInput, TrajectoryMetadata, task_messages
+from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
 
 TASKCOMPENDIUM_ENVIRONMENT = "taskcompendium"
 TASK_ROLLOUT_COLUMN = "task_rollout_spec"
