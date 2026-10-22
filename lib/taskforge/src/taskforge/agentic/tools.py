@@ -296,8 +296,8 @@ class TaskforgeTools:
         self.adversary_runs: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         self.transcripts: Counter[str] = Counter()
         self.accepted: list[AcceptedTask] = []
-        # The digests of the task versions that a review refused. Another submit of such a version only asks for a
-        # new review, and enough of them accept a flawed task.
+        # The digests of the task versions that a review refused, or that got too many unfinished reviews. Another
+        # submit of such a version only asks for a new review, and enough of them accept a flawed task.
         self.refused: set[str] = set()
         self.unfinished_reviews: Counter[str] = Counter()
         self.report: str | None = None
