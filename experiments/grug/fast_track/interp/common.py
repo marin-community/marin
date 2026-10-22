@@ -48,7 +48,13 @@ CHECKPOINTS = {
         f"lc1-onset-{arm}-s0": f"s3://marin-us-east-02a/marin/grug/lc1-onset-{arm}-s0/2026.09.25/checkpoints/step-2760"
         for arm in (*ONSET_ARMS, *PLAIN_SUM_ARMS)
     },
+    # The deeper 171-TPP ladder rungs (8, 12 and 14 layers), for the depth comparison of the skip study.
+    "lc1-l171-d768": "s3://marin-us-east-02a/marin/grug/lc1-l171-d768/2026.09.25/checkpoints/step-24995",
+    "lc1-l171-d1024": "s3://marin-us-east-02a/marin/grug/lc1-l171-d1024/2026.09.25/checkpoints/step-32323",
+    "lc1-l171-d1280": "s3://marin-us-east-02a/marin/grug/lc1-l171-d1280/2026.09.25/checkpoints/step-57578",
 }
+# Study tags of other ladder sizes (every other tag is d512).
+TAG_SIZES = {"lc1-l171-d768": "d768", "lc1-l171-d1024": "d1024", "lc1-l171-d1280": "d1280"}
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/interp-belay-d512"
 SEQ_LEN = launch.SEQ_LEN
 TRAIN_CACHE = launch.V16384_CACHE_DIR
@@ -82,15 +88,17 @@ PLAIN_SUM_TAGS = frozenset(f"lc1-onset-{arm}-s0" for arm in PLAIN_SUM_ARMS)
 
 
 def model_config(tag: str) -> GrugModelConfig:
-    """The Ckpt 1 d512 model of study tag ``tag``, built the way ``build_h100_ladder_run`` builds it from
-    ``belay_ckpt1.recipe_args`` (with ``attn_res_plain_sum`` for the plain-residual onset arms)."""
-    args = belay_ckpt1.recipe_args(SIZE)
+    """The Ckpt 1 model of study tag ``tag`` (d512 unless ``TAG_SIZES`` says otherwise), built the way
+    ``build_h100_ladder_run`` builds it from ``belay_ckpt1.recipe_args`` (with ``attn_res_plain_sum`` for the
+    plain-residual onset arms)."""
+    size = TAG_SIZES.get(tag, SIZE)
+    args = belay_ckpt1.recipe_args(size)
     settings = {}
     for flag, value in itertools.pairwise(args):
         if flag == "--model-set":
             key, _, val = value.partition("=")
             settings[key] = val
-    rung = launch._resolved_rung(SIZE, None, None)
+    rung = launch._resolved_rung(size, None, None)
     model = dataclasses.replace(launch._h100_ladder_model(rung), vocab_size=launch.V16384_VOCAB)
     model = launch._kma_model(model)
     model = launch._apply_settings(model, settings)
