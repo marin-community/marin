@@ -204,17 +204,6 @@ def list_user_budgets(tx: Tx) -> list[UserBudget]:
     ]
 
 
-def get_all_user_budget_limits(tx: Tx) -> dict[str, int]:
-    """Return ``{user_id: budget_limit}`` for every user with a budget row."""
-    rows = tx.execute(
-        select(
-            user_budgets_table.c.user_id,
-            user_budgets_table.c.budget_limit,
-        )
-    ).all()
-    return {str(row.user_id): int(row.budget_limit) for row in rows}
-
-
 # ---------------------------------------------------------------------------
 # Dashboard composite reads (previously reads/dashboard.py)
 # ---------------------------------------------------------------------------
