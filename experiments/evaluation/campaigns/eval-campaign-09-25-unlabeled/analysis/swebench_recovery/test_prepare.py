@@ -55,6 +55,7 @@ def test_review_retains_model_failure_only_for_exact_source_evidence():
         "sha256": "result-digest",
         "reward": 0,
         "exception_type": "NonZeroAgentExitCodeError",
+        "transport_failure_observed": True,
         "agent_logs": [{"sha256": "log-digest", "terminal_error_classes": ["FileNotFoundError"]}],
     }
     report = {"model": "model", "trials": [row]}
@@ -70,5 +71,9 @@ def test_review_retains_model_failure_only_for_exact_source_evidence():
     retained, recovery = prepare["partition"](report, {row["task_name"]})
     assert retained == [row]
     assert recovery == []
+    row["agent_logs"][0]["terminal_error_classes"] = ["httpx.ReadTimeout"]
+    retained, recovery = prepare["partition"](report, {row["task_name"]})
+    assert retained == []
+    assert recovery == [row["task_name"]]
     with pytest.raises(ValueError, match="evidence differs"):
         prepare["apply_reviews"](report, [dict(review, result_sha256="another-trial")])

@@ -38,12 +38,13 @@ def recovery_reason(row: dict) -> str | None:
         for name in log["terminal_error_classes"] + log.get("retry_error_classes", [])
     ):
         return "agent_log_transport_failure"
-    if row.get("transport_failure_observed"):
+    reviewed = row.get("manual_review", {}).get("decision") == "retain_scored_model_failure"
+    if row.get("transport_failure_observed") and not reviewed:
         raise ValueError(f"transport text needs manual review: {row['task_name']}")
     if error not in SCOREABLE or not isinstance(row["reward"], int | float):
         return f"unscored:{error or 'missing_reward'}"
     if error == "NonZeroAgentExitCodeError":
-        if row.get("manual_review", {}).get("decision") != "retain_scored_model_failure":
+        if not reviewed:
             raise ValueError(f"nonzero exit needs manual review: {row['task_name']}")
     return None
 
