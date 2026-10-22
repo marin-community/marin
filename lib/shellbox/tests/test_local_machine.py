@@ -4,6 +4,7 @@
 """Local machines: bubblewrap sandboxes over a private root, with the host's system directories read-only."""
 
 import asyncio
+import contextlib
 import io
 import os
 import shutil
@@ -408,17 +409,21 @@ def test_a_commands_process_group_ends_with_it_and_a_process_that_leaves_it_last
     assert (probed.exit_code, probed.stdout) == (0, b"detached\n"), (started_result, probed)
 
 
-def _sandbox_processes(root: Path) -> list[int]:
-    """The host PIDs of the bwrap processes that build a machine's sandbox over ``root``."""
+def _sandbox_processes(root: Path) -> set[int]:
+    """The host PIDs of the bwrap processes that build a machine's sandbox over ``root``, and of their children."""
     marker = f"\0{root}\0".encode()
-    pids = []
+    parents = {}
+    bwrap = set()
     for entry in Path("/proc").iterdir():
         try:
-            if entry.name.isdigit() and marker in (entry / "cmdline").read_bytes():
-                pids.append(int(entry.name))
+            if not entry.name.isdigit():
+                continue
+            parents[int(entry.name)] = int((entry / "stat").read_text().rsplit(")", 1)[1].split()[1])
+            if marker in (entry / "cmdline").read_bytes():
+                bwrap.add(int(entry.name))
         except OSError:
             pass
-    return pids
+    return bwrap | {pid for pid, parent in parents.items() if parent in bwrap}
 
 
 def test_a_machine_whose_sandbox_was_killed_raises_machine_terminated(factory):
@@ -427,7 +432,8 @@ def test_a_machine_whose_sandbox_was_killed_raises_machine_terminated(factory):
         sandbox = _sandbox_processes(machine.root)
         assert sandbox
         for pid in sandbox:
-            os.kill(pid, signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
         with pytest.raises(MachineTerminated):
             for _ in range(100):
                 await machine.run(Command(("true",)))
