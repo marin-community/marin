@@ -34,7 +34,7 @@ from tempfile import TemporaryDirectory
 from huggingface_hub import snapshot_download
 from mlx_lm import load
 from mlx_lm.convert import convert
-from provenance import Recipe, validate_revision, write_manifest
+from provenance import Recipe, build_directory, validate_revision, write_manifest
 
 MODEL_FILE = Path(__file__).resolve().parent / "grug_moe_mlx.py"
 CONVERT_DTYPE = "bfloat16"
@@ -104,7 +104,7 @@ def main() -> None:
 
     validate_revision(args.revision)
     args.work_dir.mkdir(parents=True, exist_ok=True)
-    dst = args.work_dir / f"mlx-{args.recipe}"
+    dst = build_directory(args.work_dir, args.recipe)
     assert not dst.exists(), f"{dst} exists; remove it to rebuild"
     with TemporaryDirectory(prefix="source-", dir=args.work_dir) as temporary:
         src = Path(temporary)

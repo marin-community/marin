@@ -6,21 +6,23 @@
 import hashlib
 import json
 import subprocess
-import tomllib
 from pathlib import Path
 from uuid import uuid4
 
 import click
 from marin.execution.lazy import OUT, ArtifactStep, apply
 from marin.experiment.cli import build_options
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from rigging.filesystem.cluster_config import marin_prefix
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.mlx_export.golden_vllm import VLLM_GPU_RELEASE, submit_golden
-from experiments.mlx_export.provenance import Recipe, file_digest, validate_revision
+from experiments.mlx_export.golden_vllm import submit_golden
+from experiments.mlx_export.provenance import Recipe, build_directory, file_digest, validate_revision
 
 PROJECT = Path(__file__).resolve().parent
+PROMPTS_FILE = "prompts.json"
+GOLDEN_FILE = "golden.json"
 
 
 def source_digest() -> str:
@@ -40,7 +42,7 @@ def mac_command(script: str, arguments: list[str], code_sha256: str) -> None:
 def prompt_stage(repo: str, revision: str, code_sha256: str, output: str) -> None:
     Path(output).mkdir(parents=True, exist_ok=True)
     mac_command(
-        "prompts.py", ["--repo", repo, "--revision", revision, "--out", str(Path(output) / "prompts.json")], code_sha256
+        "prompts.py", ["--repo", repo, "--revision", revision, "--out", str(Path(output) / PROMPTS_FILE)], code_sha256
     )
 
 
@@ -62,13 +64,13 @@ def golden_stage(
 ) -> None:
     if source_digest() != code_sha256:
         raise ValueError("MLX project changed after graph construction")
-    if tomllib.loads(VLLM_GPU_RELEASE.read_text())["release_tag"] != release_tag:
+    if VLLM_GPU_RELEASE.release_tag != release_tag:
         raise ValueError("vLLM release changed after graph construction")
-    remote_output = str(StoragePath(remote_prefix) / uuid4().hex / "golden.json")
-    submit_golden(repo, revision, Path(prompts) / "prompts.json", gpus, remote_output, release_tag)
+    remote_output = str(StoragePath(remote_prefix) / uuid4().hex / GOLDEN_FILE)
+    submit_golden(repo, revision, Path(prompts) / PROMPTS_FILE, gpus, remote_output, release_tag)
     configure_coreweave_s3()
     Path(output).mkdir(parents=True, exist_ok=True)
-    (Path(output) / "golden.json").write_bytes(StoragePath(remote_output).read_bytes())
+    (Path(output) / GOLDEN_FILE).write_bytes(StoragePath(remote_output).read_bytes())
 
 
 def dump_stage(model: str, recipe: str, prompts: str, golden: str, code_sha256: str, output: str) -> None:
@@ -77,11 +79,11 @@ def dump_stage(model: str, recipe: str, prompts: str, golden: str, code_sha256: 
         "dump_logprobs.py",
         [
             "--model",
-            str(Path(model) / f"mlx-{recipe}"),
+            str(build_directory(Path(model), Recipe(recipe))),
             "--prompts",
-            str(Path(prompts) / "prompts.json"),
+            str(Path(prompts) / PROMPTS_FILE),
             "--golden",
-            str(Path(golden) / "golden.json"),
+            str(Path(golden) / GOLDEN_FILE),
             "--out",
             str(Path(output) / "dump.json"),
         ],
@@ -95,13 +97,13 @@ def parity_stage(model: str, recipe: str, dump: str, golden: str, code_sha256: s
         "compare_parity.py",
         [
             "--model",
-            str(Path(model) / f"mlx-{recipe}"),
+            str(build_directory(Path(model), Recipe(recipe))),
             "--recipe",
             recipe,
             "--dump",
             str(Path(dump) / "dump.json"),
             "--golden",
-            str(Path(golden) / "golden.json"),
+            str(Path(golden) / GOLDEN_FILE),
             "--report",
             str(Path(output) / "parity.md"),
         ],
@@ -114,7 +116,6 @@ def build(repo: str, revision: str, recipe: Recipe, gpus: int, remote_prefix: st
     if not Path(marin_prefix()).is_absolute():
         raise ValueError("Set MARIN_PREFIX to an absolute local directory on the Mac")
     code = source_digest()
-    release = tomllib.loads(VLLM_GPU_RELEASE.read_text())["release_tag"]
     name = f"mlx-export/{repo}/{revision}/{recipe}"
     prompts = apply(f"{name}/prompts", prompt_stage, repo=repo, revision=revision, code_sha256=code, output=OUT)
     model = apply(
@@ -126,7 +127,7 @@ def build(repo: str, revision: str, recipe: Recipe, gpus: int, remote_prefix: st
         repo=repo,
         revision=revision,
         prompts=prompts,
-        release_tag=release,
+        release_tag=VLLM_GPU_RELEASE.release_tag,
         gpus=gpus,
         remote_prefix=remote_prefix,
         code_sha256=code,

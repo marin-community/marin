@@ -29,7 +29,6 @@ import argparse
 import json
 import logging
 import os
-import tomllib
 from pathlib import Path
 
 import requests
@@ -40,6 +39,7 @@ from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.setup_scripts import default_setup_script
 from iris.rpc import job_pb2
+from marin.external_dependencies import VLLM_GPU_RELEASE
 from marin.inference.backend import ModelSpec
 from marin.inference.config import VllmEngineConfig, VllmLauncherType, VllmSource
 from marin.inference.iris_vllm import iris_vllm_launch
@@ -50,7 +50,6 @@ from rigging.filesystem.storage_path import StoragePath
 logger = logging.getLogger(__name__)
 
 MARIN_ROOT = Path(__file__).resolve().parents[2]
-VLLM_GPU_RELEASE = MARIN_ROOT / "config" / "external" / "vllm" / "gpu.toml"
 MAX_MODEL_LEN = 16384
 LOGPROBS_K = 25
 CONTINUATION_TOKENS = 64
@@ -217,7 +216,7 @@ def relay(args: argparse.Namespace) -> None:
 
 
 def submit(args: argparse.Namespace) -> None:
-    release_tag = tomllib.loads(VLLM_GPU_RELEASE.read_text())["release_tag"]
+    release_tag = VLLM_GPU_RELEASE.release_tag
     submit_golden(args.repo, args.revision, args.prompts, args.gpus, args.output, release_tag)
 
 

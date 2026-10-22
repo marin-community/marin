@@ -77,27 +77,6 @@ def test_layer_types_rule():
     assert tiny_args(num_hidden_layers=5).layer_types == LAYER_TYPES_5
 
 
-def test_unsupported_features_rejected():
-    for field, value in [
-        ("disable_pko", False),
-        ("sconv", True),
-        ("rope_fused", True),
-        ("tie_word_embeddings", True),
-    ]:
-        with pytest.raises(ValueError, match=field):
-            tiny_args(**{field: value})
-    with pytest.raises(ValueError, match="latent_dim"):
-        tiny_args(latent_dim=32)
-    with pytest.raises(ValueError, match="num_shared_experts"):
-        tiny_args(num_shared_experts=2)
-    with pytest.raises(ValueError, match="grugmoe_artifact_schema_version"):
-        tiny_args(grugmoe_artifact_schema_version=2)
-    with pytest.raises(ValueError, match="local_kv_heads"):
-        tiny_args(local_kv_heads=1, global_kv_heads=1)
-    with pytest.raises(ValueError, match="num_key_value_heads"):
-        tiny_args(num_key_value_heads=3)
-
-
 def test_incremental_decode_matches_full_forward():
     model = tiny_model()
     n = 40

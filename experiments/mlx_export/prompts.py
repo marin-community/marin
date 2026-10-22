@@ -80,7 +80,7 @@ def long_text() -> str:
     return "".join(pq.read_table(path, columns=["text"]).column("text").to_pylist())
 
 
-def build_cases(tok) -> list[dict]:
+def build_cases(tokenizer) -> list[dict]:
     cases: list[dict] = []
 
     def add(case_id: str, ids: list[int], **meta):
@@ -88,11 +88,11 @@ def build_cases(tok) -> list[dict]:
         print(f"{case_id}: {len(ids)} tokens")
 
     def render(conversation: list[dict], **kwargs) -> list[int]:
-        text = tok.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False, **kwargs)
-        return tok.encode(text, add_special_tokens=False)
+        text = tokenizer.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False, **kwargs)
+        return tokenizer.encode(text, add_special_tokens=False)
 
     def raw(text: str) -> list[int]:
-        return [tok.bos_token_id, *tok.encode(text, add_special_tokens=False)]
+        return [tokenizer.bos_token_id, *tokenizer.encode(text, add_special_tokens=False)]
 
     add("plain_short", raw(ENGLISH_PASSAGE), kind="raw")
 
@@ -156,8 +156,8 @@ def main() -> None:
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
 
-    tok = AutoTokenizer.from_pretrained(args.repo, revision=args.revision)
-    cases = build_cases(tok)
+    tokenizer = AutoTokenizer.from_pretrained(args.repo, revision=args.revision)
+    cases = build_cases(tokenizer)
     fixture = {"source_repo": args.repo, "source_revision": args.revision, "cases": cases}
     args.out.write_text(json.dumps(fixture, indent=1) + "\n")
     print(f"wrote {args.out} ({len(cases)} cases)")

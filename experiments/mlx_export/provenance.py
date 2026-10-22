@@ -34,6 +34,11 @@ def build_files(model: Path) -> dict[str, str]:
     }
 
 
+def build_directory(work_dir: Path, recipe: Recipe) -> Path:
+    """Where convert.py writes the build for ``recipe`` under ``work_dir``."""
+    return work_dir / f"mlx-{recipe}"
+
+
 def validate_revision(revision: str) -> None:
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise ValueError("The source revision must be a full commit SHA")
