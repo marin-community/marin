@@ -15,7 +15,6 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.models import TaskSpec
 from taskforge.llm.agent import ReasoningReplay
-from taskforge.capability import capability_idea_record
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
