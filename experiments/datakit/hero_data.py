@@ -45,6 +45,7 @@ import pathlib
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from functools import cache
+from types import MappingProxyType
 from typing import NoReturn
 
 from levanter.tokenizers import TokenizerBackend
@@ -93,10 +94,12 @@ MANIFEST_PREFIX = "s3://marin-us-east-02a/marin"
 
 # These Hero artifacts were built from the pre-repair transforms. Keep the
 # materialized paths until replacement normalize, tokenize, and store runs exist.
-_PROCESSED_VERSION_PINS = {
-    "swe-zero-12m": "v1",
-    "davinci-dev/env-native": "v1",
-}
+_PROCESSED_VERSION_PINS = MappingProxyType(
+    {
+        "swe-zero-12m": "v1",
+        "davinci-dev/env-native": "v1",
+    }
+)
 
 
 @dataclass(frozen=True)

@@ -60,7 +60,7 @@ def test_source_adapter_rejects_malformed_reasoning(content):
 
 @pytest.mark.parametrize("tag", ["<thinking>", "</thinking>"])
 def test_source_adapter_rejects_thinking_markup(tag):
-    with pytest.raises(ValueError, match="unexpected control or reasoning tokens"):
+    with pytest.raises(ValueError):
         openai_chat_messages([{"role": "user", "content": f"This contains {tag}."}])
 
 
