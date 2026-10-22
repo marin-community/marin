@@ -295,8 +295,8 @@ class GraderDraft(BaseModel):
     tolerance: float = Field(description="For numeric, the absolute tolerance; otherwise 0.")
     answer_contract: str = Field(
         description="For decision_model, the deliverable statement: what the solver hands back, in the "
-        "requester's words, with no answer block, labelled fields or fixed layout the work itself does not have, "
-        "or that the requester would specify. "
+        "requester's words, with no answer block, labelled fields or fixed layout unless the work itself has one "
+        "or the requester would specify one. "
         "For the other kinds, the exact output format the solver must follow. Written as requirements for the "
         "instruction; never describe grading, parsing, credit or tolerances."
     )
