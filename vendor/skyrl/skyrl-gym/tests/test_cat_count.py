@@ -107,3 +107,11 @@ def test_environment_scores_the_row_word():
     assert grade_cat_count(correct, {}, extras).grade.passed is True
     assert grade_cat_count(incorrect, {}, extras).grade.passed is False
     assert cat_count_score("cat cat cat", 3, word="dog").reward < cat_count_score("dog dog dog", 3, word="dog").reward
+
+
+def test_uppercase_target_keeps_exact_reward_and_case_insensitive_shaping():
+    exact = cat_count_score("Dog Dog", 2, word="Dog")
+    near_miss = cat_count_score("dog dog", 2, word="Dog")
+    assert exact.exact and exact.reward == pytest.approx(1.0)
+    assert exact.junk_words == 0
+    assert not near_miss.exact and near_miss.reward == pytest.approx(0.7)

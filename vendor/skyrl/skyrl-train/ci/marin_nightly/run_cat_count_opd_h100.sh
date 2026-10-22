@@ -2,7 +2,8 @@
 # CatCount on-policy distillation from synthetic expert teachers, inside one Iris H100x4 task.
 # Two GPUs train Qwen2.5-0.5B-Instruct with Megatron, two serve vLLM rollouts, and each teacher is a CPU process
 # on this host. TEACHER_WORDS="cat" is single-teacher OPD; "cat evens" is MOPD with one expert per route (cat
-# repeats a word, evens lists even numbers), and SWAP_ROUTES=1 sends each route to the other's expert. SPEC gates the run (by default the OPD or MOPD spec);
+# repeats a word, evens lists even numbers), and SWAP_ROUTES=1 sends each route to the other's expert. SPEC gates
+# the run (by default the OPD or MOPD spec); evens-only runs need an explicit SPEC.
 # set SPEC= (empty) to only train, for calibration.
 set -euo pipefail
 
@@ -15,11 +16,18 @@ LOG="${LOG:-$PWD/cat-count-opd-run.log}"
 TEACHER_WORDS="${TEACHER_WORDS:-cat}"
 SWAP_ROUTES="${SWAP_ROUTES:-0}"
 read -r -a WORDS <<< "$TEACHER_WORDS"
-for word in "${WORDS[@]}"; do
-  if [[ "$word" != cat && "$word" != evens ]]; then echo "GPU routes are cat and evens; got '$word'" >&2; exit 2; fi
-done
-if (( ${#WORDS[@]} > 1 )); then DEFAULT_SPEC=cat-evens-mopd-qwen2.5-0.5b-async.json
-else DEFAULT_SPEC=cat-count-opd-qwen2.5-0.5b-async.json; fi
+case "${WORDS[*]}" in
+  cat) DEFAULT_SPEC=cat-count-opd-qwen2.5-0.5b-async.json ;;
+  "cat evens" | "evens cat") DEFAULT_SPEC=cat-evens-mopd-qwen2.5-0.5b-async.json ;;
+  evens)
+    if [[ ! -v SPEC ]]; then
+      echo "TEACHER_WORDS=evens needs an explicit SPEC (or SPEC= to skip the gate)" >&2
+      exit 2
+    fi
+    DEFAULT_SPEC=
+    ;;
+  *) echo "TEACHER_WORDS must be 'cat', 'evens', or both; got '$TEACHER_WORDS'" >&2; exit 2 ;;
+esac
 SPEC="${SPEC-ci/marin_nightly/specs/$DEFAULT_SPEC}"
 MAX_STEPS="${MAX_STEPS:-30}"
 LEARNING_RATE="${LEARNING_RATE:-5e-7}"

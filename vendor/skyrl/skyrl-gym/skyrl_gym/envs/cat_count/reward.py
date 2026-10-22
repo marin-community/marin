@@ -70,13 +70,14 @@ def cat_count_score(
         raise ValueError(f"n must be >= 1, got {n}")
 
     words = shaping_words(completion)
-    counts = {k: cat_ngram_count(words, k, word) for k in NGRAM_WEIGHTS}
+    shaping_word = word.lower()
+    counts = {k: cat_ngram_count(words, k, shaping_word) for k in NGRAM_WEIGHTS}
     orders = [k for k in NGRAM_WEIGHTS if k <= n]
     weight_total = sum(NGRAM_WEIGHTS[k] for k in orders)
     shaped = sum(NGRAM_WEIGHTS[k] * closeness(counts[k], n - k + 1) for k in orders) / weight_total
 
     exact = strip_completion(completion) == " ".join([word] * n)
-    junk_words = sum(1 for w in words if w != word)
+    junk_words = sum(1 for w in words if w != shaping_word)
     extra_cats = max(0, counts[1] - n)
     truncated = stop_reason == "length"
 
