@@ -16,6 +16,7 @@ import yaml
 from jax.sharding import AxisType, Mesh
 from levanter.checkpoint import save_checkpoint
 from levanter.tensorstore_serialization import TensorStoreWriteConfig
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep import averaging
 from experiments.grug.moe_hero_ep.averaging import (
@@ -43,6 +44,18 @@ class LocalRegionProbe:
 
     def storage_region(self, path):
         return "local-test"
+
+
+def test_prepared_provenance_trailing_slash_reads_completed_object_store_checkpoint(tmp_path):
+    checkpoint = StoragePath(f"memory://{tmp_path.name}/candidate-C")
+    model = {"max_seq_len": 16384}
+    provenance = {"candidate": "C", "model": model, "model_digest": digest(model)}
+    metadata = {"is_temporary": False, "averaging_digest": digest(provenance)}
+    (checkpoint / "metadata.json").write_text(json.dumps(metadata))
+    (checkpoint / "averaging.json").write_text(json.dumps(provenance))
+
+    assert read_prepared_provenance(str(checkpoint), digest(metadata)) == provenance
+    assert read_prepared_provenance(str(checkpoint) + "/", digest(metadata)) == provenance
 
 
 def test_cooldown_coefficients_match_integrated_constant_direction_updates():

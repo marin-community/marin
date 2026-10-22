@@ -192,12 +192,13 @@ from experiments.grug.moe_hero_ep.sft_campaign import (
 
 smoke, raw = read_campaign("SMOKE_REQUEST_URI")
 selected = latest_completed_checkpoint(smoke)
-if selected is None or selected["step"] != 8:
+if selected is None or selected.step != 8:
     raise ValueError("The eight-update parent must be complete before extending its schedule")
 parent = RecoveryParent(
     request_uri="SMOKE_REQUEST_URI",
     request_sha256=hashlib.sha256(raw).hexdigest(), request_digest=digest(json.loads(raw)),
-    **{key: selected[key] for key in ("path", "step", "metadata_digest", "counters")},
+    path=selected.path, step=selected.step, metadata_digest=selected.metadata_digest,
+    counters=selected.counters,
 )
 long = dataclasses.replace(
     smoke, name="hero-format-long-reproduction", output_root="FRESH_REMOTE_LONG_ROOT",

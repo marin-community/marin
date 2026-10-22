@@ -56,6 +56,10 @@ TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 FORBIDDEN_CONTINUATION = ("<|start_header_id|>", "<|end_header_id|>", "<tool_response", "</tool_response>")
 
 
+SOURCE_CONTEXT_LENGTH = 16384
+EXTENDED_CONTEXT_LENGTH = 65536
+
+
 class Interface(StrEnum):
     SIMPLE = "simple"
     REASONING_ON = "reasoning_on"
@@ -80,7 +84,7 @@ class PanelCase(Record):
     expected_tool_names: tuple[str, ...] = ()
     expected_observation_answer: str | None = None
     # Pin an actual long-token requirement rather than trusting a "16K" label.
-    minimum_prompt_tokens: int = Field(default=1, ge=1, lt=65536)
+    minimum_prompt_tokens: int = Field(default=1, ge=1, lt=EXTENDED_CONTEXT_LENGTH)
     seed: int = Field(ge=0)
     source: str = Field(min_length=1)
     expected: str | None = None
@@ -115,8 +119,8 @@ class Panel(Record):
     source_revision: str = Field(pattern=r"^[0-9a-f]{40}$")
     backend: str = Field(min_length=1)
     template_sha256: str = Field(default_factory=lambda: hashlib.sha256(MARIN_CHAT_TEMPLATE.encode()).hexdigest())
-    max_new_tokens: int = Field(gt=0, le=65536)
-    context_length: int = Field(default=16384)
+    max_new_tokens: int = Field(gt=0, le=EXTENDED_CONTEXT_LENGTH)
+    context_length: int = Field(default=SOURCE_CONTEXT_LENGTH)
     temperature: float = Field(ge=0, allow_inf_nan=False)
 
     @property
@@ -125,7 +129,7 @@ class Panel(Record):
 
     @model_validator(mode="after")
     def unique_cases(self) -> Self:
-        if self.context_length not in (16384, 65536):
+        if self.context_length not in (SOURCE_CONTEXT_LENGTH, EXTENDED_CONTEXT_LENGTH):
             raise ValueError("Format panels support the 16K pilot or the separately gated 65K extension")
         if len({case.id for case in self.cases}) != len(self.cases):
             raise ValueError("Panel case IDs must be unique")
@@ -560,7 +564,7 @@ def compare_native_candidates(
                     or long.get("model_config_digest") != child.model_config_digest
                     or long.get("tokenizer_revision") != child.tokenizer_revision
                     or long.get("serialization") != Serialization.MARIN.value
-                    or long.get("context_length") != 65536
+                    or long.get("context_length") != EXTENDED_CONTEXT_LENGTH
                 ):
                     raise ValueError("65K formatting report does not belong to this candidate and backend")
                 long_metric = long_metrics.get(Interface.CONTEXT_65K.value)
@@ -758,7 +762,7 @@ class SmokeRecord(Record):
     terminal_checkpoint: str
     terminal_checkpoint_metadata_digest: str
     input_batches_digest: str
-    sequence_length: int = Field(ge=16384, le=16384)
+    sequence_length: int = Field(ge=SOURCE_CONTEXT_LENGTH, le=SOURCE_CONTEXT_LENGTH)
     global_batch_executed_tokens: int = Field(gt=0)
     microbatch_size: int = Field(gt=0)
     gradient_accumulation: int = Field(gt=0)

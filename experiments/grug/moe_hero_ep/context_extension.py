@@ -11,6 +11,7 @@ from pathlib import Path
 import draccus
 from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.averaging import read_prepared_provenance
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
@@ -62,8 +63,8 @@ def prepare_extension(config: ContextExtensionConfig, destination: Path) -> dict
     short/16K/65K evaluation and serving parity succeed.
     """
     model = extended_model(config)
-    fs, source = filesystem_for(config.source_checkpoint)
-    with fs.open(f"{source.rstrip('/')}/metadata.json") as stream:
+    fs, source = filesystem_for(str(StoragePath(config.source_checkpoint) / "metadata.json"))
+    with fs.open(source) as stream:
         metadata = json.load(stream)
     if digest(metadata) != config.metadata_digest or metadata.get("is_temporary") is not False:
         raise ValueError("Context extension source metadata changed or is not permanent")

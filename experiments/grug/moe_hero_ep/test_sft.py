@@ -217,8 +217,8 @@ def test_current_hero_compact_sft_update_resume_export_and_context_sharding(tmp_
                 merged = merge_sft(frozen, state.params, sft)
                 adapter_logits = np.asarray(sft_logits(frozen, state.params, tokens, sft))
                 merged_logits = np.asarray(merged.logits(tokens), dtype=np.float32)
-                # BF16 merge and separately rounded low-rank GEMMs differ; this bound
-                # is below one BF16 ULP for these O(0.1) logits plus accumulation.
+                # BF16 merge and separately rounded low-rank GEMMs introduce
+                # rounding and accumulation differences in these logits.
                 np.testing.assert_allclose(merged_logits, adapter_logits, rtol=0.02, atol=0.002)
                 diagnostic_panel = AcquisitionPanel(source_artifact_digest="fixed-tiny-source",
                     tokenizer_revision="pinned-revision", cases=(

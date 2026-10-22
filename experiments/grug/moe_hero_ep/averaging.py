@@ -309,10 +309,11 @@ def read_prepared_provenance(checkpoint: str, metadata_digest: str) -> dict:
     This reads only small JSON records, never model arrays. Consumers additionally
     check candidate-specific requirements, including donor initialization for C.
     """
-    metadata = _read_json(f"{checkpoint}/metadata.json")
+    checkpoint_path = StoragePath(checkpoint)
+    metadata = _read_json(str(checkpoint_path / "metadata.json"))
     if metadata.get("is_temporary") is not False or digest(metadata) != metadata_digest:
         raise ValueError("Prepared checkpoint metadata changed or is not permanent")
-    provenance = _read_json(f"{checkpoint}/averaging.json")
+    provenance = _read_json(str(checkpoint_path / "averaging.json"))
     if digest(provenance) != metadata["averaging_digest"]:
         raise ValueError("Prepared checkpoint provenance does not match its completion metadata")
     if digest(provenance["model"]) != provenance["model_digest"]:
@@ -430,12 +431,13 @@ def average_checkpoints(config: AverageConfig, *, region_probe: RegionProbe | No
         raise ValueError("Streamed averaging requires exactly one worker and one Iris task")
     if config.max_chunk_bytes < 4:
         raise ValueError("max_chunk_bytes must hold at least one FP32 element")
-    sources = [pin.path.rstrip("/") for pin in config.checkpoints]
+    sources = [str(StoragePath(pin.path)) for pin in config.checkpoints]
     if not sources or len(set(sources)) != len(sources) or (len(sources) == 1 and not config.initialize_donors):
         raise ValueError("Need distinct averaging sources, or one donor-initialization source")
     if config.initialize_donors and len(sources) != 1:
         raise ValueError("Prepare donor candidate C from exactly one selected A or B parent")
-    output = config.output.rstrip("/")
+    output_path = StoragePath(config.output)
+    output = str(output_path)
     if any(output == source or output.startswith(source + "/") or source.startswith(output + "/") for source in sources):
         raise ValueError("Output must be separate from all source checkpoints")
     probe = region_probe or ProviderRegionProbe()
@@ -449,12 +451,13 @@ def average_checkpoints(config: AverageConfig, *, region_probe: RegionProbe | No
 
     metadata, run_configs, manifests, parameter_maps = [], [], [], []
     for pin in config.checkpoints:
-        meta = _read_json(f"{pin.path}/metadata.json")
+        checkpoint_path = StoragePath(pin.path)
+        meta = _read_json(str(checkpoint_path / "metadata.json"))
         if meta.get("is_temporary") is not False or digest(meta) != pin.metadata_digest:
             raise ValueError(f"Checkpoint is not the pinned permanent snapshot: {pin.path}")
         metadata.append(meta)
         run_configs.append(_load_config(pin))
-        raw_manifest = _read_json(f"{pin.path}/manifest.json")
+        raw_manifest = _read_json(str(checkpoint_path / "manifest.json"))
         if digest(raw_manifest) != pin.manifest_digest:
             raise ValueError(f"Checkpoint manifest changed: {pin.path}")
         if not pin.tokenizer_revision_evidence:
@@ -618,8 +621,8 @@ def average_checkpoints(config: AverageConfig, *, region_probe: RegionProbe | No
             "runtime/allocator overhead is additional; router rows span all experts"
         ),
     }
-    _write_json(f"{output}/manifest.json", output_manifest.model_dump())
-    _write_json(f"{output}/averaging.json", provenance)
+    _write_json(str(output_path / "manifest.json"), output_manifest.model_dump())
+    _write_json(str(output_path / "averaging.json"), provenance)
     result = {
         "step": metadata[-1]["step"],
         "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
@@ -627,7 +630,7 @@ def average_checkpoints(config: AverageConfig, *, region_probe: RegionProbe | No
         "averaging_digest": digest(provenance),
         "weights_only": True,
     }
-    _write_json(f"{output}/metadata.json", result)
+    _write_json(str(output_path / "metadata.json"), result)
     return result
 
 

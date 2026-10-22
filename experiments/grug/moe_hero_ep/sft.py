@@ -16,7 +16,7 @@ import re
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import draccus
 import equinox as eqx
@@ -32,6 +32,7 @@ from experiments.grug import checkpointing
 from experiments.grug.moe_hero_ep.averaging import _DONORS, read_prepared_provenance
 from experiments.grug.moe_hero_ep.model import (
     _BATCH_AXES,
+    GrugModelConfig,
     LoraProjection,
     Transformer,
     _partition_spec_of,
@@ -97,8 +98,8 @@ class SftParameters(eqx.Module):
 class SftState(eqx.Module):
     step: jax.Array
     params: SftParameters
-    adapter_opt_state: Any
-    vocab_opt_state: Any
+    adapter_opt_state: tuple[optax.ScaleByAdamState, optax.ScaleByScheduleState]
+    vocab_opt_state: tuple[optax.ScaleByAdamState, optax.ScaleByScheduleState]
     processed_tokens: jax.Array
     supervised_tokens: jax.Array
 
@@ -147,15 +148,20 @@ def initialize_sft(base: Transformer, config: SftConfig) -> tuple[Transformer, S
     return frozen, SftState(
         step=reshard(jnp.array(0, jnp.int32), P()),
         params=params,
-        adapter_opt_state=adapter_optimizer.init(params.adapters),
-        vocab_opt_state=vocab_optimizer.init((params.input_delta, params.output_delta)),
+        adapter_opt_state=cast(
+            tuple[optax.ScaleByAdamState, optax.ScaleByScheduleState], adapter_optimizer.init(params.adapters)
+        ),
+        vocab_opt_state=cast(
+            tuple[optax.ScaleByAdamState, optax.ScaleByScheduleState],
+            vocab_optimizer.init((params.input_delta, params.output_delta)),
+        ),
         processed_tokens=reshard(jnp.array(0, jnp.int32), P()),
         supervised_tokens=reshard(jnp.array(0, jnp.int32), P()),
     )
 
 
-def initialize_from_checkpoint(reference: BaseReference, model_config, mesh: Mesh, config: SftConfig):
-    """Restore authoritative weights/effective QB state; never load the PT optimizer or step."""
+def validate_prepared_base(reference: BaseReference, model_config: GrugModelConfig, config: SftConfig) -> dict:
+    """Validate candidate-C metadata, forward settings, tokenizer and source ancestry."""
     provenance = read_prepared_provenance(reference.checkpoint, reference.metadata_digest)
     if provenance["candidate"] != "C" or provenance["donors"] != [list(row) for row in _DONORS]:
         raise ValueError("SFT must initialize from the exact donor-initialized candidate C")
@@ -177,6 +183,12 @@ def initialize_from_checkpoint(reference: BaseReference, model_config, mesh: Mes
         raise ValueError("An averaged parent was incorrectly declared as candidate A")
     if reference.source_pt_checkpoint != source_pt or reference.source_pt_step != provenance["source_pt_step"]:
         raise ValueError("SFT source PT checkpoint or step differs from prepared-checkpoint ancestry")
+    return provenance
+
+
+def initialize_from_checkpoint(reference: BaseReference, model_config, mesh: Mesh, config: SftConfig):
+    """Restore authoritative weights/effective QB state; never load the PT optimizer or step."""
+    validate_prepared_base(reference, model_config, config)
     return initialize_sft(restore_weights(reference.checkpoint, reference.metadata_digest, model_config, mesh), config)
 
 
@@ -338,7 +350,7 @@ def make_sft_optimizer_step(config: SftConfig):
 
 
 def make_sft_step(config: SftConfig):
-    """Fused update for correctness/parity; smoke runtime times its two stages separately."""
+    """Return an update that computes compact gradients and advances Adam and counters."""
     gradients = make_sft_gradients(config)
     optimize = make_sft_optimizer_step(config)
 
@@ -377,7 +389,7 @@ def compact_optimizer_report(state: SftState) -> dict:
             errors.append(f"Unexpected {group} optimizer state")
             continue
         adam, schedule = optimizer
-        if type(adam) is not optax.ScaleByAdamState or type(schedule) is not optax.ScaleByScheduleState:
+        if not isinstance(adam, optax.ScaleByAdamState) or not isinstance(schedule, optax.ScaleByScheduleState):
             errors.append(f"Unexpected {group} Adam/schedule state types")
             continue
         for label, moment in (("mu", adam.mu), ("nu", adam.nu)):

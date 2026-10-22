@@ -26,10 +26,7 @@ from haliax.jax_utils import broadcast_one_to_all
 from jax.experimental.multihost_utils import sync_global_devices
 from levanter.cutlass_kernel_cache import cutlass_kernel_cache, install
 from levanter.distributed import DistributedConfig
-from levanter.optim.config import AdamConfig
-from levanter.utils.mesh import MeshConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
-from marin.execution.lazy import ArtifactStep, StepContext, lower
+from marin.execution.lazy import StepContext, lower
 from marin.execution.step_runner import StepRunner
 from marin.execution.step_status import STATUS_SUCCESS, StatusFile
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -38,14 +35,19 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
-from experiments.grug.moe_hero_ep.averaging import _DONORS, read_prepared_provenance
 from experiments.grug.moe_hero_ep.format_eval import AcquisitionDiagnostic, AcquisitionPanel
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.grug.moe_hero_ep.sft import BaseReference, SftConfig, sft_manifest
-from experiments.grug.moe_hero_ep.sft_launch import HeroSftModel, HeroSftRunConfig, _run_sft_local
+from experiments.grug.moe_hero_ep.sft import BaseReference, SftConfig, sft_manifest, validate_prepared_base
+from experiments.grug.moe_hero_ep.sft_launch import (
+    HeroSftModel,
+    HeroSftRunConfig,
+    SftInputs,
+    _run_sft_local,
+    build_chat_sft_inputs,
+)
 from experiments.grug.moe_hero_ep.train import _apply_hero_ep_runtime_defaults
-from experiments.sft.launcher import ArtifactDatasetSpec, SFTSpec, _prebuilt_chat_data_config, chat_tokenize
+from experiments.sft.launcher import _prebuilt_chat_data_config
 
 _MAX_ATTEMPTS = 64
 _MAX_ANCESTRY = 8
@@ -61,6 +63,15 @@ class RecoveryParent:
     step: int
     metadata_digest: str
     counters: dict[str, int]
+
+
+@dataclass(frozen=True)
+class CompletedCheckpoint:
+    path: str
+    step: int
+    metadata_digest: str
+    counters: dict[str, int]
+    sft_config: SftConfig
 
 
 @dataclass(frozen=True)
@@ -123,7 +134,7 @@ def validate_continuation(previous: SftCampaign, current: SftCampaign) -> None:
         raise ValueError("Continuation cannot shrink its cumulative schedule or token cap")
 
 
-def latest_completed_checkpoint(campaign: SftCampaign, depth: int = 0) -> dict | None:
+def latest_completed_checkpoint(campaign: SftCampaign, depth: int = 0) -> CompletedCheckpoint | None:
     """Prefer own completed checkpoints, otherwise resolve the exact pinned parent.
 
     Only permanent metadata is read here. restore_sft_checkpoint subsequently
@@ -135,7 +146,7 @@ def latest_completed_checkpoint(campaign: SftCampaign, depth: int = 0) -> dict |
         raise ValueError("Attempt discovery exceeded the bounded campaign limit")
     identity = digest(draccus.encode(campaign))
     manifest = json.loads(json.dumps(sft_manifest(campaign.reference, campaign.sft)))
-    candidates = []
+    candidates: list[CompletedCheckpoint] = []
     for path in records:
         record = _json(path)
         uid = record["leader_attempt_uid"]
@@ -163,17 +174,17 @@ def latest_completed_checkpoint(campaign: SftCampaign, depth: int = 0) -> dict |
             ):
                 raise ValueError("Compact counters exceed the cumulative campaign scope")
             candidates.append(
-                {
-                    "path": str(checkpoint),
-                    "step": step,
-                    "metadata_digest": digest(metadata),
-                    "counters": counts,
-                    "sft_config": draccus.encode(campaign.sft),
-                }
+                CompletedCheckpoint(
+                    path=str(checkpoint),
+                    step=step,
+                    metadata_digest=digest(metadata),
+                    counters=counts,
+                    sft_config=campaign.sft,
+                )
             )
     if candidates:
-        latest = max(candidates, key=lambda row: (row["step"], row["path"]))
-        if len({digest(row["counters"]) for row in candidates if row["step"] == latest["step"]}) != 1:
+        latest = max(candidates, key=lambda row: (row.step, row.path))
+        if len({digest(row.counters) for row in candidates if row.step == latest.step}) != 1:
             raise ValueError("Same-step checkpoints disagree on the deterministic data cursor")
         return latest
     parent = campaign.recovery_parent
@@ -186,26 +197,21 @@ def latest_completed_checkpoint(campaign: SftCampaign, depth: int = 0) -> dict |
         raise ValueError("Recovery parent request bytes changed")
     validate_continuation(previous, campaign)
     selected = latest_completed_checkpoint(previous, depth + 1)
-    expected = {key: getattr(parent, key) for key in ("path", "step", "metadata_digest", "counters")}
-    if selected is None or any(selected[key] != value for key, value in expected.items()):
+    if (
+        selected is None
+        or selected.path != parent.path
+        or selected.step != parent.step
+        or selected.metadata_digest != parent.metadata_digest
+        or selected.counters != parent.counters
+    ):
         raise ValueError("Latest parent checkpoint differs from the reviewed full-state boundary")
     return selected
 
 
-def campaign_inputs(campaign: SftCampaign) -> tuple[HeroSftModel, SFTSpec, list[ArtifactStep]]:
+def campaign_inputs(campaign: SftCampaign) -> SftInputs:
     """Validate C/data and construct the shared CPU chat-tokenization dependencies."""
     reference = campaign.reference
-    provenance = read_prepared_provenance(reference.checkpoint, reference.metadata_digest)
-    if provenance["candidate"] != "C" or provenance["donors"] != [list(row) for row in _DONORS]:
-        raise ValueError("Require the completed donor-initialized C base")
-    if tuple(row[1] for row in provenance["donors"]) != campaign.sft.token_ids:
-        raise ValueError("Trainable vocabulary differs from C's donor columns")
-    if provenance["tokenizer_pin"] != {"name": reference.tokenizer, "revision": reference.tokenizer_revision}:
-        raise ValueError("Prepared base tokenizer changed")
-    if digest(draccus.encode(draccus.decode(GrugModelConfig, provenance["model"]))) != digest(
-        draccus.encode(campaign.model)
-    ):
-        raise ValueError("Training changed the prepared base's forward configuration")
+    validate_prepared_base(reference, campaign.model, campaign.sft)
     manifest = _json(StoragePath(campaign.data_manifest))
     if (
         manifest.get("manifest_digest") != campaign.data_manifest_digest
@@ -225,26 +231,12 @@ def campaign_inputs(campaign: SftCampaign) -> tuple[HeroSftModel, SFTSpec, list[
         reference.tokenizer_revision,
     ):
         raise ValueError("Acquisition panel differs from the training-source/tokenizer pins")
-    datasets = []
     for slug, source in manifest["source_outputs"].items():
         if "train" not in source:
             continue
         path = StoragePath(campaign.data_root) / "train" / f"{slug}.jsonl"
         if hashlib.sha256(path.read_bytes()).hexdigest() != source["train"]["sha256"]:
             raise ValueError(f"Prepared training bytes changed for {slug}")
-        artifact = ArtifactStep.adopt(
-            name=f"hero-format-data/{slug}-{campaign.data_manifest_digest[:12]}",
-            version=campaign.version,
-            source=campaign.data_root,
-            config={"manifest_digest": campaign.data_manifest_digest, "train_sha256": source["train"]["sha256"]},
-        )
-        datasets.append(
-            ArtifactDatasetSpec(
-                f"{slug}-{campaign.data_manifest_digest[:12]}", artifact, f"train/{slug}.jsonl", source["weight"]
-            )
-        )
-    if not datasets:
-        raise ValueError("Prepared data contains no training sources")
     backend = HeroSftModel(
         reference,
         campaign.model,
@@ -259,34 +251,15 @@ def campaign_inputs(campaign: SftCampaign) -> tuple[HeroSftModel, SFTSpec, list[
         campaign.data_manifest_digest,
         campaign.acquisition_panel_digest,
     )
-    spec = SFTSpec(
+    return build_chat_sft_inputs(
         name=campaign.name,
         version=campaign.version,
-        model=backend,
-        chat_template=MARIN_CHAT_TEMPLATE,
-        datasets=tuple(datasets),
-        optimizer=AdamConfig(
-            learning_rate=campaign.sft.adapter_learning_rate,
-            beta1=0.9,
-            beta2=0.999,
-            epsilon=1e-8,
-            weight_decay=0,
-            max_grad_norm=None,
-            lr_schedule="linear",
-            warmup=campaign.sft.warmup_steps / campaign.sft.num_steps,
-        ),
-        mesh=MeshConfig(
-            axes={"data": -1, "replica": 1, "model": 1, "context": campaign.context_axis_size},
-            compute_mapping={"batch": ["replica_dcn", "data"]},
-        ),
-        seq_len=campaign.model.max_seq_len,
-        pack=True,
+        backend=backend,
         batch_size=campaign.batch_size,
-        num_train_steps=campaign.sft.num_steps,
-        wandb_project="hero-format-sft",
+        data_root=campaign.data_root,
+        data_manifest_digest=campaign.data_manifest_digest,
+        manifest=manifest,
     )
-    caches = [chat_tokenize(spec, source, source.artifact) for source in datasets]
-    return backend, spec, caches
 
 
 def build_caches(campaign: SftCampaign) -> None:
@@ -298,11 +271,11 @@ def build_caches(campaign: SftCampaign) -> None:
     prefix = StoragePath(campaign.cache_prefix)
     if "://" in campaign.cache_prefix:
         raise ValueError("Build caches under a local prefix, then publish and verify completed files")
-    _, _, caches = campaign_inputs(campaign)
+    inputs = campaign_inputs(campaign)
     previous = os.environ.get("MARIN_PREFIX")
     os.environ["MARIN_PREFIX"] = str(prefix)
     try:
-        StepRunner().run([lower(cache) for cache in caches], max_concurrent=1)
+        StepRunner().run([lower(cache) for cache in inputs.caches], max_concurrent=1)
     finally:
         if previous is None:
             os.environ.pop("MARIN_PREFIX", None)
@@ -312,7 +285,8 @@ def build_caches(campaign: SftCampaign) -> None:
 
 def build_campaign(campaign: SftCampaign) -> tuple[HeroSftRunConfig, list[dict]]:
     """Resolve only completed, exact-fingerprint caches for a GPU configuration."""
-    backend, spec, caches = campaign_inputs(campaign)
+    inputs = campaign_inputs(campaign)
+    backend, spec, caches = inputs.backend, inputs.spec, inputs.caches
     paths = [cache.path(campaign.cache_prefix) for cache in caches]
     records = []
     for cache, path in zip(caches, paths, strict=True):
@@ -331,10 +305,11 @@ def build_campaign(campaign: SftCampaign) -> tuple[HeroSftRunConfig, list[dict]]
 
 def campaign_review(campaign: SftCampaign, raw: bytes) -> dict:
     config, caches = build_campaign(campaign)
+    resume = latest_completed_checkpoint(campaign)
     return {
         "request_sha256": hashlib.sha256(raw).hexdigest(),
         "request_digest": digest(draccus.encode(campaign)),
-        "resume": latest_completed_checkpoint(campaign),
+        "resume": dataclasses.asdict(resume) if resume is not None else None,
         "cache_records": caches,
         "runtime_config": draccus.encode(config),
         "submission_requested": False,
@@ -363,9 +338,10 @@ def run_attempt(campaign: SftCampaign, raw: bytes) -> None:
     config, _ = build_campaign(campaign)
     selected = None
     if jax.process_index() == 0:
+        resume = latest_completed_checkpoint(campaign)
         selected = {
             "leader_attempt_uid": os.environ["IRIS_ATTEMPT_UID"],
-            "resume": latest_completed_checkpoint(campaign),
+            "resume": dataclasses.asdict(resume) if resume is not None else None,
         }
     encoded = json.dumps(selected).encode()
     if len(encoded) >= _BROADCAST_BYTES:

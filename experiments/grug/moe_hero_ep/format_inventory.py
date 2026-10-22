@@ -13,6 +13,7 @@ from typing import Any
 import wandb
 from levanter.checkpoint_manifest import CheckpointManifest
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.grug.moe_hero_ep.averaging import CheckpointPin, ProviderRegionProbe
 from experiments.grug.moe_hero_ep.checkpoints import hero_checkpoint_paths
@@ -49,19 +50,25 @@ def inventory_run(
     if saved["model"]["max_seq_len"] != 16384:
         raise ValueError("This format-SFT inventory expects the 16K source regime")
     checkpointer = trainer["checkpointer"]
-    root = checkpointer["base_path"].rstrip("/")
+    root = StoragePath(checkpointer["base_path"])
     if checkpointer["append_run_id_to_base_path"]:
-        root += "/" + trainer["id"]
+        root = root / trainer["id"]
     paths = hero_checkpoint_paths(run_id)
     region_probe = ProviderRegionProbe()
     records: list[dict[str, Any]] = []
     for path in paths:
-        if not path.startswith(root + "/"):
+        checkpoint_path = StoragePath(path)
+        try:
+            relative = checkpoint_path.relative_to(root)
+        except ValueError:
             continue
-        fs, plain = filesystem_for(path)
-        with fs.open(f"{plain.rstrip('/')}/metadata.json") as stream:
+        if not relative:
+            continue
+        fs, metadata_path = filesystem_for(str(checkpoint_path / "metadata.json"))
+        with fs.open(metadata_path) as stream:
             metadata = json.load(stream)
-        with fs.open(f"{plain.rstrip('/')}/manifest.json") as stream:
+        _, manifest_path = filesystem_for(str(checkpoint_path / "manifest.json"))
+        with fs.open(manifest_path) as stream:
             raw_manifest = json.load(stream)
         manifest = CheckpointManifest.model_validate(raw_manifest)
         if metadata.get("is_temporary") is not False:

@@ -26,10 +26,14 @@ from levanter.data.text.examples import grug_lm_example_from_named
 from levanter.grug.attention import token_validity_from_attention_mask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
+from levanter.optim.config import AdamConfig
 from levanter.schedule import BatchSchedule
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
+from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext
+from marin.processing.tokenize.tokenize import TokenizedCache
 from pydantic import BaseModel, Field, TypeAdapter
 from rigging.filesystem.conditional_object import conditional_object
 from rigging.filesystem.storage_path import StoragePath
@@ -55,7 +59,7 @@ from experiments.grug.moe_hero_ep.train import (
     build_train_loader,
     verify_ragged_pjrt,
 )
-from experiments.sft.launcher import SFTSpec, _trainer
+from experiments.sft.launcher import ArtifactDatasetSpec, SFTSpec, _trainer, chat_tokenize
 
 logger = logging.getLogger(__name__)
 
@@ -462,7 +466,8 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
         last_saved_step = None
         last_saved_checkpoint = None
         stop_reason = None
-        telemetry_path = StoragePath(config.output_path) / "telemetry"
+        output_path = StoragePath(config.output_path)
+        telemetry_path = output_path / "telemetry"
         if jax.process_index() == 0:
             telemetry_path.mkdirs()
             (telemetry_path / "compact-optimizer-report.json").write_text(json.dumps(optimizer_audit, indent=2) + "\n")
@@ -589,7 +594,7 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                     "gradient_norm": float(metrics["gradient_norm"]),
                     "acquisition_panel_digest": config.acquisition_panel_digest,
                     "data_manifest_digest": config.data_manifest_digest,
-                    "checkpoint": f"{config.output_path}/adapters/step-{int(state.step)}",
+                    "checkpoint": str(output_path / "adapters" / f"step-{int(state.step)}"),
                     "processed_tokens_total": int(state.processed_tokens),
                     "supervised_tokens_total": int(state.supervised_tokens),
                     "routing_metrics": {
@@ -632,11 +637,9 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
             )
             if int(state.step) % config.save_every_steps == 0:
                 checkpoint_start = time.perf_counter()
-                save_sft_checkpoint(
-                    f"{config.output_path}/adapters/step-{int(state.step)}", state, config.reference, config.sft
-                )
+                last_saved_checkpoint = str(output_path / "adapters" / f"step-{int(state.step)}")
+                save_sft_checkpoint(last_saved_checkpoint, state, config.reference, config.sft)
                 last_saved_step = int(state.step)
-                last_saved_checkpoint = f"{config.output_path}/adapters/step-{int(state.step)}"
                 if jax.process_index() == 0:
                     checkpoint_record = _checkpoint_timing(last_saved_checkpoint, state, trainer.id, checkpoint_start)
                     (telemetry_path / f"checkpoint-{int(state.step):06d}.json").write_text(
@@ -654,7 +657,7 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
                 conditional_object(str(telemetry_path / f"diagnostics-step-{int(state.step)}.json")).write(
                     TypeAdapter(list[PendingAcquisition]).dump_json(pending) + b"\n", expected_version=None
                 )
-            last_saved_checkpoint = f"{config.output_path}/adapters/step-{int(state.step)}"
+            last_saved_checkpoint = str(output_path / "adapters" / f"step-{int(state.step)}")
             checkpoint_start = time.perf_counter()
             save_sft_checkpoint(last_saved_checkpoint, state, config.reference, config.sft)
             if jax.process_index() == 0:
@@ -671,7 +674,7 @@ def _run_sft_local(config: HeroSftRunConfig) -> None:
             (telemetry_path / f"diagnostics-step-{int(state.step)}.json").read_text()
         )
         complete_acquisition(config, frozen, state, mesh, pending)
-        native_path = f"{config.output_path}/export/step-{int(state.step)}"
+        native_path = str(output_path / "export" / f"step-{int(state.step)}")
         export_sft(native_path, frozen, state, config.reference, config.sft)
         assert last_saved_checkpoint is not None
         handoff = write_sft_handoff(config.output_path, native_path, last_saved_checkpoint, state, config.reference)
@@ -785,3 +788,76 @@ class HeroSftModel:
             self.resume_sft_config,
             self.pilot_inspection,
         )
+
+
+@dataclass(frozen=True)
+class SftInputs:
+    backend: HeroSftModel
+    spec: SFTSpec
+    caches: tuple[ArtifactStep[TokenizedCache], ...]
+
+
+def build_chat_sft_inputs(
+    *,
+    name: str,
+    version: str,
+    backend: HeroSftModel,
+    batch_size: int,
+    data_root: str,
+    data_manifest_digest: str,
+    manifest: dict,
+) -> SftInputs:
+    """Bind weighted prepared sources to the shared chat recipe and native Adam groups.
+
+    Callers retain their own qualification policy and validate the manifest and
+    acquisition panel before constructing this common training configuration.
+    """
+    datasets = []
+    for slug, source in manifest["source_outputs"].items():
+        if "train" not in source:
+            continue
+        artifact = ArtifactStep.adopt(
+            name=f"hero-format-data/{slug}-{data_manifest_digest[:12]}",
+            version=version,
+            source=data_root,
+            config={"manifest_digest": data_manifest_digest, "train_sha256": source["train"]["sha256"]},
+        )
+        datasets.append(
+            ArtifactDatasetSpec(
+                slug=f"{slug}-{data_manifest_digest[:12]}",
+                artifact=artifact,
+                train_glob=f"train/{slug}.jsonl",
+                weight=source["weight"],
+            )
+        )
+    if not datasets:
+        raise ValueError("Prepared manifest contains no training conversations")
+    spec = SFTSpec(
+        name=name,
+        version=version,
+        model=backend,
+        chat_template=MARIN_CHAT_TEMPLATE,
+        datasets=tuple(datasets),
+        # The native backend consumes SftConfig's independent Adam schedules.
+        optimizer=AdamConfig(
+            learning_rate=backend.sft.adapter_learning_rate,
+            beta1=0.9,
+            beta2=0.999,
+            epsilon=1e-8,
+            weight_decay=0.0,
+            max_grad_norm=None,
+            lr_schedule="linear",
+            warmup=backend.sft.warmup_steps / backend.sft.num_steps,
+        ),
+        mesh=MeshConfig(
+            axes={"data": -1, "replica": 1, "model": 1, "context": backend.context_axis_size},
+            compute_mapping={"batch": ["replica_dcn", "data"]},
+        ),
+        seq_len=backend.model.max_seq_len,
+        pack=True,
+        batch_size=batch_size,
+        num_train_steps=backend.sft.num_steps,
+        wandb_project="hero-format-sft",
+    )
+    caches = tuple(chat_tokenize(spec, source, source.artifact) for source in datasets)
+    return SftInputs(backend=backend, spec=spec, caches=caches)

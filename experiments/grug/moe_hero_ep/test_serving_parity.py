@@ -336,7 +336,7 @@ def parity_bundle(tmp_path, suite_inputs):
     return build
 
 
-def responses(request, mutation=None):
+def responses(mutation=None):
     calls = []
 
     def post(url, headers, json, timeout):
@@ -362,7 +362,7 @@ def responses(request, mutation=None):
 
 def test_parsed_multitoken_http_and_retained_bytes_recompute_success(tmp_path, parity_bundle):
     request = parity_bundle(Candidate.E)
-    post, calls = responses(request)
+    post, calls = responses()
     report = collect_serving(request, str(tmp_path / "proof.json"), post=post)
     assert report["measurement"]["passed"]
     assert len(calls) == 6
@@ -396,7 +396,7 @@ def test_parsed_multitoken_http_and_retained_bytes_recompute_success(tmp_path, p
 )
 def test_raw_http_wrong_identity_prefix_decode_stop_and_repeatability_reject(tmp_path, parity_bundle, mutation, reason):
     request = parity_bundle()
-    post, _ = responses(request, mutation)
+    post, _ = responses(mutation)
     report = collect_serving(request, str(tmp_path / "proof.json"), post=post)
     assert not report["measurement"]["passed"]
     assert reason.lower() in str(report["measurement"]["reasons"]).lower()
@@ -409,7 +409,7 @@ def test_pending_source_or_actual_context_coverage_makes_zero_http_calls(tmp_pat
     launch["wheel"]["source_commit"] = "0" * 40
     changed = save(tmp_path / "wrong-launch.json", launch)
     request = request.model_copy(update={"launch_manifest": changed})
-    post, calls = responses(request)
+    post, calls = responses()
     report = collect_serving(request, str(tmp_path / "pending.json"), post=post)
     assert not calls and report["measurement"]["status"] == "pending"
     assert verify_serving_report(pin(tmp_path / "pending.json"))["measurement"]["status"] == "pending"
@@ -419,7 +419,7 @@ def test_pending_source_or_actual_context_coverage_makes_zero_http_calls(tmp_pat
 
 def test_handoff_uses_recomputed_report_and_rejects_cross_suite_proof(tmp_path, parity_bundle, completed_suite):
     request = parity_bundle()
-    post, _ = responses(request)
+    post, _ = responses()
     collect_serving(request, str(tmp_path / "proof.json"), post=post)
     handoff, _ = completed_suite
     attached = handoff.model_copy(
@@ -440,7 +440,7 @@ def test_divergence_retains_only_common_prefix_positions(tmp_path, parity_bundle
         choice["token_ids"][1] = 45
         choice["logprobs"]["top_logprobs"][1]["token_id:45"] = -0.09
 
-    post, _ = responses(request, mutate)
+    post, _ = responses(mutate)
     report = collect_serving(request, str(tmp_path / "divergence.json"), post=post)
     measured = report["measurement"]
     assert not measured["passed"]
@@ -458,7 +458,7 @@ def test_context_budget_rejected_before_http(tmp_path, parity_bundle):
     output["file_sha256"]["samples.json"] = save(samples_path, samples).sha256
     manifest["manifest_digest"] = digest({key: value for key, value in manifest.items() if key != "manifest_digest"})
     request = request.model_copy(update={"suite_manifest": save(Path(request.suite_manifest.path), manifest)})
-    post, calls = responses(request)
+    post, calls = responses()
     with pytest.raises(ValueError, match="request limits"):
         collect_serving(request, str(tmp_path / "never.json"), post=post)
     assert not calls
@@ -507,7 +507,7 @@ def test_handoff_derives_pass_from_same_suite_retained_http(tmp_path, parity_bun
     suite_pin = save(root / "manifest.json", manifest)
     save(root / "request.json", suite.model_dump(mode="json"))
     request = request.model_copy(update={"suite_manifest": suite_pin})
-    post, _ = responses(request)
+    post, _ = responses()
     collect_serving(request, str(tmp_path / "same-suite.json"), post=post)
     handoff = handoff.model_copy(
         update={

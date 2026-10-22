@@ -5,6 +5,7 @@ import dataclasses
 import hashlib
 import json
 from pathlib import Path
+from typing import NamedTuple
 from unittest.mock import patch
 
 import draccus
@@ -49,6 +50,12 @@ from experiments.grug.moe_hero_ep.sft_launch import (
     save_pilot_inspection,
     sft_measurement_identity,
 )
+
+
+class PreparedRecipe(NamedTuple):
+    recipe: FormatSftRecipe
+    manifest: dict
+    acquisition: AcquisitionPanel
 
 
 @pytest.fixture
@@ -106,7 +113,7 @@ def prepared_recipe(tmp_path_factory):
         acquisition_panel_path="acquisition.json",
         acquisition_panel_digest=acquisition.panel_digest,
     )
-    return recipe, manifest, acquisition
+    return PreparedRecipe(recipe, manifest, acquisition)
 
 
 def test_multisource_graph_isolates_chat_caches_and_preserves_raw_data(prepared_recipe, tmp_path):
@@ -134,7 +141,7 @@ def test_multisource_graph_isolates_chat_caches_and_preserves_raw_data(prepared_
     assert build_format_sft(changed, manifest, acquisition).fingerprint() != first_identity
 
 
-def test_changed_training_bytes_are_rejected_before_training(prepared_recipe, tmp_path):
+def test_changed_training_bytes_are_rejected_before_training(prepared_recipe):
     recipe, manifest, _ = prepared_recipe
     verify_training_data(recipe, manifest)
     (Path(recipe.data_root) / "train" / "second.jsonl").write_text('{"messages": []}\n')

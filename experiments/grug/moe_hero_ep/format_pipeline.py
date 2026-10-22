@@ -15,9 +15,6 @@ from pathlib import Path
 
 import draccus
 from fray.types import ResourceConfig
-from levanter.optim.config import AdamConfig
-from levanter.utils.mesh import MeshConfig
-from marin.datakit.chat_template import MARIN_CHAT_TEMPLATE
 from marin.execution.lazy import ArtifactStep, StepContext, lower, materialized_config
 from marin.execution.step_runner import StepRunner
 from pydantic import Field
@@ -48,15 +45,13 @@ from experiments.grug.moe_hero_ep.sft_launch import (
     HeroSftCheckpoint,
     HeroSftModel,
     PilotInspection,
+    build_chat_sft_inputs,
     read_pilot_inspection,
     sft_measurement_identity,
 )
 from experiments.sft.launcher import (
     _TRAIN_RESOURCES,
-    ArtifactDatasetSpec,
-    SFTSpec,
     _prebuilt_chat_data_config,
-    chat_tokenize,
 )
 
 
@@ -362,26 +357,6 @@ def build_format_sft(
         recipe.reference.tokenizer_revision,
     ):
         raise ValueError("Acquisition panel belongs to a different training dataset or tokenizer")
-    datasets = []
-    for slug, source in manifest["source_outputs"].items():
-        if "train" not in source:
-            continue
-        artifact = ArtifactStep.adopt(
-            name=f"hero-format-data/{slug}-{recipe.data_manifest_digest[:12]}",
-            version=recipe.version,
-            source=recipe.data_root,
-            config={"manifest_digest": recipe.data_manifest_digest, "train_sha256": source["train"]["sha256"]},
-        )
-        datasets.append(
-            ArtifactDatasetSpec(
-                slug=f"{slug}-{recipe.data_manifest_digest[:12]}",
-                artifact=artifact,
-                train_glob=f"train/{slug}.jsonl",
-                weight=source["weight"],
-            )
-        )
-    if not datasets:
-        raise ValueError("Prepared manifest contains no training conversations")
     backend = HeroSftModel(
         reference=recipe.reference,
         model=recipe.model,
@@ -399,38 +374,16 @@ def build_format_sft(
         resume_sft_config=recipe.resume_sft_config,
         pilot_inspection=pilot_inspection,
     )
-    spec = SFTSpec(
+    inputs = build_chat_sft_inputs(
         name=recipe.name,
         version=recipe.version,
-        model=backend,
-        chat_template=MARIN_CHAT_TEMPLATE,
-        datasets=tuple(datasets),
-        # The native backend uses SftConfig's two independent Adam schedules.
-        # This required SFTSpec field describes its adapter group consistently.
-        optimizer=AdamConfig(
-            learning_rate=recipe.sft.adapter_learning_rate,
-            beta1=0.9,
-            beta2=0.999,
-            epsilon=1e-8,
-            weight_decay=0.0,
-            max_grad_norm=None,
-            lr_schedule="linear",
-            warmup=recipe.sft.warmup_steps / recipe.sft.num_steps,
-        ),
-        mesh=MeshConfig(
-            axes={"data": -1, "replica": 1, "model": 1, "context": recipe.context_axis_size},
-            compute_mapping={"batch": ["replica_dcn", "data"]},
-        ),
-        seq_len=recipe.model.max_seq_len,
-        pack=True,
+        backend=backend,
         batch_size=recipe.batch_size,
-        num_train_steps=recipe.sft.num_steps,
-        wandb_project="hero-format-sft",
+        data_root=recipe.data_root,
+        data_manifest_digest=recipe.data_manifest_digest,
+        manifest=manifest,
     )
-    # Materialize one chat cache per source outside the immutable raw dataset.
-    # Building caches on-pod from a shared raw root would alias every component
-    # to the same cache directory in the generic explicit-step launcher path.
-    caches = tuple(chat_tokenize(spec, source, source.artifact) for source in datasets)
+    spec, caches = inputs.spec, inputs.caches
 
     def build_config(ctx: StepContext):
         resources = ctx.runtime_arg(_TRAIN_RESOURCES)

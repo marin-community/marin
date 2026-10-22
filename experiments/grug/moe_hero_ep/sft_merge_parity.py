@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -34,7 +35,6 @@ from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
-from experiments.grug.moe_hero_ep.averaging import _DONORS, read_prepared_provenance
 from experiments.grug.moe_hero_ep.format_measure import NativePtRequest, PtPanel, read_pt_panel
 from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import Checkpoint, Record, digest
@@ -45,6 +45,7 @@ from experiments.grug.moe_hero_ep.sft import (
     restore_sft_checkpoint,
     sft_logits,
     sft_manifest,
+    validate_prepared_base,
 )
 from experiments.grug.moe_hero_ep.train import (
     RAGGED_MOE_IMPLEMENTATION,
@@ -104,7 +105,14 @@ def _metadata(path: str, expected_digest: str) -> dict:
     return value
 
 
-def validate_merge_request(request: MergeParityRequest) -> tuple[GrugModelConfig, PtPanel, dict]:
+@dataclass(frozen=True)
+class MergeInputs:
+    model: GrugModelConfig
+    panel: PtPanel
+    compact_metadata: dict
+
+
+def validate_merge_request(request: MergeParityRequest) -> MergeInputs:
     """Validate C/compact/D lineage, configuration and real token rows before array I/O."""
     config = draccus.decode(GrugModelConfig, request.model)
     if config.moe_implementation in ("scatter", "sonic", "sonic_cute") and request.expert_axis_size != 1:
@@ -112,27 +120,7 @@ def validate_merge_request(request: MergeParityRequest) -> tuple[GrugModelConfig
     if config.num_experts % request.expert_axis_size:
         raise ValueError("Merge-parity expert mesh must divide the model's expert count")
     reference = request.reference
-    provenance = read_prepared_provenance(reference.checkpoint, reference.metadata_digest)
-    if provenance["candidate"] != "C" or provenance["donors"] != [list(row) for row in _DONORS]:
-        raise ValueError("Merge parity requires the donor-initialized candidate C")
-    saved_model = draccus.encode(draccus.decode(GrugModelConfig, provenance["model"]))
-    if digest(saved_model) != digest(draccus.encode(config)):
-        raise ValueError("Merge parity model differs from the exact candidate-C forward configuration")
-    if provenance["tokenizer_pin"] != {"name": reference.tokenizer, "revision": reference.tokenizer_revision}:
-        raise ValueError("Merge parity tokenizer differs from candidate C")
-    if request.sft.token_ids != tuple(row[1] for row in provenance["donors"]):
-        raise ValueError("Merge parity selected vocabulary differs from donor initialization")
-    parent = provenance["selected_parent"]
-    source_pt = parent["path"]
-    if reference.selected_parent == "B":
-        averaged = read_prepared_provenance(parent["path"], parent["metadata_digest"])
-        if averaged["candidate"] != "B":
-            raise ValueError("Declared averaged parent is not candidate B")
-        source_pt = averaged["request"]["checkpoints"][-1]["path"]
-    elif "averaging_digest" in provenance["source_metadata"][0]:
-        raise ValueError("An averaged parent cannot be declared candidate A")
-    if (reference.source_pt_checkpoint, reference.source_pt_step) != (source_pt, provenance["source_pt_step"]):
-        raise ValueError("Merge parity source PT ancestry differs from candidate C")
+    validate_prepared_base(reference, config, request.sft)
     compact = _metadata(request.compact_checkpoint, request.compact_metadata_digest)
     merged = _metadata(request.merged_checkpoint.uri, request.merged_checkpoint.metadata_digest)
     expected = digest(sft_manifest(reference, request.sft))
@@ -174,7 +162,7 @@ def validate_merge_request(request: MergeParityRequest) -> tuple[GrugModelConfig
             raise ValueError("Merge parity token or prediction position is outside the pinned model")
         if row.loss_weight[probe.prediction_position] <= 0:
             raise ValueError("Merge parity probes must predict actual weighted held-out targets")
-    return config, panel, compact
+    return MergeInputs(config, panel, compact)
 
 
 def _logprobs(logits: np.ndarray) -> np.ndarray:
@@ -269,7 +257,8 @@ def compare_merge_logits(
 def run_merge_parity(request: MergeParityRequest, destination: str) -> dict:
     """Restore exact compact/D checkpoints, compare selected logits, and retain the report."""
     request = MergeParityRequest.model_validate(request.model_dump(mode="json"))
-    config, panel, compact_metadata = validate_merge_request(request)
+    inputs = validate_merge_request(request)
+    config, panel, compact_metadata = inputs.model, inputs.panel, inputs.compact_metadata
     root = StoragePath(destination)
     if root.exists():
         raise FileExistsError("Choose a new immutable merge-parity destination")

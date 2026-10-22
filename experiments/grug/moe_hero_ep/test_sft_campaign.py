@@ -4,6 +4,7 @@
 import dataclasses
 import hashlib
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import draccus
@@ -14,6 +15,7 @@ from experiments.grug.moe_hero_ep.model import GrugModelConfig
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
 from experiments.grug.moe_hero_ep.sft import BaseReference, SftConfig, sft_manifest
 from experiments.grug.moe_hero_ep.sft_campaign import (
+    CompletedCheckpoint,
     RecoveryParent,
     SftCampaign,
     latest_completed_checkpoint,
@@ -75,16 +77,24 @@ def save_checkpoint(
         },
     }
     (checkpoint / "metadata.json").write_text(json.dumps(metadata))
-    return {
-        "path": str(checkpoint),
-        "step": step,
-        "metadata_digest": digest(metadata),
-        "counters": metadata["hero_sft_counters"],
-        "sft_config": draccus.encode(campaign.sft),
-    }
+    return CompletedCheckpoint(
+        path=str(checkpoint),
+        step=step,
+        metadata_digest=digest(metadata),
+        counters=metadata["hero_sft_counters"],
+        sft_config=campaign.sft,
+    )
 
 
-def continuation(tmp_path: Path):
+@dataclass(frozen=True)
+class CampaignContinuation:
+    previous: SftCampaign
+    current: SftCampaign
+    checkpoint: CompletedCheckpoint
+    request: Path
+
+
+def continuation(tmp_path: Path) -> CampaignContinuation:
     previous = campaign_at(tmp_path / "smoke")
     selected = save_checkpoint(previous, "first", 8)
     request = tmp_path / "smoke.json"
@@ -94,16 +104,20 @@ def continuation(tmp_path: Path):
         str(request),
         hashlib.sha256(raw).hexdigest(),
         digest(draccus.encode(previous)),
-        **{key: selected[key] for key in ("path", "step", "metadata_digest", "counters")},
+        path=selected.path,
+        step=selected.step,
+        metadata_digest=selected.metadata_digest,
+        counters=selected.counters,
     )
     current = dataclasses.replace(campaign_at(tmp_path / "long", 64), recovery_parent=parent)
-    return previous, current, selected, request
+    return CampaignContinuation(previous=previous, current=current, checkpoint=selected, request=request)
 
 
 def test_continuation_retains_exact_parent_state_and_prefers_own_completed_checkpoint(tmp_path):
-    _, current, parent, request = continuation(tmp_path)
+    fixture = continuation(tmp_path)
+    current, parent, request = fixture.current, fixture.checkpoint, fixture.request
     assert latest_completed_checkpoint(current) == parent
-    assert parent["sft_config"]["num_steps"] == 8
+    assert parent.sft_config.num_steps == 8
     assert current.sft.num_steps == 64
     save_checkpoint(current, "interrupted", 10, temporary=True)
     assert latest_completed_checkpoint(current) == parent
@@ -113,12 +127,13 @@ def test_continuation_retains_exact_parent_state_and_prefers_own_completed_check
     # even when the original parent request cannot be accessed during a retry.
     request.unlink()
     assert latest_completed_checkpoint(current) == own
-    assert own["counters"]["sft_step"] == 9
-    assert own["sft_config"]["num_steps"] == 64
+    assert own.counters["sft_step"] == 9
+    assert own.sft_config.num_steps == 64
 
 
 def test_parent_request_and_latest_boundary_are_both_hash_bound(tmp_path):
-    previous, current, _, request = continuation(tmp_path)
+    fixture = continuation(tmp_path)
+    previous, current, request = fixture.previous, fixture.current, fixture.request
     raw = request.read_bytes()
     request.write_bytes(raw + b" ")
     with pytest.raises(ValueError, match="parent request bytes changed"):
@@ -132,7 +147,7 @@ def test_parent_request_and_latest_boundary_are_both_hash_bound(tmp_path):
 
 
 def test_parent_ancestry_rejects_changed_data_and_schedule_parameters(tmp_path):
-    _, current, _, _ = continuation(tmp_path)
+    current = continuation(tmp_path).current
     changed = dataclasses.replace(current, data_manifest_digest="f" * 64)
     with pytest.raises(ValueError, match="changed weights, data"):
         latest_completed_checkpoint(changed)
@@ -142,7 +157,7 @@ def test_parent_ancestry_rejects_changed_data_and_schedule_parameters(tmp_path):
 
 
 def test_request_roundtrip_preserves_checkpoint_manifest_identity(tmp_path):
-    _, campaign, _, _ = continuation(tmp_path)
+    campaign = continuation(tmp_path).current
     request = tmp_path / "long.json"
     request.write_text(json.dumps(draccus.encode(campaign)))
     restored, _ = read_campaign(str(request))

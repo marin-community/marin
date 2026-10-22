@@ -16,7 +16,7 @@ from collections import Counter
 from collections.abc import Sequence
 from itertools import islice
 from pathlib import Path
-from typing import Self
+from typing import NamedTuple, Self
 
 import datasets
 import numpy as np
@@ -63,13 +63,19 @@ class DataRecipe(Record):
         return self
 
 
-def shifted_chat_targets(processed: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+class ChatTargets(NamedTuple):
+    inputs: np.ndarray
+    targets: np.ndarray
+    weights: np.ndarray
+
+
+def shifted_chat_targets(processed: dict) -> ChatTargets:
     """Return causal inputs, next-token targets and assistant target weights."""
     ids = np.asarray(processed["input_ids"], dtype=np.int32)
     mask = np.asarray(processed["assistant_masks"], dtype=np.int32)
     if ids.shape != mask.shape or ids.ndim != 1:
         raise ValueError("Chat tokens and assistant masks must be aligned one-dimensional arrays")
-    return ids[:-1], ids[1:], mask[1:]
+    return ChatTargets(ids[:-1], ids[1:], mask[1:])
 
 
 def validate_chat_mask(processed: dict, tokenizer: MarinTokenizer) -> None:
