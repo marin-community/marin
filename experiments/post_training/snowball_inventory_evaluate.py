@@ -41,6 +41,7 @@ from marin.rl.skyrl import (
     SkyRLSpec,
     SkyRLTopology,
     run_skyrl,
+    skyrl_cpu_command,
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
@@ -203,16 +204,7 @@ def runtime_operation(action: str, request: dict, *, timeout: float = 30 * 60) -
         result = Path(directory) / "result.json"
         source.write_text(json.dumps(request))
         subprocess.run(
-            [
-                "uv",
-                "run",
-                "--project",
-                "vendor/skyrl",
-                "--frozen",
-                "--extra",
-                "cpu",
-                "--no-group",
-                "dev",
+            skyrl_cpu_command(
                 "python",
                 "-m",
                 WORKER_MODULE,
@@ -221,7 +213,7 @@ def runtime_operation(action: str, request: dict, *, timeout: float = 30 * 60) -
                 str(source),
                 "--result",
                 str(result),
-            ],
+            ),
             cwd=Path(__file__).resolve().parents[2],
             check=True,
             timeout=timeout,

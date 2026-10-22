@@ -655,27 +655,38 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _project_command(*arguments: str) -> list[str]:
+def skyrl_cpu_command(*arguments: str) -> list[str]:
+    """Return argv for SkyRL's frozen CPU environment using the current Python."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
     return [
         "uv",
+        "tool",
+        "run",
+        "--from",
+        "uv==0.13.1",
+        "--python",
+        sys.executable,
+        "--no-python-downloads",
+        "uv",
         "run",
         "--project",
         str(workspace_root / SKYRL_PROJECT),
+        "--python",
+        sys.executable,
+        "--no-python-downloads",
         "--frozen",
         "--extra",
         "cpu",
         "--no-group",
         "dev",
-        "marinskyrl",
         *arguments,
     ]
 
 
 def _launcher_command(config_path: str) -> list[str]:
-    return _project_command("iris", "launch", "--config", config_path)
+    return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
