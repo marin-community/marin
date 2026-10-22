@@ -1,9 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Compare pinned Datakit SFT and Dr.Doom initializers on the fixed Snowball inventory.
+"""Compare pinned initializers on the fixed Snowball inventory.
 
-The two arms share the dedicated evaluation account's 16-task budget, eight each.
+Selected arms share the dedicated evaluation account's 16-task budget.
 Do not overlap another evaluation job using that account with the comparison.
 Each arm starts in its own artifact/checkpoint root and resumes only its own state.
 Periodic arms persist paired reports under evaluation/step-UPDATE/report.json.
