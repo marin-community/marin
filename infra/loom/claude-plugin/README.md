@@ -12,20 +12,15 @@ Loom sessions on `loom.oa.dev` and follow them from a chat. It contains:
 ## Prerequisites
 
 The `connector.enabled` setting must be on in the [Loom deployment](../README.md)
-for `loom.oa.dev`. A Loom administrator registers claude.ai as the connector's
-OAuth client once, which prints a client ID and secret:
-
-```sh
-loom oauth-client add claude.ai \
-  --redirect-uri https://claude.ai/api/mcp/auth_callback \
-  --redirect-uri https://claude.com/api/mcp/auth_callback
-```
+for `loom.oa.dev`. The deployment also declares the connector's public OAuth
+clients, `claude-ai` and `claude-code`.
 
 Making the plugin available does not add its bundled connector. An
 organization Owner adds a custom connector in **Organization settings >
 Connectors** with the URL `https://loom.oa.dev/mcp`, selects **Use your own
-OAuth client** under **Advanced settings**, and enters the client ID and
-secret. Each member then connects it and signs in to Loom with GitHub.
+OAuth client** under **Advanced settings**, enters the client ID `claude-ai`,
+and leaves the secret blank. Each member then connects it and signs in to Loom
+with GitHub.
 
 ## Publish to the organization
 
@@ -50,17 +45,11 @@ from **Customize > Plugins > Add > Upload plugin**.
 
 ## Claude Code
 
-Loom has no dynamic client registration, so Claude Code needs a client ID
-before it can sign in. A Loom administrator registers Claude Code once as a
-public client. Loom accepts its loopback callback on any port:
+Loom has no dynamic client registration, so Claude Code signs in as the
+deployment's `claude-code` client. Each person adds the server with that client
+ID and copies the skill:
 
 ```sh
-loom oauth-client add claude-code --public --redirect-uri http://localhost/callback
-```
-
-Each person then adds the server with that client ID and copies the skill:
-
-```sh
-claude mcp add --transport http --scope user --client-id <client-id> loom https://loom.oa.dev/mcp
+claude mcp add --transport http --scope user --client-id claude-code loom https://loom.oa.dev/mcp
 cp -r infra/loom/claude-plugin/skills/use-loom ~/.claude/skills/
 ```
