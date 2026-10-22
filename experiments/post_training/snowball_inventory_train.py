@@ -16,7 +16,6 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     SkyRLRetentionPolicy,
     SkyRLRun,
-    SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -128,7 +127,6 @@ def main(
             config_yaml=yaml.safe_dump(
                 training_recipe(max_steps, judge_base_url=judge_base_url, judge_model=judge_model), sort_keys=False
             ),
-            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=TOKENIZER_MODEL,

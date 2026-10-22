@@ -24,7 +24,6 @@ from marin.rl.skyrl import (
     ArtifactHfModel,
     SkyRLRetentionPolicy,
     SkyRLRun,
-    SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -212,7 +211,6 @@ def comparison_step(
             config_yaml=yaml.safe_dump(
                 comparison_recipe(model_uri, judge_base_url=judge_base_url, judge_model=judge_model), sort_keys=False
             ),
-            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(model, identity.repository, identity.revision, relative_path=""),
             train_data=(ArtifactDataSource(pool, relative_path="train.parquet"),),
             validation_data=(ArtifactDataSource(validation, relative_path="validation.parquet"),),

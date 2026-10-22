@@ -29,7 +29,6 @@ from marin.rl.skyrl import (
     SkyRLRolePlan,
     SkyRLRun,
     SkyRLRunConfig,
-    SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
     run_skyrl,
@@ -239,7 +238,6 @@ def main(
             name=name,
             version=resolve_version(name, None),
             config_yaml=yaml.safe_dump(recipe, sort_keys=False),
-            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=TOKENIZER_MODEL,

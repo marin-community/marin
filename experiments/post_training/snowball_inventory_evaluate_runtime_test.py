@@ -2,6 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
@@ -174,16 +180,11 @@ def test_cpu_preflight_tokenizer_loads_without_staged_model(tmp_path, override_t
 
 
 @pytest.mark.manual
-def test_probe_launch_binds_exact_bytes_and_rejects_other_runtime(tmp_path):
-    from cloud.iris.runtime_bundle import resolve_launcher_source  # noqa: PLC0415
-
-    from experiments.post_training.snowball_inventory_probe import ProbeReport, validated_probe_config  # noqa: PLC0415
-
-    digest = resolve_launcher_source().digest
+def test_copied_workspace_imports_bind_declared_provenance(tmp_path):
     document: dict[str, Any] = {
         "schema_version": 1,
         "run": {"id": "probe-unit", "attempt_id": "one", "export_hf": False},
-        "runtime": {"source_digest": digest, "profile": "megatron"},
+        "runtime": {"profile": "megatron"},
         "iris": {
             "cluster": "unit",
             "cluster_config": "unit.yaml",
@@ -203,7 +204,7 @@ def test_probe_launch_binds_exact_bytes_and_rejects_other_runtime(tmp_path):
             "export_root": "s3://unit/exports",
             "attempts_root": "s3://unit/attempts",
             "resolved_config_uri": "s3://unit/config.yaml",
-            "terminal_manifest_uri": "s3://unit/terminal.json",
+            "terminal_manifest_uri": str(tmp_path / "terminal.json"),
         },
         "inputs": {
             "model": {
@@ -238,19 +239,118 @@ def test_probe_launch_binds_exact_bytes_and_rejects_other_runtime(tmp_path):
     source = tmp_path / "launch.yaml"
     raw = "# exact submitted bytes\n" + yaml.safe_dump(document)
     source.write_text(raw)
-    report = ProbeReport()
-
-    config = validated_probe_config(source, report)
-
-    assert config.runtime.source_digest == report.runtime_source_digest == digest
-    assert report.launch_config_sha256 == hashlib.sha256(raw.encode()).hexdigest()
-    document["runtime"]["source_digest"] = "0" * 64
-    source.write_text(yaml.safe_dump(document))
-    rejected = ProbeReport()
-    with pytest.raises(ValueError, match="runtime identity"):
-        validated_probe_config(source, rejected)
-    assert rejected.runtime_source_digest == digest
-    assert rejected.launch_config_sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
+    workspace = tmp_path / "workspace"
+    root = Path(__file__).resolve().parents[2]
+    for package in ("experiments", "experiments/post_training"):
+        directory = workspace / package
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "__init__.py").write_text(f"__path__.append({str(root / package)!r})\n")
+    for filename in ("snowball_inventory_probe.py", "snowball_inventory_evaluate_runtime.py"):
+        shutil.copyfile(
+            root / "experiments/post_training" / filename, workspace / "experiments/post_training" / filename
+        )
+    shutil.copytree(root / "lib/finelog/src/finelog", workspace / "lib/finelog/src/finelog")
+    lock = workspace / "vendor/skyrl/uv.lock"
+    lock.parent.mkdir(parents=True)
+    shutil.copyfile(root / "vendor/skyrl/uv.lock", lock)
+    metadata = workspace / "marin_finelog-0.0.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: marin-finelog\nVersion: 0.0.0\n")
+    direct_url = metadata / "direct_url.json"
+    direct_url.write_text(json.dumps({"url": (workspace / "lib/finelog").as_uri(), "dir_info": {"editable": True}}))
+    provenance = {
+        "tree_hash": "admitted-tree",
+        "base_commit": "commit",
+        "dirty": False,
+        "branch": None,
+        "built_by": None,
+    }
+    script = r"""
+import hashlib
+import importlib.util
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+import sys
+from pathlib import Path
+from omegaconf import OmegaConf
+from experiments.post_training import snowball_inventory_probe as probe
+from experiments.post_training import snowball_inventory_evaluate_runtime as worker
+workspace, source = map(Path, sys.argv[1:])
+probe.FEATURE_DISTRIBUTIONS = {"marin-finelog": probe.finelog.types}
+report = probe.ProbeReport()
+config = probe.validated_probe_config(source, report)
+revisions = probe.package_revisions()
+assert not (workspace / ".git").exists()
+assert report.runtime_tree_hash == "admitted-tree"
+assert report.launch_config_sha256 == hashlib.sha256(source.read_bytes()).hexdigest()
+assert report.runtime_lock_sha256 == hashlib.sha256((workspace / "vendor/skyrl/uv.lock").read_bytes()).hexdigest()
+imported_file = Path(probe.finelog.types.__file__).resolve()
+assert imported_file.is_relative_to(workspace)
+expected_hash = hashlib.sha256(imported_file.read_bytes()).hexdigest()
+assert revisions["marin-finelog"] == "editable:lib/finelog/src/finelog/types.py;sha256:" + expected_hash
+# Installed wheel, Git and archive identities retain their import ownership check.
+metadata = workspace / "marin_finelog-0.0.0.dist-info/direct_url.json"
+original = metadata.read_text()
+record = metadata.parent / "RECORD"
+record.write_text("lib/finelog/src/finelog/types.py,,\n")
+for direct_url, expected_identity in (
+    (None, "registry:0.0.0"),
+    ({"vcs_info": {"commit_id": "a" * 40}}, "git:" + "a" * 40),
+    ({"archive_info": {"hashes": {"sha256": "b" * 64}}}, "archive-sha256:" + "b" * 64),
+):
+    if direct_url is None:
+        metadata.unlink()
+    else:
+        metadata.write_text(json.dumps(direct_url))
+    assert probe.package_revisions()["marin-finelog"] == expected_identity + ";import-sha256:" + expected_hash
+metadata.write_text(original)
+# A direct_url for a different checkout must not authenticate this imported module.
+foreign = workspace / "foreign"
+foreign.mkdir()
+metadata.write_text(json.dumps({"url": foreign.as_uri(), "dir_info": {"editable": True}}))
+try:
+    probe.package_revisions()
+except ValueError:
+    pass
+else:
+    raise AssertionError("foreign editable installation authenticated copied import")
+metadata.write_text(original)
+# Conversely an import shadowing the correct editable install must be rejected.
+shadow = foreign / "types.py"
+shadow.write_text("shadow = True")
+loader = importlib.util.spec_from_file_location("shadowed_types", shadow)
+shadowed = importlib.util.module_from_spec(loader)
+loader.loader.exec_module(shadowed)
+probe.FEATURE_DISTRIBUTIONS = {"marin-finelog": shadowed}
+try:
+    probe.package_revisions()
+except ValueError:
+    pass
+else:
+    raise AssertionError("shadow import authenticated as editable workspace source")
+print(json.dumps({"status": "passed", "runtime_lock_sha256": report.runtime_lock_sha256}))
+"""
+    environment = {
+        **os.environ,
+        "MARIN_PROVENANCE": json.dumps(provenance),
+        "PYTHONPATH": os.pathsep.join([str(workspace), str(workspace / "lib/finelog/src"), *sys.path]),
+    }
+    completed = subprocess.run(
+        [sys.executable, "-c", script, str(workspace), str(source)],
+        cwd=workspace,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(completed.stdout) == {
+        "status": "passed",
+        "runtime_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+    }
 
 
 @pytest.mark.manual

@@ -16,7 +16,6 @@ import pyarrow.parquet as pq
 from cloud.iris.artifacts import file_inventory, fs_and_path, terminal_checkpoint_step
 from cloud.iris.export_hf_checkpoint import ExportJobSpec, checkpoint_export_launch_config
 from cloud.iris.launch_config import load_launch_config
-from cloud.iris.runtime_bundle import resolve_launcher_source
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest, sha256_file
 from marinskyrl.remote_io import filesystem_and_path
 from marinskyrl.task_machine_factories import task_machine_factories
@@ -35,7 +34,11 @@ from taskcompendium.models import ScriptGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 from experiments.post_training.snowball_curriculum.export import DerivedDeployment, derived_record
-from experiments.post_training.snowball_inventory_probe import package_revisions, preflight_tokenizer
+from experiments.post_training.snowball_inventory_probe import (
+    package_revisions,
+    preflight_tokenizer,
+    runtime_source_evidence,
+)
 
 REFERENCE_RUNTIME_LIMITS = {"model_turn_timeout": 1800.0, "total_turn_timeout": 2400.0, "attempt_timeout": 3600.0}
 
@@ -135,8 +138,6 @@ def load_document(text: str):
         path = Path(directory) / "launch.yaml"
         path.write_text(text)
         config = load_launch_config(path)
-    if config.runtime.source_digest != resolve_launcher_source().digest:
-        raise ValueError("Composed runtime identity differs from the installed frozen runtime")
     return config
 
 
@@ -199,7 +200,7 @@ def preflight(request: dict) -> dict:
         raise ValueError("Evaluation decoding budget differs from the declared protocol")
     # The source composer retains an unused HOME-based train default for empty inputs.
     config.skyrl.data.train_data = []
-    revisions = package_revisions(str(config.runtime.source_digest))
+    revisions = package_revisions()
     model = verify_model(str(config.inputs.model.uri))
     tokenizer = preflight_tokenizer(config)
     sessions = config.skyrl.environment.task_sessions
@@ -282,6 +283,7 @@ def preflight(request: dict) -> dict:
         "grader_canaries": checks,
         "factory_backends": sorted(factories),
         "package_revisions": revisions,
+        **runtime_source_evidence(),
         **model,
     }
 
@@ -375,7 +377,6 @@ def export_config(request: dict) -> dict:
         allocation_gpus_per_node=8,
     )
     config = checkpoint_export_launch_config(training, export_request, spec)
-    config.runtime.source_digest = resolve_launcher_source().digest
     config.run.id = "snowball-evaluation-export-" + hashlib.sha256(str(destination).encode()).hexdigest()[:12]
     config.run.attempt_id = f"step-{step}"
     config.iris.job_name = f"{config.run.id}-step-{step}"
@@ -390,7 +391,7 @@ def export_config(request: dict) -> dict:
         "launch_config_yaml": document,
         "policy_export_uri": str(StoragePath(export_root) / f"global_step_{step}" / "policy"),
         "source_config_sha256": hashlib.sha256(source_text.encode()).hexdigest(),
-        "source_runtime_digest": str(training.runtime.source_digest),
+        **runtime_source_evidence(),
         "checkpoint_step": step,
         "checkpoint_checks": "Committed step marker and nonempty control/metadata/32 shards; no tensor rehash or resume",
     }

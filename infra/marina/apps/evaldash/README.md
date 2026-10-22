@@ -191,8 +191,9 @@ Historical cohort labels remain selectable. `cohort=all` selects the newest admi
 benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
 it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
 are not verified as comparable. A named verified cohort admits only records with its approved
-benchmark config, evaluator revision, and thinking mode. Models with different normalized source
-YAMLs have separate comparison names ending in `@<12-character digest>`.
+benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
+the selected cohort, including benchmark-specific serving overrides. Each run retains its source
+configuration and digest.
 
 Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share

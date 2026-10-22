@@ -5,7 +5,6 @@ import json
 import os
 from concurrent.futures import Future
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -192,7 +191,6 @@ def test_periodic_comparison_persists_fixed_pairing_and_coverage_before_return(
 
     monkeypatch.setattr(comparison, "run_inventory", trained)
     monkeypatch.setattr(comparison, "runtime_operation", read_saved_results)
-    monkeypatch.setattr(comparison, "SkyRLRuntime", lambda: SimpleNamespace(source_digest="fixture-runtime"))
     artifact = comparison.comparison_step(
         comparison.Initializer.SFT,
         version="2026.10.22",

@@ -29,11 +29,11 @@ import shellbox.machine
 import taskcompendium.models
 import verifyit.modes.grade_judge
 from cloud.iris.launch_config import load_launch_config
-from cloud.iris.runtime_bundle import local_module_source, resolve_launcher_source
 from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME, ModelManifest
 from marinskyrl.task_machine_factories import task_machine_factories
 from omegaconf import DictConfig, OmegaConf
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from rigging.provenance import launch_provenance
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.prefill import PrefillHarness
@@ -94,7 +94,9 @@ class ProbeReport:
     phase: str = "package_identity"
     sha256: str | None = None
     launch_config_sha256: str | None = None
-    runtime_source_digest: str | None = None
+    runtime_tree_hash: str | None = None
+    runtime_lock_sha256: str | None = None
+    launch_provenance: dict = field(default_factory=dict)
     model_manifest_identity: str | None = None
     model_repository: str | None = None
     model_revision: str | None = None
@@ -115,16 +117,30 @@ class ProbeReport:
     error_type: str | None = None
 
 
-def package_revisions(expected_source_digest: str) -> dict[str, str]:
-    """Record installed package identities selected by the digest-covered frozen lock."""
+def runtime_source_evidence() -> dict:
+    """Record declared launch context and the copied workspace's nested dependency lock."""
+    provenance = launch_provenance()
+    if not provenance.tree_hash:
+        raise ValueError("Runtime launch provenance must identify its source tree")
+    lock = Path(__file__).resolve().parents[2] / "vendor/skyrl/uv.lock"
+    return {
+        "runtime_tree_hash": provenance.tree_hash,
+        "runtime_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+        "launch_provenance": asdict(provenance),
+    }
+
+
+def package_revisions() -> dict[str, str]:
+    """Identify actual imports, rejecting sources outside their installed distribution."""
+    workspace = Path(__file__).resolve().parents[2]
     revisions = {}
     for name, imported_module in FEATURE_DISTRIBUTIONS.items():
         package = distribution(name)
+        if imported_module.__file__ is None:
+            raise ValueError("Feature package has no imported source file")
+        imported_file = Path(imported_module.__file__).resolve(strict=True)
         metadata = package.read_text("direct_url.json")
-        if metadata is None:
-            revisions[name] = f"registry:{package.version}"
-            continue
-        source = json.loads(metadata)
+        source = json.loads(metadata) if metadata is not None else {}
         if source.get("dir_info", {}).get("editable") is True:
             uri = urlsplit(source["url"])
             if (
@@ -136,35 +152,44 @@ def package_revisions(expected_source_digest: str) -> dict[str, str]:
             ):
                 raise ValueError("Editable feature package must name a local file URI")
             installed_root = Path(url2pathname(uri.path)).resolve(strict=True)
-            module_source = local_module_source(name, installed_root, expected_source_digest)
-            if imported_module.__file__ is None:
-                raise ValueError("Feature package has no imported source file")
-            Path(imported_module.__file__).resolve(strict=True).relative_to(module_source.root.resolve(strict=True))
-            revisions[name] = f"module-source-sha256:{module_source.digest}"
+            expected_root = (workspace / "lib" / name.removeprefix("marin-")).resolve(strict=True)
+            if installed_root != expected_root:
+                raise ValueError("Editable feature package is not installed from this Marin workspace")
+            imported_file.relative_to(installed_root / "src")
+            imported_path = imported_file.relative_to(workspace).as_posix()
+            revisions[name] = f"editable:{imported_path};sha256:{hashlib.sha256(imported_file.read_bytes()).hexdigest()}"
+            continue
+        owned_files = {Path(package.locate_file(path)).resolve() for path in package.files or ()}
+        if imported_file not in owned_files:
+            raise ValueError("Feature package import is shadowed outside its installed distribution")
+        file_hash = hashlib.sha256(imported_file.read_bytes()).hexdigest()
+        if metadata is None:
+            revisions[name] = f"registry:{package.version};import-sha256:{file_hash}"
             continue
         revision = source.get("vcs_info", {}).get("commit_id")
         if isinstance(revision, str) and len(revision) == 40 and all(c in "0123456789abcdef" for c in revision):
-            revisions[name] = f"git:{revision}"
+            revisions[name] = f"git:{revision};import-sha256:{file_hash}"
             continue
         archive_hash = source.get("archive_info", {}).get("hashes", {}).get("sha256")
         if isinstance(archive_hash, str) and len(archive_hash) == 64:
-            revisions[name] = f"archive-sha256:{archive_hash}"
+            revisions[name] = f"archive-sha256:{archive_hash};import-sha256:{file_hash}"
             continue
         raise ValueError("Feature package is not installed from the frozen registry or immutable source")
     return revisions
 
 
 def validated_probe_config(path: Path, report: ProbeReport) -> DictConfig:
-    """Bind admission to the exact launch bytes and the installed vendored source."""
+    """Record exact launch bytes and the current workspace's declared provenance."""
     document = path.read_bytes()
     report.launch_config_sha256 = hashlib.sha256(document).hexdigest()
     with TemporaryDirectory(prefix="snowball-probe-config-") as directory:
         snapshot = Path(directory) / "launch.yaml"
         snapshot.write_bytes(document)
         config = load_launch_config(snapshot)
-    report.runtime_source_digest = resolve_launcher_source().digest
-    if config.runtime.source_digest != report.runtime_source_digest:
-        raise ValueError("Composed runtime identity differs from the installed frozen runtime")
+    evidence = runtime_source_evidence()
+    report.runtime_tree_hash = evidence["runtime_tree_hash"]
+    report.runtime_lock_sha256 = evidence["runtime_lock_sha256"]
+    report.launch_provenance = evidence["launch_provenance"]
     return config
 
 
@@ -272,7 +297,7 @@ async def probe(
         report.model_repository = manifest.model_id
         report.model_revision = manifest.revision
     report.phase = "package_identity"
-    report.package_revisions = package_revisions(str(config.runtime.source_digest))
+    report.package_revisions = package_revisions()
     task_sessions = config.skyrl.environment.task_sessions
     if task_sessions.get("local") is None:
         raise ValueError("The composed training configuration did not enable the local machine backend")

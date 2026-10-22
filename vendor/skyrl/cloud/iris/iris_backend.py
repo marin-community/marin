@@ -33,6 +33,7 @@ from iris.cluster.types import CoschedulingConfig, ResourceSpec, gpu_device
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
+from rigging.config_discovery import find_project_root
 
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
 from cloud.iris.launch import LaunchOutcome
@@ -52,7 +53,7 @@ from marinskyrl.resource_locator import (
     join_resource_path,
 )
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
-from cloud.iris.runtime_bundle import build_runtime_bundle
+from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.ray_ports import RayPort
 from marinskyrl.environment_contract import (
     DEBUG_ARTIFACT_DIR_ENV,
@@ -76,7 +77,6 @@ DAYTONA_RL_SECRET_NAME = "DAYTONA_RL_API_KEY"
 DAYTONA_RL_SECRET_VERSION = "1"
 
 
-RUNTIME_BUNDLE_INCLUDES = ("**/*",)
 AUTOMATIC_RESOURCE_REQUEST = "auto"
 MEMORY_RESOURCE = "memory"
 DISK_RESOURCE = "ephemeral-storage"
@@ -289,7 +289,6 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         rendezvous_dir=ray["rendezvous_dir"],
         cluster=iris["cluster"],
         cluster_config=iris["cluster_config"],
-        source_digest=runtime["source_digest"],
         runtime_profile=RuntimeProfile(runtime["profile"]),
         job_name=iris["job_name"],
         priority=iris["priority"],
@@ -329,10 +328,10 @@ class IrisBackend:
         args = _iris_submission_state(config_path, config)
         if config.run.submission == SubmissionMode.PREPARE:
             raise ValueError("Prepare mode validates a launch without submitting it")
-        with (
-            build_runtime_bundle(config.runtime.source_digest) as workspace,
-            contextlib.redirect_stdout(sys.stderr),
-        ):
+        workspace = find_project_root(PROJECT_ROOT)
+        if workspace is None:
+            raise RuntimeError("SkyRL launches require a Marin checkout")
+        with contextlib.redirect_stdout(sys.stderr):
             return launch(args, workspace)
 
     def export_terminal_policy(self, config_path: Path) -> None:
@@ -544,9 +543,7 @@ def resolve_node_resource_requests(
 
 RL_PYTHON = "python"
 SKYRL_HOME = MARINSKYRL_TASK_ROOT
-# Iris synchronizes the project and local modules below /app. Setup verifies
-# their source identity and installs the independent frozen profile.
-APP_DIR = SKYRL_HOME
+APP_DIR = "/app"
 
 
 @dataclass(frozen=True)
@@ -788,7 +785,7 @@ def _build_task_shell(
     if not flashqla_enabled:
         gdn_branch = f"exec {ctrl}"
     bash = (
-        f"set -e; {spill_preflight}cd {APP_DIR}; "
+        f"set -e; {spill_preflight}cd {SKYRL_HOME}; "
         f"export SKYRL_HOME={shlex.quote(SKYRL_HOME)}; "
         f"source {shlex.quote(MARINSKYRL_ACTIVATION_FILE)}; "
         f"export PYTHONPATH={shlex.quote(pythonpath)}:${{PYTHONPATH:-}}; "
@@ -845,7 +842,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
     print(f"[rl-iris] Job:        /{user}/{args.job_name}", flush=True)
     print(f"[rl-iris] Cluster:    {args.cluster}  ({args.cluster_config})", flush=True)
-    print(f"[rl-iris] Runtime:    {args.source_digest} ({args.runtime_profile.value})", flush=True)
+    print(f"[rl-iris] Runtime:    {args.runtime_profile.value}", flush=True)
     print(
         f"[rl-iris] Topology:   {args.num_nodes} node(s) x {gpu_spec}  "
         f"(= {args.num_nodes * args.gpus_per_node} GPUs, exclusive, gang/leafgroup)",
@@ -1076,8 +1073,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
                 iris_config.controller
             )
         with bundle.controller.tunnel(address=controller_address) as controller_url:
-            # The sealed workspace already contains only the declared runtime files.
-            yield IrisClient.remote(controller_url, workspace=workspace, extra_bundle_includes=RUNTIME_BUNDLE_INCLUDES)
+            yield IrisClient.remote(controller_url, workspace=workspace)
 
     if args.target_cluster:
         # Federated submission MUST carry the IAP *user* identity: the controller rejects
@@ -1090,9 +1086,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         # Requires a completed `iris --cluster=marin login` (@openathena.ai).
         from iris.cli.connect import open_iris_client
 
-        client_cm = open_iris_client(
-            config_file=Path(submit_cluster_config), workspace=workspace, extra_bundle_includes=RUNTIME_BUNDLE_INCLUDES
-        )
+        client_cm = open_iris_client(config_file=Path(submit_cluster_config), workspace=workspace)
     else:
         client_cm = _direct_client()
 
@@ -1107,7 +1101,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             environment=EnvironmentSpec(
                 env_vars=env_vars,
                 extras=["gpu"],
-                setup_scripts=[task_setup_script(args.source_digest, args.runtime_profile)],
+                setup_scripts=[task_setup_script(args.runtime_profile)],
             ),
             constraints=constraints or None,
             coscheduling=coscheduling,
@@ -1148,7 +1142,7 @@ def _ambient_in_cluster_client(workspace: Path) -> IrisClient | None:
     controller_url = os.environ.get("IRIS_CONTROLLER_URL")
     if not controller_url:
         return None
-    return IrisClient.in_cluster(controller_url, workspace=workspace, extra_bundle_includes=RUNTIME_BUNDLE_INCLUDES)
+    return IrisClient.in_cluster(controller_url, workspace=workspace)
 
 
 def _seconds_to_duration(secs: int):

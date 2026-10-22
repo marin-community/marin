@@ -677,6 +677,7 @@ class K8sControllerProvider:
             node_selector={
                 _KUBERNETES_ARCH_LABEL: _CONTROLLER_ARCH,
                 self._iris_labels.iris_scale_group: cw.scale_group,
+                **({"kubernetes.io/hostname": cw.hostname} if cw.hostname else {}),
             },
             env_from_secrets=env_from_secrets,
             state_mount_path=state_mount_path,
