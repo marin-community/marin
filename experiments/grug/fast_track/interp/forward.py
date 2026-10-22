@@ -158,6 +158,32 @@ def no_ablation() -> Ablation:
     )
 
 
+class RoutingOverride(NamedTuple):
+    """Per-layer routing edits over the ``T = B * S`` flattened tokens (traced, so one compile serves all of them).
+
+    ``bias_scale`` multiplies the QB bias in the top-k selection (0: unbiased selection); where ``sel_mask``, the
+    token's selection is ``sel_override`` (distinct experts; combine weights follow from their unbiased logits as
+    usual); ``combine_mult`` scales each slot's final combine weight (a capacity drop is 0); ``latent_delta`` is added
+    to the routed latent output (before ``w_latent_up``), the point the routing studies differentiate at.
+    """
+
+    bias_scale: jax.Array  # [L]
+    sel_mask: jax.Array  # [L, T] bool
+    sel_override: jax.Array  # [L, T, K] int32
+    combine_mult: jax.Array  # [L, T, K]
+    latent_delta: jax.Array  # [L, T, R]
+
+
+def no_override(tokens: int) -> RoutingOverride:
+    return RoutingOverride(
+        bias_scale=jnp.ones((NUM_LAYERS,), jnp.float32),
+        sel_mask=jnp.zeros((NUM_LAYERS, tokens), bool),
+        sel_override=jnp.zeros((NUM_LAYERS, tokens, TOP_K), jnp.int32),
+        combine_mult=jnp.ones((NUM_LAYERS, tokens, TOP_K), jnp.float32),
+        latent_delta=jnp.zeros((NUM_LAYERS, tokens, LATENT), jnp.float32),
+    )
+
+
 def position_in_document(seg: jax.Array) -> jax.Array:
     """``[B, S]`` each token's offset from its document's first token."""
     idx = jnp.broadcast_to(jnp.arange(seg.shape[1]), seg.shape)
@@ -335,7 +361,7 @@ def _local_ragged_dot(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) ->
     )(lhs, rhs, group_sizes)
 
 
-def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
+def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, routing: RoutingOverride, out: dict):
     """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless)."""
     mlp = block.mlp
     shared = block.shared[0]
@@ -344,8 +370,9 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
     # One device: the dispatch gathers and scatters run on replicated token arrays.
     x_flat = reshard(x.reshape(t, d), P(None, None))
     router_logits = jnp.einsum("td,de->te", x_flat, mlp.router).astype(jnp.float32)
-    biased = router_logits + mlp.router_bias.astype(jnp.float32)
+    biased = router_logits + routing.bias_scale[layer] * mlp.router_bias.astype(jnp.float32)
     _, selected = _small_top_k(biased, TOP_K)
+    selected = jnp.where(routing.sel_mask[layer][:, None], routing.sel_override[layer], selected)
     unbiased_topk = jnp.take_along_axis(router_logits, selected, axis=-1)
     raw = jnp.sqrt(jnp.maximum(jax.nn.softplus(unbiased_topk), 1e-30))
     combine = raw * (mlp.cfg.routing_renorm_sum / (jnp.sum(raw, axis=-1, keepdims=True) + 1e-9))
@@ -354,7 +381,7 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
     slot_keep = abl.slot_mult[layer][rank]
     kept = combine * slot_keep
     renormed = kept * (jnp.sum(combine, axis=-1, keepdims=True) / (jnp.sum(kept, axis=-1, keepdims=True) + 1e-9))
-    used = abl.slot_renorm * renormed + (1.0 - abl.slot_renorm) * kept
+    used = (abl.slot_renorm * renormed + (1.0 - abl.slot_renorm) * kept) * routing.combine_mult[layer]
     routed_input = mlp.latent_norm(jnp.einsum("td,dl->tl", x_flat, mlp.w_latent_down))
 
     expert_sorted, token_sorted, slot_sorted, counts, starts = _dispatch(selected)
@@ -365,7 +392,7 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
     act = keep * jnp.square(jax.nn.relu(pre)) + (1.0 - keep) * abl.neuron_mean[layer][expert_sorted]
     y = _local_ragged_dot(act.astype(x.dtype), em.w_down, counts).astype(jnp.float32)  # [TK, R]
     per_slot = jnp.zeros((t, TOP_K, LATENT), jnp.float32).at[token_sorted, slot_sorted].set(y)
-    routed_latent = jnp.einsum("tk,tko->to", used, per_slot)
+    routed_latent = jnp.einsum("tk,tko->to", used, per_slot) + routing.latent_delta[layer]
     routed = jnp.einsum("to,od->td", routed_latent.astype(x.dtype), mlp.w_latent_up, preferred_element_type=jnp.float32)
 
     shared_pre = jnp.einsum("td,di->ti", x_flat, shared.w_up, preferred_element_type=jnp.float32)
@@ -393,6 +420,7 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
         expert_act=act,
         expert_counts=counts,
         slot_latent_out=per_slot,
+        routed_latent=routed_latent,
         shared_pre=shared_pre,
         shared_act=shared_act,
         routed_pre_conv=routed,
@@ -419,13 +447,17 @@ def trace_forward(
     tokens: jax.Array,
     segment_ids: jax.Array,
     abl: Ablation,
+    routing: RoutingOverride | None = None,
 ) -> dict:
     """The forward of ``model`` (compute dtype) on ``[B, S]`` tokens, returning every intermediate: ``layers[i]`` holds
     layer ``i``'s gate weights, attention internals, MoE internals and branch outputs, and the top level the final
-    gate, the normed hidden state, the capped logits' loss, top-1 and the label."""
+    gate, the normed hidden state, the capped logits' loss, top-1 and the label. ``routing`` edits the MoE routing
+    (``no_override`` when None)."""
     cfg = model.config
     eps = cfg.layer_norm_eps
     b, s = tokens.shape
+    if routing is None:
+        routing = no_override(b * s)
     model = replicate(model)
     seg = reshard(segment_ids, P(_BATCH, None))
     long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=(seg, seg))
@@ -464,7 +496,7 @@ def trace_forward(
         attn_out = _mix(abl.sub_mult[i, SUB_ATTN], attn_out, abl.sub_mean[i, SUB_ATTN]).astype(embed.dtype)
         w_mlp, h2 = _gate([*blocks, attn_out], layer.attn_res_query_mlp, eps)
         mlp_in = layer._mlp_input(h2)
-        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, out)
+        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out)
         routed_sc = layer.sconv_mlp(routed, seg)
         shared_sc = layer.sconv_mlp(shared_out, seg)
         mlp_out = layer.sconv_mlp(routed + shared_out, seg)
