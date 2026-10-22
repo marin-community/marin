@@ -129,7 +129,8 @@ class Ablation(NamedTuple):
     sub_mean: jax.Array  # [L, NUM_SUB, D]
     neuron_mult: jax.Array  # [L, E, I] routed hidden units
     neuron_mean: jax.Array  # [L, E, I] their replacement activation (0: zero ablation)
-    shared_mult: jax.Array  # [L, I] shared hidden units (zero ablation)
+    shared_mult: jax.Array  # [L, I] shared hidden units
+    shared_mean: jax.Array  # [L, I] their replacement activation (0: zero ablation)
     slot_mult: jax.Array  # [L, K] per top-k rank (rank 0 = largest combine weight)
     slot_renorm: jax.Array  # [] 1: renormalize the kept combine weights to the original sum
     ve_head_mult: jax.Array  # [L, H] MLA value-embedding term per head (times ``sub_mult[:, SUB_VE]``)
@@ -147,6 +148,7 @@ def no_ablation() -> Ablation:
         neuron_mult=jnp.ones((NUM_LAYERS, NUM_EXPERTS, EXPERT_WIDTH), jnp.float32),
         neuron_mean=jnp.zeros((NUM_LAYERS, NUM_EXPERTS, EXPERT_WIDTH), jnp.float32),
         shared_mult=jnp.ones((NUM_LAYERS, SHARED_WIDTH), jnp.float32),
+        shared_mean=jnp.zeros((NUM_LAYERS, SHARED_WIDTH), jnp.float32),
         slot_mult=jnp.ones((NUM_LAYERS, TOP_K), jnp.float32),
         slot_renorm=jnp.zeros((), jnp.float32),
         ve_head_mult=jnp.ones((NUM_LAYERS, NUM_HEADS), jnp.float32),
@@ -367,7 +369,8 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, out: dict):
     routed = jnp.einsum("to,od->td", routed_latent.astype(x.dtype), mlp.w_latent_up, preferred_element_type=jnp.float32)
 
     shared_pre = jnp.einsum("td,di->ti", x_flat, shared.w_up, preferred_element_type=jnp.float32)
-    shared_act = jnp.square(jax.nn.relu(shared_pre)) * abl.shared_mult[layer][None, :]
+    s_keep = abl.shared_mult[layer][None, :]
+    shared_act = s_keep * jnp.square(jax.nn.relu(shared_pre)) + (1.0 - s_keep) * abl.shared_mean[layer][None, :]
     shared_out = jnp.einsum("ti,id->td", shared_act.astype(x.dtype), shared.w_down, preferred_element_type=jnp.float32)
 
     routed = _mix(abl.sub_mult[layer, SUB_ROUTED], routed, abl.sub_mean[layer, SUB_ROUTED]).reshape(b, s, d)
