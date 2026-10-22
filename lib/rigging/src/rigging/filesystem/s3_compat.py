@@ -45,6 +45,7 @@ from rigging.filesystem.listing_cache import DEFAULT_LISTINGS_EXPIRY_TIME, confi
 
 # Endpoint domains that reject path-style requests outright.
 VIRTUAL_HOST_ONLY_S3_DOMAINS = ("cwobject.com", "cwlota.com")
+TASK_S3_PROFILES_ENV = "MARIN_S3_CREDENTIAL_PROFILES"
 
 _S3_CONNECT_TIMEOUT = 30
 _S3_READ_TIMEOUT = 120
@@ -146,8 +147,8 @@ def fsspec_s3_conf(endpoint: str) -> dict:
 
 
 def credential_profile_for_bucket(bucket: str) -> dict:
-    """Resolve a bucket to its renewable AWS process-provider profile."""
-    routes = json.loads(os.environ.get("MARIN_S3_CREDENTIAL_PROFILES", "{}"))
+    """Read the task bootstrap's routing contract for independent SDK clients."""
+    routes = json.loads(os.environ.get(TASK_S3_PROFILES_ENV, "{}"))
     route = routes.get(bucket)
     if route is None:
         return {}

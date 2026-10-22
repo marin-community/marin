@@ -14,18 +14,18 @@ COREWEAVE_CLUSTERS = ("cw-us-east-02a", "cw-us-east-08a", "cw-rno2a", "cw-us-wes
 
 
 def test_node_agent_can_collect_and_publish_health_without_controller_authority():
-    account, role, binding = node_agent_rbac_manifests("iris")
+    rbac = node_agent_rbac_manifests("iris")
 
-    assert account["metadata"] == {"name": "iris-node-agent", "namespace": "iris"}
-    assert binding["subjects"] == [{"kind": "ServiceAccount", **account["metadata"]}]
-    assert binding["roleRef"] == {
+    assert rbac.service_account["metadata"] == {"name": "iris-node-agent", "namespace": "iris"}
+    assert rbac.cluster_role_binding["subjects"] == [{"kind": "ServiceAccount", **rbac.service_account["metadata"]}]
+    assert rbac.cluster_role_binding["roleRef"] == {
         "kind": "ClusterRole",
-        "name": role["metadata"]["name"],
+        "name": rbac.cluster_role["metadata"]["name"],
         "apiGroup": "rbac.authorization.k8s.io",
     }
     permissions = {
         (group, resource, verb)
-        for rule in role["rules"]
+        for rule in rbac.cluster_role["rules"]
         for group in rule["apiGroups"]
         for resource in rule["resources"]
         for verb in rule["verbs"]

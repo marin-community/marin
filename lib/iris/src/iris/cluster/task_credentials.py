@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Private task credential files and the AWS credential_process entry point."""
+"""Renew controller access tokens from a private attempt capability."""
 
 from functools import cache
 from pathlib import Path

@@ -24,6 +24,7 @@ from typing import NamedTuple
 
 from finelog.client.log_client import Table
 from google.protobuf import json_format
+from rigging.filesystem.s3_compat import TASK_S3_PROFILES_ENV
 from rigging.timing import Duration, Timestamp
 
 from iris.cluster import credential_process
@@ -171,6 +172,8 @@ _LABEL_ATTEMPT_ID = IRIS_ATTEMPT_ID_LABEL
 # Collision-resistant hash of the full (unsanitized) task_id; 16 hex chars (64 bits).
 _LABEL_TASK_HASH = "iris.task_hash"
 _LABEL_JOB_ID = "iris.job_id"
+_LABEL_TASK_SESSION = "iris.task-session"
+_ANNOTATION_SESSION_POD = "iris.session-pod"
 
 # Runtime identifier for pods created by K8sTaskProvider.
 _RUNTIME_LABEL_VALUE = IRIS_KUBERNETES_RUNTIME
@@ -2762,9 +2765,9 @@ class K8sTaskProvider:
                     "labels": {
                         _LABEL_MANAGED: "true",
                         _LABEL_TASK_HASH: _task_hash(run_req.task_id),
-                        "iris.task-session": "true",
+                        _LABEL_TASK_SESSION: "true",
                     },
-                    "annotations": {"iris.session-pod": pod_name},
+                    "annotations": {_ANNOTATION_SESSION_POD: pod_name},
                 },
                 "stringData": {
                     "credential_process.py": Path(credential_process.__file__).read_text(),
@@ -2822,7 +2825,7 @@ class K8sTaskProvider:
                                 "value": f"{TASK_CREDENTIAL_CACHE}/aws-config-{container['name']}",
                             },
                             {"name": "AWS_PROFILE", "value": next(iter(profiles))},
-                            {"name": "MARIN_S3_CREDENTIAL_PROFILES", "value": json.dumps(routing)},
+                            {"name": TASK_S3_PROFILES_ENV, "value": json.dumps(routing)},
                         ]
                     )
 
@@ -2987,13 +2990,13 @@ class K8sTaskProvider:
         gang_cutoff = now.add(Duration.from_seconds(-_GANG_GC_MAX_AGE_SECONDS))
         # A failed Pod create can leave the preceding Secret without an owner.
         # Allow in-flight creates ten minutes, then verify absence with a fresh get.
-        for secret in self.kubectl.list_json(K8sResource.SECRETS, labels={"iris.task-session": "true"}):
+        for secret in self.kubectl.list_json(K8sResource.SECRETS, labels={_LABEL_TASK_SESSION: "true"}):
             metadata = secret["metadata"]
             created = metadata.get("creationTimestamp")
             if metadata.get("ownerReferences") or not created:
                 continue
             age = now.epoch_seconds() - parse_k8s_timestamp(created).timestamp()
-            pod_name = metadata["annotations"]["iris.session-pod"]
+            pod_name = metadata["annotations"][_ANNOTATION_SESSION_POD]
             if age > 600 and self.kubectl.get_json(K8sResource.PODS, pod_name) is None:
                 self.kubectl.delete(K8sResource.SECRETS, metadata["name"], wait=False)
 

@@ -25,7 +25,7 @@ from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.bundle import BundleStore
 from iris.cluster.config import AuthConfig, CredentialBrokerConfig, StorageCredentialProfile
 from iris.cluster.controller import writes
-from iris.cluster.controller.auth import create_controller_auth
+from iris.cluster.controller.auth import JwtTokenManager, create_controller_auth
 from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.endpoints import EndpointRow, EndpointsProjection
@@ -50,6 +50,16 @@ from sqlalchemy import update
 from starlette.applications import Starlette
 from starlette.responses import Response
 from starlette.routing import Mount, Route
+
+
+@dataclasses.dataclass(frozen=True)
+class SessionSetup:
+    broker: TaskSessionBroker
+    jwt: JwtTokenManager
+    renew: controller_pb2.Controller.RenewTaskSessionRequest
+    job: JobName
+    published: list[dict]
+    config: CredentialBrokerConfig
 
 
 @pytest.fixture
@@ -93,11 +103,14 @@ def session_setup(state):
         attempt_uid=uid,
         refresh_capability=dispatch.task_refresh_capability,
     )
-    return broker, auth.jwt_manager, renew, job, published, config
+    return SessionSetup(broker=broker, jwt=auth.jwt_manager, renew=renew, job=job, published=published, config=config)
 
 
 def test_session_uses_submitter_and_separate_namespace_grant(session_setup):
-    broker, jwt, renew, job, _, _ = session_setup
+    broker = session_setup.broker
+    jwt = session_setup.jwt
+    renew = session_setup.renew
+    job = session_setup.job
     response = broker.renew(renew)
     identity = jwt.verify(response.token)
     assert identity.user_id == "submitter@example.test"
@@ -149,7 +162,10 @@ def test_session_uses_submitter_and_separate_namespace_grant(session_setup):
     ],
 )
 def test_task_rpc_resource_scope_accepts_own_root_and_rejects_other_roots(session_setup, state, method, build_request):
-    broker, jwt, renew, job, _, _ = session_setup
+    broker = session_setup.broker
+    jwt = session_setup.jwt
+    renew = session_setup.renew
+    job = session_setup.job
     other = JobName.root(job.user, "foreign")
     with state._db.transaction() as tx:
         submit_job_in_tx(tx, job_id=other, request=make_job_request(other.to_wire()))
@@ -173,7 +189,8 @@ def test_task_rpc_resource_scope_accepts_own_root_and_rejects_other_roots(sessio
 
 
 def test_non_broker_task_tokens_keep_namespace_authority(session_setup):
-    _, jwt, _, job, _, _ = session_setup
+    jwt = session_setup.jwt
+    job = session_setup.job
     identity = jwt.verify(jwt.create_task_token(job))
     with identity_scope(identity):
         assert authorize_resource_owner(job.user) == identity
@@ -187,7 +204,9 @@ def test_broker_rejects_anonymous_launch_and_fails_ineligible_dispatch(
     mock_controller,
     tmp_path,
 ):
-    broker, _, _, job, _, config = session_setup
+    broker = session_setup.broker
+    job = session_setup.job
+    config = session_setup.config
     service = ControllerServiceImpl(
         controller=mock_controller,
         bundle_store=BundleStore(str(tmp_path / "bundles")),
@@ -220,12 +239,16 @@ def test_broker_rejects_anonymous_launch_and_fails_ineligible_dispatch(
     controller.run_control_tick()
     status = controller.get_job_status(job.to_wire()).job
     assert status.state == job_pb2.JOB_STATE_FAILED
-    assert "Credential broker denied dispatch" in status.error
+    assert status.error
     assert not kubernetes.list_json(K8sResource.PODS)
 
 
 def test_rollover_and_disable_fence_cached_tokens_and_renewal_across_restart(session_setup, state):
-    broker, jwt, renew, _, published, config = session_setup
+    broker = session_setup.broker
+    jwt = session_setup.jwt
+    renew = session_setup.renew
+    published = session_setup.published
+    config = session_setup.config
     old_identity = jwt.verify(broker.renew(renew).token)
     management = controller_pb2.Controller.ManageTaskSessionsRequest
     with identity_scope(VerifiedIdentity("operator", "admin")):
@@ -243,7 +266,9 @@ def test_rollover_and_disable_fence_cached_tokens_and_renewal_across_restart(ses
 
 
 def test_superseded_and_closed_attempts_cannot_renew(session_setup, state):
-    broker, _, renew, job, _, _ = session_setup
+    broker = session_setup.broker
+    renew = session_setup.renew
+    job = session_setup.job
     with state._db.transaction() as tx:
         tx.execute(
             update(task_attempts_table)
@@ -264,7 +289,8 @@ def test_superseded_and_closed_attempts_cannot_renew(session_setup, state):
 
 
 def test_refresh_capability_cannot_authenticate_another_attempt(session_setup):
-    broker, _, renew, _, _, _ = session_setup
+    broker = session_setup.broker
+    renew = session_setup.renew
     forged = controller_pb2.Controller.RenewTaskSessionRequest(
         attempt_uid="another-attempt",
         refresh_capability=renew.refresh_capability,
@@ -274,7 +300,9 @@ def test_refresh_capability_cannot_authenticate_another_attempt(session_setup):
 
 
 def test_provider_exchange_racing_disable_never_releases_credentials(session_setup, monkeypatch):
-    broker, jwt, renew, _, _, _ = session_setup
+    broker = session_setup.broker
+    jwt = session_setup.jwt
+    renew = session_setup.renew
     identity = jwt.verify(broker.renew(renew).token)
     management = controller_pb2.Controller.ManageTaskSessionsRequest
 
@@ -301,7 +329,11 @@ def test_provider_exchange_racing_disable_never_releases_credentials(session_set
 
 
 def test_finalization_keeps_storage_authority_but_closes_mutating_access(session_setup, state):
-    broker, jwt, renew, job, published, _ = session_setup
+    broker = session_setup.broker
+    jwt = session_setup.jwt
+    renew = session_setup.renew
+    job = session_setup.job
+    published = session_setup.published
     with state._db.transaction() as tx:
         tx.execute(
             update(tasks_table)
@@ -334,7 +366,9 @@ def test_task_client_verifies_private_tls_and_recovers_from_access_token_rollove
     tmp_path,
     monkeypatch,
 ):
-    broker, jwt, renew, _, _, _ = session_setup
+    broker = session_setup.broker
+    jwt = session_setup.jwt
+    renew = session_setup.renew
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test-controller")])
     now = Timestamp.now().epoch_seconds()

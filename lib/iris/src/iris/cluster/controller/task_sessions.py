@@ -34,6 +34,7 @@ from iris.cluster.controller.schema import (
     tasks_table,
 )
 from iris.cluster.controller.storage_credentials import StorageCredentials, exchange_credentials
+from iris.cluster.credential_process import REFRESH_MARGIN
 from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -149,9 +150,11 @@ class TaskSessionBroker:
                     scope == "job" and (job_id == target or job_id.startswith(target + "/")) for scope, target in blocks
                 )
             )
-            finalized_at = row.finalizing_at_ms
+            finalization_started_at = row.finalizing_at_ms
             deadline = (
-                finalized_at.epoch_seconds() + self._finalization_timeout if finalized_at is not None else 253402300799.0
+                finalization_started_at.epoch_seconds() + self._finalization_timeout
+                if finalization_started_at is not None
+                else 253402300799.0
             )
             if (
                 blocked
@@ -167,7 +170,7 @@ class TaskSessionBroker:
                 row.job_id,
                 row.root_job_id,
                 deadline,
-                finalized_at is not None or row.status_message == TASK_OUTPUT_FINALIZING_STATUS,
+                finalization_started_at is not None or row.status_message == TASK_OUTPUT_FINALIZING_STATUS,
             )
         return result
 
@@ -394,7 +397,8 @@ class TaskSessionBroker:
         with self._lock:
             credentials = self._cache.get(key)
         needs_exchange = (
-            credentials is None or credentials.expires_at.epoch_seconds() <= Timestamp.now().epoch_seconds() + 900
+            credentials is None
+            or credentials.expires_at.epoch_seconds() <= Timestamp.now().epoch_seconds() + REFRESH_MARGIN
         )
         if needs_exchange:
             credentials = exchange_credentials(profile, identity.user_id)

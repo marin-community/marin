@@ -43,7 +43,11 @@ from iris.cluster.platforms.k8s.constants import (
     EGRESS_NETWORK_POLICY_PREFIX,
     NVIDIA_GPU_TOLERATION,
 )
-from iris.cluster.platforms.k8s.credential_manifests import controller_tls_sidecar
+from iris.cluster.platforms.k8s.credential_manifests import (
+    CONTROLLER_TLS_CONFIG_MAP,
+    TASK_SESSION_ROLE_NAME,
+    controller_tls_sidecar,
+)
 from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
     build_workload_priority_class,
@@ -373,7 +377,7 @@ def _build_controller_deployment(
         pod["volumes"].extend(
             [
                 {"name": "controller-tls", "secret": {"secretName": tls_secret}},
-                {"name": "tls-proxy-config", "configMap": {"name": "iris-controller-tls-proxy"}},
+                {"name": "tls-proxy-config", "configMap": {"name": CONTROLLER_TLS_CONFIG_MAP}},
             ]
         )
     return {
@@ -523,9 +527,9 @@ def build_egress_network_policy(
 
     Both policies deny all ingress and allow egress to DNS in kube-system.
     INTERNET adds every IPv4 address outside ``EGRESS_BLOCKED_CIDRS`` and
-    ``service_cidr``. Neither mode reaches the controller, finelog, worker RPC
-    ports, other pods, or the metadata server. ``kubectl exec`` goes through
-    the kubelet and is unaffected.
+    ``service_cidr``. With ``controller_tls_port``, both policies also allow
+    controller TLS for trusted bundle staging. Finelog, worker RPC ports, other
+    pods and metadata stay blocked. ``kubectl exec`` uses the kubelet.
     """
     if network is TaskNetwork.CLUSTER:
         raise ValueError("cluster-network pods carry no egress NetworkPolicy")
@@ -737,7 +741,7 @@ class K8sControllerProvider:
                 {
                     "apiVersion": "v1",
                     "kind": "ConfigMap",
-                    "metadata": {"name": "iris-controller-tls-proxy", "namespace": self._namespace},
+                    "metadata": {"name": CONTROLLER_TLS_CONFIG_MAP, "namespace": self._namespace},
                     "data": {"nginx.conf": proxy_config},
                 }
             )
@@ -998,8 +1002,8 @@ class K8sControllerProvider:
             missing.append(f"ClusterRoleBinding/{role_name}")
         if config.credential_broker is not None:
             for kind in (K8sResource.ROLES, K8sResource.ROLE_BINDINGS):
-                if self._kubectl.get_json(kind, "iris-task-sessions") is None:
-                    missing.append(f"{kind.kind}/iris-task-sessions")
+                if self._kubectl.get_json(kind, TASK_SESSION_ROLE_NAME) is None:
+                    missing.append(f"{kind.kind}/{TASK_SESSION_ROLE_NAME}")
             certificate = self._kubectl.get_json(K8sResource.SECRETS, config.credential_broker.tls_secret)
             if certificate is None or not all(
                 certificate.get("data", {}).get(key) for key in ("ca.crt", "tls.crt", "tls.key")

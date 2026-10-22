@@ -125,32 +125,32 @@ class IrisRbac(pulumi.ComponentResource):
                 opts=child_opts(depends_on=[session_role, service_account]),
             )
 
-        agent_account_manifest, agent_role_manifest, agent_binding_manifest = node_agent_rbac_manifests(args.namespace)
+        agent_rbac = node_agent_rbac_manifests(args.namespace)
         agent_account = k8s.core.v1.ServiceAccount(
             "node-agent-service-account",
-            metadata=agent_account_manifest["metadata"],
+            metadata=agent_rbac.service_account["metadata"],
             opts=child_opts(depends_on=[namespace]),
         )
         imports.register(
             agent_account,
             parent=self,
-            provider_id=f"{args.namespace}/{agent_account_manifest['metadata']['name']}",
+            provider_id=f"{args.namespace}/{agent_rbac.service_account['metadata']['name']}",
         )
         agent_role = k8s.rbac.v1.ClusterRole(
             "node-agent-cluster-role",
-            metadata=agent_role_manifest["metadata"],
-            rules=agent_role_manifest["rules"],
+            metadata=agent_rbac.cluster_role["metadata"],
+            rules=agent_rbac.cluster_role["rules"],
             opts=child_opts(),
         )
-        imports.register(agent_role, parent=self, provider_id=agent_role_manifest["metadata"]["name"])
+        imports.register(agent_role, parent=self, provider_id=agent_rbac.cluster_role["metadata"]["name"])
         agent_binding = k8s.rbac.v1.ClusterRoleBinding(
             "node-agent-cluster-role-binding",
-            metadata=agent_binding_manifest["metadata"],
-            role_ref=agent_binding_manifest["roleRef"],
-            subjects=agent_binding_manifest["subjects"],
+            metadata=agent_rbac.cluster_role_binding["metadata"],
+            role_ref=agent_rbac.cluster_role_binding["roleRef"],
+            subjects=agent_rbac.cluster_role_binding["subjects"],
             opts=child_opts(depends_on=[agent_role, agent_account]),
         )
-        imports.register(agent_binding, parent=self, provider_id=agent_binding_manifest["metadata"]["name"])
+        imports.register(agent_binding, parent=self, provider_id=agent_rbac.cluster_role_binding["metadata"]["name"])
         self.register_outputs({})
 
 

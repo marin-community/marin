@@ -138,8 +138,7 @@ def _request_is_authenticated(policy: RequestAuthPolicy, request: Request) -> bo
     return True
 
 
-# Every control RPC is authenticated: users reach the controller only through IAP,
-# which authenticates each request at the edge. No RPC is exempt from the policy.
+# Renewal authenticates its separate attempt capability inside the broker.
 _UNAUTHENTICATED_RPCS: frozenset[str] = frozenset({"RenewTaskSession"})
 
 
@@ -477,9 +476,8 @@ class ControllerDashboard:
 
     @public
     def _bundle_download(self, request: Request) -> Response:
-        # Bundle IDs are SHA-256 hashes (256 bits of entropy) serving as
-        # capability URLs. Workers and K8s init-containers fetch via stdlib
-        # urlopen with no auth header support.
+        # Broker tasks authenticate against their job template. Other deployments
+        # retain content-addressed bundle URLs for worker bootstrap.
         bundle_id = request.path_params["bundle_id"]
         denied = self._download_authorization(request, bundle_id)
         if denied is not None:

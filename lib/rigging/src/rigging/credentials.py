@@ -167,8 +167,8 @@ def credentials_for(
     """Assemble the :class:`ClientCredentials` for ``cluster`` from the standard sources.
 
     ``auth`` is the cluster's resolved auth shape (provider + IAP params). The IAP
-    edge provider is the sole per-request auth (``Proxy-Authorization``); the
-    ``Authorization`` bearer is empty unless ``$MARIN_CLUSTER_TOKEN`` injects one.
+    edge provider supplies ``Proxy-Authorization``. ``Authorization`` uses the
+    cached cluster token, overridden by ``$MARIN_CLUSTER_TOKEN`` when set.
     """
     override = os.environ.get(token_env)
     record = load_credentials(cluster)

@@ -3,7 +3,10 @@
 
 """Tests for pod manifest building: naming, env vars, volumes, constraints, init containers."""
 
+import configparser
 import json
+import os
+import subprocess
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -58,7 +61,9 @@ LABEL_TASK_ID = "iris.task_id"
 
 @pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_SANDBOX])
 @pytest.mark.parametrize("storage_granted", [True, False])
-def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_environment(profile, storage_granted):
+def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_environment(
+    profile, storage_granted, tmp_path
+):
     k8s = InMemoryK8sService(namespace="iris")
     config = pod_config(
         controller_address="https://iris-controller-svc.iris.svc.cluster.local:10000",
@@ -69,9 +74,15 @@ def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_envir
     request.container_profile = profile
     request.bundle_id = "bundle-sha"
     request.task_refresh_capability = "private-attempt-refresh-capability"
+    request.entrypoint.run_command.argv[:] = ["bash", "-c", "printf entrypoint-reached"]
     request.task_storage_profiles_json = json.dumps(
         {
-            "training": {"endpoint": "https://cwobject.com", "region": "US-EAST-02A", "buckets": ["training"]},
+            "training": {
+                "endpoint": "https://cwobject.com",
+                "region": "US-EAST-02A",
+                "buckets": ["training"],
+                "addressing_style": "virtual",
+            },
         }
         if storage_granted
         else {}
@@ -87,7 +98,6 @@ def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_envir
     assert request.task_refresh_capability in secret["stringData"]["session.json"]
     assert secret["metadata"]["ownerReferences"][0]["uid"] == pod["metadata"]["uid"]
     task = next(container for container in pod["spec"]["containers"] if container["name"] == "task")
-    assert ("--write-aws-config" in task["command"][2]) == storage_granted
     mounts = {mount["name"] for mount in task["volumeMounts"]}
     assert ("task-session" in mounts) == (profile != job_pb2.CONTAINER_PROFILE_SANDBOX)
     if profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
@@ -97,6 +107,32 @@ def test_broker_credentials_use_pod_owned_secret_without_leaking_into_task_envir
     assert all(
         "task-session" in {m["name"] for m in container["volumeMounts"]} for container in pod["spec"]["initContainers"]
     )
+    # Map projected files and container mounts into the test directory, then
+    # exercise credential bootstrap before the user entrypoint.
+    host_mounts = {
+        "/app": tmp_path / "workdir",
+        "/var/run/iris/credentials": tmp_path / "credentials",
+        "/var/run/iris/credential-cache": tmp_path / "cache",
+    }
+    for destination in host_mounts.values():
+        destination.mkdir()
+    for filename, content in secret["stringData"].items():
+        (host_mounts["/var/run/iris/credentials"] / filename).write_text(content)
+    environment = {"PATH": os.environ["PATH"], "IRIS_VENV": str(tmp_path / "unused-venv")}
+    environment.update({entry["name"]: entry["value"] for entry in task["env"] if "value" in entry})
+    script = task["command"][2]
+    for mounted, destination in host_mounts.items():
+        script = script.replace(mounted, str(destination))
+        environment = {name: value.replace(mounted, str(destination)) for name, value in environment.items()}
+    result = subprocess.run(
+        ["bash", "-ec", script], env=environment, capture_output=True, text=True, check=True, timeout=10
+    )
+    assert result.stdout == "entrypoint-reached"
+    if storage_granted and profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+        aws_config = configparser.ConfigParser()
+        aws_config.read(environment["AWS_CONFIG_FILE"])
+        assert aws_config["profile training"]["region"] == "US-EAST-02A"
+        assert aws_config["profile training"]["endpoint_url"] == "https://cwobject.com"
 
 
 # These are Kubernetes wire keys, not Iris implementation symbols. Keep the

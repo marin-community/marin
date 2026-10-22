@@ -3,6 +3,8 @@
 
 """Define Kubernetes namespace and RBAC manifests for Iris services."""
 
+from typing import NamedTuple
+
 NODE_AGENT_SERVICE_ACCOUNT = "iris-node-agent"
 
 # Permissions the iris-controller ServiceAccount needs at runtime.
@@ -106,7 +108,13 @@ def node_agent_cluster_role_name(namespace: str) -> str:
     return f"{NODE_AGENT_SERVICE_ACCOUNT}-{namespace}"
 
 
-def node_agent_rbac_manifests(namespace: str) -> tuple[dict, dict, dict]:
+class NodeAgentRbac(NamedTuple):
+    service_account: dict
+    cluster_role: dict
+    cluster_role_binding: dict
+
+
+def node_agent_rbac_manifests(namespace: str) -> NodeAgentRbac:
     """Grant Kubernetes node collection and health publication separately."""
     role_name = node_agent_cluster_role_name(namespace)
     role = {
@@ -122,7 +130,7 @@ def node_agent_rbac_manifests(namespace: str) -> tuple[dict, dict, dict]:
             {"apiGroups": [""], "resources": ["nodes/metrics"], "verbs": ["get"]},
         ],
     }
-    return (
+    return NodeAgentRbac(
         service_account_manifest(namespace, NODE_AGENT_SERVICE_ACCOUNT),
         role,
         cluster_role_binding_manifest(role_name, namespace, NODE_AGENT_SERVICE_ACCOUNT),
