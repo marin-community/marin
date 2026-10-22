@@ -43,6 +43,7 @@ STAGE0_OPTIMIZER = AxolotlOptimizer(
     adam_beta2=0.95,
     lr_scheduler="cosine",
     warmup_steps=0,
+    max_grad_norm=1.0,
 )
 
 # The #6839 canary conversation: reasoning content, structured tool calls, a tool
@@ -139,7 +140,23 @@ def test_seed_is_required_and_optimizers_reject_silent_defaults():
         AxolotlSpec(**kwargs)  # no seed default
     with pytest.raises(ValueError, match="positive"):
         AxolotlOptimizer(
-            learning_rate="0", weight_decay=0.0, adam_beta1=0.9, adam_beta2=0.95, lr_scheduler="cosine", warmup_steps=0
+            learning_rate="0",
+            weight_decay=0.0,
+            adam_beta1=0.9,
+            adam_beta2=0.95,
+            lr_scheduler="cosine",
+            warmup_steps=0,
+            max_grad_norm=1.0,
+        )
+    with pytest.raises(ValueError, match="max_grad_norm"):
+        AxolotlOptimizer(
+            learning_rate="5e-6",
+            weight_decay=0.0,
+            adam_beta1=0.9,
+            adam_beta2=0.95,
+            lr_scheduler="cosine",
+            warmup_steps=0,
+            max_grad_norm=0.0,
         )
     with pytest.raises(ValueError, match=r"betas"):
         AxolotlOptimizer(
@@ -149,6 +166,7 @@ def test_seed_is_required_and_optimizers_reject_silent_defaults():
             adam_beta2=0.95,
             lr_scheduler="cosine",
             warmup_steps=0,
+            max_grad_norm=1.0,
         )
 
 

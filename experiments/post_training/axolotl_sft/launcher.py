@@ -68,6 +68,7 @@ class AxolotlOptimizer:
     adam_beta2: float
     lr_scheduler: str
     warmup_steps: int
+    max_grad_norm: float
 
     def __post_init__(self) -> None:
         # axolotl's YAML takes the learning rate as a string like "5e-6"; float() reads it back.
@@ -77,6 +78,8 @@ class AxolotlOptimizer:
             raise ValueError("adam betas must lie in [0, 1)")
         if self.warmup_steps < 0:
             raise ValueError("warmup_steps must be non-negative")
+        if self.max_grad_norm <= 0:
+            raise ValueError("max_grad_norm must be positive")
 
 
 @dataclass(frozen=True)
@@ -171,6 +174,7 @@ def axolotl_config(spec: AxolotlSpec, *, scratch_output_dir: str) -> dict[str, A
         "weight_decay": spec.optimizer.weight_decay,
         "lr_scheduler": spec.optimizer.lr_scheduler,
         "warmup_steps": spec.optimizer.warmup_steps,
+        "max_grad_norm": spec.optimizer.max_grad_norm,
         "seed": spec.seed,
         "logging_steps": 1,
         # Train-equals-serve: the shared template, inline.
