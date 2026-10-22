@@ -4,6 +4,7 @@
 """Test Evalchemy configuration, command construction, and child cancellation."""
 
 import base64
+import http.client
 import io
 import json
 import os
@@ -705,6 +706,7 @@ def test_model_args_carry_served_max_length():
         urllib.error.HTTPError("http://model/v1/models", 503, "unavailable", {}, None),
         urllib.error.URLError("connection refused"),
         TimeoutError("metadata request timed out"),
+        http.client.IncompleteRead(b'{"data":', 100),
     ],
 )
 def test_served_max_length_recovers_from_transient_lookup_failure(monkeypatch, error):

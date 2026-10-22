@@ -13,6 +13,7 @@ writes result documents and normalized sample rows directly to FineStore tables 
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import os
 import subprocess
@@ -130,7 +131,7 @@ def served_max_length(base_url: str) -> int | None:
         retryable=lambda exc: (
             exc.code in _RETRYABLE_HTTP_STATUS
             if isinstance(exc, urllib.error.HTTPError)
-            else isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+            else isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead))
         ),
         max_attempts=_MODEL_LOOKUP_ATTEMPTS,
         operation="read served model context length",
