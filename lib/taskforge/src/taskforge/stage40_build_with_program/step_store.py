@@ -45,7 +45,7 @@ from rigging.filesystem.storage_path import StoragePath
 from taskforge.content_hash import canonical_json, digest, sha256_hex
 from taskforge.ledger.records import FILE_SAFE, check_workpiece_id
 
-SDK_VERSION = "taskforge.builder/13"
+SDK_VERSION = "taskforge.builder/14"
 """Bump when a library change alters what an unchanged step would produce."""
 
 

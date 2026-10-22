@@ -36,6 +36,8 @@ from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
+from taskforge.spec import draft
+from taskforge.spec.decision import DecisionGrader, task_decision_grader
 from taskforge.stage10_proposal.model import CompositePart, ResearchNeed, SolverMachine, TaskProposal, Verification
 from taskforge.stage30_author.author import VerificationChange
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
@@ -51,10 +53,17 @@ from taskforge.stage40_build_with_program.run import (
     run_program,
     step_output,
 )
-from taskforge.stage40_build_with_program.sdk import research, structured
+from taskforge.stage40_build_with_program.sandbox_effects import calibrate_decision_grader
+from taskforge.stage40_build_with_program.sdk import FoolingKind, research, structured
 from taskforge.stage40_build_with_program.services import AgentLimits
 from taskforge.stage40_build_with_program.step_store import CacheStatus, RLEnvBuildStepStore
+from tests.spec.fake_decision import FakeDecisionClient
 from tests.stage40_build_with_program.conftest import (
+    DECISION_FLUENT_WRONG,
+    DECISION_HEDGED,
+    DECISION_REFERENCE,
+    DECISION_RUBRIC,
+    DECISION_VARIANTS,
     FACTORIES,
     SAMPLING,
     WORKPIECE,
@@ -605,3 +614,55 @@ async def test_a_verification_change_with_the_unrevised_proposal_is_refused_befo
         await build(tmp_path, declared_code, services, verification_change=change)
 
     assert not (tmp_path / "store").exists()
+
+
+@rl_env_build_step
+async def uncalibrated_grader(context: RLEnvBuildContext) -> DecisionGrader:
+    return draft.decision_grader(DECISION_RUBRIC, DECISION_REFERENCE)
+
+
+@rl_env_build_step
+async def calibrated_grader(context: RLEnvBuildContext) -> DecisionGrader:
+    calibration = await calibrate_decision_grader(
+        context,
+        draft.decision_grader(DECISION_RUBRIC, DECISION_REFERENCE),
+        DECISION_VARIANTS,
+        fluent_wrong_reply=DECISION_FLUENT_WRONG,
+        hedged_reply=DECISION_HEDGED,
+    )
+    assert calibration.problem is None, calibration.problem
+    return calibration.grader
+
+
+def decision_task(workpiece_id: str, grader: DecisionGrader) -> TaskSpec:
+    source = Source(dataset="taskforge", revision="test", row=workpiece_id, importer_revision="test")
+    return draft.assemble(
+        workpiece_id, "Multiply 6 by 7.", AnswerType.TEXT, PlainText(), grader, source, environment=None
+    )
+
+
+@rl_env_build_sink
+async def uncalibrated_task(context: RLEnvBuildContext, uncalibrated_grader: DecisionGrader) -> TaskSpec:
+    return decision_task(context.workpiece_id, uncalibrated_grader)
+
+
+@rl_env_build_sink
+async def calibrated_task(context: RLEnvBuildContext, calibrated_grader: DecisionGrader) -> TaskSpec:
+    return decision_task(context.workpiece_id, calibrated_grader)
+
+
+async def test_a_decision_grader_ships_only_through_the_calibration_of_its_fooling_answers(tmp_path, proposal, services):
+    """A program may build a decision grader itself, but run_build refuses one that skipped the calibration."""
+    deciding_proposal = replace(proposal, header=replace(proposal.header, verification=Verification.DECISION_MODEL))
+    declared = declaring(deciding_proposal, SolverMachine.NONE)
+    reads = FakeDecisionClient({DECISION_REFERENCE: 3.9, **dict.fromkeys(DECISION_VARIANTS, 3.2)})
+    deciding = replace(services, decision=reads)
+
+    with pytest.raises(BuildFailure) as refused:
+        await build(tmp_path, declared, deciding, rl_env_build_program(uncalibrated_grader, sink=uncalibrated_task))
+    built = await build(tmp_path, declared, deciding, rl_env_build_program(calibrated_grader, sink=calibrated_task))
+
+    assert refused.value.step == "grader" and "calibrate_decision_grader" in refused.value.message
+    shipped = task_decision_grader(built.task)
+    assert shipped is not None and set(shipped.fooling) == {kind.value for kind in FoolingKind}
+    assert (tmp_path / "round" / DRAFT_DIR).exists()

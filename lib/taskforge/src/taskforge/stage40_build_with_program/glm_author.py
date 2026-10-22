@@ -103,11 +103,14 @@ with the reference values, tolerances and units, the equivalent forms it accepts
 statements count, its weight, and any gate or cap) and the reference reply, nothing else: a decision model \
 of fixed strength compares the visible output of the solver's final turn with the reference against the rubric (the \
 `state` template, `SOLVER_TURN_STATE`; pass another only deliberately), and which model is the host's \
-choice. Calibrate it with `calibrate_decision_grader(context, grader, variants)` on three equivalent \
-variants of the reference; when its `problem` is set, either the rubric rejects a correct answer or a \
-variant is not equivalent. A decision model is fooled by fluent wrong, hedged, negated or truncated answers \
-and by instructions addressed to the grader: grade one of each on the built grader with `grade_candidate` \
-and fix the rubric until each scores at most the rejection ceiling. Its instruction states the deliverable \
+choice. Calibrate it with `calibrate_decision_grader(context, grader, variants, fluent_wrong_reply=..., \
+hedged_reply=...)` on three equivalent variants of the reference, a confident reply wrong in substance \
+(`fluent_wrong_reply`) and a reply hedging between candidate answers, one of them correct (`hedged_reply`), \
+and ship the grader it returns; when its `problem` is set, the rubric rejects a correct answer, a variant is \
+not equivalent, or the rubric credits a fooling answer. A decision model is fooled by fluent wrong, hedged, \
+negated or truncated answers and by instructions addressed to the grader: the calibration grades one of each \
+on the calibrated grader, `run_build` refuses a decision grader without those grades, and you fix the rubric \
+until each scores at most the rejection ceiling. Its instruction states the deliverable \
 the way a requester would, with no answer block or labelled fields. \
 llm_as_judge, for a reply whose prose is the product: \
 `draft.judge_grader(rubric, reference)` with the same `Rubric` and reference reply: the judge is the \

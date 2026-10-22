@@ -334,7 +334,11 @@ revision spent and no author adapting the task to the host.
 `grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
 sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
 grader that rejects its own reference, returns a reward outside its score range, or credits the
-empty answer above its declared `rejection_ceiling` is a build failure. A reference whose grader
+empty answer above its declared `rejection_ceiling` is a build failure. A decision-model grader is
+calibrated instead (`calibrate_decision_grader`): its reference and three equivalent variants set the bar,
+five fooling answers (fluent wrong, hedged, retracted, truncated, and a wrong answer addressed to the grader)
+must each score at most the rejection ceiling under it, and `run_build` refuses any program's task whose
+decision grader lacks those reads (`check_decision_grader`). A reference whose grader
 timed out on both of `grade_candidate`'s gradings raises `BuildExpired` (`GRADER`) at once instead of
 going back to the model, and the driver holds the workpiece as abandoned. The `Grader` it returns
 holds the reference answer, the ceiling (the most a submission wrong in substance can earn under

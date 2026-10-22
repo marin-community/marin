@@ -28,7 +28,8 @@ adapter where a TaskSpec is built: the grader travels as a ``NoGrader`` whose ``
 ``task_decision_grader`` reads it back.
 
 The acceptance level (the bar) is set at build time from the reads of the reference and its equivalent
-variants by ``known_correct_check``, whose one caller is ``sandbox_effects.calibrate_decision_grader``.
+variants by ``known_correct_check``, whose one caller is ``sandbox_effects.calibrate_decision_grader``. The
+same calibration then reads the fooling answers under that bar and keeps their levels in ``fooling``.
 """
 
 import asyncio
@@ -132,6 +133,8 @@ class DecisionGrader(BaseModel):
         state: The decision model's state, key by key (``SOLVER_TURN_STATE`` unless a program sets another).
         acceptance_level: The calibrated bar on the 0-4 level scale, or ``None`` for ``PARTIAL_LEVEL``.
         calibration: The level each known-correct candidate read when the bar was set, by name.
+        fooling: The level each fooling answer read under the calibrated bar, by kind
+            (``stage40_build_with_program.sdk.FoolingKind``); empty until calibrated.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -142,6 +145,7 @@ class DecisionGrader(BaseModel):
     state: dict[str, StateSource] = Field(default_factory=lambda: dict(SOLVER_TURN_STATE))
     acceptance_level: float | None
     calibration: dict[str, float]
+    fooling: dict[str, float]
 
     @model_validator(mode="after")
     def consistent(self) -> Self:
@@ -153,8 +157,8 @@ class DecisionGrader(BaseModel):
             raise ValueError("the decision model's state keys must be non-empty")
         if self.acceptance_level is not None and not 0 <= self.acceptance_level <= EQUIVALENT_LEVEL:
             raise ValueError(f"acceptance_level lies in [0, {EQUIVALENT_LEVEL}], got {self.acceptance_level}")
-        if any(not 0 <= level <= MAX_LEVEL for level in self.calibration.values()):
-            raise ValueError(f"calibration levels lie in [0, {MAX_LEVEL}]")
+        if any(not 0 <= level <= MAX_LEVEL for level in (*self.calibration.values(), *self.fooling.values())):
+            raise ValueError(f"calibration and fooling levels lie in [0, {MAX_LEVEL}]")
         return self
 
     @property

@@ -18,7 +18,8 @@ served tokens (``ModelRequest.continuation``) by one token.
 A decision-model grader (``spec.decision``) is graded as validation grades it: the engine runs the candidate
 with the grader swapped to ``NoGrader``, and the host's decision client (``RLEnvBuildServices.decision``)
 grades the final conversation (``decision.run_decision_trial``). ``calibrate_decision_grader`` reads the
-reference and its equivalent variants that way and sets the grader's bar.
+reference and its equivalent variants that way and sets the grader's bar, then reads the fooling answers
+(``sdk.fooling_negatives``) under it and refuses a grader that credits one.
 
 ``build_machine`` prepares a machine through RolloutEngine's own ``_prepare_machine``, so files, setup
 commands, the execution user and the startup deadline behave as in a task attempt. RolloutEngine's
@@ -69,7 +70,13 @@ from taskforge.stage40_build_with_program.infrastructure import (
     infrastructure_failure,
 )
 from taskforge.stage40_build_with_program.outputs import GradedCandidate
-from taskforge.stage40_build_with_program.sdk import ANSWER_FORMAT, GRADER_TIMEOUT, graded_candidate
+from taskforge.stage40_build_with_program.sdk import (
+    ANSWER_FORMAT,
+    GRADER_TIMEOUT,
+    fooling_negatives,
+    fooling_problem,
+    graded_candidate,
+)
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 
@@ -96,6 +103,11 @@ IMAGE_REPOSITORY_PREFIX = "taskforge-tasks"
 """Registry repository under which ``publish_image`` pushes a workpiece's task image."""
 CALIBRATION_INSTRUCTION = "(instruction)"
 """The instruction of the provisional task ``calibrate_decision_grader`` reads its candidates against."""
+KNOWN_CORRECT_ADVICE = (
+    "Either the rubric rejects a correct answer (state the equivalent forms it must accept) or a variant is not "
+    "equivalent to the reference (replace it)"
+)
+"""How to fix a grader whose known-correct candidates read below "partially matches"."""
 
 
 @asynccontextmanager
@@ -251,9 +263,10 @@ class DecisionCalibration:
 
     Attributes:
         grader: The calibrated grader, or the grader as given when it is refused.
-        problem: Why the known-correct candidates refuse it (``decision.known_correct_check``), or ``None``.
-        candidates: Every candidate read, in order (the reference, the variants, then the empty answer when
-            the grader is accepted), for ``Grader.prototyped``.
+        problem: Why the known-correct candidates (``decision.known_correct_check``) or the fooling answers
+            (``sdk.fooling_problem``) refuse it, or ``None``.
+        candidates: Every candidate read, in order (the reference, the variants, then, once the bar is set, the
+            empty answer and the fooling answers), for ``Grader.prototyped``.
     """
 
     grader: DecisionGrader
@@ -262,17 +275,31 @@ class DecisionCalibration:
 
 
 async def calibrate_decision_grader(
-    context: RLEnvBuildContext, grader: DecisionGrader, variants: Sequence[str]
+    context: RLEnvBuildContext,
+    grader: DecisionGrader,
+    variants: Sequence[str],
+    *,
+    fluent_wrong_reply: str,
+    hedged_reply: str,
 ) -> DecisionCalibration:
-    """Read ``grader``'s reference and the equivalent ``variants`` as validation would, and set the bar.
+    """Read ``grader``'s reference and the equivalent ``variants`` as validation would, set the bar, and read the
+    fooling answers under it.
 
     Each candidate is graded by ``grade_candidate`` on a provisional task without a machine, since the
     decision model reads the final reply only. ``decision.known_correct_check`` then refuses the grader or
     gives its acceptance level, which is stored with the reads in the returned grader's ``calibration``.
+    Under that bar the empty answer is read, then the five fooling answers ``sdk.fooling_negatives`` builds
+    from the reference, ``fluent_wrong_reply`` and ``hedged_reply``; their levels go in the grader's
+    ``fooling``, and ``sdk.fooling_problem`` refuses the grader when one earns more than the rejection
+    ceiling. ``run_build`` refuses a task whose decision grader lacks these reads, so a program ships the
+    grader this returns.
 
     Raises:
+        BuildFailure: ``fluent_wrong_reply`` or ``hedged_reply`` is blank.
         BuildInfrastructureFailure: the host has no decision client (``NO_DECISION_MODEL``).
     """
+    if not fluent_wrong_reply.strip() or not hedged_reply.strip():
+        raise BuildFailure("calibrate_decision_grader: fluent_wrong_reply and hedged_reply must be non-empty replies")
     replies = {REFERENCE_CONTROL: grader.reference, **{f"variant:{i}": v for i, v in enumerate(variants, 1)}}
     levels: dict[str, float] = {}
     candidates: list[GradedCandidate] = []
@@ -282,11 +309,21 @@ async def calibrate_decision_grader(
         levels[name] = _level(grade)
     check = known_correct_check(levels)
     if check.problem is not None:
-        return DecisionCalibration(grader, check.problem, tuple(candidates))
+        problem = f"{check.problem}. {KNOWN_CORRECT_ADVICE}"
+        return DecisionCalibration(grader, problem, tuple(candidates))
     calibrated = DecisionGrader.model_validate(
         {**grader.model_dump(), "acceptance_level": check.acceptance_level, "calibration": levels}
     )
     candidates.append(graded_candidate("", (), await _read(context, calibrated, "")))
+    fooling: dict[str, float] = {}
+    for negative in fooling_negatives(grader.reference, fluent_wrong_reply, hedged_reply):
+        grade = await _read(context, calibrated, negative.reply)
+        candidates.append(graded_candidate(negative.reply, (), grade))
+        fooling[negative.kind.value] = _level(grade)
+    calibrated = DecisionGrader.model_validate({**calibrated.model_dump(), "fooling": fooling})
+    problem = fooling_problem(calibrated)
+    if problem is not None:
+        return DecisionCalibration(grader, problem, tuple(candidates))
     return DecisionCalibration(calibrated, None, tuple(candidates))
 
 
