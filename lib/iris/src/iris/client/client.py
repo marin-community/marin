@@ -829,7 +829,6 @@ class IrisClient:
         workspace: Path | None = None,
         bundle_id: str | None = None,
         timeout_ms: int = 30000,
-        extra_bundle_includes: Sequence[str] = (),
     ) -> "IrisClient":
         """Create an IrisClient for code running inside the cluster (in-task).
 
@@ -848,7 +847,6 @@ class IrisClient:
             timeout_ms=timeout_ms,
             credentials=job_info.credentials if job_info is not None else None,
             use_controller_proxy=False,
-            extra_bundle_includes=extra_bundle_includes,
         )
 
     @classmethod

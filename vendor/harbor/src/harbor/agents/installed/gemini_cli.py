@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from harbor.agents.installed.base import (
+    REQUIRED_MODEL_PRICE_FIELDS,
     BaseInstalledAgent,
     CliFlag,
     with_prompt_template,
@@ -64,9 +65,11 @@ class GeminiCli(BaseInstalledAgent, ACPAgentMixin):
     def __init__(
         self,
         *args,
+        model_info: dict[str, Any] | None = None,
         reasoning_effort: _ReasoningEffort | None = None,
         **kwargs,
     ):
+        self._model_info = model_info
         self._reasoning_effort = reasoning_effort
         super().__init__(*args, **kwargs)
         self._validate_reasoning_effort(self._reasoning_effort, self.model_alias)
@@ -562,26 +565,15 @@ class GeminiCli(BaseInstalledAgent, ACPAgentMixin):
         cached_tokens: int | None,
     ) -> float | None:
         # Gemini CLI's session file has no cost field; back it out from
-        # LiteLLM's pricing. Return None on miss rather than a misleading $0.
+        # explicit model_info prices. Return None on miss rather than a misleading $0.
         if not self.model_alias:
             return None
 
-        try:
-            import litellm
-        except ImportError:
-            self.logger.debug("litellm not available; cost_usd left as None")
-            return None
+        pricing = self._model_info
 
-        pricing: dict[str, Any] | None = None
-        for key in (self.model_alias, self.model_alias.split("/", 1)[-1]):
-            entry = litellm.model_cost.get(key)
-            if entry:
-                pricing = entry
-                break
-
-        if pricing is None:
+        if pricing is None or not REQUIRED_MODEL_PRICE_FIELDS <= pricing.keys():
             self.logger.debug(
-                "No LiteLLM pricing for '%s'; cost_usd left as None",
+                "No model_info pricing for '%s'; cost_usd left as None",
                 self.model_alias,
             )
             return None

@@ -30,6 +30,7 @@ from itertools import batched, chain
 from pydantic import BaseModel
 from rolloutengine.models import GradedRollout
 from taskcompendium.models import TaskSpec
+from taskforge.capability import CapabilityIdea
 from taskforge.content_hash import digest
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
@@ -45,7 +46,7 @@ from experiments.post_training.capability_driven_envs.analyze_failed_runs.models
 )
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.prompts import EXTRACT_PROMPT, MERGE_PROMPT
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollouts import policy_failed, rollout_text
-from experiments.post_training.capability_driven_envs.catalog import CAPABILITY_KIND, CapabilityIdea
+from experiments.post_training.capability_driven_envs.catalog import CAPABILITY_KIND
 
 SUBJECT_ID = "failed-runs"
 SUBJECT_NAME = "Capabilities that failed runs lack"

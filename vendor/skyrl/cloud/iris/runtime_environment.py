@@ -5,9 +5,8 @@ from __future__ import annotations
 import shlex
 from enum import StrEnum
 
-from cloud.iris.paths import PROJECT_RELATIVE_PATH
 
-MARINSKYRL_TASK_ROOT = f"/app/{PROJECT_RELATIVE_PATH.as_posix()}"
+MARINSKYRL_TASK_ROOT = "/app/vendor/skyrl"
 MARINSKYRL_ACTIVATION_FILE = f"{MARINSKYRL_TASK_ROOT}/.iris-runtime-env"
 MARINSKYRL_BOOTSTRAP_SCRIPT = "cloud/iris/bootstrap_runtime.sh"
 CHECKPOINT_EXPORT_ENTRYPOINT = "skyrl_train.entrypoints.checkpoint_export"
@@ -44,15 +43,14 @@ def runtime_profile_for_strategy(
     raise ValueError(f"Unsupported training strategy: {strategy}")
 
 
-def task_setup_script(source_digest: str, profile: RuntimeProfile) -> str:
-    """Verify bundled source and install its independently frozen dependency profile."""
+def task_setup_script(profile: RuntimeProfile) -> str:
+    """Install SkyRL's frozen profile and editable dependencies from the Marin workspace."""
     checkout = MARINSKYRL_TASK_ROOT
     activation_file = MARINSKYRL_ACTIVATION_FILE
     bootstrap_script = f"{checkout}/{MARINSKYRL_BOOTSTRAP_SCRIPT}"
     return f"""set -euo pipefail
 checkout={shlex.quote(checkout)}
 cd "$checkout"
-python3.12 -c {shlex.quote("from cloud.iris.runtime_bundle import validate_bundled_runtime; assert validate_bundled_runtime() == " + repr(source_digest))}
 bash {shlex.quote(bootstrap_script)} \
   "$checkout" \
   "$IRIS_VENV" \
