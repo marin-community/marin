@@ -360,19 +360,25 @@ async def _end_input(process: asyncio.subprocess.Process, sending: asyncio.Task[
         await sending
 
 
+def _signal(process: asyncio.subprocess.Process, number: int) -> None:
+    """Signal ``process`` unless it has exited.
+
+    ``Process.send_signal`` polls first, which can reap the child before asyncio's child watcher does, and the
+    watcher then reports exit status 255.
+    """
+    if process.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(process.pid, number)
+
+
 async def _stop(process: asyncio.subprocess.Process, sending: asyncio.Task[None]) -> None:
     """Have the launcher kill its command's process group, or kill the launcher if it does not exit in time."""
-    if process.returncode is None:
-        # Not Process.terminate(): Popen polls first, which can reap the child before asyncio's watcher does.
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(process.pid, signal.SIGTERM)
+    _signal(process, signal.SIGTERM)
     await _end_input(process, sending)
     exiting = asyncio.ensure_future(process.wait())
     if not (await asyncio.wait({exiting}, timeout=STOP_GRACE))[0]:
         logger.warning("A command's launcher did not stop within %s seconds; killing it", STOP_GRACE)
-        if process.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(process.pid, signal.SIGKILL)
+        _signal(process, signal.SIGKILL)
     await exiting
 
 
@@ -462,9 +468,7 @@ class _Sandbox:
                     f"The machine's sandbox did not start: {(await process.stderr.read()).decode(errors='replace')}"
                 )
         except BaseException:
-            if process.returncode is None:
-                # Not Process.kill(): Popen polls first, which can reap the child before asyncio's watcher does.
-                os.kill(process.pid, signal.SIGKILL)
+            _signal(process, signal.SIGKILL)
             await process.communicate()
             if pidfd is not None:
                 os.close(pidfd)
@@ -484,9 +488,7 @@ class _Sandbox:
     async def stop(self) -> None:
         with contextlib.suppress(ProcessLookupError):
             signal.pidfd_send_signal(self.pidfd, signal.SIGKILL)
-        if self.process.returncode is None:
-            with contextlib.suppress(ProcessLookupError):
-                os.kill(self.process.pid, signal.SIGKILL)
+        _signal(self.process, signal.SIGKILL)
         await self.process.communicate()
         os.close(self.pidfd)
         self.pidfd = -1
@@ -640,7 +642,16 @@ class LocalMachine:
         fields = [os.fsencode(field) for variable in environment.items() for field in variable]
         if any(b"\0" in field for field in fields):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
-        account = _command_account(command.user)
+        process, pipes = await self._launch(command, fields, _command_account(command.user))
+        return await self._communicate(process, pipes, command)
+
+    async def _launch(
+        self, command: Command, environment: list[bytes], account: pwd.struct_passwd | None
+    ) -> tuple[asyncio.subprocess.Process, list[int]]:
+        """Start the launcher of ``command``; return it and the read ends of its status, stdout and stderr pipes.
+
+        ``environment`` holds the command's variable names and values, alternately.
+        """
         sandbox = self._sandbox
         assert sandbox is not None
         if not sandbox.running():
@@ -653,11 +664,11 @@ class LocalMachine:
         status_read, status_write = os.pipe()
         stdout_read, stdout_write = os.pipe()
         stderr_read, stderr_write = os.pipe()
-        unread = [status_read, stdout_read, stderr_read]
+        pipes = [status_read, stdout_read, stderr_read]
         try:
             # Environment values must stay out of both the host launcher's environment and its public argv.
             with tempfile.TemporaryFile() as environment_file:
-                environment_file.write(b"".join(field + b"\0" for field in fields))
+                environment_file.write(b"".join(field + b"\0" for field in environment))
                 environment_file.seek(0)
                 settings |= {"environment": environment_file.fileno(), "status": status_write}
                 process = await asyncio.create_subprocess_exec(
@@ -681,12 +692,16 @@ class LocalMachine:
                     start_new_session=True,
                 )
         except BaseException:
-            for fd in unread:
+            for fd in pipes:
                 os.close(fd)
             raise
         finally:
             for fd in (status_write, stdout_write, stderr_write):
                 os.close(fd)
+        return process, pipes
+
+    async def _communicate(self, process: asyncio.subprocess.Process, unread: list[int], command: Command) -> Result:
+        """Write the command's input, collect its output and report, and stop it if its timeout expires."""
         assert process.stdin is not None
         stdout, stderr = _Output(command.output_limit_bytes), _Output(command.output_limit_bytes)
         transports: list[asyncio.ReadTransport] = []

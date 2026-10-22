@@ -15,8 +15,8 @@ only in the sandboxed program. The launcher stays outside the sandbox's PID name
 signal it. When the command's first process ends, the launcher kills the rest of its process group; SIGTERM
 makes it kill the whole group at once.
 
-The status pipe receives ``S`` when the command starts, then ``X<code>`` when it exits or ``K<signal>`` when a
-signal ends it, each line ending in a newline. A launcher or command setup failure writes ``E<message>``.
+The status pipe receives the byte ``S`` when the command starts, then one line: ``X<code>`` when it exits or
+``K<signal>`` when a signal ends it. A launcher or command setup failure writes the line ``E<message>`` instead.
 """
 
 import ctypes
