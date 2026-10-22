@@ -2264,9 +2264,10 @@ class RayPPOTrainer:
             )
         if self._training_metrics_enabled:
             self.all_metrics.update(_token_staleness_metrics(rollout_staleness_tensor, loss_masks_tensor, policy_steps))
+        probe = self.cfg.trainer.algorithm.get("score_centering_probe")
         probe_reason = score_centering_probe_unavailable_reason(self.cfg)
         self.all_metrics["score_centering_probe/available"] = float(probe_reason is None)
-        self.all_metrics["score_centering_probe/interval"] = float(self.cfg.trainer.algorithm.score_centering_probe.interval)
+        self.all_metrics["score_centering_probe/interval"] = float(probe.interval if probe is not None else 0)
         self.all_metrics["score_centering_probe/observed"] = 0.0
         self.all_metrics["score_centering_probe/sampled_tokens"] = 0.0
         if self._last_score_probe_step is not None:

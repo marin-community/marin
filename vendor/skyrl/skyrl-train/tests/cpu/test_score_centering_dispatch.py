@@ -3,11 +3,14 @@
 import asyncio
 import inspect
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import numpy as np
 import ray
+import torch
+from hydra import compose, initialize_config_dir
 from ray.actor import ActorHandle
 from omegaconf import OmegaConf
 from rolloutengine.models import ModelTurn
@@ -30,6 +33,7 @@ from skyrl_train.rollouts.payloads import MemoryPayloads, PayloadStore
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition
+from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.trajectory_runners.types import TaskRequestBatch
 
 from tests.cpu.task_specs import lowered_task, task_input, text_task
@@ -156,6 +160,46 @@ async def _next_uids(context: TrainingContext) -> list[str]:
     return [group.uid for group in groups]
 
 
+def test_null_probe_preserves_ordinary_tis_training_batch():
+    with initialize_config_dir(
+        config_dir=str(Path(__file__).resolve().parents[2] / "skyrl_train/config"), version_base=None
+    ):
+        config = compose(config_name="ppo_base_config")
+    batches = []
+    for probe in ({"interval": 0, "topk": 128, "tokens_per_response": 32}, None):
+        trainer = object.__new__(RayPPOTrainer)
+        trainer.cfg = OmegaConf.create(config)
+        trainer.cfg.trainer.algorithm.off_policy_correction = "tis"
+        trainer.cfg.trainer.algorithm.score_centering_probe = probe
+        trainer.tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=2)
+        trainer.group_advantage_invariant = GroupAdvantageInvariant.exact_physical(physical_group_size=2)
+        trainer.policy_model = SimpleNamespace(actor_infos=[SimpleNamespace(rank=SimpleNamespace(dp_size=1))])
+        trainer.critic_model = trainer.ref_model = None
+        trainer.all_metrics, trainer.all_timings = {}, {}
+        trainer._training_metrics_enabled, trainer._last_score_probe_step, trainer.global_step = False, None, 4
+        batch = trainer.convert_to_training_input(
+            {
+                "prompt_token_ids": [[1, 2], [1]],
+                "response_ids": [[3, 4], [4]],
+                "rewards": [[0.0, 0.0], [1.0]],
+                "loss_masks": [[1, 0], [1]],
+                "rollout_logprobs": [np.array([-0.1, -0.2]), np.array([-0.3])],
+            },
+            ["prompt", "prompt"],
+        )
+        assert trainer.all_metrics["score_centering_probe/available"] == 0
+        assert trainer.all_metrics["score_centering_probe/interval"] == 0
+        batches.append(batch)
+    baseline, without_probe = batches
+    assert without_probe.keys() == baseline.keys()
+    for name in baseline:
+        if baseline[name] is None:
+            assert without_probe[name] is None
+        else:
+            torch.testing.assert_close(without_probe[name], baseline[name], rtol=0, atol=0)
+    assert without_probe.metadata == baseline.metadata
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("topk", [0, 128])
 async def test_training_task_persists_capture_costs_with_its_rollout(topk):
@@ -165,16 +209,28 @@ async def test_training_task_persists_capture_costs_with_its_rollout(topk):
     response = (11, 12, 13, 14)
     messages = ({"role": "assistant", "content": "answer"},)
     turn = ModelTurn(
-        message=messages[0], text="answer", prompt_token_ids=(1,), response_token_ids=response,
-        logprobs=logprobs, stop_reason="stop",
+        message=messages[0],
+        text="answer",
+        prompt_token_ids=(1,),
+        response_token_ids=response,
+        logprobs=logprobs,
+        stop_reason="stop",
         metadata={"student_topk_indices": ids, "behavior_topk_logprobs": scores} if topk else {},
     )
     grade = GradeResult(status=Outcome.GRADED, reward=1.0)
-    outputs = [TrainingRollout(
-        task_id="prompt", messages=messages, prompt_token_ids=(1,), response_token_ids=response,
-        loss_mask=(1, 1, 1, 1), logprobs=logprobs, grade=grade, stop_reason="stop",
-        steps=(TrainingStep(turn, TrainingTransition(done=True, reward=1.0, grade=grade), 3, messages),),
-    )]
+    outputs = [
+        TrainingRollout(
+            task_id="prompt",
+            messages=messages,
+            prompt_token_ids=(1,),
+            response_token_ids=response,
+            loss_mask=(1, 1, 1, 1),
+            logprobs=logprobs,
+            grade=grade,
+            stop_reason="stop",
+            steps=(TrainingStep(turn, TrainingTransition(done=True, reward=1.0, grade=grade), 3, messages),),
+        )
+    ]
 
     class Worker(TaskRolloutWorker):
         async def generate(self, request):
@@ -186,11 +242,14 @@ async def test_training_task_persists_capture_costs_with_its_rollout(topk):
 
     worker = object.__new__(Worker)
     worker.closing, worker.active_requests = False, set()
-    worker.trajectory_runner_cfg = OmegaConf.create({"apply_overlong_filtering": False, "sampling_params": {"logprobs": topk}})
+    worker.trajectory_runner_cfg = OmegaConf.create(
+        {"apply_overlong_filtering": False, "sampling_params": {"logprobs": topk}}
+    )
     worker.projection = WholeTaskProjection(worker.trajectory_runner_cfg, SimpleNamespace(eos_token_id=2))
     worker.trajectory_sink = None
     request = TaskRequestBatch(
-        rows=(task_input(lowered_task(text_task("prompt"))),), sampling_params={"logprobs": topk},
+        rows=(task_input(lowered_task(text_task("prompt"))),),
+        sampling_params={"logprobs": topk},
         score_centering_probe_tokens=1 if topk else 0,
     )
     task = RolloutTask(RolloutLease("lease", 7, 8), {"uid": "prompt"}, request)
@@ -245,9 +304,7 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
             for request in sampled
         )
         assert all(
-            request.sampling_params["logprobs"] == 0
-            for request in requests
-            if not request.score_centering_probe_tokens
+            request.sampling_params["logprobs"] == 0 for request in requests if not request.score_centering_probe_tokens
         )
     finally:
         await context.close()
