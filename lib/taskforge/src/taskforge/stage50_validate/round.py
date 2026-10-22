@@ -7,12 +7,23 @@ adversary trials as units of one graph.
 Lowering (``preflight``) and control writing (``write_controls``) start together. Each solver trial starts
 as soon as the lowering is done and does not wait for the controls. Control replay and each adversary trial
 (``adversary.run_adversary_trial``) start once both the lowered spec and the controls exist, and wait for no
-solver trial. The result waits for every unit. A unit that raises cancels the others and the round raises its
-error; the files the finished units wrote stay for the relaunch.
+solver trial. A unit that raises cancels the others and the round raises its error; the files the finished units
+wrote stay for the relaunch.
+
+The result waits for every unit, except when a violated control decides the round early. While the workpiece has
+a MODIFY round left (``ValidationContext.modify_rounds_left``), the first control whose replay, or whose file, is
+violated cancels every solver and adversary trial that has not ended, and the round returns once the remaining
+control replays end. The result's ``EarlyDecision`` names that control and the cancelled trials, which the result
+leaves out. A cancelled attempt writes no attempt file, so a later round on the same files runs those trials again.
+Without a MODIFY round left, a violated control decides nothing early and the round waits for complete evidence.
+
+The round takes two inputs besides the draft and its models: the ``ValidationContext`` a stage coordinator owns
+(the workpiece, the round, its directory, the proposal it built, the step store, the MODIFY rounds left) and the
+host's ``ValidationSettings`` (engine, deadlines, trial counts, retries, adversary policy, ledger), which a caller's
+validate function closes over.
 
 Each unit is idempotent on its own file, so a relaunch redoes only the units whose files are missing:
 
-    <round_dir>/validation.json                                the ValidationResult
     <round_dir>/validation/<draft>/lowered.json                the lowering
     <round_dir>/validation/<draft>/controls.json               the controls
     <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
@@ -30,18 +41,21 @@ the trial runs again after it with its full retries. An adversary attempt is num
 attempt cancelled in flight graded, so its submissions directory is its own.
 
 A trial is done when its last attempt file holds a grade or a cause that is not retryable, or when it holds
-``max_retries + 1`` attempts: where ``run_trial`` stops. Otherwise the trial resumes at the next attempt
-number with the retries it has left. An attempt cancelled before its outcome writes no file
-(``trials.write_evidence`` writes whole files only), so a cancelled trial is run again rather than counted as
-ungraded.
+``(max_retries + 1) * validation_pass`` attempts: one ``run_trial`` budget for each validation pass of the round
+(``ValidationContext.validation_pass``). Otherwise the trial resumes at the next attempt number with the retries
+left in the current budget, so a review ``Retry``, or a relaunch of an abandoned workpiece, reruns exactly the
+trials that ended ungraded for a retryable cause, each with a full budget, and its attempt files follow the ones
+on disk. An attempt cancelled before its outcome writes no file (``trials.write_evidence`` writes whole files
+only), so a cancelled trial is run again rather than counted as ungraded.
 
 The result is read back from the unit files, each outcome through ``trials.attempt_outcome``, so a resumed
-round returns what an uninterrupted one would. ``validation.json`` holds every decision input and no rollout,
-which stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
+round returns what an uninterrupted one would. The result holds every decision input and no rollout, which
+stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
 trial its status, reward and cause, with the solver ``Evidence``'s reward totals and ungraded causes; per
-control its verdict and cause; and per adversary trial its status, cause, claim and every submission with its
+control its verdict, reward and cause; and per adversary trial its status, cause, claim and every submission with its
 grade status, reward and whether it passed. Which passing submissions are shortcuts is review's judgement, not
-the round's. ``load_validation`` reads it without the evidence files.
+the round's. ``write_validation`` writes it to ``<round_dir>/validation.json``, and ``load_validation`` reads it
+back without the evidence files.
 
 A spec RolloutEngine rejects is ``REJECTED`` and no trial runs. A spec a factory refuses is ``REFUSED`` and its
 trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial`` records for it.
@@ -49,7 +63,7 @@ trials run, each recording the one ``MACHINE_UNSUPPORTED`` attempt ``run_trial``
 
 import asyncio
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -105,14 +119,36 @@ _ATTEMPT_FILE = re.compile(rf"{re.escape(ATTEMPT_PREFIX)}(\d+)\.json")
 
 @dataclass(frozen=True)
 class ValidationContext:
-    """What one validation round of a workpiece needs besides its draft and its models.
+    """What the stage coordinator knows of the round it validates.
 
     Attributes:
         workpiece_id: The workpiece the draft belongs to.
         round: The author, build and validation round.
-        round_dir: The round's directory; ``validation.json`` and ``validation/`` are written under it.
+        round_dir: The round's directory; ``validation/`` is written under it.
         proposal: The proposal the round built, which the controls follow.
         store_root: The build's step store, holding the draft's grader step output.
+        modify_rounds_left: The review ``Modify`` decisions the workpiece may still follow into a new round
+            (``WorkpieceBudget.max_modify_rounds`` less the rounds already spent).
+        validation_pass: This validation's pass of the round, counting from 1: one more than the round's
+            validations already recorded (``WorkpieceState.validation_passes``), across review ``Retry``
+            decisions and re-entries after an abandonment. Each pass gives every trial that ended ungraded for a
+            retryable cause a fresh retry budget.
+    """
+
+    workpiece_id: str
+    round: int
+    round_dir: Path
+    proposal: TaskProposal
+    store_root: str
+    modify_rounds_left: int
+    validation_pass: int
+
+
+@dataclass(frozen=True)
+class ValidationSettings:
+    """The validating host's settings, the same for every round it validates.
+
+    Attributes:
         host: Where the machine factories run.
         engine: The engine settings every trial and the preflight probe run under.
         deadlines: The deadlines of every trial and of the probe.
@@ -124,11 +160,6 @@ class ValidationContext:
         ledger: Where the trials and the control writing are recorded.
     """
 
-    workpiece_id: str
-    round: int
-    round_dir: Path
-    proposal: TaskProposal
-    store_root: str
     host: MachineHost
     engine: EngineSettings
     deadlines: Deadlines
@@ -190,12 +221,13 @@ class SolverEvidence:
 
 @dataclass(frozen=True)
 class ControlResult:
-    """A control's replay: ``cause`` is set when the replay produced no grade. ``attempt_file`` is relative to
-    the round directory."""
+    """A control's replay: ``reward`` is set when the replay was graded, ``cause`` when it produced no grade.
+    ``attempt_file`` is relative to the round directory."""
 
     id: str
     kind: ControlKind
     verdict: ControlVerdict
+    reward: float | None
     cause: Cause | None
     attempt_file: str
 
@@ -227,9 +259,22 @@ class AdversaryResult:
 
 
 @dataclass(frozen=True)
+class EarlyDecision:
+    """A round its first violated control decided before every trial ended.
+
+    ``control`` is the id of that control, and ``cancelled`` names each solver and adversary trial the round
+    stopped, as ``solver/<i>`` or ``adversary/<i>``; none of them is in the round's result.
+    """
+
+    control: str
+    cancelled: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ValidationResult:
     """A validation round, written as ``validation.json``: ``solver`` is ``None`` and ``controls`` and
-    ``adversary`` empty when the lowering was rejected."""
+    ``adversary`` empty when the lowering was rejected. ``early`` is set when a violated control decided the
+    round before every trial ended, and ``solver`` and ``adversary`` then hold only the trials that ended."""
 
     workpiece_id: str
     round: int
@@ -237,6 +282,7 @@ class ValidationResult:
     solver: SolverEvidence | None
     controls: tuple[ControlResult, ...]
     adversary: tuple[AdversaryResult, ...]
+    early: EarlyDecision | None
 
 
 @dataclass(frozen=True)
@@ -259,15 +305,20 @@ class _Lowered:
 async def validate_round(
     draft: TaskDraft,
     context: ValidationContext,
+    settings: ValidationSettings,
     solver_model: TrialModel,
     controls_model: ModelClient,
     adversary_model: ModelClient,
 ) -> ValidationResult:
-    """Validate ``draft``, running only the units without a file, and write ``validation.json``.
+    """Validate ``draft``, running only the units without a file, and return the round's result.
+
+    A stage coordinator passes ``context``; a caller's validate function closes over ``settings`` and the models.
+    ``write_validation`` writes the result as ``validation.json``.
 
     Args:
         draft: The round's draft.
-        context: The round's settings.
+        context: The round, as its stage coordinator knows it.
+        settings: The validating host's settings.
         solver_model: The model of the solver trials.
         controls_model: The model that writes the controls.
         adversary_model: The model of the adversary trials.
@@ -280,22 +331,40 @@ async def validate_round(
     directory = context.round_dir / VALIDATION_DIR / digest(draft.task)
     try:
         async with asyncio.TaskGroup() as group:
-            lowering = group.create_task(_lowering_unit(draft, context, directory))
-            controls = group.create_task(_controls_unit(draft, context, controls_model, directory))
-            group.create_task(_solver_units(lowering, context, solver_model, directory))
-            group.create_task(_replay_units(lowering, controls, context, directory))
-            group.create_task(_adversary_units(lowering, controls, context, adversary_model, directory))
+            lowering = group.create_task(_lowering_unit(draft, settings, directory))
+            controls = group.create_task(_controls_unit(draft, context, settings, controls_model, directory))
+            trials = {
+                f"{TrialKind.SOLVER}/{index}": group.create_task(
+                    _solver_unit(lowering, context, settings, solver_model, directory, str(index))
+                )
+                for index in range(settings.k)
+            } | {
+                f"{TrialKind.ADVERSARY}/{index}": group.create_task(
+                    _adversary_unit(lowering, controls, context, settings, adversary_model, directory, str(index))
+                )
+                for index in range(settings.adversary.k)
+            }
+            closing = _EarlyClose(armed=context.modify_rounds_left > 0, trials=trials)
+            group.create_task(_replay_units(lowering, controls, context, settings, directory, closing))
     except BaseExceptionGroup as failure:
         if len(failure.exceptions) == 1:
             raise failure.exceptions[0] from None
         raise
-    result = _result(context, lowering.result(), controls.result(), directory)
-    write_evidence(context.round_dir / VALIDATION_FILE, pretty_json(result).encode())
-    return result
+    cancelled = tuple(name for name, task in trials.items() if task.cancelled())
+    early = None
+    if cancelled:
+        assert closing.control is not None, f"{context.workpiece_id}: trials {cancelled} were cancelled undecided"
+        early = EarlyDecision(closing.control, cancelled)
+    return _result(context, settings, lowering.result(), controls.result(), directory, early)
+
+
+def write_validation(round_dir: Path, result: ValidationResult) -> None:
+    """Write ``result`` to ``round_dir`` as ``validation.json``, whole or not at all."""
+    write_evidence(round_dir / VALIDATION_FILE, pretty_json(result).encode())
 
 
 def load_validation(round_dir: Path) -> ValidationResult:
-    """Read the ``validation.json`` ``validate_round`` wrote to ``round_dir``."""
+    """Read the ``validation.json`` ``write_validation`` wrote to ``round_dir``."""
     return _RESULT.validate_json((round_dir / VALIDATION_FILE).read_bytes())
 
 
@@ -305,111 +374,151 @@ async def _inputs_ready(*inputs: asyncio.Task) -> bool:
     return all(not task.cancelled() and task.exception() is None for task in inputs)
 
 
-async def _lowering_unit(draft: TaskDraft, context: ValidationContext, directory: Path) -> _Lowered:
+async def _lowering_unit(draft: TaskDraft, settings: ValidationSettings, directory: Path) -> _Lowered:
     path = directory / LOWERED_FILE
-    backends = tuple(sorted(context.engine.factories))
+    backends = tuple(sorted(settings.engine.factories))
     if path.exists():
         done = _LOWERED.validate_json(path.read_bytes())
-        if done.host == context.host and done.backends == backends:
+        if done.host == settings.host and done.backends == backends:
             return done
-    write_evidence(path, pretty_json(await _lower(draft, context, backends)).encode())
+    write_evidence(path, pretty_json(await _lower(draft, settings, backends)).encode())
     return _LOWERED.validate_json(path.read_bytes())
 
 
-async def _lower(draft: TaskDraft, context: ValidationContext, backends: tuple[str, ...]) -> _Lowered:
-    engine = context.engine
+async def _lower(draft: TaskDraft, settings: ValidationSettings, backends: tuple[str, ...]) -> _Lowered:
+    engine = settings.engine
     try:
-        lowered = await preflight(draft.task, context.host, engine.factories, engine, context.deadlines)
+        lowered = await preflight(draft.task, settings.host, engine.factories, engine, settings.deadlines)
     except (ValueError, NotImplementedError) as error:
-        return _Lowered(context.host, backends, None, str(error), (), None)
+        return _Lowered(settings.host, backends, None, str(error), (), None)
     refusals = tuple(task_refusals(lowered.spec, engine.factories))
-    return _Lowered(context.host, backends, lowered.spec, "", refusals, lowered.fallback)
+    return _Lowered(settings.host, backends, lowered.spec, "", refusals, lowered.fallback)
 
 
-def _trial_digest(context: ValidationContext, spec: TaskRolloutSpec) -> str:
+def _trial_digest(settings: ValidationSettings, spec: TaskRolloutSpec) -> str:
     """The ``task_digest`` of ``spec`` as the round's trials run it."""
-    engine = context.engine
-    return task_digest(engine.apply(context.deadlines.apply(spec)), engine.command_timeout)
+    engine = settings.engine
+    return task_digest(engine.apply(settings.deadlines.apply(spec)), engine.command_timeout)
 
 
-def _trials_dir(directory: Path, context: ValidationContext, spec: TaskRolloutSpec) -> Path:
-    return directory / _trial_digest(context, spec)
+def _trials_dir(directory: Path, settings: ValidationSettings, spec: TaskRolloutSpec) -> Path:
+    return directory / _trial_digest(settings, spec)
 
 
 async def _controls_unit(
-    draft: TaskDraft, context: ValidationContext, model: ModelClient, directory: Path
+    draft: TaskDraft, context: ValidationContext, settings: ValidationSettings, model: ModelClient, directory: Path
 ) -> tuple[Control, ...]:
     if not (directory / CONTROLS_FILE).exists():
         grader = step_output(draft, context.store_root, GRADER_STEP, Grader)
-        record = CallLedger(context.ledger, context.workpiece_id, context.round, CONTROLS_STEP)
-        await write_controls(draft.task, grader, context.proposal, model, context.sampling, record, directory)
+        record = CallLedger(settings.ledger, context.workpiece_id, context.round, CONTROLS_STEP)
+        await write_controls(draft.task, grader, context.proposal, model, settings.sampling, record, directory)
     return load_controls(directory)
 
 
-async def _solver_units(
-    lowering: asyncio.Task[_Lowered], context: ValidationContext, model: TrialModel, directory: Path
+@dataclass
+class _EarlyClose:
+    """Cancels the round's ``trials`` that have not ended on its first violated control, when ``armed``.
+
+    A round is armed while the workpiece has a MODIFY round left; without one it waits for every trial.
+    ``control`` records the control that closed the round.
+    """
+
+    armed: bool
+    trials: Mapping[str, asyncio.Task[None]]
+    control: str | None = None
+
+    def violated(self, control_id: str) -> None:
+        if not self.armed or self.control is not None:
+            return
+        self.control = control_id
+        for task in self.trials.values():
+            task.cancel()
+
+
+async def _solver_unit(
+    lowering: asyncio.Task[_Lowered],
+    context: ValidationContext,
+    settings: ValidationSettings,
+    model: TrialModel,
+    directory: Path,
+    trial: str,
 ) -> None:
     if not await _inputs_ready(lowering):
         return
     lowered = lowering.result()
     if lowered.spec is None:
         return
-    spec, evidence_dir = lowered.spec, _trials_dir(directory, context, lowered.spec)
-    async with asyncio.TaskGroup() as group:
-        for index in range(context.k):
-            plan = _resumed_plan(context, TrialKind.SOLVER, evidence_dir, str(index), _any_attempt, 0)
-            if plan is not None:
-                group.create_task(run_trial(spec, plan, context.engine, model, str(index)))
+    evidence_dir = _trials_dir(directory, settings, lowered.spec)
+    plan = _resumed_plan(context, settings, TrialKind.SOLVER, evidence_dir, trial, _any_attempt, 0)
+    if plan is not None:
+        await run_trial(lowered.spec, plan, settings.engine, model, trial)
 
 
 async def _replay_units(
     lowering: asyncio.Task[_Lowered],
     controls: asyncio.Task[tuple[Control, ...]],
     context: ValidationContext,
+    settings: ValidationSettings,
     directory: Path,
+    closing: _EarlyClose,
 ) -> None:
     if not await _inputs_ready(lowering, controls):
         return
     lowered, control_set = lowering.result(), controls.result()
     if lowered.spec is None:
         return
-    spec, evidence_dir = lowered.spec, _replay_dir(_trials_dir(directory, context, lowered.spec), control_set)
-    check_replayable(spec.task, control_set, context.engine.max_turns)
+    spec, evidence_dir = lowered.spec, _replay_dir(_trials_dir(directory, settings, lowered.spec), control_set)
+    check_replayable(spec.task, control_set, settings.engine.max_turns)
     async with asyncio.TaskGroup() as group:
         for control in control_set:
-            plan = _resumed_plan(context, TrialKind.CONTROL, evidence_dir, control.id, _any_attempt, 0)
-            if plan is not None:
-                group.create_task(replay_control(spec, control, plan, context.engine))
+            group.create_task(_control_unit(spec, control, context, settings, evidence_dir, closing))
 
 
-async def _adversary_units(
+async def _control_unit(
+    spec: TaskRolloutSpec,
+    control: Control,
+    context: ValidationContext,
+    settings: ValidationSettings,
+    evidence_dir: Path,
+    closing: _EarlyClose,
+) -> None:
+    """Replay ``control`` unless its file holds its last attempt, and report a violation to ``closing``."""
+    plan = _resumed_plan(context, settings, TrialKind.CONTROL, evidence_dir, control.id, _any_attempt, 0)
+    if plan is None:
+        _, outcome = _final_attempt(evidence_dir, TrialKind.CONTROL, control.id)
+        verdict = control_outcome(control, outcome).verdict
+    else:
+        verdict = (await replay_control(spec, control, plan, settings.engine)).verdict
+    if verdict is ControlVerdict.VIOLATED:
+        closing.violated(control.id)
+
+
+async def _adversary_unit(
     lowering: asyncio.Task[_Lowered],
     controls: asyncio.Task[tuple[Control, ...]],
     context: ValidationContext,
+    settings: ValidationSettings,
     model: ModelClient,
     directory: Path,
+    trial: str,
 ) -> None:
     if not await _inputs_ready(lowering, controls):
         return
     lowered, control_set = lowering.result(), controls.result()
     if lowered.spec is None:
         return
-    spec, evidence_dir = lowered.spec, _trials_dir(directory, context, lowered.spec)
-    policy = context.adversary
+    spec, evidence_dir = lowered.spec, _trials_dir(directory, settings, lowered.spec)
+    policy = settings.adversary
     brief = adversary_brief(spec, control_set, policy)
 
     def under_brief(payload: bytes) -> bool:
         return adversary_record(payload).brief == brief
 
-    async with asyncio.TaskGroup() as group:
-        for index in range(policy.k):
-            trial = str(index)
-            graded_submissions = _numbered_dirs(evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR)
-            floor = graded_submissions[-1] + 1 if graded_submissions else 0
-            plan = _resumed_plan(context, TrialKind.ADVERSARY, evidence_dir, trial, under_brief, floor)
-            if plan is not None:
-                run = run_adversary_trial(spec, brief, policy, plan, context.engine, model, trial, context.max_retries)
-                group.create_task(run)
+    graded_submissions = _numbered_dirs(evidence_dir / str(TrialKind.ADVERSARY) / trial / SUBMISSIONS_DIR)
+    floor = graded_submissions[-1] + 1 if graded_submissions else 0
+    plan = _resumed_plan(context, settings, TrialKind.ADVERSARY, evidence_dir, trial, under_brief, floor)
+    if plan is not None:
+        await run_adversary_trial(spec, brief, policy, plan, settings.engine, model, trial, settings.max_retries)
 
 
 def _any_attempt(payload: bytes) -> bool:
@@ -418,6 +527,7 @@ def _any_attempt(payload: bytes) -> bool:
 
 def _resumed_plan(
     context: ValidationContext,
+    settings: ValidationSettings,
     kind: TrialKind,
     evidence_dir: Path,
     trial: str,
@@ -427,27 +537,30 @@ def _resumed_plan(
     """The plan that runs the rest of ``trial`` after the attempts on disk, or ``None`` when it is done.
 
     Only the attempts whose file ``covers`` accepts belong to this run of the trial and spend its retries; the
-    trial is done when the last attempt is one of them and ends it. The next attempt is numbered after every
-    attempt on disk and at least ``floor``.
+    trial is done when the last attempt is one of them and ends it: graded, ungraded for a cause that is not
+    retryable, or the last attempt the passes so far allow, ``max_retries + 1`` for each. The plan's retries
+    are those left in the current validation's budget. The next attempt is numbered after every attempt on disk
+    and at least ``floor``.
     """
     attempts = _attempt_numbers(evidence_dir / str(kind) / trial)
     payloads = {attempt: _attempt_path(evidence_dir, kind, trial, attempt).read_bytes() for attempt in attempts}
     covered = [attempt for attempt in attempts if covers(payloads[attempt])]
     spent = len(covered) if covered and covered[-1] == attempts[-1] else 0
+    allowed = (settings.max_retries + 1) * context.validation_pass
     if spent:
         last = attempt_outcome(payloads[attempts[-1]])
-        if isinstance(last, Graded) or not last.retryable or spent > context.max_retries:
+        if isinstance(last, Graded) or not last.retryable or spent >= allowed:
             return None
     return TrialPlan(
         workpiece_id=context.workpiece_id,
         round=context.round,
         kind=kind,
         k=1,
-        deadlines=context.deadlines,
-        max_retries=context.max_retries - spent,
-        retry_backoff=context.retry_backoff.schedule(),
+        deadlines=settings.deadlines,
+        max_retries=min(settings.max_retries, allowed - spent - 1),
+        retry_backoff=settings.retry_backoff.schedule(),
         evidence_dir=evidence_dir,
-        ledger=context.ledger,
+        ledger=settings.ledger,
         first_attempt=max(floor, attempts[-1] + 1 if attempts else 0),
     )
 
@@ -482,33 +595,45 @@ def _replay_dir(trials_dir: Path, controls: tuple[Control, ...]) -> Path:
 
 
 def _result(
-    context: ValidationContext, lowered: _Lowered, controls: tuple[Control, ...], directory: Path
+    context: ValidationContext,
+    settings: ValidationSettings,
+    lowered: _Lowered,
+    controls: tuple[Control, ...],
+    directory: Path,
+    early: EarlyDecision | None,
 ) -> ValidationResult:
-    """The round's result, read back from its unit files."""
+    """The round's result, read back from the unit files of every trial ``early`` did not cancel."""
     if lowered.spec is None:
         rejected = Lowering(LoweringStatus.REJECTED, lowered.detail, (), None, None)
-        return ValidationResult(context.workpiece_id, context.round, rejected, None, (), ())
-    trial_digest = _trial_digest(context, lowered.spec)
+        return ValidationResult(context.workpiece_id, context.round, rejected, None, (), (), None)
+    trial_digest = _trial_digest(settings, lowered.spec)
     status = LoweringStatus.REFUSED if lowered.refusals else LoweringStatus.LOWERED
     lowering = Lowering(status, "", lowered.refusals, lowered.fallback, trial_digest)
-    trials_dir = _trials_dir(directory, context, lowered.spec)
+    trials_dir = _trials_dir(directory, settings, lowered.spec)
+    cancelled = set() if early is None else set(early.cancelled)
+    solver = [str(index) for index in range(settings.k) if f"{TrialKind.SOLVER}/{index}" not in cancelled]
+    adversary = [
+        str(index) for index in range(settings.adversary.k) if f"{TrialKind.ADVERSARY}/{index}" not in cancelled
+    ]
     return ValidationResult(
         context.workpiece_id,
         context.round,
         lowering,
-        _solver_evidence(context, trials_dir),
+        _solver_evidence(context, trials_dir, solver),
         _control_results(context, _replay_dir(trials_dir, controls), controls),
-        tuple(_adversary_result(context, trials_dir, str(index)) for index in range(context.adversary.k)),
+        tuple(_adversary_result(context, trials_dir, trial) for trial in adversary),
+        early,
     )
 
 
-def _solver_evidence(context: ValidationContext, evidence_dir: Path) -> SolverEvidence:
-    finals = [_final_attempt(evidence_dir, TrialKind.SOLVER, str(index)) for index in range(context.k)]
+def _solver_evidence(context: ValidationContext, evidence_dir: Path, trials: list[str]) -> SolverEvidence:
+    finals = [_final_attempt(evidence_dir, TrialKind.SOLVER, trial) for trial in trials]
     evidence = Evidence({TrialKind.SOLVER: tuple(outcome for _, outcome in finals)})
     status = evidence.status
     return SolverEvidence(
         trials=tuple(
-            _trial_result(str(index), outcome, _relative(context, path)) for index, (path, outcome) in enumerate(finals)
+            _trial_result(trial, outcome, _relative(context, path))
+            for trial, (path, outcome) in zip(trials, finals, strict=True)
         ),
         stats=evidence.reward_stats(TrialKind.SOLVER),
         ungraded=dict(status.causes) if isinstance(status, Incomplete) else {},
@@ -528,8 +653,8 @@ def _control_results(
     for control in controls:
         path, outcome = _final_attempt(evidence_dir, TrialKind.CONTROL, control.id)
         verdict = control_outcome(control, outcome).verdict
-        cause = None if isinstance(outcome, Graded) else outcome.cause
-        results.append(ControlResult(control.id, control.kind, verdict, cause, _relative(context, path)))
+        reward, cause = (outcome.reward, None) if isinstance(outcome, Graded) else (None, outcome.cause)
+        results.append(ControlResult(control.id, control.kind, verdict, reward, cause, _relative(context, path)))
     return tuple(results)
 
 
