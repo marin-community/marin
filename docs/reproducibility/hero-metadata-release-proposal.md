@@ -59,9 +59,13 @@ revision, dimension, quantization scale and range, and the input preprocessing.
 Multiplying the stored `int8` values by the recorded scale gives approximate
 floating-point vectors. We should preserve the stored bytes.
 
-Harrier skipped dedup noncanonical documents, so its shards can have fewer rows
-than the normalized shards. Embeddings must be joined by document ID, with the
-same vector carried to repeated selected occurrences. We must report coverage
+Harrier embedded one representative per candidate duplicate cluster in an
+earlier deduplication pass. The final store uses verified duplicate decisions
+and exempts some sources, so documents omitted by the embedding pass can still
+be selected. Its embedding shards can therefore have fewer rows than the
+normalized shards. Embeddings must be joined by document ID, with the same
+vector carried to repeated selected occurrences. Conflicting stored vectors
+for the same ID must be rejected. We must report coverage
 and null counts per source; a missing vector must not silently become zeros or
 cause a selected document to disappear. Filling gaps would be a separate
 embedding job. At 1,024 bytes per vector, the vectors add about 1.024 TB per
@@ -151,8 +155,7 @@ quality score determines which bucket it falls into within that set. Thus,
 the same score can map to different buckets for different content types. The
 exporter must reuse the frozen store's thresholds rather than estimate new
 ones from the exported documents. Unknown content types use the stored
-`default` cutpoints. Copying a bucket from an older scoring format would give
-the wrong result.
+`default` cutpoints.
 
 The production job should stream batches, write each task's metadata under
 its bucket directories, and mark a task complete only after all its files
@@ -227,7 +230,8 @@ Multirow sources must pass with all their contributing rows. Harrier vectors
 must match the stored embedding rows, carry their frozen model and quantization
 provenance, and have measured coverage for every source. The release must
 distinguish confirmed missing vectors from a trial scan that stopped at its
-read budget.
+read budget. A public export must stop if requested embedding lookups remain
+unresolved.
 We need to recover and document
 transform provenance where artifacts came from dirty working trees or older
 metadata records; the store's commit alone does not pin those transforms.

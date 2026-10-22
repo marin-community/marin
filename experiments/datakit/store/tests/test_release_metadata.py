@@ -3,6 +3,7 @@
 
 
 from dataclasses import replace
+from typing import NamedTuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -12,6 +13,12 @@ from marin.datakit.normalize import generate_id
 from experiments.datakit.scripts.metadata_upstream_locators import SourceFile, SourceManifest, SourceRef
 from experiments.datakit.store.metadata import ShardManifest
 from experiments.datakit.store.release_metadata import export_release_metadata_shard
+
+
+class ReleaseInputs(NamedTuple):
+    selection: ShardManifest
+    source: SourceManifest
+    rows: list[dict]
 
 
 @pytest.fixture
@@ -40,7 +47,7 @@ def release_inputs(tmp_path):
         {"source_ref": source.sha256, "row_offset": 1, "file": "z.parquet", "file_row_offset": 1},
     ]
     rows = [{"id": doc_id, "normalized_row": i, "source_rows": [locator]} for i, locator in enumerate(locators)]
-    return selection, source, rows
+    return ReleaseInputs(selection, source, rows)
 
 
 def test_release_preserves_occurrences_and_verified_upstream_coordinates(tmp_path, release_inputs):
@@ -127,3 +134,14 @@ def test_release_preserves_harrier_vectors_and_upstream_locators(tmp_path, relea
     assert result["harrier_embedding"]["embedded_occurrences"] == 2
     assert result["harrier_embedding"]["status"] == "complete"
     assert result["harrier_embedding"]["provenance"] == selection.harrier_embedding_provenance
+    with pytest.raises(ValueError, match="Embedding read budget"):
+        export_release_metadata_shard(
+            selection,
+            str(sidecar),
+            {source.sha256: source},
+            str(tmp_path / "unresolved"),
+            cluster_view=40,
+            max_rows=64,
+            max_embedding_bytes=1,
+        )
+    assert not (tmp_path / "unresolved").exists()

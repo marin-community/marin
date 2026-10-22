@@ -141,6 +141,7 @@ def _collect_biodiversity_pages(
 
 
 def _order_biodiversity_pages(groups: dict[str, list[tuple[dict, dict]]]) -> set[str]:
+    """Sort each item's pages in place and return IDs with duplicate page numbers."""
     ambiguous = set()
     for key, pages in groups.items():
         pages.sort(key=lambda pair: pair[1]["page_num"])
@@ -244,6 +245,10 @@ def run_transform_replay(
 
 
 def _normalized_source_id(path: str, ordinal: int, budget: ScanBudget) -> tuple[bool, Any]:
+    """Return whether the source ID was read and its value, which may be null.
+
+    False means the column or row was absent, or the read budget was exhausted.
+    """
     fs, resolved = filesystem_for(path)
     with fs.open(resolved, "rb") as stream:
         parquet = pq.ParquetFile(stream)

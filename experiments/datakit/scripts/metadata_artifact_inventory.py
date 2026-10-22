@@ -129,7 +129,8 @@ def inventory(store_record: dict, *, workers: int = 8, cache_dir: str | None = N
     fuzzy = records[dep_paths[-1]].get("record", {}).get("result", {}).get("sources", {})
     sources = []
     for index, name in enumerate(source_names):
-        roots = dict(zip(INPUT_KINDS, dep_paths[index * 5 : index * 5 + 5], strict=True))
+        start = index * len(INPUT_KINDS)
+        roots = dict(zip(INPUT_KINDS, dep_paths[start : start + len(INPUT_KINDS)], strict=True))
         token = records[roots["tokenize"]].get("record", {})
         source_key = token.get("result", {}).get("source_keys", {}).get("train")
         normalized = str(StoragePath(_absolute(prefix, source_key)).parent.parent) if source_key else None

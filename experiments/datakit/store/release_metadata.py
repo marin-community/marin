@@ -62,6 +62,8 @@ def export_release_metadata_shard(
         result = export_metadata_shard(
             manifest, temporary, cluster_view=cluster_view, max_rows=max_rows, max_embedding_bytes=max_embedding_bytes
         )
+        if result["harrier_embedding"]["unresolved_occurrences"]:
+            raise ValueError("Embedding read budget left selected occurrences unresolved; release is incomplete")
         buckets = []
         selected = {}
         for output in result["outputs"]:

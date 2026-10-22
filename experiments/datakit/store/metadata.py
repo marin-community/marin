@@ -22,9 +22,9 @@ import pyarrow.parquet as pq
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
+from experiments.datakit.embeddings.harrier.pipeline import HARRIER_DIM
 from experiments.datakit.store.datakit_store import _FilterStats, _keep_document
 
-HARRIER_DIM = 1024
 DEFAULT_EMBEDDING_READ_BYTES = 64 * 1024 * 1024
 
 
