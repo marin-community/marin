@@ -16,7 +16,7 @@ from marin.rl.skyrl import ResolvedModelLocator, SkyRLOutputPaths, SkyRLRun, Sky
 from experiments.post_training import snowball_inventory_compare as comparison
 from experiments.post_training import snowball_inventory_evaluate as evaluation
 from experiments.post_training import snowball_inventory_smoke as inventory
-from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS
+from experiments.post_training.snowball_inventory_panel import FAMILY_COUNTS, evaluation_dataset_uid
 
 
 class IsolatedPreflightClient(LocalClient):
@@ -162,6 +162,8 @@ def test_periodic_comparison_persists_fixed_pairing_and_coverage_before_return(
         for family, count in FAMILY_COUNTS.items()
         for index in range(count)
     ]
+    rows[0]["dataset_uid"] = "0"
+    rows[1]["dataset_uid"] = "uid-calendar-0"
     probe = {
         "status": "passed",
         "validation_family_counts": FAMILY_COUNTS,
@@ -177,14 +179,24 @@ def test_periodic_comparison_persists_fixed_pairing_and_coverage_before_return(
     def read_saved_results(action, request):
         assert action == "results"
         step = request["evaluation_step"]
+        # The external step evaluator prefixes UIDs with a length-delimited
+        # validation name, which may itself contain hyphens or UID suffixes.
+        validation_name = "" if step == 0 else "panel-with-uid-calendar-0"
+        emitted = [
+            {
+                "uid": f"eval-{step}-{len(validation_name)}-{validation_name}-{row['dataset_uid']}",
+                "score": None if missing_final_grade and step == 50 and index == 0 else (index + 1) % 2,
+            }
+            for index, row in enumerate(reversed(rows))
+        ]
         return {
             "outcomes": [
                 {
-                    "task_id": row["task_id"],
-                    "score": None if missing_final_grade and step == 50 and index == 0 else 1.0,
+                    "task_id": request["dataset_uids"][evaluation_dataset_uid(row["uid"], step)],
+                    "score": row["score"],
                     "stop_reason": "stop",
                 }
-                for index, row in enumerate(reversed(rows))
+                for row in emitted
             ],
             "source_dumps": [{"uri": f"retained-step-{step}.jsonl", "sha256": f"dump-{step}"}],
         }
@@ -220,5 +232,9 @@ def test_periodic_comparison_persists_fixed_pairing_and_coverage_before_return(
         assert {family: row["expected"] for family, row in report["families"].items()} == FAMILY_COUNTS
         assert [row["task_id"] for row in report["tasks"]] == [row["task_id"] for row in rows]
         assert report["source_dumps"] == [{"uri": f"retained-step-{step}.jsonl", "sha256": f"dump-{step}"}]
+        assert [row["score"] for row in report["tasks"]] == [
+            None if missing_final_grade and step == 50 and index == len(rows) - 1 else (len(rows) - index) % 2
+            for index in range(len(rows))
+        ]
         assert report["complete"] == (not missing_final_grade or step != 50)
-    assert reports[-1]["aggregate_fixed_denominator_mean"] == pytest.approx(909 / 910 if missing_final_grade else 1.0)
+    assert reports[-1]["aggregate_fixed_denominator_mean"] == pytest.approx(454 / 910 if missing_final_grade else 0.5)

@@ -34,6 +34,7 @@ from taskcompendium.models import ScriptGrader
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 
 from experiments.post_training.snowball_curriculum.export import DerivedDeployment, derived_record
+from experiments.post_training.snowball_inventory_panel import evaluation_dataset_uid
 from experiments.post_training.snowball_inventory_probe import (
     package_revisions,
     preflight_tokenizer,
@@ -294,37 +295,38 @@ def results(request: dict) -> dict:
     session = "eval_only" if step is None else f"global_step_{step}_evals"
     root = StoragePath(str(config.artifacts.export_root)) / "dumped_evals" / session
     outcomes = []
-    for directory, _, files in root.walk():
-        for filename in files:
+    dumps = []
+    for directory, _, files in sorted(root.walk(), key=lambda entry: str(entry[0])):
+        for filename in sorted(files):
             if not filename.endswith(".jsonl") or filename == "aggregated_results.jsonl":
                 continue
-            with (directory / filename).open("rt") as source:
-                for line in source:
-                    row = json.loads(line)
-                    verification = row.get("verification")
-                    score = None
-                    if verification is not None:
-                        verification["status"] = VerificationStatus(verification["status"])
-                        verdict = VerificationResult(**verification)
-                        if verdict.status is VerificationStatus.VERIFIED:
-                            score = normalized_verifier_score(verdict)
-                    outcomes.append(
-                        {
-                            "task_id": request["dataset_uids"][row["uid"]],
-                            "score": score,
-                            "stop_reason": row.get("stop_reason"),
-                            "verification_status": verification["status"].value if verification is not None else None,
-                            "failure_type": (
-                                row.get("exception_type")
-                                or (
-                                    (verification.get("diagnostics") or {}).get("cause_error_type")
-                                    if verification
-                                    else None
-                                )
-                            ),
-                        }
-                    )
-    return {"outcomes": outcomes}
+            source = directory / filename
+            raw = source.read_bytes()
+            dumps.append({"uri": str(source), "sha256": hashlib.sha256(raw).hexdigest()})
+            for line in raw.decode().splitlines():
+                row = json.loads(line)
+                verification = row.get("verification")
+                score = None
+                if verification is not None:
+                    verification["status"] = VerificationStatus(verification["status"])
+                    verdict = VerificationResult(**verification)
+                    if verdict.status is VerificationStatus.VERIFIED:
+                        score = normalized_verifier_score(verdict)
+                outcomes.append(
+                    {
+                        "task_id": request["dataset_uids"][evaluation_dataset_uid(row["uid"], step)],
+                        "score": score,
+                        "stop_reason": row.get("stop_reason"),
+                        "verification_status": verification["status"].value if verification is not None else None,
+                        "failure_type": (
+                            row.get("exception_type")
+                            or (
+                                (verification.get("diagnostics") or {}).get("cause_error_type") if verification else None
+                            )
+                        ),
+                    }
+                )
+    return {"outcomes": outcomes, "source_dumps": dumps}
 
 
 def export_config(request: dict) -> dict:
