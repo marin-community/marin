@@ -925,7 +925,8 @@ class GrugModelConfig:
     layer_onset_steps: tuple[int, ...] | None = None
     """Per-layer onset step: layer ``l`` stays offline (its AttnRes sources masked from every later gate and the
     final gate, its parameters and QB router bias frozen) through step ``t_l``, then its sources enter with weight
-    ``g_l(t) = min(1, (t - t_l) / layer_onset_ramp)`` times their softmax term (a ``log g_l`` logit bias). Layers
+    ``g_l(t) = min(1, (t - t_l) / layer_onset_ramp)`` times their softmax term (a ``log g_l`` logit bias; under
+    ``attn_res_plain_sum`` the sources are scaled by ``g_l`` in the sum). Layers
     with onset 0 are always on; all-zero onsets give the default program. Each delayed layer must be its own
     AttnRes block. Training only: evals and analysis see every layer on (``g = 1``)."""
     layer_onset_ramp: int = 100
@@ -1260,10 +1261,8 @@ class GrugModelConfig:
             raise ValueError("layer_onset_ramp must be >= 1 and layer_onset_lr_warmup >= 0")
         if not self.delayed_layers:
             return
-        if not self.attn_res or self.scan_layers or self.attn_res_plain_sum or self.attn_res_kv_layers:
-            raise ValueError(
-                "layer_onset_steps needs attn_res (softmax gates), the unrolled loop and no attn_res_kv_layers"
-            )
+        if not self.attn_res or self.scan_layers or self.attn_res_kv_layers:
+            raise ValueError("layer_onset_steps needs attn_res, the unrolled loop and no attn_res_kv_layers")
         starts = (*attn_res_block_starts(self), self.num_layers)
         for i in self.delayed_layers:
             if i not in starts or i + 1 not in starts:
@@ -4288,6 +4287,7 @@ def _attn_res_mix(
     sources = list(blocks)
     if plain_sum:
         sources = [*sources, *([] if partial is None else [partial])]
+        sources = _onset_scale_sources(sources, extras, gate_index, len(blocks), has_partial=partial is not None)
         uniform = jnp.full((len(sources),), 1.0 / len(sources), jnp.float32)
         return reshard(_stream_sum(tuple(sources)), _batch_spec()), jnp.zeros((), jnp.float32), uniform
     logits = [_block_logit(bl, queries, gate_index) for bl in block_logits]
@@ -4391,6 +4391,26 @@ def _onset_gate_logits(
     columns = list(range(num_blocks)) + ([-1] if has_partial else [])
     biased = [logit + row[c] for logit, c in zip(logits, columns, strict=False)]
     return biased + logits[len(columns) :]
+
+
+def _onset_scale_sources(
+    sources: list[jax.Array],
+    extras: dict[str, jax.Array | None] | None,
+    gate_index: int,
+    num_blocks: int,
+    *,
+    has_partial: bool,
+) -> list[jax.Array]:
+    """``attn_res_plain_sum`` under ``layer_onset_steps``: each source times its ``g_l`` (``exp`` of the
+    ``_onset_logit_table`` entry: exactly 0 offline, exactly 1 once on), the residual-stream analogue of the logit mask.
+    """
+    table = None if extras is None else extras.get("onset")
+    if table is None:
+        return sources
+    row = jnp.exp(table[gate_index])
+    columns = list(range(num_blocks)) + ([-1] if has_partial else [])
+    scaled = [src * row[c].astype(src.dtype) for src, c in zip(sources, columns, strict=False)]
+    return scaled + sources[len(columns) :]
 
 
 def _onset_logit_table(
@@ -6056,7 +6076,8 @@ class Transformer(eqx.Module):
             logits = _onset_gate_logits(logits, logit_bias, final_index, len(blocks), has_partial=True)
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
             if cfg.attn_res_plain_sum:
-                mixed = _stream_sum((*blocks, partial))
+                scaled = _onset_scale_sources([*blocks, partial], logit_bias, final_index, len(blocks), has_partial=True)
+                mixed = _stream_sum(tuple(scaled))
                 weights = jnp.full_like(weights, 1.0 / weights.shape[0])
             spot = _probe_spot()
             if spot is not None:
