@@ -3,6 +3,7 @@
 
 """Docker workers' best-effort ALLOWLIST: per-task DNS filters in front of the host resolver."""
 
+import errno
 import ipaddress
 import socket
 import socketserver
@@ -16,6 +17,7 @@ from iris.cluster.worker.egress_dns import EgressDnsFilters, HostResolver, read_
 
 _RCODE_REFUSED = 5
 _ANSWER_ADDRESS = bytes([192, 0, 2, 1])
+_UPSTREAM_BIND_ATTEMPTS = 20
 
 
 def _query(name: str, query_id: int = 0x1234) -> bytes:
@@ -45,11 +47,23 @@ class _UpstreamTcp(socketserver.StreamRequestHandler):
         self.wfile.write(struct.pack("!H", len(response)) + response)
 
 
+def _bind_upstream() -> tuple[socketserver.ThreadingUDPServer, socketserver.ThreadingTCPServer]:
+    """Bind UDP and TCP to one port, retrying when another socket already holds the TCP port."""
+    for _ in range(_UPSTREAM_BIND_ATTEMPTS):
+        udp = socketserver.ThreadingUDPServer(("127.0.0.1", 0), _UpstreamUdp)
+        try:
+            return udp, socketserver.ThreadingTCPServer(("127.0.0.1", udp.server_address[1]), _UpstreamTcp)
+        except OSError as e:
+            udp.server_close()
+            if e.errno != errno.EADDRINUSE:
+                raise
+    raise RuntimeError(f"No port free for both UDP and TCP after {_UPSTREAM_BIND_ATTEMPTS} attempts")
+
+
 @pytest.fixture
 def upstream_port() -> Iterator[int]:
     """A resolver on 127.0.0.1 that answers every query over UDP and TCP."""
-    udp = socketserver.ThreadingUDPServer(("127.0.0.1", 0), _UpstreamUdp)
-    tcp = socketserver.ThreadingTCPServer(("127.0.0.1", udp.server_address[1]), _UpstreamTcp)
+    udp, tcp = _bind_upstream()
     for server in (udp, tcp):
         threading.Thread(target=server.serve_forever, daemon=True).start()
     yield udp.server_address[1]
