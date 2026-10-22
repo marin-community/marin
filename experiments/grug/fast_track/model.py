@@ -907,9 +907,12 @@ class GrugModelConfig:
     history (``_AttnResHistory``), each layer rematerialized in the backward, instead of unrolling every layer.
     Same math; the layers after the leading run of identical units (e.g. ``latent_out_full_layers``) stay
     unrolled. Needed to compile deep models (48 layers)."""
+    attn_res_logit_soft_cap: float | None = None
+    """Tanh soft-cap ``c * tanh(z / c)`` on every AttnRes gate's source logits (the per-layer gates and the final
+    gate; after the logit biases, before the softmax and z-loss). None: off."""
     attn_res_final_logit_soft_cap: float | None = None
     """Tanh soft-cap ``c * tanh(z / c)`` on the final AttnRes readout gate's source logits only (after the logit
-    biases, before the softmax and z-loss); the per-layer gates stay uncapped. None: off."""
+    biases, before the softmax and z-loss); overrides ``attn_res_logit_soft_cap`` there. None: off."""
     attn_res_remat_attention: bool = False
     """Rematerialize the attention branch inside each AttnRes layer's backward, so its residuals (incl.
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
@@ -1098,12 +1101,10 @@ class GrugModelConfig:
                     f"value_embed_tie_lm_head needs MLA heads x head_dim == hidden_dim, got {heads} x "
                     f"{self.inferred_head_dim} != {self.hidden_dim}"
                 )
-        if self.attn_res_final_logit_soft_cap is not None and (
-            not self.attn_res or self.attn_res_final_logit_soft_cap <= 0
-        ):
-            raise ValueError(
-                f"attn_res_final_logit_soft_cap needs attn_res and must be > 0, got {self.attn_res_final_logit_soft_cap}"
-            )
+        for name in ("attn_res_logit_soft_cap", "attn_res_final_logit_soft_cap"):
+            cap = getattr(self, name)
+            if cap is not None and (not self.attn_res or cap <= 0):
+                raise ValueError(f"{name} needs attn_res and must be > 0, got {cap}")
         if self.scan_layers and (not self.attn_res or self.attn_res_layer_backward != AttnResLayerBackward.RECOMPUTE):
             raise ValueError("scan_layers needs attn_res with attn_res_layer_backward=recompute")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
@@ -4320,7 +4321,7 @@ def _bias_gate_logits(
 
 
 def _soft_cap_logits(logits: list[jax.Array], cap: float | None) -> list[jax.Array]:
-    """``cap * tanh(logit / cap)`` on each source logit (``attn_res_final_logit_soft_cap``); unchanged when None."""
+    """``cap * tanh(logit / cap)`` on each source logit (``attn_res_logit_soft_cap``); unchanged when None."""
     if cap is None:
         return logits
     return [cap * jnp.tanh(logit / cap) for logit in logits]
@@ -4391,7 +4392,15 @@ def _attn_res_layer(
         cfg = layer.attn.cfg
         if not leading_sources_only:
             return _attn_res_mix(
-                blocks, block_logits, p, queries, gate_index, eps, logit_bias, plain_sum=cfg.attn_res_plain_sum
+                blocks,
+                block_logits,
+                p,
+                queries,
+                gate_index,
+                eps,
+                logit_bias,
+                soft_cap=cfg.attn_res_logit_soft_cap,
+                plain_sum=cfg.attn_res_plain_sum,
             )
         # The leading layers' sources: the extra sources, then the blocks rolled at layers 0, seg, ... <= the
         # cutoff (each holds only earlier layers); the partial and later blocks are later layers' work.
@@ -4406,6 +4415,7 @@ def _attn_res_layer(
             gate_index,
             eps,
             logit_bias,
+            soft_cap=cfg.attn_res_logit_soft_cap,
             plain_sum=cfg.attn_res_plain_sum,
         )
 
@@ -4866,11 +4876,17 @@ def _scan_history_layer(
     valid = jnp.arange(num_sources) < schedule.num_extra + block + 1
     gate_weights: list[jax.Array] = []
     two_phase = layer.attn.cfg.attn_res_two_phase
+    cap = layer.attn.cfg.attn_res_logit_soft_cap
+
+    def capped(x: jax.Array) -> jax.Array:
+        """``attn_res_logit_soft_cap``, applied before the ``-inf`` masking (tanh would map it to ``-cap``)."""
+        return x if cap is None else cap * jnp.tanh(x / cap)
+
     # Phase 1 (two_phase): the attention and MLP gates' mixes of the completed sources in one pass over them.
     inter = None
     if two_phase:
         gate_logits_2 = jax.lax.dynamic_slice_in_dim(logits, 2 * layer_index, 2, axis=1)  # [N, 2, B, S]
-        gate_logits_2 = jnp.where(valid[:, None, None, None], gate_logits_2, -jnp.inf)
+        gate_logits_2 = jnp.where(valid[:, None, None, None], capped(gate_logits_2), -jnp.inf)
         lse = jax.nn.logsumexp(gate_logits_2, axis=0)  # [2, B, S]
         inter_weights = jnp.exp(gate_logits_2 - lse[None])  # [N, 2, B, S]
         src = sources if probes is None else jax.lax.stop_gradient(sources)
@@ -4885,7 +4901,7 @@ def _scan_history_layer(
         assert inter is not None and attn_gate == (j == 0)
         normed, lse, inter_weights = inter
         query = jax.lax.dynamic_index_in_dim(queries, gate_index, axis=0, keepdims=True)
-        partial_logit = _attn_res_source_logits(p, query, eps)[0]  # [B, S]
+        partial_logit = capped(_attn_res_source_logits(p, query, eps)[0])  # [B, S]
         if attn_gate:
             partial_logit = jnp.where(boundary, -jnp.inf, partial_logit)
         total = jnp.logaddexp(lse[j], partial_logit)
@@ -4906,9 +4922,9 @@ def _scan_history_layer(
         if two_phase and j < 2:  # the attention gate, then the MLP gate (``_attn_res_sublayers``' order)
             return two_phase_mix(p, gate_index, attn_gate, j)
         gate = jax.lax.dynamic_index_in_dim(logits, gate_index, axis=1, keepdims=False)  # [N, B, S]
-        gate = jnp.where(valid[:, None, None], gate, -jnp.inf)
+        gate = jnp.where(valid[:, None, None], capped(gate), -jnp.inf)
         query = jax.lax.dynamic_index_in_dim(queries, gate_index, axis=0, keepdims=True)
-        partial_logit = _attn_res_source_logits(p, query, eps)  # [1, B, S]
+        partial_logit = capped(_attn_res_source_logits(p, query, eps))  # [1, B, S]
         if attn_gate:
             partial_logit = jnp.where(boundary, -jnp.inf, partial_logit)
         gate_logits = jnp.concatenate([gate, partial_logit])
@@ -5921,7 +5937,8 @@ class Transformer(eqx.Module):
             logits = [_block_logit(bl, queries, final_index) for bl in block_logits]
             logits.append(_attn_res_source_logits(partial, queries[final_index][None], eps, (False))[0])
             logits = _bias_gate_logits(logits, logit_bias, final_index, [*blocks, partial], eps, has_partial=True)
-            logits = _soft_cap_logits(logits, cfg.attn_res_final_logit_soft_cap)
+            final_cap = cfg.attn_res_final_logit_soft_cap
+            logits = _soft_cap_logits(logits, cfg.attn_res_logit_soft_cap if final_cap is None else final_cap)
             weights, mixed = _softmax_mix(logits, [*blocks, partial])
             if cfg.attn_res_plain_sum:
                 mixed = _stream_sum((*blocks, partial))
