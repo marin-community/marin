@@ -38,7 +38,6 @@ ADVANTAGE_CLIP="${ADVANTAGE_CLIP-5}"
 ADVANTAGE_CLIP="${ADVANTAGE_CLIP:-none}"
 TEACHER_JITTER="${TEACHER_JITTER:-0.5}"
 TEACHER_FLAGS="${TEACHER_FLAGS:-}"
-FIRST_TEACHER_PORT=18080
 source "$REPOSITORY_ROOT/skyrl-train/ci/marin_nightly/resolve_runtime.sh" \
   "$REPOSITORY_ROOT" "$NIGHTLY_RL_ENV" production
 
@@ -54,39 +53,39 @@ MODEL_DIR=$("$PYTHON" -c 'import sys; from huggingface_hub import snapshot_downl
 echo "::: policy ${POLICY_MODEL}@${POLICY_REVISION} at ${MODEL_DIR}"
 
 teacher_pids=()
+TEACHER_ENDPOINT_DIR="$(mktemp -d)"
 cleanup_teachers() {
   for pid in "${teacher_pids[@]}"; do
     kill "$pid" >/dev/null 2>&1 || true
     wait "$pid" >/dev/null 2>&1 || true
   done
+  rm -rf "$TEACHER_ENDPOINT_DIR"
 }
 trap cleanup_teachers EXIT
 TEACHER_ARGS=()
-for index in "${!WORDS[@]}"; do
-  word="${WORDS[$index]}"
-  port=$((FIRST_TEACHER_PORT + index))
+for word in "${WORDS[@]}"; do
+  endpoint_file="$TEACHER_ENDPOINT_DIR/$word"
   # shellcheck disable=SC2086
   if [[ "$word" == evens ]]; then TARGET_ARGS=(--task evens); else TARGET_ARGS=(--task count --word "$word"); fi
-  "$PYTHON" examples/cat_count/synthetic_teacher.py --tokenizer "$MODEL_DIR" --port "$port" "${TARGET_ARGS[@]}" \
-    --jitter "$TEACHER_JITTER" $TEACHER_FLAGS &
-  teacher_pids+=($!)
-  "$PYTHON" - "$port" <<'PY'
-import sys
-import time
-import urllib.error
-import urllib.request
-
-for _ in range(300):
-    try:
-        urllib.request.urlopen(f"http://127.0.0.1:{sys.argv[1]}", timeout=1)
-    except urllib.error.HTTPError:
-        break
-    except OSError:
-        time.sleep(0.1)
-else:
-    raise RuntimeError("the synthetic teacher did not start")
-PY
-  TEACHER_ARGS+=(--teacher "${word}=http://127.0.0.1:${port}/v1")
+  "$PYTHON" examples/cat_count/synthetic_teacher.py --tokenizer "$MODEL_DIR" --endpoint-file "$endpoint_file" \
+    "${TARGET_ARGS[@]}" --jitter "$TEACHER_JITTER" $TEACHER_FLAGS &
+  teacher_pid=$!
+  teacher_pids+=("$teacher_pid")
+  for ((attempt = 0; attempt < 300; attempt++)); do
+    if ! kill -0 "$teacher_pid" 2>/dev/null; then
+      echo "synthetic teacher '$word' exited before publishing its endpoint" >&2
+      wait "$teacher_pid"
+      exit 1
+    fi
+    if [[ -s "$endpoint_file" ]]; then break; fi
+    sleep 0.1
+  done
+  if [[ ! -s "$endpoint_file" ]]; then
+    echo "synthetic teacher '$word' did not publish its endpoint within 30 seconds" >&2
+    exit 1
+  fi
+  read -r endpoint < "$endpoint_file"
+  TEACHER_ARGS+=(--teacher "${word}=${endpoint}")
 done
 if [[ "$SWAP_ROUTES" == 1 ]]; then TEACHER_ARGS+=(--swap-routes); fi
 

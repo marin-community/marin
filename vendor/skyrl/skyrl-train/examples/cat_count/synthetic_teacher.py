@@ -36,18 +36,23 @@ get worse, which tests that learning depends on the teacher's signal.
 
 Serve it for a training run on the policy's tokenizer::
 
-    uv run --project .. python examples/cat_count/synthetic_teacher.py --tokenizer <policy-dir> --port 18080
+    uv run --project .. python examples/cat_count/synthetic_teacher.py \
+        --tokenizer <policy-dir> --endpoint-file /tmp/teacher-endpoint
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import hashlib
 import math
 import random
 import re
-from collections.abc import Iterable, Sequence
+import socket
+from collections.abc import AsyncIterator, Iterable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from aiohttp import web
@@ -236,13 +241,35 @@ def application(teacher: SyntheticTeacher) -> web.Application:
     return app
 
 
+@asynccontextmanager
+async def teacher_server(teacher: SyntheticTeacher) -> AsyncIterator[str]:
+    """Serve one teacher on a kernel-selected loopback port held for its lifetime."""
+    with socket.create_server(("127.0.0.1", 0)) as listener:
+        runner = web.AppRunner(application(teacher))
+        await runner.setup()
+        try:
+            await web.SockSite(runner, listener).start()
+            yield f"http://127.0.0.1:{listener.getsockname()[1]}/v1"
+        finally:
+            await runner.cleanup()
+
+
+async def serve_until_cancelled(teacher: SyntheticTeacher, endpoint_file: Path) -> None:
+    """Publish this server's endpoint atomically after it starts accepting requests."""
+    async with teacher_server(teacher) as endpoint:
+        pending = endpoint_file.with_suffix(".tmp")
+        pending.write_text(endpoint + "\n")
+        pending.replace(endpoint_file)
+        print(f"SYNTHETIC_TEACHER_READY endpoint={endpoint}", flush=True)
+        await asyncio.Event().wait()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--tokenizer", required=True, help="the student policy's tokenizer directory or HF name")
     parser.add_argument("--task", choices=sorted(TARGETS), default="count")
     parser.add_argument("--word", default=TARGET_WORD, help="count: the word this expert teaches")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--endpoint-file", type=Path, required=True, help="publish the bound OpenAI base URL here")
     parser.add_argument("--correct-probability", type=float, default=TeacherNoise.correct_probability)
     parser.add_argument("--jitter", type=float, default=0.0)
     parser.add_argument("--error-rate", type=float, default=0.0)
@@ -259,7 +286,7 @@ def main() -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer)
     target = WordCountTarget(args.word) if args.task == "count" else TARGETS[args.task]()
     teacher = SyntheticTeacher(tokenizer, noise, target, engine_stop_token_ids(args.tokenizer, tokenizer))
-    web.run_app(application(teacher), host=args.host, port=args.port, print=None)
+    asyncio.run(serve_until_cancelled(teacher, args.endpoint_file))
 
 
 if __name__ == "__main__":
