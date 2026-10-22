@@ -268,9 +268,9 @@ trainer:
     # Cap on prompt groups generating at once; null bounds generation only by staleness.
     max_in_flight: null
     # Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then
-    # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. Rollout workers
-    # write from every node, so a local directory works only on a one-node Ray cluster. null keeps payloads only in
-    # Ray's object store.
+    # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. Rollout worker
+    # pools write from every node, so with a pool a local directory works only on a one-node Ray cluster. null keeps
+    # payloads only in Ray's object store.
     object_store_root: null
 
   # Bound teacher-scoring work independently for each logical teacher. Queue
