@@ -91,8 +91,8 @@ def alarms():
 
 
 def report_of(probe: SandboxHealthProbe):
-    async def report() -> WorkerHealthReport:
-        return probe.report()
+    async def report(acknowledged: int) -> WorkerHealthReport:
+        return probe.report(acknowledged)
 
     return report
 
@@ -157,18 +157,18 @@ async def test_failed_and_hung_canaries_are_counted_and_their_machines_closed(al
 async def test_unreachable_hung_or_silent_workers_are_errors(alarms):
     watch = SandboxHealthWatch(CONFIG, report_timeout_seconds=0.05)
 
-    async def unreachable() -> WorkerHealthReport:
+    async def unreachable(acknowledged: int) -> WorkerHealthReport:
         raise ConnectionError("actor died")
 
-    async def hung() -> WorkerHealthReport:
+    async def hung(acknowledged: int) -> WorkerHealthReport:
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
-    async def silent() -> WorkerHealthReport:
-        return WorkerHealthReport(True, "node-c", (), (0.01,), 0, CONFIG.silent_after_seconds + 1)
+    async def silent(acknowledged: int) -> WorkerHealthReport:
+        return WorkerHealthReport(True, "node-c", (), ((1, 0.01),), 1, 0, CONFIG.silent_after_seconds + 1)
 
-    async def without_backend() -> WorkerHealthReport:
-        return WorkerHealthReport(False, "node-d", (), (0.01,), 0, 10_000.0)
+    async def without_backend(acknowledged: int) -> WorkerHealthReport:
+        return WorkerHealthReport(False, "node-d", (), ((1, 0.01),), 1, 0, 10_000.0)
 
     reports = [unreachable, hung, silent, without_backend]
     await watch.collect(reports)
@@ -181,6 +181,26 @@ async def test_unreachable_hung_or_silent_workers_are_errors(alarms):
     assert metrics[f"{PREFIX}/sandbox_canary_alarm"] == 1
     # One error per worker when its readings go missing, not one per collection.
     assert alarms().count(("ERROR", "sandbox_canary_missing")) == 3
+
+
+@pytest.mark.asyncio
+async def test_readings_from_a_report_the_pool_never_received_are_collected_later():
+    clock = FakeClock()
+    factory = FakeFactory(clock, run_seconds=3.0)
+    probe = SandboxHealthProbe(CONFIG, factory, host="node-a", clock=clock)
+    watch = SandboxHealthWatch(CONFIG)
+    await probe.canary()
+    await watch.collect([report_of(probe)])
+    watch.step_metrics(PREFIX)
+    await probe.canary()
+    # A report that ran after the pool's deadline: the worker built it, but the pool discarded the result.
+    probe.report(acknowledged=0)
+    await watch.collect([report_of(probe)])
+
+    metrics = watch.step_metrics(PREFIX)
+
+    assert metrics[f"{PREFIX}/sandbox_canary_samples"] == 1
+    assert metrics[f"{PREFIX}/sandbox_canary_slow"] == 1
 
 
 @pytest.mark.asyncio

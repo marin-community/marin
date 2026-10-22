@@ -126,8 +126,8 @@ class RolloutWorker:
         await self._health.stop()
         await self._runner.shutdown()
 
-    async def sandbox_health_report(self) -> WorkerHealthReport:
-        return self._health.report()
+    async def sandbox_health_report(self, acknowledged: int) -> WorkerHealthReport:
+        return self._health.report(acknowledged)
 
     async def run(
         self, input_batch: TrajectoryRequestBatch, observe: bool

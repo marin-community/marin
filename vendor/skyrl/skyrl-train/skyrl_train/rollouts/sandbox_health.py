@@ -124,13 +124,16 @@ class CanaryReading:
 
 @dataclass(frozen=True)
 class WorkerHealthReport:
-    """Readings a worker took since its previous report."""
+    """Readings a worker holds that the pool has not acknowledged, each with its sequence number."""
 
     canary_enabled: bool
     host: str
-    canaries: tuple[CanaryReading, ...]
-    loop_lags: tuple[float, ...]
+    canaries: tuple[tuple[int, CanaryReading], ...]
+    loop_lags: tuple[tuple[int, float], ...]
+    sequence: int
+    """The last sequence number the worker assigned; acknowledging it releases every reading in this report."""
     dropped_readings: int
+    """Readings dropped from a full buffer since the probe started."""
     seconds_since_canary: float
     """Since the last canary finished, or since the probe started when none has."""
 
@@ -156,8 +159,9 @@ class SandboxHealthProbe:
         self._host = host
         self._clock = clock
         self._wait = wait
-        self._canaries: deque[CanaryReading] = deque()
-        self._lags: deque[float] = deque()
+        self._canaries: deque[tuple[int, CanaryReading]] = deque()
+        self._lags: deque[tuple[int, float]] = deque()
+        self._sequence = 0
         self._dropped = 0
         self._last_canary = clock()
         self._tasks: list[asyncio.Task[None]] = []
@@ -190,16 +194,22 @@ class SandboxHealthProbe:
         # Each loop that ended with an error already logged it when it ended.
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    def report(self) -> WorkerHealthReport:
-        canaries, self._canaries = tuple(self._canaries), deque()
-        lags, self._lags = tuple(self._lags), deque()
-        dropped, self._dropped = self._dropped, 0
+    def report(self, acknowledged: int) -> WorkerHealthReport:
+        """Release readings up to ``acknowledged`` and return the rest.
+
+        Readings stay buffered until a later report acknowledges them, so a report whose result never reaches the
+        pool, such as one that ran after the pool's deadline, loses nothing.
+        """
+        for readings in (self._canaries, self._lags):
+            while readings and readings[0][0] <= acknowledged:
+                readings.popleft()
         return WorkerHealthReport(
             canary_enabled=self._config.enabled and self._factory is not None,
             host=self._host,
-            canaries=canaries,
-            loop_lags=lags,
-            dropped_readings=dropped,
+            canaries=tuple(self._canaries),
+            loop_lags=tuple(self._lags),
+            sequence=self._sequence,
+            dropped_readings=self._dropped,
             seconds_since_canary=self._clock() - self._last_canary,
         )
 
@@ -264,7 +274,8 @@ class SandboxHealthProbe:
         if len(readings) >= MAX_BUFFERED_READINGS:
             readings.popleft()
             self._dropped += 1
-        readings.append(value)
+        self._sequence += 1
+        readings.append((self._sequence, value))
 
 
 class _Alarm(StrEnum):
@@ -294,9 +305,12 @@ class _WorkerWindow:
     loop_lags: list[float] = field(default_factory=list)
     missing_collections: int = 0
     dropped_readings: int = 0
+    acknowledged: int = 0
+    reported_dropped: int = 0
 
 
-WorkerReport = Callable[[], Awaitable[WorkerHealthReport]]
+WorkerReport = Callable[[int], Awaitable[WorkerHealthReport]]
+"""Asks one worker for its readings after the given acknowledged sequence number."""
 
 
 class SandboxHealthWatch:
@@ -324,14 +338,17 @@ class SandboxHealthWatch:
                 logger.exception("Sandbox health collection failed; the step summary will collect again")
 
     async def collect(self, reports: Sequence[WorkerReport]) -> None:
-        async def bounded(report: WorkerReport) -> WorkerHealthReport:
+        async def bounded(report: WorkerReport, acknowledged: int) -> WorkerHealthReport:
             async with asyncio.timeout(self._report_timeout):
-                return await report()
+                return await report(acknowledged)
 
         async with self._lock:
-            results = await asyncio.gather(*(bounded(report) for report in reports), return_exceptions=True)
-            while len(self._workers) < len(results):
+            while len(self._workers) < len(reports):
                 self._workers.append(_WorkerWindow())
+            results = await asyncio.gather(
+                *(bounded(report, window.acknowledged) for report, window in zip(reports, self._workers, strict=False)),
+                return_exceptions=True,
+            )
             for index, result in enumerate(results):
                 if isinstance(result, BaseException):
                     self._missing(index, f"its health report failed: {result!r}")
@@ -386,13 +403,21 @@ class SandboxHealthWatch:
         window = self._workers[index]
         window.canary_enabled = report.canary_enabled
         window.host = report.host
-        window.dropped_readings += report.dropped_readings
+        if report.sequence < window.acknowledged:
+            # A restarted worker numbers its readings from zero again.
+            window.acknowledged = window.reported_dropped = 0
+        window.dropped_readings += max(0, report.dropped_readings - window.reported_dropped)
+        window.reported_dropped = report.dropped_readings
+        # Absorb only readings newer than the last acknowledgement, then acknowledge everything this report held.
+        lags = [lag for sequence, lag in report.loop_lags if sequence > window.acknowledged]
+        canaries = [reading for sequence, reading in report.canaries if sequence > window.acknowledged]
+        window.acknowledged = max(window.acknowledged, report.sequence)
         attributes = {"role": WORKER_ROLE, "rollout_worker": str(index), "host": report.host}
-        for lag in report.loop_lags:
+        for lag in lags:
             event_loop_lag.record(lag, attributes=attributes)
-        window.loop_lags.extend(report.loop_lags)
+        window.loop_lags.extend(lags)
         seen: set[_Alarm] = set()
-        for reading in report.canaries:
+        for reading in canaries:
             reading = self._classify(index, reading)
             canary_seconds.record(reading.total_seconds, attributes={**attributes, "outcome": reading.outcome})
             if (alarm := _OUTCOME_ALARMS.get(reading.outcome)) is not None:
@@ -407,7 +432,7 @@ class SandboxHealthWatch:
             window.active.discard(_Alarm.MISSING)
             logger.info("Rollout worker {} on {} reports sandbox canaries again", index, report.host)
         # A collection between two canaries says nothing new, so it leaves the canary alarms as they were.
-        if report.canaries:
+        if canaries:
             self._transition(index, window, seen)
 
     def _missing(self, index: int, reason: str) -> None:
