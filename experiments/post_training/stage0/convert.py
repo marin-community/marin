@@ -26,6 +26,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
+
 Message = dict[str, Any]
 
 MAX_RENDERED_TOKENS = 32768
