@@ -34,11 +34,12 @@ jobs:
           goal: >-
             Follow the Nightshift area reviews procedure in
             .github/workflows/README.md in
-            ${{ github.repository }}. Choose one project area, review its
-            design and behavior holistically, and compare supported candidates
+            ${{ github.repository }}. Choose one project area from current
+            demand or measured workflow cost, review its design and behavior
+            holistically, and compare supported candidates
             before implementing the highest-value eligible improvement. Follow
             AGENTS.md and the commit skill. Open a PR with agent-generated and
             nightshift labels only for a justified change. Publish a typed
-            result with the review, candidate ranking, validation evidence,
+            result with the review, candidate comparison, validation evidence,
             and PR URL or the reason no change was warranted.
           base: ${{ github.sha }}

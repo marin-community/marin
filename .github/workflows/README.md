@@ -112,21 +112,23 @@ delta is only `Deslop` commits, which closes the review-then-deslop loop.
 dispatch. It launches one `github-automation` session. Follow this procedure
 for that assignment; CI-test and documentation-drift jobs have separate scopes.
 
-1. **Choose one area.** Read applicable `AGENTS.md` files and use
-   `consult-echo` for prior work. Inspect the last 20 PRs labeled `nightshift`,
-   including closed PRs and relevant feedback:
+1. **Find demand, then choose one area.** Read applicable `AGENTS.md` files
+   and use `consult-echo` for prior work. Inspect the last 20 PRs labeled
+   `nightshift`, including closed PRs and relevant feedback:
 
    ```bash
    gh pr list --state all --label nightshift --limit 20 \
      --json number,title,state,createdAt,url,files
    ```
 
-   Choose a bounded subsystem under `lib/marin/src/marin`,
-   `lib/iris/src/iris`, `lib/zephyr/src/zephyr`, or
-   `lib/levanter/src/levanter`. Explain why it deserves review: recurring
-   friction, recent changes, a critical operational boundary, or neglected
-   coverage. Prefer an area recent runs have not reviewed unless new evidence
-   justifies returning.
+   Look for an unresolved failure, repeated operator work, a current request,
+   or a measured cost in an active workflow. Read the full discussion,
+   including corrections and rejected fixes. Use that evidence to choose a
+   bounded subsystem under `lib/marin/src/marin`, `lib/iris/src/iris`,
+   `lib/zephyr/src/zephyr`, or `lib/levanter/src/levanter`. Name the affected
+   workflow and why it deserves attention now. Prefer an area the inspected
+   PRs have not recently covered unless new evidence justifies returning. If no
+   demand is documented, measure an ordinary caller before proposing work.
 
 2. **Understand the system before proposing edits.** Apply the whole-system
    questions from [holistic review](../../.agents/skills/review-pr-holistic/SKILL.md):
@@ -137,9 +139,15 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    Trace entry points, current callers, configuration defaults, state and
    error transitions, neighboring abstractions, tests, and recent history.
    Read `TESTING.md` and module testing guidance when assessing coverage.
-   Write a short walkthrough of how the area works.
+   Write a short walkthrough of one ordinary workflow, including its dominant
+   work and failure boundaries. Check open PRs by listing their changed files
+   and filtering by the area's paths; `gh pr list --search` does not search
+   changed paths. Read relevant closed predecessors before developing a fix.
+   Defer work already covered by an open PR or rejected without new evidence.
 
-3. **Compare up to three supported improvements.** Do not fill a quota. Each
+3. **Generate alternatives from that workflow.** Consider preventing the
+   failure, containing it at an existing boundary, or removing unnecessary
+   work. Compare up to three supported improvements; do not fill a quota. Each
    candidate needs exact source paths and lines, an affected user or operator,
    a concrete consequence, a replacement using existing concepts, and a safe,
    falsifiable regression or measurement. Establish why the affected case
@@ -154,11 +162,6 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    latency. A format or edge-case fix that introduces full-file materialization
    or extra work for common callers needs evidence that its benefit outweighs
    that cost.
-
-   Check open PRs by listing their changed files and filtering by the
-   candidate's paths; `gh pr list --search` does not search changed paths.
-   Read relevant issues and PR discussions. Defer work already covered by an
-   open PR, rejected without new evidence, or requiring a maintainer decision.
 
 4. **Choose by demonstrated benefit.** Record a candidate table with evidence
    of current use, consequence or measured cost, proposed change, validation,
@@ -175,15 +178,24 @@ for that assignment; CI-test and documentation-drift jobs have separate scopes.
    what was reviewed and why no change is warranted. Do not switch areas
    repeatedly to force a PR.
 
-5. **Validate the premise, then implement one improvement.** Reproduce the
-   defect or measure the cost before editing. Drop disproved candidates and
-   reconsider the remaining ones. Follow applicable implementation and
-   testing skills, and compare the changed behavior with the baseline using
-   the promised regression or measurement. Measure newly added I/O or
-   materialization on representative input sizes. Passing existing tests alone
-   does not establish the improvement. Use `update-docs` when guidance changes and
-   `commit` to publish a PR with `agent-generated` and `nightshift` labels.
-   Do not merge it or file issues for unselected candidates.
+5. **Test the replacement, then implement one improvement.** Reproduce the
+   defect or measure the cost before editing. Use a small local prototype to
+   compare the proposed replacement with the baseline through the affected
+   caller. Ask one reviewer with fresh context to try to disprove the selected
+   candidate using its source and demand evidence. Have them check prior
+   decisions, added costs, failure paths, teardown, and any state or ownership
+   boundaries the replacement changes. A helper-level reproducer does not
+   establish that it works across retries, asynchronous completion, or ranks.
+   Drop disproved candidates and reconsider the remaining ones. Narrow claims
+   to the callers and modes actually validated.
+
+   Follow applicable implementation and testing skills. Compare the finished
+   change with the baseline using the promised regression or measurement.
+   Measure added I/O or materialization on representative input sizes and
+   relate local measurements to the whole workflow. Passing existing tests
+   alone does not establish the improvement. Use `update-docs` when guidance
+   changes and `commit` to publish a PR with `agent-generated` and `nightshift`
+   labels. Do not merge it or file issues for unselected candidates.
 
 Publish the report in the session's Loom channel with message kind `result`:
 
@@ -191,10 +203,10 @@ Publish the report in the session's Loom channel with message kind `result`:
 loom channels send --kind result "<review and outcome>"
 ```
 
-Include the source revision, reviewed area, walkthrough, candidate table,
-selection or no-change rationale, validation results and limits, and PR URL
-when present. Keep the full review in the session; keep the PR description
-focused on its resulting behavior.
+Include the reviewed baseline SHA, reviewed area, walkthrough, candidate table,
+selection or no-change rationale, validation results and limits, and resulting
+PR URL and head SHA when present. Keep the full review in the session; keep the
+PR description focused on its resulting behavior.
 
 ## SkyRL runtime checks
 
