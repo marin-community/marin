@@ -69,7 +69,22 @@ class PreferenceRequestBatch:
         return self.prompts
 
 
-TrajectoryRequestBatch = TaskRequestBatch | PreferenceRequestBatch
+@dataclass(frozen=True)
+class FixedCompletionRequestBatch:
+    prompts: tuple[ConversationType | list[int], ...]
+    completions: tuple[str | list[int], ...]
+    metadata: tuple[TrajectoryMetadata, ...]
+    completion_loss_masks: tuple[tuple[int, ...] | None, ...] | None = None
+    sampling_params: dict[str, Any] | None = None
+    trajectory_ids: tuple[TrajectoryID, ...] | None = None
+    batch_metadata: BatchMetadata | None = None
+
+    @property
+    def public_prompts(self) -> tuple[ConversationType | list[int], ...]:
+        return self.prompts
+
+
+TrajectoryRequestBatch = TaskRequestBatch | PreferenceRequestBatch | FixedCompletionRequestBatch
 
 
 class RewardShapingComponents(TypedDict):

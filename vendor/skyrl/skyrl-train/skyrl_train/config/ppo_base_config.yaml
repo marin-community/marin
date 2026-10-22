@@ -11,6 +11,7 @@ data:
   val_data: ["${oc.env:HOME}/data/gsm8k/validation.parquet"]
   shuffle: true
   preference_pair_format: text # text completions or tokenized conversations with assistant masks
+  fixed_completion_format: text # text completions or tokenized conversations with assistant masks
   # Optional task-directory sidechannel for mixed Nemotron Ultra RLVR. The
   # parquet dataloader remains authoritative; SWE rows resolve their instance ID
   # against these terminal-bench task roots at rollout time.

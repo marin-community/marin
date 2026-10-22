@@ -92,6 +92,20 @@ class PromptDataset:
         return len(self.dataframe)
 
 
+def prompt_token_ids(tokenizer: PreTrainedTokenizerBase, prompt) -> list[int]:
+    """Apply the chat template with a generation prompt, normalizing Transformers 5 returns."""
+    encoded = tokenizer.apply_chat_template(prompt, add_generation_prompt=True)
+    if isinstance(encoded, Mapping):
+        encoded = encoded.get("input_ids")
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if isinstance(encoded, list) and len(encoded) == 1 and isinstance(encoded[0], list):
+        encoded = encoded[0]
+    if not isinstance(encoded, list):
+        raise TypeError(f"tokenizer chat template returned unsupported token IDs: {type(encoded).__name__}")
+    return [int(token) for token in encoded]
+
+
 def _prompt_token_count(tokenizer: PreTrainedTokenizerBase, prompt, **template_options) -> int:
     """Count token IDs, including with Transformers 5.x ``BatchEncoding`` output."""
     encoded = tokenizer.apply_chat_template(prompt, add_generation_prompt=True, **template_options)

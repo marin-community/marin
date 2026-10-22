@@ -37,11 +37,44 @@ DPO_OVERRIDES = {
     "generator": {"n_samples_per_prompt": 2},
 }
 
+# The fixed-data SFT recipe for M1: static rows under the sft loss with the matched
+# update budget. Same shape as DPO_OVERRIDES so config tests build both arms from one helper.
+FIXED_COMPLETION_OVERRIDES = {
+    "environment": {"env_class": "fixed_completion"},
+    "data": {"fixed_completion_format": "text", "sampling": {"kind": None}},
+    "trainer": {
+        "algorithm": {
+            "policy_loss_type": "sft",
+            "advantage_estimator": "uniform",
+            "loss_reduction": "token_mean",
+            "use_kl_loss": False,
+            "use_kl_in_reward": False,
+            "use_entropy_loss": False,
+            "off_policy_correction": "none",
+            "dynamic_sampling": {"type": None},
+        },
+        "placement": {"colocate_all": False},
+        "use_sample_packing": False,
+        "step_wise_training": False,
+        "trajectory_selector": {"type": None},
+    },
+    "generator": {"n_samples_per_prompt": 1},
+}
+
 
 def dpo_test_config(**overrides):
     """Compose the default config with the DPO recipe plus test-local overrides."""
+    return _recipe_config(DPO_OVERRIDES, overrides)
+
+
+def fixed_completion_test_config(**overrides):
+    """Compose the default config with the fixed-completion recipe plus test-local overrides."""
+    return _recipe_config(FIXED_COMPLETION_OVERRIDES, overrides)
+
+
+def _recipe_config(recipe: dict, overrides: dict):
     cfg = get_default_config()
-    cfg = OmegaConf.merge(cfg, OmegaConf.create(DPO_OVERRIDES))
+    cfg = OmegaConf.merge(cfg, OmegaConf.create(recipe))
     if overrides:
         cfg = OmegaConf.merge(cfg, OmegaConf.create(overrides))
     cfg.trainer.logger = "console"

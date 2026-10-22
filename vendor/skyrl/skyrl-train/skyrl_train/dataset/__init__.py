@@ -1,2 +1,3 @@
 from .dataset import PromptDataset as PromptDataset
 from .preference_pairs import PreferencePairDataset as PreferencePairDataset
+from .fixed_completions import FixedCompletionsDataset as FixedCompletionsDataset
