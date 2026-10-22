@@ -22,6 +22,12 @@ ARM_NAMES = (
     "65k-16k-summary",
 )
 MODEL_NAMES = ("qwen36", "gemma4", "nemotron-lightning", "snowball-v0.1")
+ARCHIVE_ARM_MARKERS = (
+    ("131", "131k-16k-no-summary"),
+    ("32_SUMMARY", "32k-8k-summary"),
+    ("65_SUMMARY", "65k-16k-summary"),
+    ("65", "65k-16k-no-summary"),
+)
 SENSITIVE = re.compile(
     r"iris\.oa\.dev/proxy/t/|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}|"
     r"hf_[A-Za-z0-9]{25,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9_.-]{20,}",
@@ -63,6 +69,8 @@ def accepted_manifest(audit_root: Path) -> dict:
     assert len(completion["rows"]) == len(MODEL_NAMES) * len(ARM_NAMES)
     arms = []
     for index, item in enumerate(completion["rows"]):
+        archive_name = Path(item["archive"]).name.upper()
+        arm_name = next(name for marker, name in ARCHIVE_ARM_MARKERS if marker in archive_name)
         audit = read_audit(audit_root / item["archive"], item["member"])
         retained = set(audit.get("retained_tasks", []))
         trials = audit.get("trials", audit.get("observed_trials"))
@@ -78,13 +86,14 @@ def accepted_manifest(audit_root: Path) -> dict:
         arms.append(
             {
                 "model": MODEL_NAMES[index // len(ARM_NAMES)],
-                "arm": ARM_NAMES[index % len(ARM_NAMES)],
+                "arm": arm_name,
                 "audit_archive": item["archive"],
                 "audit_member": item["member"],
                 "mean_reward": item["mean_reward"],
                 "trials": sorted(selected, key=lambda trial: trial["task_name"]),
             }
         )
+    assert {(arm["model"], arm["arm"]) for arm in arms} == {(model, name) for model in MODEL_NAMES for name in ARM_NAMES}
     return {"benchmark": "SWE-bench Verified", "expected_tasks_per_arm": 500, "arms": arms}
 
 
