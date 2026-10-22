@@ -43,7 +43,7 @@ The result is read back from the unit files, each outcome through ``trials.attem
 round returns what an uninterrupted one would. The result holds every decision input and no rollout, which
 stays in the attempt files it names: the lowering's status, refusals and backend fallback; per solver
 trial its status, reward and cause, with the solver ``Evidence``'s reward totals and ungraded causes; per
-control its verdict and cause; and per adversary trial its status, cause, claim and every submission with its
+control its verdict, reward and cause; and per adversary trial its status, cause, claim and every submission with its
 grade status, reward and whether it passed. Which passing submissions are shortcuts is review's judgement, not
 the round's. ``write_validation`` writes it to ``<round_dir>/validation.json``, and ``load_validation`` reads it
 back without the evidence files.
@@ -207,12 +207,13 @@ class SolverEvidence:
 
 @dataclass(frozen=True)
 class ControlResult:
-    """A control's replay: ``cause`` is set when the replay produced no grade. ``attempt_file`` is relative to
-    the round directory."""
+    """A control's replay: ``reward`` is set when the replay was graded, ``cause`` when it produced no grade.
+    ``attempt_file`` is relative to the round directory."""
 
     id: str
     kind: ControlKind
     verdict: ControlVerdict
+    reward: float | None
     cause: Cause | None
     attempt_file: str
 
@@ -564,8 +565,8 @@ def _control_results(
     for control in controls:
         path, outcome = _final_attempt(evidence_dir, TrialKind.CONTROL, control.id)
         verdict = control_outcome(control, outcome).verdict
-        cause = None if isinstance(outcome, Graded) else outcome.cause
-        results.append(ControlResult(control.id, control.kind, verdict, cause, _relative(context, path)))
+        reward, cause = (outcome.reward, None) if isinstance(outcome, Graded) else (None, outcome.cause)
+        results.append(ControlResult(control.id, control.kind, verdict, reward, cause, _relative(context, path)))
     return tuple(results)
 
 

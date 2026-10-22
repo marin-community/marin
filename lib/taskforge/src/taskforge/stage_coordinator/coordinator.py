@@ -72,7 +72,6 @@ The layout of the run root is in ``lib/taskforge/README.md``.
 """
 
 import inspect
-import json
 import traceback
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -101,8 +100,9 @@ from taskforge.stage40_build_with_program.infrastructure import exception_chain,
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
-from taskforge.stage50_validate.round import VALIDATION_FILE, ValidationContext, write_validation
+from taskforge.stage50_validate.round import ValidationContext, load_validation, write_validation
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, RejectKind, Retry
+from taskforge.stage60_review.rules import BandRules, ReviewContext
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import (
@@ -167,6 +167,7 @@ class StageCoordinator:
     Attributes:
         stages: The caller's function for each stage.
         budget: The budget of every workpiece. ``OPENED`` records its digest.
+        band: The band rules every review receives in its ``ReviewContext``.
         root: The run root holding ``workpieces/`` and the step store in ``store/``.
         event_store: The store each workpiece's events are saved to on reaching a terminal.
         model: The model build steps call.
@@ -181,6 +182,7 @@ class StageCoordinator:
 
     stages: StageFunctions
     budget: WorkpieceBudget
+    band: BandRules
     root: Path
     event_store: WorkpieceEventStore
     model: ModelClient
@@ -559,8 +561,7 @@ def _program_files(program: RLEnvBuildProgram) -> set[str]:
 async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
     """Validate the round's draft in the round's ``ValidationContext`` and write the result to ``validation.json``.
 
-    The context carries the MODIFY rounds the workpiece has left: ``max_modify_rounds`` less ``state.round``,
-    the ``Modify`` decisions already followed.
+    The context carries the MODIFY rounds the workpiece has left (``_modify_rounds_left``).
     """
     coordinator = workpiece.coordinator
     round_dir = workpiece.round_dir(state.round)
@@ -575,7 +576,7 @@ async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEv
         round_dir=round_dir,
         proposal=workpiece.proposal_at(state),
         store_root=str(coordinator.root / STORE_DIR),
-        modify_rounds_left=coordinator.budget.max_modify_rounds - state.round,
+        modify_rounds_left=_modify_rounds_left(workpiece, state),
     )
     result = await coordinator.stages.validate(draft, context)
     write_validation(round_dir, result)
@@ -584,11 +585,21 @@ async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEv
 
 
 async def _review(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
-    """Decide on the summary read back from ``validation.json`` and write the decision to ``decision.json``."""
+    """Decide on the result read back from ``validation.json`` and write the decision to ``decision.json``.
+
+    Review receives the round, the MODIFY rounds the workpiece has left and the coordinator's band rules.
+    """
+    coordinator = workpiece.coordinator
     round_dir = workpiece.round_dir(state.round)
-    decision = await workpiece.coordinator.stages.review(json.loads((round_dir / VALIDATION_FILE).read_bytes()))
+    context = ReviewContext(state.round, _modify_rounds_left(workpiece, state), coordinator.band)
+    decision = await coordinator.stages.review(load_validation(round_dir), context)
     _write(round_dir / DECISION_FILE, _DECISION.dump_json(decision, indent=2))
     return WorkpieceEvent(EventKind.DECIDED, state.round, state.task_digest, _decision_attrs(workpiece, state, decision))
+
+
+def _modify_rounds_left(workpiece: _Workpiece, state: WorkpieceState) -> int:
+    """``max_modify_rounds`` less the ``Modify`` decisions the workpiece has followed (``WorkpieceState.round``)."""
+    return workpiece.coordinator.budget.max_modify_rounds - state.round
 
 
 def _decision_attrs(workpiece: _Workpiece, state: WorkpieceState, decision: Decision) -> dict[str, str]:

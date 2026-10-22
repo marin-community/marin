@@ -56,7 +56,8 @@ src/taskforge/
                                controls.py: control replay; outcome.py, evidence.py: outcomes and their totals
                                round.py: `validate_round`, one validation round as a graph of units;
                                adversary.py, adversary_prompts.py: adversary trials and their brief
-  stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
+  stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify);
+                               rules.py: BandRules, ReviewContext, `default_review`, the default rule table
 ```
 
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
@@ -502,6 +503,10 @@ the step store, and the MODIFY rounds left, `max_modify_rounds` less the `Modify
 followed. It returns a `ValidationResult`, which the coordinator writes to `validation.json`. The
 caller's function closes over what the coordinator does not own, the host's `ValidationSettings` and
 the trial models, as `validate_round(draft, context, settings, solver, controls, adversary)` takes them.
+The review stage reads the result back from `validation.json` (`load_validation`) and calls
+`StageFunctions.review(result, context)` with a `ReviewContext`: the round, the MODIFY rounds left, and
+the `BandRules` the `StageCoordinator` holds in `band`. `stage60_review.rules.default_review` is a
+`Review`; the rule table it applies is under Review.
 
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
 digest and research requirement. A relaunch of the workpiece with another proposal, budget, model
@@ -645,8 +650,8 @@ counting as ungraded. The result is read back from the unit files (`trials.attem
 holds every decision input without the rollouts: the lowering's status
 (`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
 backend fallback; each solver trial's status, reward, cause and attempt file, with the reward totals
-and ungraded causes of its `Evidence`; each control's verdict (`met`, `violated`, `ungraded`) and
-cause; and each adversary trial's status, cause, claim and submissions with their grades and rewards.
+and ungraded causes of its `Evidence`; each control's verdict (`met`, `violated`, `ungraded`), reward
+and cause; and each adversary trial's status, cause, claim and submissions with their grades and rewards.
 `write_validation(round_dir, result)` writes it to `<round_dir>/validation.json`, and
 `load_validation(round_dir)` reads it back. The round itself writes no `validation.json`: the stage
 coordinator, the file's one writer, writes the result its validate function returns.
@@ -664,6 +669,25 @@ graded with its last passing submission's grade, else its last submission's. Its
 agent's whole rollout, the brief and every submission; an attempt under another brief, such as another
 mode or control set, does not count as done. The round records facts only: whether a passing submission
 is a shortcut is review's judgement.
+
+## Review
+
+`stage60_review.rules.default_review(result, context)` decides on a `ValidationResult` by the first
+row of this table that matches:
+
+| finding                                                                 | decision                                       |
+|-------------------------------------------------------------------------|------------------------------------------------|
+| the lowering was `refused` by a factory or `rejected` by RolloutEngine | `Reject(HOST)`                                 |
+| a control was `violated`                                                | `Modify(findings)` while a MODIFY round is left, else `Reject(TASK)` |
+| a solver trial or a control replay has no grade                         | `Retry(cause, count)`                          |
+| the solve rate falls in a place `context.band` accepts                  | `Accept(band)`, else `Reject(TASK)`            |
+
+A `Modify` carries one finding per violated control, naming its kind, id, reward and attempt file. A
+`Retry` names the cause that left the most solver trials and controls ungraded, with their count. The
+solve rate is the solved share of the graded solver trials: below `BandRules.low` it is `too_hard`,
+above `BandRules.high` `too_easy`, and in between, both ends included, `in_band`; `BandRules.accepted`
+lists the places review accepts. Adversary trials decide nothing yet: whether a passing submission is
+a shortcut is the arbiter's judgement, which a later rule will read.
 
 ## Testing
 

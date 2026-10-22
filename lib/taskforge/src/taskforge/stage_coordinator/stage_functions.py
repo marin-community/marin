@@ -15,7 +15,7 @@ as they are and may also call any stage directly::
     build         Build           ``stage40_build_with_program.run.run_build``
     validate      Validate        ``stage50_validate.round.validate_round``, closed over the host's settings
                                   and models
-    review        Review          a caller's function
+    review        Review          ``stage60_review.rules.default_review``
 
 The Protocols defined here take positional-only parameters, so a caller's function may use its own
 parameter names; ``Build`` passes ``run_build``'s keyword-only ``research`` and ``model_digest`` by
@@ -32,8 +32,10 @@ not own, such as the host's ``ValidationSettings`` and the trial models::
         return await validate_round(draft, context, settings, solver_model, controls_model, adversary_model)
 
 The coordinator writes the ``ValidationResult`` returned by validate to ``validation.json``
-(``write_validation``), the file's one writer, and hands review the JSON read back from that file, so
-a resumed review receives the same value as a review in the first process.
+(``write_validation``), the file's one writer. The review stage hands review the result read back from
+that file (``load_validation``), so a resumed review receives the same value as a review in the first
+process, with the round's ``ReviewContext``: the round, the MODIFY rounds left and the coordinator's
+``BandRules``.
 """
 
 from dataclasses import dataclass
@@ -50,6 +52,7 @@ from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDr
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage50_validate.round import ValidationContext, ValidationResult
 from taskforge.stage60_review.decision import Decision
+from taskforge.stage60_review.rules import ReviewContext
 
 
 class Triage(Protocol):
@@ -98,9 +101,9 @@ class Validate(Protocol):
 
 
 class Review(Protocol):
-    """Decide on the summary of a validation round."""
+    """Decide on a validation round's ``result`` in its review ``context``."""
 
-    async def __call__(self, summary: object, /) -> Decision: ...
+    async def __call__(self, result: ValidationResult, context: ReviewContext, /) -> Decision: ...
 
 
 @dataclass(frozen=True)

@@ -70,6 +70,7 @@ from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuil
 from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage50_validate.evidence import RewardStats
 from taskforge.stage50_validate.round import (
+    VALIDATION_FILE,
     Lowering,
     LoweringStatus,
     SolverEvidence,
@@ -80,13 +81,13 @@ from taskforge.stage50_validate.round import (
     load_validation,
 )
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
+from taskforge.stage60_review.rules import BandRules, ReviewContext, default_review
 from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
     DECISION_FILE,
     FAILURES_DIR,
     REPAIRED_DIR,
     STORE_DIR,
-    VALIDATION_FILE,
     StageCoordinator,
     WorkpieceBudget,
     run_workpiece,
@@ -149,6 +150,7 @@ BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_valida
 REPAIRING = replace(BUDGET, max_triage_repairs=1)
 """``BUDGET`` for a consumer using the REPAIR surface: one rewrite, then a REPAIR verdict rejects."""
 SAMPLING = LLMPolicy()
+BAND = BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND}))
 SERVICES = RLEnvBuildServices(
     host=MachineHost.LAPTOP,
     factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
@@ -257,10 +259,6 @@ async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationRe
     return passing_result(context)
 
 
-async def review(summary: object) -> Decision:
-    return Accept(band=BandOutcome.IN_BAND)
-
-
 NO_SDK_NAMES = SdkExports(defining_modules={})
 """The walkthrough's programs read no name they leave unbound, so the loader has no SDK name to suggest."""
 
@@ -280,7 +278,7 @@ STAGES = StageFunctions(
     load_program=load_toy_program,
     build=run_build,
     validate=validate,
-    review=review,
+    review=default_review,
 )
 UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
@@ -354,7 +352,7 @@ def coordinator(
     research: ResearchRequirement = ResearchRequirement.OFF,
 ) -> StageCoordinator:
     return StageCoordinator(
-        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, research, digest
+        stages, budget, BAND, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, research, digest
     )
 
 
@@ -792,13 +790,15 @@ async def test_an_unavailable_model_fails_the_workpiece_at_validation_and_a_rela
     assert exits(log) == [*ACCEPTED_EXITS[:4], ("terminal", "failed"), *ACCEPTED_EXITS[4:]]
 
 
-async def test_the_validate_stage_passes_each_round_its_directory_proposal_and_modify_rounds_left_across_a_relaunch(
+async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds_left_across_a_relaunch(
     tmp_path,
 ):
     validate_once = UnavailableOnce(failing=2)
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
+    reviewed: list[tuple[ValidationResult, ReviewContext]] = []
 
-    async def review_in_turn(summary: object) -> Decision:
+    async def review_in_turn(result: ValidationResult, context: ReviewContext) -> Decision:
+        reviewed.append((result, context))
         return decisions.pop(0)
 
     stages = replace(STAGES, author=RecordingAuthor(PROGRAM), validate=validate_once, review=review_in_turn)
@@ -815,6 +815,10 @@ async def test_the_validate_stage_passes_each_round_its_directory_proposal_and_m
     )
     assert validate_once.contexts == [first, second, second]
     assert load_validation(rounds / "1") == passing_result(second)
+    assert reviewed == [
+        (passing_result(first), ReviewContext(round=0, modify_rounds_left=1, band=BAND)),
+        (passing_result(second), ReviewContext(round=1, modify_rounds_left=0, band=BAND)),
+    ]
     assert [(event.kind, event.round) for event in log.events()][-4:] == [
         ("terminal", 1),
         ("validated", 1),
@@ -827,7 +831,7 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
 
-    async def review_in_turn(summary: object) -> Decision:
+    async def review_in_turn(result: ValidationResult, context: ReviewContext) -> Decision:
         return decisions.pop(0)
 
     stages = replace(STAGES, author=author, review=review_in_turn)
@@ -839,7 +843,7 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
 
 
-async def always_modify(summary: object) -> Decision:
+async def always_modify(result: ValidationResult, context: ReviewContext) -> Decision:
     return Modify(findings=("the file states the product",))
 
 
