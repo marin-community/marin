@@ -44,12 +44,14 @@ def test_sharded_recovery_preserves_scores_and_assigns_unscored_tasks_once():
     recovered = [{"task_name": str(i), "reward": 1, "exception_type": None} for i in range(100, 130)]
     recovered.append({"task_name": "130", "reward": 0, "exception_type": "AgentSetupTimeoutError"})
     report = {"manifest": manifest, **combine(manifest, retained, recovered)}
+    report["trials"][0]["result"] = {"verifier_output": "raw evidence stays in the archived audit"}
     config = {
         "datasets": [{"name": "swebench-verified", "task_names": manifest["recovery_tasks"]}],
         "agent": {"max_input_tokens": 131072},
     }
     next_manifest, shards = partition(report, config, 3)
     assert len(next_manifest["retained_trials"]) == 130
+    assert "result" not in next_manifest["retained_trials"][0]
     assignments = [name for shard in shards for name in shard["datasets"][0]["task_names"]]
     assert len(assignments) == len(set(assignments)) == 370
     assert "130" in assignments

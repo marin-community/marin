@@ -21,7 +21,7 @@ def partition(report: dict, config: dict, count: int) -> tuple[dict, list[dict]]
     all_tasks = {row["task_name"] for row in source["retained_trials"]} | set(source["recovery_tasks"])
     if len(all_tasks) != 500 or count < 2:
         raise ValueError("expected a 500-task cohort and at least two shards")
-    rows = report["trials"]
+    rows = [{key: value for key, value in row.items() if key != "result"} for row in report["trials"]]
     if len({row["task_name"] for row in rows}) != len(rows):
         raise ValueError("duplicate audited outcomes")
     if any(row["task_name"] not in all_tasks for row in rows):
