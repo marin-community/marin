@@ -2,8 +2,9 @@
 
 from collections import Counter
 from contextlib import ExitStack
-from dataclasses import replace
+from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
+from typing import Any
 
 import pyarrow.parquet as pq
 from eval.contracts.benchmark_metadata import MetricKind
@@ -29,6 +30,21 @@ _OUTPUT_BUDGET_MULTIPLIER = 2
 _MIN_OUTPUT_BUDGET = _OUTPUT_BUDGET_MULTIPLIER * _MIN_OUTPUT_TOKENS
 
 
+@dataclass(frozen=True)
+class _SelectionDiagnostics:
+    dataset: str
+    revision: str
+    n_benchmark: int
+    n_attempted: int
+    skipped_context_by_type: dict[str, int]
+    skipped_output_cap_by_type: dict[str, int]
+    not_inspected_after_limit: int
+    max_model_len: int
+    max_output_tokens: int
+    chat_template_kwargs: dict[str, Any]
+    output_budget_policy: str
+
+
 class GraphWalksBenchmark(BaseBenchmark):
     """Score the context-eligible subset while retaining full benchmark coverage."""
 
@@ -45,17 +61,17 @@ class GraphWalksBenchmark(BaseBenchmark):
         super().__init__(logger=logger)
         self.max_tokens = max_tokens
         self.cache_dir = cache_dir
-        self.selection = None
+        self.selection: _SelectionDiagnostics | None = None
 
     def benchmark_size(self):
-        return None if self.selection is None else self.selection["n_benchmark"]
+        return None if self.selection is None else self.selection.n_benchmark
 
     def describe(self, task_name=None):
         metadata = super().describe(task_name)
-        return metadata if self.selection is None else replace(metadata, n_attempted=self.selection["n_attempted"])
+        return metadata if self.selection is None else replace(metadata, n_attempted=self.selection.n_attempted)
 
     def evaluation_metadata(self):
-        return {"selection": self.selection}
+        return {"selection": asdict(self.selection) if self.selection is not None else None}
 
     def iter_specs(self, options: SourceOptions):
         context = require_context_length(options.context_length, task_name=options.task)
@@ -133,19 +149,19 @@ class GraphWalksBenchmark(BaseBenchmark):
                 context_skips[row["problem_type"]] += 1
                 continue
             selected.append({**row, "source_index": index, "prompt_tokens": tokens, "max_output_tokens": budget})
-        self.selection = {
-            "dataset": GRAPHWALKS_DATASET,
-            "revision": GRAPHWALKS_REVISION,
-            "n_benchmark": count,
-            "n_attempted": len(selected),
-            "skipped_context_by_type": dict(context_skips),
-            "skipped_output_cap_by_type": dict(output_skips),
-            "not_inspected_after_limit": capped,
-            "max_model_len": context,
-            "max_output_tokens": cap,
-            "chat_template_kwargs": dict(options.chat_template),
-            "output_budget_policy": "2 * max(4096, tokenized_gold_list_length + 4096)",
-        }
+        self.selection = _SelectionDiagnostics(
+            dataset=GRAPHWALKS_DATASET,
+            revision=GRAPHWALKS_REVISION,
+            n_benchmark=count,
+            n_attempted=len(selected),
+            skipped_context_by_type=dict(context_skips),
+            skipped_output_cap_by_type=dict(output_skips),
+            not_inspected_after_limit=capped,
+            max_model_len=context,
+            max_output_tokens=cap,
+            chat_template_kwargs=dict(options.chat_template),
+            output_budget_policy="2 * max(4096, tokenized_gold_list_length + 4096)",
+        )
         if not selected:
             raise ValueError("No GraphWalks examples fit the served context and output cap")
         return selected

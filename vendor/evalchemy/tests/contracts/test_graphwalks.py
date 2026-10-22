@@ -159,7 +159,7 @@ def test_output_cap_skips_without_shortening_gold_budget(dataset):
     metrics, samples = evaluate_source(source, options, endpoint)
     assert [sample["doc"]["source_index"] for sample in samples] == [1]
     assert endpoint.requests[0].generation["max_gen_toks"] == 8198
-    assert source.selection["skipped_output_cap_by_type"] == {"bfs": 1}
+    assert source.evaluation_metadata()["selection"]["skipped_output_cap_by_type"] == {"bfs": 1}
     assert metrics["f1"] == 1.0
 
 
