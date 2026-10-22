@@ -127,7 +127,7 @@ def test_injected_row_trains_exactly_its_plain_tokens_and_masks_the_injection(to
         recovery.Injection(3, failures("missing_fields") if trace["family"] == "tmax" else failures("prose_no_call")),
     ]
     for mode in modes:
-        messages, records = recovery.inject(trace["family"], trace["messages"], injections, mode)
+        messages, records = recovery.inject(recovery.harness(trace), trace["messages"], injections, mode)
         injected = render_trace(tokenizer, messages, trace["tools"])
         assert injected.supervised == plain.supervised
         assert trained(injected) == trained(plain)
@@ -154,10 +154,67 @@ def test_injected_row_trains_exactly_its_plain_tokens_and_masks_the_injection(to
 
 def test_first_and_last_teacher_turns_are_never_injection_points():
     for trace in (tmax_trace(), swe_trace()):
-        assert recovery.eligible_turns(trace["family"], trace["messages"]) == [1, 2, 3]
+        assert recovery.eligible_turns(recovery.harness(trace), trace["messages"]) == [1, 2, 3]
         for seed in range(50):
-            for injection in recovery.plan_injections(random.Random(seed), trace["family"], trace["messages"]):
+            for injection in recovery.plan_injections(random.Random(seed), recovery.harness(trace), trace["messages"]):
                 assert 1 <= injection.turn <= 3 and 1 <= len(injection.failures) <= 3
+
+
+@pytest.mark.parametrize(
+    ("make", "family", "agent_harness"),
+    [(tmax_trace, "swesmith", recovery.TERMINUS_2), (swe_trace, "tmax", recovery.MINI_SWE_FORMAT_ERROR)],
+)
+def test_contributor_harness_controls_completion_and_recovery(tokenizer, make, family, agent_harness):
+    trace = make() | {"family": family, "harness": agent_harness}
+    assert recovery.eligible_turns(recovery.harness(trace), trace["messages"]) == [1, 2, 3]
+    assert not build.clean_completion(trace)
+    assistant = [message for message in trace["messages"] if message["role"] == "assistant"]
+    if agent_harness == recovery.TERMINUS_2:
+        final = json.loads(assistant[-1]["content"]) | {"task_complete": True}
+        assistant[-1]["content"] = json.dumps(final)
+    else:
+        assistant[-1]["tool_calls"][0]["function"]["arguments"] = json.dumps(
+            {"command": "echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"}
+        )
+    assert build.clean_completion(trace)
+    plain = render_trace(tokenizer, trace["messages"], trace["tools"])
+    plan = recovery.plan_injections(random.Random(17), recovery.harness(trace), trace["messages"])
+    messages, records = recovery.inject(recovery.harness(trace), trace["messages"], plan)
+    injected = render_trace(tokenizer, messages, trace["tools"])
+    assert trained(injected) == trained(plain)
+    added = len(injected.ids) - len(plain.ids)
+    assert added > 0 and injected.mask.count(0) - plain.mask.count(0) == added
+    failed = [message for message in messages if message.get("author") == INJECTED]
+    assert len(failed) == len(records) > 0
+    for message in failed:
+        feedback = messages[messages.index(message) + 1]
+        assert feedback["role"] == "user"
+        if agent_harness == recovery.TERMINUS_2:
+            assert feedback["content"] == recovery.terminus_feedback(message["content"])
+        else:
+            assert not message.get("tool_calls")
+            assert feedback["content"] == recovery.QWEN_NO_TOOL_CALL
+
+    chosen, kept = {}, {}
+    for index in range(5):
+        trial_id = f"contributor-{index}"
+        attempt = Attempt(
+            task_id=f"task-{index}",
+            family=family,
+            trial_id=trial_id,
+            sample=0,
+            retry=0,
+            supervised=plain.supervised,
+            context=len(plain.ids),
+            authors=plain.authors,
+        )
+        chosen[attempt.task_id] = attempt
+        kept[trial_id] = (attempt, plain, trace | {"trial_id": trial_id})
+    recovered = {}
+    stats = recovery.build_recovery(chosen, kept, tokenizer, recovery.HARNESS_FAITHFUL, "contributor", recovered)
+    assert stats["families"][family]["injected"] == 1
+    assert len(recovered) == 1
+    assert trained(next(iter(recovered.values()))) == trained(plain)
 
 
 REALISTIC_TURN = {
@@ -195,7 +252,7 @@ def test_tmax_repeats_follow_v0s_measured_rates():
     pairs = same = repeats = 0
     rng = random.Random(0)
     for _ in range(20000):
-        planned = recovery.plan_failures(rng, "tmax", 3)
+        planned = recovery.plan_failures(rng, recovery.TERMINUS_2, 3)
         for before, after in itertools.pairwise(planned):
             pairs += 1
             same += before.style == after.style
@@ -211,7 +268,7 @@ def test_a_tmax_failure_is_labeled_with_the_parsers_error():
     data["analysis"] = "Match the code with the regex `PROD-[A-Z]{3}-[0-9]{4}`."
     data["plan"] = "Write each match as `[TIMESTAMP] {json}`."
     trace["messages"][5]["content"] = json.dumps(data, indent=2)
-    _, records = recovery.inject("tmax", trace["messages"], [recovery.Injection(2, failures("no_json"))])
+    _, records = recovery.inject(recovery.TERMINUS_2, trace["messages"], [recovery.Injection(2, failures("no_json"))])
     assert [(r["style"], r["error"]) for r in records] == [("invalid_json", "Invalid JSON")]
 
 
@@ -219,7 +276,7 @@ def test_a_repeat_failure_is_the_previous_text_word_for_word():
     trace = tmax_trace()
     first = recovery.Failure("invalid_json", 7)
     plan = [recovery.Injection(2, (first, recovery.Failure("invalid_json", 7, repeat=True)))]
-    messages, records = recovery.inject("tmax", trace["messages"], plan)
+    messages, records = recovery.inject(recovery.TERMINUS_2, trace["messages"], plan)
     failed = [m["content"] for m in messages if m.get("author") == INJECTED]
     assert len(failed) == 2 and failed[0] == failed[1] and [r["repeat"] for r in records] == [False, True]
     assert recovery.failed_texts(messages) == [failed]
@@ -276,9 +333,9 @@ def test_a_row_whose_full_injection_is_over_the_context_takes_a_smaller_one(toke
     rows, chosen = tmax_rows(tokenizer)
     (trial,) = recovery.selected_rows({"tmax": sorted(rows)}, "seed")
     trace = rows[trial][2]
-    plan = recovery.plan_injections(random.Random(f"seed:{trial}"), "tmax", trace["messages"])
+    plan = recovery.plan_injections(random.Random(f"seed:{trial}"), recovery.TERMINUS_2, trace["messages"])
     lengths = [
-        len(render_trace(tokenizer, recovery.inject("tmax", trace["messages"], step)[0], None).ids)
+        len(render_trace(tokenizer, recovery.inject(recovery.TERMINUS_2, trace["messages"], step)[0], None).ids)
         for step in recovery.smaller_plans(plan)
     ]
     if len(lengths) < 2:

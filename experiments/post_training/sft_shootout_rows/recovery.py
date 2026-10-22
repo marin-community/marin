@@ -10,14 +10,18 @@ Injected turns and replies are context (zero loss). Every teacher turn trains ex
 supervised tokens equal its plain row's; only context grows.
 
 Each injected row must match what the deployed harness would send:
-- Terminus-2 (TMax) keeps a failed reply in history and answers with its parser's feedback. The failed attempt is
-  the teacher turn re-rendered in one of v0's measured error styles, in a seeded variant of that style (the prose
+- Terminus-2 (v7 TMax and contributor Kimi SWE) keeps a failed reply and answers with its parser's feedback.
+  The failed attempt is the teacher turn re-rendered in one of v0's measured error styles, in a seeded variant (the prose
   form, the JSON layout and how the JSON breaks vary), so failures are not one fixed text. The reply is the exact
   prompt Terminus-2 builds from the vendored parser's error and warning (terminus_2.py:2029-2035, 2273-2278).
 - mini-swe-agent 2.1.0 (SWE-smith) drops a reply it cannot parse, raising FormatError before the reply enters
   history (default.py:113-116), and sends only its error message. So by default (HARNESS_FAITHFUL) an SWE
   injection is 1 to 3 consecutive copies of that message, with no failed reply. The other mode (with_failed_reply)
   also inserts the failed reply, which is the plan's original wording.
+- Contributor Qwen TMax keeps the rejected native-tool reply, then a user message with the exact format error
+  observed in allenai/tmax-sft@9d6ab747, skill_tax_20260505_2.2k_combined_balanced_thinking_only_success.
+  All 409 observed errors share that reply. Synthetic failures retain the existing v0 prose/text-call style mix,
+  not Qwen's observed mix (374 reasoning-only leaked calls, 24 empty replies, 9 prose and 2 other).
 
 Sampling distributions:
 - Error styles: v0's own format errors in the relay traces (422 in swesmith-relay and tmax-relay shard-00
@@ -97,10 +101,21 @@ TERMINUS_2 = "terminus-2"
 MINI_SWE_AGENT = "mini-swe-agent-2.1"
 MINI_SWE_FORMAT_ERROR = "mini-swe-agent-bash-tool"
 V7_HARNESS = {"swesmith": MINI_SWE_AGENT, "tmax": TERMINUS_2}
+QWEN_NO_TOOL_CALL = (
+    "Format error: Your last response did not include a `bash` tool call.\n\n"
+    "Please always provide EXACTLY ONE call to the `bash` tool. If you want to\n"
+    "end the task, please issue the command `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT`\n"
+    "via the `bash` tool, with no other content in the command.\n"
+)
 
 
 def harness(trace: dict) -> str:
-    return trace.get("harness") or V7_HARNESS[trace["family"]]
+    name = trace.get("harness") or V7_HARNESS[trace["family"]]
+    if name not in (TERMINUS_2, MINI_SWE_AGENT, MINI_SWE_FORMAT_ERROR):
+        raise ValueError(f"Unknown trace harness {name!r}")
+    return name
+
+
 PARSER = TerminusJSONPlainParser()
 
 
@@ -277,26 +292,26 @@ class Injection:
     failures: tuple[Failure, ...]  # one per failed attempt
 
 
-def eligible_turns(family: str, messages: list[dict]) -> list[int]:
-    """Teacher turns that may be an injection point: not the first or the last, and re-renderable for TMax."""
+def eligible_turns(agent_harness: str, messages: list[dict]) -> list[int]:
+    """Interior teacher turns with a re-renderable response in the trace's harness."""
     assistant = [m for m in messages if m["role"] == "assistant"]
     turns = []
     for index, message in enumerate(assistant[1:-1], start=1):
         if message.get("author") != TEACHER:
             continue
-        if family == "tmax" and terminus_fields(message.get("content") or "") is None:
+        if agent_harness == TERMINUS_2 and terminus_fields(message.get("content") or "") is None:
             continue
-        if family == "swesmith" and not message.get("tool_calls"):
+        if agent_harness != TERMINUS_2 and not message.get("tool_calls"):
             continue
         turns.append(index)
     return turns
 
 
-def plan_failures(rng: random.Random, family: str, attempts: int) -> tuple[Failure, ...]:
-    """The failed attempts at one point. TMax follows v0's measured repeats: each later failure repeats the previous
+def plan_failures(rng: random.Random, agent_harness: str, attempts: int) -> tuple[Failure, ...]:
+    """Failed attempts at one point. Terminus-2 follows v0's measured repeats: each later failure repeats the previous
     text with p = identical_text, else keeps its style so that p(same style) = same_style overall, else takes another
     style by weight. SWE styles are drawn independently (v0's SWE failed replies are not logged)."""
-    if family != "tmax":
+    if agent_harness != TERMINUS_2:
         return tuple(Failure(weighted(rng, SWE_STYLES), rng.getrandbits(32)) for _ in range(attempts))
     identical, same = TMAX_REPEAT["identical_text"], TMAX_REPEAT["same_style"]
     keep = (same - identical) / (1 - identical)
@@ -314,13 +329,14 @@ def plan_failures(rng: random.Random, family: str, attempts: int) -> tuple[Failu
     return tuple(failures)
 
 
-def plan_injections(rng: random.Random, family: str, messages: list[dict]) -> list[Injection]:
-    turns = eligible_turns(family, messages)
+def plan_injections(rng: random.Random, agent_harness: str, messages: list[dict]) -> list[Injection]:
+    turns = eligible_turns(agent_harness, messages)
     if not turns:
         return []
     count = min(weighted(rng, POINTS), len(turns))
     return [
-        Injection(turn, plan_failures(rng, family, weighted(rng, ATTEMPTS))) for turn in sorted(rng.sample(turns, count))
+        Injection(turn, plan_failures(rng, agent_harness, weighted(rng, ATTEMPTS)))
+        for turn in sorted(rng.sample(turns, count))
     ]
 
 
@@ -341,7 +357,7 @@ def smaller_plans(injections: list[Injection]):
 
 
 def inject(
-    family: str, messages: list[dict], injections: list[Injection], swe_mode: str = HARNESS_FAITHFUL
+    agent_harness: str, messages: list[dict], injections: list[Injection], swe_mode: str = HARNESS_FAITHFUL
 ) -> tuple[list[dict], list[dict]]:
     """Insert each injection's failed attempts and harness replies before its teacher turn.
 
@@ -358,7 +374,7 @@ def inject(
             previous = None
             for failure in by_turn[turn].failures if turn in by_turn else ():
                 style = failure.style
-                if family == "tmax":
+                if agent_harness == TERMINUS_2:
                     if failure.repeat and previous is not None:
                         failed, variant = previous
                     else:
@@ -376,12 +392,17 @@ def inject(
                     style = next((s for s, e in TMAX_ERRORS.items() if error.startswith(e)), style)
                 else:
                     variant = None
-                    if swe_mode == WITH_FAILED_REPLY:
+                    if swe_mode == WITH_FAILED_REPLY or agent_harness == MINI_SWE_FORMAT_ERROR:
                         out.append(swe_failure(message, style))
                     else:
                         style = "error_message_only"
-                    out.append({"role": "user", "content": SWE_NO_TOOL_CALL})
-                    error = "No tool calls found in the response"
+                    feedback = QWEN_NO_TOOL_CALL if agent_harness == MINI_SWE_FORMAT_ERROR else SWE_NO_TOOL_CALL
+                    out.append({"role": "user", "content": feedback})
+                    error = (
+                        "Response did not include a bash tool call"
+                        if agent_harness == MINI_SWE_FORMAT_ERROR
+                        else "No tool calls found in the response"
+                    )
                 records.append(
                     {"turn": turn, "style": style, "variant": variant, "repeat": failure.repeat, "error": error}
                 )
@@ -447,13 +468,14 @@ def build_recovery(chosen: dict, kept: dict, tokenizer, swe_mode: str, seed: str
         attempt, rendered, trace = kept[trial]
         family = stats[attempt.family]
         family["selected"] += 1
-        injections = plan_injections(random.Random(f"{seed}:{trial}"), attempt.family, trace["messages"])
+        agent_harness = harness(trace)
+        injections = plan_injections(random.Random(f"{seed}:{trial}"), agent_harness, trace["messages"])
         if not injections:
             family["skipped_no_eligible_turn"] += 1
             continue
         plain_trained = [token for token, weight in zip(rendered.ids, rendered.mask, strict=True) if weight]
         for plan in smaller_plans(injections):
-            messages, records = inject(attempt.family, trace["messages"], plan, swe_mode)
+            messages, records = inject(agent_harness, trace["messages"], plan, swe_mode)
             injected = render_trace(tokenizer, messages, trace.get("tools"))
             trained = [token for token, weight in zip(injected.ids, injected.mask, strict=True) if weight]
             if trained != plain_trained:
