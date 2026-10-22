@@ -13,12 +13,13 @@ from rolloutengine.harness.prefill import prefill_prompt
 from rolloutengine.models import RolloutContractError
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import TaskDataset, task_prompt_token_count, write_tasks
+from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from skyrl_train.task_inputs import task_messages
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
+from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
@@ -232,6 +233,71 @@ async def test_prefill_transport_renders_serving_tokens_and_retains_raw_structur
     assert output["response_logprobs"] == [[-0.1, -0.2, -0.3]]
     assert output["student_topk_indices"] == [[[8], [9], [10]]]
     assert output["response_policy_steps"] == [[4, 4, 4]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interrupted", [False, True])
+async def test_prefill_real_client_preserves_prompt_and_raw_completion_across_retry(interrupted):
+    backend = Tokenizer(
+        models.WordLevel({"[UNK]": 0, "assistant": 1, "prefix": 2, "</think>": 3, "tail": 4}, unk_token="[UNK]")
+    )
+    backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend,
+        unk_token="[UNK]",
+        additional_special_tokens=["</think>"],
+        chat_template="{% for m in messages %}{{ m.role }} {{ m.content }} {% endfor %}closed",
+    )
+    task = text_task("real-client-prefill").model_copy(
+        update={"context": ConversationInput(events=(TextMessage(role="assistant", content="prefix"),))}
+    )
+    prompt = prefill_prompt(task)
+    submitted = []
+
+    class Engine:
+        async def generate(self, request):
+            submitted.append(request)
+            partial = interrupted and len(submitted) == 1
+            ids = [3] if partial else [4] if interrupted else [3, 4]
+            return {
+                "responses": [tokenizer.decode(ids, skip_special_tokens=False)],
+                "response_ids": [ids],
+                "response_logprobs": [[-token / 10 for token in ids]],
+                "stop_reasons": ["abort" if partial else "stop"],
+                "student_topk_indices": [[[token] for token in ids]],
+                "behavior_topk_logprobs": [[[-token / 10] for token in ids]],
+                "response_policy_steps": [[7] * len(ids)],
+            }
+
+    config = get_default_config()
+    config.generator.enable_http_endpoint = False
+    client = DirectModelClient(InferenceEngineClient([Engine()], tokenizer, config))
+    output = await client.generate(
+        {
+            "prompts": [list(prompt.messages)],
+            "chat_completion_params": [dict(prompt.options)],
+            "session_ids": ["prefill"],
+            "sampling_params": {"max_generate_length": 10, "logprobs": 1},
+            "max_context_length": 5,
+            "max_prompt_length": 2,
+        }
+    )
+    assert [row["prompt_token_ids"] for row in submitted] == (
+        [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
+    )
+    assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
+    assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
+    assert all(row["sampling_params"]["include_stop_str_in_output"] is True for row in submitted)
+    assert output["prompt_ids"] == [[1, 2]]
+    assert output["response_ids"] == [[3, 4]]
+    assert output["response_logprobs"] == [[-0.3, -0.4]]
+    assert output["student_topk_indices"] == [[[3], [4]]]
+    assert output["behavior_topk_logprobs"] == [[[-0.3], [-0.4]]]
+    assert output["response_policy_steps"] == [[7, 7]]
+    assert output["responses"] == ["</think> tail"]
+    assert output["assistant_messages"] == [{"role": "assistant", "content": "</think> tail"}]
+    assert output["stop_reasons"] == ["stop"]
+    assert output["token_provenance"] == TokenProvenance.ENGINE
 
 
 @pytest.mark.asyncio

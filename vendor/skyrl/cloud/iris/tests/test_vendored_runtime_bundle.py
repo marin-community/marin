@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
+from iris.cluster.client.bundle import collect_workspace_files
 
 from cloud.iris import runtime_bundle
 
@@ -33,8 +34,10 @@ def bundled_source(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (module / "src/rolloutengine").mkdir(parents=True)
     (module / "src/rolloutengine/__init__.py").write_text("value = 1\n")
     (module / "pyproject.toml").write_text(
-        '[project]\nname = "marin-rolloutengine"\n[tool.hatch.build.targets.wheel]\npackages = ["src/rolloutengine"]\n'
+        '[project]\nname = "marin-rolloutengine"\n[tool.hatch.build.targets.wheel]\npackages = ["src/rolloutengine"]\n[tool.hatch.build.targets.wheel.force-include]\n"../../config" = "rolloutengine/config"\n'
     )
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config/runtime.yaml").write_text("task_limit: 2\n")
     provenance = project / runtime_bundle.PROVENANCE_FILE
     provenance.parent.mkdir(parents=True)
     provenance.write_text(json.dumps({"source_sha": "original-upstream-revision"}))
@@ -56,6 +59,7 @@ def test_vendored_runtime_bundles_frozen_dependencies_and_assets_without_git(bun
     [
         "vendor/skyrl/skyrl-train/skyrl_train/config/ppo_base_config.yaml",
         "lib/rolloutengine/src/rolloutengine/__init__.py",
+        "config/runtime.yaml",
     ],
 )
 def test_changed_bundled_source_is_rejected(bundled_source, path):
@@ -67,7 +71,12 @@ def test_changed_bundled_source_is_rejected(bundled_source, path):
 
 @pytest.mark.parametrize(
     "path",
-    ["cloud/iris/launch.py", "cloud/iris/new_runtime.py", "../../lib/rolloutengine/src/rolloutengine/__init__.py"],
+    [
+        "cloud/iris/launch.py",
+        "cloud/iris/new_runtime.py",
+        "../../lib/rolloutengine/src/rolloutengine/__init__.py",
+        "../../config/runtime.yaml",
+    ],
 )
 def test_source_edits_get_a_new_identity_and_bundle_without_restaging(bundled_source, path):
     source, _ = bundled_source
@@ -100,12 +109,28 @@ def test_unrecorded_file_added_to_a_built_bundle_is_rejected(bundled_source):
 
 def test_worker_bundle_installs_local_modules_without_the_checkout(tmp_path):
     source = runtime_bundle.resolve_launcher_source()
-    local_source = runtime_bundle.local_module_source(
-        "marin-rolloutengine", source.root.parents[1] / "lib/rolloutengine", source.digest
+    module_names = (
+        "finelog",
+        "finestore",
+        "iris",
+        "rigging",
+        "rolloutengine",
+        "shellbox",
+        "taskcompendium",
+        "verifyit",
     )
+    local_digests = {
+        name: runtime_bundle.local_module_source(
+            "marin-" + name, source.root.parents[1] / "lib" / name, source.digest
+        ).digest
+        for name in module_names
+    }
     workspace = tmp_path / "worker"
     with runtime_bundle.build_runtime_bundle(source.digest) as built:
-        shutil.copytree(built, workspace)
+        for original in collect_workspace_files(built, extra_includes=("**/*",)):
+            destination = workspace / original.relative_to(built)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(original, destination)
     environment = dict(os.environ)
     for name in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(name, None)
@@ -125,13 +150,14 @@ def test_worker_bundle_installs_local_modules_without_the_checkout(tmp_path):
             "-I",
             "-c",
             "import json; from pathlib import Path; "
-            "import rolloutengine, taskcompendium, verifyit; "
+            "import finelog, finestore, iris, rigging, rolloutengine, shellbox, taskcompendium, verifyit; "
             "import marinskyrl.task_machine_factories as factory; "
             "from cloud.iris.runtime_bundle import local_module_source; "
-            f"source = local_module_source('marin-rolloutengine', Path(rolloutengine.__file__).parents[2], {source.digest!r}); "
+            "modules = (finelog, finestore, iris, rigging, rolloutengine, shellbox, taskcompendium, verifyit); "
+            f"digests = {{module.__name__: local_module_source('marin-' + module.__name__, Path(module.__file__).parents[2], {source.digest!r}).digest for module in modules}}; "
             "records = {module.__name__: str(Path(module.__file__).resolve()) "
-            "for module in (rolloutengine, taskcompendium, verifyit, factory)}; "
-            "records['module_digest'] = source.digest; print(json.dumps(records))",
+            "for module in (finelog, finestore, iris, rigging, rolloutengine, shellbox, taskcompendium, verifyit, factory)}; "
+            "records['module_digests'] = digests; print(json.dumps(records))",
         ],
         cwd=workspace,
         env=environment,
@@ -141,8 +167,8 @@ def test_worker_bundle_installs_local_modules_without_the_checkout(tmp_path):
         timeout=180,
     )
     observed = json.loads(completed.stdout)
-    assert observed["module_digest"] == local_source.digest
-    for name in ("rolloutengine", "taskcompendium", "verifyit"):
+    assert observed["module_digests"] == local_digests
+    for name in module_names:
         assert Path(observed[name]).is_relative_to(workspace / "lib" / name / "src" / name)
     assert observed["marinskyrl.task_machine_factories"] == str(
         workspace / "vendor/skyrl/marinskyrl/task_machine_factories.py"
