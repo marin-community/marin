@@ -60,9 +60,8 @@ class RunConfig:
 
 @dataclass
 class RuntimeConfig:
-    """MarinSkyRL runtime provenance."""
+    """SkyRL execution settings."""
 
-    source_digest: str = MISSING
     profile: str = MISSING
     entrypoint: str = ""
     training_type: str | None = None

@@ -16,6 +16,11 @@ count. The legacy AdamW default is a bring-up configuration. The historical
 long-context recipe explicitly selects BF16 MuonH and both host offloads.
 Production continuation and long-run training stability remain unvalidated.
 
+Set `--context-axis-size` to split each sequence across context-parallel
+devices. Sequence length must be divisible by this size. Context replicas do
+not increase the global batch size or its required divisibility; data and
+expert parallelism still do.
+
 Set `--checkpoint-root` to restore the latest complete `step-N` checkpoint and
 `--checkpoint-every-steps` to save at that interval and on the final step. Keep
 `--steps` at the same total update count when restarting: it sets the MuonH

@@ -22,7 +22,6 @@ from sqlalchemy import select
 from iris.cluster.controller import reads, writes
 from iris.cluster.controller.budget import (
     UserTask,
-    budget_user_id,
     compute_effective_band,
     compute_user_spend,
     interleave_by_user,
@@ -157,7 +156,6 @@ def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
         select(
             local_tasks.c.task_id,
             local_tasks.c.job_id,
-            jobs_table.c.submitting_user,
             jobs_table.c.num_tasks,
             job_config_table.c.has_coscheduling,
             local_tasks.c.priority_neg_depth,
@@ -172,7 +170,7 @@ def _ranking_rows(cur: Tx, *predicates) -> list[_RankRow]:
         _RankRow(
             task_id=r.task_id,
             job_id=r.job_id,
-            budget_user=budget_user_id(r.job_id, str(r.submitting_user)),
+            budget_user=r.job_id.user,
             num_tasks=int(r.num_tasks),
             has_coscheduling=bool(r.has_coscheduling),
             sort_key=_PriorityKey(

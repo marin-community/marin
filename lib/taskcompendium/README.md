@@ -43,7 +43,7 @@ flowchart LR
 | `answer_format` | How the final answer is requested from the model and extracted. See [Answer formats](#answer-formats). |
 | `grader` | How an attempt is graded. See [What is a grader?](#what-is-a-grader) |
 | `source` | Upstream dataset, revision, row, and importer revision retained as audit provenance. |
-| `schema_version` | Version of the serialized spec: `0.27`. Readers reject other versions. |
+| `schema_version` | Version of the serialized spec: `0.28`. Readers reject other versions. |
 | `resources` | Inline files grouped under `all`, `worker`, `oracle`, and `verifier` visibility. |
 | `tags` | Arbitrary descriptive strings, retained in order, including duplicates and empty strings. |
 
@@ -268,6 +268,51 @@ Answer formats preserve the task's advertised functions. `AnswerCall` adds `subm
 
 `taskcompendium.submission` builds model requests from the task alone. `submission_instruction(answer_format)` returns the format's final-answer instruction, and `answer_call_tool()` returns the `submit_answer` tool definition. `chat_request(task)` and `render_instruction(task)` combine them with the public conversation and final tools. These helpers perform no execution.
 
+## Optional terminal ejection
+
+`enable_ejection(task)` adds the reserved `eject_button(reason)` final tool. Use it on
+both solvable and unsolvable tasks. Ejection instructions live only in the tool description;
+normal answer instructions and parallel-call constraints are preserved.
+
+`mark_unsolvable(task)` privately classifies a confirmed unsolvable direct-chat task. It
+returns a new task with the same context and final tools as `enable_ejection(task)`, an
+`unsolvable` verifyit grader, and a `FinalAction` answer format. For text and JSON formats,
+`FinalAction.normal_submission` retains the original model-facing answer instructions and
+tools. Native-action tasks retain their required-call and maximum-call constraints.
+Callers must establish unsolvability; unsupported runtimes and missing evidence do not
+establish it. The helper rejects tasks that cannot already run and be graded in direct chat.
+
+```python
+from taskcompendium.ejection import enable_ejection, mark_unsolvable
+
+solvable = enable_ejection(task)
+confirmed_unsolvable = mark_unsolvable(task)
+```
+
+Both tasks produce identical `chat_request` and `render_instruction` output. The grader and
+expected answers remain private. A valid ejection is one terminal call with a nonempty string
+`reason`. Its call ID and reason remain in an `ActionSubmission`; the reason's prose is not
+scored. Ejection earns reward `1.0` only for the private `unsolvable` mode and `0.0` otherwise.
+Normal answers to unsolvable tasks earn `0.0`. Malformed reasons, mixed ejection/answer calls,
+unadvertised ejections, and continuation after ejection are `submission_failure` with reward
+`0.0`. Completed ejection calls in the source conversation are historical input.
+
+`answer_submission` dispatches ejection before the normal answer-format extractor, without
+passing expected answers or solvability labels into extraction. The episode runtime preserves
+the terminal call and stops before executing it or any other call in its batch. Runtime
+failures remain infrastructure errors without a reward.
+
+Generate paired missing-information, contradictory-constraint, and guideline examples as
+serialized TaskSpecs:
+
+```bash
+uv run --package marin-taskcompendium python -m taskcompendium.examples.ejection \
+  /tmp/ejection-tasks --pairs-per-family 32
+```
+
+This produces 192 tasks. The example generates task definitions; no model performance
+evaluation is included.
+
 ## Grading
 
 Create a task:
@@ -348,5 +393,6 @@ cd lib/taskcompendium
 uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 ```
 
-Schema `0.27` adds explicit task-owned shell tool bindings. Reconvert
+Schema `0.28` adds `FinalAction.normal_submission` for private unsolvability labels while
+preserving the normal answer presentation. Reconvert
 older TaskSpecs before using the updated readers; no compatibility shim is supplied.

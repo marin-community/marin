@@ -1,7 +1,7 @@
 """Episode logging: the raw request+response (with logprobs/token_ids) is
 written to disk ONLY when a logging_path is passed.
 
-This replaces litellm's ``logger_fn`` post_api_call hook. It is the hot-path
+Episode logs record the raw request and response. This is the hot-path
 write that stalls the shared rollout loop on a remote logging_path; Terminus-2
 gates it by passing None (``enable_episode_logging`` default-off), so the RL
 hot path never writes. When enabled, the multi-MB serialization + write run on
@@ -15,13 +15,12 @@ Ref: agent_logs/2026-07-03_r5_engine_starvation_rootcause.md
 import json
 
 import pytest
-
-from harbor.llms.lite_llm import LiteLLM
+from harbor.llms.openai_llm import OpenAILLM
 from harbor.utils.artifact_writer import get_artifact_writer
 
 
-def _llm() -> LiteLLM:
-    return LiteLLM(model_name="fake-provider/fake-model")
+def _llm() -> OpenAILLM:
+    return OpenAILLM(model_name="fake-provider/fake-model")
 
 
 _RAW_RESPONSE = {
@@ -46,7 +45,6 @@ async def test_call_writes_nothing_when_logging_path_none(tmp_path):
         return _RAW_RESPONSE
 
     llm._acreate_chat_raw = _fake  # type: ignore[assignment]
-    llm._acreate_chat_litellm = _fake  # type: ignore[assignment]
     await llm.call(prompt="hi", message_history=[], logging_path=None)
     get_artifact_writer().flush(prefix=str(tmp_path), timeout=30)
     # No files written anywhere under tmp_path.
@@ -64,7 +62,6 @@ async def test_call_writes_episode_log_when_path_given(tmp_path):
         return _RAW_RESPONSE
 
     llm._acreate_chat_raw = _fake  # type: ignore[assignment]
-    llm._acreate_chat_litellm = _fake  # type: ignore[assignment]
     await llm.call(prompt="hi", message_history=[], logging_path=path)
     get_artifact_writer().flush(prefix=str(tmp_path), timeout=30)
     assert path.exists()
