@@ -10,10 +10,8 @@ loader in a child process for at most ``wall_timeout`` seconds, with the source 
 ``SdkExports`` on its stdin, and reads back the program's manifest (``author.program_manifest``) or the
 loader's refusal.
 
-A child that exits without a result, as when the kernel killed it for memory, raises
-``LoaderProcessFailed``: the host's fault, not the program's. This stage cannot import the build's
-``BuildInfrastructureFailure`` (stages import only lower stages), so the build's caller of the
-loader (``stage40_build_with_program.agentic_author.load_in_child``) raises that in its place.
+A child that exits without a result, as when the kernel kills it for memory, raises
+``LoaderProcessFailed``.
 """
 
 import asyncio
@@ -32,7 +30,7 @@ STDERR_TAIL = 2000
 
 
 class LoaderProcessFailed(RuntimeError):
-    """The loader child exited without writing a result; the host failed, not the program."""
+    """The loader child exited without writing a result."""
 
 
 class StepManifest(BaseModel):

@@ -111,7 +111,7 @@ from taskforge.stage40_build_with_program.infrastructure import exception_chain,
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
-from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, Retry
+from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, RejectKind, Retry
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import (
@@ -153,7 +153,7 @@ The failure file keeps the rest.
 
 @dataclass(frozen=True)
 class WorkpieceBudget:
-    """The triage rewrites, build revisions and validation retries each workpiece may spend.
+    """The triage rewrites, build revisions, validation retries and MODIFY rounds each workpiece may spend.
 
     Attributes:
         max_triage_repairs: The REPAIR verdicts a workpiece may answer with a rewrite that triage judges
@@ -161,11 +161,14 @@ class WorkpieceBudget:
         max_build_revisions: The build and author failures a workpiece may revise after. The next failure
             rejects it.
         max_validation_retries: The review ``Retry`` decisions a workpiece may follow before it is abandoned.
+        max_modify_rounds: The review ``Modify`` decisions a workpiece may follow into a new round. The next
+            one rejects it on its budget; zero rejects on the first.
     """
 
     max_triage_repairs: int
     max_build_revisions: int
     max_validation_retries: int
+    max_modify_rounds: int
 
 
 @dataclass(frozen=True)
@@ -255,6 +258,9 @@ async def run_workpiece(
     A REPAIR verdict within ``max_triage_repairs`` has ``StageFunctions.repair`` rewrite the proposal,
     triage judges the rewrite, and every later stage runs it. A REPAIR verdict past the budget rejects
     the workpiece.
+
+    A ``Modify`` decision within ``max_modify_rounds`` sends the workpiece back to the author for the
+    next round. One past it rejects the workpiece with ``RejectKind.BUDGET``.
 
     A build failure, or an author raising ``StructuredOutputError``, spends one of the workpiece's build
     revisions and sends the workpiece back to the author. When the build raises
@@ -606,7 +612,12 @@ async def _review(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
 
 
 def _decision_attrs(workpiece: _Workpiece, state: WorkpieceState, decision: Decision) -> dict[str, str]:
-    """The ``DECIDED`` attrs of ``decision``. A ``Retry`` past ``max_validation_retries`` exits abandon."""
+    """The ``DECIDED`` attrs of ``decision``.
+
+    A ``Retry`` past ``max_validation_retries`` exits abandon. A ``Modify`` once the workpiece's rounds
+    have spent ``max_modify_rounds`` (``WorkpieceState.round`` counts the ``Modify`` decisions followed)
+    exits reject with ``RejectKind.BUDGET``, its findings in the reasons.
+    """
     used = {"retries_used": str(state.retries)}
     match decision:
         case Accept(band=band):
@@ -618,6 +629,10 @@ def _decision_attrs(workpiece: _Workpiece, state: WorkpieceState, decision: Deci
             way = Exit.ABANDON if spent else Exit.RETRY
             return {EXIT: way, "cause": cause, "count": str(count), "retries_used": str(state.retries + 1)}
         case Modify(findings=findings):
+            budget = workpiece.coordinator.budget.max_modify_rounds
+            if state.round >= budget:
+                reason = f"review returned Modify with {state.round} of {budget} rounds spent: {'; '.join(findings)}"
+                return {EXIT: Exit.REJECT, "kind": RejectKind.BUDGET, "reasons": reason, **used}
             return {EXIT: Exit.MODIFY, "findings": "; ".join(findings), **used}
 
 

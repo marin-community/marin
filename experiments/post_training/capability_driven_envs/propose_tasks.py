@@ -51,7 +51,7 @@ from taskforge.llm.glm_client import EndpointSource, GlmClient, Pool
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.stage10_proposal.model import Environment, render
-from taskforge.stage10_proposal.source import ProposalBatch, SlotProposal
+from taskforge.stage10_proposal.source import ProposalBatch, SlotProposal, propose_all
 from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage20_triage.verdict import Verdict
 
@@ -96,7 +96,7 @@ async def propose_capability(source: CapabilitySource, idea: CapabilityIdea, slo
     failures in the batch.
     """
     try:
-        batch = await source.propose(idea, slots)
+        batch = await propose_all(source, idea, slots)
     except StructuredOutputError as error:
         planning = ProposalBatch(plan_request(idea, slots, source.environments), error.completions, ())
         return ProposedCapability(idea.capability_id, planning, {}, str(error))

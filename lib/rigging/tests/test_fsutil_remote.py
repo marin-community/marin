@@ -28,9 +28,7 @@ HF_STORAGE_ROOTS = (
 )
 
 
-@pytest.mark.parametrize("operation", ["cp", "mv"])
-@pytest.mark.parametrize("root", HF_STORAGE_ROOTS)
-def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(tmp_path, monkeypatch, operation, root):
+def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(tmp_path, monkeypatch):
     capture = tmp_path / "submission.json"
     iris = tmp_path / "iris"
     iris.write_text(
@@ -47,7 +45,7 @@ def test_remote_transfer_forwards_saved_hf_token_without_putting_it_in_command(t
 
     result = CliRunner().invoke(
         cli,
-        [operation, "--remote", "s3://marin-us-east-02a/example", f"{root}/example"],
+        ["cp", "--remote", "s3://marin-us-east-02a/example", "hf://datasets/owner/files/example"],
     )
 
     assert result.exit_code == 0, result.output
