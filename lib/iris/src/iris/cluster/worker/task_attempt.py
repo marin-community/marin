@@ -20,6 +20,7 @@ from pathlib import Path
 
 from finelog.client import LogClient, Table
 from finelog.rpc import logging_pb2
+from rigging.secrets import SECRETS_DIR, SECRETS_DIR_ENV, secret_file_environment, validate_secret_name
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 
 from iris.chaos import chaos, chaos_raise
@@ -48,7 +49,14 @@ from iris.cluster.runtime.types import (
     ContainerPhase,
     ContainerRuntime,
     DiscoveredContainer,
+    MountKind,
+    MountSpec,
     RuntimeLogReader,
+)
+from iris.cluster.secrets import (
+    task_secret_values,
+    worker_secret_root,
+    write_task_secrets,
 )
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, IrisTaskStat, build_task_stat
 from iris.cluster.types import AttemptUid, JobName, WellKnownAttribute, is_task_finished
@@ -280,6 +288,7 @@ class TaskAttempt:
         self._worker_id = worker_id
         self._controller_address = controller_address
         self._task_env = task_env or {}
+        self._secret_dir: Path | None = None
         self._default_task_image = default_task_image
         self._resolve_image_fn = resolve_image or (lambda x: x)
         self._port_allocator = port_allocator
@@ -394,6 +403,9 @@ class TaskAttempt:
         instance.status_message = "adopted"
         instance.workdir = Path(discovered.workdir_host_path) if discovered.workdir_host_path else None
         instance.output_dir = instance.workdir / _OUTPUT_HOST_DIRNAME if instance.workdir is not None else None
+        if instance.attempt_uid:
+            validate_secret_name(str(instance.attempt_uid))
+            instance._secret_dir = worker_secret_root(instance._cache_dir) / str(instance.attempt_uid)
         # Restore host-port reservations and re-mark them taken so the worker
         # never re-allocates an in-use port to a new task after restart.
         instance.ports = dict(discovered.ports)
@@ -768,10 +780,23 @@ class TaskAttempt:
             self.request.task_token if isolation.include_task_token else None,
         )
         env = dict(iris_env)
-
+        mounts = list(isolation.mounts)
+        secret_values = task_secret_values(self.request.environment)
         if isolation.include_cluster_env:
             env.update(self._task_env)
-        env.update(dict(self.request.environment.env_vars))
+        env.update(self.request.environment.env_vars)
+        if secret_values:
+            validate_secret_name(str(self.attempt_uid))
+            root = worker_secret_root(self._cache_dir)
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            self._secret_dir = root / str(self.attempt_uid)
+            assert self.workdir is not None
+            owner = self.workdir.stat()
+            write_task_secrets(secret_values, self._secret_dir, uid=owner.st_uid, gid=owner.st_gid)
+            mounts.append(MountSpec("task-secrets", str(SECRETS_DIR), MountKind.SECRET, read_only=True))
+            env[SECRETS_DIR_ENV] = str(SECRETS_DIR)
+            for name, value in secret_file_environment(secret_values).items():
+                env.setdefault(name, value)
         # CPU tasks on TPU hosts also need to share the cache's package files.
         if self._worker_metadata.device.HasField("tpu"):
             env[UV_LINK_MODE_ENV] = "symlink"
@@ -805,10 +830,11 @@ class TaskAttempt:
             resources=self.request.resources if self.request.HasField("resources") else None,
             container_profile=self.request.container_profile,
             timeout_seconds=timeout_seconds,
-            mounts=list(isolation.mounts),
+            mounts=mounts,
             network_mode=docker_network_mode(isolation.network),
             workdir_host_path=self.workdir,
             output_host_path=self.output_dir,
+            secret_host_path=self._secret_dir,
             task_id=self.task_id.to_wire(),
             attempt_id=self.attempt_id,
             attempt_uid=self.attempt_uid,
@@ -1116,6 +1142,12 @@ class TaskAttempt:
                 self._container_handle.cleanup()
             except Exception as e:
                 logger.warning("Failed to cleanup container handle for task %s: %s", self.task_id, e)
+
+        if self._secret_dir is not None and self._secret_dir.exists():
+            try:
+                shutil.rmtree(self._secret_dir)
+            except OSError:
+                logger.exception("Failed to remove secret files for task %s", self.task_id)
 
         # Release ports
         try:

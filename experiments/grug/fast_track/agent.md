@@ -87,7 +87,7 @@ Most promotable changes land in one of these files:
 ## Documentation & GitHub Issues
 
 Create a new branch for each experiment issue, off `main`. Follow
-`.agents/skills/research/SKILL.md` for explicitly requested research programs and
+`docs/dev-guide/experiment-records.md` for explicitly requested research programs and
 their existing issue, W&B, or session records.
 
 Experiment issues should be titled `[fast-track] <description>` and include the exact prompt from

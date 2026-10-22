@@ -19,6 +19,11 @@ The [GB200 launcher](GB200.md) provides NVIDIA worker commands. The
 [H100 adapter reference](../../../docs/references/hero-pipeline-h100.md) records
 the main-recipe flags, fresh-data path and bounded validation gates.
 
+Set `--context-axis-size` to split each sequence across context-parallel
+devices. Sequence length must be divisible by this size. Context replicas do
+not increase the global batch size or its required divisibility; data and
+expert parallelism still do.
+
 Set `--checkpoint-root` to restore the latest complete `step-N` checkpoint and
 `--checkpoint-every-steps` to save at that interval and on the final step. Keep
 `--steps` at the same total update count when restarting: it sets the MuonH

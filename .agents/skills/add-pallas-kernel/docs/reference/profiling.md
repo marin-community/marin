@@ -12,7 +12,7 @@ For generic profiling setup and UI usage, start with:
 - `lib/levanter/docs/Performance-Guide.md`
 
 For an explicitly requested long-running research program, use:
-- `.agents/skills/research/SKILL.md`
+- `docs/dev-guide/experiment-records.md`
 
 ## What to report
 

@@ -30,7 +30,11 @@ except ModuleNotFoundError:
     from jax.experimental.shard_map import shard_map
 from jaxtyping import Array, Bool, Float, Int, PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter
-from levanter.grug._moe.common import _zero_dropped_assignments, padding_skipped_assignments
+from levanter.grug._moe.common import (
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
+    _zero_dropped_assignments,
+    padding_skipped_assignments,
+)
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
     AttentionMask,
@@ -317,6 +321,10 @@ class GrugModelConfig:
     releases its HBM between forward and backward."""
     rope: RotaryConfig = dataclasses.field(default_factory=RotaryConfig)
     rope_fused: bool = False
+    ce_grad_in_forward_token_block_size: int | None = None
+    """Rows per scan step of a reduced training loss whose forward also computes its gradients:
+    3 GEMMs instead of the "xla_fast_bwd" kernel's 4, holding the [B, D] and [D, V] gradients
+    from the forward to the backward. None keeps "xla_fast_bwd"."""
 
     def __post_init__(self) -> None:
         _ = self.inferred_head_dim
@@ -358,9 +366,11 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.pooled_transport_capacity_factor is not None and self.pooled_transport_capacity_factor <= 0:
             raise ValueError("pooled_transport_capacity_factor must be positive")
-        if self.moe_implementation == "fixed_pooled_wave_all_to_all":
-            if self.pooled_transport_capacity_factor is None:
-                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
+        if (
+            self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+            and self.pooled_transport_capacity_factor is None
+        ):
+            raise ValueError(f"{self.moe_implementation} requires pooled_transport_capacity_factor")
         if self.num_expert_waves <= 0:
             raise ValueError("num_expert_waves must be positive")
         if self.num_shared_experts <= 0:
@@ -1455,6 +1465,11 @@ class Transformer(eqx.Module):
         # against an older run, this is why. Set LEVANTER_CE_XLA_FAST_BWD=0 to
         # force the old backward back on without editing code, or swap this to
         # implementation="xla" for a code-level A/B.
+        # A per-token loss has no fixed row cotangents, so it keeps "xla_fast_bwd".
+        grad_in_forward_token_block_size = (
+            self.config.ce_grad_in_forward_token_block_size if reduction != "none" else None
+        )
+        grad_in_forward = grad_in_forward_token_block_size is not None
         cross_entropy_loss = fused_linear_softmax_cross_entropy_loss(
             hidden,
             self.output_proj,
@@ -1463,8 +1478,9 @@ class Transformer(eqx.Module):
             reduction=reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
-            implementation="xla_fast_bwd",
-            block_sizes=_CE_BLOCK_SIZES,
+            implementation=None if grad_in_forward else "xla_fast_bwd",
+            block_sizes=None if grad_in_forward else _CE_BLOCK_SIZES,
+            grad_in_forward_token_block_size=grad_in_forward_token_block_size,
         )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss

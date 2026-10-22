@@ -8,11 +8,13 @@ import io
 import os
 import shutil
 import socket
+import subprocess
 import sys
 import tarfile
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -239,6 +241,89 @@ def test_bin_dirs_win_path_lookup_and_host_environment_is_not_inherited(tmp_path
     assert b"SHELLBOX_HOST_SECRET" not in environment.stdout
 
 
+@pytest.mark.parametrize("environment_source", ["spec", "command"])
+def test_task_loader_environment_takes_effect_only_inside_sandbox(tmp_path, environment_source):
+    # A preloaded library can write this host directory before isolation. Inside the sandbox it is read-only.
+    library = tmp_path / "preload.so"
+    marker = tmp_path / "host-marker"
+    factory = make_factory(read_only=(tmp_path,))
+    source = b"""
+    #include <fcntl.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    __attribute__((constructor)) static void record(void) {
+        const char *path = getenv("SHELLBOX_HOST_MARKER");
+        if (path) {
+            int fd = open(path, O_WRONLY | O_CREAT, 0600);
+            if (fd >= 0) close(fd);
+        }
+    }
+    """
+    subprocess.run(["cc", "-shared", "-fPIC", "-x", "c", "-", "-o", str(library)], input=source, check=True)
+    environment = {"LD_PRELOAD": str(library), "SHELLBOX_HOST_MARKER": str(marker)}
+    spec = replace(SPEC, env=environment if environment_source == "spec" else {})
+    command = Command(
+        ("sh", "-c", 'printf "%s" "$LD_PRELOAD"'),
+        env=environment if environment_source == "command" else {},
+    )
+    result = run_command(factory, command, spec)
+    assert (result.exit_code, result.stdout) == (0, str(library).encode()), result.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("environment_source", ["spec", "command"])
+def test_task_environment_is_absent_from_host_process_arguments(factory, monkeypatch, environment_source):
+    secret = "canary with spaces, 'quotes', and\na newline"
+    environment = {"SHELLBOX_TEST_SECRET": secret}
+    spec = replace(SPEC, env=environment if environment_source == "spec" else {})
+    command = Command(
+        ("sh", "-c", 'read release; printf "%s" "$SHELLBOX_TEST_SECRET"'),
+        env=environment if environment_source == "command" else {},
+        stdin=b"release\n",
+    )
+    create_subprocess = asyncio.create_subprocess_exec
+    host_arguments = []
+
+    async def observe_launcher(*args, **kwargs):
+        process = await create_subprocess(*args, **kwargs)
+        # The guest waits for stdin, which run() supplies after this returns, keeping its launcher alive.
+        host_arguments.append(Path(f"/proc/{process.pid}/cmdline").read_bytes())
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_launcher)
+    result = run_command(factory, command, spec)
+    assert (result.exit_code, result.stdout) == (0, secret.encode()), result.stderr
+    assert host_arguments and all(secret.encode() not in arguments for arguments in host_arguments)
+
+
+def test_task_environment_cannot_inject_arguments_through_nul_bytes(factory):
+    # NUL-delimited --args must retain exec's rejection of embedded NULs instead of parsing extra mounts.
+    command = Command(("true",), env={"TASK_VALUE": "value\0--ro-bind\0/etc\0/host-etc"})
+    with pytest.raises(ValueError, match="NUL"):
+        run_command(factory, command)
+
+
+@pytest.mark.parametrize("system_directories", list(SystemDirectories))
+def test_host_configuration_is_hidden_from_commands_and_downloads(tmp_path, system_directories):
+    factory = make_factory(system_directories=system_directories)
+    # These host paths must not become visible even when commands run as the host's root user.
+    hidden = ("/etc/profile", "/etc/environment", "/etc/shadow", "/etc/gshadow", "/etc/ssl/private", "/sys/kernel")
+
+    async def scenario(machine: LocalMachine):
+        result = await machine.run(Command(("sh", "-c", 'for path do test ! -e "$path" || exit 1; done', "sh", *hidden)))
+        assert result.exit_code == 0, result.stderr
+        for path in hidden:
+            with pytest.raises(RuntimeError, match="No such file"):
+                await machine.download(path, tmp_path / "download")
+        configuration = await machine.run(Command(("cat", "/etc/resolv.conf")))
+        assert (configuration.exit_code, configuration.stdout) == (0, Path("/etc/resolv.conf").read_bytes())
+        await machine.download("/etc", tmp_path / "etc")
+
+    on_machine(factory, SPEC, scenario)
+    assert not (tmp_path / "etc/profile").exists()
+    assert (tmp_path / "etc/passwd").read_bytes() == Path("/etc/passwd").read_bytes()
+
+
 def test_host_image_adds_read_only_mount_and_program_path(tmp_path, factory):
     bin_dir = tmp_path / "venv-bin"
     bin_dir.mkdir()
@@ -419,9 +504,9 @@ def test_copy_on_write_transfers_see_the_machines_own_system_directories(tmp_pat
         with pytest.raises(UnsupportedMachineSpec):
             await machine.upload(single, f"/sys/{name}")
         # A link to a path that exists only on the host does not resolve in the sandbox.
-        await machine.run(Command(("ln", "-s", str(tmp_path), f"/opt/{name}/host")))
+        await machine.run(Command(("ln", "-s", str(tmp_path), f"/usr/local/share/{name}/host")))
         with pytest.raises(RuntimeError, match="No such file"):
-            await machine.download(f"/opt/{name}/host", downloaded / "host")
+            await machine.download(f"/usr/local/share/{name}/host", downloaded / "host")
         return read
 
     read = on_machine(copy_on_write_factory, SPEC, scenario)
@@ -644,7 +729,6 @@ def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
     assert prefix == python_environment.bin_dir.parent
     assert base_prefix.is_relative_to(python_environment.root)
 
-    monkeypatch.setenv("UV_OFFLINE", "1")
     packages = PackageSpec(pypi_packages=("six==1.17.0",), tools=("python3",))
     factory = make_factory(python_version=PYTHON_VERSION, hash_seed="23")
     spec = MachineSpec(packages, workdir="/app")
@@ -671,6 +755,7 @@ def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
         finally:
             await first.close()
         # A fresh factory must reuse the resolved installation without index access.
+        monkeypatch.setenv("UV_OFFLINE", "1")
         second = await make_factory(python_version=PYTHON_VERSION).create(spec)
         try:
             result = await second.run(Command(("python3", "-c", "import six,sys; print(sys.prefix)")))

@@ -298,10 +298,8 @@ def build_common_iris_env(
     # parent (bring-your-own image) from a top-level submission with no parent.
     env["IRIS_JOB_SETUP_SCRIPTS"] = json.dumps(list(environment.setup_scripts))
 
-    # Serialize user env vars for child job inheritance via IRIS_JOB_ENV
-    user_env_vars = dict(environment.env_vars)
-    if user_env_vars:
-        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
+    if environment.env_vars:
+        env["IRIS_JOB_ENV"] = json.dumps(dict(environment.env_vars))
 
     # Only propagate region/zone constraints to children; device constraints
     # are re-derived from each child's own resource spec.

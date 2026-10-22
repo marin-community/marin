@@ -81,7 +81,7 @@ class TestComposeEnvVars:
                 },
             ],
         )
-        compose_env = env._compose_env_vars(include_os_env=False)
+        compose_env = env._compose_env_vars(include_client_env=False)
         assert (
             compose_env["HOST_VERIFIER_LOGS_PATH"]
             == trial_paths.verifier_dir.resolve().absolute().as_posix()

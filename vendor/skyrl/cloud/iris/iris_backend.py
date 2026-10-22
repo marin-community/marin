@@ -33,6 +33,7 @@ from iris.cluster.types import CoschedulingConfig, ResourceSpec, gpu_device
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
+from rigging.config_discovery import find_project_root
 
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
 from cloud.iris.launch import LaunchOutcome
@@ -52,7 +53,7 @@ from marinskyrl.resource_locator import (
     join_resource_path,
 )
 from skyrl_train.rollouts.harbor_settings import EnvironmentType
-from cloud.iris.runtime_bundle import build_runtime_bundle
+from cloud.iris.paths import PROJECT_ROOT
 from cloud.iris.ray_ports import RayPort
 from marinskyrl.environment_contract import (
     DEBUG_ARTIFACT_DIR_ENV,
@@ -288,7 +289,6 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         rendezvous_dir=ray["rendezvous_dir"],
         cluster=iris["cluster"],
         cluster_config=iris["cluster_config"],
-        source_digest=runtime["source_digest"],
         runtime_profile=RuntimeProfile(runtime["profile"]),
         job_name=iris["job_name"],
         priority=iris["priority"],
@@ -298,6 +298,11 @@ def _iris_submission_state(config_path: Path, config: DictConfig) -> SimpleNames
         dry_run=submission == SubmissionMode.PREPARE,
         target_cluster=iris["target_cluster"],
         parent_cluster_config=iris["parent_cluster_config"],
+        container_profile=(
+            job_pb2.CONTAINER_PROFILE_UNSPECIFIED
+            if iris["container_profile"] is None
+            else job_pb2.ContainerProfile.Value(iris["container_profile"])
+        ),
         wandb_entity=iris["wandb_entity"],
         config=config,
     )
@@ -323,10 +328,10 @@ class IrisBackend:
         args = _iris_submission_state(config_path, config)
         if config.run.submission == SubmissionMode.PREPARE:
             raise ValueError("Prepare mode validates a launch without submitting it")
-        with (
-            build_runtime_bundle(config.runtime.source_digest) as workspace,
-            contextlib.redirect_stdout(sys.stderr),
-        ):
+        workspace = find_project_root(PROJECT_ROOT)
+        if workspace is None:
+            raise RuntimeError("SkyRL launches require a Marin checkout")
+        with contextlib.redirect_stdout(sys.stderr):
             return launch(args, workspace)
 
     def export_terminal_policy(self, config_path: Path) -> None:
@@ -538,9 +543,6 @@ def resolve_node_resource_requests(
 
 RL_PYTHON = "python"
 SKYRL_HOME = MARINSKYRL_TASK_ROOT
-# Iris synchronizes the small controller bundle to /app. The setup phase checks
-# out the same immutable MarinSkyRL commit and installs its locked training
-# environment under /app/marinskyrl.
 APP_DIR = "/app"
 
 
@@ -783,7 +785,7 @@ def _build_task_shell(
     if not flashqla_enabled:
         gdn_branch = f"exec {ctrl}"
     bash = (
-        f"set -e; {spill_preflight}cd {APP_DIR}; "
+        f"set -e; {spill_preflight}cd {SKYRL_HOME}; "
         f"export SKYRL_HOME={shlex.quote(SKYRL_HOME)}; "
         f"source {shlex.quote(MARINSKYRL_ACTIVATION_FILE)}; "
         f"export PYTHONPATH={shlex.quote(pythonpath)}:${{PYTHONPATH:-}}; "
@@ -840,7 +842,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     user = os.environ.get("USER") or os.environ.get("USERNAME") or "user"
     print(f"[rl-iris] Job:        /{user}/{args.job_name}", flush=True)
     print(f"[rl-iris] Cluster:    {args.cluster}  ({args.cluster_config})", flush=True)
-    print(f"[rl-iris] Runtime:    {args.source_digest} ({args.runtime_profile.value})", flush=True)
+    print(f"[rl-iris] Runtime:    {args.runtime_profile.value}", flush=True)
     print(
         f"[rl-iris] Topology:   {args.num_nodes} node(s) x {gpu_spec}  "
         f"(= {args.num_nodes * args.gpus_per_node} GPUs, exclusive, gang/leafgroup)",
@@ -962,39 +964,11 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
                 print(f"[rl-iris] FR-slug re-scope: {_fr_cvar} {_old} -> {_new}", flush=True)
     if args.rendezvous_dir:
         env_vars["OT_AGENT_IRIS_RENDEZVOUS_DIR"] = args.rendezvous_dir
-    # Forward the launch host's secrets (mirrors launch_eval_iris.py passthrough).
-    #
-    # IMPORTANT — do NOT forward AWS_*/R2_* here. The cw-us-east-02a cluster
-    # projects an `iris-task-env` k8s Secret into EVERY task pod via `envFrom`
-    # (because storage.remote_state_dir is an s3:// URI), and that secret already
-    # carries the correct in-cluster R2 credentials + endpoint
-    # (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_ENDPOINT_URL / AWS_REGION /
-    # FSSPEC_S3). In K8s, explicit container `env` entries take precedence over
-    # `envFrom`, so forwarding the launch host's AWS_* (which point at a
-    # DIFFERENT account and lack AWS_ENDPOINT_URL) would CLOBBER the pod's
-    # injected creds and make the s3://marin-us-east-02a rendezvous (multi-node)
-    # silently target real AWS S3 instead of the cluster store. NOTE: the default
-    # object store moved R2 (s3://marin-na) -> CW (s3://marin-us-east-02a) on
-    # 2026-07-05 (marin c7caecc95a) — pods now inject CW creds+AWS_ENDPOINT_URL and
-    # can no longer reach R2. Let the cluster-injected creds win; the
-    # fsspec rendezvous in task_runtime.py uses default credential
-    # discovery and picks them up.
-    #
-    # Daytona credentials MUST be forwarded: agentic RL (terminal_bench / Harbor)
-    # builds a Daytona sandbox per trial, and iris injects only HF/WANDB into the
-    # task pod — nothing else. Without DAYTONA_API_KEY the worker's harbor client
-    # raises DaytonaAuthenticationError on every env build, so no sandbox comes
-    # up, the verifier never runs, and EVERY trajectory finalizes as
-    # VerificationNotCompletedError with reward 0 (observed zeroing an entire
-    # reverify rollout). Mirror the base IrisLauncher passthrough set
-    # so the same creds reach the RL worker.
-    #
-    # SkyRL passes trainer.project_name directly to wandb.init but does not pass an
-    # entity. Resolve that missing dimension here: the explicit launch argument wins,
-    # followed by the launch-host value and the Marin team default.
+    # Keep launch-host AWS overrides out of cluster jobs. The read-only
+    # submitted CoreWeave files and AWS_SHARED_CREDENTIALS_FILE supply storage
+    # authentication. Iris bundles HF/W&B credentials as files; these provider
+    # clients still consume explicitly forwarded environment values.
     for k in (
-        "HF_TOKEN",
-        "WANDB_API_KEY",
         "DAYTONA_API_KEY",
         "DAYTONA_JWT_TOKEN",
         "DAYTONA_ORGANIZATION_ID",
@@ -1094,11 +1068,12 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             entrypoint=entrypoint,
             name=args.job_name,
             task_image=IRIS_TASK_IMAGE,
+            container_profile=args.container_profile,
             resources=resources,
             environment=EnvironmentSpec(
                 env_vars=env_vars,
                 extras=["gpu"],
-                setup_scripts=[task_setup_script(args.source_digest, args.runtime_profile)],
+                setup_scripts=[task_setup_script(args.runtime_profile)],
             ),
             constraints=constraints or None,
             coscheduling=coscheduling,

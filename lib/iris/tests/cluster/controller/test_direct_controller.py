@@ -81,6 +81,9 @@ class FakeDirectProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
@@ -369,7 +372,7 @@ def _submit_job_for_user(
     return jid.task(0)
 
 
-def test_drain_uses_authenticated_email_for_nickname_job_budget(state):
+def test_drain_uses_job_owner_budget(state):
     email = "russell.power@openathena.ai"
     _submit_job_for_user(
         state,
@@ -380,7 +383,7 @@ def test_drain_uses_authenticated_email_for_nickname_job_budget(state):
     )
     with state._db.transaction() as cur:
         dispatch.drain_for_dispatch(cur)
-        set_user_budget(cur, email, 1, job_pb2.PRIORITY_BAND_INTERACTIVE, Timestamp.now())
+        set_user_budget(cur, "power", 1, job_pb2.PRIORITY_BAND_INTERACTIVE, Timestamp.now())
 
     pending = _submit_job_for_user(
         state,

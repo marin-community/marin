@@ -90,10 +90,22 @@ nav:
       - Pretraining source pool: reproducibility/pretraining-source-pool.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
+      - Agent Workflows: dev-guide/agent-workflows.md
+      - Experiment Records: dev-guide/experiment-records.md
+      - Writing Style:
+          - House Style: dev-guide/writing-style/index.md
+          - Prose Review: dev-guide/writing-style/ai-writing-donts.md
+          - Pull Requests and Commits: dev-guide/writing-style/pull-requests.md
+          - Issues: dev-guide/writing-style/issues.md
+          - Reference Docs: dev-guide/writing-style/reference-docs.md
+          - Tutorials: dev-guide/writing-style/tutorials.md
+          - Reports: dev-guide/writing-style/reports.md
+          - Blog Posts: dev-guide/writing-style/blog-posts.md
+          - Discord: dev-guide/writing-style/discord.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
       - Internal Onboarding: dev-guide/guidelines-internal.md
       - Forking Policy: dev-guide/forking-policy.md
-      - SkyRL Migration: dev-guide/skyrl-migration.md
+      - SkyRL Runtime: dev-guide/skyrl.md
       - Building Docs: dev-guide/building-docs.md
       - Releasing to PyPI: dev-guide/releasing.md
       - Snapshot Tests: dev-guide/snapshot-tests.md
@@ -111,6 +123,7 @@ nav:
       - Hero Pipeline on H100: references/hero-pipeline-h100.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
       - Browsing Buckets with fsutil: references/fsutil.md
+      - Analyzing Large Logs: references/logscan.md
 
 markdown_extensions:
   - markdown.extensions.footnotes

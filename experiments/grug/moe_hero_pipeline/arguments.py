@@ -44,6 +44,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--physical-stages", type=int)
     parser.add_argument("--stages", type=int, default=2)
     parser.add_argument("--expert-axis-size", type=int, default=1)
+    parser.add_argument("--context-axis-size", type=int, default=1)
     parser.add_argument("--microbatches", type=int, default=2)
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--sequence-length", type=int)
@@ -101,8 +102,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("moe-implementation requires main-hero-recipe")
     if args.expert_waves < 1:
         parser.error("expert-waves must be positive")
-    if args.steps < 1 or args.expert_axis_size < 1:
-        parser.error("steps and expert-axis-size must be positive")
+    if min(args.steps, args.expert_axis_size, args.context_axis_size) < 1:
+        parser.error("steps, expert-axis-size, and context-axis-size must be positive")
     if args.stop_after_step is not None and not 1 <= args.stop_after_step <= args.steps:
         parser.error("stop-after-step must be between 1 and steps")
     if args.checkpoint_every_steps < 0 or (args.checkpoint_every_steps and not args.checkpoint_root):

@@ -88,6 +88,8 @@ Per-user budget tracking lives in
 exceeds their budget, INTERACTIVE submissions are silently downgraded to BATCH.
 SYSTEM and PRODUCTION are exempt.
 
+See [shared budgets](federation.md#shared-budgets) for federation configuration.
+
 ### Max-band caps and unlisted users
 
 Each user who is listed in the cluster config's `user_budgets` tier list has a
@@ -104,23 +106,19 @@ config at startup are:
   default budget; jobs run INTERACTIVE while within budget and degrade to
   BATCH once exceeded. SYSTEM and PRODUCTION submissions are rejected.
 
-Budget rows are keyed by the authenticated principal stored in
-`jobs.submitting_user`. IAP and JWT submissions use the verified email or
-service-account identity. The friendly owner in a job path remains independent:
-an admin may submit `/power/train` while Iris accounts the job to
-`russell.power@openathena.ai`. Child jobs inherit the root submitter, and a
-federated handoff carries the same principal to the receiving cluster. Trusted
-local submissions (`local_admin`) and rows with an empty `submitting_user` use the
-job-path owner as a fallback budget key.
+Budget rows are keyed by the job owner stored in `jobs.user_id`: `/power/train`
+uses the `power` budget. Spend, priority limits, scheduling fairness, task caps,
+and dashboard counts use this same owner. Non-admin top-level submissions use the
+authenticated identity as their owner; admins can choose a different owner.
+The authenticated submitter remains in `jobs.submitting_user` for federation
+authorization, but does not determine the budget.
 
 If a higher-band submission is rejected:
 
 1. **Use the appropriate lower band.** Ordinary research should run at
    INTERACTIVE or BATCH.
-2. **Check your budget identity.** The error reports the authenticated email or
-   service account used for budget lookup. Confirm that exact value appears in
-   the cluster config. Trusted local submissions instead use the nickname at
-   the start of the job path.
+2. **Check your budget identity.** The error reports the job owner used for
+   budget lookup. Confirm that exact value appears in the cluster config.
 3. **Request an uplift.** If your work needs INTERACTIVE budget headroom or an
    admin-only band, ping [@Helw150](https://github.com/Helw150).
 
