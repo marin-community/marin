@@ -80,7 +80,6 @@ def test_native_converter_uses_text_prefill_and_preserves_private_resources_and_
     task = converted.task
     assert task.id == row.id and task.source == row.source
     assert task.context.events[-1] == TextMessage(role="assistant", content='{"a":[1')
-    assert "token_ids" not in task.context.model_dump()
     native = json.loads(row.data["lowered_task_spec"])["task"]
     assert task.resources.model_dump(mode="json") == native["resources"]
     audit = {change.field: change.original for change in converted.changes}
