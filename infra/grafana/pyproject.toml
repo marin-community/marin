@@ -45,7 +45,7 @@ only-include = ["src"]
 sources = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "--durations=10 -v"
 filterwarnings = ["ignore::DeprecationWarning"]
 log_level = "INFO"
