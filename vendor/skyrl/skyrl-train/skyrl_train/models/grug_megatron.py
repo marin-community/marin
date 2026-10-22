@@ -298,10 +298,12 @@ class GrugTopKRouter(NativeRouterObserverEmitter, TopKRouter):
     def routing(self, logits: torch.Tensor, padding_mask: torch.Tensor | None = None):
         logits = logits.view(-1, self.config.num_moe_experts).float()
         biased_logits = logits + self.expert_bias
-        natural_selected: torch.Tensor | None = None
+        # The natural top-k is the model's own selection, computed always: WP4's
+        # flip rate compares it against the replayed selection, so reporting the
+        # replay under the natural name would hide every flip.
+        natural_selected = _grug_topk_indices(biased_logits, self.topk)
         if self.router_replay is None:
-            selected = _grug_topk_indices(biased_logits, self.topk)
-            natural_selected = selected
+            selected = natural_selected
         else:
             # Grug overrides MCore's routing method, so its replay hook must be
             # called here. Selection uses biased logits; combine weights below
@@ -321,7 +323,7 @@ class GrugTopKRouter(NativeRouterObserverEmitter, TopKRouter):
             router=self,
             router_inputs=logits,
             selection_logits=biased_logits,
-            natural_selected_experts=natural_selected if natural_selected is not None else selected,
+            natural_selected_experts=natural_selected,
             selected_experts=selected,
             combine_weights=combine,
         )

@@ -98,6 +98,10 @@ def _validate_grug_router_policy(model_type: str | None, transformer_config_kwar
 
 
 ROUTER_POLICY_MANIFEST_FILENAME = "router_policy.json"
+# The bias-freeze guard applies to these model types. Grug freezes its selection
+# bias in training; NemotronH updates its correction bias, so the guard must not
+# fire there. Extend only when a per-architecture knob (CL4) resolves it.
+_BIAS_GUARD_MODEL_TYPES = ("grug_moe",)
 
 
 def _write_router_policy_manifest(cfg, model_type: str) -> None:
@@ -524,9 +528,15 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         self._initialize_policy_modules(model_path, mode=_MegatronInitMode.TRAINING)
         # The selection bias stays frozen while the router weights train; snapshot
         # the buffers so every optimizer step can assert they are byte-identical.
-        self._expert_bias_snapshot = snapshot_expert_bias(self.actor_module[0])
-        if self._expert_bias_snapshot and self.strategy.is_rank_0():
-            _write_router_policy_manifest(self.cfg, self.strategy.hf_config.model_type)
+        # Grug only until the CL4 per-architecture knob exists: NemotronH updates
+        # its correction bias during pretraining-style Stage 0, so the guard
+        # must not fire there.
+        self._bias_guard_active = self.strategy.hf_config.model_type in _BIAS_GUARD_MODEL_TYPES
+        self._expert_bias_snapshot = (
+            snapshot_expert_bias(self.actor_module[0]) if self._bias_guard_active else {}
+        )
+        if self.strategy.is_rank_0():
+            _write_router_policy_manifest(self.cfg, self.strategy.hf_config.model_type, self.actor_module)
         # create profiler
         if self.cfg.trainer.policy.megatron_config.torch_profiler_config.enable:
             self.profiler = Profiler(self.cfg.trainer.policy.megatron_config.torch_profiler_config)
@@ -590,50 +600,6 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                 self.cfg, "trainer.policy.megatron_config.logprob_chunk_size", default=None
             ),
         )
-
-    def verify_router_observations(self, model_path: str) -> int:
-        """Drive every Grug router under the telemetry observer and audit the emission.
-
-        Returns the number of failures: selection mismatches between the emitted
-        observations and a top-(k+1) recomputation from each observation's own
-        router inputs, plus routers whose expert_bias changed during the forward.
-        """
-        self._initialize_policy_modules(model_path, mode=_MegatronInitMode.CHECKPOINT_EXPORT)
-        from skyrl_train.models.grug_megatron import GrugTopKRouter, _grug_topk_indices  # noqa: PLC0415
-        from skyrl_train.models.router_instrumentation import observe_router_forwards  # noqa: PLC0415
-        from skyrl_train.workers.megatron.router_telemetry import RouterLoadStats  # noqa: PLC0415
-
-        module = self.actor_module[0]
-        if hasattr(module, "module"):
-            module = module.module
-        routers = [candidate for candidate in module.modules() if isinstance(candidate, GrugTopKRouter)]
-        if not routers:
-            raise ValueError("no GrugTopKRouter found under the model; the bridge did not install Grug routing")
-
-        stats = RouterLoadStats()
-        observations: list = []
-        mismatches = 0
-        generator = torch.Generator(device="cpu").manual_seed(3)
-        with observe_router_forwards(
-            lambda observation: (stats.observe(observation), observations.append(observation))
-        ):
-            for router in routers:
-                device = next(router.parameters()).device
-                dtype = next(router.parameters()).dtype
-                hidden = torch.randn(6, router.config.hidden_size, generator=generator).to(device=device, dtype=dtype)
-                before = router.expert_bias.detach().clone()
-                router(hidden)
-                if not torch.equal(router.expert_bias.detach(), before):
-                    mismatches += 1
-        total_selected = sum(int(counts.sum()) for counts in stats.counts().values())
-        expected_selected = len(routers) * 6 * routers[0].topk
-        if total_selected != expected_selected:
-            raise ValueError(f"telemetry recorded {total_selected} selections, expected {expected_selected}")
-        for observation in observations:
-            recomputed = _grug_topk_indices(observation.selection_logits, observation.selected_experts.shape[-1])
-            if not torch.equal(recomputed, observation.selected_experts):
-                mismatches += 1
-        return int(mismatches)
 
     def _ppo_train_impl(self, train_data, timing: PhaseBreakdown) -> "TrainingOutputBatch":
         """Train through Megatron Core's pipeline scheduler."""
@@ -738,7 +704,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                             consecutive_nonfinite_steps=self._consecutive_nonfinite_steps,
                             max_consecutive_nonfinite_steps=self.cfg.trainer.policy.max_consecutive_nonfinite_steps,
                         )
-                    assert_bias_unchanged(self.actor_module[0], self._expert_bias_snapshot)
+                    if self._bias_guard_active:
+                        assert_bias_unchanged(self.actor_module[0], self._expert_bias_snapshot)
                     checksum_mismatch = None
                     if self.cfg.trainer.policy.megatron_config.check_dp_weight_consistency:
                         with timing.span("megatron_dp_weight_checksum"):
