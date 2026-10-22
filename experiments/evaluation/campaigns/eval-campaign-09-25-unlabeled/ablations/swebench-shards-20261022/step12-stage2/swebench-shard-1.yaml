@@ -1,0 +1,84 @@
+n_concurrent_trials: 16
+n_attempts: 1
+release_trial_payloads_in_memory: true
+retry:
+  max_retries: 10
+  include_exceptions:
+  - InternalServerError
+  - APIConnectionError
+  - APITimeoutError
+  - ArtifactUploadTimeoutError
+  - ArtifactWriterBacklogError
+  - CancelledError
+  - ContextManagementInfrastructureError
+  - LLMRequestTimeoutError
+  - SandboxBuildFailedError
+  - ContainerRegistryThrottledError
+  - AgentSetupTimeoutError
+  - DaytonaSandboxStopError
+  - DaytonaProcessError
+  - TrialTimeoutError
+  - ArtifactWriteTimeoutError
+  - Tau3RuntimeInfrastructureError
+  - Tau3TargetInfrastructureError
+  - VerifierTimeoutError
+  - VerifierRuntimeError
+  wait_multiplier: 2.0
+  min_wait_sec: 1.0
+  max_wait_sec: 60.0
+  exclude_exceptions: []
+environment:
+  type: daytona
+agents:
+- name: mini-swe-agent
+  override_setup_timeout_sec: 360
+  override_timeout_sec: 1800
+  kwargs:
+    version: 2.1.0
+    model_info:
+      max_input_tokens: 131072
+      max_output_tokens: 16384
+datasets:
+- name: swebench-verified
+  version: '1.0'
+  registry_url: https://raw.githubusercontent.com/marin-community/harbor/38742b0f9f411c95e0c01468785cac7bb77c9894/registry.json
+  task_names:
+  - astropy__astropy-13398
+  - astropy__astropy-14995
+  - django__django-11265
+  - django__django-11490
+  - django__django-12262
+  - django__django-13033
+  - django__django-13315
+  - django__django-13590
+  - django__django-13933
+  - django__django-14493
+  - django__django-14725
+  - django__django-15103
+  - django__django-15280
+  - django__django-15554
+  - django__django-15973
+  - django__django-16145
+  - django__django-16631
+  - django__django-16950
+  - matplotlib__matplotlib-22865
+  - matplotlib__matplotlib-24570
+  - matplotlib__matplotlib-25775
+  - psf__requests-1724
+  - pydata__xarray-3677
+  - pydata__xarray-7233
+  - pytest-dev__pytest-5787
+  - scikit-learn__scikit-learn-10297
+  - scikit-learn__scikit-learn-13135
+  - scikit-learn__scikit-learn-25232
+  - sphinx-doc__sphinx-7590
+  - sphinx-doc__sphinx-8721
+  - sphinx-doc__sphinx-9698
+  - sympy__sympy-13798
+  - sympy__sympy-15809
+  - sympy__sympy-17318
+  - sympy__sympy-19040
+  - sympy__sympy-20801
+  - sympy__sympy-23262
+verifier:
+  override_timeout_sec: 300
