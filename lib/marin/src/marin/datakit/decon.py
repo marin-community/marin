@@ -938,6 +938,7 @@ def build_eval_bloom(
     required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
+    best_effort_required_tasks: tuple[str, ...] = (),
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     zephyr_context: ZephyrContext | None = None,
@@ -980,6 +981,9 @@ def build_eval_bloom(
             manifest directory.
         best_effort_eval_corpus_version: Version that the best-effort manifest
             must report.
+        best_effort_required_tasks: Tasks in the best-effort manifest that
+            must have loaded. The manifest's ``required_tasks`` must list the
+            leaf tasks of each one, and every leaf must be included.
         worker_resources: Resource request for each eval-file shard.
         max_workers: Maximum Zephyr workers for the Bloom build.
         zephyr_context: Optional shared Zephyr worker context.
@@ -1015,6 +1019,7 @@ def build_eval_bloom(
             _validate_best_effort_eval_manifest(
                 best_effort_eval_manifest_path,
                 best_effort_eval_corpus_version,
+                best_effort_required_tasks,
             )
         )
 
@@ -1153,6 +1158,7 @@ def _validate_required_eval_manifest(
 def _validate_best_effort_eval_manifest(
     manifest_path: str,
     expected_corpus_version: str,
+    required_tasks: tuple[str, ...],
 ) -> list[str]:
     """Validate a best-effort manifest and return its exact artifact paths."""
     manifest_storage = StoragePath(manifest_path)
@@ -1181,6 +1187,16 @@ def _validate_best_effort_eval_manifest(
         raise ValueError("best-effort eval manifest included_leaf_tasks must be a list of strings")
     if not isinstance(artifacts, list) or not all(isinstance(entry, Mapping) for entry in artifacts):
         raise ValueError("best-effort eval manifest artifacts must be a list of objects")
+    manifest_required_tasks = manifest.get("required_tasks", {})
+    if not isinstance(manifest_required_tasks, Mapping):
+        raise ValueError("best-effort eval manifest required_tasks must be an object")
+    for task in required_tasks:
+        leaves = manifest_required_tasks.get(task)
+        if not leaves:
+            raise ValueError(f"best-effort eval manifest does not list required task {task!r}")
+        missing_leaves = sorted(set(leaves) - set(included_tasks))
+        if missing_leaves:
+            raise ValueError(f"required task {task!r} is missing leaf tasks {missing_leaves}")
 
     manifest_parent = os.path.dirname(manifest_path)
     paths: list[str] = []
@@ -1308,6 +1324,7 @@ def build_eval_bloom_step(
     required_eval_names: tuple[str, ...] = (),
     best_effort_eval_manifest_path: str | None = None,
     best_effort_eval_corpus_version: str | None = None,
+    best_effort_required_tasks: tuple[str, ...] = (),
     worker_resources: ResourceConfig | None = None,
     max_workers: int | None = None,
     zephyr_context: ZephyrContext | None = None,
@@ -1333,9 +1350,10 @@ def build_eval_bloom_step(
             required_eval_names: Required-suite gate passed to
             :func:`build_eval_bloom`. The path is an external input. The
             expected version and names enter the step hash.
-        best_effort_eval_manifest_path, best_effort_eval_corpus_version:
-            Optional best-effort suite. Only the exact artifacts below its
-            immutable, versioned manifest directory enter the Bloom.
+        best_effort_eval_manifest_path, best_effort_eval_corpus_version,
+            best_effort_required_tasks: Optional best-effort suite. Only the
+            exact artifacts below its immutable, versioned manifest directory
+            enter the Bloom. The required task names enter the step hash.
         worker_resources: Resource request for each eval-file shard.
         max_workers: Maximum Zephyr workers for the Bloom build.
         zephyr_context: Optional shared Zephyr worker context.
@@ -1378,6 +1396,7 @@ def build_eval_bloom_step(
         "required_eval_corpus_version": required_eval_corpus_version,
         "required_eval_names": tuple(sorted(required_eval_names)),
         "best_effort_eval_corpus_version": best_effort_eval_corpus_version,
+        "best_effort_required_tasks": tuple(sorted(best_effort_required_tasks)),
     }
 
     return StepSpec(
@@ -1395,6 +1414,7 @@ def build_eval_bloom_step(
             required_eval_names=required_eval_names,
             best_effort_eval_manifest_path=best_effort_eval_manifest_path,
             best_effort_eval_corpus_version=best_effort_eval_corpus_version,
+            best_effort_required_tasks=best_effort_required_tasks,
             worker_resources=worker_resources,
             max_workers=max_workers,
             zephyr_context=zephyr_context,
