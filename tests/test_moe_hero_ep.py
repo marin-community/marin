@@ -361,6 +361,63 @@ def test_synthetic_training_data_builds_a_reusable_global_batch():
     assert batch.tokens.sharding == NamedSharding(mesh, P(train._BATCH_AXES, None))
 
 
+@pytest.mark.parametrize("context_size", [1, 2])
+def test_balance_attention_rows_spreads_long_documents_across_shards(context_size):
+    # Two whole-row documents land on the last shard as loaded; balancing gives them separate shards,
+    # moves every row's tokens, loss weights, and segment ids together, and keeps loaded order within a shard.
+    # Context ranks share rows, so a context axis must not change the placement.
+    script = f"""
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.data.text.examples import GrugLmExample
+        from levanter.grug.attention import AttentionMask
+
+        from experiments.grug.moe_hero_ep import train
+
+        rows, seq_len, shards, context = 8, 16, 4, {context_size}
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, context, shards, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        segment_ids = np.repeat(np.arange(seq_len // 2)[None, :], rows, axis=0).repeat(2, axis=1)
+        segment_ids[-2:] = 0
+        # Row 0 is two 2-token documents followed by padding.
+        segment_ids[0, 4:] = -1
+        tokens = np.arange(rows)[:, None] * 100 + np.arange(seq_len)[None, :]
+        loss_weight = np.repeat(np.arange(rows, dtype=np.float32)[:, None], seq_len, axis=1)
+        sharding = NamedSharding(mesh, P(train._BATCH_AXES, None))
+        batch = jax.device_put(
+            GrugLmExample(
+                tokens=jnp.asarray(tokens, dtype=jnp.int32),
+                loss_weight=jnp.asarray(loss_weight),
+                attn_mask=AttentionMask.causal().with_segment_ids(jnp.asarray(segment_ids, dtype=jnp.int32)),
+            ),
+            sharding,
+        )
+        with jax.set_mesh(mesh):
+            out = jax.jit(train.balance_attention_rows)(batch)
+
+        assert out.tokens.sharding == sharding
+        source = np.asarray(out.tokens)[:, 0] // 100
+        assert sorted(source.tolist()) == list(range(rows))
+        np.testing.assert_array_equal(np.asarray(out.tokens), tokens[source])
+        np.testing.assert_array_equal(np.asarray(out.loss_weight), loss_weight[source])
+        for ids in out.attn_mask.segment_ids:
+            np.testing.assert_array_equal(np.asarray(ids), segment_ids[source])
+        long_rows_per_shard = np.isin(source, [rows - 2, rows - 1]).reshape(shards, rows // shards).sum(axis=1)
+        assert long_rows_per_shard.max() == 1, long_rows_per_shard
+        # Padding adds no cost, so row 0 is the cheapest row and the snake deal pairs it with the costliest.
+        assert sorted(source[: rows // shards].tolist()) == [0, rows - 2], source
+        # Expert capacity drops a shard's later tokens first, so a shard keeps its rows in loaded order.
+        assert (np.diff(source.reshape(shards, rows // shards), axis=1) > 0).all(), source
+    """
+
+    run_on_cpu_devices(script, device_count=4 * context_size)
+
+
 def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
@@ -1221,7 +1278,7 @@ def test_diagnostic_watch_stats_match_direct_gradient_and_parameter_norms():
     batch = SimpleNamespace(
         tokens=jnp.array([1, 3], dtype=jnp.int32),
         loss_weight=jnp.array([0.5, 1.0]),
-        attn_mask=None,
+        attn_mask=AttentionMask.causal(),
     )
     mp = jmp.get_policy("params=float32,compute=float32,output=float32")
     watch = WatchConfig(interval=1)
