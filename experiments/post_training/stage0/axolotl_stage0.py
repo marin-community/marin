@@ -32,7 +32,6 @@ from experiments.post_training.stage0.budget import (
     ADAM_BETA1,
     ADAM_BETA2,
     EPOCHS_PER_STAGE,
-    GLOBAL_BATCH,
     GRADIENT_ACCUMULATION_STEPS,
     LEARNING_RATE,
     LR_SCHEDULE,
