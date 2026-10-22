@@ -219,7 +219,7 @@ def test_masking_canary_on_the_shared_template(base_name):
     single token so the partition is token-exact."""
     if not _hf_reachable():
         pytest.skip("HF hub unreachable")
-    from transformers import AutoTokenizer
+    from transformers import AutoTokenizer  # noqa: PLC0415 - optional dep guard
 
     base = AXOLOTL_BASES[base_name]
     tokens = FAMILY_TOKEN_MAPS[base.architecture]
@@ -252,12 +252,12 @@ def test_masking_canary_on_the_shared_template(base_name):
     supervised_ids = [token for role, ids in spans if role == "assistant" for token in ids]
     unsupervised_ids = [token for role, ids in spans if role != "assistant" for token in ids]
     supervised_text = tokenizer.decode(supervised_ids)
-    unsupervised_text = tokenizer.decode(unsupervised_ids)
     assert "The user wants weather. I should call the tool." in supervised_text
     assert "It's 18C and cloudy in Paris." in supervised_text
     assert "What is the weather in Paris?" not in supervised_text
     assert "You are a helpful assistant." not in supervised_text
     assert '{"temp_c": 18, "cond": "cloudy"}' not in supervised_text
+    assert unsupervised_ids, "the unsupervised side must be nonempty on the canary conversation"
     # The family's turn-close token lands in the supervised span, so the 98%
     # end-of-turn gate measures a token the model actually trains to emit.
     close_ids = tokenizer.encode(tokens.turn_close, add_special_tokens=False)
@@ -271,11 +271,9 @@ def test_fork_chat_template_strategy_produces_the_same_partition():
     """Where the fork is installed (the pod image), the fork's own
     ``ChatTemplateStrategy`` must derive the same supervised region on the shared
     template. Skipped honestly where axolotl is not installed."""
-    axolotl = pytest.importorskip("axolotl")  # noqa: F841 - availability is the gate
+    pytest.importorskip("axolotl")
     from axolotl.prompt_strategies.chat_template import ChatTemplateStrategy  # noqa: PLC0415
-    from transformers import AutoTokenizer
-
-    from experiments.post_training.axolotl_sft.launcher import AXOLOTL_FORK_REPO  # noqa: F401
+    from transformers import AutoTokenizer  # noqa: PLC0415 - optional dep guard
 
     base = QWEN3_30B_A3B_BASE
     tokens = FAMILY_TOKEN_MAPS[base.architecture]
