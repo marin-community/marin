@@ -1,7 +1,7 @@
 {
   "provenance": {
     "what": "CatCount multi-teacher on-policy distillation (MOPD) from two synthetic experts with different skills: cat (repeat a word N times) and evens (the first N positive even numbers), through Megatron with pretrained Qwen2.5-0.5B-Instruct.",
-    "produced_by": "TEACHER_WORDS='cat evens' ci/marin_nightly/run_cat_count_opd_h100.sh on one Iris H100x4 task",
+    "produced_by": "TEACHER_ROUTES='cat evens' ci/marin_nightly/run_cat_count_opd_h100.sh on one Iris H100x4 task",
     "recipe": "The OPD recipe (lr 5e-7, teacher-credit clip 5, jitter 0.5) with one cat row and one evens row for every count, teacher_route set to the row's route, and each route sent to its own expert. The evens rows use the sequence environment, whose shaped reward credits the longest correct prefix, so their step-0 sampled score is higher than cat's although their exact match (0.38) is in the same band.",
     "learning_rate": 5e-07,
     "advantage_clip": 5,

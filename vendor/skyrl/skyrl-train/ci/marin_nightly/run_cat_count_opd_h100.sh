@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # CatCount on-policy distillation from synthetic expert teachers, inside one Iris H100x4 task.
 # Two GPUs train Qwen2.5-0.5B-Instruct with Megatron, two serve vLLM rollouts, and each teacher is a CPU process
-# on this host. TEACHER_WORDS="cat" is single-teacher OPD; "cat evens" is MOPD with one expert per route (cat
+# on this host. TEACHER_ROUTES="cat" is single-teacher OPD; "cat evens" is MOPD with one expert per route (cat
 # repeats a word, evens lists even numbers), and SWAP_ROUTES=1 sends each route to the other's expert. SPEC gates
 # the run (by default the OPD or MOPD spec); evens-only runs need an explicit SPEC.
 # set SPEC= (empty) to only train, for calibration.
@@ -13,20 +13,20 @@ POLICY_MODEL="${POLICY_MODEL:-Qwen/Qwen2.5-0.5B-Instruct}"
 POLICY_REVISION="${POLICY_REVISION:-7ae557604adf67be50417f59c2c2f167def9a775}"
 OUTPUT="${OUTPUT:-$PWD/cat-count-opd}"
 LOG="${LOG:-$PWD/cat-count-opd-run.log}"
-TEACHER_WORDS="${TEACHER_WORDS:-cat}"
+TEACHER_ROUTES="${TEACHER_ROUTES:-cat}"
 SWAP_ROUTES="${SWAP_ROUTES:-0}"
-read -r -a WORDS <<< "$TEACHER_WORDS"
-case "${WORDS[*]}" in
+read -r -a ROUTES <<< "$TEACHER_ROUTES"
+case "${ROUTES[*]}" in
   cat) DEFAULT_SPEC=cat-count-opd-qwen2.5-0.5b-async.json ;;
   "cat evens" | "evens cat") DEFAULT_SPEC=cat-evens-mopd-qwen2.5-0.5b-async.json ;;
   evens)
     if [[ ! -v SPEC ]]; then
-      echo "TEACHER_WORDS=evens needs an explicit SPEC (or SPEC= to skip the gate)" >&2
+      echo "TEACHER_ROUTES=evens needs an explicit SPEC (or SPEC= to skip the gate)" >&2
       exit 2
     fi
     DEFAULT_SPEC=
     ;;
-  *) echo "TEACHER_WORDS must be 'cat', 'evens', or both; got '$TEACHER_WORDS'" >&2; exit 2 ;;
+  *) echo "TEACHER_ROUTES must be 'cat', 'evens', or both; got '$TEACHER_ROUTES'" >&2; exit 2 ;;
 esac
 SPEC="${SPEC-ci/marin_nightly/specs/$DEFAULT_SPEC}"
 MAX_STEPS="${MAX_STEPS:-30}"
@@ -63,17 +63,17 @@ cleanup_teachers() {
 }
 trap cleanup_teachers EXIT
 TEACHER_ARGS=()
-for word in "${WORDS[@]}"; do
-  endpoint_file="$TEACHER_ENDPOINT_DIR/$word"
+for route in "${ROUTES[@]}"; do
+  endpoint_file="$TEACHER_ENDPOINT_DIR/$route"
   # shellcheck disable=SC2086
-  if [[ "$word" == evens ]]; then TARGET_ARGS=(--task evens); else TARGET_ARGS=(--task count --word "$word"); fi
+  if [[ "$route" == evens ]]; then TARGET_ARGS=(--task evens); else TARGET_ARGS=(--task count --word "$route"); fi
   "$PYTHON" examples/cat_count/synthetic_teacher.py --tokenizer "$MODEL_DIR" --endpoint-file "$endpoint_file" \
     "${TARGET_ARGS[@]}" --jitter "$TEACHER_JITTER" $TEACHER_FLAGS &
   teacher_pid=$!
   teacher_pids+=("$teacher_pid")
   for ((attempt = 0; attempt < 300; attempt++)); do
     if ! kill -0 "$teacher_pid" 2>/dev/null; then
-      echo "synthetic teacher '$word' exited before publishing its endpoint" >&2
+      echo "synthetic teacher '$route' exited before publishing its endpoint" >&2
       wait "$teacher_pid"
       exit 1
     fi
@@ -81,15 +81,15 @@ for word in "${WORDS[@]}"; do
     sleep 0.1
   done
   if [[ ! -s "$endpoint_file" ]]; then
-    echo "synthetic teacher '$word' did not publish its endpoint within 30 seconds" >&2
+    echo "synthetic teacher '$route' did not publish its endpoint within 30 seconds" >&2
     exit 1
   fi
   read -r endpoint < "$endpoint_file"
-  TEACHER_ARGS+=(--teacher "${word}=${endpoint}")
+  TEACHER_ARGS+=(--teacher "${route}=${endpoint}")
 done
 if [[ "$SWAP_ROUTES" == 1 ]]; then TEACHER_ARGS+=(--swap-routes); fi
 
-echo "::: distilling for ${MAX_STEPS} steps at lr ${LEARNING_RATE}, advantage clip ${ADVANTAGE_CLIP:-none}; experts ${TEACHER_WORDS} (swap ${SWAP_ROUTES}), jitter ${TEACHER_JITTER} ${TEACHER_FLAGS}"
+echo "::: distilling for ${MAX_STEPS} steps at lr ${LEARNING_RATE}, advantage clip ${ADVANTAGE_CLIP:-none}; experts ${TEACHER_ROUTES} (swap ${SWAP_ROUTES}), jitter ${TEACHER_JITTER} ${TEACHER_FLAGS}"
 START=$(date +%s)
 # shellcheck disable=SC2086
 "$PYTHON" -m cloud.iris.telemetry_env -- \
