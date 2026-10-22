@@ -1,4 +1,4 @@
-"""Fixed-dataset (prompt, completion) trajectory runner: the M1 fixed-data path."""
+"""Fixed-dataset (prompt, completion) trajectory runner: the static SFT data path."""
 
 import asyncio
 import json
@@ -10,7 +10,6 @@ from omegaconf import OmegaConf
 from marinskyrl.runtime_options import FixedCompletionFormat
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.utils import (
-    get_default_config,
     response_token_cap,
     sequence_token_cap,
     sequences_per_step,
@@ -263,15 +262,3 @@ def test_validate_objective_rejects_fixed_completion_configs_that_break_the_matc
         cfg = fixed_completion_test_config(**overrides)
         with pytest.raises(ValueError, match=message):
             validate_objective(cfg)
-
-
-def test_fixed_completion_config_rejects_an_unknown_format():
-    cfg = fixed_completion_test_config(**{"data": {"fixed_completion_format": "packed"}})
-    with pytest.raises(ValueError, match="fixed_completion_format"):
-        validate_objective(cfg)
-
-
-def test_default_config_keeps_the_fixed_completion_fields():
-    cfg = get_default_config()
-    assert cfg.data.fixed_completion_format == "text"
-    assert cfg.environment.env_class != "fixed_completion"

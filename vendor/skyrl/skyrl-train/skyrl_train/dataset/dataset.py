@@ -106,6 +106,21 @@ def prompt_token_ids(tokenizer: PreTrainedTokenizerBase, prompt) -> list[int]:
     return [int(token) for token in encoded]
 
 
+def completion_token_ids(
+    tokenizer: PreTrainedTokenizerBase, completion: str, *, field: str, max_generate_length: int
+) -> list[int]:
+    """Tokenize one completion, failing loudly when it exceeds the response cap."""
+    ids = [int(token) for token in tokenizer(completion, add_special_tokens=False)["input_ids"]]
+    if not ids:
+        raise ValueError(f"{field} completion tokenized to zero tokens")
+    if len(ids) > max_generate_length:
+        raise ValueError(
+            f"{field} completion needs {len(ids)} tokens but "
+            f"generator.sampling_params.max_generate_length is {max_generate_length}"
+        )
+    return ids
+
+
 def _prompt_token_count(tokenizer: PreTrainedTokenizerBase, prompt, **template_options) -> int:
     """Count token IDs, including with Transformers 5.x ``BatchEncoding`` output."""
     encoded = tokenizer.apply_chat_template(prompt, add_generation_prompt=True, **template_options)

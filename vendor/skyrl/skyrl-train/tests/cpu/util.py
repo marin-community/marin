@@ -37,8 +37,8 @@ DPO_OVERRIDES = {
     "generator": {"n_samples_per_prompt": 2},
 }
 
-# The fixed-data SFT recipe for M1: static rows under the sft loss with the matched
-# update budget. Same shape as DPO_OVERRIDES so config tests build both arms from one helper.
+# The fixed-data SFT recipe: static rows under the sft loss with the matched update
+# budget. Same shape as DPO_OVERRIDES so config tests build both arms from one helper.
 FIXED_COMPLETION_OVERRIDES = {
     "environment": {"env_class": "fixed_completion"},
     "data": {"fixed_completion_format": "text", "sampling": {"kind": None}},

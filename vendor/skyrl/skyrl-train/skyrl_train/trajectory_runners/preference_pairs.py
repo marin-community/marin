@@ -11,14 +11,15 @@ from typing import Any
 
 from loguru import logger
 
-from skyrl_train.dataset.dataset import prompt_token_ids
+from skyrl_train.dataset.dataset import completion_token_ids, prompt_token_ids
 from skyrl_train.dataset.preference_pairs import PreferencePairFormat, completion_text, tokenized_pair
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.types import (
-    TrajectoryBatch,
     PreferenceRequestBatch,
+    TrajectoryBatch,
+    static_trajectory_batch,
 )
 
 
@@ -66,14 +67,12 @@ class PreferencePairTrajectoryRunner:
         prompt_ids = prompt_token_ids(self.tokenizer, prompt)
         completions = []
         for field, text in (("chosen", chosen), ("rejected", rejected)):
-            completion_ids = [int(token) for token in self.tokenizer(text, add_special_tokens=False)["input_ids"]]
-            if not completion_ids:
-                raise ValueError(f"preference-pair {field} completion tokenized to zero tokens")
-            if len(completion_ids) > self.max_generate_length:
-                raise ValueError(
-                    f"preference-pair {field} completion needs {len(completion_ids)} tokens but "
-                    f"generator.sampling_params.max_generate_length is {self.max_generate_length}"
-                )
+            completion_ids = completion_token_ids(
+                self.tokenizer,
+                text,
+                field=f"preference-pair {field}",
+                max_generate_length=self.max_generate_length,
+            )
             if len(prompt_ids) + len(completion_ids) > self.max_input_length + self.max_generate_length:
                 raise ValueError(
                     f"preference-pair {field} completion exceeds the "
@@ -136,37 +135,17 @@ class PreferencePairTrajectoryRunner:
             loss_masks.extend(masks)
             pair_roles.extend((1, -1))
 
-        batch: TrajectoryBatch = {
-            "prompt_token_ids": prompt_token_ids,
-            "response_ids": response_ids,
-            "data_sources": None,
-            "rewards": rewards,
-            "unshaped_rewards": None,
-            "unshaped_reward_available": None,
-            "reward_shaping_components": None,
-            "reward_shaping_loop_spans": None,
-            "loop_advantages": None,
-            "reward_shaping_versions": None,
-            "verification_results": [None] * len(response_ids),
-            "evidence_messages": [None] * len(response_ids),
-            "verifier_tests": None,
-            "loss_masks": loss_masks,
-            "stop_reasons": ["preference_pair"] * len(response_ids),
-            "exception_types": None,
-            "error_treatments": None,
-            "server_errors": None,
-            "rollout_metrics": {},
-            "rollout_logprobs": None,
-            "student_topk_indices": None,
-            "behavior_topk_logprobs": None,
-            "rollout_routed_experts": None,
-            "teacher_evidence": None,
-            "distillation": None,
-            "token_level_shaping": None,
-            "response_span_tags": None,
-            "teacher_route_keys": None,
-            "is_last_step": None,
-            "exclude_from_baseline": None,
-            "pair_roles": pair_roles,
-        }
-        return await finalize_trajectory_batch(input_batch, batch, self.generator_config, self.trajectory_sink)
+        return await finalize_trajectory_batch(
+            input_batch,
+            static_trajectory_batch(
+                prompt_token_ids=prompt_token_ids,
+                response_ids=response_ids,
+                loss_masks=loss_masks,
+                data_sources=None,
+                rewards=rewards,
+                stop_reason="preference_pair",
+                pair_roles=pair_roles,
+            ),
+            self.generator_config,
+            self.trajectory_sink,
+        )

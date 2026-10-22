@@ -1,13 +1,14 @@
 """Pre-generated (prompt, completion) rows for fixed-data SFT.
 
-Fixed-data training (M1, expert building) reads expert completions from the training
-parquet instead of generating rollouts. Text rows carry a message-list prompt and
-completion text; tokenized rows carry a complete conversation with assistant masks so
-tool observations and the expert's exact tokenization survive. Rows may carry a
+Fixed-data SFT reads expert completions from the training parquet instead of
+generating rollouts. Text rows carry a message-list prompt and completion text;
+tokenized rows carry a complete conversation with assistant masks so tool
+observations and the expert's exact tokenization survive. Rows may carry a
 ``data_source`` task tag and a ``teacher_route`` for joint-run routing.
 """
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from numbers import Integral
 from typing import Any
 
@@ -20,12 +21,20 @@ from skyrl_train.dataset.preference_pairs import completion_text
 from skyrl_train.task_inputs import FixedCompletionInput, TrajectoryMetadata
 
 
-def tokenized_completion(row: Mapping[str, Any], *, max_sequence_length: int) -> tuple[list[int], list[int], list[int]]:
+@dataclass(frozen=True)
+class FixedCompletionTokens:
+    """One row split at its first supervised token."""
+
+    prompt_ids: list[int]
+    response_ids: list[int]
+    loss_mask: list[int]
+
+
+def tokenized_completion(row: Mapping[str, Any], *, max_sequence_length: int) -> FixedCompletionTokens:
     """Split one complete tokenized conversation at its first supervised token.
 
-    Returns prompt IDs, response IDs, and the response-aligned supervision mask. The
-    response span keeps every token after the prompt — including unsupervised tool
-    observations — so a tokenized row replays the conversation exactly.
+    The response span keeps every token after the prompt — including unsupervised
+    tool observations — so a tokenized row replays the conversation exactly.
     """
     ids = row["input_ids"]
     mask = row["assistant_masks"]
@@ -40,10 +49,10 @@ def tokenized_completion(row: Mapping[str, Any], *, max_sequence_length: int) ->
     first = list(mask).index(1)
     if first == 0:
         raise ValueError("tokenized completions require a nonempty unsupervised prompt prefix")
-    return (
-        [int(token) for token in ids[:first]],
-        [int(token) for token in ids[first:]],
-        [int(value) for value in mask[first:]],
+    return FixedCompletionTokens(
+        prompt_ids=[int(token) for token in ids[:first]],
+        response_ids=[int(token) for token in ids[first:]],
+        loss_mask=[int(value) for value in mask[first:]],
     )
 
 
@@ -98,16 +107,16 @@ class FixedCompletionsDataset(PromptDataset):
             budget = self.max_prompt_length + self.max_completion_length
 
             def split(row):
-                prompt_ids, response_ids, mask = tokenized_completion(row, max_sequence_length=budget)
-                if len(response_ids) > self.max_completion_length:
+                tokens = tokenized_completion(row, max_sequence_length=budget)
+                if len(tokens.response_ids) > self.max_completion_length:
                     raise ValueError(
-                        f"tokenized completion response span needs {len(response_ids)} tokens but the "
+                        f"tokenized completion response span needs {len(tokens.response_ids)} tokens but the "
                         f"{self.max_completion_length}-token response cap is exhausted; filter the row at dataset load instead"
                     )
                 return {
-                    self.prompt_key: prompt_ids,
-                    "completion_input_ids": response_ids,
-                    "completion_assistant_masks": mask,
+                    self.prompt_key: tokens.prompt_ids,
+                    "completion_input_ids": tokens.response_ids,
+                    "completion_assistant_masks": tokens.loss_mask,
                 }
 
             self.dataframe = self.dataframe.map(
