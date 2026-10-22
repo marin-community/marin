@@ -1,0 +1,302 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[project]
+name = "marinskyrl"
+version = "0.1.0"
+description = "Marin's typed launcher and RL training runtime"
+requires-python = "==3.12.*"
+dependencies = [
+    "marin-verifyit[math,schema,reasoning-gym,judge]",
+    "aiohttp>=3.13.3",
+    "boto3",
+    "datasets>=4.0.0",
+    "debugpy==1.8.0",
+    "fastapi",
+    "filelock>=3.16",
+    "fsspec>=2024.0.0",
+    "func_timeout",
+    "hf_transfer",
+    "huggingface-hub>=0.34.0",
+    "ijson>=3.5",
+    "jinja2>=3.1",
+    "math-verify==0.9.0",
+    "hydra-core==1.3.2",
+    "jaxtyping",
+    "langdetect==1.0.9",
+    "loguru",
+    "marin-finelog",
+    "marin-finestore",
+    "marin-iris",
+    "marin-iris-native",
+    "marin-rigging[secrets]",
+    "marin-rolloutengine",
+    "marin-shellbox[daytona,shellsim]",
+    "ninja",
+    "nvidia-ml-py",
+    "omegaconf",
+    "openapi-schema-validator",
+    "pandas",
+    "polars",
+    "pydantic>=2.12,<3",
+    "pyarrow>=18",
+    "pycosat==0.6.6",
+    "pyyaml>=6.0",
+    "ray==2.51.1",
+    "requests",
+    "reasoning-gym==0.1.25",
+    "s3fs",
+    "smart_open",
+    "tensorboard",
+    "marin-taskcompendium",
+    "tqdm>=4.66",
+    "tokenizers==0.23.1",
+    "transformers==5.16.1",
+    "verifiable-instructions @ git+https://github.com/abukharin-nv/verifiable-instructions.git@f46a5ac87b1400a4f8973039844b6be9b56e3faf",
+    "xmltodict",
+    "uvicorn",
+    "wandb",
+]
+
+[project.optional-dependencies]
+cpu = [
+    "accelerate>=1.14,<2",
+    "peft>=0.19",
+    "tensordict",
+    "torch==2.11.0",
+    "torchdata",
+]
+cuda = [
+    "cuda-toolkit[nvcc,cccl]==13.2.1 ; sys_platform == 'linux'",
+    "accelerate>=1.14,<2 ; sys_platform == 'linux'",
+    "peft>=0.19 ; sys_platform == 'linux'",
+    "tensordict ; sys_platform == 'linux'",
+    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torchdata ; sys_platform == 'linux'",
+    "torchvision==0.28.0 ; sys_platform == 'linux'",
+]
+vllm = [
+    # The CPU audio wheel uses Torch for GPU resampling without loading a cu132 extension.
+    "torchaudio==2.11.0+cpu ; sys_platform == 'linux'",
+    "torchcodec==0.16.0+cu132 ; sys_platform == 'linux'",
+    "cuda-toolkit[nvcc,cccl]==13.2.1 ; sys_platform == 'linux'",
+    "accelerate>=1.14,<2 ; sys_platform == 'linux'",
+    "flashinfer-cubin==0.6.18.post1 ; sys_platform == 'linux'",
+    "flashinfer-python==0.6.18.post1 ; sys_platform == 'linux'",
+    "peft>=0.19 ; sys_platform == 'linux'",
+    "quack-kernels==0.6.4 ; sys_platform == 'linux'",
+    "runai-model-streamer[gcs,s3]==0.16.1 ; sys_platform == 'linux'",
+    "hs-connectors ; sys_platform == 'linux'",
+    "speculators ; sys_platform == 'linux'",
+    "tensordict ; sys_platform == 'linux'",
+    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torchdata ; sys_platform == 'linux'",
+    "torchvision==0.28.0 ; sys_platform == 'linux'",
+    "vllm==0.0.0.dev20260929+marin.39e62869693c.cu132 ; sys_platform == 'linux'",
+]
+megatron = [
+    "harbor ; sys_platform == 'linux'",
+    "cuda-toolkit[nvcc,cccl]==13.2.1 ; sys_platform == 'linux'",
+    "accelerate>=1.14,<2 ; sys_platform == 'linux'",
+    "causal-conv1d>=1.5,<2 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    # Keep the qualified FlashAttention 2 path for context parallelism.
+    "flash-attn==2.8.3 ; sys_platform == 'linux'",
+    "flash-linear-attention==0.4.2 ; sys_platform == 'linux'",
+    "mamba-ssm>=2.2,<3 ; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "megatron-bridge==0.6.0 ; sys_platform == 'linux'",
+    "megatron-core==0.18.0 ; sys_platform == 'linux'",
+    "nvidia-modelopt==0.46.1 ; sys_platform == 'linux'",
+    "peft>=0.19 ; sys_platform == 'linux'",
+    "tensordict ; sys_platform == 'linux'",
+    "torch==2.13.0 ; sys_platform == 'linux'",
+    "torchdata ; sys_platform == 'linux'",
+    "torchvision==0.28.0 ; sys_platform == 'linux'",
+    "transformer-engine[pytorch]==2.19.0 ; sys_platform == 'linux'",
+    "transformer-engine-cu13==2.19.0 ; sys_platform == 'linux'",
+    "transformer-engine-torch==2.19.0 ; sys_platform == 'linux'",
+]
+telemetry = [
+    "marin-rigging[prometheus]",
+    "memray ; sys_platform == 'linux'",
+    "ray[default]",
+]
+
+[project.scripts]
+marinskyrl = "cloud.iris.launch:main"
+
+[dependency-groups]
+analysis = [
+    "matplotlib",
+    "pandas",
+    "tabulate",
+]
+docs = [
+    "myst-parser>=2.0.0",
+    "sphinx>=7.0.0",
+    "sphinx-autobuild>=2021.3.14",
+    "sphinx-autodoc-typehints>=1.25.0",
+    "sphinx-copybutton>=0.5.0",
+    "sphinx-rtd-theme>=2.0.0",
+]
+dev = [
+    { include-group = "analysis" },
+    "marin-shellbox[shellsim]",
+    "marin-rigging[prometheus]",
+    "marin-style @ git+https://github.com/marin-community/marin-style@727f180cd423246ca1a6164163a5883cda5bf52b",
+    "prometheus-client",
+    "pytest>=8.4",
+    "pytest-asyncio",
+    "pytest-xdist",
+    "universal-pathlib",
+]
+harbor-test = ["harbor"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_train"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"chat_templates" = "chat_templates"
+"open_mopd_versions.py" = "open_mopd_versions.py"
+
+[tool.uv]
+exclude-dependencies = ["litellm"]
+package = true
+prerelease = "allow"
+required-version = ">=0.8.10"
+conflicts = [
+    [{ extra = "cpu" }, { extra = "cuda" }],
+    [{ extra = "cpu" }, { extra = "megatron" }],
+    [{ extra = "cpu" }, { extra = "vllm" }],
+]
+environments = [
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+required-environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+no-build-isolation-package = [
+    "transformer-engine",
+    "transformer-engine-torch",
+]
+override-dependencies = [
+    # Published dependency floors do not apply to the checkout's development version.
+    "marin-rigging[secrets,prometheus]",
+    # Megatron Bridge declares this native extension but does not import or use it.
+    "fast-hadamard-transform ; sys_platform == 'never'",
+    "nvidia-resiliency-ext ; sys_platform == 'never'",
+    "fsspec==2026.4.0",
+    # Megatron Bridge pins older serving libraries; share the selected vLLM ABI.
+    "flashinfer-python==0.6.18.post1 ; sys_platform == 'linux'",
+    "flashinfer-cubin==0.6.18.post1 ; sys_platform == 'linux'",
+    "transformers==5.16.1",
+    "opentelemetry-api==1.44.0 ; sys_platform == 'linux'",
+    "opentelemetry-api ; sys_platform != 'linux'",
+]
+constraint-dependencies = [
+    "gcsfs==2026.4.0",
+    "botocore==1.42.97 ; sys_platform == 'linux'",
+    "boto3==1.42.97 ; sys_platform == 'linux'",
+    "s3transfer==0.16.1 ; sys_platform == 'linux'",
+    "aiobotocore==3.7.0 ; sys_platform == 'linux'",
+    "s3fs==2026.4.0 ; sys_platform == 'linux'",
+]
+
+[tool.uv.extra-build-dependencies]
+transformer-engine = [{ requirement = "torch", match-runtime = true }, "build_tools", "ninja"]
+transformer-engine-torch = [{ requirement = "torch", match-runtime = true }, "build_tools", "ninja"]
+
+[tool.uv.sources]
+marin-finelog = { path = "../../lib/finelog", editable = true }
+marin-finestore = { path = "../../lib/finestore", editable = true }
+marin-iris = { path = "../../lib/iris", editable = true }
+marin-rigging = { path = "../../lib/rigging", editable = true }
+marin-rolloutengine = { path = "../../lib/rolloutengine", editable = true }
+marin-shellbox = { path = "../../lib/shellbox", editable = true }
+marin-taskcompendium = { path = "../../lib/taskcompendium", editable = true }
+marin-verifyit = { path = "../../lib/verifyit", editable = true }
+langdetect = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/langdetect-1.0.9-py3-none-any.whl" }
+pycosat = { url = "https://huggingface.co/datasets/open-athena/marinskyrl-gpu-wheelhouse/resolve/d761f1e357b6d5a9b80427f4710eb2e04adf1101/linux-x86_64/cp312/20260915-tinker-aime/pycosat-0.6.6-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" }
+torchaudio = { index = "pytorch-cpu", marker = "sys_platform == 'linux'" }
+torchcodec = { index = "pytorch-cu132", extra = "vllm", marker = "sys_platform == 'linux'" }
+flash-attn = [
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-fa283-20260920/flash_attn-2.8.3-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-fa283-20260920/flash_attn-2.8.3-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+harbor = { path = "../harbor", editable = true }
+hs-connectors = { git = "https://github.com/lukedhlee/speculators.git", rev = "6496b4db007de00dd4741349643d23b23e29dce8", subdirectory = "hs_connectors" }
+speculators = { git = "https://github.com/lukedhlee/speculators.git", rev = "6496b4db007de00dd4741349643d23b23e29dce8" }
+torch = [
+    { index = "pytorch-cpu", extra = "cpu", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { index = "pytorch-cu132", extra = "cuda" },
+    { index = "pytorch-cu132", extra = "megatron" },
+    { index = "pytorch-cu132", extra = "vllm" },
+]
+torchvision = [
+    { index = "pytorch-cu132", extra = "cuda" },
+    { index = "pytorch-cu132", extra = "megatron" },
+    { index = "pytorch-cu132", extra = "vllm" },
+]
+flashinfer-cubin = { index = "flashinfer", marker = "sys_platform == 'linux'" }
+vllm = [
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260929-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+    { url = "https://github.com/marin-community/vllm/releases/download/marin-vllm-gpu-20260929-39e62869693c/vllm-0.0.0.dev20260929+marin.39e62869693c.cu132-cp38-abi3-manylinux_2_28_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+]
+transformer-engine-torch = [
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/fa4-te219-cu132-20260920-694f3adf/transformer_engine_torch-2.19.0-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64'" },
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/fa4-te219-cu132-20260920-694f3adf/transformer_engine_torch-2.19.0-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+causal-conv1d = [
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-torch2.13-20260910-6d12d7a0/causal_conv1d-1.6.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+mamba-ssm = [
+    { url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-torch2.13-20260910-6d12d7a0/mamba_ssm-2.3.1-cp312-cp312-linux_x86_64.whl", marker = "sys_platform == 'linux' and platform_machine == 'x86_64'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu132"
+url = "https://download.pytorch.org/whl/cu132"
+explicit = true
+
+[[tool.uv.index]]
+name = "flashinfer"
+url = "https://flashinfer.ai/whl"
+explicit = true
+
+[tool.marin-style]
+checks = ["ruff-check", "ruff-format"]
+ruff_version = "0.14.3"
+include = ["marinskyrl/**", "skyrl-train/**", "skyrl-gym/**", "skyrl-tx/**", "cloud/**", "scripts/**"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+ignore = [
+    "F722",
+    "E741",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"skyrl-train/tests/cpu/models/test_models.py" = ["E402"]
+"skyrl-train/tests/cpu/test_ray_metrics.py" = ["E402"]
+
+[tool.pytest.ini_options]
+addopts = "-v -s -m 'not docker'"
+testpaths = ["skyrl-train/tests", "cloud/iris/tests"]
+markers = [
+    "docker: local Docker execution; run explicitly in the container test lane",
+    "nightly: extended CPU learning and checkpoint-resume coverage",
+    "vllm",
+    "integrations",
+    "megatron",
+    "slow: long-running test with its own Ray cluster; started first, with concurrency bounded by host memory",
+]

@@ -98,6 +98,7 @@ _INFRASTRUCTURE_FAILURE_CATEGORIES = frozenset({"agent_timeout", "model_transpor
 EVALCHEMY_SOURCE_ROOT = PurePosixPath(prefix_join(SOURCES_PREFIX, "evalchemy"))
 EVALCHEMY_NATIVE_SOURCE_DIR = "native"
 EVALCHEMY_RESULTS_TABLE = "evalchemy_results"
+_EVALCHEMY_RESULTS_TABLE = EVALCHEMY_RESULTS_TABLE
 
 
 def is_scratch_artifact(relative_path: str) -> bool:
@@ -790,6 +791,73 @@ def _is_native_evalchemy_source(name: str) -> bool:
         return False
     relative = path.relative_to(EVALCHEMY_SOURCE_ROOT)
     return len(relative.parts) == 3 and relative.parts[1] == EVALCHEMY_NATIVE_SOURCE_DIR
+
+
+def _direct_evalchemy_artifacts(reader: ReadView) -> NativeEvalchemyArtifacts:
+    """Represent Evalchemy's direct FineStore result rows as logical native artifacts."""
+    table = reader.scan(_EVALCHEMY_RESULTS_TABLE)
+    if table is None:
+        return NativeEvalchemyArtifacts(sample_sources=(), result_payloads={})
+
+    sample_sources: list[str] = []
+    result_payloads: dict[str, bytes] = {}
+    for row in table.to_pylist(maps_as_pydicts="strict"):
+        source_prefix = row.get("source_prefix")
+        document = row.get("document")
+        if not row.get("scored") or not isinstance(source_prefix, str) or not isinstance(document, str):
+            continue
+        directory = EVALCHEMY_SOURCE_ROOT / source_prefix / EVALCHEMY_NATIVE_SOURCE_DIR
+        result_payloads[str(directory / f"results_{source_prefix}.json")] = document.encode()
+        parsed = json.loads(document)
+        leaves = parsed.get("benchmark_metadata") or parsed.get("results") or {}
+        if isinstance(leaves, Mapping):
+            sample_sources.extend(
+                str(directory / f"samples_{leaf}_native.jsonl") for leaf in leaves if isinstance(leaf, str)
+            )
+    return NativeEvalchemyArtifacts(sample_sources=tuple(sorted(sample_sources)), result_payloads=result_payloads)
+
+
+@dataclass(frozen=True)
+class NativeEvalchemyArtifacts:
+    """Native Evalchemy source artifacts needed by Marin's archive readers."""
+
+    sample_sources: tuple[str, ...]
+    result_payloads: dict[str, bytes]
+
+
+def read_native_evalchemy_artifacts(out_path: str) -> NativeEvalchemyArtifacts:
+    """Discover Evalchemy results and their logical sample partitions in FineStore."""
+    reader = ReadView(out_path)
+    source_names = tuple(
+        sorted(
+            key[0]
+            for key in reader.keys(BlobTables.DESCRIPTORS)
+            if isinstance(key[0], str) and _is_native_evalchemy_source(key[0])
+        )
+    )
+    payloads: dict[str, bytes] = {}
+    for name in source_names:
+        if not _is_result_source(name):
+            continue
+        payload = reader.read_blob(name)
+        if payload is None:
+            raise FileNotFoundError(f"archive at {out_path!r} lists source blob {name!r} but cannot read it")
+        payloads[name] = payload
+    artifacts = NativeEvalchemyArtifacts(
+        sample_sources=tuple(name for name in source_names if _is_sample_source(name)),
+        result_payloads=payloads,
+    )
+    if artifacts.result_payloads:
+        return artifacts
+    return _direct_evalchemy_artifacts(reader)
+
+
+def evalchemy_result_committed(out_path: str, source_prefix: str) -> bool:
+    """Whether FineStore contains a successful Evalchemy result for one task-config prefix."""
+    return any(
+        PurePosixPath(name).parent.parent.name == source_prefix
+        for name in read_native_evalchemy_artifacts(out_path).result_payloads
+    )
 
 
 def _has_partial_evalchemy_scores(document: dict) -> bool:

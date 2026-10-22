@@ -31,13 +31,12 @@ from marin.datakit.download.huggingface import (
     stream_file_to_fsspec,
 )
 from marin.evaluation.harbor.driver_config import (
-    HARBOR_RUNTIME_PROJECT,
     harbor_runtime_command,
+    harbor_runtime_descriptor,
 )
 from marin.execution.artifact import Artifact
 from marin.execution.fingerprint import canonical_json
 from marin.execution.lazy import ArtifactStep, StepContext
-from marin.external_dependencies import HARBOR
 from marin.inference.openai_batch import OpenAIBatchClient
 from marin.inference.openai_chat import OpenAIChatClient
 from rigging.filesystem.storage_path import StoragePath
@@ -610,7 +609,7 @@ def download_identity(source: RecipeSource) -> dict[str, Any]:
             "harbor_hub": source.name,
             "revision": source.revision,
             "exporter_sha256": hashlib.sha256(HARBOR_EXPORTER.read_bytes()).hexdigest(),
-            "harbor_commit": HARBOR.commit,
+            "harbor_runtime": harbor_runtime_descriptor(),
         }
     return {"url": source.url, "sha256": source.sha256, "filename": source.filename}
 
@@ -684,7 +683,6 @@ def download_source(request: DownloadRequest, *, campaign: CampaignRuntime) -> N
     if isinstance(source, HarborHubSource):
         subprocess.run(
             harbor_runtime_command(
-                HARBOR_RUNTIME_PROJECT,
                 HARBOR_EXPORTER,
                 "--release",
                 f"{source.name}@{source.revision}",

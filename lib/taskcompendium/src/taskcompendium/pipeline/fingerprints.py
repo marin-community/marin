@@ -87,11 +87,11 @@ def semantic_digest(task: TaskSpec, include_reference: bool) -> str:
 
 
 def deduplication_key(task: TaskSpec) -> str:
-    """Opaque evaluator inputs and preference candidates define distinct task records."""
-    # Different opaque contracts do not establish conflicting answer keys. Their
-    # quality review checks reference agreement; exact copies still deduplicate.
+    """Keep opaque graders and closure contracts distinct when private inputs differ."""
+    # Closure prefixes and references define continuation contracts. Different
+    # private contracts are separate tasks; exact copies still deduplicate.
     grader = task.grader
-    opaque = isinstance(grader, ScriptGrader | NoGrader) or (
-        isinstance(grader, VerifyitGrader) and grader.mode == Mode.SCRIPT
+    private_contract = isinstance(grader, ScriptGrader | NoGrader) or (
+        isinstance(grader, VerifyitGrader) and grader.mode in (Mode.SCRIPT, Mode.STRUCTURE_CLOSURE)
     )
-    return semantic_digest(task, include_reference=opaque)
+    return semantic_digest(task, include_reference=private_contract)
