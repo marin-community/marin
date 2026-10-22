@@ -15,12 +15,16 @@ error result. A failure of the host, for example an unavailable judge model, rai
 """
 
 import asyncio
+import csv
+import io
 import json
 import logging
+import re
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass, replace
+from decimal import Decimal
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
@@ -49,6 +53,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
     AnswerType,
     CommandSemantics,
+    EnvironmentRequirements,
     FunctionDefinition,
     InlineFile,
     ProviderRequirement,
@@ -58,10 +63,11 @@ from taskcompendium.models import (
     grades_with_judge,
 )
 from taskcompendium.runtime.resources import resource_bytes
+from verifyit.spec import IfevalSpec, spec_from_table
 
 from taskforge.agentic.config import AgenticConfig
 from taskforge.agentic.gate import Evidence, Gate, missing_evidence
-from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, REVIEW_TASK_PROMPT
+from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, GUESS_PROMPT, REVIEW_TASK_PROMPT
 from taskforge.capability import FILE_SAFE_ID, CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.client import ContextExhausted
@@ -99,6 +105,8 @@ def machine_runtime(backend: str) -> MachineRuntimeSpec:
 SHELLSIM_MACHINE = machine_runtime(Backend.SHELLSIM)
 ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER, AnswerType.JSON})
 """The answer types of a final message: native actions need tools that the solver does not have."""
+PLAIN_DECIMAL = re.compile(r"[+-]?\d+(\.\d+)?")
+"""An answer whose last digit gives its precision, unlike a fraction or scientific notation."""
 OUTPUT_CHARS = 2000
 """The most characters of a program output, an answer, a page or a file that one tool result shows."""
 REVIEW_ANSWERS = 20
@@ -115,6 +123,16 @@ RAN_OUT_STOP_REASONS = frozenset(
     {MAX_TURNS_STOP_REASON, BUDGET_STOP_REASON, LENGTH_STOP_REASON, TOTAL_TURN_TIMEOUT_STOP_REASON}
 )
 """Stop reasons of a solver that ran out of a limit before it answered: a failed run, not a format failure."""
+OPTION_PROBLEM = (
+    "The answer selects an option from a list, and reviews do not find the flaws of such tasks well. Make a task whose "
+    "answer the solver computes or writes."
+)
+"""On 313 labeled tasks, 27% of the option tasks that a review accepted had a blocking flaw, for example a correct
+option that a guess finds, against 8% of the other tasks."""
+GUESS_RUNS = 4
+"""Rollouts of ``submit`` in which the solver model guesses the answer of a task with files from its prompt alone."""
+MAX_GUESS_PASSES = 2
+"""The most guesses that can pass: more show an answer that the prompt gives away, for example by a cue."""
 MAX_FILE_BYTES = 64 * 1024 * 1024
 """The largest workspace file that a tool reads, for example a TaskSpec with large inline files."""
 
@@ -139,11 +157,30 @@ class BlindSolution(BaseModel):
     answer: str = Field(description="Your answer to the task, in the task's answer format.")
 
 
+class OptionList(BaseModel):
+    """A list of options in a task, from which the answer selects one."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    options: tuple[str, ...] = Field(
+        min_length=2,
+        description=(
+            "The options, quoted in full in their order. For an option that is a code, quote the text that defines it."
+        ),
+    )
+
+
 class TaskReview(BaseModel):
     """The review of one task. The decision comes last, so that the judge writes its analysis first."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    option_lists: tuple[OptionList, ...] = Field(
+        description=(
+            "Each list of options in the prompt or the files from which the answer selects one option. Empty when "
+            "the answer selects no option."
+        )
+    )
     failure_causes: tuple[str, ...] = Field(
         description=(
             "For each distinct failed answer: the answer, the reading or the mistake that gives it, and the "
@@ -239,6 +276,9 @@ class TaskforgeTools:
         )
         self.evidence: defaultdict[str, Evidence] = defaultdict(Evidence)
         self.failed_answers: defaultdict[str, list[str]] = defaultdict(list)
+        # The answers of the controls that came out as the agent expected, from which submit makes wrong answers.
+        self.right_answers: defaultdict[str, list[str]] = defaultdict(list)
+        self.wrong_answers: defaultdict[str, list[str]] = defaultdict(list)
         self.adversary_runs: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         self.transcripts: Counter[str] = Counter()
         self.accepted: list[AcceptedTask] = []
@@ -327,14 +367,8 @@ class ToolSession:
 
     async def grade(self, path: str, answer: str, expect: Literal["pass", "fail"]) -> ToolCallResult:
         task = await self._load(path)
-        spec = _solver_spec(task, self.config)
-        try:
-            result = await self.tools.solver_engine.run_task(spec, _ReplayModel(answer))
-        except RolloutInterrupted as error:
-            raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
-        except (ValueError, NotImplementedError) as error:
-            raise ToolError(f"The grade failed; check the task: {error}") from error
-        status = result.grade.status
+        grade = await self._grade(task, answer)
+        status = grade.status
         if status == Outcome.SUBMISSION_FAILURE:
             # A wrong control must show that the grader rejects a wrong value, not that the format rejects the answer.
             return _result(
@@ -348,18 +382,33 @@ class ToolSession:
                 }
             )
         if status != Outcome.GRADED:
-            raise ToolError(f"The grade failed ({status}); check the task: {result.grade.error}")
-        passed = _passed(result.grade)
-        self.tools.evidence[_task_digest(task)].controls.append((expect == "pass", passed))
+            raise ToolError(f"The grade failed ({status}); check the task: {grade.error}")
+        passed = _passed(grade)
+        key = _task_digest(task)
+        self.tools.evidence[key].controls.append((expect == "pass", passed))
+        if passed and expect == "pass":
+            self.tools.right_answers[key].append(answer)
+        elif not passed and expect == "fail":
+            self.tools.wrong_answers[key].append(answer)
         return _result(
             {
-                "outcome": result.grade.status,
-                "reward": result.grade.reward,
+                "outcome": grade.status,
+                "reward": grade.reward,
                 "passed": passed,
                 "as_expected": passed == (expect == "pass"),
-                "error": result.grade.error,
+                "error": grade.error,
             }
         )
+
+    async def _grade(self, task: TaskSpec, answer: str) -> GradeResult:
+        """The grade of ``answer`` by the task's grader, from a rollout of a model that gives only that answer."""
+        try:
+            result = await self.tools.solver_engine.run_task(_solver_spec(task, self.config), _ReplayModel(answer))
+        except RolloutInterrupted as error:
+            raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
+        except (ValueError, NotImplementedError) as error:
+            raise ToolError(f"The grade failed; check the task: {error}") from error
+        return result.grade
 
     async def rollout(self, paths: list[str], n: int, role: Literal["solver", "adversary"]) -> ToolCallResult:
         if n < 1:
@@ -439,12 +488,23 @@ class ToolSession:
         if any(_task_digest(accepted.task) == key for accepted in self.tools.accepted):
             raise ToolError("This task is already accepted")
         problems = _unsupported(task, self.tools.solver_engine, self.config)
+        problems += _malformed_files(task)
         if problems:
             return _result({"accepted": False, "problems": problems})
         evidence = self.tools.evidence[key]
         missing = missing_evidence(evidence, self.config.gate)
         if missing:
             return _result({"accepted": False, "missing": missing, "evidence": asdict(evidence)})
+        problems = await self._accepted_wrong_answers(task, key)
+        if problems:
+            return _result({"accepted": False, "problems": problems})
+        guessed = await self._guesses(task)
+        if guessed > MAX_GUESS_PASSES:
+            problem = (
+                f"A solver with the prompt alone and no files guessed the answer in {guessed} of {GUESS_RUNS} attempts: "
+                "the prompt gives the answer away, for example by a cue."
+            )
+            return _result({"accepted": False, "problems": [problem]})
         # The review comes last, so it sees all the evidence of this version of the task.
         review = await self._review(task, key, evidence)
         if not review.accept:
@@ -454,6 +514,51 @@ class ToolSession:
         count = len(self.tools.accepted)
         reply = {"accepted": True, "accepted_tasks": count, "remaining": self.tools.n - count, "review": review.summary}
         return _result(reply, done=count >= self.tools.n)
+
+    async def _accepted_wrong_answers(self, task: TaskSpec, key: str) -> list[str]:
+        """The problems of a grader that accepts wrong answers made from the controls of this version: the right
+        answer with one unit more or less in its last digit, the right and the wrong answer as a list in the two
+        orders, and an empty answer. A grader that accepts the list in one order only reads one position of it."""
+        # An agent can also grade a more precise right answer, so the one with the fewest decimals gives the precision.
+        right = min(
+            (answer.strip() for answer in self.tools.right_answers[key]),
+            key=lambda answer: (PLAIN_DECIMAL.fullmatch(answer) is None, len(answer.partition(".")[2])),
+        )
+        wrong = self.tools.wrong_answers[key][-1].strip()
+        neighbors = _neighbors(right)
+        lists = [f"{wrong}, {right}", f"{right}, {wrong}"]
+        answers = [*neighbors, *lists, ""]
+        grades = await asyncio.gather(*(self._grade(task, answer) for answer in answers))
+        accepted = {
+            answer
+            for answer, grade in zip(answers, grades, strict=True)
+            if grade.status == Outcome.GRADED and _passed(grade)
+        }
+        problems = [
+            f"The grader accepts {answer}, one unit from your right control {right} in its last digit. Write the "
+            "reference with the precision that the prompt asks for, and a tolerance below one unit of it"
+            for answer in neighbors
+            if answer in accepted
+        ]
+        if set(lists) <= accepted:
+            problems.append(
+                f"The grader accepts {lists[0]!r} and {lists[1]!r}, so an answer that lists candidates passes. Grade "
+                "the whole answer, for example with an ExactSpec without substring matching"
+            )
+        if "" in accepted:
+            problems.append("The grader accepts an empty answer")
+        return problems
+
+    async def _guesses(self, task: TaskSpec) -> int:
+        """How many of ``GUESS_RUNS`` solvers with the prompt alone guess the answer of a task with files.
+
+        The guesses are a part of ``submit``, so they do not use the rollout budget of the agent.
+        """
+        if not task.resources.worker:
+            return 0
+        spec = _solver_spec(_guess_task(task), self.config)
+        outcomes = await asyncio.gather(*(self._solve(spec) for _ in range(GUESS_RUNS)))
+        return sum(isinstance(outcome, GradedRollout) and _passed(outcome.grade) for outcome in outcomes)
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
         # The budget must hold the whole review, so that a review never stops after its blind solve.
@@ -469,7 +574,10 @@ class ToolSession:
             [accepted.task for accepted in self.tools.accepted],
             blind,
         )
-        return await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
+        review = await self._judge(REVIEW_TASK_PROMPT, pretty_json(content), TaskReview)
+        if not review.option_lists:
+            return review
+        return review.model_copy(update={"accept": False, "problems": (*review.problems, OPTION_PROBLEM)})
 
     async def finish(self, report: str) -> ToolCallResult:
         budget = self.config.budget.solver_rollouts
@@ -690,7 +798,12 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
         try:
             if grades_with_judge(grader):
                 problems.append("Judge graders are not supported")
-        except ValueError as error:
+            elif _grades_keywords(grader):
+                problems.append(
+                    "Keyword graders are not supported: a correct paraphrase fails and an answer that only repeats "
+                    "the words passes. Ask for a value that a NumericSpec or an ExactSpec can grade"
+                )
+        except (TypeError, ValueError) as error:
             problems.append(f"The grader is invalid: {error}")
     requirements = task.environment_requirements
     if _needs_machine(task) and requirements.command_semantics != CommandSemantics.SHELL_SIMULATOR:
@@ -707,6 +820,45 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
             engine.check(_solver_spec(task, config))
         except (ValueError, NotImplementedError) as error:
             problems.append(f"The rollout engine rejects the task: {error}")
+    return problems
+
+
+def _grades_keywords(grader: VerifyitGrader) -> bool:
+    spec = spec_from_table({"mode": grader.mode, **grader.parameters})
+    return isinstance(spec, IfevalSpec) and any(
+        constraint.name.startswith("keywords:") for constraint in spec.constraints
+    )
+
+
+def _neighbors(answer: str) -> list[str]:
+    """``answer`` with one unit more and one unit less in its last digit, when it is a plain decimal."""
+    if PLAIN_DECIMAL.fullmatch(answer) is None:
+        return []
+    value = Decimal(answer)
+    unit = Decimal(1).scaleb(-len(answer.partition(".")[2]))
+    return [str(value + unit), str(value - unit)]
+
+
+def _malformed_files(task: TaskSpec) -> list[str]:
+    """The solver's CSV and JSON files that do not parse, for example a CSV field with an unquoted comma."""
+    problems = []
+    for resource in task.resources.worker:
+        if not isinstance(resource.source, InlineFile):
+            continue
+        text = resource_bytes(resource).decode(errors="replace")
+        if resource.path.endswith(".csv"):
+            rows = [row for row in csv.reader(io.StringIO(text)) if row]
+            widths = {len(row) for row in rows}
+            if len(widths) > 1:
+                problems.append(
+                    f"{resource.path} is not a valid CSV: its rows have {sorted(widths)} fields. Quote the fields "
+                    "that contain commas"
+                )
+        elif resource.path.endswith(".json"):
+            try:
+                json.loads(text)
+            except json.JSONDecodeError as error:
+                problems.append(f"{resource.path} is not valid JSON: {error}")
     return problems
 
 
@@ -728,6 +880,13 @@ def _public_task(task: TaskSpec, file_chars: int = OUTPUT_CHARS) -> dict[str, An
 
 def _adversary_task(task: TaskSpec) -> TaskSpec:
     return _with_system_prompt(task, ADVERSARY_PROMPT)
+
+
+def _guess_task(task: TaskSpec) -> TaskSpec:
+    """``task`` with no files and no shell, and the guess prompt as its system message."""
+    resources = task.resources.model_copy(update={"worker": ()})
+    task = task.model_copy(update={"environment_requirements": EnvironmentRequirements(), "resources": resources})
+    return _with_system_prompt(task, GUESS_PROMPT)
 
 
 def _with_system_prompt(task: TaskSpec, prompt: str) -> TaskSpec:
