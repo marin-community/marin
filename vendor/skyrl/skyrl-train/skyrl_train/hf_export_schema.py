@@ -1,9 +1,11 @@
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
-from marinskyrl.resource_locator import validate_replayable_model_reference
+from marin_hf_release import PrecisionMode, ReleasePolicy
 
-HF_EXPORT_REQUEST_SCHEMA_VERSION = 1
+from marinskyrl.resource_locator import is_hugging_face_repo_id, validate_replayable_model_reference
+
+HF_EXPORT_REQUEST_SCHEMA_VERSION = 2
 TRAINER_STATE_FILENAME = "trainer_state.pt"
 DEFAULT_HF_EXPORT_TIMEOUT = 7200
 DEFAULT_HF_HUB_REVISION = "main"
@@ -32,6 +34,12 @@ class HFExportRequest:
     model_path: str
     num_nodes: int
     gpus_per_node: int
+    release_precision: str = "preserve"
+    release_policy_version: int = 1
+    eos_token_ids: list[int] | None = None
+    generation_controls: dict[str, object] = field(default_factory=dict)
+    chat_template: str | None = None
+    model_revision: str | None = None
     model_source_uri: str | None = None
     model_source_identity: str | None = None
     schema_version: int = HF_EXPORT_REQUEST_SCHEMA_VERSION
@@ -46,6 +54,13 @@ class HFExportRequest:
 
     def __post_init__(self) -> None:
         validate_replayable_model_reference(self.model_path, self.model_source_uri, self.model_source_identity)
+        ReleasePolicy(PrecisionMode(self.release_precision), version=self.release_policy_version)
+        if is_hugging_face_repo_id(self.model_path) and (
+            self.model_revision is None
+            or len(self.model_revision) != 40
+            or any(char not in "0123456789abcdef" for char in self.model_revision)
+        ):
+            raise ValueError("HF release source model must be pinned to a 40-character commit")
 
     def with_status(
         self,

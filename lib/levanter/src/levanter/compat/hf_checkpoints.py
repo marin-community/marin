@@ -8,6 +8,7 @@ import functools
 import json
 import logging
 import os
+from pathlib import Path
 import random
 import shutil
 import tempfile
@@ -45,6 +46,23 @@ from jax import ShapeDtypeStruct
 from jax._src.mesh import get_concrete_mesh
 from jax.random import PRNGKey
 from jaxtyping import Array, PRNGKeyArray
+from marin_hf_release import (
+    PrecisionMode,
+    ReleasePolicy,
+    ReleaseRequest,
+    TensorSpec,
+    canonical_grug_config,
+    completion_manifest,
+    exporter_revision,
+    grug_tensor_specs,
+    persist_request,
+    resolve_metadata,
+    tokenizer_special_token_ids,
+    validate_release_metadata,
+    write_completion_manifest,
+)
+from marin_hf_release.validation import validate_release_index, validate_release_shard
+from marin_hf_release.request import MANIFEST_NAME, REQUEST_NAME
 from rigging.filesystem.atomic import fetch_file_atomic
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
@@ -52,7 +70,7 @@ from tqdm_loggable.auto import tqdm
 
 from levanter.callbacks import StepInfo
 from levanter.compat.fsspec_safetensor import DEFAULT_STAGING_BUDGET_BYTES, read_safetensors_fsspec
-from levanter.compat.hf_export import run_on_export_writer, save_hf_shards
+from levanter.compat.hf_export import run_on_export_writer, save_hf_shards, write_export_json
 from levanter.models.lm_model import LmConfig, LmHeadModel
 from levanter.tokenizers import MarinTokenizer
 from levanter.utils.cloud_utils import temp_dir_before_upload
@@ -67,6 +85,7 @@ from transformers import (  # noqa: E402  # noqa: E402
     AutoConfig,
     AutoProcessor,
     AutoTokenizer,
+    GenerationConfig,
     PreTrainedTokenizerBase,
     PreTrainedTokenizerFast,
 )
@@ -120,8 +139,24 @@ PYTORCH_MODEL = "pytorch_model.bin"
 SAFE_TENSORS_MODEL = "model.safetensors"
 PYTORCH_WEIGHTS_INDEX_NAME = "pytorch_model.bin.index.json"
 SAFE_TENSORS_INDEX_NAME = "model.safetensors.index.json"
+RELEASE_METADATA_NAMES = frozenset(
+    {
+        REQUEST_NAME,
+        "config.json",
+        "generation_config.json",
+        SAFE_TENSORS_INDEX_NAME,
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "added_tokens.json",
+        "vocab.json",
+        "merges.txt",
+        "chat_template.jinja",
+        "preprocessor_config.json",
+    }
+)
 
-GenerationConfigDict = dict[str, int | list[int]]
+GenerationConfigDict = dict[str, object]
 
 
 def build_generation_config(
@@ -137,7 +172,7 @@ def build_generation_config(
 
     Normalization guarantees:
     - Output ``eos_token_id`` is always sorted and deduplicated.
-    - The tokenizer's own ``eos_token_id`` is auto-added if not already present.
+    - The tokenizer's EOS ID must be present in the explicit list.
 
     Args:
         tokenizer: The tokenizer that will be saved with the checkpoint.
@@ -168,10 +203,9 @@ def build_generation_config(
 
     tok_eos = tokenizer.eos_token_id
     if tok_eos is None:
-        logger.warning("Tokenizer has no eos_token_id; generation config will use only the provided IDs")
-    elif tok_eos not in ids:
-        logger.info("Auto-adding tokenizer eos_token_id=%d to generation config", tok_eos)
-        ids.add(tok_eos)
+        raise ValueError("Tokenizer has no eos_token_id")
+    if tok_eos not in ids:
+        raise ValueError(f"Tokenizer eos_token_id={tok_eos} is absent from explicit generation EOS IDs")
 
     gen_config: GenerationConfigDict = {"eos_token_id": sorted(ids)}
     if tokenizer.bos_token_id is not None:
@@ -486,10 +520,10 @@ def _load_safetensor_shards(
 # but it means we get to benefit from dead code elimination and other goodness
 @eqx.filter_jit
 def _to_state_dict_with_dtype(
-    model: ModelWithHfSerializationMixin, dtype, subset: tuple[str, ...] | None
+    model: ModelWithHfSerializationMixin, target_dtypes: dict[str, str] | None, subset: tuple[str, ...] | None
 ) -> StateDict:
     """
-    Convert a model to a torch-compatible state dict, optionally converting floating-point arrays to a given dtype
+    Convert a model to a torch-compatible state dict, optionally converting floating-point arrays by policy
     and optionally subsetting to a given set of keys.
     """
     # We don't want to directly use to_torch_compatible_state_dict because it will convert everything to numpy.
@@ -508,15 +542,37 @@ def _to_state_dict_with_dtype(
             out[k] = state_dict[k]
         state_dict = out
 
-    if dtype is not None:
-        logger.info(f"Converting floating-point arrays in state_dict to {dtype}")
+    if target_dtypes is not None:
         for k, v in state_dict.items():
+            target = target_dtypes[k]
             if jnp.issubdtype(v.dtype, jnp.floating):
-                state_dict[k] = v.astype(dtype)
-            else:
-                logger.debug(f"Skipping dtype conversion for non-floating point array {k} with dtype {v.dtype}")
+                state_dict[k] = v.astype(
+                    {"BF16": jnp.bfloat16, "F16": jnp.float16, "F32": jnp.float32, "F64": jnp.float64}[target]
+                )
 
     return state_dict
+
+
+def _release_dtype(dtype: jnp.dtype) -> str:
+    mapping = {
+        "bfloat16": "BF16",
+        "float16": "F16",
+        "float32": "F32",
+        "float64": "F64",
+        "int8": "I8",
+        "uint8": "U8",
+        "int16": "I16",
+        "uint16": "U16",
+        "int32": "I32",
+        "uint32": "U32",
+        "int64": "I64",
+        "uint64": "U64",
+        "bool": "BOOL",
+    }
+    try:
+        return mapping[str(dtype)]
+    except KeyError as error:
+        raise ValueError(f"unsupported HF release tensor dtype {dtype}") from error
 
 
 @dataclass_with_default_init(frozen=True)
@@ -1056,19 +1112,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         if self.tokenizer:
             tokenizer_dependent_config = {}
-            suppress_tokens = []
             if self.tokenizer.pad_token_id is not None:
                 tokenizer_dependent_config["pad_token_id"] = self.tokenizer.pad_token_id
-                suppress_tokens.append(self.tokenizer.pad_token_id)
             if self.tokenizer.eos_token_id is not None:
                 tokenizer_dependent_config["eos_token_id"] = self.tokenizer.eos_token_id
-                suppress_tokens.append(self.tokenizer.eos_token_id)
             if self.tokenizer.bos_token_id is not None:
                 tokenizer_dependent_config["bos_token_id"] = self.tokenizer.bos_token_id
                 tokenizer_dependent_config["decoder_start_token_id"] = self.tokenizer.bos_token_id
-                suppress_tokens.append(self.tokenizer.bos_token_id)
-            if len(suppress_tokens) > 0:
-                tokenizer_dependent_config["begin_suppress_tokens"] = list(set(suppress_tokens))
             dict_config = mergedeep.merge({}, dict_config, tokenizer_dependent_config)
 
         if self.config_overrides:
@@ -1089,9 +1139,12 @@ class HFCheckpointConverter(Generic[LevConfig]):
         export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES,
         max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS,
         save_feature_extractor: bool = False,
-        dtype: Optional[jnp.dtype] = None,
+        release_precision: PrecisionMode = PrecisionMode.PRESERVE,
         generation_config: Optional[GenerationConfigDict] = None,
         chat_template: Optional[str] = None,
+        source_checkpoint: str | None = None,
+        source_step: int | None = None,
+        checkpoint_identity: str | None = None,
         **hf_upload_kwargs,
     ):
         """
@@ -1123,6 +1176,104 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         save_reference_code_flag = self._resolve_save_reference_code(save_reference_code)
         dict_config = self._build_hf_config_dict(model)
+        policy = ReleasePolicy(PrecisionMode(release_precision))
+        is_grug = dict_config.get("model_type") == "grug_moe"
+        if is_grug:
+            dict_config = canonical_grug_config(dict_config)
+
+        source_shapes = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, None, None)
+        source_specs = {
+            name: TensorSpec(tuple(value.shape), _release_dtype(value.dtype)) for name, value in source_shapes.items()
+        }
+        specs = grug_tensor_specs(dict_config, source_specs) if is_grug else source_specs
+        target_dtypes = {name: policy.target_dtype(name, spec) for name, spec in specs.items()}
+        scalar_dtype = policy.config_dtype(specs)
+        if scalar_dtype is None:
+            dict_config.pop("dtype", None)
+        else:
+            dict_config["dtype"] = scalar_dtype
+        dict_config = json.loads(json.dumps(dict_config))
+
+        request = None
+        resolved_tokenizer = None
+        resolved_generation = generation_config
+        if save_tokenizer:
+            tokenizer = _coerce_to_hf_tokenizer(self.tokenizer)
+            explicit_metadata: dict[str, object] = {}
+            if generation_config is not None:
+                eos = generation_config.get("eos_token_id")
+                if eos is not None:
+                    explicit_metadata["eos_token_ids"] = eos if isinstance(eos, list) else [eos]
+                explicit_metadata["generation_controls"] = {
+                    key: value
+                    for key, value in generation_config.items()
+                    if key not in ("eos_token_id", "bos_token_id")
+                }
+            if chat_template is not None:
+                explicit_metadata["chat_template"] = chat_template
+            checkpoint_metadata = {
+                "vocab_size": len(tokenizer),
+                "bos_token_id": tokenizer.bos_token_id,
+                "eos_token_id": tokenizer.eos_token_id,
+                "chat_template": getattr(tokenizer, "chat_template", None),
+                "special_token_ids": tokenizer_special_token_ids(tokenizer),
+            }
+            if not is_grug and tokenizer.eos_token_id is not None:
+                checkpoint_metadata["eos_token_ids"] = [tokenizer.eos_token_id]
+            source_ref = self.reference_checkpoint
+            if source_ref is not None and not os.path.exists(source_ref.model_name_or_path):
+                revision = source_ref.revision
+                if revision is None or len(revision) != 40 or any(char not in "0123456789abcdef" for char in revision):
+                    raise ValueError("HF release source model must be pinned to a 40-character commit")
+                source_model, source_model_commit = source_ref.model_name_or_path, revision
+            else:
+                source_model, source_model_commit = None, None
+            source_metadata: dict[str, object] = {}
+            if is_grug and source_ref is not None:
+                source_generation = GenerationConfig.from_pretrained(
+                    source_ref.model_name_or_path, revision=source_model_commit
+                ).to_diff_dict()
+                source_eos = source_generation.pop("eos_token_id", None)
+                if source_eos is not None:
+                    source_metadata["eos_token_ids"] = source_eos if isinstance(source_eos, list) else [source_eos]
+                source_generation.pop("bos_token_id", None)
+                source_generation.pop("transformers_version", None)
+                source_metadata["generation_controls"] = source_generation
+            resolved_tokenizer, resolved_generation = resolve_metadata(
+                explicit_metadata, checkpoint_metadata, source_metadata, require_chat_template=is_grug
+            )
+            source_checkpoint = source_checkpoint or "in-memory"
+            checkpoint_identity = checkpoint_identity or source_checkpoint
+            request = ReleaseRequest(
+                policy=policy,
+                schema_id=(
+                    f"{self.LevConfigClass.__name__}-grug-moe-v{dict_config['grugmoe_artifact_schema_version']}"
+                    if is_grug
+                    else str(dict_config.get("model_type", "generic"))
+                ),
+                tensors=specs,
+                config=dict_config,
+                generation=resolved_generation,
+                tokenizer=resolved_tokenizer,
+                source_checkpoint=source_checkpoint,
+                source_step=source_step,
+                checkpoint_identity=checkpoint_identity,
+                source_model=source_model,
+                source_model_commit=source_model_commit,
+                exporter_revision=exporter_revision(Path(__file__)),
+            )
+
+            def store_request() -> None:
+                if (StoragePath(path) / MANIFEST_NAME).exists():
+                    raise FileExistsError(f"HF release is already complete: {path}")
+                if StoragePath(path).is_remote:
+                    write_export_json(StoragePath(path) / REQUEST_NAME, request.payload())
+                else:
+                    persist_request(Path(path), request)
+
+            run_on_export_writer(store_request)
+        elif upload_to_hf:
+            raise ValueError("Hugging Face publication requires tokenizer metadata")
 
         if not _is_url_like(path):
             os.makedirs(path, exist_ok=True)
@@ -1145,7 +1296,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         else:
             logger.info(f"Uploading checkpoint to {hf_repo_ref} from {path}")
 
-        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, dtype, None)
+        state_dict_shape = eqx.filter_eval_shape(_to_state_dict_with_dtype, model, target_dtypes, None)
 
         shards, index = _shard_hf_checkpoint(state_dict_shape, max_shard_size, SAFE_TENSORS_MODEL)
 
@@ -1214,13 +1365,16 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 source_is_temp=StoragePath(path).is_remote,
             )
 
-        save_hf_shards(
+        records = save_hf_shards(
             shards,
-            lambda keys: _to_state_dict_with_dtype(model, dtype, keys),
+            lambda keys: _to_state_dict_with_dtype(model, target_dtypes, keys),
             path,
             export_host_budget_bytes=export_host_budget_bytes,
             max_concurrent_shards=max_concurrent_shards,
             upload_to_hf=upload_shard,
+            validate_shard=lambda shard: validate_release_shard(
+                shard, {name: specs[name] for name in shards[shard.name]}, policy
+            ),
         )
 
         if index is not None:
@@ -1228,14 +1382,18 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 f"Saved a sharded checkpoint with {len(shards)} shards, max size {humanfriendly.format_size(this_max_shard_size)}"
             )
 
-        def save_metadata() -> None:
+        def save_metadata() -> dict[str, str]:
             with temp_dir_before_upload(path, process_should_upload=True, sync_on_exit=False) as local_path:
                 if path != local_path:
                     logger.info(f"Saving metadata to {path} via temp path {local_path}")
 
                 os.makedirs(local_path, exist_ok=True)
-
                 files_before = _list_relative_files(local_path)
+
+                if request is not None:
+                    with open(os.path.join(local_path, REQUEST_NAME), "w") as f:
+                        json.dump(request.payload(), f, indent=2, sort_keys=True)
+                        f.write("\n")
 
                 if save_reference_code_flag:
                     logger.info(f"Copying reference code from {self.reference_checkpoint}")
@@ -1243,7 +1401,13 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
                 if save_tokenizer:
                     logger.info("Saving tokenizer")
-                    _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
+                    _save_tokenizer_pretrained(
+                        self.tokenizer,
+                        local_path,
+                        chat_template=(
+                            resolved_tokenizer.chat_template if resolved_tokenizer is not None else chat_template
+                        ),
+                    )
 
                 if save_feature_extractor and self.feature_extractor is not None:
                     logger.info("Saving feature extractor")
@@ -1252,19 +1416,31 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 with open(os.path.join(local_path, "config.json"), "w") as f:
                     json.dump(dict_config, f)
 
-                if generation_config is not None:
+                if resolved_generation:
                     logger.info(
-                        "Writing generation_config.json with eos_token_id=%s", generation_config.get("eos_token_id")
+                        "Writing generation_config.json with eos_token_id=%s", resolved_generation.get("eos_token_id")
                     )
                     with open(os.path.join(local_path, "generation_config.json"), "w") as f:
-                        json.dump(generation_config, f)
+                        json.dump(resolved_generation, f)
 
                 if index is not None:
+                    weight_map = {name: record.filename for record in records for name in record.tensor_names}
+                    validate_release_index(index, weight_map, specs, policy)
                     with open(os.path.join(local_path, SAFE_TENSORS_INDEX_NAME), "w") as f:
                         json.dump(index, f)
 
                 files_after = _list_relative_files(local_path)
-                new_files = sorted(files_after - files_before)
+                new_files = sorted(
+                    name
+                    for name in files_after
+                    if (name not in files_before or name in RELEASE_METADATA_NAMES)
+                    and not name.endswith(".safetensors")
+                    and not name.startswith(".export-progress-")
+                    and name != MANIFEST_NAME
+                )
+                metadata_hashes = (
+                    validate_release_metadata(Path(local_path), request, new_files) if request is not None else {}
+                )
 
                 _maybe_upload(
                     local_path,
@@ -1272,8 +1448,29 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     commit_message="Upload config and metadata from Levanter",
                     source_is_temp=path != local_path,
                 )
+                return metadata_hashes
 
-        run_on_export_writer(save_metadata)
+        metadata_hashes = run_on_export_writer(save_metadata)
+
+        def finish_release() -> None:
+            assert request is not None
+            assert metadata_hashes is not None
+            file_hashes = {record.filename: record.sha256 for record in records}
+            file_hashes.update(metadata_hashes)
+            manifest = completion_manifest(request, file_hashes)
+            if StoragePath(path).is_remote:
+                write_export_json(StoragePath(path) / MANIFEST_NAME, manifest)
+                with tempfile.TemporaryDirectory() as directory:
+                    with open(os.path.join(directory, MANIFEST_NAME), "w") as f:
+                        json.dump(manifest, f, indent=2, sort_keys=True)
+                        f.write("\n")
+                    _maybe_upload(directory, files=[MANIFEST_NAME], source_is_temp=True)
+            else:
+                write_completion_manifest(Path(path), request, file_hashes)
+                _maybe_upload(path, files=[MANIFEST_NAME], source_is_temp=False)
+
+        if request is not None:
+            run_on_export_writer(finish_release)
 
         logger.info(f"Finished saving HF-compatible checkpoint to {path}")
 
@@ -1354,7 +1551,7 @@ def save_hf_checkpoint_callback(
     base_path,
     converter: HFCheckpointConverter,
     upload_to_hf: Union[bool, str, RepoRef] = False,
-    save_dtype: Optional[jnp.dtype] = None,
+    release_precision: PrecisionMode = PrecisionMode.PRESERVE,
     generation_config: Optional[GenerationConfigDict] = None,
     chat_template: Optional[str] = None,
     **hf_upload_kwargs,
@@ -1385,7 +1582,10 @@ def save_hf_checkpoint_callback(
             cast(ModelWithHfSerializationMixin, step.eval_model),
             os.path.join(base_path, f"step-{step.step}"),
             upload_to_hf=upload_to_hf,
-            dtype=save_dtype,
+            release_precision=release_precision,
+            source_checkpoint=base_path,
+            source_step=step.step,
+            checkpoint_identity=f"{base_path}@{step.step}",
             generation_config=generation_config,
             chat_template=chat_template,
             **my_upload_kwargs,

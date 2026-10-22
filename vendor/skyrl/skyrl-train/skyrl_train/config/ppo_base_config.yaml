@@ -38,6 +38,10 @@ checkpoint_export:
   checkpoint_path: null
   export_root: null
   hf_hub_repo_id: null
+  hf_release_precision: preserve
+  hf_generation_eos_token_ids: null
+  hf_generation_controls: {}
+  hf_chat_template: null
   hf_hub_private: false
   hf_hub_revision: main
   hf_upload_mode: latest

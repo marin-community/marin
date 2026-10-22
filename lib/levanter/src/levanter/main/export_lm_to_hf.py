@@ -21,6 +21,7 @@ from levanter.compat.hf_checkpoints import (
     DEFAULT_MAX_SHARD_SIZE,
     MAX_CONCURRENT_HF_SHARDS,
     RepoRef,
+    build_generation_config,
     load_tokenizer,
 )
 from levanter.models.llama import LlamaConfig
@@ -46,6 +47,9 @@ class ConvertLmConfig:
     max_shard_size: int = DEFAULT_MAX_SHARD_SIZE
     export_host_budget_bytes: int = DEFAULT_EXPORT_HOST_BUDGET_BYTES
     max_concurrent_shards: int = MAX_CONCURRENT_HF_SHARDS
+    release_precision: str = "preserve"
+    eos_token_ids: list[int] | None = None
+    chat_template: str | None = None
 
     model: LmConfig = LlamaConfig()
     save_tokenizer: bool = True  # if True, save the tokenizer to the output directory
@@ -116,6 +120,11 @@ def main(config: ConvertLmConfig):
             max_shard_size=config.max_shard_size,
             export_host_budget_bytes=config.export_host_budget_bytes,
             max_concurrent_shards=config.max_concurrent_shards,
+            release_precision=config.release_precision,
+            generation_config=build_generation_config(tokenizer, config.eos_token_ids),
+            chat_template=config.chat_template,
+            source_checkpoint=checkpoint_path,
+            checkpoint_identity=checkpoint_path,
         )
 
 

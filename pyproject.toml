@@ -14,6 +14,7 @@ dependencies = [
     "marin-fray",
     "marin-haliax",
     "marin-levanter",
+    "marin-hf-release",
     "marin-core",
     # [secrets] so `iris cluster up` on a Kubernetes cluster can resolve the
     # `gcp-secret://` signing key in the operator's shell: the controller pod holds no
@@ -198,6 +199,7 @@ members = [
     "lib/ducky",
     "lib/haliax",
     "lib/levanter",
+    "lib/hf_release",
     "lib/marin",
     "lib/rigging",
     "lib/rolloutengine",
@@ -231,6 +233,7 @@ marin-ducky = { workspace = true }
 marin-marina = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
+marin-hf-release = { workspace = true }
 marin-core = { workspace = true }
 marin-rigging = { workspace = true }
 marin-rolloutengine = { workspace = true }

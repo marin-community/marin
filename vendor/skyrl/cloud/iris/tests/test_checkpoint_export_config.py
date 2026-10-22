@@ -54,6 +54,7 @@ def _request() -> HFExportRequest:
         checkpoint_path="s3://run/checkpoints/global_step_7",
         export_path="s3://run/exports",
         model_path="Qwen/Qwen3-8B",
+        model_revision="a" * 40,
         num_nodes=1,
         gpus_per_node=4,
     )

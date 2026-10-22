@@ -54,6 +54,9 @@ class ConvertCheckpointStepConfig:
     override_vocab_size: int | None = None
     config_overrides: dict[str, Any] | None = None
     save_tokenizer: bool = True
+    release_precision: str = "preserve"
+    eos_token_ids: list[int] | None = None
+    chat_template: str | None = None
     use_cpu: bool = False
     discover_latest: bool = False
 
@@ -83,6 +86,9 @@ def convert_checkpoint_to_hf(config: ConvertCheckpointStepConfig) -> None:
         max_shard_size=config.max_shard_size,
         model=config.model,
         save_tokenizer=config.save_tokenizer,
+        release_precision=config.release_precision,
+        eos_token_ids=config.eos_token_ids,
+        chat_template=config.chat_template,
         tokenizer=config.tokenizer,
         override_vocab_size=config.override_vocab_size,
         config_overrides=config.config_overrides,

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["uv_build>=0.7.19,<0.10.0"]
+build-backend = "uv_build"
+
+[project]
+name = "marin-hf-release"
+version = "0.1.0"
+description = "Framework-neutral Hugging Face inference release contracts"
+requires-python = ">=3.12"
+
+[tool.uv.build-backend]
+module-name = "marin_hf_release"
+
+[dependency-groups]
+test = ["pytest", "numpy", "ml-dtypes", "safetensors[numpy]>=0.4.2,<0.7.0"]

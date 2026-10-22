@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+from io import BytesIO
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 
@@ -10,10 +12,14 @@ import ray
 import torch
 from omegaconf import DictConfig
 from ray.util.placement_group import PlacementGroup, placement_group, remove_placement_group
-from transformers import PreTrainedTokenizerBase
+from transformers import GenerationConfig, PreTrainedTokenizerBase
+
+from marin_hf_release import PrecisionMode, ReleasePolicy
 
 from marinskyrl.checkpoint_paths import POLICY_CHECKPOINT_SUBDIRECTORY, policy_export_path
+from marinskyrl.resource_locator import is_hugging_face_repo_id
 from skyrl_train import hf_model_io
+from skyrl_train.hf_release_export import ReleaseExportOptions
 from skyrl_train.hf_export_schema import (
     DEFAULT_HF_HUB_REVISION,
     DEFAULT_HF_UPLOAD_MODE,
@@ -40,6 +46,12 @@ class CheckpointExportPlan:
     checkpoint_path: str
     export_root: str
     model_path: str
+    model_revision: str | None = None
+    release_precision: str = "preserve"
+    release_policy_version: int = 1
+    eos_token_ids: list[int] | None = None
+    generation_controls: dict[str, object] | None = None
+    chat_template: str | None = None
 
     @property
     def policy_checkpoint_path(self) -> str:
@@ -63,7 +75,9 @@ class PolicyExportWorkers(Protocol):
 
     def load_model_checkpoint(self, checkpoint_path: str) -> None: ...
 
-    def save_hf_model(self, export_path: str, tokenizer: PreTrainedTokenizerBase) -> None: ...
+    def save_hf_model(
+        self, export_path: str, tokenizer: PreTrainedTokenizerBase, release_options: ReleaseExportOptions
+    ) -> None: ...
 
     def close(self) -> None: ...
 
@@ -99,8 +113,10 @@ class RayPolicyExportWorkers:
             load_training_state=False,
         )
 
-    def save_hf_model(self, export_path: str, tokenizer: PreTrainedTokenizerBase) -> None:
-        self._run("save_hf_model", export_path, tokenizer)
+    def save_hf_model(
+        self, export_path: str, tokenizer: PreTrainedTokenizerBase, release_options: ReleaseExportOptions
+    ) -> None:
+        self._run("save_hf_model", export_path, tokenizer, release_options)
 
     def close(self) -> None:
         self._actor_group.kill_actors()
@@ -123,12 +139,13 @@ class CheckpointExporter:
         self._tokenizer = tokenizer
         self._publisher = publisher
 
-    def _validate_checkpoint(self) -> None:
+    def _validate_checkpoint(self) -> str:
         trainer_state_path = os.path.join(self._plan.checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):
             raise FileNotFoundError(f"completed checkpoint marker not found: {trainer_state_path}")
         with io.open_file(trainer_state_path, "rb") as source:
-            trainer_state = torch.load(source, map_location="cpu", weights_only=False)
+            marker = source.read()
+        trainer_state = torch.load(BytesIO(marker), map_location="cpu", weights_only=False)
         saved_step = trainer_state.get("global_step")
         if saved_step != self._plan.step:
             raise ValueError(
@@ -136,14 +153,49 @@ class CheckpointExporter:
             )
         if not io.exists(self._plan.policy_checkpoint_path):
             raise FileNotFoundError(f"policy checkpoint not found: {self._plan.policy_checkpoint_path}")
+        return hashlib.sha256(marker).hexdigest()
+
+    def _release_options(self, checkpoint_identity: str) -> ReleaseExportOptions:
+        policy = ReleasePolicy(PrecisionMode(self._plan.release_precision), self._plan.release_policy_version)
+        revision = self._plan.model_revision
+        is_pinned = revision is not None and len(revision) == 40 and all(char in "0123456789abcdef" for char in revision)
+        if is_hugging_face_repo_id(self._plan.model_path) and not is_pinned:
+            raise ValueError("HF release source model must be pinned to a 40-character commit")
+        eos_token_ids = self._plan.eos_token_ids
+        controls = {}
+        if is_pinned or os.path.isdir(self._plan.model_path):
+            source_generation = GenerationConfig.from_pretrained(
+                self._plan.model_path, revision=revision if is_pinned else None
+            ).to_diff_dict()
+            eos = source_generation.pop("eos_token_id", None)
+            if eos_token_ids is None and eos is not None:
+                eos_token_ids = eos if isinstance(eos, list) else [eos]
+            source_generation.pop("bos_token_id", None)
+            source_generation.pop("transformers_version", None)
+            controls = source_generation
+        if eos_token_ids is None:
+            raise ValueError("checkpoint HF release needs explicit EOS IDs or source generation metadata")
+        controls.update(self._plan.generation_controls or {})
+        return ReleaseExportOptions(
+            precision=policy.mode,
+            source_checkpoint=self._plan.checkpoint_path,
+            source_step=self._plan.step,
+            checkpoint_identity=checkpoint_identity,
+            source_model=self._plan.model_path if is_pinned else None,
+            source_model_commit=revision if is_pinned else None,
+            eos_token_ids=eos_token_ids,
+            generation_controls=controls,
+            chat_template=self._plan.chat_template,
+        )
 
     def run(self) -> CheckpointExportResult:
         try:
-            self._validate_checkpoint()
+            checkpoint_identity = self._validate_checkpoint()
+            release_options = self._release_options(checkpoint_identity)
             self._workers.initialize(self._plan.model_path)
             self._workers.load_model_checkpoint(self._plan.policy_checkpoint_path)
-            self._workers.save_hf_model(self._plan.policy_export_path, self._tokenizer)
-            hf_model_io.verify_hf_model_export(self._plan.policy_export_path)
+            self._workers.save_hf_model(self._plan.policy_export_path, self._tokenizer, release_options)
+            hf_model_io.verify_hf_model_export(self._plan.policy_export_path, require_release_manifest=True)
             if self._publisher is not None:
                 self._publisher.publish(self._plan.policy_export_path, self._plan.step)
             return CheckpointExportResult(step=self._plan.step, export_path=self._plan.policy_export_path)
@@ -168,6 +220,12 @@ def checkpoint_export_plan(cfg: DictConfig) -> CheckpointExportPlan:
         checkpoint_path=str(checkpoint_path).rstrip("/"),
         export_root=str(export_root).rstrip("/"),
         model_path=str(cfg.trainer.policy.model.path),
+        model_revision=cfg.trainer.policy.model.get("revision"),
+        release_precision=str(export_cfg.get("release_precision", "preserve")),
+        release_policy_version=int(export_cfg.get("release_policy_version", 1)),
+        eos_token_ids=export_cfg.get("eos_token_ids"),
+        generation_controls=export_cfg.get("generation_controls"),
+        chat_template=export_cfg.get("chat_template"),
     )
 
 

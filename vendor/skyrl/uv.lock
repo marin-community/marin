@@ -2827,6 +2827,11 @@ test = [
 ]
 
 [[package]]
+name = "marin-hf-release"
+version = "0.1.0"
+source = { editable = "../../lib/hf_release" }
+
+[[package]]
 name = "marin-iris"
 version = "0.2.0"
 source = { editable = "../../lib/iris" }
@@ -3196,6 +3201,7 @@ dependencies = [
     { name = "loguru" },
     { name = "marin-finelog" },
     { name = "marin-finestore" },
+    { name = "marin-hf-release" },
     { name = "marin-iris" },
     { name = "marin-iris-native" },
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
@@ -3367,6 +3373,7 @@ requires-dist = [
     { name = "mamba-ssm", marker = "platform_machine == 'x86_64' and sys_platform == 'linux' and extra == 'megatron'", url = "https://github.com/marin-community/MarinSkyRL/releases/download/native-cu132-torch2.13-20260910-6d12d7a0/mamba_ssm-2.3.1-cp312-cp312-linux_x86_64.whl" },
     { name = "marin-finelog", editable = "../../lib/finelog" },
     { name = "marin-finestore", editable = "../../lib/finestore" },
+    { name = "marin-hf-release", editable = "../../lib/hf_release" },
     { name = "marin-iris", editable = "../../lib/iris" },
     { name = "marin-iris-native" },
     { name = "marin-rigging", extras = ["prometheus"], marker = "extra == 'telemetry'", editable = "../../lib/rigging" },

@@ -3434,6 +3434,11 @@ class RayPPOTrainer:
             model_path=model.path,
             num_nodes=placement.policy_num_nodes,
             gpus_per_node=placement.policy_num_gpus_per_node,
+            release_precision=self.cfg.trainer.get("hf_release_precision", "preserve"),
+            eos_token_ids=self.cfg.trainer.get("hf_generation_eos_token_ids"),
+            generation_controls=self.cfg.trainer.get("hf_generation_controls", {}),
+            chat_template=self.cfg.trainer.get("hf_chat_template"),
+            model_revision=model.get("revision"),
             model_source_uri=model.source_uri,
             model_source_identity=model.source_identity,
             hf_hub_repo_id=self.cfg.trainer.get("hf_hub_repo_id"),
@@ -3443,18 +3448,18 @@ class RayPPOTrainer:
         )
         existing = read_hf_export_request(checkpoint_path)
         if existing is not None:
+            original = replace(
+                existing, status=HFExportStatus.PENDING, attempts=0, timeout=None, last_exit_code=None
+            )
+            if original != request:
+                raise ValueError(f"HF export request changed for global_step_{self.global_step}")
             if existing.status is HFExportStatus.COMPLETE:
                 logger.info(f"HF export for global_step_{self.global_step} is already complete")
                 return
             if existing.status is HFExportStatus.IN_PROGRESS:
                 logger.info(f"HF export for global_step_{self.global_step} is already in progress")
                 return
-            request = replace(
-                request,
-                attempts=existing.attempts,
-                timeout=existing.timeout,
-                last_exit_code=existing.last_exit_code,
-            )
+            request = replace(existing, status=HFExportStatus.PENDING)
             logger.info(f"Refreshing pending HF export request for global_step_{self.global_step}")
         request_path = write_hf_export_request(request)
         logger.info(f"Queued out-of-band HF export for global_step_{self.global_step}: {request_path}")

@@ -710,6 +710,7 @@ members = [
     "marin-finestore",
     "marin-fray",
     "marin-haliax",
+    "marin-hf-release",
     "marin-iac",
     "marin-iris",
     "marin-levanter",
@@ -6896,6 +6897,29 @@ test = [
 ]
 
 [[package]]
+name = "marin-hf-release"
+version = "0.1.0"
+source = { editable = "lib/hf_release" }
+
+[package.dev-dependencies]
+test = [
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "pytest" },
+    { name = "safetensors", extra = ["numpy"] },
+]
+
+[package.metadata]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "ml-dtypes" },
+    { name = "numpy" },
+    { name = "pytest" },
+    { name = "safetensors", extras = ["numpy"], specifier = ">=0.4.2,<0.7.0" },
+]
+
+[[package]]
 name = "marin-iac"
 version = "0.0.0"
 source = { editable = "infra/pulumi" }
@@ -7143,6 +7167,7 @@ dependencies = [
     { name = "marin-finestore" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
+    { name = "marin-hf-release" },
     { name = "marin-iris" },
     { name = "marin-rigging" },
     { name = "marin-zephyr" },
@@ -7280,6 +7305,7 @@ requires-dist = [
     { name = "marin-finestore", editable = "lib/finestore" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
+    { name = "marin-hf-release", editable = "lib/hf_release" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-rigging", editable = "lib/rigging" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
@@ -7569,6 +7595,7 @@ dependencies = [
     { name = "marin-finelog" },
     { name = "marin-fray" },
     { name = "marin-haliax" },
+    { name = "marin-hf-release" },
     { name = "marin-iris" },
     { name = "marin-levanter" },
     { name = "marin-marina" },
@@ -7609,6 +7636,7 @@ requires-dist = [
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-fray", editable = "lib/fray" },
     { name = "marin-haliax", editable = "lib/haliax" },
+    { name = "marin-hf-release", editable = "lib/hf_release" },
     { name = "marin-iris", editable = "lib/iris" },
     { name = "marin-levanter", editable = "lib/levanter" },
     { name = "marin-levanter", marker = "extra == 'pipeline'", editable = "lib/levanter" },

@@ -20,6 +20,7 @@ from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 from omegaconf import OmegaConf
 from skyrl_train.distributed.dispatch import MeshRank
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
+from skyrl_train.hf_release_export import ReleaseExportOptions
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
 from skyrl_train.distributed.megatron.megatron_utils import (
     get_model_config,
@@ -361,13 +362,14 @@ class MegatronWorker:
             recompute_enabled=recompute_router,
         )
 
-    def save_hf_model(self, export_dir: str, tokenizer):
+    def save_hf_model(self, export_dir: str, tokenizer, release_options: ReleaseExportOptions | None = None):
         # Save model in HuggingFace safetensors format
         self.strategy.save_hf_model(
             self.bridge,
             self.model,
             export_dir,
             tokenizer=tokenizer,
+            release_options=release_options,
         )
 
 

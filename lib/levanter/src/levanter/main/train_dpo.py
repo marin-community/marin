@@ -28,6 +28,7 @@ from levanter.adaptor import (
     AdaptorExportConfig,
     LoraAdaptorConfig,
     NoAdaptorConfig,
+    _parse_hf_save_dtype,
 )
 from levanter.compat.hf_checkpoints import build_generation_config
 from levanter.data.dataset import AsyncDataset
@@ -537,12 +538,7 @@ def _install_separate_reference_export_hooks(
     if trainer.config.checkpointer is not None and trainer.config.checkpointer.append_run_id_to_base_path:
         full_save_path = os.path.join(full_save_path, trainer.run_id)
 
-    save_dtype: jnp.dtype | None = None
-    if export.hf_save_dtype is not None:
-        try:
-            save_dtype = jnp.dtype(export.hf_save_dtype)
-        except TypeError:
-            logger.warning(f"Invalid hf_save_dtype: {export.hf_save_dtype}. Defaulting to None.")
+    release_precision = _parse_hf_save_dtype(export.hf_save_dtype)
 
     def save_policy_hf_checkpoint(step):
         if step.step == 0:
@@ -557,7 +553,10 @@ def _install_separate_reference_export_hooks(
             _policy_model_for_hf_save(step.eval_model),
             os.path.join(full_save_path, f"step-{step.step}"),
             upload_to_hf=upload_to_hf,
-            dtype=save_dtype,
+            release_precision=release_precision,
+            source_checkpoint=full_save_path,
+            source_step=step.step,
+            checkpoint_identity=f"{full_save_path}@{step.step}",
             generation_config=export.generation_config,
             **hf_upload_kwargs,
         )

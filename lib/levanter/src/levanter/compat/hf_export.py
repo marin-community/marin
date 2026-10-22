@@ -120,6 +120,7 @@ class _HFShardWriter:
         max_concurrent_shards: int,
         resume: HFShardResume | None,
         upload_to_hf: Callable[[str, str], None] | None,
+        validate_shard: Callable[[Path], None] | None,
     ) -> None:
         self._pool = pool
         self._root = StoragePath(path)
@@ -127,6 +128,7 @@ class _HFShardWriter:
         self._max_concurrent_shards = max_concurrent_shards
         self._resume = resume
         self._upload_to_hf = upload_to_hf
+        self._validate_shard = validate_shard
         self._pending: deque[Future[HFShardRecord | None]] = deque()
         self._records: list[HFShardRecord] = []
 
@@ -184,20 +186,20 @@ class _HFShardWriter:
             local = Path(directory) / filename
             local.parent.mkdir(parents=True, exist_ok=True)
             save_file(tensors, local, metadata={"format": "pt"})
-            record = None
-            if self._resume is not None:
-                record = HFShardRecord(
-                    self._resume.export_id,
-                    filename,
-                    local.stat().st_size,
-                    _sha256(StoragePath(str(local))),
-                    sorted(tensors),
-                )
+            if self._validate_shard is not None:
+                self._validate_shard(local)
+            record = HFShardRecord(
+                self._resume.export_id if self._resume is not None else "",
+                filename,
+                local.stat().st_size,
+                _sha256(StoragePath(str(local))),
+                sorted(tensors),
+            )
             if self._root.is_remote:
                 (self._root / filename).upload_from(str(local))
             if self._upload_to_hf is not None:
                 self._upload_to_hf(directory, filename)
-            if self._resume is not None and record is not None:
+            if self._resume is not None:
                 self._resume.commit(record)
             return record
 
@@ -222,6 +224,7 @@ def save_hf_shards(
     resume: HFShardResume | None = None,
     tensor_names: Mapping[str, tuple[str, ...]] | None = None,
     upload_to_hf: Callable[[str, str], None] | None = None,
+    validate_shard: Callable[[Path], None] | None = None,
 ) -> list[HFShardRecord]:
     """Replicate tensors on every rank; copy to CPU and write only on process zero.
 
@@ -235,11 +238,12 @@ def save_hf_shards(
     when observed by a main thread; intervening gathers may finish first.
 
     Resume verifies receipts before skipping gathers and returns ordered receipts
-    on process zero. Without resume, overwrite existing shards. Return [] elsewhere
-    or without resume.
+    on process zero. Without resume, overwrite existing shards. Return [] on other ranks.
     """
     with ThreadPoolExecutor(max_workers=max_concurrent_shards, thread_name_prefix="hf_export") as pool:
-        writer = _HFShardWriter(pool, path, export_host_budget_bytes, max_concurrent_shards, resume, upload_to_hf)
+        writer = _HFShardWriter(
+            pool, path, export_host_budget_bytes, max_concurrent_shards, resume, upload_to_hf, validate_shard
+        )
         for filename, shapes in shards.items():
             names = sorted(
                 output for key in shapes for output in (tensor_names[key] if tensor_names is not None else (key,))
@@ -270,7 +274,7 @@ def save_hf_shards(
 
         records = run_on_export_writer(writer.finish)
 
-    if resume is None or records is None:
+    if records is None:
         return []
     # Reused shards can be encountered before earlier asynchronous writes finish.
     by_filename = {record.filename: record for record in records}

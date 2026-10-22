@@ -25,7 +25,11 @@ import haliax as hax
 from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 from safetensors.numpy import load_file
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import PreTrainedTokenizerFast
 
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
@@ -37,6 +41,7 @@ from levanter.models.snowball import (
     validate_single_name_config,
 )
 from levanter.testing.cpu_devices import run_on_cpu_devices
+from marin_hf_release.validation import read_safetensors_tensors
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -63,6 +68,43 @@ def _tiny_config(**overrides) -> SnowballConfig:
     )
     base.update(overrides)
     return SnowballConfig(**base)
+
+
+def test_snowball_release_keeps_nonzero_router_bias_fp32(tmp_path):
+    vocabulary = {"[BOS]": 0, "[EOS]": 1, "[EOT]": 2, "[UNK]": 3}
+    vocabulary.update({f"token_{index}": index for index in range(4, 48)})
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel(vocabulary, unk_token="[UNK]")),
+        bos_token="[BOS]",
+        eos_token="[EOS]",
+        unk_token="[UNK]",
+    )
+    tokenizer.chat_template = "{{ bos_token }}{{ messages[0]['content'] }}{{ eos_token }}"
+    cfg = _tiny_config(num_layers=1)
+    converter = HFCheckpointConverter(SnowballConfig, HfConfigClass=GrugMoeHfConfig, tokenizer=tokenizer)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(13))
+        model = eqx.tree_at(
+            lambda value: value.transformer.blocks[0].mlp.router_bias,
+            model,
+            jnp.asarray([0.25, -0.5, *([0.0] * 6)], dtype=jnp.float32),
+        )
+        converter.save_pretrained(
+            model,
+            str(tmp_path),
+            release_precision="bf16",
+            generation_config={"eos_token_id": [1, 2]},
+            save_reference_code=False,
+        )
+
+    headers = read_safetensors_tensors(tmp_path / "model.safetensors")
+    assert headers["model.embed_tokens.weight"].source_dtype == "BF16"
+    assert headers["model.layers.0.mlp.router.bias"].source_dtype == "F32"
+    weights = load_file(tmp_path / "model.safetensors")
+    np.testing.assert_array_equal(weights["model.layers.0.mlp.router.bias"][:2], np.asarray([0.25, -0.5]))
+    assert json.loads((tmp_path / "generation_config.json").read_text())["eos_token_id"] == [1, 2]
+    assert (tmp_path / "hf_release_manifest.json").is_file()
 
 
 def _device_batched_ids(vocab_size: int, pos_len: int) -> hax.NamedArray:

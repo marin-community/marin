@@ -73,7 +73,6 @@ from datetime import timedelta
 from typing import Protocol, runtime_checkable
 
 import click
-import jax.numpy as jnp
 import jmp
 from fray.types import ANY_REGION, GpuConfig, ResourceConfig
 from levanter.checkpoint import CheckpointerConfig
@@ -224,7 +223,7 @@ def _levanter_train_config(
         # has no HF reference from which the generic padding helper could re-derive that vocab.
         pad_tokenizer_to_match_model=initialize_model_from_checkpoint_path is None,
         hf_save_steps=num_train_steps,  # one HF export at the end
-        hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
+        hf_save_dtype=spec.hf_save_dtype,
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=0.0,
     )

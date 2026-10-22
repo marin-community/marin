@@ -7,6 +7,8 @@ import torch
 from skyrl_train.checkpoint_exporter import CheckpointExportPlan, CheckpointExporter, RayPolicyExportWorkers
 from skyrl_train.hf_export_schema import HFUploadMode
 from skyrl_train.hf_model_io import verify_hf_model_export
+from skyrl_train.hf_release_export import ReleaseExportOptions
+from marin_hf_release import PrecisionMode
 from skyrl_train.hf_publisher import HuggingFacePublisher
 
 
@@ -24,23 +26,25 @@ class FakePolicyExportWorkers:
     def load_model_checkpoint(self, checkpoint_path: str) -> None:
         self.checkpoint_path = checkpoint_path
 
-    def save_hf_model(self, export_path: str, tokenizer: object) -> None:
+    def save_hf_model(self, export_path: str, tokenizer: object, release_options: ReleaseExportOptions) -> None:
         self.export_path = export_path
         self.tokenizer = tokenizer
         Path(export_path).mkdir(parents=True)
         Path(export_path, "model.safetensors").write_bytes(b"weights")
+        Path(export_path, "hf_release_manifest.json").write_text("{}")
+        Path(export_path, ".marinskyrl-model-manifest.json").write_text("{}")
 
     def close(self) -> None:
         self.closed = True
 
 
 class MissingExportWorkers(FakePolicyExportWorkers):
-    def save_hf_model(self, export_path: str, tokenizer: object) -> None:
+    def save_hf_model(self, export_path: str, tokenizer: object, release_options: ReleaseExportOptions) -> None:
         self.export_path = export_path
 
 
 class MetadataOnlyExportWorkers(FakePolicyExportWorkers):
-    def save_hf_model(self, export_path: str, tokenizer: object) -> None:
+    def save_hf_model(self, export_path: str, tokenizer: object, release_options: ReleaseExportOptions) -> None:
         self.export_path = export_path
         Path(export_path).mkdir(parents=True)
         Path(export_path, "config.json").write_text("{}")
@@ -87,11 +91,15 @@ def _plan(tmp_path: Path, step: int = 12) -> CheckpointExportPlan:
     checkpoint_path.mkdir(parents=True)
     (checkpoint_path / "policy").mkdir()
     torch.save({"global_step": step}, checkpoint_path / "trainer_state.pt")
+    source_model = tmp_path / "source-model"
+    source_model.mkdir(exist_ok=True)
+    (source_model / "generation_config.json").write_text('{"eos_token_id": 1}')
     return CheckpointExportPlan(
         step=step,
         checkpoint_path=str(checkpoint_path),
         export_root=str(tmp_path / "exports"),
-        model_path="org/model",
+        model_path=str(source_model),
+        eos_token_ids=[1],
     )
 
 
@@ -104,7 +112,7 @@ def test_checkpoint_exporter_converts_only_the_policy_model(tmp_path):
 
     assert result.step == 12
     assert result.export_path == str(tmp_path / "exports" / "global_step_12" / "policy")
-    assert workers.model_path == "org/model"
+    assert workers.model_path == str(tmp_path / "source-model")
     assert workers.checkpoint_path == str(tmp_path / "checkpoints" / "global_step_12" / "policy")
     assert workers.export_path == result.export_path
     assert workers.tokenizer is tokenizer
@@ -162,7 +170,18 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
 
     workers.initialize("org/model")
     workers.load_model_checkpoint("/checkpoints/global_step_12/policy")
-    workers.save_hf_model("/exports/global_step_12/policy", tokenizer="tokenizer")
+    options = ReleaseExportOptions(
+        precision=PrecisionMode.PRESERVE,
+        source_checkpoint="/checkpoints/global_step_12",
+        source_step=12,
+        checkpoint_identity="identity",
+        source_model=None,
+        source_model_commit=None,
+        eos_token_ids=[1],
+        generation_controls={},
+        chat_template=None,
+    )
+    workers.save_hf_model("/exports/global_step_12/policy", tokenizer="tokenizer", release_options=options)
     workers.close()
 
     assert group.calls == [
@@ -179,7 +198,7 @@ def test_ray_policy_export_workers_loads_model_state_without_training_state():
         (
             "pass_through",
             "save_hf_model",
-            ("/exports/global_step_12/policy", "tokenizer"),
+            ("/exports/global_step_12/policy", "tokenizer", options),
             {},
         ),
     ]

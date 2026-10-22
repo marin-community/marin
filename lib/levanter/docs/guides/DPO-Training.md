@@ -204,9 +204,9 @@ each HF checkpoint with the correct stop tokens:
 hf_generation_eos_token_ids: [128001, 128009]  # <|end_of_text|> + <|eot_id|>
 ```
 
-The tokenizer's `eos_token_id` is auto-added if not in the list. This field
-defaults to `null` (no `generation_config.json` written), preserving backward
-compatibility with pretraining checkpoints.
+The list must include the tokenizer's `eos_token_id`; export rejects a missing
+ID. When this field is `null`, export uses generation metadata from the pinned
+source model for Grug models and the tokenizer EOS ID for other models.
 
 To determine the right stop token for your model's chat template:
 

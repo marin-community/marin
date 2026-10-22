@@ -621,6 +621,9 @@ def save_merged_hf_checkpoint_callback(
             path,
             upload_to_hf=upload_to_hf,
             generation_config=generation_config,
+            source_checkpoint=base_path,
+            source_step=step.step,
+            checkpoint_identity=f"{base_path}@{step.step}",
             **my_upload_kwargs,
         )
 

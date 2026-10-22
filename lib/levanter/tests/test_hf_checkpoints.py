@@ -84,7 +84,11 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
         use_flash_attention=False,
         tokenizer=local_gpt2_tokenizer_path,
     )
-    converter = nano_config.hf_checkpoint_converter()
+    converter = nano_config.hf_checkpoint_converter(ref_checkpoint=local_gpt2_tokenizer_path)
+    tokenizer = hf_checkpoints._coerce_to_hf_tokenizer(converter.tokenizer)
+    tokenizer.eos_token = tokenizer.convert_ids_to_tokens(1)
+    tokenizer.bos_token = tokenizer.convert_ids_to_tokens(0)
+    converter = converter.replaced(tokenizer=tokenizer)
 
     mp = jmp.get_policy("f32")
 
@@ -325,7 +329,7 @@ def test_save_pretrained_with_custom_dtype():
                 save_tokenizer=False,
                 save_reference_code=False,
                 max_shard_size=int(10e9),
-                dtype=jnp.bfloat16,
+                release_precision="bf16",
             )
 
         saved_file = os.path.join(tmpdir, SAFE_TENSORS_MODEL)

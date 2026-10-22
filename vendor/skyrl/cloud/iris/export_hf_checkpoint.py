@@ -170,6 +170,10 @@ def checkpoint_export_launch_config(
     config.skyrl.generator.run_engines_locally = True
     config.skyrl.generator.num_inference_engines = total_policy_gpus // engine_width
     config.skyrl.trainer.policy.model.path = request.model_path
+    if request.model_revision is not None:
+        config.skyrl.trainer.policy.model.revision = request.model_revision
+    else:
+        config.skyrl.trainer.policy.model.pop("revision", None)
     if request.model_source_uri is not None:
         config.inputs.model.uri = request.model_source_uri
         config.inputs.model.identity = request.model_source_identity
@@ -184,6 +188,11 @@ def checkpoint_export_launch_config(
         "hf_hub_private": request.hf_hub_private,
         "hf_hub_revision": request.hf_hub_revision,
         "hf_upload_mode": request.hf_upload_mode.value,
+        "release_precision": request.release_precision,
+        "release_policy_version": request.release_policy_version,
+        "eos_token_ids": request.eos_token_ids,
+        "generation_controls": request.generation_controls,
+        "chat_template": request.chat_template,
     }
     return config
 
