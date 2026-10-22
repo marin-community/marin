@@ -34,10 +34,16 @@ tokens as shown. All arms used canonical SWE-bench Verified, mini-swe-agent 2.1.
 agent and 300-second verifier timeouts. Early-sealed valid-task subsets differ, so differences
 are descriptive rather than matched-task causal estimates.
 
+The earlier 32k/8k references are the [Qwen](s3://marin-us-east-02a/marin/evals/20261003-193328-Qwen-Qwen3.6-35B-A3B-swebench-verified-9664/results),
+[Gemma](s3://marin-us-east-02a/marin/evals/20261003-193930-google-gemma-4-26B-A4B-it-swebench-verified-42c3/results),
+[Nemotron](s3://marin-us-east-02a/marin/evals/20261003-194024-nvidia-NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16-swebench-verified-e102/results),
+and [Snowball](s3://marin-us-east-02a/marin/evals/20261019-103224-open-athena-Snowball-Smartie-RL-2026.10.15.32-step14-swebench-verified-cf45/results)
+result roots.
+
 `accepted-manifest.json` fixes the exact accepted task/result choices and their source SHA-256s.
 `MANIFEST-*.json` records exported row counts, compressed file hashes, and missing-trajectory
 counts. `completion-audit.json` maps scores to the original sealed audit archives. The
-checked-in [exporter](https://github.com/marin-community/marin/blob/78ad784bbe/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/swebench_context_compaction/publish_traces.py)
+checked-in [exporter](https://github.com/marin-community/marin/blob/a12f14494e/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/swebench_context_compaction/publish_traces.py)
 shows the scrubbing and source verification logic.
 The [ablation configs and launcher](https://github.com/marin-community/marin/tree/58ff2c03aa/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/swebench_context_compaction)
 identify the exact checkpoints and benchmark settings.
