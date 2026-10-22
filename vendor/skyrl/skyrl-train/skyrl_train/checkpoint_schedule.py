@@ -1,14 +1,15 @@
 """Explicit checkpoint schedules: which steps save weights and which include the optimizer.
 
-Training runs state the schedule as explicit step lists (C4: fp32 master weights every
-10 steps to 50 and every 25 after; the full optimizer at three of those). Checkpoints
-outside the optimizer list keep the model's BF16 records and the FP32 master params but
-drop the moment states, and carry an ``optimizer_state.json`` marker so a later resume
-fails loudly instead of silently restarting the optimizer.
+Training runs state the schedule as explicit step lists: fp32 master weights every 10
+steps to 50 and every 25 after, with the full optimizer state at a short list of those
+steps. Checkpoints outside the optimizer list keep the model's BF16 records and the
+FP32 master params but drop the moment states, and carry an ``optimizer_state.json``
+marker so a later resume fails loudly instead of silently restarting the optimizer.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from omegaconf import DictConfig, OmegaConf
@@ -16,8 +17,17 @@ from omegaconf import DictConfig, OmegaConf
 from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
 
 OPTIMIZER_STATE_MARKER = "optimizer_state.json"
-FULL_OPTIMIZER_STATE = "full"
-MASTER_ONLY_OPTIMIZER_STATE = "masters"
+
+
+class OptimizerStateMode(StrEnum):
+    """How much optimizer state one checkpoint carries."""
+
+    FULL = "full"
+    MASTERS_ONLY = "masters"
+
+
+FULL_OPTIMIZER_STATE = OptimizerStateMode.FULL
+MASTER_ONLY_OPTIMIZER_STATE = OptimizerStateMode.MASTERS_ONLY
 
 
 @dataclass(frozen=True)
@@ -59,7 +69,7 @@ class CheckpointSchedule:
             return step in self.optimizer_steps
         return True
 
-    def optimizer_mode(self, step: int) -> str:
+    def optimizer_mode(self, step: int) -> OptimizerStateMode:
         """The optimizer records a checkpoint at ``step`` carries."""
         return FULL_OPTIMIZER_STATE if self.should_save_optimizer(step) else MASTER_ONLY_OPTIMIZER_STATE
 
@@ -82,7 +92,7 @@ def master_only_optimizer_state(optimizer_state: Mapping[str, Any]) -> dict[str,
     """Drop moment and scalar records, keeping the param and FP32 master records.
 
     Walks the sharded-state nesting and keeps every subtree whose leaf keys name a
-    param or FP32 master record (C8) — the records weight analysis reads. The dropped
+    param or FP32 master record — the records weight analysis reads. The dropped
     moment states are what a resume needs, so master-only checkpoints are not
     optimizer-resumable.
     """
