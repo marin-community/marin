@@ -158,14 +158,25 @@ def test_retry_after_sets_the_minimum_delay(fake_glm, run):
     assert second.started - (first.started + first.duration) >= 0.3
 
 
+# A tool-call delta for index 1 with no earlier delta, which the SDK accumulator cannot place.
+ORPHAN_TOOL_DELTA = json.dumps(
+    {
+        "choices": [
+            {"index": 0, "delta": {"tool_calls": [{"index": 1, "function": {"arguments": "x"}}]}, "finish_reason": None}
+        ]
+    }
+)
+
+
 @pytest.mark.parametrize(
     "stream",
     [
         {"content": "partial", "finish": "abort"},
         {"content": "partial", "raw_payload": "{not json"},
         {"content": "partial", "raw_payload": '{"error": {"message": "engine died", "code": 500}}'},
+        {"content": "partial", "raw_payload": ORPHAN_TOOL_DELTA},
     ],
-    ids=["abort", "malformed", "error-event"],
+    ids=["abort", "malformed", "error-event", "orphan-tool-delta"],
 )
 def test_aborted_malformed_or_errored_stream_is_retried(fake_glm, run, stream):
     fake_glm.stream(**stream)
