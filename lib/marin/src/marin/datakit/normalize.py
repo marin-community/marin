@@ -230,11 +230,11 @@ def _discover_files(
         return f"{protocol}://{p}" if protocol else p
 
     discovered: list[tuple[str, int]] = []
-    for root, _dirs, files in fs.walk(resolved, detail=True):
-        rel_root = os.path.relpath(root, resolved)
-        parts = [] if rel_root == "." else rel_root.split(os.sep)
-        if any(p.startswith(".") for p in parts):
-            continue
+    for root, dirs, files in fs.walk(resolved, detail=True):
+        # Prune before walk recurses to avoid listing hidden subtrees.
+        for dirname in list(dirs):
+            if dirname.startswith("."):
+                del dirs[dirname]
         for fname, info in files.items():
             if fname.startswith("."):
                 continue
