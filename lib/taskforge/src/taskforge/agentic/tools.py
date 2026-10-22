@@ -288,6 +288,9 @@ class TaskforgeTools:
         self.adversary_runs: defaultdict[str, list[dict[str, Any]]] = defaultdict(list)
         self.transcripts: Counter[str] = Counter()
         self.accepted: list[AcceptedTask] = []
+        # The digests of the task versions that a review refused. Another submit of such a version only asks for a
+        # new review, and enough of them accept a flawed task.
+        self.refused: set[str] = set()
         self.report: str | None = None
         self.spend = ToolSpend()
         self.empty_budget_calls = 0
@@ -522,6 +525,8 @@ class ToolSession:
         key = _task_digest(task)
         if any(_task_digest(accepted.task) == key for accepted in self.tools.accepted):
             raise ToolError("This task is already accepted")
+        if key in self.tools.refused:
+            raise ToolError("The review refused this version of the task: change the task, then get its evidence again")
         problems = _unsupported(task, self.tools.solver_engine, self.config)
         problems += _malformed_files(task)
         if problems:
@@ -543,6 +548,7 @@ class ToolSession:
         # The review comes last, so it sees all the evidence of this version of the task.
         review = await self._review(task, key, evidence)
         if not review.accept:
+            self.tools.refused.add(key)
             return _result({"accepted": False, "review": review.model_dump(mode="json")})
         accepted = AcceptedTask(task, replace(evidence, controls=list(evidence.controls)), review)
         self.tools.accepted.append(accepted)
@@ -596,8 +602,18 @@ class ToolSession:
         return sum(isinstance(outcome, GradedRollout) and _passed(outcome.grade) for outcome in outcomes)
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
-        # The budget must hold the whole review, so that a review never stops after its blind solve.
-        self._spend("judge_calls", self.config.budget.judge_calls, JUDGE_CALLS_PER_REVIEW)
+        """The decision of ``gate.reviews`` independent reviews: one refusal refuses the task, with the problems of
+        each refusal."""
+        reviews = self.config.gate.reviews
+        # The budget must hold all the reviews, so that no review stops after its blind solve.
+        self._spend("judge_calls", self.config.budget.judge_calls, JUDGE_CALLS_PER_REVIEW * reviews)
+        results = await asyncio.gather(*(self._one_review(task, key, evidence) for _ in range(reviews)))
+        refusals = [review for review in results if not review.accept]
+        if not refusals:
+            return results[0]
+        return refusals[0].model_copy(update={"problems": tuple(p for review in refusals for p in review.problems)})
+
+    async def _one_review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:
         # The judge first solves the task without its reference answer, as a check that is not anchored on it.
         blind = await self._judge(BLIND_SOLVE_PROMPT, pretty_json(blind_content(self.tools.idea, task)), BlindSolution)
         content = review_content(
