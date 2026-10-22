@@ -26,7 +26,7 @@ from taskforge.stage10_proposal.model import (
     document_request_fields,
     solver_machine_violation,
 )
-from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal
+from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal, propose_all
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
@@ -321,7 +321,7 @@ def test_a_plan_slot_the_host_cannot_run_is_repaired_before_any_document_is_writ
     model.reply(json.dumps(plan([slot(1, "shellsim", "code")], [])))
     model.reply(filled_document(idea, 1))
 
-    batch: ProposalBatch = asyncio.run(CapabilitySource(model, LLMPolicy(), NO_CONTAINER).propose(idea, 1))
+    batch: ProposalBatch = asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), NO_CONTAINER), idea, 1))
 
     repair_prompt = model.requests[1].messages[-2]["content"]
     assert isinstance(repair_prompt, str) and "slot 1 is proposed in container" in repair_prompt
@@ -336,7 +336,7 @@ def test_a_plan_still_invalid_after_its_repair_raises_before_any_document_is_wri
     model.reply(unrunnable)
 
     with pytest.raises(StructuredOutputError, match="slot 1 is proposed in container"):
-        asyncio.run(CapabilitySource(model, LLMPolicy(), NO_CONTAINER).propose(ideas[CAPABILITY_ID], 1))
+        asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), NO_CONTAINER), ideas[CAPABILITY_ID], 1))
     assert len(model.requests) == 2
 
 
@@ -346,7 +346,7 @@ def test_propose_returns_one_outcome_per_slot_in_order_without_calling_the_model
     model.reply(json.dumps(plan([slot(1, "reasoning", "llm_as_judge", "null"), slot(2, "shellsim", "code")], [])))
     model.reply(filled_document(idea, 2))
 
-    batch: ProposalBatch = asyncio.run(CapabilitySource(model, LLMPolicy(), ALL_ENVIRONMENTS).propose(idea, 2))
+    batch: ProposalBatch = asyncio.run(propose_all(CapabilitySource(model, LLMPolicy(), ALL_ENVIRONMENTS), idea, 2))
 
     assert len(model.requests) == 2
     assert model.requests[0].fields == {"response_format": response_format(slot_plan_type(2, ALL_ENVIRONMENTS))}

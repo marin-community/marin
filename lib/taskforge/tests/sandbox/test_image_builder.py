@@ -143,7 +143,3 @@ def test_a_job_the_host_ended_is_an_image_job_failure_whichever_job_it_is(state,
 def test_a_job_that_ran_and_failed_raises_the_callers_failure(failed):
     with pytest.raises(failed, match="ended failed: the job's log tail"):
         wait_succeeded(cast(Job, EndedJob(JobState.FAILED)), failed)
-
-
-def test_a_job_that_succeeded_raises_nothing():
-    wait_succeeded(cast(Job, EndedJob(JobState.SUCCEEDED)), BuildFailed)

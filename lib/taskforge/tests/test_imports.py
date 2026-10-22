@@ -8,7 +8,8 @@ import, in any form and at any depth. A stage package ``stageNN_<name>`` may imp
 lower number and the shared modules in ``SHARED``. Two packages may share a stage number when they
 are alternative ways of running that stage; ``BUILDS_ON`` names the same-number packages each one may
 import. A shared module may import other shared modules but no stage. A package in ``TOP``
-coordinates the stages, so it may import every stage and shared module, and no package may import it.
+runs the whole pipeline: ``stage_coordinator`` runs the stages, and ``agentic`` replaces them with
+one agent. It may import every stage and shared module, and no package may import it.
 
 The build stage has one package, ``stage40_build_with_program``, and the name states the
 distinction that decides where build code goes: it is about whether a build *program* produces the
@@ -28,7 +29,7 @@ from pathlib import Path
 import taskforge
 
 SHARED = ("capability", "child_process", "content_hash", "ledger", "llm", "sandbox", "spec")
-TOP = ("stage_coordinator",)
+TOP = ("agentic", "stage_coordinator")
 BUILDS_ON: dict[str, tuple[str, ...]] = {}
 STAGE = re.compile(r"stage(\d+)_[a-z0-9_]+")
 ROOT = Path(taskforge.__file__).parent

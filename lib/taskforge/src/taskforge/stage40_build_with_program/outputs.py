@@ -1,17 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The outputs of the standard template's steps, which authored programs return too.
+"""Output models for authored build programs.
 
 The step store writes each output as canonical JSON and decodes it with a pydantic ``TypeAdapter``
-of the step's return annotation, so every type here survives that round trip. Two step names carry
-a meaning outside the program:
-
-* ``stage30_author.loader.GRADER_STEP``: ``load_program_source`` requires a step of this name
-  returning ``Grader``, and validation reads the reference answer and the prototyped candidates
-  from its stored output.
-* ``SOURCES_STEP``: under ``ResearchRequirement.ENFORCED``, ``run_build`` reads the research
-  findings from the ``Sources`` this step returns.
+of the step's return annotation. ``load_program_source`` requires a step named ``grader`` that
+returns ``Grader``.
 """
 
 from dataclasses import dataclass

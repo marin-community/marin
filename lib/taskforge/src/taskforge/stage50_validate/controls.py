@@ -160,21 +160,21 @@ async def replay(
     unknown = sorted(set(plan.first_attempts) - {control.id for control in controls})
     if unknown:
         raise ValueError(f"First attempts name controls {unknown} that are not replayed")
-    context_turns = context_assistant_turns(task)
     async with asyncio.TaskGroup() as group:
         runs = [
-            group.create_task(
-                run_trial(
-                    spec,
-                    plan.trial_plan(control.id),
-                    settings,
-                    ScriptedModel(control_turns(control), context_turns),
-                    control.id,
-                )
-            )
+            group.create_task(replay_control(spec, control, plan.trial_plan(control.id), settings))
             for control in controls
         ]
-    return [control_outcome(control, run.result()) for control, run in zip(controls, runs, strict=True)]
+    return [run.result() for run in runs]
+
+
+async def replay_control(
+    spec: TaskRolloutSpec, control: Control, plan: TrialPlan, settings: EngineSettings
+) -> ControlOutcome:
+    """Replay one control of a set ``check_replayable`` accepted as the ``CONTROL`` trial of ``plan``, named by
+    its id."""
+    model = ScriptedModel(control_turns(control), context_assistant_turns(spec.task))
+    return control_outcome(control, await run_trial(spec, plan, settings, model, control.id))
 
 
 def control_outcome(control: Control, outcome: Outcome) -> ControlOutcome:

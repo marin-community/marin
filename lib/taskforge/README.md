@@ -12,6 +12,10 @@ src/taskforge/
                                JsonEventStore;
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
+                               run.py: InfrastructureRetry, `run_workpieces`
+  agentic/                     agent.py: `generate_tasks`, one managed agent that makes tasks for an idea;
+                               tools.py: the agent's Taskforge tools; gate.py: the acceptance rule;
+                               config.py, prompts.py, parallel.py (web search), example_build.py
   capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
   ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
@@ -25,7 +29,8 @@ src/taskforge/
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal document and its generation regex;
-                               source.py: ProposalBatch, SlotFailure, the ProposalSource protocol
+                               source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
+                               protocol, `proposal_batch`, `propose_all`
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
                                verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
@@ -52,6 +57,8 @@ src/taskforge/
                                lowering.py: `lower`, a task lowered for the validating host;
                                control_drafts.py: `write_controls`, the controls of a draft round;
                                controls.py: control replay; outcome.py, evidence.py: outcomes and their totals
+                               round.py: `validate_round`, one validation round as a graph of units;
+                               adversary.py, adversary_prompts.py: adversary trials and their brief
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
@@ -76,11 +83,27 @@ a relay job.
 
 ## Proposals
 
-A proposal source implements `stage10_proposal.source.ProposalSource[IdeaT]`:
-`async propose(idea, n) -> ProposalBatch`. A batch holds the planning request and completions and
-one `SlotProposal` or `SlotFailure` per slot, in slot order, so a failed slot does not drop its
-siblings. `stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalHeader`, keys in
-`HEADER_KEYS` order) plus a markdown body with required section headings. `parse` and `render`
+A proposal source implements `stage10_proposal.source.ProposalSource[IdeaT, PlanT]` in two phases:
+
+- `async plan(idea, n) -> Portfolio[PlanT]` plans the slots once. A `Portfolio` holds the planning
+  request and completions, the source's own plan record (`plan`, which the document prompts quote),
+  and a `PlannedSlot` per slot, numbered 1 through `n`, that either proposes or carries the
+  `null_reason` the plan gave it. With a dataclass or pydantic plan record it is plain data:
+  `content_hash.pretty_json` writes it and pydantic's `TypeAdapter(Portfolio[PlanT])` reads it back.
+- `async write(idea, portfolio, slot) -> SlotOutcome` writes one slot's document, a `SlotProposal` or
+  a `SlotFailure`, from the idea and the portfolio alone. A slot planned null becomes a proposal with
+  `null_reason` set and makes no model call.
+
+Because no slot waits for another, a scheduler can run each slot's `write` as its own unit and start
+that slot's workpiece as soon as its proposal exists, and a relaunch with a persisted portfolio writes only
+the slots it lacks. `proposal_batch(portfolio, outcomes)` assembles a portfolio and an outcome for
+each of its slots, given in any order, into a `ProposalBatch`: the planning request and completions
+and one outcome per slot, in slot order, so a failed slot does not drop its siblings.
+`propose_all(source, idea, n)` plans, writes every slot concurrently and returns that batch, for a
+caller that wants everything at once.
+
+`stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalHeader`, keys in `HEADER_KEYS`
+order) plus a markdown body with required section headings. `parse` and `render`
 round-trip it and `digest` is the sha256 of the canonical form. `parse` also checks the research
 decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
 non-null body cites every item, and only listed items, as `research[i]`. `solver_machine` pins the
@@ -101,9 +124,9 @@ built from `DOCUMENT_REPAIR_PROMPT`.
 
 `experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
-construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
-machine, an offered verification and a research decision, then writes each document under the regex
-with GLM thinking first.
+construction. Its `plan(idea, n)` plans `n` slots in one structured call, each with a solver
+machine, an offered verification and a research decision, and its `write(idea, portfolio, slot)`
+writes one slot's document under the regex with GLM thinking first.
 `propose_tasks` in the same package proposes the catalog's capabilities from the command line and
 triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
 is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a
@@ -235,6 +258,22 @@ Under `TraceMode.MESSAGES` the engine accepts such a turn and charges its usage 
 token budget, which Taskforge leaves unset. Every request of a rollout carries `prompt_cache_key: <workpiece>:<round>:<step>`,
 so it shares one node's prefix cache, and `GlmRolloutModel.for_step(step)` derives the model of
 one rollout.
+
+## Agentic generation
+
+`agentic.agent.generate_tasks(idea, n, config)` makes up to n tasks for one idea with one managed
+agent, in place of the stages. The agent works in a shell with Python, taskcompendium and verifyit,
+and no network: a bubblewrap `LocalMachineFactory`, which needs the privileged container profile on
+Iris. Its tools do only what the shell cannot:
+
+- `grade`: grade a control answer with the task's grader.
+- `rollout`: run solver or adversary rollouts on ShellSim machines.
+- `web_search`, `web_fetch`: search and read the web with Parallel.
+- `submit`: accept a task when its evidence satisfies the `Gate` and a blind review accepts it.
+- `finish`: end the session with a report.
+
+The checks of `submit` are in `agentic/tools.py`. The driver is
+`experiments/post_training/capability_driven_envs/generate_tasks_agentic.py`.
 
 ## The build DAG
 
@@ -446,9 +485,11 @@ relaunch never resumes a session mid-way: a session directory without an `author
 
 From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
 raising an exception closes it as failed. `WorkpieceBudget` bounds the triage rewrites a workpiece
-may take, the build and author failures it may revise after, and the review retries it may
-follow. The coordinator spends the budget when it records the event, choosing repair or reject,
-revise or reject, retry or abandon.
+may take, the build and author failures it may revise after, the review retries it may follow,
+and the review `Modify` decisions it may follow into a new round. The coordinator spends the
+budget when it records the event, choosing repair or reject, revise or reject, retry or abandon,
+modify or reject. A `Modify` past `max_modify_rounds` exits reject with kind `budget`, so a budget
+of zero never takes the modify edge; the round number counts the `Modify` decisions followed.
 
 Triage returns a `Verdict`. The preflight's exits accept or reject, and a reject records the
 verdict's reasons. REPAIR is the surface described under Triage, and a `max_triage_repairs` of zero
@@ -541,6 +582,27 @@ leaves none, so the next run starts again from that terminal or from triage, and
 serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
 planned with the ledger.
 
+## Running many workpieces
+
+`run_workpieces` in `stage_coordinator/run.py` runs every proposal of an async iterable of
+`(workpiece_id, proposal)` pairs through `run_workpiece`, starting each as the iterable yields it,
+so a proposal still being written holds back no workpiece. It sets no width: the stages' resource
+pools bound how much runs at once. Each workpiece runs in a wrapper that records its terminal and
+never raises, so a failed workpiece cancels none of its siblings.
+
+A workpiece stopped by a transient infrastructure failure runs again in-process after a backoff,
+resuming at the stage that raised, up to `InfrastructureRetry.max_attempts` attempts; each failed attempt
+leaves a `TERMINAL` failed event in its log. Only two failures qualify
+(`transient_infrastructure_failure`): `ModelUnavailable`, and a `BuildInfrastructureFailure` whose
+cause is not one of `HOST_REJECTIONS` (no factory or no image builder on this host). A
+`BuildExpired`, a storage fault, and every task or program failure leave the workpiece failed in
+place after one attempt, as `run_workpiece` leaves it.
+
+`run_workpieces` returns each started workpiece's terminal once the iterable is exhausted and every
+workpiece has one. A workpiece id yielded a second time raises `ValueError`, and an error reading the
+iterable is raised as it is; either way no later proposal starts, and the workpieces already started
+first run to their terminals.
+
 ## Validation
 
 `stage50_validate.lowering.lower(task, host, factories)` lowers a draft's task for the validating
@@ -585,6 +647,51 @@ retryable cause;
 where it stopped. `stage50_validate.evidence.Evidence(outcomes).reward_stats(kind)` totals the graded
 trials. `stage50_validate.controls.replay(spec, controls, plan, settings)` replays each control as
 one `CONTROL` trial named by its id.
+
+`stage50_validate.round.validate_round(draft, context, solver_model, controls_model, adversary_model)`
+runs one validation round from these parts as a graph of units. Lowering (`preflight`) and control
+writing start together; each of the `context.k` solver trials starts once the lowering is done, without
+waiting for the controls; each control's replay and each of the `context.adversary.k` adversary trials
+start once both the lowered spec and the controls exist, without waiting for a solver trial. Every unit is idempotent on its own file, so a relaunch runs only the units whose files are
+missing:
+
+```
+<round_dir>/validation.json                                  the ValidationResult
+<round_dir>/validation/<draft>/lowered.json                  the lowering, for one host and set of backends
+<round_dir>/validation/<draft>/controls.json                 the written controls
+<round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
+<round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
+<round_dir>/validation/<draft>/<task>/adversary/<i>/attempt-<n>.json
+<round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
+```
+
+`<draft>` is `content_hash.digest` of the draft's task, `<task>` the `trials.task_digest` of the
+lowered spec as the round's trials run it, and `<controls>` `content_hash.digest` of the control set,
+so no file of another task, lowered spec or control set counts as done. A trial is done when its
+last attempt is graded, failed for a cause that is not retryable, or used its retries; otherwise it
+resumes at the next attempt with the retries it has left. Attempt files are written whole or not at
+all, and an attempt cancelled in flight writes none, so a cancelled trial runs again instead of
+counting as ungraded. The result is read back from the unit files (`trials.attempt_outcome`), and
+`validation.json` holds every decision input without the rollouts: the lowering's status
+(`lowered`, `refused` by a factory, `rejected` by RolloutEngine, when no trial runs), refusals and
+backend fallback; each solver trial's status, reward, cause and attempt file, with the reward totals
+and ungraded causes of its `Evidence`; each control's verdict (`met`, `violated`, `ungraded`) and
+cause; and each adversary trial's status, cause, claim and submissions with their grades and rewards.
+`load_validation(round_dir)` reads it back.
+
+An adversary trial (`stage50_validate.adversary.run_adversary_trial`) red-teams the grader as an agent
+loop with two tools: `shell` on a private task machine, started as the engine starts the solver's, and
+`submit`, which grades one candidate (a final reply and the files it names) as a control is graded, on a
+fresh machine. `AdversaryPolicy` sets the trials per round, the submissions per attempt (a `submit` past
+them grades nothing), the turns, the sampling and the mode; the round's deadlines, retries and backoff
+apply. A `blackbox` adversary sees the task as the solver does; a `whitebox` one is also shown the
+grader's specification and verifier files, the round's controls with their expected rewards and the
+task's example answers. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
+candidates and a final `NO_SHORTCUT` or `SHORTCUT:` line, recorded as the trial's claim. An attempt is
+graded with its last passing submission's grade, else its last submission's. Its attempt file holds the
+agent's whole rollout, the brief and every submission; an attempt under another brief, such as another
+mode or control set, does not count as done. The round records facts only: whether a passing submission
+is a shortcut is review's judgement.
 
 ## Testing
 
