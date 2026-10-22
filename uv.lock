@@ -6906,6 +6906,7 @@ test = [
     { name = "ml-dtypes" },
     { name = "numpy" },
     { name = "pytest" },
+    { name = "pytest-xdist" },
     { name = "safetensors", extra = ["numpy"] },
 ]
 
@@ -6916,6 +6917,7 @@ test = [
     { name = "ml-dtypes" },
     { name = "numpy" },
     { name = "pytest" },
+    { name = "pytest-xdist" },
     { name = "safetensors", extras = ["numpy"], specifier = ">=0.4.2,<0.7.0" },
 ]
 
