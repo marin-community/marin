@@ -493,6 +493,39 @@ def build_egress_network_policy(namespace: str, network: TaskNetwork, service_ci
     }
 
 
+def _resolve_s3_credentials() -> dict[str, str]:
+    """Resolve operator storage keys for controller checkpoints and node probes."""
+    store = store_config(StoreType.COREWEAVE)
+    key_id = os.environ.get(store.key_id_env)
+    key_secret = os.environ.get(store.key_secret_env)
+    if not key_id or not key_secret:
+        raise InfraError(
+            f"{store.key_id_env} and {store.key_secret_env} environment variables are required "
+            "for S3-compatible object storage"
+        )
+    return {
+        "AWS_ACCESS_KEY_ID": key_id,
+        "AWS_SECRET_ACCESS_KEY": key_secret,
+        store.key_id_env: key_id,
+        store.key_secret_env: key_secret,
+    }
+
+
+def _build_s3_task_env(endpoint: str) -> dict[str, str]:
+    """Build the endpoint settings shared by infrastructure and task Pods."""
+    store = store_config(StoreType.COREWEAVE)
+    env: dict[str, str] = {}
+    if endpoint:
+        env["AWS_ENDPOINT_URL"] = endpoint
+        env["AWS_REGION"] = "auto"
+        env["AWS_DEFAULT_REGION"] = "auto"
+        env["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
+        # The pod's node-local endpoint, under the name the CoreWeave store config reads,
+        # so a bucket-routed filesystem in a task uses LOTA rather than the public VIP.
+        env[store.endpoint_env] = endpoint
+    return env
+
+
 # ============================================================================
 # K8sControllerProvider
 # ============================================================================
@@ -599,10 +632,8 @@ class K8sControllerProvider:
         # Service storage keys stay on infrastructure Pods; task defaults carry
         # only endpoint settings and explicitly requested operator variables.
         self._s3_enabled = self.uses_s3_storage(config)
-        storage_env = self._s3_storage_env() if self._s3_enabled else {}
-        store = store_config(StoreType.COREWEAVE)
-        credential_names = {"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", store.key_id_env, store.key_secret_env}
-        default_env = {name: value for name, value in storage_env.items() if name not in credential_names}
+        default_env = _build_s3_task_env(self._config.object_storage_endpoint) if self._s3_enabled else {}
+        storage_env = {**default_env, **_resolve_s3_credentials()} if self._s3_enabled else {}
         injected_env = collect_inject_env(config.defaults.inject_env)
         default_env.update(injected_env)
         storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
@@ -632,7 +663,7 @@ class K8sControllerProvider:
             )
 
         if self._prepared_controller_env:
-            self.ensure_controller_env_secret(self._prepared_controller_env)
+            self.ensure_env_secret(CONTROLLER_ENV_SECRET_NAME, self._prepared_controller_env)
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
@@ -981,40 +1012,7 @@ class K8sControllerProvider:
         """Check if any storage URI uses S3."""
         return config.storage.remote_state_dir.startswith("s3://")
 
-    # -- Cluster default env (S3 storage auth + operator-injected vars) -------
-
-    def _s3_storage_env(self) -> dict[str, str]:
-        """Compute S3 storage env (creds + endpoint + FSSPEC) from the operator's shell.
-
-        Maps the operator's CoreWeave object-storage credentials to the AWS
-        names boto3/s3fs expect and derives endpoint/region/FSSPEC_S3 from the
-        configured object-storage endpoint. Stored in iris-storage-env for
-        controller checkpoints and node storage-health probes.
-        """
-        store = store_config(StoreType.COREWEAVE)
-        key_id = os.environ.get(store.key_id_env)
-        key_secret = os.environ.get(store.key_secret_env)
-        if not key_id or not key_secret:
-            raise InfraError(
-                f"{store.key_id_env} and {store.key_secret_env} environment variables are required "
-                "for S3-compatible object storage"
-            )
-        env = {
-            "AWS_ACCESS_KEY_ID": key_id,
-            "AWS_SECRET_ACCESS_KEY": key_secret,
-            store.key_id_env: key_id,
-            store.key_secret_env: key_secret,
-        }
-        endpoint = self._config.object_storage_endpoint
-        if endpoint:
-            env["AWS_ENDPOINT_URL"] = endpoint
-            env["AWS_REGION"] = "auto"
-            env["AWS_DEFAULT_REGION"] = "auto"
-            env["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
-            # The pod's node-local endpoint, under the name the CoreWeave store config reads,
-            # so a bucket-routed filesystem in a task uses LOTA rather than the public VIP.
-            env[store.endpoint_env] = endpoint
-        return env
+    # -- Storage credentials and task environment -----------------------------
 
     def ensure_env_secret(self, name: str, env: dict[str, str]) -> None:
         """Project environment values without putting secrets in the ConfigMap."""
@@ -1037,22 +1035,6 @@ class K8sControllerProvider:
         service_cidr = config.kubernetes_provider.service_cidr
         for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
             self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
-
-    def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
-        """Create the iris-controller-env Secret holding the controller's own credentials.
-
-        Only the controller Deployment references it, so a task pod cannot read the
-        cluster's signing key.
-        """
-        self._kubectl.apply_json(
-            {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {"name": CONTROLLER_ENV_SECRET_NAME, "namespace": self._namespace},
-                "type": "Opaque",
-                "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
-            }
-        )
 
     # -- Deployment readiness --------------------------------------------------
 

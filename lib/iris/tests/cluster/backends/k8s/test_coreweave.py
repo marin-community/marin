@@ -287,7 +287,7 @@ def test_start_controller_creates_controller_resources(hostname):
     assert k8s.get_json(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME) is not None
     assert k8s.get_json(K8sResource.SERVICES, "iris-controller-svc") is not None
 
-    # S3 storage auth lives in the iris-storage-env Secret, not the ConfigMap.
+    # Only infrastructure Pods receive the operator storage credentials.
     secret = k8s.get_json(K8sResource.SECRETS, "iris-storage-env")
     assert secret is not None
     assert "AWS_ACCESS_KEY_ID" in secret["data"]

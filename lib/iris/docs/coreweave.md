@@ -455,7 +455,7 @@ submissions and commands from another directory must pass checkout-local values
 explicitly; the SDK forwards exported CoreWeave credentials. The deploy path
 rejects literal secrets before writing
 `iris-cluster-config`: references remain in the ConfigMap, while resolved values
-go through the controller and storage Secrets above.
+go through the Kubernetes Secrets above.
 
 Do not dump Pod environments or use `kubectl describe pod` on a task Pod; literal
 job environment values can appear in the output. Inspect named keys and

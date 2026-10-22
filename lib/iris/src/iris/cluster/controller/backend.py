@@ -523,8 +523,8 @@ class TaskBackend(Protocol):
         """Return why a submitted shape can never run, or None if feasible."""
         ...
 
-    def job_environment_error(self, environment: job_pb2.EnvironmentConfig, container_profile: int) -> str | None:
-        """Return why the submitted environment cannot run on this backend, or None."""
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        """Validate backend requirements; return an error for an invalid job, or None."""
         ...
 
     def get_process_status(

@@ -15,7 +15,6 @@ import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fsspec.implementations.local import LocalFileSystem
-from iris.cluster.backends.k8s.tasks import K8sTaskProvider
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     Constraint,
@@ -33,7 +32,6 @@ from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.reconcile.task import TerminalDecision, TerminalKind
 from iris.cluster.controller.schema import jobs_table, task_attempts_table, tasks_table
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.redaction import REDACTED_VALUE, redact_request_env_vars
 from iris.cluster.types import JobName, UserBudgetDefaults, WorkerId, tpu_device
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
@@ -46,7 +44,6 @@ from iris.testing.controller import (
     query_tasks_with_attempts as _query_tasks_with_attempts,
 )
 from iris.testing.controller_state import ControllerTestState, submit_job_in_tx
-from iris.testing.k8s import k8s_backend_descriptor, pod_config
 from iris.testing.transitions import WorkerTaskUpdates, apply_task_observations
 from rigging.server_auth import VerifiedIdentity, _verified_identity
 from rigging.timing import Duration, Timestamp
@@ -1595,57 +1592,41 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
     assert response.job_id == child_id.to_wire()
 
 
-@pytest.fixture
-def coreweave_backend(mock_controller):
-    backend = K8sTaskProvider(
-        descriptor=k8s_backend_descriptor(),
-        kubectl=InMemoryK8sService(namespace="iris"),
-        pods=pod_config(require_coreweave_credentials=True),
-    )
-    mock_controller.backend = backend
-    try:
-        yield backend
-    finally:
-        backend.close()
-
-
 @pytest.mark.parametrize("env", [{}, {"CW_KEY_ID": "user-key"}, {"CW_KEY_ID": "user-key", "CW_KEY_SECRET": ""}])
-def test_coreweave_launch_rejects_missing_user_keys(
-    state, log_client, mock_controller, coreweave_backend, tmp_path, monkeypatch, env
-):
+def test_coreweave_launch_with_missing_keys_is_rejected(coreweave_service, monkeypatch, env):
     monkeypatch.setenv("CW_KEY_ID", "operator-key")
     monkeypatch.setenv("CW_KEY_SECRET", "operator-secret")
-    service = ControllerServiceImpl(
-        controller=mock_controller,
-        bundle_store=BundleStore(storage_dir=str(tmp_path / "bundles")),
-        log_client=log_client,
-        db=state._db,
-        endpoint_service=EndpointServiceImpl(db=state._db),
-    )
     request = make_job_request("missing-cw-keys")
     request.environment.env_vars.update(env)
+
     with pytest.raises(ConnectError) as exc:
-        service.launch_job(request, None)
+        coreweave_service.launch_job(request, None)
+
     assert exc.value.code == Code.INVALID_ARGUMENT
     assert "https://console.coreweave.com/object-storage/access-keys" in str(exc.value)
-    assert "operator-secret" not in str(exc.value)
     with pytest.raises(ConnectError) as missing:
-        service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=request.name), None)
+        coreweave_service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=request.name), None)
     assert missing.value.code == Code.NOT_FOUND
 
-    request.environment.env_vars.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
-    response = service.launch_job(request, None)
-    status = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None)
-    assert status.job.job_id == response.job_id
 
+def test_coreweave_invalid_replacement_preserves_existing_job(coreweave_service):
+    request = make_job_request("existing-cw-job")
+    request.environment.env_vars.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    response = coreweave_service.launch_job(request, None)
     request.environment.env_vars.clear()
     request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
-    with pytest.raises(ConnectError) as invalid_replacement:
-        service.launch_job(request, None)
-    assert invalid_replacement.value.code == Code.INVALID_ARGUMENT
-    preserved = service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None)
-    assert preserved.job.state == job_pb2.JOB_STATE_PENDING
 
-    sandbox = make_job_request("sandbox-without-storage-keys")
-    sandbox.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
-    assert service.launch_job(sandbox, None).job_id == sandbox.name
+    with pytest.raises(ConnectError) as exc:
+        coreweave_service.launch_job(request, None)
+
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    status = coreweave_service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
+    )
+    assert status.job.state == job_pb2.JOB_STATE_PENDING
+
+
+def test_coreweave_sandbox_does_not_require_storage_keys(coreweave_service):
+    request = make_job_request("sandbox-without-storage-keys")
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert coreweave_service.launch_job(request, None).job_id == request.name

@@ -898,11 +898,9 @@ def launch_job(
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
-        environment_error = dependencies.runtime.backend.job_environment_error(
-            request.environment, request.container_profile
-        )
-        if environment_error:
-            raise ConnectError(Code.INVALID_ARGUMENT, environment_error)
+        error = dependencies.runtime.backend.validate_job(request)
+        if error:
+            raise ConnectError(Code.INVALID_ARGUMENT, error)
 
     existing = _prepare_job_slot(dependencies, request, launch)
     if existing is not None:

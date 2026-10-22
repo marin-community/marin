@@ -144,8 +144,8 @@ COREWEAVE_ACCESS_KEYS_URL = "https://console.coreweave.com/object-storage/access
 _ARM64_ARCHITECTURES = frozenset({b"aarch64", b"arm64"})
 
 
-def coreweave_storage_error(env: Mapping[str, str]) -> str | None:
-    """Return an actionable error when a job lacks personal storage credentials."""
+def validate_coreweave_credentials(env: Mapping[str, str]) -> str | None:
+    """Check the submitted storage keys and explain how to supply missing credentials."""
     missing = [name for name in COREWEAVE_STORAGE_ENV_VARS if not env.get(name)]
     if not missing:
         return None
@@ -879,15 +879,14 @@ def _build_pod_manifest(
     combined = {**cluster_env, **dict(run_req.environment.env_vars), **iris_env}
     storage_env = {}
     if config.require_coreweave_credentials and isolation.include_cluster_env:
-        storage_error = coreweave_storage_error(run_req.environment.env_vars)
+        storage_error = validate_coreweave_credentials(run_req.environment.env_vars)
         if storage_error:
             raise PodManifestError(storage_error)
-        key_id_env, key_secret_env = COREWEAVE_STORAGE_ENV_VARS
         storage_env = {
-            key_id_env: combined[key_id_env],
-            key_secret_env: combined[key_secret_env],
-            "AWS_ACCESS_KEY_ID": combined[key_id_env],
-            "AWS_SECRET_ACCESS_KEY": combined[key_secret_env],
+            "CW_KEY_ID": combined["CW_KEY_ID"],
+            "CW_KEY_SECRET": combined["CW_KEY_SECRET"],
+            "AWS_ACCESS_KEY_ID": combined["CW_KEY_ID"],
+            "AWS_SECRET_ACCESS_KEY": combined["CW_KEY_SECRET"],
         }
         combined.update(storage_env)
     env_list: list[dict] = [{"name": k, "value": v} for k, v in combined.items()]
@@ -2481,10 +2480,10 @@ class K8sTaskProvider:
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
-    def job_environment_error(self, environment: job_pb2.EnvironmentConfig, container_profile: int) -> str | None:
-        if not self.pods.require_coreweave_credentials or container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
-        return coreweave_storage_error(environment.env_vars)
+        return validate_coreweave_credentials(request.environment.env_vars)
 
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
