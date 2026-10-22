@@ -88,6 +88,7 @@ nav:
       - Markdownified Datasets: reports/markdownified-datasets.md
   - Reproducibility:
       - Pretraining source pool: reproducibility/pretraining-source-pool.md
+      - Hero metadata release proposal: reproducibility/hero-metadata-release-proposal.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Tutorial Guidelines: dev-guide/tutorial-guidelines.md
