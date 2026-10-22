@@ -140,11 +140,13 @@ class Verification(StrEnum):
 
     ``answer_in_box``: a generic match of a final answer whose format is unambiguous (exact, numeric, math,
     choice). ``decision_model``: a decision model compares the answer with the reference answer against a
-    rubric; the default, since it needs no format restriction. ``code``: what only code can probe
-    (behavioural tests, running systems). ``llm_as_judge``: a model judge for deliverables whose prose is the
-    product. ``composite``: a weighted list of the other kinds (``CompositePart``). ``composite`` is
-    reserved: documents that carry it parse, but it is not offered to proposers (``OFFERED_VERIFICATIONS``)
-    until a composite grader type exists, since a TaskSpec holds one grader.
+    rubric; the usual choice for a reply a person reads, since it needs no format restriction. ``code``: a
+    deliverable with a strict structure the requester specified whose graded parts are all deterministic,
+    or what only execution can judge (behavioural tests, running systems). ``llm_as_judge``: a model judge
+    for deliverables whose prose is the product. ``composite``: a weighted list of the other kinds
+    (``CompositePart``). ``composite`` is reserved: documents that carry it parse, but it is not offered to
+    proposers (``OFFERED_VERIFICATIONS``) until a composite grader type exists, since a TaskSpec holds one
+    grader.
     """
 
     ANSWER_IN_BOX = "answer_in_box"

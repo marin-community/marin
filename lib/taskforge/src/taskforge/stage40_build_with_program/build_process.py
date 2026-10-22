@@ -75,6 +75,7 @@ from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
 from taskforge.spec.decision import DecisionClient
 from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage30_author.author import VerificationChange
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
@@ -149,7 +150,10 @@ class BuildServiceConfig:
 
 @dataclass(frozen=True)
 class BuildRequest:
-    """One workpiece's round, as ``run_build`` takes it, with the program as source and the host as config."""
+    """One workpiece's round, as ``run_build`` takes it, with the program as source and the host as config.
+
+    ``proposal`` is the revised proposal when ``verification_change`` is set, as ``run_build`` requires.
+    """
 
     workpiece_id: str
     round: int
@@ -162,6 +166,7 @@ class BuildRequest:
     research: ResearchRequirement
     invalidate: frozenset[str]
     model_digest: str | None
+    verification_change: VerificationChange | None
     services: BuildServiceConfig
 
 
@@ -358,6 +363,7 @@ async def build_result(request: BuildRequest) -> BuildResult:
                 research=request.research,
                 invalidate=request.invalidate,
                 model_digest=request.model_digest,
+                verification_change=request.verification_change,
             )
         except BuildFailure as error:
             return Failed(error.message, error.step)

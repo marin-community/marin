@@ -19,9 +19,10 @@ a revision.
 ``run_build`` computes the model part of every key (``build_model_digest``), runs the program for
 one proposal, applies the research requirement, refuses a task whose machine is not the solver
 machine the proposal declares (``check_solver_machine``), and writes the sink's ``TaskSpec`` with
-the build's ``WorkpieceBuildProvenance`` to ``<round_dir>/draft/``. Validation lowers the task for its own
-host and reads any step's stored output, such as the grader's reference answer, through
-``step_output``.
+the build's ``WorkpieceBuildProvenance`` to ``<round_dir>/draft/``. A build after a revision that swapped
+the verifier kind takes the revised proposal (``VerificationChange.revise``) and the change, checks the
+revised kind and records both kinds in its provenance. Validation lowers the task for its own host and reads
+any step's stored output, such as the grader's reference answer, through ``step_output``.
 """
 
 import asyncio
@@ -40,7 +41,8 @@ from taskforge.content_hash import digest
 from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion, ModelClient, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
+from taskforge.stage10_proposal.model import SolverMachine, TaskProposal, Verification
+from taskforge.stage30_author.author import VerificationChange
 from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
@@ -105,6 +107,9 @@ class WorkpieceBuildProvenance:
     Attributes:
         workpiece_id: The workpiece the caller built.
         proposal_digest: ``content_hash.digest`` of the proposal.
+        verification: The verifier kind this build checked, the proposal's ``header.verification``.
+        verification_change: The change that revised the proposal's kind, whose ``declared`` is the kind
+            the proposal declared before it, or ``None`` for a build of the declared kind.
         program_digest: ``RLEnvBuildProgram.digest``.
         sdk_version: ``SDK_VERSION`` during the build.
         model: The model id, ``ModelClient.model``.
@@ -118,6 +123,8 @@ class WorkpieceBuildProvenance:
 
     workpiece_id: str
     proposal_digest: str
+    verification: Verification
+    verification_change: VerificationChange | None
     program_digest: str
     sdk_version: str
     model: str
@@ -348,6 +355,7 @@ async def run_build(
     research: ResearchRequirement,
     invalidate: frozenset[str] = frozenset(),
     model_digest: str | None = None,
+    verification_change: VerificationChange | None = None,
 ) -> TaskDraft:
     """Run ``program`` for ``proposal`` and write the draft to ``<round_dir>/draft/``.
 
@@ -366,6 +374,8 @@ async def run_build(
             research needs no such step.
         invalidate: Step names to rerun even when the store holds their output.
         model_digest: Replaces ``build_model_digest(model, sampling, services)`` in every key.
+        verification_change: The change a revision made to the verifier kind; ``proposal`` is then the
+            revised proposal, and the provenance records the change.
 
     Raises:
         BuildFailure: the research requirement fails, a step failed, the task's machine is not the solver
@@ -376,8 +386,14 @@ async def run_build(
             that timed out twice).
         BuildInfrastructureFailure: this host cannot provide the declared solver machine
             (``machine_available``), before any step runs, or a step failed because of the host.
-        ValueError: ``check_workpiece_id`` refused ``workpiece_id``.
+        ValueError: ``check_workpiece_id`` refused ``workpiece_id``, or ``verification_change`` is given and
+            ``proposal`` does not declare its revised kind, before any step runs.
     """
+    if verification_change is not None and proposal.header.verification is not verification_change.revised:
+        raise ValueError(
+            f"the verification change revises to {verification_change.revised}, but the proposal declares "
+            f"{proposal.header.verification}; pass the revised proposal"
+        )
     machine_available(services, proposal)
     declared = proposal.header.verification
     unbuildable = unbuildable_problem(declared)
@@ -404,6 +420,8 @@ async def run_build(
         provenance=WorkpieceBuildProvenance(
             workpiece_id=workpiece_id,
             proposal_digest=digest(proposal),
+            verification=declared,
+            verification_change=verification_change,
             program_digest=program.digest,
             sdk_version=SDK_VERSION,
             model=model.model,

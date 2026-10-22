@@ -26,8 +26,8 @@ src/taskforge/
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
                                verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
-                               the program manifest;
+                               author.py: Revision, VerificationChange, AuthoredProgram, the Author protocol,
+                               `static_author`, the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
   stage40_build_with_program/  agentic_author.py: `author_round`, the agent session that writes, loads,
                                builds and grades a build program;
@@ -460,6 +460,13 @@ raising `StructuredOutputError` costs a revision from the same budget. Its struc
 invalid through the repair turns, as when the output limit cut it, and the next author call samples
 again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
 author stage.
+
+A `MODIFY` revision, which sends review's or an adversary's findings back, may carry a
+`VerificationChange` that swaps the task's verifier kind (`declared`, `revised`, `reason`). The
+caller passes `change.revise(proposal)` to the author and to the build from that round on, so both
+authors' prompts and the build's check of the built grader's kind read the revised kind, and
+`run_build(verification_change=...)` records both kinds in the draft's provenance. A build or
+author failure may not change the kind.
 
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the

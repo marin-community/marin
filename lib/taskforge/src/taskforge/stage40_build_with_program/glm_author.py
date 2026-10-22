@@ -16,7 +16,7 @@ and its completions under ``<workpiece_dir>/author/<n>/``, including the complet
 raised ``StructuredOutputError``. It writes the accepted source to ``<workpiece_dir>/program.py`` before
 it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
 no source, and continues the conversation with the previous program as the model's turn and the
-revision as the next user turn.
+revision as the next user turn (``revision_prompt``), which names a verification change the revision carries.
 """
 
 import inspect
@@ -94,11 +94,11 @@ that purpose.
 returning Sources"), even when you already know the facts. Never catch its `BuildFailure`.
 - Build the grader of the kind the proposal's `verification` names; `run_build` refuses a draft whose \
 grader is another kind, and refuses a composite proposal outright (no composite grader exists yet). \
-decision_model, the default: `draft.decision_grader(rubric, reference)`. You state a `Rubric` (the \
-deliverable, and one `RubricItem` per property a correct reply has: its meaning with the reference values, \
-tolerances and units, the equivalent forms it accepts, how negated or hedged statements count, its \
-weight, and any gate or cap) and the reference reply, nothing else: a decision model of fixed strength \
-compares the visible output of the solver's final turn with the reference against the rubric (the \
+decision_model, the usual choice for a reply a person reads: `draft.decision_grader(rubric, reference)`. \
+You state a `Rubric` (the deliverable, and one `RubricItem` per property a correct reply has: its meaning \
+with the reference values, tolerances and units, the equivalent forms it accepts, how negated or hedged \
+statements count, its weight, and any gate or cap) and the reference reply, nothing else: a decision model \
+of fixed strength compares the visible output of the solver's final turn with the reference against the rubric (the \
 `state` template, `SOLVER_TURN_STATE`; pass another only deliberately), and which model is the host's \
 choice. Calibrate it with `calibrate_decision_grader(context, grader, variants)` on three equivalent \
 variants of the reference; when its `problem` is set, either the rubric rejects a correct answer or a \
@@ -110,9 +110,11 @@ verifyit` in a verifier machine, and `GRADER_BASE_IMAGE` has no verifyit ("No mo
 'verifyit'"); `grade_candidate` calls no model, so a judge can never be prototyped. Never keyword or \
 regex checks standing in for a judgement. answer_in_box: `draft.answer_grader` with a verifyit mode \
 that grades in process (exact, numeric, mcq, math, ifeval, json_schema, xml_elements, csv_columns, \
-structured_exact, predicted_action), for one value in an unambiguous format. code, only for what only \
-code can probe (running solver-written code, executing files): a deterministic grader program in a \
-separate verifier machine: \
+structured_exact, predicted_action), for one value in an unambiguous format. code, when the proposal's \
+deliverable has a strict structure the requester specified (a JSON record, CSV columns, a config file) and \
+every graded part is deterministic, or when grading runs something (solver-written code, executing files); \
+never keyword, regex or length checks on prose: a deterministic grader program in a separate verifier \
+machine: \
 `draft.python_grader(script, config, environment=draft.grader_environment(image), answer_path=..., \
 timeout=...)` runs `python3 /tests/grade.py` after the attempt, in the task image for a task with one \
 (`publish_image(context, DockerBuild(...))`), otherwise on Taskforge's grader-base image (CPython \
@@ -189,6 +191,21 @@ That program needs a revision ({kind}):
 Find the cause, fix it, and write the complete corrected program. Keep the steps that worked \
 unchanged, so their memoized outputs are reused.
 """
+
+VERIFICATION_CHANGE_PROMPT = (
+    "This revision changes the verification from {declared} to {revised} ({reason}); build a {revised} grader, "
+    "rewrite the controls for it, and change the instruction's format only as that kind needs."
+)
+
+
+def revision_prompt(revision: Revision) -> str:
+    """The user turn asking for ``revision``, with the verification change it carries, if any."""
+    text = REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)
+    change = revision.verification_change
+    if change is None:
+        return text
+    sentence = VERIFICATION_CHANGE_PROMPT.format(declared=change.declared, revised=change.revised, reason=change.reason)
+    return f"{text}{sentence}\n"
 
 
 NOTES_LIMIT = 2000
@@ -381,7 +398,7 @@ class GlmAuthor:
         if revision is not None:
             follow_up: list[Message] = [
                 {"role": "assistant", "content": (self.workpiece_dir / PROGRAM_FILE).read_text()},
-                {"role": "user", "content": REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)},
+                {"role": "user", "content": revision_prompt(revision)},
             ]
             messages += follow_up
         attempts = self.workpiece_dir / AUTHOR_DIR

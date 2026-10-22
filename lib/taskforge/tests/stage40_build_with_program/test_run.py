@@ -37,6 +37,7 @@ from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage10_proposal.model import CompositePart, ResearchNeed, SolverMachine, TaskProposal, Verification
+from taskforge.stage30_author.author import VerificationChange
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program import run as run_module
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
@@ -575,3 +576,32 @@ async def test_a_draft_whose_grader_is_not_the_declared_kind_is_refused(tmp_path
 
     with pytest.raises(BuildFailure, match="declares code verification but the built grader is answer_in_box"):
         await build(tmp_path, declared_code, services)
+
+
+async def test_a_build_after_a_verification_change_checks_the_revised_kind_and_records_both(
+    tmp_path, proposal, services
+):
+    declared_code = replace(proposal, header=replace(proposal.header, verification=Verification.CODE))
+    change = VerificationChange(Verification.CODE, Verification.ANSWER_IN_BOX, "the answer is one number")
+
+    with pytest.raises(BuildFailure, match="declares code verification but the built grader is answer_in_box"):
+        await build(tmp_path, declared_code, services)
+    draft = await build(tmp_path, change.revise(declared_code), services, verification_change=change)
+
+    assert (draft.provenance.verification, draft.provenance.verification_change) == (
+        Verification.ANSWER_IN_BOX,
+        change,
+    )
+    assert load_draft(tmp_path / "round" / DRAFT_DIR) == draft
+
+
+async def test_a_verification_change_with_the_unrevised_proposal_is_refused_before_any_step_runs(
+    tmp_path, proposal, services
+):
+    declared_code = replace(proposal, header=replace(proposal.header, verification=Verification.CODE))
+    change = VerificationChange(Verification.CODE, Verification.ANSWER_IN_BOX, "the answer is one number")
+
+    with pytest.raises(ValueError):
+        await build(tmp_path, declared_code, services, verification_change=change)
+
+    assert not (tmp_path / "store").exists()

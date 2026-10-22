@@ -165,10 +165,11 @@ async def grader(
         "would accept, and three equivalent variants of it; the answer contract is that deliverable statement, "
         "with no answer block. llm_as_judge is kind=llm_as_judge: the same rubric and a reference reply, for a "
         "reply whose prose is the product. answer_in_box is an in-process kind (exact, "
-        "numeric, math or mcq) for one value in an unambiguous format. code is kind=script, only for what only "
-        "code can probe. Rewards lie in [0, 1]. Give partial credit only where the proposal does, and declare "
-        "rejection_ceiling as the most a submission wrong in substance can collect under that scheme (0 without "
-        "partial credit). The reference reply and files must earn full credit."
+        "numeric, math or mcq) for one value in an unambiguous format. code is kind=script, for a deliverable with "
+        "a strict structure the requester specified whose graded parts are all deterministic, or for what only "
+        "execution can judge; never for prose. Rewards lie in [0, 1]. Give partial credit only where the "
+        "proposal does, and declare rejection_ceiling as the most a submission wrong in substance can collect "
+        "under that scheme (0 without partial credit). The reference reply and files must earn full credit."
     )
     prototyped: list[GradedCandidate] = []
     calibrated: list[DecisionGrader] = []
