@@ -1,0 +1,19 @@
+{
+  "native_windows": 28,
+  "periodic_windows": 5,
+  "cpu_replay_overlap": [
+    {
+      "phase": "native/sc/6",
+      "seconds": 69.85274371318519,
+      "overlap_seconds": 5.241528060287237
+    }
+  ],
+  "scope": "exploratory only; CPU replay overlapped a later native window after the apparent stall recovered; retain all raw measurements and do not use this allocation as the clean final overhead estimate",
+  "outlier": {
+    "phase": "native/probe/4",
+    "cycle_seconds": 622.808,
+    "rollout_wait_seconds": 604.107,
+    "selected_probe_group_collection_seconds": 43.72336050309241
+  },
+  "final_saved_updates": 54
+}

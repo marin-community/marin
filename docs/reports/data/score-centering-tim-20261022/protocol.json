@@ -1,0 +1,82 @@
+{
+  "model": "models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770",
+  "source_controls_commit": "3b9f0183badb2c20d4c9bd4468489a442f9222e2",
+  "grader_overlay_commit": "431b16264571c546f774586de373cf4577f5dcdd",
+  "geometry": {
+    "nodes": 4,
+    "gpus_per_node": 8,
+    "learner_nodes": 3,
+    "learner_tp": 1,
+    "learner_cp": 1,
+    "learner_sp": 1,
+    "learner_pp": 3,
+    "learner_dp": 8,
+    "learner_ep": 8,
+    "pipeline_layer_counts": [
+      9,
+      9,
+      8
+    ],
+    "inference_nodes": 1,
+    "inference_dp": 8,
+    "inference_ep": 8,
+    "inference_tp": 1,
+    "supersedes_failed_layout": [
+      10,
+      8,
+      8
+    ]
+  },
+  "sampling": {
+    "temperature": 1.0,
+    "top_p": 1.0,
+    "top_k": -1,
+    "min_p": 0.0,
+    "context_budget": 8192,
+    "max_response_tokens": 4096
+  },
+  "controls": {
+    "optimizer_lr": 0.0,
+    "min_lr_default": 0.0,
+    "trainer_modes": [
+      "ordinary",
+      "sc",
+      "probe"
+    ],
+    "native_modes": [
+      "ordinary",
+      "capture",
+      "sc",
+      "probe"
+    ],
+    "mode_order": "rotate each repetition",
+    "warmup_per_mode": 1,
+    "measured_repetitions_per_mode": 6,
+    "trainer_input": "identical captured tokens; long prefixes explicitly padded with newline to4096, response4096",
+    "native_input": "same32retainedpromptgroups,n4, fixedresponses4096/256/1024/64, seed1701+group, ignore_eos; only masks/advantages controlled",
+    "advantages": "alternating signed; actual optimizer gradients; runtime and cost only",
+    "default_probe_interval": 10,
+    "periodic_cycles": 22,
+    "observations_required": 3,
+    "timing": "RPC completion walls, normal emission included separately, no extra GPU synchronization; stage walls can overlap"
+  },
+  "coverage": {
+    "optimizer_lr": 1e-06,
+    "mode_order": [
+      "ordinary TIS default probes",
+      "SC"
+    ],
+    "default_probe_interval": 10,
+    "tis_max_steps": 32,
+    "tis_stop": "atleast22 updates and3consumed probes",
+    "sc_steps": 4,
+    "advantages": "natural GRPO; require nonzero tokens and finite positive raw gradient in SC",
+    "max_staleness_steps": 4,
+    "max_in_flight_groups": 64,
+    "interpretation": "coverage/runtime; changing asynchronous trajectories do not establish causal overhead or learning benefit"
+  },
+  "gpu_job_deadline_seconds": 14400,
+  "max_retries": 0,
+  "interactive_node_cap_across_both_clusters": 4,
+  "source_and_data": "retained192sourceindicesandinputhashes unchanged; originalSFTonly, no deletedcheckpoints"
+}

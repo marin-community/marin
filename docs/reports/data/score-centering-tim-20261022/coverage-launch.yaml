@@ -1,0 +1,983 @@
+artifacts:
+  attempts_root: s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/attempts
+  checkpoint_root: s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/checkpoints
+  draft_model_cache_ttl_days: 14
+  export_root: s3://marin-us-east-02a/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/exports
+  resolved_config_uri: s3://marin-us-east-02a/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/resolved-launch.yaml
+  resume_checkpoint_count: 1
+  terminal_manifest_uri: s3://marin-us-east-02a/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/terminal.json
+inputs:
+  data_kind: parquet
+  model:
+    chat_template: null
+    identity: models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770
+    local_path: /tmp/marinskyrl/models/snowball-67b-a2b-sft-s2-thinking
+    tokenizer_revision: a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2
+    tokenizer_uri: marin-community/marin-tokenizer
+    uri: s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm
+  train_data:
+  - identity: users/romain/documents/score-centering-snowball-retained@2026.09.18:cb99b0bb
+    kind: directory
+    local_path: /tmp/marinskyrl/data/score-centering-snowball-retained
+    relative_path: train.parquet
+    uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/snowball-inputs-01a126ce/seed0
+  validation_data:
+  - identity: users/romain/documents/score-centering-snowball-retained@2026.09.18:cb99b0bb
+    kind: directory
+    local_path: /tmp/marinskyrl/data/score-centering-snowball-retained
+    relative_path: validation.parquet
+    uri: s3://marin-us-east-02a/marin/users/romain/score-centering-overnight-01a123c0/snowball-inputs-01a126ce/seed0
+iris:
+  allocation:
+    cpu: 32.0
+    disk: 500GB
+    gpu_variant: H100
+    gpus_per_node: 8
+    memory: 1400GB
+    num_nodes: 4
+  cluster: cw-rno2a
+  cluster_config: lib/iris/config/cw-rno2a.yaml
+  container_profile: null
+  job_name: users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-34c3154ef1c8
+  max_retries: 0
+  parent_cluster_config: null
+  priority: interactive
+  target_cluster: null
+  timeout: 14400
+  wandb_entity: null
+ray:
+  cluster_join_timeout: 1800
+  driver_liveness_timeout: 9000
+  log_dir: s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/attempts/ray-logs
+  rendezvous_dir: s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/attempts/rendezvous
+  rendezvous_timeout: 1800
+  spill_backend: local
+  spill_dir: /tmp/skyrl-ray-spill
+run:
+  attempt_id: 34c3154ef1c8
+  export_hf: false
+  id: users/romain/checkpoints/score-centering-tim/snowball-coverage-2026.10.22.3
+  mode: train
+  seed: 0
+  submission: wait
+runtime:
+  entrypoint: skyrl_train.entrypoints.main_base
+  experiments_dir: /app/experiments
+  profile: megatron
+  task_env:
+    NVTE_FLASH_ATTN: '1'
+    NVTE_FUSED_ATTN: '0'
+    NVTE_UNFUSED_ATTN: '0'
+    PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
+    RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS: '60000'
+  training_type: sync
+schema_version: 1
+skyrl:
+  checkpoint_export:
+    checkpoint_path: null
+    export_root: null
+    hf_hub_private: false
+    hf_hub_repo_id: null
+    hf_hub_revision: main
+    hf_upload_mode: latest
+    step: null
+  data:
+    preference_pair_format: text
+    sampling:
+      adaptive_exploration: 0.2
+      adaptive_min_informative: 0.1
+      adaptive_window: 10
+      decay: 0.95
+      domain_weights: {}
+      epsilon: 0.05
+      grade_prior_high: 0.85
+      grade_prior_low: 0.05
+      grade_prior_strength: 8.0
+      instance_decay: 0.7
+      kind: null
+      prior_alpha: 1.0
+      prior_beta: 1.0
+      reversion_mass: 0.0
+      seed: null
+      weighting: pass-variance
+    shuffle: false
+    task_cache_dir: ~/.cache/marinskyrl/tasks
+    terminal_bench_data: []
+    train_data:
+    - /tmp/marinskyrl/data/score-centering-snowball-retained/train.parquet
+    val_data:
+    - /tmp/marinskyrl/data/score-centering-snowball-retained/validation.parquet
+  environment:
+    env_class: gsm8k
+    task_sessions:
+      aime:
+        evaluation_token_budget: 8192
+        length_penalty_weight: 0.0
+        max_gen_length: 0
+        min_response_length: 16
+        strict_box_verify: false
+        target_length: 768
+        truncated_penalty: -2.0
+      daytona: null
+      gsm8k:
+        reward_method: strict
+      lcb:
+        machine:
+          requirements:
+            command_semantics: linux_process
+            docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+            working_directory: /workspace
+          runtime:
+            backend: docker
+            cleanup_timeout: null
+            cpus: 1
+            gpus: 0
+            memory_mb: 8192
+            network: deny
+            startup_timeout: 600
+            storage_mb: null
+            user: null
+      llm_as_a_judge:
+        base_url: null
+        model: gpt-4o-mini
+      local: null
+      max_verifier_workers: 32
+      nemotron_ultra:
+        code_verifier:
+          max_memory_bytes: 4294967296
+          per_test_timeout_seconds: 10
+          total_timeout_seconds: 300
+        genrm:
+          answer_bonus: 0.5
+          default_score: 3.0
+          genrm_parse_retries: 1
+          genrm_parse_retry_sleep_seconds: 0.2
+          group_answer_length_penalty_coeff: 0.1
+          group_reasoning_length_penalty_coeff: 0.1
+          judge:
+            api_key: dummy_key
+            api_key_env: null
+            base_url: http://127.0.0.1:8003/v1
+            model: genrm-judge
+            reasoning_effort: null
+            response_transport: responses_metadata
+            timeout_seconds: 600.0
+          max_concurrent_comparisons: 4
+          max_output_tokens: 24576
+          reasoning_bonus: 0.5
+          temperature: 1.0
+          top_p: 0.95
+          top_percentile: 0.2
+        grading: verify
+        judges:
+          general:
+            api_key: dummy_key
+            api_key_env: null
+            base_url: http://127.0.0.1:8001/v1
+            model: general-judge
+            reasoning_effort: null
+            response_transport: responses_metadata
+            timeout_seconds: 600.0
+          safety:
+            api_key: dummy_key
+            api_key_env: null
+            base_url: http://127.0.0.1:8002/v1
+            model: safety-judge
+            reasoning_effort: null
+            response_transport: responses_metadata
+            timeout_seconds: 600.0
+        lean_timeout: 30.0
+        machines:
+          code_gen_simple_agent:
+            requirements:
+              command_semantics: linux_process
+              docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+              working_directory: /workspace
+            runtime:
+              backend: docker
+              cleanup_timeout: null
+              cpus: 1
+              gpus: 0
+              memory_mb: 8192
+              network: deny
+              startup_timeout: 600
+              storage_mb: null
+              user: null
+          math_formal_lean_refinement_agent:
+            requirements:
+              command_semantics: linux_process
+              docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+              working_directory: /lean4/my_project
+            runtime:
+              backend: docker
+              cleanup_timeout: null
+              cpus: 1
+              gpus: 0
+              memory_mb: 8192
+              network: deny
+              startup_timeout: 600
+              storage_mb: null
+              user: null
+          ns_tools_simple_agent:
+            requirements:
+              command_semantics: linux_process
+              docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+              working_directory: /workspace
+            runtime:
+              backend: docker
+              cleanup_timeout: null
+              cpus: 1
+              gpus: 0
+              memory_mb: 8192
+              network: deny
+              startup_timeout: 600
+              storage_mb: null
+              user: null
+          nvarc_inductive_simple_agent:
+            requirements:
+              command_semantics: linux_process
+              docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+              working_directory: /workspace
+            runtime:
+              backend: docker
+              cleanup_timeout: null
+              cpus: 1
+              gpus: 0
+              memory_mb: 8192
+              network: deny
+              startup_timeout: 600
+              storage_mb: null
+              user: null
+      remote_judge: null
+      search:
+        log_requests: false
+        search_url: http://127.0.0.1:8000/retrieve
+        timeout: 30
+        topk: 3
+      searchcode:
+        machine:
+          requirements:
+            command_semantics: linux_process
+            docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+            working_directory: /workspace
+          runtime:
+            backend: docker
+            cleanup_timeout: null
+            cpus: 1
+            gpus: 0
+            memory_mb: 8192
+            network: deny
+            startup_timeout: 600
+            storage_mb: null
+            user: null
+      session:
+        attempt_timeout: null
+        cleanup_timeout: 30
+        command_timeout: 120
+        max_total_tokens: null
+        max_turns: 1
+        model_turn_timeout: null
+        tool_turn_timeout: 600
+        total_turn_timeout: null
+        verifier_timeout: null
+      text2sql:
+        db_path: /home/ray/default/sql_data
+        machine:
+          requirements:
+            command_semantics: linux_process
+            docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+            working_directory: /workspace
+          runtime:
+            backend: docker
+            cleanup_timeout: null
+            cpus: 1
+            gpus: 0
+            memory_mb: 8192
+            network: deny
+            startup_timeout: 600
+            storage_mb: null
+            user: null
+      text_to_sql:
+        machine:
+          requirements:
+            command_semantics: linux_process
+            docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+            working_directory: /workspace
+          runtime:
+            backend: docker
+            cleanup_timeout: null
+            cpus: 1
+            gpus: 0
+            memory_mb: 8192
+            network: deny
+            startup_timeout: 600
+            storage_mb: null
+            user: null
+  generator:
+    apply_overlong_filtering: false
+    backend: vllm
+    chat_template:
+      name_or_path: null
+      source: name
+    chat_template_kwargs: {}
+    enable_chunked_prefill: true
+    enable_http_endpoint: true
+    enable_prefix_caching: true
+    enforce_eager: false
+    engine_init_kwargs:
+      generation_config: vllm
+      logprobs_mode: processed_logprobs
+      max_model_len: 8192
+      moe_backend: triton
+      served_model_name: snowball-67b-a2b-sft-s2-thinking
+    engine_init_timeout_seconds: 1800
+    error_handling:
+      default_error_treatment: mask
+      enable_error_classification: true
+      mask_exceptions: []
+      passthrough_exceptions: []
+      preserve_logprobs_on_timeout: true
+      zero_exceptions: []
+    eval_n_samples_per_prompt: 4
+    eval_sampling_params:
+      logprobs: null
+      max_generate_length: 4096
+      min_p: 0.0
+      repetition_penalty: 1.0
+      stop: null
+      temperature: 1.0
+      top_k: -1
+      top_p: 1.0
+    expert_block_sync:
+      timeout_seconds: 600
+      verify: true
+    fully_sharded_loras: false
+    fuse_weights: false
+    gdn_backend: torch
+    gpu_memory_utilization: 0.75
+    http_endpoint_host: 127.0.0.1
+    http_endpoint_port: 8000
+    inference_engine_data_parallel_size: 8
+    inference_engine_decode_context_parallel_size: 1
+    inference_engine_expert_parallel_size: 8
+    inference_engine_mp_backend: false
+    inference_engine_pipeline_parallel_size: 1
+    inference_engine_tensor_parallel_size: 1
+    inference_stats_interval: 1
+    max_input_length: 4096
+    max_num_batched_tokens: 8192
+    max_num_seqs: 1024
+    max_turns: 1
+    model_dtype: bfloat16
+    model_loading: stream
+    model_name: /tmp/marinskyrl/models/snowball-67b-a2b-sft-s2-thinking
+    n_samples_per_prompt: 4
+    num_inference_engines: 1
+    override_existing_update_group: auto
+    r3_dispatch_put_timeout_seconds: 600
+    r3_transport: decentral
+    remote_inference_engine_urls:
+    - 127.0.0.1:8001
+    rope_scaling: null
+    rope_theta: null
+    run_engines_locally: true
+    sampling_params:
+      logprobs: 0
+      max_generate_length: 4096
+      min_p: 0.0
+      repetition_penalty: 1.0
+      stop: null
+      temperature: 1.0
+      top_k: -1
+      top_p: 1.0
+    speculative_decoding: null
+    timeout_multiplier: 1.0
+    trajectory_retention:
+      accepted_stop_reasons:
+      - stop
+      - complete
+      - eos
+      - end_turn
+      always_retain_failures: true
+      always_retain_loops: true
+      always_retain_non_terminating: true
+      enabled: true
+      inference_backend: vllm
+      max_bytes_per_run: 26843545600
+      max_bytes_per_step: 838860800
+      model_path: /tmp/marinskyrl/models/snowball-67b-a2b-sft-s2-thinking
+      model_source_identity: models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770
+      output_path: s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/attempts/trajectories
+      phases:
+      - train
+      publish_timeout_seconds: 120
+      redact_fields: []
+      required: false
+      resume_path: null
+      reward_above: null
+      reward_below: null
+      run_id: users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-34c3154ef1c8
+      sample_count_per_step: 1
+      sample_fraction: 0.0
+      shutdown_timeout_seconds: 30
+    trajectory_reward_shaping:
+      enabled: false
+      loop:
+        advantage_penalty_per_token: 0.0
+        max_advantage_penalty: 0.2
+        max_period_tokens: 64
+        minimum_occurrences: 4
+        tail_tokens: 256
+      non_termination:
+        accepted_stop_reasons:
+        - stop
+        - complete
+        - eos
+        - end_turn
+        penalty: 0.0
+      overlong:
+        l_cache: 1024
+        l_max: 4096
+        penalty_scale: 1.0
+      passthrough:
+        penalty: 0.0
+      schema_version: 2
+      successful_length:
+        free_tokens: 0
+        max_penalty: 0.2
+        penalty_per_token: 0.0
+    vllm_attention_backend: FLASH_ATTN
+    vllm_v1_disable_multiproc: true
+    weight_sync_backend: nccl
+    weight_sync_pause:
+      clear_cache: true
+      mode: keep
+    weight_sync_pause_timeout_seconds: 30.0
+    weight_sync_transport: expert_block
+    weight_transfer_threshold_cuda_ipc_GB: 1.0
+  trainer:
+    algorithm:
+      advantage_batch_normalize: false
+      advantage_estimator: grpo
+      batch_invariant: false
+      cispo:
+        cispo_eps_clip_high: 5
+        cispo_eps_clip_low: 1.0
+      clip_cov:
+        clip_cov_lb: 1.0
+        clip_cov_ub: 5.0
+        clip_ratio: 0.0002
+      clip_ratio_c: 3.0
+      dpo:
+        beta: 0.1
+        label_smoothing: 0.0
+      dynamic_sampling:
+        informative_on: shaped
+        max_mean_reward: null
+        max_sample_batches: 30
+        min_reward_std: 0.0
+        type: null
+      enable_token_reward_channel: false
+      entropy_loss_coef: 0.01
+      eps_clip_high: 0.2
+      eps_clip_low: 0.2
+      ftpo: {}
+      gamma: 1.0
+      group_admission:
+        stall_timeout: null
+      group_advantage_min_size: null
+      grpo_norm_by_std: true
+      kl_cov:
+        kl_cov_frac: 0.2
+        ppo_kl_coef: 1.0
+      kl_ctrl:
+        horizon: 10000
+        kl_target: 0.1
+        type: fixed
+      kl_estimator_type: k3_unbiased_gradient
+      kl_loss_coef: 0.001
+      lambd: 1.0
+      loss_reduction: token_mean
+      off_policy_correction: custom
+      off_policy_correction_rules:
+      - action: truncate
+        high: 2.0
+        kind: token
+      policy_loss_type: regular
+      resolved_group_advantage:
+        kind: exact_physical
+        minimum_group_size: null
+        physical_group_size: 4
+      rloo_n_filter_zero_reward_groups: true
+      sapo:
+        tau_neg: 1.05
+        tau_pos: 1.0
+      score_centering_diagnostic_tokens: 0
+      score_centering_enabled: false
+      score_centering_probe:
+        interval: 10
+        tokens_per_response: 32
+        topk: 128
+      score_centering_topk: 0
+      think_token_weight: 1.0
+      tis_lcs_alert_threshold: 0.005
+      tis_splice: true
+      use_entropy_loss: false
+      use_kl_in_reward: false
+      use_kl_loss: false
+      value_clip: 0.2
+      value_head_prefix: value_head
+    attn_backend: auto
+    bf16: true
+    callbacks: []
+    ckpt_interval: -1
+    ckpt_path: s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/checkpoints
+    collective_phase_diagnostics: null
+    critic:
+      model:
+        lora:
+          alpha: 16
+          dropout: 0
+          exclude_modules: null
+          rank: 0
+          target_modules: all-linear
+        path: null
+      optimizer_config:
+        adam_betas:
+        - 0.9
+        - 0.999
+        lr: 5e-06
+        max_grad_norm: 1.0
+        num_warmup_steps: 0
+        offload_after_step: true
+        optimizer: AdamW
+        optimizer_kwargs: {}
+        scheduler: constant_with_warmup
+        weight_decay: 0.01
+      sequence_parallel_size: 1
+    critic_mini_batch_size: 256
+    debug_mode: light
+    disable_fast_tokenizer: false
+    distillation_token_budget: null
+    distributed:
+      placement_group_timeout_seconds: 180
+      worker_collective_timeout_seconds: 1800
+    dump_data_batch: false
+    dump_eval_results: true
+    epochs: 50
+    eval_batch_size: 1024
+    eval_before_train: false
+    eval_interval: -1
+    eval_num_prompts: null
+    evaluation_runner: training
+    export_hf_artifact: false
+    export_path: s3://marin-us-east-02a/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/exports
+    flash_attn: true
+    gradient_checkpointing: true
+    gradient_checkpointing_use_reentrant: false
+    hf_save_interval: -1
+    hf_upload_mode: latest
+    log_level: INFO
+    logger: console
+    max_ckpts_to_keep: 1
+    max_prompt_length: 4096
+    max_steps: 128
+    micro_forward_batch_size_per_gpu: 1
+    micro_train_batch_size_per_gpu: 1
+    mismatch_probe:
+      archive_uri: null
+      enabled: false
+      extra_trainer_modes: []
+      filtered_replay:
+        keep_fraction: null
+      prompts:
+        count: 128
+        samples_per_prompt: 4
+      rescore_prefix_cache: 'off'
+      reuse_probe: null
+      seed: null
+      updates: 2
+    model_load_retry:
+      backoff_base_seconds: 2.0
+      backoff_cap_seconds: 32.0
+      max_retries: 0
+    offload_optimizer_during_rollouts: true
+    placement:
+      colocate_all: false
+      colocate_policy_ref: true
+      critic_num_gpus_per_node: 4
+      critic_num_nodes: 1
+      enable_numa_affinity: false
+      policy_force_cvd_mask: false
+      policy_num_gpus_per_node: 8
+      policy_num_nodes: 3
+      policy_per_gpu_bundles: false
+      policy_strict_spread_pg: false
+      ref_num_gpus_per_node: 8
+      ref_num_nodes: 3
+    policy:
+      grug_query_bias_interpolation_weight: null
+      grug_query_bias_update_mode: frozen
+      grug_query_bias_update_rate: null
+      host_memory_monitor:
+        enabled: true
+        interval_seconds: 60
+      max_consecutive_nonfinite_steps: 3
+      megatron_config:
+        check_dp_weight_consistency: false
+        check_train_eval_parity: false
+        context_parallel_size: 1
+        ddp_config:
+          average_in_collective: true
+          grad_reduce_in_fp32: true
+          overlap_grad_reduce: false
+          overlap_param_gather: false
+        empty_cuda_cache: true
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        logprob_chunk_size: 512
+        model_config_kwargs: {}
+        moe_router_replay: false
+        optimizer_checkpoint_sharding_type: dp_reshardable
+        optimizer_config_kwargs:
+          optimizer_cpu_offload: false
+          optimizer_offload_fraction: 0.0
+          overlap_cpu_optimizer_d2h_h2d: false
+          use_precision_aware_optimizer: false
+        pipeline_model_parallel_size: 3
+        tensor_model_parallel_size: 1
+        torch_profiler_config:
+          enable: false
+          ranks: []
+          save_path: null
+        transformer_config_kwargs:
+          num_layers_in_first_pipeline_stage: 9
+          num_layers_in_last_pipeline_stage: 8
+          recompute_granularity: full
+          recompute_method: uniform
+          recompute_modules:
+          - core_attn
+          recompute_num_layers: 1
+      model:
+        lora:
+          adapter_path: null
+          adapter_revision: null
+          alpha: 16
+          dropout: 0
+          exclude_modules: null
+          lora_sync_path: /tmp/skyrl_lora_sync
+          rank: 0
+          target_modules: all-linear
+        path: /tmp/marinskyrl/model_metadata/2b00011dc69414c122ea8f25b63e9ecb7649a539922d5129e9b9c6510eecc3dd
+        revision: models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770
+        source_identity: models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770
+        source_uri: s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm
+        tokenizer_path: /tmp/marinskyrl/model_metadata/d42f2392996e9216e91892577212d1cee2a3b8a8fc7324556e7f1d5e3d1637db
+        tokenizer_revision: null
+      nccl_buffer_size_bytes: null
+      optimizer_config:
+        adam_betas:
+        - 0.9
+        - 0.999
+        lr: 1e-06
+        max_grad_norm: 1.0
+        num_warmup_steps: 0
+        offload_after_step: true
+        optimizer: AdamW
+        optimizer_kwargs: {}
+        scheduler: constant_with_warmup
+        weight_decay: 0.01
+      record_memory: false
+      sequence_parallel_size: 1
+      use_torch_compile: false
+    policy_mini_batch_size: 32
+    policy_train_spans: true
+    preflight_gate:
+      enabled: false
+      max_reward: 0.75
+      min_reward: 0.25
+      num_trials: 256
+      on_failure: abort
+    progress:
+      count_step: 1000
+      heartbeat_seconds: 60.0
+      min_interval_seconds: 0.5
+      mode: auto
+      percent_step: 5.0
+    project_name: skyrl
+    ref:
+      megatron_config:
+        context_parallel_size: 1
+        expert_model_parallel_size: 8
+        expert_tensor_parallel_size: 1
+        logprob_chunk_size: 1024
+        model_config_kwargs: {}
+        moe_router_replay: false
+        pipeline_model_parallel_size: 3
+        tensor_model_parallel_size: 1
+        transformer_config_kwargs:
+          num_layers_in_first_pipeline_stage: 9
+          num_layers_in_last_pipeline_stage: 8
+      model:
+        path: /tmp/marinskyrl/model_metadata/2b00011dc69414c122ea8f25b63e9ecb7649a539922d5129e9b9c6510eecc3dd
+        revision: models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770
+        source_identity: models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770
+        source_uri: s3://marin-us-east-02a/marin/exports/grug/june-67b-a2b-sft-s2-thinking/step-630/hf-bf16-vllm
+        tokenizer_path: /tmp/marinskyrl/model_metadata/d42f2392996e9216e91892577212d1cee2a3b8a8fc7324556e7f1d5e3d1637db
+        tokenizer_revision: null
+      nccl_buffer_size_bytes: 262144
+      sequence_parallel_size: 1
+    reset_distillation_token_count_on_resume: false
+    reset_global_step_on_resume: false
+    restore_dataloader_state: true
+    resume_mode: none
+    resume_path: null
+    rollout_buffer:
+      batch_policy: full_batch
+      max_in_flight: 32
+      max_staleness_steps: 0
+      object_store_root: s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/attempts/groups
+    rollout_spans: true
+    rope_scaling: null
+    rope_theta: null
+    run_name: users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-34c3154ef1c8
+    score_centering_performance:
+      async_max_steps: 32
+      default_interval: 10
+      output_uri: s3://marin-us-east-02a/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3/exports/tim-report.json
+      repetitions: 6
+      scope: coverage
+      source_data_sha256: df971071e94b3efaa8c39a97beb1020dca6240dff71651fe263f620fc57c5bcd
+      source_rows:
+      - 5195
+      - 5078
+      - 12943
+      - 1664
+      - 20499
+      - 15908
+      - 3078
+      - 11383
+      - 23037
+      - 2305
+      - 17982
+      - 6189
+      - 12473
+      - 12517
+      - 14509
+      - 7286
+      - 12060
+      - 8365
+      - 22398
+      - 5527
+      - 3521
+      - 20369
+      - 20526
+      - 8275
+      - 1324
+      - 9858
+      - 4203
+      - 9897
+      - 725
+      - 988
+      - 15911
+      - 13528
+      - 1017
+      - 16100
+      - 13279
+      - 2360
+      - 15994
+      - 12837
+      - 22386
+      - 21145
+      - 9313
+      - 1417
+      - 14620
+      - 14956
+      - 11405
+      - 5554
+      - 19012
+      - 5683
+      - 3715
+      - 15731
+      - 9612
+      - 4555
+      - 3887
+      - 15919
+      - 6826
+      - 16543
+      - 22772
+      - 10134
+      - 21866
+      - 9431
+      - 10569
+      - 12220
+      - 21936
+      - 19062
+      - 18824
+      - 22434
+      - 11611
+      - 19215
+      - 13203
+      - 7462
+      - 22599
+      - 5572
+      - 22247
+      - 18366
+      - 1835
+      - 2313
+      - 14451
+      - 3374
+      - 14610
+      - 18641
+      - 22137
+      - 22054
+      - 6358
+      - 8969
+      - 18880
+      - 9055
+      - 18852
+      - 20005
+      - 2316
+      - 7242
+      - 1425
+      - 17324
+      - 10129
+      - 14406
+      - 5621
+      - 4085
+      - 19401
+      - 16317
+      - 23206
+      - 16270
+      - 11521
+      - 5330
+      - 4469
+      - 8120
+      - 13432
+      - 22711
+      - 98
+      - 7734
+      - 17516
+      - 5264
+      - 9466
+      - 5803
+      - 2320
+      - 9924
+      - 18584
+      - 10340
+      - 3238
+      - 10170
+      - 17657
+      - 4783
+      - 1011
+      - 18555
+      - 19187
+      - 12105
+      - 5553
+      - 4100
+      - 5911
+      - 19708
+      - 19023
+      - 8692
+      - 10481
+      - 4768
+      - 4119
+      - 10353
+      - 20860
+      - 2835
+      - 1650
+      - 6086
+      - 22996
+      - 7061
+      - 20893
+      - 9978
+      - 958
+      - 8870
+      - 3575
+      - 16533
+      - 1060
+      - 22320
+      - 7680
+      - 15419
+      - 17848
+      - 12743
+      - 8289
+      - 4493
+      - 18731
+      - 6576
+      - 3593
+      - 14975
+      - 8999
+      - 1071
+      - 13423
+      - 17859
+      - 19451
+      - 10789
+      - 13063
+      - 14976
+      - 4852
+      - 7700
+      - 21100
+      - 18916
+      - 15031
+      - 5878
+      - 10682
+      - 12436
+      - 14951
+      - 13749
+      - 4297
+      - 2198
+      - 14030
+      - 20424
+      - 6204
+      - 12168
+      - 16314
+      - 10270
+      - 2352
+      - 22027
+      - 7060
+      - 952
+      - 9115
+      - 19137
+      - 20625
+      - 22984
+      variant: candidate
+      window_timeout_seconds: 1800
+      workload: snowball
+    seed: 0
+    step_phase_budgets:
+      advantages: 300
+      batch_assembly: 600
+      checkpoint_work: 1800
+      evaluation: 1800
+      group_admission: 1800
+      group_bookkeeping: 60
+      policy_training: 3600
+      step_end_bookkeeping: 60
+      training_preparation: 900
+      unaccounted: 5
+      weight_sync: 600
+    step_wise_training: false
+    strategy: megatron
+    teacher_scoring:
+      max_queued_per_teacher: 8
+      workers_per_teacher: 1
+    tracker_commit_each_step: true
+    train_batch_size: 32
+    training_metrics: true
+    trajectory_selector:
+      type: null
+    update_epochs_per_batch: 1
+    update_ref_every_epoch: false
+    use_sample_packing: false
+  trajectory_runner:
+    cleanup_timeout: 30
+    command_timeout: 120
+    max_concurrent_tasks: 32
+    rollout_workers:
+      cpus_per_worker: 4
+      executor_threads: 64
+      num_workers: 4
+      progress_timeout_seconds: 21600
+      start_interval_seconds: 2.0
+    shutdown_timeout: 45

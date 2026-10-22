@@ -53,6 +53,13 @@ uses finalized advantages, then removes the evidence before the
 optimizer update. This sampling does not change the ordinary TIS objective.
 There is no automatic cadence controller.
 
+Interval 10 is a starting cadence based on the
+[Snowball cost and coverage check](../reports/score-centering-tim.md). Six
+matched repetitions with a probe every cycle showed no resolved added latency;
+a separate interval-10 sequence consumed three probes over 22 cycles. This
+does not establish a general 1% overhead ceiling. Increase the interval when
+capture is expensive, and check actual observation spacing and coverage.
+
 At assembly, selection spans evenly from the first to the last loss-eligible
 response position. A one-position sample takes the first eligible position.
 Tool or other masked positions are excluded. Later trainer masks can remove
@@ -81,6 +88,10 @@ can expose engine disagreement; a stale probe also includes weight drift. It
 does not measure current/old divergence in later minibatches. Scalar correction
 size, retained mass and zero-advantage probes do not establish parameter-gradient
 error or learning benefit.
+
+Small omitted masses are sensitive to FP32 rounding, including values just
+above the 1e-6 floor when `tail_floor_fraction` is zero. Inspect omitted mass
+as well as floor usage before comparing small scalar changes across machines.
 
 Probes require regular PPO/TIS, local vLLM, and unpacked Megatron with tensor,
 context and sequence parallel sizes one. Other ordinary configurations retain
@@ -196,12 +207,12 @@ matched numeric and chat captures at temperatures 1.0/0.7 and lengths 128/4096;
 independent causal references differed by less than 2e-6. Those references apply
 to the unchanged SC calculation and numeric representation.
 
-Earlier serialized Snowball controls measured SC cycle wall time 9.27% above
-ordinary TIS after replacing chat objects with arrays. They used one allocation,
-one warmup and two measured cycles per arm. Separate asynchronous arms had
-different response lengths, so their throughput comparison does not isolate
-overhead. These earlier measurements do not qualify
-the current runtime or establish a 1% probe-overhead ceiling.
+The [Snowball report](../reports/score-centering-tim.md) measures SC cycle wall
+time 8.61% above ordinary TIS, with a within-allocation 95% interval of
+7.92–9.39% across six matched repetitions. Trainer-only overhead was 30.37%.
+The windows have different scopes; stage timers can overlap. Earlier controls
+reported 9.27% with only two repetitions. Separate asynchronous trajectories
+had different response lengths and do not isolate overhead.
 
 The earlier [Countdown reference](https://github.com/yonromai/marin/blob/a745f814811e84481301bd61db965c1fdc4e87e3/experiments/post_training/score_centering_overnight/results/reference_results.json)
 and [SkyRL reproduction](https://github.com/yonromai/marin/blob/a745f814811e84481301bd61db965c1fdc4e87e3/experiments/post_training/score_centering_overnight/results/skyrl_faithful_v4/skyrl_faithful_results.json)
@@ -222,6 +233,6 @@ still raise `TypeError` while grading a rollout.
 
 Editable source dependencies make the repair available to a worker when it is
 present in the bundled checkout. A package release or dependency-floor update
-is unnecessary. The current Qwen check verified the guard in its installed
+is unnecessary. The Qwen and Snowball checks verified the guard in installed
 worker source using an explicit overlay of #10394. That overlay is separate
 from this feature; deployment still needs the repair in its checkout.

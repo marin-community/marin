@@ -1,0 +1,64 @@
+{
+  "checked_at": "2026-10-22T21:35:51.045131+00:00",
+  "bytes_removed": 7855304576,
+  "temporary_roots": [
+    {
+      "prefix": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/startup/2026.10.22",
+      "removed_bytes": 12435029,
+      "remaining_objects": 0
+    },
+    {
+      "prefix": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/probe-startup/2026.10.22",
+      "removed_bytes": 0,
+      "remaining_objects": 0
+    },
+    {
+      "prefix": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/probe-startup/2026.10.22.1",
+      "removed_bytes": 12787536,
+      "remaining_objects": 0
+    },
+    {
+      "prefix": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-controls/2026.10.22",
+      "removed_bytes": 123191771,
+      "remaining_objects": 0
+    },
+    {
+      "prefix": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-controls/2026.10.22.1",
+      "removed_bytes": 3339535727,
+      "remaining_objects": 0
+    },
+    {
+      "prefix": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-controls/2026.10.22.2",
+      "removed_bytes": 3220506123,
+      "remaining_objects": 0
+    },
+    {
+      "prefix": "s3://marin-rno2a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.2",
+      "removed_bytes": 250266012,
+      "remaining_objects": 0
+    },
+    {
+      "prefix": "s3://marin-us-east-08a/tmp/ttl=14d/skyrl/marin/users/romain/checkpoints/score-centering-tim/snowball-coverage/2026.10.22.3",
+      "removed_bytes": 896582378,
+      "remaining_objects": 0
+    }
+  ],
+  "active_owned_gpu_tasks": 0,
+  "provider_checked_at": "2026-10-22T21:35:49.193504+00:00",
+  "retained_inputs_after_cleanup": {
+    "retained_inputs": {
+      "train.parquet": {
+        "bytes": 7553162,
+        "sha256": "df971071e94b3efaa8c39a97beb1020dca6240dff71651fe263f620fc57c5bcd"
+      },
+      "validation.parquet": {
+        "bytes": 384984,
+        "sha256": "2a570388fb6582978fe194d01d846b1d0750edfada55976c55a15bae59cedbb9"
+      }
+    },
+    "original_sft_config_exists": true,
+    "model_identity": "models/snowball-67b-a2b-sft-s2-thinking@2026.08.30:c6168770",
+    "scope": "read-only hash checks after owned-run cleanup; model weights were never inside deleted prefixes"
+  },
+  "scope": "exact owned TTL roots only; durable outputs, original SFT and retained input data are preserved"
+}

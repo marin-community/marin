@@ -7,6 +7,7 @@ This page includes only experiments that have at least one run or report.
 
 ## Curated experiment series
 
+- [Snowball TIM and score-centering cost](./score-centering-tim.md): matched H100 timings, probe cadence, alignment checks and evidence limits.
 - [Agent MoE experiment digest](./agent-moe-experiments.md) — outcomes from small-scale modeling, optimizer, routing, systems, and data tests.
 
 ## Published analysis sites

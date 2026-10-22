@@ -1,0 +1,385 @@
+{
+  "checked_at": "2026-10-22T21:31:50.886394+00:00",
+  "root_runs": 8,
+  "gpu_allocations": 7,
+  "requested_gpu_hours": 114.9117861111111,
+  "scope": "requested GPUs times Iris execution-attempt wall time, including startup and failures; not provider billing or queue wait; unfinished attempts use snapshot time",
+  "runs": [
+    {
+      "root_job": "/romain/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-coordinator-ec3ec517",
+      "terminal_states": {
+        "/romain/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-coordinator-ec3ec517/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-3161e014393c": "succeeded",
+        "/romain/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-coordinator-ec3ec517/users-romain-documents-score-centering-tim-cat-count_8cb20f23-3725a76d": "succeeded",
+        "/romain/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-coordinator-ec3ec517/zephyr-download-hf-a88c6fcc-coordinator-c9fa1dd3/zephyr-download-hf-a88c6fcc-coordinator-c9fa1dd3-workers": "killed",
+        "/romain/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-coordinator-ec3ec517/zephyr-download-hf-a88c6fcc-coordinator-c9fa1dd3": "killed",
+        "/romain/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-coordinator-ec3ec517": "succeeded"
+      },
+      "requested_gpu_hours": 0.23977833333333334,
+      "gpu_allocations": 1,
+      "task_attempts": [
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-coordinator-ec3ec517/users-romain-checkpoints-score-centering-tim-startup-2026.10.22-3161e014393c/0",
+          "requested_gpu_hours": 0.23977833333333334,
+          "attempts": [
+            {
+              "started_ms": 1792686402096,
+              "finished_ms": 1792686833697,
+              "seconds": 431.601,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "root_job": "/romain/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22-coordinator-d6fad3a5",
+      "terminal_states": {
+        "/romain/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22-coordinator-d6fad3a5": "failed"
+      },
+      "requested_gpu_hours": 0.0,
+      "gpu_allocations": 0,
+      "task_attempts": []
+    },
+    {
+      "root_job": "/romain/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22.1-coordinator-bc3a4190",
+      "terminal_states": {
+        "/romain/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22.1-coordinator-bc3a4190/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22.1-ddf319de2833": "succeeded",
+        "/romain/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22.1-coordinator-bc3a4190/users-romain-documents-score-centering-tim-cat-count_28a982ab-28191953": "succeeded",
+        "/romain/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22.1-coordinator-bc3a4190": "succeeded"
+      },
+      "requested_gpu_hours": 0.23850111111111114,
+      "gpu_allocations": 1,
+      "task_attempts": [
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22.1-coordinator-bc3a4190/users-romain-checkpoints-score-centering-tim-probe-startup-2026.10.22.1-ddf319de2833/0",
+          "requested_gpu_hours": 0.23850111111111114,
+          "attempts": [
+            {
+              "started_ms": 1792688246750,
+              "finished_ms": 1792688676052,
+              "seconds": 429.302,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "root_job": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-coordinator-b6b9b332",
+      "terminal_states": {
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-coordinator-b6b9b332/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-cfdc673a5f03": "failed",
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-coordinator-b6b9b332": "failed"
+      },
+      "requested_gpu_hours": 8.784417777777778,
+      "gpu_allocations": 1,
+      "task_attempts": [
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-coordinator-b6b9b332/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-cfdc673a5f03/0",
+          "requested_gpu_hours": 2.1961044444444444,
+          "attempts": [
+            {
+              "started_ms": 1792688983193,
+              "finished_ms": 1792689971440,
+              "seconds": 988.247,
+              "state": "failed",
+              "exit": 1
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-coordinator-b6b9b332/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-cfdc673a5f03/1",
+          "requested_gpu_hours": 2.1961044444444444,
+          "attempts": [
+            {
+              "started_ms": 1792688983193,
+              "finished_ms": 1792689971440,
+              "seconds": 988.247,
+              "state": "cosched_failed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-coordinator-b6b9b332/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-cfdc673a5f03/2",
+          "requested_gpu_hours": 2.1961044444444444,
+          "attempts": [
+            {
+              "started_ms": 1792688983193,
+              "finished_ms": 1792689971440,
+              "seconds": 988.247,
+              "state": "cosched_failed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-coordinator-b6b9b332/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22-cfdc673a5f03/3",
+          "requested_gpu_hours": 2.1961044444444444,
+          "attempts": [
+            {
+              "started_ms": 1792688983193,
+              "finished_ms": 1792689971440,
+              "seconds": 988.247,
+              "state": "cosched_failed",
+              "exit": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "root_job": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-coordinator-265a473f",
+      "terminal_states": {
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-coordinator-265a473f/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-fabc610d0290": "succeeded",
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-coordinator-265a473f": "succeeded"
+      },
+      "requested_gpu_hours": 38.82662666666666,
+      "gpu_allocations": 1,
+      "task_attempts": [
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-coordinator-265a473f/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-fabc610d0290/0",
+          "requested_gpu_hours": 9.689346666666667,
+          "attempts": [
+            {
+              "started_ms": 1792690801445,
+              "finished_ms": 1792695161651,
+              "seconds": 4360.206,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-coordinator-265a473f/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-fabc610d0290/1",
+          "requested_gpu_hours": 9.712426666666666,
+          "attempts": [
+            {
+              "started_ms": 1792690801445,
+              "finished_ms": 1792695172037,
+              "seconds": 4370.592,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-coordinator-265a473f/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-fabc610d0290/2",
+          "requested_gpu_hours": 9.712426666666666,
+          "attempts": [
+            {
+              "started_ms": 1792690801445,
+              "finished_ms": 1792695172037,
+              "seconds": 4370.592,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-coordinator-265a473f/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.1-fabc610d0290/3",
+          "requested_gpu_hours": 9.712426666666666,
+          "attempts": [
+            {
+              "started_ms": 1792690801445,
+              "finished_ms": 1792695172037,
+              "seconds": 4370.592,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "root_job": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-coordinator-a5403387",
+      "terminal_states": {
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-coordinator-a5403387/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-87ef6f2d8bc9": "killed",
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-coordinator-a5403387": "killed"
+      },
+      "requested_gpu_hours": 36.51994666666666,
+      "gpu_allocations": 1,
+      "task_attempts": [
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-coordinator-a5403387/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-87ef6f2d8bc9/0",
+          "requested_gpu_hours": 9.129986666666666,
+          "attempts": [
+            {
+              "started_ms": 1792695395563,
+              "finished_ms": 1792699504057,
+              "seconds": 4108.494,
+              "state": "killed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-coordinator-a5403387/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-87ef6f2d8bc9/1",
+          "requested_gpu_hours": 9.129986666666666,
+          "attempts": [
+            {
+              "started_ms": 1792695395563,
+              "finished_ms": 1792699504057,
+              "seconds": 4108.494,
+              "state": "killed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-coordinator-a5403387/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-87ef6f2d8bc9/2",
+          "requested_gpu_hours": 9.129986666666666,
+          "attempts": [
+            {
+              "started_ms": 1792695395563,
+              "finished_ms": 1792699504057,
+              "seconds": 4108.494,
+              "state": "killed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-coordinator-a5403387/users-romain-checkpoints-score-centering-tim-snowball-controls-2026.10.22.2-87ef6f2d8bc9/3",
+          "requested_gpu_hours": 9.129986666666666,
+          "attempts": [
+            {
+              "started_ms": 1792695395563,
+              "finished_ms": 1792699504057,
+              "seconds": 4108.494,
+              "state": "killed",
+              "exit": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "root_job": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-coordinator-4dfd0623",
+      "terminal_states": {
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-coordinator-4dfd0623/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-e9054e524145": "failed",
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-coordinator-4dfd0623": "failed"
+      },
+      "requested_gpu_hours": 17.34676888888889,
+      "gpu_allocations": 1,
+      "task_attempts": [
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-coordinator-4dfd0623/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-e9054e524145/0",
+          "requested_gpu_hours": 4.330231111111111,
+          "attempts": [
+            {
+              "started_ms": 1792700277374,
+              "finished_ms": 1792702225978,
+              "seconds": 1948.604,
+              "state": "failed",
+              "exit": 1
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-coordinator-4dfd0623/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-e9054e524145/1",
+          "requested_gpu_hours": 4.330231111111111,
+          "attempts": [
+            {
+              "started_ms": 1792700277374,
+              "finished_ms": 1792702225978,
+              "seconds": 1948.604,
+              "state": "cosched_failed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-coordinator-4dfd0623/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-e9054e524145/2",
+          "requested_gpu_hours": 4.356075555555555,
+          "attempts": [
+            {
+              "started_ms": 1792700265744,
+              "finished_ms": 1792702225978,
+              "seconds": 1960.234,
+              "state": "cosched_failed",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-coordinator-4dfd0623/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.2-e9054e524145/3",
+          "requested_gpu_hours": 4.330231111111111,
+          "attempts": [
+            {
+              "started_ms": 1792700277374,
+              "finished_ms": 1792702225978,
+              "seconds": 1948.604,
+              "state": "cosched_failed",
+              "exit": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "root_job": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-coordinator-d2fdc8e8",
+      "terminal_states": {
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-coordinator-d2fdc8e8/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-34c3154ef1c8": "succeeded",
+        "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-coordinator-d2fdc8e8": "succeeded"
+      },
+      "requested_gpu_hours": 12.955746666666666,
+      "gpu_allocations": 1,
+      "task_attempts": [
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-coordinator-d2fdc8e8/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-34c3154ef1c8/0",
+          "requested_gpu_hours": 3.24302,
+          "attempts": [
+            {
+              "started_ms": 1792702907955,
+              "finished_ms": 1792704367314,
+              "seconds": 1459.359,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-coordinator-d2fdc8e8/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-34c3154ef1c8/1",
+          "requested_gpu_hours": 3.2539222222222226,
+          "attempts": [
+            {
+              "started_ms": 1792702907955,
+              "finished_ms": 1792704372220,
+              "seconds": 1464.265,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-coordinator-d2fdc8e8/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-34c3154ef1c8/2",
+          "requested_gpu_hours": 3.2294022222222223,
+          "attempts": [
+            {
+              "started_ms": 1792702907955,
+              "finished_ms": 1792704361186,
+              "seconds": 1453.231,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        },
+        {
+          "task": "/romain/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-coordinator-d2fdc8e8/users-romain-checkpoints-score-centering-tim-snowball-coverage-2026.10.22.3-34c3154ef1c8/3",
+          "requested_gpu_hours": 3.2294022222222223,
+          "attempts": [
+            {
+              "started_ms": 1792702907955,
+              "finished_ms": 1792704361186,
+              "seconds": 1453.231,
+              "state": "succeeded",
+              "exit": 0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
