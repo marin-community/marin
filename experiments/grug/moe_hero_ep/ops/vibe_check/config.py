@@ -36,12 +36,12 @@ FIRST_SAMPLED_STEP = 270_000
 
 def sampling_spec() -> SamplingSpec:
     return SamplingSpec(
-        release="hero-native-v6-temperature-0.7",
+        release="hero-native-v7-temperature-1.0",
         completions_per_prompt=3,
         prompts=tuple(Prompt.model_validate(row) for row in json.loads((CONFIG_DIRECTORY / "prompts.json").read_text())),
         tokenizer="marin-community/marin-tokenizer",
         tokenizer_revision="a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2",
-        temperature=0.7,
+        temperature=1.0,
         max_new_tokens=1024,
         context_length=4096,
     )
