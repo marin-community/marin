@@ -15,6 +15,24 @@ from levanter.layers.rotary import YarnRotaryEmbeddingsConfig
 from experiments.grug.moe_hero_ep.context_extension import ContextExtensionConfig, extended_model, prepare_extension
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, _apply_rotary_embedding_fused
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
+from experiments.grug.moe_hero_ep.yarn import yarn_frequencies
+
+
+def test_yarn_boundary_beyond_frequency_vector_preserves_reference_interpolation():
+    # The original YaRN reference clamps against dim - 1, not dim // 2 - 1:
+    # https://github.com/jquesnelle/yarn/blob/master/scaled_rope/LlamaYaRNScaledRotaryEmbedding.py
+    # These parameters give a correction interval [0, 7] over four frequencies.
+    # With factor 4 the reference ramp is [0, 1/7, 2/7, 3/7], so the final
+    # frequency remains partly interpolated rather than reaching 0.125 / 4.
+    config = YarnRotaryEmbeddingsConfig(
+        theta=16,
+        factor=4,
+        original_max_position_embeddings=64,
+        beta_fast=64 / (2 * math.pi),
+        beta_slow=64 / (2 * math.pi * 16**2),
+    )
+    frequencies, _ = yarn_frequencies(8, config)
+    np.testing.assert_allclose(frequencies, [1, 25 / 56, 11 / 56, 19 / 224], rtol=1e-7, atol=0)
 
 
 def test_yarn_factor_one_preserves_interleaved_rotation_and_global_rope_free_layers():

@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import draccus
 import pytest
+from draccus.utils import ParsingError
 from fray.types import GpuConfig, ResourceConfig
 
 from experiments.grug.moe_hero_ep.format_job import LaunchConfig, main, prepare_launch, submit_launch
@@ -85,3 +86,25 @@ def test_launch_rejects_same_bytes_with_mismatched_source_or_guard_root(tmp_path
         prepare_launch(dataclasses.replace(config, source_revision="b" * 40))
     with pytest.raises(ValueError, match="Embedded worker destination"):
         prepare_launch(dataclasses.replace(config, output_root=str(tmp_path / "unguarded-output")))
+
+
+@pytest.mark.parametrize("replicas,processes_per_task", ((8, 4), (8, 8), (32, 2)))
+def test_rollout_submit_cli_rejects_unsupported_topology_before_network(
+    tmp_path, monkeypatch, replicas, processes_per_task
+):
+    # The worker requires both 64 ranks and four ranks per task. Reject the
+    # reported 32-rank layout and alternate 64-rank layouts before submission.
+    config = draccus.encode(launch_config(tmp_path))
+    config["command"] = ["python", "-m", "experiments.grug.moe_hero_ep.rollout_sanity", "run", "request.json"]
+    config["resources"]["replicas"] = replicas
+    config["resources"]["device"]["count"] = processes_per_task
+    config["processes_per_task"] = processes_per_task
+    launch = tmp_path / "launch.json"
+    launch.write_text(json.dumps(config))
+    receipt = tmp_path / "receipt.json"
+    monkeypatch.setattr(sys, "argv", ["format_job", str(launch), "--submit", "--receipt", str(receipt)])
+    with patch("experiments.grug.moe_hero_ep.format_job.connect_controller", side_effect=AssertionError("No network")):
+        with pytest.raises(ParsingError):
+            main()
+    assert not receipt.exists()
+    assert not (tmp_path / "output").exists()

@@ -35,6 +35,9 @@ def yarn_frequencies(rotary_dim: int, config: YarnRotaryEmbeddingsConfig) -> tup
         )
 
     low = max(math.floor(correction(config.beta_fast)), 0)
+    # YaRN's reference and Transformers clamp the boundary to rotary_dim - 1,
+    # even though the ramp contains rotary_dim // 2 frequencies. A boundary
+    # beyond that vector intentionally leaves its last entry partly interpolated.
     high = min(math.ceil(correction(config.beta_slow)), rotary_dim - 1)
     denominator = high - low if high != low else 0.001
     ramp = np.clip((np.arange(rotary_dim // 2, dtype=np.float32) - low) / denominator, 0, 1)

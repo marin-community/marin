@@ -64,6 +64,8 @@ class LaunchConfig:
             raise ValueError("Format-campaign workers require GPU resources")
         if self.resources.device.count != self.processes_per_task:
             raise ValueError("Use one GPU rank per process")
+        if self.command == _ROLLOUT_COMMAND and (self.resources.replicas != 16 or self.processes_per_task != 4):
+            raise ValueError("Rollout sampling requires 16 tasks with four GPU processes each")
         if self.failure_retries != 0:
             raise ValueError("Application errors require diagnosis, not automatic retry")
 
