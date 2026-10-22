@@ -164,10 +164,33 @@ and future GitHub Actions callers select the automation profile authorized by
 their federation mapping.
 
 The PR review workflow launches on open, ready-for-review, and reopen events.
-Reopen a PR to retry its latest head if a push invalidates an in-progress review.
+Automatic review keys are durable: reopening a PR or rerunning its Actions job
+returns the existing run, including when that run failed or was archived.
 The `pr-holistic-review` mapping authorizes the whole-change review profile,
-which runs the `claude` agent with the `fable` model and also launches on
+which runs the `claude` agent with the `claude-opus-5-5` model and also launches on
 pushes; its session skips small deltas since the last reviewed head.
+
+A successful Actions job confirms that Loom accepted the launch. Check the
+returned session URL and its conversation for the review outcome. In particular,
+`Failed to authenticate: OAuth session expired and could not be refreshed`
+means the review never started; changing the review skill will not repair it.
+Reconnect Claude on the production host as the `app` user, whose persisted
+home is shared with session containers, and verify a prompt succeeds before
+retrying. `claude auth status` alone does not verify that an API request works.
+Do not put login tokens in repository files, command arguments, or logs.
+
+After repairing authentication or another launch failure, retry the holistic
+review at the PR's current head from the default branch:
+
+```sh
+gh workflow run ops-loom-holistic-review.yaml --ref main -f pr=10476
+```
+
+Each manual attempt gets a fresh run key; automatic initial/follow-up limits
+remain unchanged. The PR must still be open, non-draft, from this repository,
+authored by an allowed writer or bot, and pass the size/abstraction gate. Deploy
+the Loom federation update before using manual retries: its workflow and main
+ref remain fixed, while both PR events and manual dispatches are accepted.
 
 The `remoteMcps` declaration registers Marina's authenticated Streamable HTTP
 endpoints as the full `/marina/api` capability and the read-only

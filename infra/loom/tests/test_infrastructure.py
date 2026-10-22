@@ -203,11 +203,11 @@ def test_loom_holistic_review_launcher_bounds_automatic_sessions_per_pr() -> Non
     trigger = workflow.get("on", workflow.get(True))
     job = workflow["jobs"]["review"]
 
-    assert set(trigger) == {"pull_request_target"}
+    assert set(trigger) == {"pull_request_target", "workflow_dispatch"}
     assert "synchronize" in trigger["pull_request_target"]["types"]
     assert workflow["concurrency"]["cancel-in-progress"] is True
     assert "head.repo.full_name == github.repository" in job["if"]
-    checkout, author, gate, launch = job["steps"]
+    checkout, _, author, gate, launch = job["steps"]
     assert checkout["with"]["ref"] == "main"
     assert author["uses"] == "./.github/actions/check-write-access"
     assert gate["if"] == "steps.author.outputs.allowed == 'true'"
@@ -221,6 +221,71 @@ def test_loom_holistic_review_launcher_bounds_automatic_sessions_per_pr() -> Non
         "/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main"
     )
     assert federations["pr-holistic-review"]["profile"] == "pr-holistic-review"
+
+
+@pytest.mark.parametrize(
+    ("event_name", "state", "draft", "head_repo", "api_exit_code", "eligible"),
+    [
+        ("pull_request_target", "open", False, "marin-community/marin", 1, True),
+        ("workflow_dispatch", "open", False, "marin-community/marin", 0, True),
+        ("workflow_dispatch", "closed", False, "marin-community/marin", 0, False),
+        ("workflow_dispatch", "open", True, "marin-community/marin", 0, False),
+        ("workflow_dispatch", "open", False, "contributor/marin", 0, False),
+        ("workflow_dispatch", "open", False, "marin-community/marin", 1, None),
+    ],
+)
+def test_holistic_retry_resolves_current_head_and_rejects_ineligible_prs(
+    tmp_path: Path,
+    event_name: str,
+    state: str,
+    draft: bool,
+    head_repo: str,
+    api_exit_code: int,
+    eligible: bool | None,
+) -> None:
+    workflow = yaml.safe_load((ROOT.parent.parent / ".github/workflows/ops-loom-holistic-review.yaml").read_text())
+    resolve = next(step for step in workflow["jobs"]["review"]["steps"] if step.get("id") == "pr")
+    pr = {
+        "number": 10476,
+        "state": state,
+        "draft": draft,
+        "head": {"repo": {"full_name": head_repo}, "sha": "b" * 40},
+        "user": {"login": "writer"},
+        "additions": 3664,
+        "deletions": 326,
+    }
+    response = tmp_path / "response.json"
+    response.write_text(json.dumps(pr))
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"pull_request": {**pr, "head": {**pr["head"], "sha": "a" * 40}}}))
+    github_cli = tmp_path / "gh"
+    github_cli.write_text(f'#!/bin/sh\ncat "$RESPONSE_FILE"\nexit {api_exit_code}\n')
+    github_cli.chmod(0o755)
+    output = tmp_path / "output"
+    result = subprocess.run(
+        ["bash", "-c", resolve["run"]],
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "RESPONSE_FILE": str(response),
+            "GITHUB_EVENT_NAME": event_name,
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_REPOSITORY": "marin-community/marin",
+            "PR_NUMBER": "10476",
+        },
+        capture_output=True,
+        text=True,
+    )
+    if eligible is None:
+        assert result.returncode != 0
+        assert not output.exists()
+        return
+    assert result.returncode == 0, result.stderr
+    fields = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert fields["eligible"] == str(eligible).lower()
+    assert fields["head"] == ("b" if event_name == "workflow_dispatch" else "a") * 40
+    assert fields["number"] == "10476"
 
 
 @pytest.mark.parametrize(

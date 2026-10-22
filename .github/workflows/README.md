@@ -95,6 +95,14 @@ delta since the last reviewed head is under 100 changed lines, touches only
 fixtures or documentation, or consists only of `Deslop` commits. The review is
 advisory and is not a required check.
 
+An Actions success means Loom accepted the launch; the linked session records
+whether the review completed. After repairing a failed session, maintainers can
+run `gh workflow run ops-loom-holistic-review.yaml --ref main -f pr=<number>`
+to review the current head with a fresh run key. This preserves automatic
+initial/follow-up limits and the author, repository, draft, and size gates.
+Rerunning an automatic job reuses its original run, including a failed one.
+See [Loom authentication and retry guidance](../../infra/loom/README.md#automation-identities).
+
 The `deslop` job in `ops-loom-github.yaml` launches a `github-automation`
 session when a holistic packet is posted on a pull request carrying
 `agent-generated`, or when a maintainer review contains `deslop`. The session

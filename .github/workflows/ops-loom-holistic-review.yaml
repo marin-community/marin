@@ -7,9 +7,15 @@ name: "Ops - Loom Holistic Review"
 on:
   pull_request_target:
     types: [opened, ready_for_review, reopened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "Pull request to retry after repairing a failed review"
+        required: true
+        type: number
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ inputs.pr || github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
@@ -19,8 +25,9 @@ env:
 jobs:
   review:
     if: >-
-      github.event.pull_request.draft == false &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.pull_request.draft == false &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -38,11 +45,32 @@ jobs:
             .github/actions/check-write-access
           sparse-checkout-cone-mode: false
 
+      - name: Resolve pull request
+        id: pr
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr || github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+            pr=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER")
+          else
+            pr=$(jq -c '.pull_request' "$GITHUB_EVENT_PATH")
+          fi
+          jq -r --arg repo "$GITHUB_REPOSITORY" '
+            "eligible=\(.state == "open" and .draft == false and .head.repo.full_name == $repo)",
+            "number=\(.number)", "author=\(.user.login)", "head=\(.head.sha)",
+            "additions=\(.additions)", "deletions=\(.deletions)"
+          ' <<< "$pr" >> "$GITHUB_OUTPUT"
+
       - name: Check author write access
         id: author
+        if: steps.pr.outputs.eligible == 'true'
         uses: ./.github/actions/check-write-access
         with:
-          login: ${{ github.event.pull_request.user.login }}
+          login: ${{ steps.pr.outputs.author }}
           allowed-bots: |
             marin-ops-agent[bot]
             loom-oa-dev[bot]
@@ -54,10 +82,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT_ACTION: ${{ github.event.action }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          ADDITIONS: ${{ github.event.pull_request.additions }}
-          DELETIONS: ${{ github.event.pull_request.deletions }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          ADDITIONS: ${{ steps.pr.outputs.additions }}
+          DELETIONS: ${{ steps.pr.outputs.deletions }}
         run: |
           set -euo pipefail
           if [[ "$EVENT_ACTION" == "synchronize" ]]; then
@@ -95,17 +123,17 @@ jobs:
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_HOLISTIC_REVIEW_PROFILE }}
-          channel: pr-holistic:${{ github.event.pull_request.number }}
-          idempotency-key: pr-holistic:${{ github.event.pull_request.number }}:${{ github.event.action == 'synchronize' && 'followup' || 'initial' }}
-          title: "Holistic review for #${{ github.event.pull_request.number }}"
+          channel: pr-holistic:${{ steps.pr.outputs.number }}
+          idempotency-key: pr-holistic:${{ steps.pr.outputs.number }}:${{ github.event_name == 'workflow_dispatch' && format('manual:{0}:{1}', github.run_id, github.run_attempt) || (github.event.action == 'synchronize' && 'followup' || 'initial') }}
+          title: "Holistic review for #${{ steps.pr.outputs.number }}"
           goal: >-
-            Review pull request #${{ github.event.pull_request.number }} at head
-            ${{ github.event.pull_request.head.sha }} as a whole change. If the
+            Review pull request #${{ steps.pr.outputs.number }} at head
+            ${{ steps.pr.outputs.head }} as a whole change. If the
             session worktree is at a different commit, fetch this exact SHA from
             origin and check it out detached before reviewing. Remain
             read-only except for creating or replacing the original holistic
             overview comment and optionally creating one new top-level
             comment with new or materially changed actionable findings. Run
             review-pr-holistic with --comment and publish a typed result.
-          base: ${{ github.event.pull_request.head.sha }}
-          github-issue: ${{ github.event.pull_request.number }}
+          base: ${{ steps.pr.outputs.head }}
+          github-issue: ${{ steps.pr.outputs.number }}

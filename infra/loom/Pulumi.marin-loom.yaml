@@ -455,7 +455,6 @@ config:
       workflowRef: marin-community/marin/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main
       profile: pr-holistic-review
       serviceTag: pr-holistic-review
-      event: pull_request_target
       ref: refs/heads/main
     - name: codehealth-refinement
       repositoryId: *marinRepositoryId
