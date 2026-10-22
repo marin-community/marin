@@ -12,10 +12,11 @@ src/taskforge/
                                JsonEventStore;
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
+  capability.py                CapabilityIdea, the input of task generation, and its prompt record
   content_hash.py              canonical JSON and its sha256 digests
   ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
-                               output, call cache, ledger recording, agent loop, web tools, the
+                               output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
   sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
@@ -50,8 +51,8 @@ src/taskforge/
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
-modules (`child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and the shared
-modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
+modules (`capability`, `child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and
+the shared modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
 builds a task today goes through a build program, so the SDK, the standard template, the build
 services, the program runner and the agentic author (an agent session that writes and iterates
 that program) all live there. The name leaves room for a `stage40_build_with_agent` package in

@@ -55,7 +55,14 @@ class RecordingSource:
         self.client = client
         self.output = output
         self.calls: list[QueryRecord] = []
+        self.namespace_calls = 0
         self.guard = threading.Lock()
+
+    def namespaces(self) -> frozenset[str]:
+        """Discover producer namespaces, counted separately from SQL queries."""
+        with self.guard:
+            self.namespace_calls += 1
+        return frozenset(info.namespace for info in self.client.list_namespaces())
 
     def query(self, sql: str, *, max_rows: int):
         with self.guard:
