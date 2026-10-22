@@ -1,6 +1,6 @@
 ---
 name: use-iris
-description: Use Iris to submit, inspect, debug, monitor, or recover jobs and tasks; diagnose scheduling and federation; deploy controllers; or reserve dev GPUs and TPUs. Use for ordinary Iris operations, including babysitting a job, controller rollouts, accelerator sessions, and stuck CoreWeave pods. Use a narrower production-run or Zephyr skill when that workflow is explicitly requested.
+description: Operate Iris jobs, tasks, clusters, and dev accelerators, including Zephyr monitoring and infrastructure troubleshooting. Domain skills own experiment recipes and production-run lifecycle.
 ---
 
 # Use Iris
@@ -10,6 +10,8 @@ Read only the material needed for the request:
 - Normal jobs, tasks, scheduling, auth, or CoreWeave: `lib/iris/OPS.md`.
 - Federation: `lib/iris/docs/federation.md`.
 - Continuous job monitoring: [references/monitor-job.md](references/monitor-job.md).
+- Zephyr pipeline babysitting: [references/monitor-zephyr.md](references/monitor-zephyr.md).
+- Infrastructure faults: [references/troubleshooting.md](references/troubleshooting.md).
 - Controller deploy or rollback: [references/controller-rollout.md](references/controller-rollout.md).
 - Interactive GPU or TPU: [references/dev-accelerators.md](references/dev-accelerators.md).
 - Stuck terminating CoreWeave pod: [references/stuck-pod.md](references/stuck-pod.md).
@@ -17,6 +19,11 @@ Read only the material needed for the request:
 - Logs or measurements: use `query-finelog`.
 
 Resolve cluster facts from `lib/iris/config/<cluster>.yaml`; do not copy live coordinates from memory.
+
+Use `manage-hero-run` for production lineage, checkpoint retention, and recovery
+decisions; `launch-rl` and `run-ferries` own their recipes. This skill supplies
+execution operations without replacing those workflows' authorization or
+stopping conditions. `query-finelog` owns telemetry queries and interpretation.
 
 ## Common reads
 

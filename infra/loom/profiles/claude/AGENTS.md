@@ -9,6 +9,6 @@ validation, and landing workflow.
 - Open a pull request for the change and do not merge it. Add the
   `agent-generated` label to every pull request or issue you create.
 - Apply Marin's writing-style rules to GitHub titles and bodies, and use the
-  repository's commit skill when committing, pushing, or opening a pull request.
+  repository's manage-pr skill when committing, pushing, or opening a pull request.
 - Include every created pull request, issue, or durable artifact URL in the
   final Loom status and result. The person reads the outcome through claude.ai.
