@@ -3,15 +3,16 @@
 
 """Write task proposals for a catalog capability with GLM, as a Taskforge ``ProposalSource``.
 
-``CapabilitySource.propose(idea, n)`` works in two passes:
+``CapabilitySource`` proposes in two phases:
 
-1. A structured call plans ``n`` slots. Each slot gets a workflow, an environment the host can run,
-   the solver's machine (``null`` for a container slot), a verification and a research decision.
+1. ``plan(idea, n)``: a structured call plans ``n`` slots. Each slot gets a workflow, an environment
+   the host can run, the solver's machine (``null`` for a container slot), a verification and a
+   research decision.
    The validators of the plan's output type reject a portfolio with the wrong slot count, a solver
    machine that does not fit its environment, a slot in an environment the host lacks, or too many
    slots on one environment x verification pairing, and the model gets one repair.
-2. For each proposed slot, concurrently, GLM writes a proposal document in the
-   ``stage10_proposal`` markdown format, thinking first. The request decodes under
+2. ``write(idea, portfolio, slot)``: for one proposed slot, independent of every other, GLM writes a
+   proposal document in the ``stage10_proposal`` markdown format, thinking first. The request decodes under
    ``stage10_proposal.model.document_regex``. The regex fixes the front matter's keys, their order,
    the enum values, the id and source lines and the body's headings. Continuations stay off, since
    a continuation would restart the regex in the middle of the document.
@@ -27,9 +28,8 @@ and costs no model call.
 Both prompts quote ``taskforge.capability.capability_idea_record(idea)``.
 """
 
-import asyncio
 from collections import Counter
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from enum import StrEnum
 from textwrap import indent
 from typing import Self
@@ -37,7 +37,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import pretty_json
-from taskforge.llm.client import Completion, FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
+from taskforge.llm.client import FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, schema_instruction
 from taskforge.stage10_proposal.model import (
@@ -60,7 +60,8 @@ from taskforge.stage10_proposal.model import (
     solver_machine_violation,
     source_text,
 )
-from taskforge.stage10_proposal.source import ProposalBatch, SlotFailure, SlotOutcome, SlotProposal
+from taskforge.stage10_proposal.source import PlannedSlot as PortfolioSlot
+from taskforge.stage10_proposal.source import Portfolio, SlotFailure, SlotOutcome, SlotProposal
 
 CUT_OFF = "cut off by the output limit"
 SLOT_MODEL_ERRORS = (ModelUnavailable, ModelRequestRejected)
@@ -377,15 +378,6 @@ SLOT TO DEVELOP:
 {pretty_json(slot.model_dump(mode="json"))}"""
 
 
-@dataclass(frozen=True)
-class PlannedPortfolio:
-    """The validated slot plan, the messages its first request sent, and its completions (two if repaired)."""
-
-    plan: SlotPlan
-    request: tuple[Message, ...]
-    completions: tuple[Completion, ...]
-
-
 def proposal_id(idea: CapabilityIdea, slot: int) -> str:
     return f"{idea.capability_id}/{slot}"
 
@@ -449,8 +441,11 @@ def plan_request(idea: CapabilityIdea, n: int, environments: frozenset[Environme
 
 async def plan_slots(
     model: ModelClient, policy: LLMPolicy, idea: CapabilityIdea, n: int, environments: frozenset[Environment]
-) -> PlannedPortfolio:
+) -> Portfolio[SlotPlan]:
     """Plan ``n`` slots for ``idea`` on a host that runs ``environments``, with the client's repair budget.
+
+    The portfolio holds the validated plan, the messages its first request sent and its completions (two
+    if repaired), and each slot with the reason the plan gave a null one.
 
     Raises:
         StructuredOutputError: the output limit cut the plan off, or every reply failed validation.
@@ -458,7 +453,17 @@ async def plan_slots(
     request = plan_request(idea, n, environments)
     # complete_structured appends the field instruction itself, so the call gets the turns before it.
     result = await model.complete_structured(list(request[:-1]), slot_plan_type(n, environments), policy)
-    return PlannedPortfolio(result.value, request, result.completions)
+    plan = result.value
+    slots = tuple(_portfolio_slot(s) for s in plan.slots)
+    return Portfolio(request, result.completions, plan, slots)
+
+
+def _portfolio_slot(slot: PlannedSlot) -> PortfolioSlot:
+    """The portfolio's record of a planned slot: null with the plan's reason, or proposing."""
+    if slot.status is not SlotStatus.NULL:
+        return PortfolioSlot(slot.slot, None)
+    assert slot.reason is not None, "the plan's validator requires a reason on every null slot"
+    return PortfolioSlot(slot.slot, slot.reason.strip())
 
 
 async def author_proposal(
@@ -506,7 +511,7 @@ async def author_proposal(
 
 
 class CapabilitySource:
-    """The ``ProposalSource[CapabilityIdea]`` for catalog capabilities.
+    """The ``ProposalSource[CapabilityIdea, SlotPlan]`` for catalog capabilities.
 
     Args:
         model: The model that plans the slots and writes the documents.
@@ -519,26 +524,23 @@ class CapabilitySource:
         self.policy = policy
         self.environments = environments
 
-    async def propose(self, idea: CapabilityIdea, n: int) -> ProposalBatch:
-        """Plan ``n`` slots for ``idea`` and write a proposal per slot, returning the outcomes in slot order.
-
-        A slot whose document the output limit cuts off, whose repair still fails the parser, or
-        whose model call raises one of ``SLOT_MODEL_ERRORS`` comes back as a ``SlotFailure`` while
-        its siblings carry on.
+    async def plan(self, idea: CapabilityIdea, n: int) -> Portfolio[SlotPlan]:
+        """Plan ``n`` slots for ``idea`` on this host's environments.
 
         Raises:
             StructuredOutputError: the plan stayed invalid after its repair.
             ModelUnavailable: the planning call ran out of retries.
             ModelRequestRejected: the server rejected the planning call.
         """
-        planned = await plan_slots(self.model, self.policy, idea, n, self.environments)
-        async with asyncio.TaskGroup() as group:
-            tasks = {
-                s.slot: group.create_task(author_proposal(self.model, self.policy, idea, planned.plan, s))
-                for s in planned.plan.slots
-                if s.status is SlotStatus.PROPOSE
-            }
-        slots = tuple(
-            tasks[s.slot].result() if s.slot in tasks else null_slot_proposal(idea, s) for s in planned.plan.slots
-        )
-        return ProposalBatch(planned.request, planned.completions, slots)
+        return await plan_slots(self.model, self.policy, idea, n, self.environments)
+
+    async def write(self, idea: CapabilityIdea, portfolio: Portfolio[SlotPlan], slot: int) -> SlotOutcome:
+        """The proposal of ``slot``, or a null proposal with no model call for a slot the plan marked null.
+
+        A document the output limit cuts off, whose repair still fails the parser, or whose model call
+        raises one of ``SLOT_MODEL_ERRORS`` comes back as a ``SlotFailure``; no other slot is involved.
+        """
+        planned = portfolio.plan.slots[slot - 1]
+        if planned.status is not SlotStatus.PROPOSE:
+            return null_slot_proposal(idea, planned)
+        return await author_proposal(self.model, self.policy, idea, portfolio.plan, planned)

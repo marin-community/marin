@@ -116,8 +116,9 @@ built from `DOCUMENT_REPAIR_PROMPT`.
 
 `experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
-construction. Its `propose(idea, n)` plans `n` slots in a structured call, each with a solver
-machine and a research decision, then writes each document under the regex with GLM thinking first.
+construction. Its `plan(idea, n)` plans `n` slots in one structured call, each with a solver
+machine and a research decision, and its `write(idea, portfolio, slot)` writes one slot's document
+under the regex with GLM thinking first.
 `propose_tasks` in the same package proposes the catalog's capabilities from the command line and
 triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
 is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a
