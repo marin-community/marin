@@ -1,6 +1,6 @@
 """Convert common rollout records into whole-trajectory or per-step training data."""
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import copy
 from dataclasses import dataclass, replace
 
@@ -14,10 +14,12 @@ from skyrl_gym.verification import (
     VerificationResult,
 )
 from taskcompendium.grading_result import GradeResult, Outcome
+from taskcompendium.models import TaskSpec
 from skyrl_gym.task_records import grade_skipped, skipped_grade
 from rolloutengine.harness.shell import TOOL_USAGE_METRICS
 from rolloutengine.models import RolloutContractError
 from skyrl_train.rollouts.training_record import TrainingRollout
+from skyrl_train.task_inputs import TaskInput
 
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
@@ -257,7 +259,7 @@ class WholeTaskProjection:
             required,
             self.runner_config,
             self.tokenizer,
-            [row.metadata.metric_class for row in request.rows],
+            request.rows,
         )
         _merge_task_metrics(batch, rollouts, request)
         return batch
@@ -322,7 +324,7 @@ def _training_batch(
     logprobs_required: bool,
     runner_config: DictConfig,
     tokenizer: PreTrainedTokenizerBase,
-    env_metric_classes: Sequence[str] | None,
+    env_rows: Sequence[TaskInput] | None,
 ) -> TrajectoryBatch:
     responses = [list(rollout.response_token_ids) or [MASKED_TOKEN_ID] for rollout in rollouts]
     rewards = [decision.reward.to_trainer_reward() for decision in decisions]
@@ -363,10 +365,15 @@ def _training_batch(
     _attach_policy_steps(batch, rollouts)
     _attach_span_tags(batch, rollouts)
     metrics = None
-    if env_metric_classes is not None:
+    env_metric_classes = None if env_rows is None else [row.metadata.metric_class for row in env_rows]
+    if env_rows is not None:
         metrics = [
-            _tool_usage(rollout) if environment == TASKCOMPENDIUM_ENVIRONMENT else dict(rollout.metrics)
-            for rollout, environment in zip(rollouts, env_metric_classes, strict=True)
+            (
+                _tool_usage(rollout, row.spec.task)
+                if row.metadata.metric_class == TASKCOMPENDIUM_ENVIRONMENT
+                else dict(rollout.metrics)
+            )
+            for rollout, row in zip(rollouts, env_rows, strict=True)
         ]
         if any(metrics):
             batch["env_metrics"] = metrics
@@ -506,9 +513,22 @@ def _task_error_policies(
     return [harbor if "harbor" in row.spec.task.tags else default for row in request.rows]
 
 
-def _tool_usage(rollout: TrainingRollout) -> dict[str, float]:
-    """The shell harness's tool-usage metrics, which a ``taskcompendium`` row reports per environment."""
-    return {key: float(rollout.metrics[key]) for key in TOOL_USAGE_METRICS if key in rollout.metrics}
+def _tool_usage(rollout: TrainingRollout, task: TaskSpec) -> dict[str, float]:
+    """The shell harness's tool-usage metrics, which a ``taskcompendium`` row reports per environment.
+
+    ``wrote_output_file``, for a task with ``output_paths``, says whether the files that the engine captured after
+    the attempt cover every declared path.
+    """
+    metrics = {key: float(rollout.metrics[key]) for key in TOOL_USAGE_METRICS if key in rollout.metrics}
+    if task.output_paths:
+        metrics["wrote_output_file"] = float(all(_captured(path, rollout.outputs) for path in task.output_paths))
+    return metrics
+
+
+def _captured(path: str, outputs: Mapping[str, bytes]) -> bool:
+    """Whether the engine captured the declared output file, or a file under the declared output directory."""
+    directory = path.rstrip("/") + "/"
+    return any(captured == path or captured.startswith(directory) for captured in outputs)
 
 
 def _merge_task_metrics(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout], request: TaskRequestBatch) -> None:

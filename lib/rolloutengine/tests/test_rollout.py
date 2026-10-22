@@ -1386,6 +1386,17 @@ async def test_unparsed_tool_call_gets_an_error_and_another_turn_until_the_retry
         assert (record.grade.reward, record.rollout.metrics["parse_retry"]) == (0.0, 0.0)
 
 
+async def test_answer_that_quotes_tool_call_markup_is_graded_without_a_retry():
+    answer = 'The file uses <tool_call>{"name": "shell"}</tool_call> markup. Six plus six is 12'
+    model = ReplayModel([{"role": "assistant", "content": answer}])
+    record = await engine(model, {"simulator": ShellSimMachineFactory()}).run_task(
+        workspace_input_spec(workspace_input_task())
+    )
+
+    assert len(model.requests) == 1
+    assert record.rollout.metrics["parse_retry"] == 0.0
+
+
 async def test_turn_limit_keeps_the_tool_usage_of_the_attempt():
     model = ReplayModel([shell_call("cat workspace/data.txt")])
     record = await engine(model, {"simulator": ShellSimMachineFactory()}).run_task(
@@ -1394,17 +1405,6 @@ async def test_turn_limit_keeps_the_tool_usage_of_the_attempt():
 
     assert record.rollout.stop_reason != "stop"
     assert (record.rollout.metrics["tool_calls"], record.rollout.metrics["opened_input_file"]) == (1.0, 1.0)
-
-
-@pytest.mark.parametrize("written", [True, False])
-async def test_declared_output_files_are_checked_on_the_task_machine(written):
-    command = "cat workspace/data.txt > /workspace/report.txt" if written else "cat workspace/data.txt"
-    model = ReplayModel([shell_call(command), {"role": "assistant", "content": "12"}])
-    record = await engine(model, {"simulator": ShellSimMachineFactory()}).run_task(
-        workspace_input_spec(workspace_input_task(output_paths=("/workspace/report.txt",)))
-    )
-
-    assert record.rollout.metrics["wrote_output_file"] == float(written)
 
 
 @pytest.mark.parametrize(

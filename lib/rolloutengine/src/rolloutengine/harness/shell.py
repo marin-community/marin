@@ -67,19 +67,19 @@ OUTPUTS_INSTRUCTION = "Write each output file at the path the task states with t
 FINISH_INSTRUCTION = "When you have finished, {instruction}"
 DEFAULT_MAX_PARSE_RETRIES = 3
 TOOL_CALL_MARKER = "<tool_call>"
+TOOL_CALL_END = "</tool_call>"
 REASONING_END = "</think>"
 PARSE_ERROR = (
     "Error: your tool call could not be parsed ({error}). Write exactly one JSON object "
     '{{"name": "{tool_name}", "arguments": {{"{parameter}": "..."}}}} inside <tool_call></tool_call>, with every '
     "string JSON-escaped, and try again."
 )
-SETUP_COMMAND_TIMEOUT = 60.0
-"""The limit of the harness's own commands on the task machine: the working-directory link and the output check."""
-TOOL_USAGE_METRICS = ("tool_calls", "parse_retry", "opened_input_file", "wrote_output_file")
+LINK_TIMEOUT = 60.0
+"""The limit of the command that links the working directory's name to itself."""
+TOOL_USAGE_METRICS = ("tool_calls", "parse_retry", "opened_input_file")
 """The ``Transition.metrics`` keys that ``ShellHarness`` records on the last step of a task with a shell tool.
 
-``opened_input_file`` is present only for a task whose conversation names one of its files, and
-``wrote_output_file`` only for a task with ``output_paths``.
+``opened_input_file`` is present only for a task whose conversation names one of its files.
 """
 
 
@@ -302,14 +302,14 @@ class ShellHarness:
         usage = None
         if machine is not None and shell_tool is not None:
             await _link_working_directory(machine, task)
-            usage = _ToolUsage(task, machine, shell_tool)
+            usage = _ToolUsage(task, shell_tool)
         turn = await session.start(task_prompt(task, shell_tool, definitions))
         try:
             await self._tool_loop(context, session, tools, usage, turn)
         except RolloutEnded:
             # A limit or a failed model request ends the attempt; its tool usage still belongs to the last step.
             if usage is not None:
-                session.record(metrics=await usage.metrics())
+                session.record(metrics=usage.metrics())
             raise
 
     async def _tool_loop(
@@ -331,7 +331,7 @@ class ShellHarness:
                     continue
             transition = await _call_tools(context.task, context.machine, tools, context.events, turn)
             if transition.done:
-                metrics = transition.metrics if usage is None else {**transition.metrics, **await usage.metrics()}
+                metrics = transition.metrics if usage is None else {**transition.metrics, **usage.metrics()}
                 session.record(observations=transition.observations, metrics=metrics)
                 return
             turn = await session.reply(transition.observations)
@@ -354,7 +354,7 @@ async def _link_working_directory(machine: Machine, task: TaskSpec) -> None:
     if not re.search(rf"(?<![\w./-]){re.escape(path.name)}/", _conversation_text(task)):
         return
     name = shlex.quote(path.name)
-    command = Command(("sh", "-c", f"[ -e {name} ] || ln -s . {name}"), cwd=workdir, timeout=SETUP_COMMAND_TIMEOUT)
+    command = Command(("sh", "-c", f"[ -e {name} ] || ln -s . {name}"), cwd=workdir, timeout=LINK_TIMEOUT)
     result = await machine.run(command)
     if result.exit_code != 0:
         logger.warning(
@@ -367,7 +367,7 @@ async def _link_working_directory(machine: Machine, task: TaskSpec) -> None:
 
 
 def _unparsed_tool_call(turn: ModelTurn) -> str | None:
-    """Why the server did not return the ``<tool_call>`` that a complete reply wrote, or None.
+    """Why the server did not return the ``<tool_call>`` that ends a complete reply, or None.
 
     This reads the Hermes tool-call format, which Qwen chat templates use. Reasoning before ``</think>`` is ignored.
     """
@@ -378,7 +378,11 @@ def _unparsed_tool_call(turn: ModelTurn) -> str | None:
     answer = content.rsplit(REASONING_END, 1)[-1]
     if TOOL_CALL_MARKER not in answer:
         return None
-    body = answer.split(TOOL_CALL_MARKER, 1)[1].split("</tool_call>", 1)[0].strip()
+    body, _, after = answer.rsplit(TOOL_CALL_MARKER, 1)[1].partition(TOOL_CALL_END)
+    if after.strip():
+        # Text after the last call means the reply quotes the markup; a Hermes call ends the reply.
+        return None
+    body = body.strip()
     try:
         json.loads(body)
     except json.JSONDecodeError as error:
@@ -400,13 +404,11 @@ def _parse_error_message(error: str, shell_tool: BoundShellTool) -> dict[str, st
 
 
 class _ToolUsage:
-    """Count the tool calls and parse retries of one attempt, and whether it touched the task's named files."""
+    """Count the tool calls and parse retries of one attempt, and whether a shell command named a task file."""
 
-    def __init__(self, task: TaskSpec, machine: Machine, shell_tool: BoundShellTool):
-        self.machine = machine
+    def __init__(self, task: TaskSpec, shell_tool: BoundShellTool):
         self.shell_tool = shell_tool
         self.input_names = tuple(PurePosixPath(path).name for path in _named_task_files(task))
-        self.output_paths = task.output_paths
         self.tool_calls = 0
         self.parse_retry = 0
         self.opened_input_file = False
@@ -427,14 +429,10 @@ class _ToolUsage:
             if isinstance(command, str) and any(name in command for name in self.input_names):
                 self.opened_input_file = True
 
-    async def metrics(self) -> dict[str, float]:
+    def metrics(self) -> dict[str, float]:
         metrics = {"tool_calls": float(self.tool_calls), "parse_retry": float(self.parse_retry)}
         if self.input_names:
             metrics["opened_input_file"] = float(self.opened_input_file)
-        if self.output_paths:
-            test = " && ".join(f"test -e {shlex.quote(path)}" for path in self.output_paths)
-            result = await self.machine.run(Command(("sh", "-c", test), timeout=SETUP_COMMAND_TIMEOUT))
-            metrics["wrote_output_file"] = float(result.exit_code == 0)
         return metrics
 
 

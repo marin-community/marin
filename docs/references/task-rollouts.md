@@ -302,18 +302,19 @@ Resource paths are relative to the root, so prompts often name `/workspace/data.
 links `workspace -> .` in it before the first model request. It skips an existing name and logs a
 warning when the machine refuses the link.
 
-A reply whose content holds a Hermes `<tool_call>` that the server's tool parser did not return,
-outside the reasoning before `</think>`, gets an error and another turn, up to `max_parse_retries`
+A reply that ends with a Hermes `<tool_call>` that the server's tool parser did not return gets an
+error and another turn, up to `max_parse_retries`
 (default 3, `0` disables) times. The error is a user message wrapped in
 `<tool_response>...</tool_response>`, which Hermes chat templates render like a tool result, so a
 thinking template keeps the earlier reasoning and the next prompt extends the served tokens. A
-reply cut off by the length limit is not retried.
+reply cut off by the length limit is not retried, and neither is a reply with text after its last
+call, which quotes the markup. Reasoning before `</think>` is ignored.
 
-The last step of a task with a shell tool records `TOOL_USAGE_METRICS`: `tool_calls`, `parse_retry`,
+The last step of a task with a shell tool records `TOOL_USAGE_METRICS`: `tool_calls`, `parse_retry`, and
 `opened_input_file` (whether a shell command named one of the conversation's task files, only for tasks
-whose conversation names one), and `wrote_output_file` (whether every `output_paths` entry exists when the
-attempt ends, only for tasks with `output_paths`). A turn or token limit that ends the attempt still
-records them. SkyRL reports them per environment for `taskcompendium` rows.
+whose conversation names one). A turn or token limit that ends the attempt still records them. SkyRL
+reports them per environment for `taskcompendium` rows, with `wrote_output_file` for tasks with
+`output_paths`: whether the files that the engine captured cover every declared path.
 
 ### Tool providers
 
