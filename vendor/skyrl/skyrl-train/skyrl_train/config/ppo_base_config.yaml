@@ -333,6 +333,9 @@ trainer:
   # Deterministically sample this many validation prompts. Null evaluates the
   # complete validation dataset.
   eval_num_prompts: null
+  # Null permits partial grading. A fraction requires that coverage before training resumes.
+  # Results and failure diagnostics are still persisted when the requirement fails.
+  eval_required_score_coverage: null
   eval_before_train: true
   eval_interval: 5
   preflight_gate:
@@ -536,6 +539,8 @@ trajectory_runner:
   cleanup_timeout: 30
   shutdown_timeout: 45
   max_concurrent_tasks: 32
+  # Bound the shared evaluation pool independently of training concurrency; null inherits it.
+  eval_max_concurrent_tasks: null
   # When set, await an immutable answer write before grading each single-turn eval response.
   eval_saved_answers_root: null
   # One worker pool executes all task families on the trainer's node.
