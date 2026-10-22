@@ -543,10 +543,9 @@ def resolve_node_resource_requests(
 
 RL_PYTHON = "python"
 SKYRL_HOME = MARINSKYRL_TASK_ROOT
-# Iris synchronizes the small controller bundle to /app. The setup phase checks
-# out the same immutable MarinSkyRL commit and installs its locked training
-# environment under /app/marinskyrl.
-APP_DIR = "/app"
+# Iris synchronizes the project and local modules below /app. Setup verifies
+# their source identity and installs the independent frozen profile.
+APP_DIR = SKYRL_HOME
 
 
 @dataclass(frozen=True)
