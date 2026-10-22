@@ -3,9 +3,10 @@
 
 """Tool-call serialization shared by curated tasks and historical token exports."""
 
+import hashlib
 import json
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from typing import cast
 
@@ -28,6 +29,34 @@ from experiments.post_training.task_curation.datasets.bfcl_structure_closure.pre
 class ToolPrompt(StrEnum):
     COMPACT = "compact"
     NATIVE_DECLARED = "native-declared"
+
+
+@dataclass(frozen=True)
+class ToolPromptVariant:
+    name: str
+    case_id: str
+    prefix: str
+    expected: str
+    declared: bool
+
+
+def paired_tool_variants(
+    case_id: str, compact_prefix: str, instruction: str, tokenizer: PreTrainedTokenizerFast
+) -> list[ToolPromptVariant]:
+    """Cross declaration and serialization while holding tool-call content fixed."""
+    body = json.loads(compact_prefix.removeprefix(TOOL_OPEN))
+    native_prefix = native_tool_text(body, tokenizer, instruction=instruction, tools=None).removesuffix(TOOL_CLOSE)
+    return [
+        ToolPromptVariant(
+            name=f"{declaration}-{serialization}",
+            case_id=hashlib.sha256(f"{case_id}/{declaration}-{serialization}".encode()).hexdigest(),
+            prefix=prefix,
+            expected=prefix + TOOL_CLOSE,
+            declared=declaration == "declared",
+        )
+        for declaration in ("undeclared", "declared")
+        for serialization, prefix in (("compact", compact_prefix), ("native", native_prefix))
+    ]
 
 
 def write_result_tool() -> dict:

@@ -3,7 +3,7 @@
 
 import hashlib
 import json
-from dataclasses import asdict, replace
+from dataclasses import asdict
 
 import pytest
 from fray.types import ResourceConfig
@@ -28,28 +28,30 @@ from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cas
     Family,
     task_cases,
 )
-from experiments.post_training.task_curation.datasets.bfcl_structure_closure.prefixes import prepare_training_prefixes
-from experiments.post_training.task_curation.datasets.bfcl_structure_closure.source import TrainingPrefix, sources
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.prefixes import (
+    near_boundary_case,
+    prepare_training_prefixes,
+)
+from experiments.post_training.task_curation.datasets.bfcl_structure_closure.source import (
+    CaseConverter,
+    TrainingPrefix,
+    sources,
+)
 from experiments.post_training.task_curation.datasets.bfcl_structure_closure.tasks import (
     case_task,
     paired_task_probes,
-    prepare_tasks,
 )
 from experiments.post_training.task_curation.local import run_local_steps
-from experiments.post_training.task_curation.pipeline import HfSource, process_rows
+from experiments.post_training.task_curation.pipeline import HfSource
 
 SOURCE = Source(dataset="closure-fixture", revision="source-revision", row="0", importer_revision="1")
 
 
-def write_cases(directory, *, overlap=False):
+def write_cases(directory):
     directory.mkdir()
     hashes = {}
     for split in ("train", "validation"):
-        cases = task_cases("parent" if overlap else split + "_parent", [{"search": {"query": "value"}}], split, "source")
-        if overlap:
-            cases = [
-                replace(case, case_id=hashlib.sha256(f"{split}/{case.case_id}".encode()).hexdigest()) for case in cases
-            ]
+        cases = task_cases(split + "_parent", [{"search": {"query": "value"}}], split, "source")
         data = "".join(json.dumps(asdict(case)) + "\n" for case in cases).encode()
         (directory / f"{split}.jsonl").write_bytes(data)
         hashes[split] = hashlib.sha256(data).hexdigest()
@@ -58,37 +60,33 @@ def write_cases(directory, *, overlap=False):
 
 @pytest.mark.parametrize("tool_prompt", list(ToolPrompt))
 @pytest.mark.asyncio
-async def test_exported_tasks_grade_each_family_through_prefill_harness(tmp_path, tokenizer, tool_prompt):
-    cases = tmp_path / "cases"
-    write_cases(cases)
-    near = tmp_path / "near"
-    prepare_training_prefixes(cases, near)
+async def test_curated_tasks_grade_each_family_through_prefill_harness(tmp_path, tokenizer, tool_prompt):
     initializer = tmp_path / "tokenizer"
     tokenizer.save_pretrained(initializer)
-    output = tmp_path / "tasks"
-    prepare_tasks(near, output, tool_prompt=tool_prompt, initializer=initializer)
-    tasks = [TaskSpec.model_validate_json(line) for line in (output / "validation.jsonl").read_text().splitlines()]
-    training = [TaskSpec.model_validate_json(line) for line in (output / "train.jsonl").read_text().splitlines()]
-    training_tool = next(
-        task for task in training if "family:tool_delimiter" in task.tags and "control:continue_required" in task.tags
+    context = ConversionContext(inputs={"tokenizer": StoragePath(str(initializer))}, grader_environment=None)
+    converter = CaseConverter(tool_prompt)
+    cases = task_cases("validation_parent", [{"search": {"query": "value"}}], "validation", "source")
+    tasks = [converter(RawRow(case.case_id, SOURCE, asdict(case)), context) for case in cases]
+    training_case = next(
+        case
+        for case in task_cases("train_parent", [], "train", "source")
+        if case.family == Family.TOOL and case.control == "continue_required"
     )
+    training_tool = converter(RawRow(training_case.case_id, SOURCE, asdict(near_boundary_case(training_case))), context)
     training_spec = verifyit_spec(training_tool.grader)
     assert isinstance(training_spec, StructureClosureSpec)
     assert 'train_parent"' in training_spec.prefix
-    originals = {row["case_id"]: row for row in map(json.loads, (cases / "validation.jsonl").read_text().splitlines())}
-    assert {task.id for task in tasks} == {"structure-closure:" + identity for identity in originals}
-    assert {original["family"] for original in originals.values()} == set(Family)
+    assert {case.family for case in cases} == set(Family)
     engine = RolloutEngine({}, {"prefill": PrefillHarness()})
-    for task in tasks:
-        original = originals[task.id.removeprefix("structure-closure:")]
+    for case, task in zip(cases, tasks, strict=True):
         spec = verifyit_spec(task.grader)
         assert isinstance(spec, StructureClosureSpec)
-        if original["family"] in (Family.TOOL, Family.REPEATED_OPENER):
+        if case.family in (Family.TOOL, Family.REPEATED_OPENER):
             assert json.loads(spec.expected.removeprefix("<tool_call>").removesuffix("</tool_call>")) == json.loads(
-                original["expected"].removeprefix("<tool_call>").removesuffix("</tool_call>")
+                case.expected.removeprefix("<tool_call>").removesuffix("</tool_call>")
             )
         else:
-            assert spec.expected == original["expected"]
+            assert spec.expected == case.expected
         model = ReplayModel([{"role": "assistant", "content": spec.expected[len(spec.prefix) :]}])
         result = await engine.run_task(rollout_spec(task, harness="prefill", max_turns=1), model.complete)
         assert result.grade.reward == 1
@@ -121,18 +119,6 @@ async def test_paired_tool_probes_preserve_quoted_protocol_markers(tokenizer, ma
         result = await engine.run_task(rollout_spec(task, harness="prefill", max_turns=1), model.complete)
         assert result.grade.reward == 1
         assert bool(model.requests[0].options.get("tools")) == old["probe_variant"].startswith("declared-")
-
-
-def test_task_export_rejects_cross_split_parent_leakage_without_partial_splits(tmp_path):
-    cases = tmp_path / "cases"
-    write_cases(cases, overlap=True)
-    output = tmp_path / "tasks"
-    with pytest.raises(ValueError):
-        prepare_tasks(cases, output, tool_prompt=ToolPrompt.COMPACT, initializer=None)
-    assert not (output / "train.jsonl").exists()
-    assert not (output / "validation.jsonl").exists()
-    assert not (output / "manifest.json").exists()
-    assert len(json.loads((output / "conversion-failures.json").read_text())) == 1
 
 
 def test_curation_reader_generates_disjoint_task_cohorts(tmp_path):
@@ -172,7 +158,6 @@ def test_curation_reader_generates_disjoint_task_cohorts(tmp_path):
     for declared_source in declared:
         recipe = declared_source.config
         assert recipe is not None
-        assert declared_source.pipeline is process_rows
         assert recipe.source.read is not None
         cases = list(recipe.source.read(StoragePath(str(source / pinned.files[0])), context))
         cohort = [recipe.convert(RawRow(case["case_id"], SOURCE, case), context) for case in cases]
@@ -213,6 +198,19 @@ def test_curation_reader_generates_disjoint_task_cohorts(tmp_path):
         assert {verifyit_spec(task.grader).expected for task in curated} == {
             verifyit_spec(task.grader).expected for task in expected
         }
+    split.write_text(
+        json.dumps(
+            {
+                "train_task_ids": ["train_parent", "validation_parent"],
+                "diagnostic_reserved_task_ids": ["validation_parent"],
+                "parity_task_ids": [],
+            }
+        )
+    )
+    reader = declared[0].config.source.read
+    assert reader is not None
+    with pytest.raises(ValueError, match="disjoint"):
+        list(reader(StoragePath(str(source / pinned.files[0])), context))
 
 
 @pytest.mark.parametrize("split", ["train", "validation"])

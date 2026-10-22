@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from transformers import PreTrainedTokenizerFast
+from verifyit.closure_scoring import ClosureFormat
 
 from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import (
     ClosureCase,
@@ -49,7 +50,7 @@ def tokenized_case_record(
 ) -> TokenizedCaseRecord:
     """Render the pinned template and verify prefix-preserving conditional targets."""
     tools = None
-    if tool_prompt == ToolPrompt.NATIVE_DECLARED and case.family in (Family.TOOL, Family.REPEATED_OPENER):
+    if tool_prompt == ToolPrompt.NATIVE_DECLARED and closure_format(case.family) == ClosureFormat.TOOL:
         case = native_tool_case(case, tokenizer)
         tools = [write_result_tool()]
     rendered = cast(

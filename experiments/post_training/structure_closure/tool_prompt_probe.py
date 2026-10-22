@@ -19,7 +19,7 @@ from typing import cast
 
 from transformers import PreTrainedTokenizerFast
 from verifyit.closure_scoring import ClosureFormat, score_closure_region
-from verifyit.tool_call_markup import TOOL_CLOSE, TOOL_OPEN
+from verifyit.tool_call_markup import TOOL_CLOSE
 
 from experiments.post_training.structure_closure.token_data import (
     LOCAL_TOKEN_ROUNDTRIP_PASSED,
@@ -27,55 +27,59 @@ from experiments.post_training.structure_closure.token_data import (
 )
 from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import CLOSE_REQUIRED, Family
 from experiments.post_training.task_curation.datasets.bfcl_structure_closure.tool_serialization import (
-    native_tool_text,
+    paired_tool_variants,
     write_result_tool,
 )
 
 
-def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokenizerFast) -> list[dict]:
+class PairedToolProbeRecord(TokenizedCaseRecord):
+    probe_variant: str
+    source_case_id: str
+
+
+def paired_tool_probes(record: TokenizedCaseRecord, tokenizer: PreTrainedTokenizerFast) -> list[PairedToolProbeRecord]:
     """Keep task content fixed across declared/undeclared and compact/native formats."""
-    body = json.loads(record["prefix"].removeprefix(TOOL_OPEN))
     messages = [{"role": "user", "content": record["instruction"]}]
-    native = native_tool_text(body, tokenizer, instruction=record["instruction"], tools=None).removesuffix(TOOL_CLOSE)
     records = []
-    for declaration, tools in (("undeclared", None), ("declared", [write_result_tool()])):
+    for variant in paired_tool_variants(record["case_id"], record["prefix"], record["instruction"], tokenizer):
+        tools = [write_result_tool()] if variant.declared else None
         rendered = cast(
             str,
             tokenizer.apply_chat_template(
                 messages, tools=tools, tokenize=False, add_generation_prompt=True, enable_thinking=False
             ),
         )
-        for serialization, prefix in (("compact", record["prefix"]), ("native", native)):
-            variant = f"{declaration}-{serialization}"
-            prompt = rendered + prefix
-            prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-            target_ids = tokenizer.encode(TOOL_CLOSE, add_special_tokens=False)
-            expected = prefix + TOOL_CLOSE
-            decoded = tokenizer.decode(
-                prompt_ids + target_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
-            )
-            if decoded != prompt + TOOL_CLOSE:
-                raise ValueError(f"Conditional token round trip failed: {variant}")
-            if not score_closure_region(expected, expected, ClosureFormat.TOOL).success:
-                raise ValueError(f"Reference tool closure failed: {variant}")
-            if variant == "undeclared-compact" and prompt_ids != record["prompt_token_ids"]:
-                raise ValueError("Control arm differs from its source token record")
-            records.append(
+        prompt = rendered + variant.prefix
+        prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+        target_ids = tokenizer.encode(TOOL_CLOSE, add_special_tokens=False)
+        decoded = tokenizer.decode(
+            prompt_ids + target_ids, skip_special_tokens=False, clean_up_tokenization_spaces=False
+        )
+        if decoded != prompt + TOOL_CLOSE:
+            raise ValueError(f"Conditional token round trip failed: {variant.name}")
+        if not score_closure_region(variant.expected, variant.expected, ClosureFormat.TOOL).success:
+            raise ValueError(f"Reference tool closure failed: {variant.name}")
+        if variant.name == "undeclared-compact" and prompt_ids != record["prompt_token_ids"]:
+            raise ValueError("Control arm differs from its source token record")
+        records.append(
+            cast(
+                PairedToolProbeRecord,
                 {
                     **record,
-                    "case_id": hashlib.sha256(f"{record['case_id']}/{variant}".encode()).hexdigest(),
-                    "probe_variant": variant,
+                    "case_id": variant.case_id,
+                    "probe_variant": variant.name,
                     "source_case_id": record["case_id"],
-                    "prefix": prefix,
-                    "expected": expected,
+                    "prefix": variant.prefix,
+                    "expected": variant.expected,
                     "prompt_token_ids": prompt_ids,
                     "target_token_ids": target_ids,
                     "prompt_sha256": hashlib.sha256(prompt.encode()).hexdigest(),
                     "canonical_joint_encoding_matches": (
                         tokenizer.encode(prompt + TOOL_CLOSE, add_special_tokens=False) == prompt_ids + target_ids
                     ),
-                }
+                },
             )
+        )
     return records
 
 

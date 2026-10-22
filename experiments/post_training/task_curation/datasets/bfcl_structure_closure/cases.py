@@ -85,7 +85,7 @@ def syntax_state(text: str, family: Family):
 
 
 def score_case(case: ClosureCase, continuation: str) -> ClosureScore:
-    """Score a successful generation; infrastructure failures must stay unscored."""
+    """Score a completed continuation against the case's structure and content."""
     return score_closure(case.prefix + continuation, case.expected, closure_format(case.family))
 
 

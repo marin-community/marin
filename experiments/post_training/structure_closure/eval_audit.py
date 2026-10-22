@@ -14,6 +14,7 @@ from pathlib import Path
 
 from verifyit.closure_scoring import (
     CLOSURE_REGION_SCORER,
+    SNOWBALL_TURN_END_MARKERS,
     ClosureFormat,
     ContinuationOutcome,
     closure_response_content,
@@ -29,8 +30,6 @@ from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cas
     TASK_ID_PREFIX,
     VALUE_CONTINUE_REQUIRED,
 )
-
-SNOWBALL_TURN_END_MARKERS = ("<|eot_id|>", "<|end_of_text|>")
 
 
 class UidSource(StrEnum):

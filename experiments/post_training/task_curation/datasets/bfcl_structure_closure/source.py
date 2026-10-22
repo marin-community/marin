@@ -16,11 +16,13 @@ from taskcompendium.pipeline.controls import reference_reply
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFormat
 from taskcompendium.pipeline.models import Controls, IntendedUse, RawRow
 from transformers import PreTrainedTokenizerFast
+from verifyit.closure_scoring import ClosureFormat
 
 from experiments.post_training.task_curation.datasets.bfcl_structure_closure.cases import (
     ClosureCase,
     Family,
     Split,
+    closure_format,
     oracle_cases,
     split_membership,
 )
@@ -77,7 +79,7 @@ class CaseConverter:
     def __call__(self, row: RawRow, context: ConversionContext) -> TaskSpec:
         case = ClosureCase(**(dict(row.data) | {"family": Family(row.data["family"])}))
         tools = ()
-        if self.tool_prompt == ToolPrompt.NATIVE_DECLARED and case.family in (Family.TOOL, Family.REPEATED_OPENER):
+        if self.tool_prompt == ToolPrompt.NATIVE_DECLARED and closure_format(case.family) == ClosureFormat.TOOL:
             case = native_tool_case(case, _tokenizer(str(context.inputs["tokenizer"])))
             tools = (FunctionDefinition.model_validate(write_result_tool()["function"]),)
         task = case_task(case, row.source, tools=tools)

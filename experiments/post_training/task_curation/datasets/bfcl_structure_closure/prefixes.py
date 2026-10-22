@@ -80,9 +80,10 @@ def prepare_training_prefixes(source: Path, output: Path) -> dict:
         except (ValueError, TypeError, KeyError) as error:
             failures.append({"line": number, "error": str(error)})
     output.mkdir(parents=True)
-    (output / "conversion-failures.json").write_text(json.dumps(failures, indent=2) + "\n")
+    failures_path = output / "conversion-failures.json"
+    failures_path.write_text(json.dumps(failures, indent=2) + "\n")
     if failures:
-        raise ValueError(f"{len(failures)} conversion failures; see {output / 'conversion-failures.json'}")
+        raise ValueError(f"{len(failures)} conversion failures; see {failures_path}")
     training = b"".join(lines)
     (output / "train.jsonl").write_bytes(training)
     (output / "validation.jsonl").write_bytes(validation)
