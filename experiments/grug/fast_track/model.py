@@ -915,6 +915,15 @@ class GrugModelConfig:
     the ``[B, H, S, W]`` Inkling bias) are never alive during the MLP backward. Costs one extra
     attention forward per layer; needed for memory at d1280."""
     value_embeds: "ValueEmbeds" = dataclasses.field(default_factory=lambda: ValueEmbeds.NONE)
+    value_embed_layers: tuple[int, ...] | None = None
+    """MLA layers that carry value embeddings (None: every MLA layer). Each layer stack (the body and the
+    ``latent_out_full_layers`` tail) must be wholly in or out."""
+    value_embed_tie_lm_head: bool = False
+    """The value embedding of a token is its lm_head column (``output_proj[:, token]``) split into heads, instead
+    of a table of its own; the lm_head gets gradient from both uses. Needs MLA heads x head_dim == hidden_dim."""
+    value_embed_probe: bool = False
+    """Log each VE layer's ``lambda1``, ``lambda2`` and mean value-embedding weight ``w`` (``train/attn_res/knob_ve_*``).
+    Logging only."""
     value_embed_fsdp: bool = False
     """Store each MLA layer's value-embedding table row-sharded over the FSDP axes (all-gathered once per use)
     instead of replicating it. Same math; at hero width the replicated tables, their gradients and casts take
@@ -1077,6 +1086,18 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.value_embed_layers is not None or self.value_embed_tie_lm_head:
+            if self.value_embeds == ValueEmbeds.NONE or not self.attn_res or self.scan_layers:
+                raise ValueError(
+                    "value_embed_layers / value_embed_tie_lm_head need value_embeds, attn_res and scan_layers=false"
+                )
+        if self.value_embed_tie_lm_head:
+            heads = self.num_heads if self.mla_num_heads is None else self.mla_num_heads
+            if heads * self.inferred_head_dim != self.hidden_dim:
+                raise ValueError(
+                    f"value_embed_tie_lm_head needs MLA heads x head_dim == hidden_dim, got {heads} x "
+                    f"{self.inferred_head_dim} != {self.hidden_dim}"
+                )
         if self.attn_res_final_logit_soft_cap is not None and (
             not self.attn_res or self.attn_res_final_logit_soft_cap <= 0
         ):
@@ -1450,7 +1471,7 @@ class CausalSelfAttention(eqx.Module):
                         _init_weight(k_ve, (cfg.vocab_size, n_v * h), std),
                         P(_FSDP_AXES, None) if cfg.value_embed_fsdp else P(None, None),
                     )
-                    if use_ve
+                    if use_ve and not cfg.value_embed_tie_lm_head
                     else None
                 ),
                 ve_lambda=_ve_lambda_init(cfg.value_embeds),
@@ -1500,10 +1521,10 @@ class CausalSelfAttention(eqx.Module):
         kv_share: dict[str, jax.Array] | None = None,
         proj_inputs: dict[str, jax.Array] | None = None,
         kv_input: Float[Array, "B S W"] | None = None,
-    ) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, jax.Array] | None]:
+    ) -> tuple[jax.Array, jax.Array, jax.Array, tuple[jax.Array, jax.Array] | None, dict[str, jax.Array]]:
         """MLA with a compressed KV latent: full-rank q; k and v up-projected from one normed latent (of
         ``kv_input``, the KV side stream, when given). The last element is the second (q, k) pair of
-        ``mla_diff_attn`` (same latent and SConvs), else None."""
+        ``mla_diff_attn`` (same latent and SConvs), else None; then the ``value_embed_probe`` stats."""
         head_dim = self.cfg.inferred_head_dim
         proj_inputs = proj_inputs or {}
         q_in = proj_inputs.get("q", x)
@@ -1550,8 +1571,10 @@ class CausalSelfAttention(eqx.Module):
             v = k
         else:
             v = rearrange(_proj(self.cfg, v_latent, self.w_uv), "... (n d) -> ... n d", d=head_dim)
-        if self.value_embed is not None:
-            assert self.ve_lambda is not None and token_ids is not None
+        ve_stats: dict[str, jax.Array] = {}
+        if self.ve_lambda is not None:
+            # value_embed_tie_lm_head: the lm_head table is put in place by Transformer._tie_value_embeds.
+            assert self.value_embed is not None and token_ids is not None
             table = self.value_embed.astype(x.dtype)
             # A sharded table is all-gathered once per use (16k rows: ~200 MB bf16 per MLA layer at hero width) and
             # its gradient reduce-scattered back; the chunked row lookup issued ~500 tiny collectives per use.
@@ -1560,7 +1583,14 @@ class CausalSelfAttention(eqx.Module):
             lam = self.ve_lambda.astype(x.dtype)
             ve_weight = _value_embed_weight(self.cfg.value_embeds, x, self.ve_gate, lam)
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
-        return q, k, v, (None), (None)
+            if self.cfg.value_embed_probe:
+                lam32 = jax.lax.stop_gradient(self.ve_lambda).astype(jnp.float32)
+                ve_stats[f"{_LAYER_KNOB_PREFIX}ve_lambda1"] = lam32[0]
+                ve_stats[f"{_LAYER_KNOB_PREFIX}ve_lambda2"] = lam32[1]
+                ve_stats[f"{_LAYER_KNOB_PREFIX}ve_weight_mean"] = jnp.mean(
+                    jax.lax.stop_gradient(jnp.broadcast_to(ve_weight, (*v.shape[:3], 1))).astype(jnp.float32)
+                )
+        return q, k, v, (None), ve_stats
 
     def _gqa_qkv(
         self,
@@ -1642,10 +1672,10 @@ class CausalSelfAttention(eqx.Module):
         sconv_segment_ids = _sconv_segment_ids(mask)
         second_qk = None
         if self.cfg.mla:
-            q, k, v, second_qk, _match = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs, kv_input)
+            q, k, v, second_qk, stats = self._mla_qkv(x, sconv_segment_ids, token_ids, kv_share, proj_inputs, kv_input)
         else:
             q, k, v = self._gqa_qkv(x, sconv_segment_ids, is_global, kv_input)
-        stats: dict[str, jax.Array] = {}
+            stats = {}
         fox_key_bias = None
         # The FoX key channels reach the kernel's 1/sqrt(padded head_dim) scale; q is rescaled to keep q.k exact.
         fox_q_scale = 1.0
@@ -5345,11 +5375,17 @@ class Transformer(eqx.Module):
         ) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
             layer_index = jnp.asarray(layers, dtype=jnp.int32)
+            if not use_kda:
+                layer_cfg = _value_embed_stack_config(layer_cfg, layers)
             return ArrayStacked.init(len(layers), Block)(layer_cfg, key=keys, layer_index=layer_index, use_kda=use_kda)
 
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
         softmax_tail, kda_tail = _tail_stack_layer_indices(cfg)
         softmax_rest, kda_rest = _rest_stack_layer_indices(cfg)
+        if cfg.value_embed_layers is not None and (
+            bad := set(cfg.value_embed_layers) - {*softmax_layers, *softmax_tail, *softmax_rest}
+        ):
+            raise ValueError(f"value_embed_layers {sorted(bad)} are not MLA layers")
         # The tail layers' config override is static per layer (MoEMLP.cfg); without tail layers there is none
         # (and dense models could not even build one).
         tail_cfg = _tail_layer_config(layer_base) if softmax_tail or kda_tail else layer_base
@@ -5467,6 +5503,19 @@ class Transformer(eqx.Module):
             *_tail_stack_layer_indices(self.config),
         )
         return [indices for indices in groups if indices]
+
+    def _tie_value_embeds(self, layers: list[Block]) -> list[Block]:
+        """``value_embed_tie_lm_head``: each VE layer's value-embedding table is the lm_head transposed."""
+        if not self.config.value_embed_tie_lm_head:
+            return layers
+        table = reshard(self.output_proj.T, P(None, None))
+
+        def tie(layer: Block) -> Block:
+            if not isinstance(layer.attn, CausalSelfAttention) or layer.attn.ve_lambda is None:
+                return layer
+            return eqx.tree_at(lambda b: b.attn.value_embed, layer, table, is_leaf=lambda x: x is None)
+
+        return [tie(layer) for layer in layers]
 
     def layers(self) -> list[Block]:
         """Every layer as its own module, in layer order (each stack split whole, never sliced)."""
@@ -5705,7 +5754,7 @@ class Transformer(eqx.Module):
         if scan is not None and scan.num_units:
             units, layers = self._split_scanned_units(scan)
         else:
-            units, layers = {}, self.layers()
+            units, layers = {}, self._tie_value_embeds(self.layers())
         # Every query in gate order [pass 0: attn_0, mlp_0, ..., mlp_{L-1}; pass 1: ...; final].
         gate_queries = (
             [_cast_floats(_unit_queries(scan, units, "attn_res_query_attn", "attn_res_query_mlp"), dtype)]
@@ -6696,6 +6745,21 @@ def _final_layer_config(cfg: GrugModelConfig, tail_cfg: GrugModelConfig) -> Grug
     ``final_shared_only`` apply to it."""
     out = tail_cfg
     return out
+
+
+def _value_embed_stack_config(cfg: GrugModelConfig, layers: tuple[int, ...]) -> GrugModelConfig:
+    """A softmax layer stack's config under ``value_embed_layers``: unchanged when every layer carries value
+    embeddings, ``value_embeds=none`` when none does."""
+    if cfg.value_embed_layers is None:
+        return cfg
+    chosen = [i in cfg.value_embed_layers for i in layers]
+    if all(chosen):
+        return cfg
+    if any(chosen):
+        raise ValueError(f"value_embed_layers must cover the whole layer stack {layers} or none of it")
+    return dataclasses.replace(
+        cfg, value_embeds=ValueEmbeds.NONE, value_embed_layers=None, value_embed_tie_lm_head=False
+    )
 
 
 def _tail_layer_config(cfg: GrugModelConfig) -> GrugModelConfig:
