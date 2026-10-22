@@ -25,12 +25,13 @@ import math
 import os
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Sequence, Type
 
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.callbacks import has_explicit_callbacks, interval_hf_export_enabled
+from skyrl_train.checkpoint_schedule import checkpoint_schedule
 from skyrl_train.distillation import DISTILLATION_SCORED_TOKENS_METRIC
 from skyrl_train.json_serialization import to_jsonable
 from skyrl_train.io import io
@@ -93,7 +94,7 @@ def _configured_distillation_token_budget(cfg: DictConfig) -> int | None:
 @register_callback(CHECKPOINT_CALLBACK_TYPE)
 class CheckpointCallback(TrainerCallback):
     """
-    Callback for saving training checkpoints at regular intervals.
+    Callback for saving training checkpoints at regular or explicitly listed steps.
 
     This replaces the inline `ckpt_interval` logic in the training loop.
     Checkpoints include model weights, optimizer state, and training state
@@ -102,11 +103,18 @@ class CheckpointCallback(TrainerCallback):
     Args:
         save_steps: Save a checkpoint every N steps. Set to -1 or 0 to disable.
         save_on_train_end: Whether to save a final checkpoint when training ends.
+        save_step_list: Explicit checkpoint steps; overrides ``save_steps`` when non-empty.
     """
 
-    def __init__(self, save_steps: int = 10, save_on_train_end: bool = True):
+    def __init__(
+        self,
+        save_steps: int = 10,
+        save_on_train_end: bool = True,
+        save_step_list: Sequence[int] | None = None,
+    ):
         self.save_steps = save_steps
         self.save_on_train_end = save_on_train_end
+        self.save_step_list = frozenset(save_step_list or ())
 
     def on_step_end(
         self,
@@ -114,7 +122,9 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_steps > 0 and state.global_step % self.save_steps == 0:
+        if state.global_step in self.save_step_list or (
+            not self.save_step_list and self.save_steps > 0 and state.global_step % self.save_steps == 0
+        ):
             control.should_save = True
         return control
 
@@ -124,7 +134,7 @@ class CheckpointCallback(TrainerCallback):
         control: TrainerControl,
         **kwargs,
     ) -> Optional[TrainerControl]:
-        if self.save_on_train_end and self.save_steps > 0:
+        if self.save_on_train_end and (self.save_steps > 0 or self.save_step_list):
             control.should_save = True
         return control
 
@@ -992,9 +1002,11 @@ def create_default_callbacks(cfg: DictConfig) -> List[TrainerCallback]:
     callbacks = []
 
     # Checkpoint callback
-    ckpt_interval = getattr(cfg.trainer, "ckpt_interval", 10)
-    if ckpt_interval > 0:
-        callbacks.append(CheckpointCallback(save_steps=ckpt_interval))
+    schedule = checkpoint_schedule(cfg)
+    if schedule.weight_steps:
+        callbacks.append(CheckpointCallback(save_step_list=list(schedule.weight_steps)))
+    elif schedule.interval > 0:
+        callbacks.append(CheckpointCallback(save_steps=schedule.interval))
 
     # Evaluation callback
     eval_interval = getattr(cfg.trainer, "eval_interval", 5)

@@ -1,3 +1,4 @@
+import json
 import os
 import math
 import random
@@ -13,6 +14,12 @@ import torch.nn as nn
 from torch import optim
 from torch import distributed as dist
 
+from skyrl_train.checkpoint_schedule import (
+    FULL_OPTIMIZER_STATE,
+    MASTER_ONLY_OPTIMIZER_STATE,
+    OPTIMIZER_STATE_MARKER,
+    master_only_optimizer_state,
+)
 from skyrl_train.distributed.strategy import DistributedStrategy
 from skyrl_train.distributed.utils import ModelOrModelOptimPair
 from skyrl_train.io import io
@@ -317,7 +324,10 @@ class MegatronStrategy(DistributedStrategy):
         client_state: dict = {},
         tag=None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
+        optimizer_state: str = "full",
     ):
+        if optimizer_state not in (FULL_OPTIMIZER_STATE, MASTER_ONLY_OPTIMIZER_STATE):
+            raise ValueError(f"optimizer_state must be {FULL_OPTIMIZER_STATE} or {MASTER_ONLY_OPTIMIZER_STATE}")
         # Extract base model.
         model: List[nn.Module] = model.actor_module
         materialize_megatron_params(model)
@@ -344,10 +354,15 @@ class MegatronStrategy(DistributedStrategy):
             for child in optimizers:
                 if child.optimizer is not None and child.init_state_fn is not None:
                     child.init_state_fn(child.optimizer, child.config)
-            sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
+            optimizer_sharded_state = optimizer.sharded_state_dict(
                 model_sharded_state_dict,
                 metadata=_optimizer_checkpoint_metadata(self.megatron_config.optimizer_checkpoint_sharding_type),
             )
+            if optimizer_state == MASTER_ONLY_OPTIMIZER_STATE:
+                # Keep the FP32 master records that weight analysis reads; drop the
+                # moment states a resume would need (C4/C8 checkpoint schedules).
+                optimizer_sharded_state = master_only_optimizer_state(optimizer_sharded_state)
+            sharded_state_dict["optimizer"] = optimizer_sharded_state
             if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
                 _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
                 sharded_state_dict["optimizer_recipe"] = _MUONH_CHECKPOINT_RECIPE
@@ -399,6 +414,9 @@ class MegatronStrategy(DistributedStrategy):
                 extra_state_path = os.path.join(work_dir, "extra_state.pt")
                 with io.open_file(extra_state_path, "wb") as f:
                     torch.save({"client_state": client_state, "tag": tag}, f)
+                marker_path = os.path.join(work_dir, OPTIMIZER_STATE_MARKER)
+                with io.open_file(marker_path, "w") as f:
+                    f.write(json.dumps({"optimizer_state": optimizer_state}))
 
         dist.barrier()
         ckpt_base.async_calls.close()
