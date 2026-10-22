@@ -27,6 +27,23 @@ SENSITIVE = re.compile(
     r"hf_[A-Za-z0-9]{25,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9_.-]{20,}",
     re.IGNORECASE,
 )
+REDACTIONS = (
+    re.compile(r"https?://iris\.oa\.dev/proxy/t/[^\s\"'<>]+", re.IGNORECASE),
+    re.compile(r"eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}(?:\.[A-Za-z0-9_-]+)?"),
+    re.compile(r"hf_[A-Za-z0-9]{25,}|sk-[A-Za-z0-9_-]{20,}|Bearer\s+[A-Za-z0-9_.-]{20,}", re.IGNORECASE),
+)
+
+
+def redact(value):
+    if isinstance(value, str):
+        for pattern in REDACTIONS:
+            value = pattern.sub("[REDACTED_CREDENTIAL]", value)
+        return value
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact(item) for key, item in value.items()}
+    return value
 
 
 def read_audit(archive: Path, member: str) -> dict:
@@ -104,7 +121,7 @@ def public_trial(trial: dict) -> dict:
                 "attempt": attempt_path.rsplit("/", 1)[-1],
                 "trajectory_uri": "s3://" + trajectory_path,
                 "trajectory_sha256": hashlib.sha256(trajectory_payload).hexdigest(),
-                "trajectory": safe_trajectory,
+                "trajectory": redact(safe_trajectory),
             }
         )
     public = {
@@ -114,6 +131,7 @@ def public_trial(trial: dict) -> dict:
         "agent_execution": result.get("agent_execution"),
         "attempts": attempts,
     }
+    public = redact(public)
     serialized = json.dumps(public, ensure_ascii=False, separators=(",", ":"))
     if SENSITIVE.search(serialized):
         raise ValueError(f"Sensitive endpoint or credential in public trial {uri}")
