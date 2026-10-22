@@ -43,10 +43,7 @@ overrides = [
     { name = "flashinfer-python", marker = "sys_platform == 'linux'", specifier = "==0.6.18.post1" },
     { name = "fsspec", specifier = "==2026.4.0" },
     { name = "marin-rigging", extras = ["secrets", "prometheus"], specifier = "==0.2.202.dev39324959133" },
-    { name = "marin-rolloutengine", git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], specifier = "==0.2.202.dev39324959133" },
-    { name = "marin-taskcompendium", git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
-    { name = "marin-verifyit", extras = ["math", "schema", "reasoning-gym", "judge"], git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
     { name = "nvidia-resiliency-ext", marker = "sys_platform == 'never'" },
     { name = "opentelemetry-api", marker = "sys_platform != 'linux'" },
     { name = "opentelemetry-api", marker = "sys_platform == 'linux'", specifier = "==1.44.0" },
@@ -2845,12 +2842,28 @@ secrets = [
 [[package]]
 name = "marin-rolloutengine"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=de5507111c2672a564cff96cbef54ffd2eb194aa#de5507111c2672a564cff96cbef54ffd2eb194aa" }
+source = { editable = "../../lib/rolloutengine" }
 dependencies = [
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
     { name = "marin-taskcompendium" },
     { name = "openai" },
     { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "marin-shellbox", editable = "../../lib/shellbox" },
+    { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
+    { name = "openai", specifier = ">=1.59.9" },
+    { name = "pydantic", specifier = ">=2" },
+]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "../../lib/shellbox" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
 ]
 
 [[package]]
@@ -2890,7 +2903,7 @@ dependencies = [
 [[package]]
 name = "marin-taskcompendium"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=de5507111c2672a564cff96cbef54ffd2eb194aa#de5507111c2672a564cff96cbef54ffd2eb194aa" }
+source = { editable = "../../lib/taskcompendium" }
 dependencies = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
@@ -2899,10 +2912,33 @@ dependencies = [
     { name = "tomlkit" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "datasets", marker = "extra == 'pipeline'", specifier = ">=3.1.0,<5.0.0" },
+    { name = "marin-finestore", marker = "extra == 'pipeline'", editable = "../../lib/finestore" },
+    { name = "marin-rigging", editable = "../../lib/rigging" },
+    { name = "marin-shellbox", editable = "../../lib/shellbox" },
+    { name = "marin-verifyit", extras = ["judge", "math", "reasoning-gym", "schema"], editable = "../../lib/verifyit" },
+    { name = "marin-zephyr", marker = "extra == 'pipeline'", editable = "../../lib/zephyr" },
+    { name = "numpy", marker = "extra == 'pipeline'", specifier = ">=1.26" },
+    { name = "pyarrow", marker = "extra == 'pipeline'", specifier = ">=15.0" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "tomlkit", specifier = ">=0.13" },
+]
+provides-extras = ["pipeline"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "marin-shellbox", extras = ["shellsim"], editable = "../../lib/shellbox" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-timeout" },
+]
+
 [[package]]
 name = "marin-verifyit"
 version = "0.1.0"
-source = { git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=de5507111c2672a564cff96cbef54ffd2eb194aa#de5507111c2672a564cff96cbef54ffd2eb194aa" }
+source = { editable = "../../lib/verifyit" }
 dependencies = [
     { name = "tomli-w" },
 ]
@@ -2921,6 +2957,27 @@ reasoning-gym = [
 schema = [
     { name = "jsonschema" },
     { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jsonschema", marker = "extra == 'schema'", specifier = ">=4.20" },
+    { name = "marin-verifyit", extras = ["math", "schema", "judge", "reasoning-gym"], marker = "extra == 'all'", editable = "../../lib/verifyit" },
+    { name = "math-verify", marker = "extra == 'math'", specifier = ">=0.9" },
+    { name = "openai", marker = "extra == 'judge'", specifier = ">=1.59.9" },
+    { name = "pyyaml", marker = "extra == 'schema'", specifier = ">=6.0" },
+    { name = "reasoning-gym", marker = "extra == 'reasoning-gym'", specifier = ">=0.1.25" },
+    { name = "sympy", marker = "extra == 'math'", specifier = ">=1.12" },
+    { name = "tomli-w", specifier = ">=1.2" },
+]
+provides-extras = ["math", "schema", "judge", "reasoning-gym", "all"]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.3.2" },
+    { name = "pytest-json-report", specifier = ">=1.5" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [[package]]
@@ -3124,10 +3181,10 @@ requires-dist = [
     { name = "marin-iris-native" },
     { name = "marin-rigging", extras = ["prometheus"], marker = "extra == 'telemetry'" },
     { name = "marin-rigging", extras = ["secrets"], specifier = ">=0.2.202.dev39324959133" },
-    { name = "marin-rolloutengine", git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Frolloutengine&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
+    { name = "marin-rolloutengine", editable = "../../lib/rolloutengine" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], specifier = ">=0.2.202.dev39324959133" },
-    { name = "marin-taskcompendium", git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Ftaskcompendium&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
-    { name = "marin-verifyit", extras = ["math", "schema", "reasoning-gym", "judge"], git = "https://github.com/marin-community/marin.git?subdirectory=lib%2Fverifyit&rev=de5507111c2672a564cff96cbef54ffd2eb194aa" },
+    { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
+    { name = "marin-verifyit", extras = ["math", "schema", "reasoning-gym", "judge"], editable = "../../lib/verifyit" },
     { name = "math-verify", specifier = "==0.9.0" },
     { name = "megatron-bridge", marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.6.0" },
     { name = "megatron-core", marker = "sys_platform == 'linux' and extra == 'megatron'", specifier = "==0.18.0" },
