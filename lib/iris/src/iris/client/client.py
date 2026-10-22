@@ -30,6 +30,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from finelog.rpc import logging_pb2
 from rigging.credentials import ClientCredentials
+from rigging.secrets import SecretBehavior, forwarded_secrets
 from rigging.timing import Deadline, Duration, ExponentialBackoff, Timestamp
 
 from iris.actor.resolver import ResolvedEndpoint, Resolver, ResolveResult
@@ -799,8 +800,9 @@ class IrisClient:
                 (a loopback-trusted tunnel).
             extra_bundle_includes: Glob patterns (relative to ``workspace``) for
                 required files excluded by default, such as validation tests or a
-                gitignored frontend ``dist``. Explicit ``bundle_exclude`` patterns
-                and exclusions for credentials, caches, and local builds still apply.
+                gitignored frontend ``dist``. Overrides ``[tool.iris.bundle].exclude``
+                in the workspace pyproject. Explicit ``bundle_exclude`` patterns and
+                exclusions for credentials, caches, and local builds still apply.
             bundle_exclude: Regex matched against each candidate bundle path
                 (POSIX, relative to ``workspace``); matching paths are dropped from
                 the bundle. Trims otherwise-tracked files that a job does not need,
@@ -962,9 +964,9 @@ class IrisClient:
                 for sandboxing untrusted child workloads).
             container_profile: Container security profile. UNSPECIFIED resolves to
                 DEFAULT. Elevated profiles (DOCKER_ACCESS, PRIVILEGED) require the
-                admin role at submission when auth is enabled. SANDBOX sends only
-                ``environment.env_vars`` and ``environment.setup_scripts``, no
-                workspace bundle, and skips parent env inheritance (see
+                admin role at submission when auth is enabled. SANDBOX sends
+                explicit env vars, secrets, and setup scripts without a workspace
+                bundle or parent environment inheritance (see
                 ``EnvironmentSpec.to_sandbox_proto``).
             egress_policy: What the job's network reaches: CLUSTER, INTERNET
                 (public addresses only) or NONE. UNSPECIFIED resolves to
@@ -1027,6 +1029,8 @@ class IrisClient:
                     extras=environment.extras,
                     setup_scripts=environment.setup_scripts if child_owns_setup else parent_setup_scripts,
                     sync_packages=environment.sync_packages,
+                    secrets=environment.secrets,
+                    secret_behavior=environment.secret_behavior,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)
@@ -1058,7 +1062,11 @@ class IrisClient:
         if sandboxed:
             environment_proto = (environment or EnvironmentSpec()).to_sandbox_proto()
         else:
-            environment_proto = environment.to_proto() if environment else None
+            environment = environment or EnvironmentSpec()
+            environment_proto = environment.to_proto()
+            if environment.secret_behavior == SecretBehavior.INHERIT:
+                supplied = set(environment_proto.secrets) | set(environment_proto.env_vars)
+                environment_proto.secrets.update(forwarded_secrets(exclude=supplied))
         constraints_proto = [c.to_proto() for c in constraints or []]
         coscheduling_proto = coscheduling.to_proto() if coscheduling else None
 

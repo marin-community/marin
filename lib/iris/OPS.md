@@ -81,13 +81,13 @@ Start and restart read the directory during preflight, before building images
 or stopping a controller. Controllers resolve identities at startup before
 checkpoint or database changes. GCP loads the Secret Manager reference at
 runtime; CoreWeave projects the directory through the controller-only
-`iris-controller-env` Secret. ConfigMaps and bootstrap configs retain IDs.
+`iris-controller-secrets` read-only volume. ConfigMaps and bootstrap configs retain IDs.
 Ordinary clients use the tracked config and do not read the directory.
 See [cluster configs](config/README.md).
 
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
-The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key and principal directory in memory and projects those values through `iris-controller-env`. A missing Secret Manager dependency, inaccessible secret, or unresolved principal leaves the running controller and rollout record unchanged.
+The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key and principal directory in memory and projects those values through the controller-only `iris-controller-secrets` volume. A missing Secret Manager dependency, inaccessible secret, or unresolved principal leaves the running controller and rollout record unchanged.
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
@@ -240,7 +240,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 7200 \
   --job-name my-run-coord \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e IRIS_PORT_JAX 32731 \
+  -e IRIS_PORT_JAX 32731 \
   -- python -m experiments.<launcher> --run-id my-run --dp-racks 1 --run
 ```
 
@@ -253,10 +253,11 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   prints the bundle size.
 - **`IRIS_PORT_JAX` must be unique per concurrent gang.** Rank 0 binds and
   registers it for the JAX coordinator, and the default is shared cluster-wide.
-- **Only `task_env` reaches the container.** Each cluster config's `defaults.task_env`
-  carries `MARIN_PREFIX` and the object-store credentials, and nothing else.
-  `WANDB_API_KEY` is not among them: pass it, or set `WANDB_MODE=disabled` for a
-  run whose metrics do not matter.
+- **Application credentials use files.** The submitting client includes available
+  HF/W&B/CoreWeave credentials and its current secret bundle by default. CoreWeave
+  tasks require the submitter's storage keys; operator keys stay on infrastructure Pods. `defaults.task_env` carries
+  nonsecret settings such as `MARIN_PREFIX` and storage endpoints. See
+  [secret delivery](docs/secrets.md).
 - **`SchedulingGated` on every task means the gang is queued.** Kueue admits a
   gang all at once, so a busy cluster holds all of it. Same-band jobs queue
   behind each other; they do not preempt.
@@ -279,9 +280,10 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 
 ### `job run` gotchas
 
-- **Remote jobs only see env vars you put in the job spec.** The submitter's
-  shell env is not copied into the container. Pass required values explicitly:
-  `iris job run -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" -- python train.py`.
+- **Environment values must be explicit.** The submitter's shell environment is
+  not copied wholesale. HF/W&B/CoreWeave defaults use secret files automatically; pass other
+  credentials with `--secret NAME SOURCE`. `-e NAME VALUE` delivers an environment
+  value, including an explicit credential override.
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
@@ -310,6 +312,14 @@ days. Kubernetes `DisruptionTarget` conditions are recorded as
 `k8s/disruption` events with the pod and node identity plus a snapshot of the
 node's taints, conditions, hardware/topology labels, and CoreWeave health
 annotations.
+
+For an evaluator that retries after a `Completed` container event and a later
+`PodDeleted` worker-failure verdict, inspect its durable result archive before
+rerunning or accepting the retry. The evaluator may already have written a
+complete, sealed result even though its parent lacks a canonical record. See
+[Auditing an Evalchemy run](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears)
+for the archive checks. The Iris verdict alone does not establish whether the
+application result is complete.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -398,6 +408,16 @@ while the old process still owns the GPU. Force-delete a stale object only after
 CoreWeave confirms the reboot completed (or process death is otherwise proven).
 
 ## Process Inspection & Profiling
+
+If controller RPCs time out while `/health` succeeds, inspect the RPC worker
+threads. Bundle uploads and waits for the same bundle's lock can exhaust that pool
+without stopping the control loop. When RPC profiling is unavailable on CoreWeave,
+use the configured Kubernetes context to run `py-spy dump --pid 1` in the controller
+pod. Repeated `BundleStore.write` stacks in S3 I/O or `_content_lock` identify this
+failure. Launch payload persistence has a 30-second deadline covering the lock
+wait, object existence check, and upload. A failed upload returns an `unavailable`
+job-creation error without inserting the new job; clients can retry after storage
+recovers.
 
 ```bash
 iris process status                         # controller resource usage

@@ -1,0 +1,130 @@
+# @package environment.task_sessions
+local: null # Explicitly enable with {} on Linux hosts with working bubblewrap.
+max_verifier_workers: 32 # verifier threads in each rollout worker
+remote_judge: null # Set base_url and api_key_env to grade judge tasks on the rollout host.
+daytona: null # Set api_key_env and ttl_minutes for tasks with the daytona backend.
+
+session:
+  max_turns: ${generator.max_turns}
+  model_turn_timeout: null
+  command_timeout: ${trajectory_runner.command_timeout}
+  tool_turn_timeout: 600
+  total_turn_timeout: null
+  attempt_timeout: null
+  verifier_timeout: null
+  cleanup_timeout: ${trajectory_runner.cleanup_timeout}
+  max_total_tokens: null
+
+lcb:
+  machine: &python_machine
+    requirements:
+      command_semantics: linux_process
+      docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+      working_directory: /workspace
+    runtime: &python_runtime
+      backend: docker
+      network: deny
+      memory_mb: 8192
+      cpus: 1
+      storage_mb: null
+      gpus: 0
+      user: null
+      startup_timeout: 600
+      cleanup_timeout: null
+
+searchcode:
+  machine: *python_machine
+
+text_to_sql:
+  machine: *python_machine
+
+gsm8k:
+  # Select final_line when only a completed response's last #### line should earn reward.
+  reward_method: strict
+
+text2sql:
+  db_path: "/home/ray/default/sql_data"
+  machine: *python_machine
+
+llm_as_a_judge:
+  model: "gpt-4o-mini"
+  base_url: null
+
+search:
+  log_requests: false
+  search_url: "http://127.0.0.1:8000/retrieve"
+  topk: 3
+  timeout: 30
+
+# Judge endpoints belong to the verifier. Task execution uses Shellbox machines.
+nemotron_ultra:
+  # verify runs each row's verifier. skip keeps tool turns but returns no verdict, so
+  # judge-backed rows need no judge; Lean refinement rows are still verified because the
+  # verdict drives their correction turn. Valid only for pure on-policy distillation
+  # (distillation reward_mode=replace, uniform advantages, no eval).
+  grading: verify
+  machines:
+    ns_tools_simple_agent: *python_machine
+    code_gen_simple_agent: *python_machine
+    nvarc_inductive_simple_agent: *python_machine
+    math_formal_lean_refinement_agent:
+      requirements:
+        command_semantics: linux_process
+        docker_image: us-east1-docker.pkg.dev/hai-gcp-models/marin/nemo-skills-sandbox@sha256:280e0871b02f5dc935c1b3fdfbf75c394cceb087a0a284b13918aeb22e10b104
+        working_directory: /lean4/my_project
+      runtime: *python_runtime
+  lean_timeout: 30.0
+  # Kernel bounds for code_gen_simple_agent. max_memory_bytes limits the
+  # interpreter address space and data size. total_timeout_seconds limits the
+  # full grading attempt. A null value removes the corresponding bound.
+  code_verifier:
+    per_test_timeout_seconds: 10
+    total_timeout_seconds: 300
+    max_memory_bytes: 4294967296
+  judges:
+    general:
+      base_url: "http://127.0.0.1:8001/v1"
+      model: "general-judge"
+      api_key: "dummy_key"
+      api_key_env: null
+      timeout_seconds: 600.0
+      response_transport: responses_metadata
+      reasoning_effort: null
+    safety:
+      base_url: "http://127.0.0.1:8002/v1"
+      model: "safety-judge"
+      api_key: "dummy_key"
+      api_key_env: null
+      timeout_seconds: 600.0
+      response_transport: responses_metadata
+      reasoning_effort: null
+  genrm:
+    judge:
+      base_url: "http://127.0.0.1:8003/v1"
+      model: "genrm-judge"
+      api_key: "dummy_key"
+      api_key_env: null
+      timeout_seconds: 600.0
+      response_transport: responses_metadata
+      reasoning_effort: null
+    max_concurrent_comparisons: 4
+    default_score: 3.0
+    max_output_tokens: 24576
+    temperature: 1.0
+    top_p: 0.95
+    genrm_parse_retries: 1
+    genrm_parse_retry_sleep_seconds: 0.2
+    reasoning_bonus: 0.5
+    answer_bonus: 0.5
+    top_percentile: 0.2
+    group_reasoning_length_penalty_coeff: 0.1
+    group_answer_length_penalty_coeff: 0.1
+
+aime:
+  evaluation_token_budget: 8192
+  strict_box_verify: false
+  length_penalty_weight: 0.0
+  target_length: 768
+  truncated_penalty: -2.0
+  min_response_length: 16
+  max_gen_length: 0

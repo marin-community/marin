@@ -25,6 +25,7 @@ from iris.cluster.runtime.docker import (
     RESERVED_HOST_PORTS,
 )
 from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS
+from iris.cluster.secrets import VM_WORKER_SECRETS_ROOT
 
 # gVisor release the worker installs so the SANDBOX container profile can run task
 # containers under `docker --runtime=runsc`. Pin explicitly; bump by checking
@@ -431,11 +432,14 @@ sudo docker run -d --name iris-node-agent \
 # Start worker container with restart policy from the start so transient
 # failures (image pull races, network hiccups, etc.) self-heal. Give-up is
 # owned by the autoscaler's slice health probe, not by docker.
+sudo mkdir -p {{ secrets_root }}
+sudo chmod 700 {{ secrets_root }}
 sudo docker run -d --name iris-worker \\
     --restart=unless-stopped \\
     --network=host \\
     --ulimit core=0:0 \\
     -v {{ cache_dir }}:{{ cache_dir }} \\
+    -v {{ secrets_root }}:{{ secrets_root }} \\
     -v /var/run/docker.sock:/var/run/docker.sock \\
     -v {{ egress_run_dir }}:{{ egress_run_dir }}:ro \\
     -v /etc/iris/worker_config.json:/etc/iris/worker_config.json:ro \\
@@ -502,6 +506,7 @@ def build_worker_bootstrap_script(
     return render_template(
         WORKER_BOOTSTRAP_SCRIPT,
         cache_dir=worker_config.cache_dir,
+        secrets_root=str(VM_WORKER_SECRETS_ROOT),
         docker_image=worker_config.docker_image,
         worker_port=worker_config.port,
         worker_config_json=worker_config_json,

@@ -3,6 +3,7 @@
 
 """Tests for CloudK8sService helpers and K8sResource enum path construction."""
 
+import traceback
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -145,6 +146,22 @@ def _service_with_api(pages: list[list[str]]) -> tuple[CloudK8sService, _FakeApi
     # Seed the cached_property so no real kubernetes client is built.
     svc.__dict__["_dyn"] = SimpleNamespace(resources=SimpleNamespace(get=lambda **kwargs: api))
     return svc, api
+
+
+def test_secret_apply_failure_does_not_expose_api_echoed_values():
+    def reject_manifest(**_kwargs):
+        error = k8s_service.ApiException(status=422, reason="invalid submitted-sensitive-value")
+        error.body = "data: submitted-sensitive-value"
+        raise error
+
+    svc = CloudK8sService(namespace="iris")
+    svc.__dict__["_dyn"] = SimpleNamespace(
+        resources=SimpleNamespace(get=lambda **kwargs: object()),
+        server_side_apply=reject_manifest,
+    )
+    with pytest.raises(KubectlError) as captured:
+        svc.apply_json({"kind": "Secret", "metadata": {"name": "attempt-credentials"}, "data": {"API_KEY": "value"}})
+    assert "submitted-sensitive-value" not in "".join(traceback.format_exception(captured.value))
 
 
 def test_list_json_walks_all_pages():

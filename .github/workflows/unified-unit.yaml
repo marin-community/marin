@@ -282,14 +282,9 @@ jobs:
           fi
           du -sh "$UV_CACHE_HOST"
           TPU_TEST_PATHS="${{ needs.select.outputs.levanter_tpu_test_paths }}"
-          if [ -z "$TPU_TEST_PATHS" ]; then
-            TPU_TEST_PATHS="lib/levanter/tests"
-            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_audio.py"
-            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_new_cache.py"
-            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_checkpoints.py"
-            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_hf_gpt2_serialize.py"
-            TPU_TEST_PATHS+=" --ignore=lib/levanter/tests/test_gdn_layer.py"
-          fi
+          # The selector includes only files with tpu-marked tests, including full runs.
+          # Never fall back to repeating the entire CPU suite on the TPU runner.
+          test -n "$TPU_TEST_PATHS"
           # Run Levanter tests with the package TPU extra so CI validates the
           # explicit jax/jaxlib/libtpu pins shipped by marin-levanter.
           # TPU collection imports call jax.devices(), so keep pytest single-process here.
@@ -325,9 +320,55 @@ jobs:
                 timeout --kill-after=5 --signal=TERM 2090 \
                 uv run --package marin-levanter --frozen --group test --extra tpu \
                 pytest -n 0 $TPU_TEST_PATHS \
+                -m 'tpu and not slow and not torch and not integration and not data_integration and not cluster and not requires_cluster and not docker and not manual' \
                 -v --tb=short --log-cli-level=WARNING --durations=20 || status=\$?; \
                 [ "\$status" -eq 5 ] && exit 0; \
                 exit "\$status" )"
+
+  evalchemy:
+    name: evalchemy-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'evalchemy-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "vendor/evalchemy/uv.lock"
+      - name: Check evaluator lock freshness
+        run: uv lock --project vendor/evalchemy --check
+      - name: Test vendored Evalchemy
+        working-directory: vendor/evalchemy
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/vendor/evalchemy/.venv
+        run: >-
+          uv run --frozen --all-extras --group test pytest -q
+      - name: Check publication policy metrics
+        working-directory: vendor/evalchemy
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/vendor/evalchemy/.venv
+        run: >-
+          uv run --frozen --all-extras --group test python
+          ../../experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/check_policy_metrics.py
+
+  harbor:
+    name: harbor-unit
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'harbor-unit') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "vendor/harbor/uv.lock"
+      - name: Check Harbor lock and offline runtime
+        run: uv run --no-project infra/ci/run_harbor_tests.py
 
   shellbox:
     name: shellbox-unit
@@ -430,7 +471,8 @@ jobs:
     name: iris-e2e-smoke
     needs: select
     if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
-    runs-on: ubuntu-latest
+    # The locked Playwright release supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
@@ -451,7 +493,7 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.playwright-version.outputs.version }}
+          key: playwright-ubuntu-24.04-${{ runner.arch }}-${{ steps.playwright-version.outputs.version }}
 
       - name: Install Playwright browsers
         # Always run: `playwright install` only downloads browsers it does not already
@@ -479,9 +521,30 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  skyrl:
+    name: skyrl-wheel
+    needs: select
+    if: ${{ contains(fromJSON(needs.select.outputs.suites), 'skyrl-wheel') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: "vendor/skyrl/uv.lock"
+      - name: Check independent lock
+        run: uv lock --project vendor/skyrl --check
+      - name: Exercise packaging, launchers, and verifier
+        working-directory: vendor/skyrl
+        run: |
+          uv run --isolated --frozen --extra cpu --no-group dev --with pytest==8.4.2 --with pytest-asyncio==1.4.0 pytest -q \
+            infra/tests/test_*.py cloud/iris/tests/test_*.py skyrl-gym/tests/test_*.py
+
   unit_tests:
     name: unit-tests
-    needs: [select, unit, levanter_torch, levanter_tpu, shellbox, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke]
+    needs: [select, unit, levanter_torch, levanter_tpu, evalchemy, harbor, shellbox, taskcompendium, rolloutengine, taskforge, iris_e2e_smoke, skyrl]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -491,10 +554,13 @@ jobs:
             "${{ needs.unit.result }}" \
             "${{ needs.levanter_torch.result }}" \
             "${{ needs.levanter_tpu.result }}" \
+            "${{ needs.evalchemy.result }}" \
+            "${{ needs.harbor.result }}" \
             "${{ needs.shellbox.result }}" \
             "${{ needs.taskcompendium.result }}" \
             "${{ needs.rolloutengine.result }}" \
             "${{ needs.taskforge.result }}" \
+            "${{ needs.skyrl.result }}" \
             "${{ needs.iris_e2e_smoke.result }}"
           do
             case "$result" in

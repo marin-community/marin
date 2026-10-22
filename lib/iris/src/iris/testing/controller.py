@@ -176,6 +176,9 @@ class FakeProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
@@ -217,6 +220,7 @@ class MockController:
         self.backend = Mock()
         self.backend.descriptor = worker_backend_descriptor()
         self.backend.job_feasibility.return_value = None
+        self.backend.validate_job.return_value = None
         self.backend.runtime_image.return_value = ""
         self.worker_health = WorkerHealthTracker()
         self.backend_observation = BackendObservation()

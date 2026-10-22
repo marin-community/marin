@@ -1,0 +1,37 @@
+name: Marin - SkyRL CPU Nightly
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cat-count-cpu-nightly
+  cancel-in-progress: true
+
+jobs:
+  cat_count:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: vendor/skyrl
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Install CPU trainer
+        run: uv sync --frozen --group dev --group harbor-test --extra cpu --extra telemetry
+      - name: Check learning, reversed rewards and async checkpoint resume
+        env:
+          PYTHONPATH: ${{ github.workspace }}/vendor/skyrl/skyrl-train:${{ github.workspace }}/vendor/skyrl/skyrl-gym
+          AWS_ACCESS_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+          AWS_ENDPOINT_URL: https://cwobject.com
+          AWS_REGION: auto
+          FSSPEC_S3: '{"endpoint_url": "https://cwobject.com", "config_kwargs": {"s3": {"addressing_style": "virtual"}}}'
+        run: uv run --frozen --extra cpu --extra telemetry --group dev --group harbor-test pytest skyrl-train/tests/cpu/test_evaluation_score_order.py skyrl-train/tests/cpu/test_cat_count_cpu_canary.py -n 0 -s --durations=10

@@ -3,13 +3,13 @@
 
 """Opaque Harbor policies and the isolated-driver process protocol."""
 
+import hashlib
 import json
 import logging
 import subprocess
 import tempfile
-import tomllib
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from pathlib import Path
 
@@ -19,15 +19,14 @@ from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
 from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
+from marin.evaluation.harbor.provenance import vendored_harbor_source, vendored_runtime_digest
 from marin.evaluation.records import BenchmarkMetadataRef
-from marin.external_dependencies import HARBOR
+from marin.evaluation.runner import BACKEND_POLL_SECONDS, check_inference_backend
 from marin.inference.iris import InferenceBackendState
 
 _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _OWNER_ONLY_MODE = 0o600
-# Harbor can exhaust a trial's upstream retry budget in tens of seconds when an endpoint disappears.
-_BACKEND_POLL_SECONDS = 5.0
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
@@ -36,6 +35,7 @@ _DRIVER_SYSTEM_ENV_KEYS = (
     "HOME",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "IRIS_ATTEMPT_UID",
     "IRIS_UV_EXECUTABLE",
     "IRIS_WORKDIR",
     "NO_PROXY",
@@ -53,16 +53,14 @@ _DRIVER_SYSTEM_ENV_KEYS = (
 )
 
 
-class HarborBackendsUnavailable(RuntimeError):
-    """Harbor stopped because its model backends are not ready."""
-
-
 # Object-store credentials and config the isolated driver needs to write each trial straight to a
-# remote ``jobs_dir`` (CoreWeave S3, GCS). fsspec reads the ``FSSPEC_S3`` block natively; ``s3fs``
-# reads the ``AWS_*`` variables and ``gcsfs`` reads the ``GOOGLE_*`` ones. Resolved present-only from
-# the eval pod's ambient environment (an Iris CoreWeave task carries the ``AWS_*``/``FSSPEC_S3`` set
-# via ``iris-task-env``; GCS runs on the workload's metadata-server identity with no key file).
+# remote ``jobs_dir`` (CoreWeave S3, GCS). The subprocess shares the task's
+# mounted files; rigging reads its explicit credentials from RIGGING_SECRETS_DIR.
+# GCS normally uses the workload's metadata-server identity.
 _DRIVER_STORAGE_ENV_KEYS = (
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "RIGGING_SECRETS_DIR",
+    "HF_TOKEN_PATH",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_SESSION_TOKEN",
@@ -74,42 +72,35 @@ _DRIVER_STORAGE_ENV_KEYS = (
     "GOOGLE_CLOUD_PROJECT",
 )
 
-HARBOR_RUNTIME_PROJECT = "config/external/harbor"
+HARBOR_RUNTIME_PROJECT = "vendor/harbor"
 
 
-def harbor_runtime_descriptor(commit: str, runtime_project: str = HARBOR_RUNTIME_PROJECT) -> str:
-    dependency = replace(HARBOR, commit=commit)
-    if runtime_project == HARBOR_RUNTIME_PROJECT:
-        requirements = dependency.runtime_requirements
-    else:
-        lock_path = _harbor_env_dir(runtime_project) / "uv.lock"
-        with lock_path.open("rb") as lock_file:
-            packages = tomllib.load(lock_file)["package"]
-        by_name = {package["name"]: package for package in packages}
-        locked_commit = by_name["harbor"]["source"]["git"].rsplit("#", 1)[-1]
-        if locked_commit != commit:
-            raise ValueError(f"Harbor lock {lock_path} pins {locked_commit}, expected {commit}")
-        direct_dependencies = by_name["marin-external-harbor"]["dependencies"]
-        requirements = tuple(
-            f"{name}=={by_name[name]['version']}" for entry in direct_dependencies if (name := entry["name"]) != "harbor"
-        )
-    return "; ".join((dependency.requirement(("archive",)), *requirements))
-
-
-HARBOR_RUNTIME = harbor_runtime_descriptor(HARBOR.commit)
-
-# The isolated driver runs against the fully pinned lock under this directory, not a loose ``--with``
-# resolution: the git-branch and pre-release pins (harbor, litellm) drift daily, and only the locked
-# set is validated to import and to carry the fsspec backends the remote ``jobs_dir`` needs.
-logger = logging.getLogger(__name__)
-
-
-def _harbor_env_dir(runtime_project: str) -> Path:
-    """Resolve a locked isolated-driver project in the local Marin workspace."""
+def _harbor_env_dir() -> Path:
+    """Resolve an isolated-driver project in the local Marin workspace."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
-        raise RuntimeError("Harbor driver requires a Marin workspace to locate its pinned environment")
-    return workspace_root / runtime_project
+        raise RuntimeError("Harbor driver requires a Marin workspace to locate its environment")
+    return workspace_root / HARBOR_RUNTIME_PROJECT
+
+
+def harbor_runtime_descriptor() -> str:
+    project = _harbor_env_dir()
+    source = vendored_harbor_source(project)
+    workspace_root = project.parent.parent
+    lock_digest = hashlib.sha256((project / "uv.lock").read_bytes()).hexdigest()
+    return "; ".join(
+        (
+            f"harbor[runtime] @ {HARBOR_RUNTIME_PROJECT}",
+            f"upstream={source.repository}@{source.commit}",
+            f"source={vendored_runtime_digest(workspace_root)}",
+            f"lock=sha256:{lock_digest}",
+        )
+    )
+
+
+HARBOR_SOURCE = vendored_harbor_source(_harbor_env_dir())
+
+logger = logging.getLogger(__name__)
 
 
 class HarborDatasetKind(StrEnum):
@@ -149,7 +140,6 @@ class ValidatedHarborConfig:
     benchmark: BenchmarkMetadataRef
     trials_per_task: int
     verifier_env_keys: tuple[str, ...] = ()
-    runtime_project: str = HARBOR_RUNTIME_PROJECT
 
     @property
     def record_dataset(self) -> str:
@@ -162,7 +152,7 @@ class ValidatedHarborConfig:
         return self.dataset_revision or "unversioned"
 
     def benchmark_for(self, task_limit: int | None, task: str | None = None) -> BenchmarkMetadataRef:
-        """Return the benchmark descriptor Harbor will emit after Marin's runtime overlay."""
+        """Copy benchmark metadata with the task name and attempted count adjusted for the limit."""
         attempted = self.benchmark.n_attempted
         if task_limit is not None and self.benchmark.n_benchmark is not None:
             attempted = min(task_limit, self.benchmark.n_benchmark)
@@ -190,19 +180,26 @@ class HarborRuntimeOverlay:
     archive_dataset: str
 
 
-def _driver_command(runtime_project: str, command: str, *paths: Path) -> list[str]:
+def harbor_runtime_command(script: Path, *arguments: str) -> list[str]:
+    """Build a Python command for the vendored Harbor runtime."""
     return [
         "uv",
         "run",
         "--isolated",
         "--project",
-        str(_harbor_env_dir(runtime_project)),
+        str(_harbor_env_dir()),
+        "--extra",
+        "runtime",
+        "--no-default-groups",
         "--frozen",
         "python",
-        str(_TRIAL_DRIVER),
-        command,
-        *(str(path) for path in paths),
+        str(script),
+        *arguments,
     ]
+
+
+def _driver_command(command: str, *paths: Path) -> list[str]:
+    return harbor_runtime_command(_TRIAL_DRIVER, command, *(str(path) for path in paths))
 
 
 def _driver_environment(driver_env: Mapping[str, str] | None = None) -> dict[str, str]:
@@ -245,30 +242,23 @@ def _stream_driver(
     try:
         while True:
             try:
-                return_code = process.wait(timeout=_BACKEND_POLL_SECONDS)
+                return_code = process.wait(timeout=BACKEND_POLL_SECONDS)
                 break
             except subprocess.TimeoutExpired:
                 if process.poll() is not None:
                     continue
-                _raise_for_backend_state(backend_state())
+                check_inference_backend(backend_state())
     except BaseException:
         terminate_process_group(process, grace_period=_DRIVER_TERMINATION_GRACE_SECONDS)
         raise
 
+    check_inference_backend(backend_state())
     if return_code:
-        _raise_for_backend_state(backend_state())
         exc = subprocess.CalledProcessError(return_code, command)
         raise _driver_failure(exc) from exc
 
 
-def _raise_for_backend_state(state: InferenceBackendState) -> None:
-    if state is InferenceBackendState.RECOVERING:
-        raise HarborBackendsUnavailable("inference backends are not ready")
-    if state is InferenceBackendState.FINISHED:
-        raise RuntimeError("inference backend finished while Harbor was running")
-
-
-def _validated_config(payload: object, path: Path, runtime_project: str) -> ValidatedHarborConfig:
+def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
     if not isinstance(payload, Mapping):
         raise ValueError(f"Harbor preflight returned a non-object result for {path}")
 
@@ -365,13 +355,11 @@ def _validated_config(payload: object, path: Path, runtime_project: str) -> Vali
         max_output_tokens=required_int("max_output_tokens"),
         benchmark=benchmark,
         trials_per_task=required_positive_int("trials_per_task"),
-        runtime_project=runtime_project,
     )
 
 
 def preflight_harbor_configs(
     requests: Sequence[tuple[Path, Mapping[str, object]]],
-    runtime_project: str = HARBOR_RUNTIME_PROJECT,
 ) -> tuple[ValidatedHarborConfig, ...]:
     """Validate Harbor policies and their placeholder effective jobs before launch."""
     if not requests:
@@ -392,7 +380,7 @@ def preflight_harbor_configs(
             raise ValueError("Harbor model agent kwargs must be JSON-serializable") from exc
         request_path.chmod(_OWNER_ONLY_MODE)
         try:
-            completed = _capture_driver(_driver_command(runtime_project, "preflight", request_path))
+            completed = _capture_driver(_driver_command("preflight", request_path))
         except ValueError as exc:
             paths = ", ".join(str(path) for path, _ in requests)
             raise ValueError(f"invalid Harbor config in [{paths}]: {exc}") from exc
@@ -406,9 +394,7 @@ def preflight_harbor_configs(
             f"Harbor preflight returned {len(response) if isinstance(response, list) else 'invalid'} "
             f"result(s) for {len(requests)} request(s)"
         )
-    return tuple(
-        _validated_config(payload, path, runtime_project) for payload, (path, _) in zip(response, requests, strict=True)
-    )
+    return tuple(_validated_config(payload, path) for payload, (path, _) in zip(response, requests, strict=True))
 
 
 def run_harbor_driver(
@@ -418,7 +404,7 @@ def run_harbor_driver(
     backend_state: Callable[[], InferenceBackendState],
 ) -> None:
     """Apply a runtime overlay and run one Harbor job in the isolated environment."""
-    runtime = {"version": HARBOR.version, "commit": config.error_taxonomy.commit}
+    runtime = {"project": HARBOR_RUNTIME_PROJECT, "commit": config.error_taxonomy.commit}
     logger.info("Harbor runtime: %s", json.dumps(runtime, sort_keys=True), extra={"harbor_runtime": runtime})
     with tempfile.TemporaryDirectory(prefix="marin-harbor-run-") as temp_dir:
         policy_path = Path(temp_dir) / "policy.json"
@@ -439,6 +425,6 @@ def run_harbor_driver(
             raise ValueError("Harbor runtime overlay must be JSON-serializable") from exc
         policy_path.chmod(_OWNER_ONLY_MODE)
         overlay_path.chmod(_OWNER_ONLY_MODE)
-        command = _driver_command(config.runtime_project, "run", policy_path, overlay_path)
+        command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
         _stream_driver(command, driver_env, backend_state)

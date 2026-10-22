@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Apply a command's resource limits, then exec the sandboxed program.
+"""Apply a command's resource limits and scheduling priority, then exec the sandboxed program.
 
 Usage: ``python -I -S -c <source> <limits JSON> <program> <args>...``. The limits apply to every process
 in the sandbox.
@@ -13,12 +13,16 @@ import resource
 import signal
 import sys
 
+COMMAND_NICENESS = 10
+"""How far below the host process a command's CPU priority sits, so busy commands cannot starve the host."""
+
 
 def main() -> None:
     for limit, value in json.loads(sys.argv[1]):
         soft, _ = resource.getrlimit(limit)
         value = value if soft == resource.RLIM_INFINITY else min(value, soft)
         resource.setrlimit(limit, (value, value))
+    os.nice(COMMAND_NICENESS)
     # Python ignores these signals at startup, and exec would pass the ignored dispositions on to the command.
     signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
