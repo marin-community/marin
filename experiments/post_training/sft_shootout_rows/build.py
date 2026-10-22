@@ -112,6 +112,8 @@ POOL_MANIFEST_SHA256 = "7f3d6f7dbef1ed80d302f251540c72a5c548edb871fd0afed729653d
 # for the contributor-data experiment (contributor.py). Epoch and recovery seeds include the pool's sha256.
 POOLS = {
     POOL_MANIFEST_SHA256: "pool v5",
+    # pool-t202-contrib/manifest.json, written by contributor.py at b1b32d12ef (job t202-contrib-convert-20261022).
+    "ecebf85aeac38b769edc3f5403b974ce862205078a80e73d8e6b21535678cc70": "t202 contributor pool",
 }
 EPOCHS = 3
 # Replay for every arm: R = round(B / 4) supervised tokens (REPLAY_FRACTION_OF_B), so replay is about 20% of a split
