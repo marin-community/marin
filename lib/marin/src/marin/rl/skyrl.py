@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import uuid
 from collections import deque
 from dataclasses import asdict, dataclass, fields
@@ -639,27 +640,41 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _project_command(*arguments: str) -> list[str]:
+def skyrl_cpu_command(*arguments: str) -> list[str]:
+    """Return argv for SkyRL's frozen CPU environment using its declared Python requirement."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
+    project_root = workspace_root / SKYRL_PROJECT
+    uv_version = (project_root / ".uv-version").read_text().strip()
+    python_requirement = tomllib.loads((project_root / "pyproject.toml").read_text())["project"]["requires-python"]
     return [
+        "uv",
+        "tool",
+        "run",
+        "--from",
+        f"uv=={uv_version}",
+        "--python",
+        python_requirement,
+        "--no-python-downloads",
         "uv",
         "run",
         "--project",
-        str(workspace_root / SKYRL_PROJECT),
+        str(project_root),
+        "--python",
+        python_requirement,
+        "--no-python-downloads",
         "--frozen",
         "--extra",
         "cpu",
         "--no-group",
         "dev",
-        "marinskyrl",
         *arguments,
     ]
 
 
 def _launcher_command(config_path: str) -> list[str]:
-    return _project_command("iris", "launch", "--config", config_path)
+    return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:

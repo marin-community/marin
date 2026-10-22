@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from datasets import Dataset
 from rolloutengine.harness.tools import task_prompt as marin_task_prompt
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
 from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from skyrl_gym.rollout_specs import is_shell_harness, rollout_spec, shell_harness
 from skyrl_gym.source_task import session_parameters, source_task
@@ -21,6 +22,7 @@ from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.dataset.dataset import PromptDataset, _prompt_token_count
+from skyrl_train.inference_engines.chat_template import assistant_prefix_token_ids
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
 from skyrl_train.rollouts.group_grader import task_group_grader
 from skyrl_train.task_inputs import TaskInput, TrajectoryMetadata, task_messages
@@ -49,8 +51,10 @@ class TaskDataset(PromptDataset):
         return dataset.map(_stored_task_prompt, num_proc=self.num_workers).with_transform(_restore_task_prompts)
 
     @staticmethod
-    def prompt_token_count(tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str) -> int:
-        return task_prompt_token_count(tokenizer, row, prompt_key)
+    def prompt_token_count(
+        tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
+    ) -> int:
+        return task_prompt_token_count(tokenizer, row, prompt_key, chat_template_kwargs=chat_template_kwargs)
 
     def collate_fn(self, rows) -> list[dict]:
         inputs = []
@@ -103,14 +107,20 @@ def _restore_task_prompts(batch: dict) -> dict:
     return {**batch, "prompt": [json.loads(prompt) for prompt in batch["prompt"]]}
 
 
-def task_prompt_token_count(tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str) -> int:
+def task_prompt_token_count(
+    tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
+) -> int:
     """Include native task tools in the initial prompt's length budget."""
     lowered = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
+    if lowered.harness == ASSISTANT_PREFIX_HARNESS:
+        prompt = assistant_prefix_prompt(lowered.task)
+        options = {**prompt.options, "chat_template_kwargs": chat_template_kwargs or {}}
+        return len(assistant_prefix_token_ids(tokenizer, list(prompt.messages), options))
     if not is_shell_harness(lowered.harness):
-        return _prompt_token_count(tokenizer, row[prompt_key])
+        return _prompt_token_count(tokenizer, row[prompt_key], **(chat_template_kwargs or {}))
     shell_tool = resolve_shell_tool(lowered.task, shell_harness(lowered.harness).shell_tool)
     start = marin_task_prompt(lowered.task, shell_tool, ())
-    return _prompt_token_count(tokenizer, list(start.messages), **start.options)
+    return _prompt_token_count(tokenizer, list(start.messages), **(chat_template_kwargs or {}), **start.options)
 
 
 def source_row_task(

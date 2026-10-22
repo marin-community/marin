@@ -20,6 +20,7 @@ from taskcompendium.models import NoGrader
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from rolloutengine.models import (
     GenerationLimitReached,
     GradedRollout,
@@ -399,6 +400,8 @@ class TaskRolloutWorker:
         self, lowered: TaskRolloutSpec, harbor: HarborTaskSettings | None, session_id: str, phase: str
     ) -> tuple[TaskRolloutSpec, Mapping[str, Harness]]:
         harnesses = episode_harnesses(lowered, self.sessions)
+        if lowered.harness == ASSISTANT_PREFIX_HARNESS:
+            harnesses[ASSISTANT_PREFIX_HARNESS] = AssistantPrefixHarness()
         if is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = shell_harness(lowered.harness)
         if lowered.harness == HARBOR_TRIAL_SESSION:

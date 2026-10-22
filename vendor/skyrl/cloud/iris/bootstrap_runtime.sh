@@ -50,7 +50,9 @@ if [[ "$system_python_version" != "$required_python_minor".* ]]; then
   exit 1
 fi
 
-UV_PROJECT_ENVIRONMENT="$environment" uv sync --quiet \
+uv_version="$(cat "$project_root/.uv-version")"
+UV_PROJECT_ENVIRONMENT="$environment" uv tool run --from "uv==$uv_version" \
+  --python "$system_python" --no-python-downloads uv sync --quiet \
   --project "$project_root" \
   --python "$system_python" \
   --no-python-downloads \
