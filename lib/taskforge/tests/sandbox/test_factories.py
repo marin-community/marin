@@ -144,7 +144,7 @@ def lowered(
     )
     return TaskRolloutSpec(
         task=task,
-        harness=draft.SHELL_HARNESS,
+        harness=draft.TOOL_HARNESS,
         task_machine=task_machine,
         verifier_machine=verifier_machine,
         limits=LIMITS,
