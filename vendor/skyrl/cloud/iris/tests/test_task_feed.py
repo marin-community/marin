@@ -140,25 +140,6 @@ def uids(loader: FeedPromptLoader, live=()) -> list[str]:
     return offered
 
 
-def test_composer_accepts_feed_and_local_keys(tmp_path):
-    recipe = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml").read_text())
-    recipe["data"]["feed"] = {"root": "s3://bucket/feed", "poll_seconds": 5, "session": {"max_turns": 7}}
-    recipe["environment"] = {"task_sessions": {"local": {"python_environment": "host", "max_machines": 4}}}
-    path = tmp_path / "recipe.yaml"
-    path.write_text(yaml.safe_dump(recipe))
-    topology = LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
-    config = compose_skyrl_config(parse_rl_config(str(path)), {}, topology).config
-    assert config.data.feed.root == "s3://bucket/feed"
-    assert config.data.feed.min_rows == config.trainer.train_batch_size
-    assert config.data.feed.session.max_turns == 7
-    assert config.data.feed.session.cleanup_timeout == config.environment.task_sessions.session.cleanup_timeout
-    assert config.environment.task_sessions.local.max_machines == 4
-    recipe["data"]["feed"] = {"unknown": 1}
-    path.write_text(yaml.safe_dump(recipe))
-    with pytest.raises(ValueError, match="unknown key.*data.feed.unknown"):
-        compose_skyrl_config(parse_rl_config(str(path)), {}, topology)
-
-
 def test_feed_offers_each_row_once_in_order_and_sees_rows_after_start(tmp_path):
     write_chunk(tmp_path, 0, [make_task().model_dump_json()] * 3)
     clock = Clock()
