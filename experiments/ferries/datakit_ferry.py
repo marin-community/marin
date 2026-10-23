@@ -39,7 +39,8 @@ TIER1_SCALE = PipelineScale(
     ),
     fuzzy=FuzzyClusterConfig(
         text=ClusterTextParams(output_shards=256),
-        worker=ResourceConfig(cpu=8, ram="64g", disk="64g"),
+        # Fuzzy text and verification peaked below 10 GiB on the 10BT smoke.
+        worker=ResourceConfig(cpu=8, ram="16g", disk="64g"),
         map_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
         reduce_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
         max_workers=16,
