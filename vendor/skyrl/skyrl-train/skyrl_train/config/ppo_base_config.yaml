@@ -49,7 +49,8 @@ trainer:
   # light is the shared default: fatal Python stacks, bounded NCCL flight recording,
   # process receipts, and per-rank phase history. Use distributed for live stacks
   # and C++/NCCL escalation, or off as an emergency escape hatch.
-  debug_mode: "light"  # null follows debug_mode (on for light/distributed); true/false explicitly overrides it.
+  debug_mode: "light"
+  # null follows debug_mode (on for light/distributed); true/false explicitly overrides it.
   collective_phase_diagnostics: null
   # Telemetry families exported when the task has a telemetry endpoint.
   training_metrics: true # trainer scalars, loop events and trainer-minus-vLLM log-ratio statistics
