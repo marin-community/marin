@@ -175,9 +175,10 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
                 "field_messages": "messages",
                 "roles_to_train": ["assistant"],
                 "train_on_eot": "turn",
-                "eot_tokens": [spec.turn_close],
             }
         ],
+        # Axolotl reads eot_tokens from the top level, not from the dataset entry.
+        "eot_tokens": [spec.turn_close],
         "train_on_inputs": False,
         "val_set_size": 0.0,
         "shuffle_merged_datasets": False,

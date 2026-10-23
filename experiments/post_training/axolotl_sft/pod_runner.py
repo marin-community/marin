@@ -8,9 +8,9 @@ Marin's environment, so this script uses only the standard library, PyYAML and t
 image's ``aws`` CLI. It reads one JSON payload (``AXOLOTL_PAYLOAD``) built by
 :mod:`experiments.post_training.axolotl_sft.launcher` and:
 
-1. clones the ``marin-community/axolotl`` fork at the pinned revision and puts its
-   ``src`` first on ``PYTHONPATH`` (so the fork's plugins, e.g. ``template_integrity``,
-   shadow the image's Axolotl), and re-pins transformers;
+1. clones the ``marin-community/axolotl`` fork at the pinned revision and installs it
+   over the image's Axolotl with the fork's own pins (transformers 5.12.1 and the
+   matching ``kernels``), keeping the image's torch; it then checks the transformers pin;
 2. stages the CL12 data file and, for a chained stage, the previous stage's export
    from object storage onto local disk;
 3. trains through ``torchrun -m axolotl.cli.train``, syncing the output directory to
@@ -60,12 +60,21 @@ def _s3(arguments: list[str]) -> None:
     _run(["aws", "s3", *arguments, "--only-show-errors"], env=_aws_environment())
 
 
-def _install_fork(revision: str, transformers_pin: str) -> Path:
+def _install_fork(revision: str, transformers_pin: str) -> None:
     fork = WORK_ROOT / "axolotl-fork"
     _run(["git", "clone", "--quiet", FORK_REPO, str(fork)])
     _run(["git", "-C", str(fork), "checkout", "--quiet", revision])
-    _run(["uv", "pip", "install", "--python", IMAGE_PYTHON, f"transformers=={transformers_pin}"])
-    return fork / "src"
+    # Re-pinning transformers alone breaks against the image's newer `kernels`; the fork's
+    # own dependency set is consistent.
+    _run(["uv", "pip", "install", "--python", IMAGE_PYTHON, "-e", str(fork)])
+    installed = subprocess.run(
+        [IMAGE_PYTHON, "-c", "import transformers; print(transformers.__version__)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if installed != transformers_pin:
+        raise RuntimeError(f"the fork installed transformers {installed}, not the pinned {transformers_pin}")
 
 
 def _stage_inputs(payload: dict) -> dict:
@@ -138,14 +147,14 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", stream=sys.stdout)
     payload = json.loads(os.environ[PAYLOAD_ENV])
     WORK_ROOT.mkdir(parents=True, exist_ok=True)
-    fork_src = _install_fork(payload["fork_revision"], payload["transformers_pin"])
+    _install_fork(payload["fork_revision"], payload["transformers_pin"])
     config = _stage_inputs(payload)
     config_path = WORK_ROOT / "axolotl_config.yaml"
     config_path.write_text(yaml.safe_dump(config, sort_keys=False))
     output_dir = Path(config["output_dir"])
     output_uri = payload["output_uri"].rstrip("/")
 
-    environment = os.environ | {"PYTHONPATH": os.pathsep.join([str(fork_src), str(PLUGIN_DIR)])}
+    environment = os.environ | {"PYTHONPATH": str(PLUGIN_DIR)}
     command = ["torchrun", "--nnodes=1", f"--nproc-per-node={payload['gpus']}", "-m", "axolotl.cli.train"]
     with _PeriodicSync(output_dir, output_uri):
         _run([*command, str(config_path)], env=environment, cwd=WORK_ROOT)

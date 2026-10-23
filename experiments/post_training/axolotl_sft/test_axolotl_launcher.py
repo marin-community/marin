@@ -97,7 +97,7 @@ def test_config_trains_assistant_turns_on_the_inline_template_with_fp32_masters(
         assert dataset["type"] == "chat_template" and dataset["field_messages"] == "messages"
         # Assistant turns train through the family's end-of-turn token, which also ends generation.
         assert dataset["roles_to_train"] == ["assistant"]
-        assert dataset["eot_tokens"] == [spec.turn_close] and dataset["train_on_eot"] == "turn"
+        assert config["eot_tokens"] == [spec.turn_close] and dataset["train_on_eot"] == "turn"
         assert config["special_tokens"]["eos_token"] == spec.turn_close
         assert config["train_on_inputs"] is False and config["sample_packing"] is False
         assert config["micro_batch_size"] * 8 * config["gradient_accumulation_steps"] == spec.global_batch == 64

@@ -71,7 +71,9 @@ def completion_protocol(text: str, finish_reason: str, stop_reason: int | str | 
     return {
         "turn_ended": finish_reason == "stop" and stop_reason == END_OF_TURN_ID,
         "think_blocks": opens,
-        "think_closed": opens > 0 and opens == closes and text.rfind(GRUG_TOKENS.think_close) > text.rfind(GRUG_TOKENS.think_open),
+        "think_closed": (
+            opens > 0 and opens == closes and text.rfind(GRUG_TOKENS.think_close) > text.rfind(GRUG_TOKENS.think_open)
+        ),
     }
 
 
