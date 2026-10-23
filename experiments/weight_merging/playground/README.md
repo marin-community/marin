@@ -138,7 +138,10 @@ It uses BF16 autocast, TF32 for residual FP32 matrix multiplications, gradient
 checkpointing, paged 8-bit Adam and Liger fused linear cross-entropy. Only the
 linear-loss fusion is enabled; the attention/norm/MLP implementations are fixed.
 Validation loss selects among 250-step checkpoints; test scores do not select
-training checkpoints. Training metadata records the configuration, parent path,
+training checkpoints. Retention keeps only the latest resumable checkpoint, plus
+weights from an older validation-best checkpoint until final export. After export,
+only the latest checkpoint and `final-fp32` remain. Older optimizer states are
+removed; intermediate checkpoints are not an analysis archive. Training metadata records the configuration, parent path,
 data/source hashes, versions and selected checkpoint. Offline W&B and local
 Trainer state retain training metrics.
 
