@@ -192,7 +192,7 @@ def test_exact_rows_report_the_binned_rows_token_positions():
     )
     tags = batch["probe_score_positions"]
     # The worker reports (tag - 1, padded logits position) for every tagged position.
-    coordinates = [(int(tags[row, column]) - 1, column) for row, column in zip(*np.nonzero(tags))]
+    coordinates = [(int(tags[row, column]) - 1, column) for row, column in zip(*np.nonzero(tags), strict=True)]
     rows_of_vocab = np.log(np.full((len(coordinates), 2), 0.5))
     rows = exact_rows_from_passes(
         sequences, rows_of_vocab, coordinates, rows_of_vocab, coordinates, padded_len=batch["sequences"].shape[1]
