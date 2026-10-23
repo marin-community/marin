@@ -22,7 +22,7 @@ from openai import AsyncOpenAI
         ("openai/gpt-4o", "model"),
     ],
 )
-async def test_proxy_without_tokenize_counts_with_explicit_encoding_and_generates(
+async def test_proxy_without_tokenize_counts_locally_and_generates(
     tmp_path, monkeypatch, model_name, count_mode, encoding_source
 ):
     # A local encoding keeps tokenizer data loading offline while using real BPE.
