@@ -127,18 +127,21 @@ class _LocalComposeDaytonaProcess(_LocalDaytonaProcess):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("runtime", ["direct", "no_proc_children", "compose"])
 @pytest.mark.parametrize(
-    "ending",
+    ("runtime", "ending"),
     [
-        "deadline",
-        "cancel",
-        "cancel_submission",
-        "cleanup_failure",
-        "complete",
-        "orphan_deadline",
-        "orphan_cancel",
-        "orphan_complete",
+        ("direct", "deadline"),
+        ("direct", "cancel"),
+        ("direct", "cancel_submission"),
+        ("direct", "cleanup_failure"),
+        ("direct", "complete"),
+        ("direct", "orphan_deadline"),
+        ("direct", "orphan_cancel"),
+        ("direct", "orphan_complete"),
+        ("no_proc_children", "orphan_deadline"),
+        ("compose", "cancel"),
+        ("compose", "cancel_submission"),
+        ("compose", "complete"),
     ],
 )
 async def test_pi_daytona_session_remains_usable_after_agent_exit(

@@ -2018,11 +2018,7 @@ class DaytonaEnvironment(BaseEnvironment):
             raise
 
     async def _reap_inflight_agent_command(self) -> None:
-        """Run agent cancellation cleanup outside the occupied exec session.
-
-        Pi supplies a command scoped to its supervisor. Other agents retain the
-        existing OpenCode cleanup. A scoped cleanup failure is fatal to scoring.
-        """
+        """Attempt remote cleanup, requiring confirmation for scoped commands."""
         if not self._sandbox:
             return
         reap_session = f"reap-{uuid4()}"
