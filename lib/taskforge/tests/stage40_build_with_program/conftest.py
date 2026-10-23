@@ -13,7 +13,6 @@ The ``DECISION_*`` values are a decision-model grader's rubric for the proposal'
 three equivalent variants, and a fluent wrong and a hedged reply.
 """
 
-import json
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 
@@ -28,27 +27,19 @@ from taskforge.spec.rubric import Rubric, RubricItem
 from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal, parse
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
+from tests.proposals import proposal_document
 from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory
 
-PROPOSAL = json.dumps(
-    {
-        "header": {
-            "id": "d00.arithmetic.products/1",
-            "source": {"kind": "capability", "ref": "d00.arithmetic.products", "hash": "abc123"},
-            "grounding": "unverified",
-            "null_reason": None,
-            "environment": "reasoning",
-            "solver_machine": "shellsim",
-            "verification": "answer_in_box",
-            "composite": [],
-            "research_need": "needed",
-            "research_reason": "the task depends on an external fact the build must confirm",
-            "research": [{"kind": "web", "purpose": "confirm the multiplication table"}],
-            "build": [{"name": "grader", "description": "checks the final ANSWER line"}],
-            "resources": ["grader/grade.py"],
-        },
-        "body": (
-            """## Task
+PROPOSAL = proposal_document(
+    proposal_id="d00.arithmetic.products/1",
+    source={"kind": "capability", "ref": "d00.arithmetic.products", "hash": "abc123"},
+    verification="answer_in_box",
+    research_need="needed",
+    research_reason="the task depends on an external fact the build must confirm",
+    research=[{"kind": "web", "purpose": "confirm the multiplication table"}],
+    build=[{"name": "grader", "description": "checks the final ANSWER line"}],
+    resources=["grader/grade.py"],
+    body="""## Task
 Multiply 6 by 7 and end the reply with `ANSWER = <n>`.
 
 ## Realism and workflow
@@ -65,9 +56,7 @@ Full credit only for ANSWER = 42.
 
 ## Risks and null conditions
 None.
-"""
-        ),
-    }
+""",
 )
 WORKPIECE = "d00.arithmetic.products--1"
 SAMPLING = LLMPolicy()

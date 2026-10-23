@@ -123,8 +123,8 @@ def machine_factories(backends: Sequence[Backend], controller_url: str | None) -
     only when Docker is requested; local sandbox construction propagates its availability error.
     ShellSim reads ``SHELLSIM_CATALOG`` when a machine first requests catalog packages.
     """
-    if (Backend.GVISOR in backends) != (controller_url is not None):
-        raise ValueError("A controller URL is required exactly when the gvisor backend is selected")
+    if Backend.GVISOR in backends and controller_url is None:
+        raise ValueError("A controller URL is required when the gvisor backend is selected")
     factories: dict[str, MachineFactory] = {}
     for backend in backends:
         match backend:
