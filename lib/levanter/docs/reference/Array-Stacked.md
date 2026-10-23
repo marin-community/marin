@@ -1,10 +1,10 @@
 # ArrayStacked
 
-[haliax.nn.ArrayStacked][] is an array-native stack container for scan-over-layers when you are not using named axes in
+[levanter.layers.stacked.ArrayStacked][] is an array-native stack container for scan-over-layers when you are not using named axes in
 the stack itself.
 
-If you are using named axes (`Axis`, `NamedArray`) in your stack dimension, see [Scan and Fold](scan.md#stacked) and
-[haliax.nn.Stacked][].
+The container uses ordinary JAX arrays and Equinox modules. Import it from
+`levanter.layers.stacked`; the package does not import Haliax.
 
 ## When to use `ArrayStacked`
 
@@ -33,13 +33,13 @@ As always, validate with your model, mesh, and batch/sequence settings.
 
 ## Initialization
 
-`ArrayStacked.init(num_layers, Module)` is curried, like `Stacked.init(...)`:
+`ArrayStacked.init(num_layers, Module)` returns an initializer:
 
 ```python
 import equinox as eqx
 import jax
 import jax.numpy as jnp
-import haliax as hax
+from levanter.layers.stacked import ArrayStacked
 
 
 class Block(eqx.Module):
@@ -56,13 +56,15 @@ class Block(eqx.Module):
 num_layers = 4
 width = 8
 
-stack = hax.nn.ArrayStacked.init(num_layers, Block)(
+stack = ArrayStacked.init(num_layers, Block)(
     weight=jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
 )
 ```
 
-The init arguments are sliced per-layer on leading axis `0` when they match `num_layers`. Every
-other argument, including a non-array one such as a config object, is shared by all layers.
+An array init argument is sliced per layer when it has at least one dimension
+and `shape[0] == num_layers`. Other arguments, including config objects, are
+shared. Initialization has no `in_axes` override: wrap an accidentally matching
+shared array in a closure inside the initializer if it must remain shared.
 
 All layers are built in a single mapped trace, so `Module.init` must be traceable: it may branch in
 Python on a shared argument such as a config field, but not on a per-layer value. `scan` already
@@ -74,7 +76,9 @@ as that value rather than stacked, so a non-static `int` field reads back as an 
 
 ### `fold` / `fold_via`
 
-`fold` is the carry-only pattern:
+`fold` calls each layer’s `__call__` and returns only the final carry.
+`stack.fold(carry0, layer_scale, mask, in_axes=(0, None))` uses the `Block` above.
+Use `fold_via` to select another layer function:
 
 ```python
 carry0 = jnp.zeros((width,))
@@ -88,7 +92,8 @@ carry = stack.fold_via(Block.__call__, in_axes=(0, None))(carry0, layer_scale, m
 
 ### `scan` / `scan_via`
 
-`scan` expects block functions returning `(carry, output)`:
+`scan` calls each layer’s `__call__`, which must return `(carry, output)`.
+`scan_via` selects a separate function, as in this example:
 
 ```python
 def block_scan(layer: Block, carry, x):
@@ -103,10 +108,14 @@ carry, per_layer = stack.scan_via(block_scan, in_axes=0)(jnp.zeros((width,)), jn
 `ArrayStacked` uses a vmap-like convention for non-carry inputs:
 
 * `in_axes=None` (default): all extra args/kwargs are shared across layers.
-* `in_axes=0`: all extra args are sliced on axis 0.
-* `in_axes=(args_axes, kwargs_axes)`:
+* `in_axes=0`: all positional extra arguments are sliced on axis 0; keyword
+  arguments remain shared.
+* A positional tuple such as `(0, None)` selects an axis for each positional
+  argument. Keywords remain shared.
+* `in_axes=(args_axes, kwargs_axes)` (identified by a dictionary in its second slot):
   `args_axes` is a tuple aligned to positional args;
-  `kwargs_axes` is a dict aligned to keyword args.
+  `kwargs_axes` is a dict covering every supplied keyword exactly. For example,
+  `in_axes=((0,), {"mask": None})` scans one positional argument and shares `mask`.
 
 Any argument with an integer axis must be a `jax.Array` with `shape[axis] == num_layers`.
 
@@ -118,9 +127,26 @@ Any argument with an integer axis must be a `jax.Array` with `shape[axis] == num
 
 ## Checkpointing
 
-`ArrayStacked` accepts `gradient_checkpointing` with the same [haliax.nn.ScanCheckpointPolicy][] / `remat` semantics used
-for scan-over-layers in [Scan and Fold](scan.md#gradient-checkpointing--rematerialization).
+Pass `gradient_checkpointing` to `ArrayStacked.init`; it defaults to `False`.
+For example, `ArrayStacked.init(num_layers, Block, gradient_checkpointing="nested")`
+returns an initializer that uses nested rematerialization. The setting accepts a
+boolean, a shorthand string, or
+[levanter.layers.scan_checkpoint.ScanCheckpointPolicy][]. `True` checkpoints
+each block, `False` disables rematerialization, `"full"` recomputes carries during
+the backward pass, `"nested"` checkpoints groups of layers for backward-pass
+recomputation, and `"offload"` saves carries and inputs
+in pinned host memory. Offloading requires backend support.
+
+Parameter arrays retain a leading layer dimension under the `stacked` field.
+`to_state_dict` exports separate `<prefix>.<layer>.<parameter>` entries;
+`from_state_dict` restores them into the existing parameter structure.
+
+Use an explicit JAX mesh and native parameter shardings. Sharding is independent
+of layer count and shape names; the stack does not infer distribution from a
+logical-axis mapping.
+
+::: levanter.layers.scan_checkpoint.ScanCheckpointPolicy
 
 ## API
 
-::: haliax.nn.ArrayStacked
+::: levanter.layers.stacked.ArrayStacked
