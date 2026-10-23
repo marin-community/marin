@@ -121,9 +121,9 @@ def collate_score_centering(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Pad aligned behavior evidence and check its full-vocabulary probabilities.
 
-    The existing collator uses the trajectory loss masks and response_mask's
-    shape. Check sampled-score agreement where the chosen token is in the head.
-    The caller remains responsible for evidence provenance.
+    Trajectory loss masks select evidence; response_mask sets the padded shape.
+    Sampled scores must agree where the chosen token is in the head. The caller
+    remains responsible for evidence provenance.
     """
     if sampled_logprobs.shape != response_mask.shape:
         raise ValueError("sampled behavior logprobs must align with response rows")

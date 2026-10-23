@@ -233,7 +233,6 @@ async def test_chat_completion_retry_accumulates_and_sends_continuations(exact_p
         assert call["json"].get("add_generation_prompt") is False
         assert call["json"]["messages"][-1] == {"role": "assistant", "content": "A"}
         assert call["json"]["messages"][0] == {"role": "user", "content": "Hi"}
-        # Remaining max_tokens reduced by 1 (we already generated one token)
         assert call["json"].get("max_tokens") == 7
         assert call["json"]["model"] == "dummy-model"
         assert call["json"]["logprobs"] is True
