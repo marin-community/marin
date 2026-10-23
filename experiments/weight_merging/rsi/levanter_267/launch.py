@@ -103,7 +103,7 @@ def main():
     resource = ResourceConfig.with_tpu(
         "v4-32",
         cpu=32,
-        ram="400g",
+        ram="360g",
         disk="80g",
         regions=["us-central2"],
         zone="us-central2-b",
