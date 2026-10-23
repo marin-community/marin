@@ -29,6 +29,7 @@ from taskforge.llm.client import ModelUnavailable
 from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
+from taskforge.spec.decision import DecisionUnavailable
 from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
@@ -461,6 +462,7 @@ async def test_a_custom_grader_gets_its_own_timeout_before_the_host_deadline(con
     [
         (httpx.ConnectError("web provider disconnected"), "http_unavailable"),
         (ModelUnavailable("model unavailable", ()), "model_request_unavailable"),
+        (DecisionUnavailable("decision model unavailable"), InfrastructureCause.DECISION_UNAVAILABLE),
         (
             httpx.HTTPStatusError(
                 "missing response", request=httpx.Request("GET", "https://service.invalid"), response=httpx.Response(404)

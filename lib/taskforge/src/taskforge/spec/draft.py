@@ -64,10 +64,20 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 from taskcompendium.submission import require_submission_compatibility
 from verifyit.candidate import IN_PROCESS_MODES
-from verifyit.spec import Spec, mode_of
+from verifyit.spec import JudgeSpec, Spec, mode_of
 
 from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, MachineHost, container_backend, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
+from taskforge.spec.decision import SOLVER_TURN_STATE, DecisionGrader, StateSource, task_package
+from taskforge.spec.judge import (
+    JUDGE_MODELS,
+    JUDGE_QUESTION,
+    JUDGE_SPEC_PATH,
+    JudgeRubricSpec,
+    JudgeStrength,
+    judge_spec_json,
+)
+from taskforge.spec.rubric import Rubric
 from taskforge.spec.verdict import VERDICT_REWARD
 
 SHELL_CAPABILITY = "shell"
@@ -409,12 +419,60 @@ def answer_grader(spec: Spec, *, environment: EnvironmentRequirements | None = N
     return verifyit_package(spec, environment=environment)
 
 
+def judge_grader(rubric: Rubric, reference: str) -> GraderPackage:
+    """An LLM-as-judge grader: a model judge applies ``rubric`` to the answer, reading ``reference`` beside it.
+
+    For deliverables whose prose is the product. The grader is a verifyit ``JudgeSpec`` naming the judge of
+    the default strength (``spec.judge``, a stub the author never sets), with the rubric spec
+    (``JUDGE_SPEC_PATH``) as its context. RolloutEngine grades it on the host through the judge service of
+    ``TaskRolloutSpec.judge_connection`` or ``VERIFYIT_JUDGE_BASE_URL``, with no verifier machine: the
+    grader-base environment it declares is there because TaskCompendium's ``VerifyitGrader`` requires one
+    for a mode that does not grade in process, and nothing starts it (``grading_environment``).
+
+    Raises:
+        ValueError: ``reference`` is empty.
+    """
+    if not reference.strip():
+        raise ValueError("an LLM-as-judge grader needs a non-empty reference answer")
+    strength = JudgeStrength.DEFAULT
+    spec = JudgeRubricSpec(rubric=rubric, judge_strength=strength)
+    rubric_text = json.dumps(rubric.model_dump(mode="json"), indent=1)
+    judge = JudgeSpec(
+        references=(reference,),
+        question=f"Rubric:\n{rubric_text}\n\n{JUDGE_QUESTION}",
+        context=JUDGE_SPEC_PATH,
+        model=JUDGE_MODELS[strength],
+    )
+    files = (inline_resource(JUDGE_SPEC_PATH, judge_spec_json(spec)),)
+    return verifyit_package(judge, files, environment=grader_environment(None))
+
+
+def decision_grader(
+    rubric: Rubric, reference: str, *, state: Mapping[str, StateSource] = SOLVER_TURN_STATE
+) -> DecisionGrader:
+    """A decision-model grader: a decision model compares the solver's answer with ``reference`` against ``rubric``.
+
+    ``reference`` is the gold answer, which validation also replays as the reference control. ``state`` is
+    the decision model's state template; the default passes the deliverable, the rubric, the reference and
+    the visible output of the solver's final turn, and a program changes it only deliberately. The grader has
+    no judge strength and names no model: the host's decision client answers. It is uncalibrated (the
+    "partially matches" bar) until ``sandbox_effects.calibrate_decision_grader`` sets its bar and reads the
+    fooling answers under it; ``run_build`` refuses a task whose decision grader lacks those reads.
+
+    Raises:
+        pydantic.ValidationError: ``reference`` is empty, or ``state`` leaves out the solver's output.
+    """
+    return DecisionGrader(
+        rubric=rubric, reference=reference, state=dict(state), acceptance_level=None, calibration={}, fooling={}
+    )
+
+
 def assemble(
     task_id: str,
     instruction: str,
     answer_type: AnswerType,
     answer_format: AnswerFormat,
-    grader: GraderPackage,
+    grader: GraderPackage | DecisionGrader,
     source: Source,
     *,
     environment: EnvironmentRequirements | None,
@@ -428,10 +486,11 @@ def assemble(
 
     ``answer_format`` says how the model is asked for its final answer and how the answer is read
     from its conversation; a file or workspace-state task carries one too, which grading never
-    reads. ``environment`` is the task machine (``requirements(...)``), or ``NO_MACHINE`` or ``None``
-    for a task without one. ``files`` are the agent-visible files installed relative to the machine
-    root; the grader's files stay private, so none of them may have the same bytes as an
-    agent-visible file.
+    reads. ``grader`` is a package, or a ``DecisionGrader``, which the TaskSpec carries in the form
+    ``decision.task_package`` gives it until TaskSpec has a decision grader type. ``environment`` is the
+    task machine (``requirements(...)``), or ``NO_MACHINE`` or ``None`` for a task without one. ``files``
+    are the agent-visible files installed relative to the machine root; the grader's files stay private,
+    so none of them may have the same bytes as an agent-visible file.
 
     Raises:
         ValueError: TaskSpec validation failed, files or output paths were given without a task
@@ -442,6 +501,8 @@ def assemble(
     """
     if environment == NO_MACHINE:
         environment = None
+    if isinstance(grader, DecisionGrader):
+        grader = task_package(grader)
     if environment is None and (files or output_paths):
         raise ValueError("Files and output paths require a task machine")
     if environment is not None and SHELL_CAPABILITY not in environment.capabilities:

@@ -18,10 +18,12 @@ a revision.
 
 ``run_build`` computes the model part of every key (``build_model_digest``), runs the program for
 one proposal, applies the research requirement, refuses a task whose machine is not the solver
-machine the proposal declares (``check_solver_machine``), and writes the sink's ``TaskSpec`` with
-the build's ``WorkpieceBuildProvenance`` to ``<round_dir>/draft/``. Validation lowers the task for its own
-host and reads any step's stored output, such as the grader's reference answer, through
-``step_output``.
+machine the proposal declares (``check_solver_machine``) and a task whose decision-model grader did not
+pass ``calibrate_decision_grader``'s fooling answers (``check_decision_grader``), and writes the sink's
+``TaskSpec`` with the build's ``WorkpieceBuildProvenance`` to ``<round_dir>/draft/``. A build after a
+revision that swapped the verifier kind takes the revised proposal (``VerificationChange.revise``) and the
+change, checks the revised kind and records both kinds in its provenance. Validation lowers the task for its
+own host and reads any step's stored output, such as the grader's reference answer, through ``step_output``.
 """
 
 import asyncio
@@ -42,7 +44,10 @@ from taskforge.content_hash import digest
 from taskforge.ledger.records import EntryKind, span
 from taskforge.llm.client import Completion, ModelClient, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
+from taskforge.spec.decision import task_decision_grader
+from taskforge.stage10_proposal.model import SolverMachine, TaskProposal, Verification
+from taskforge.stage30_author.author import VerificationChange
+from taskforge.stage30_author.loader import GRADER_STEP
 from taskforge.stage30_author.program import PROPOSAL_INPUT, RLEnvBuildProgram, RLEnvBuildSink, RLEnvBuildStep
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
@@ -60,7 +65,7 @@ from taskforge.stage40_build_with_program.infrastructure import (
     storage_fault,
 )
 from taskforge.stage40_build_with_program.outputs import SOURCES_STEP, Sources
-from taskforge.stage40_build_with_program.sdk import solver_machine
+from taskforge.stage40_build_with_program.sdk import fooling_problem, solver_machine
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import (
     SDK_VERSION,
@@ -71,6 +76,7 @@ from taskforge.stage40_build_with_program.step_store import (
     memoized,
     recomputed,
 )
+from taskforge.stage40_build_with_program.verification import unbuildable_problem, verification_problem
 
 DRAFT_DIR = "draft"
 TASK_FILE = "task.json"
@@ -113,6 +119,9 @@ class WorkpieceBuildProvenance:
     Attributes:
         workpiece_id: The workpiece the caller built.
         proposal_digest: ``content_hash.digest`` of the proposal.
+        verification: The verifier kind this build checked, the proposal's ``header.verification``.
+        verification_change: The change that revised the proposal's kind, whose ``declared`` is the kind
+            the proposal declared before it, or ``None`` for a build of the declared kind.
         program_digest: ``RLEnvBuildProgram.digest``.
         sdk_version: ``SDK_VERSION`` during the build.
         model: The model id, ``ModelClient.model``.
@@ -126,6 +135,8 @@ class WorkpieceBuildProvenance:
 
     workpiece_id: str
     proposal_digest: str
+    verification: Verification
+    verification_change: VerificationChange | None
     program_digest: str
     sdk_version: str
     model: str
@@ -358,12 +369,31 @@ def check_solver_machine(proposal: TaskProposal, task: TaskSpec, sink: str) -> N
         )
 
 
+def check_decision_grader(task: TaskSpec) -> None:
+    """Raise ``BuildFailure`` for the grader step when ``task``'s decision-model grader may not ship.
+
+    ``sdk.fooling_problem`` refuses a decision grader without a read of every fooling answer, which only
+    ``sandbox_effects.calibrate_decision_grader`` records, and one that credits a fooling answer, so no program
+    ships a decision grader that skipped the calibration. A task with another grader passes.
+    """
+    grader = task_decision_grader(task)
+    if grader is None:
+        return
+    problem = fooling_problem(grader)
+    if problem is not None:
+        raise BuildFailure(problem, GRADER_STEP)
+
+
 def _machine_text(machine: SolverMachine | None) -> str:
     if machine is None:
         return "the task's own image"
     if machine is SolverMachine.NONE:
         return f"no machine (solver_machine {machine})"
     return f"solver_machine {machine}"
+
+
+VERIFICATION_CHECK = "verification"
+"""The ``BuildFailure.step`` of a proposal or draft whose verifier kind cannot match the proposal's."""
 
 
 async def run_build(
@@ -380,6 +410,7 @@ async def run_build(
     research: ResearchRequirement,
     invalidate: frozenset[str] = frozenset(),
     model_digest: str | None = None,
+    verification_change: VerificationChange | None = None,
 ) -> TaskDraft:
     """Run ``program`` for ``proposal`` and write the draft to ``<round_dir>/draft/``.
 
@@ -398,17 +429,32 @@ async def run_build(
             research needs no such step.
         invalidate: Step names to rerun even when the store holds their output.
         model_digest: Replaces ``build_model_digest(model, sampling, services)`` in every key.
+        verification_change: The change a revision made to the verifier kind; ``proposal`` is then the
+            revised proposal, and the provenance records the change.
 
     Raises:
-        BuildFailure: the research requirement fails, a step failed, or the task's machine is not the
-            solver machine the proposal declares.
+        BuildFailure: the research requirement fails, a step failed, the task's machine is not the solver
+            machine the proposal declares, its decision-model grader lacks or fails the fooling reads
+            (``check_decision_grader``), the proposal declares a verification kind no build implements yet
+            (``verification.unbuildable_problem``, before any step runs), or the built verifier is not the
+            declared kind (``verification.verification_problem``).
         BuildExpired: a step ran past ``STEP_TIMEOUT``, or raised one (the standard grader step does for a grader
             that timed out twice).
         BuildInfrastructureFailure: this host cannot provide the declared solver machine
             (``machine_available``), before any step runs, or a step failed because of the host.
-        ValueError: ``check_workpiece_id`` refused ``workpiece_id``.
+        ValueError: ``check_workpiece_id`` refused ``workpiece_id``, or ``verification_change`` is given and
+            ``proposal`` does not declare its revised kind, before any step runs.
     """
+    if verification_change is not None and proposal.header.verification is not verification_change.revised:
+        raise ValueError(
+            f"the verification change revises to {verification_change.revised}, but the proposal declares "
+            f"{proposal.header.verification}; pass the revised proposal"
+        )
     machine_available(services, proposal)
+    declared = proposal.header.verification
+    unbuildable = unbuildable_problem(declared)
+    if unbuildable is not None:
+        raise BuildFailure(unbuildable, VERIFICATION_CHECK)
     researches = research is ResearchRequirement.ENFORCED and bool(proposal.header.research)
     if researches and (SOURCES_STEP not in program.steps or program.steps[SOURCES_STEP].output_type is not Sources):
         raise BuildFailure(f"a build that researches its proposal needs a {SOURCES_STEP!r} step returning Sources")
@@ -422,11 +468,16 @@ async def run_build(
         task, outcomes = await run_program(program, context, proposal, store, keyed_model, invalidate)
         fields.attrs["hits"] = str(sum(outcome.status is CacheStatus.HIT for outcome in outcomes))
         fields.attrs["steps"] = str(len(outcomes))
+    mismatch = verification_problem(declared, task)
+    if mismatch is not None:
+        raise BuildFailure(mismatch, VERIFICATION_CHECK)
     draft = TaskDraft(
         task=task,
         provenance=WorkpieceBuildProvenance(
             workpiece_id=workpiece_id,
             proposal_digest=digest(proposal),
+            verification=declared,
+            verification_change=verification_change,
             program_digest=program.digest,
             sdk_version=SDK_VERSION,
             model=model.model,
@@ -438,6 +489,7 @@ async def run_build(
     if researches:
         check_research(proposal, step_output(draft, store_root, SOURCES_STEP, Sources))
     check_solver_machine(proposal, task, program.sink.name)
+    check_decision_grader(task)
     _write_draft(round_dir / DRAFT_DIR, draft)
     return draft
 

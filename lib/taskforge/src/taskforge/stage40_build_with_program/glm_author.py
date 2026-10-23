@@ -17,7 +17,9 @@ appends, and its completions under ``author/<n>/`` in the workpiece's directory
 ``StructuredOutputError`` or ``IncompleteOutput``. It writes the accepted source to ``program.py`` in that directory
 before it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
 no source, and continues the conversation with the previous program as the model's turn and the
-revision as the next user turn.
+revision as the next user turn (``revision_prompt``), which names a verification change the revision carries.
+The one-shot author cannot choose a swap of the verifier kind: it renders the proposal with the revision's
+change applied and returns that change unchanged.
 """
 
 import inspect
@@ -43,7 +45,7 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
 from taskforge.llm.structured import IncompleteOutput, StructuredOutputError, schema_instruction
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
-from taskforge.spec import draft, verdict
+from taskforge.spec import decision, draft, rubric, verdict
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author import program as program_module
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthorContext, AuthoredProgram, Revision
@@ -96,12 +98,39 @@ that purpose.
 `-> Sources`, that calls `research(context, proposal, i)` for every item and returns the findings; \
 `run_build` refuses a program without it ("a build that researches its proposal needs a 'sources' step \
 returning Sources"), even when you already know the facts. Never catch its `BuildFailure`.
-- Prefer `draft.answer_grader` with a verifyit mode that grades in process (exact, numeric, mcq, math, \
-ifeval, json_schema, xml_elements, csv_columns, structured_exact, predicted_action) whenever the \
-answer fits one. Every other verifyit mode, the LLM judge (`JudgeSpec`) included, runs `import verifyit` \
-in a verifier machine, and `GRADER_BASE_IMAGE` has no verifyit ("No module named 'verifyit'"); \
-`grade_candidate` calls no model, so a judge can never be prototyped. Task-specific checks, prose \
-included, belong in a deterministic grader program in a separate verifier machine: \
+- Build the grader of the kind the proposal's `verification` names; `run_build` refuses a draft whose \
+grader is another kind, and refuses a composite proposal outright (no composite grader exists yet). \
+decision_model, only where the proposal says fields cannot capture the answer: \
+`draft.decision_grader(rubric, reference)`. \
+You state a `Rubric` (the deliverable, and one `RubricItem` per property a correct reply has: its meaning \
+with the reference values, tolerances and units, the equivalent forms it accepts, how negated or hedged \
+statements count, its weight, and any gate or cap) and the reference reply, nothing else: a decision model \
+of fixed strength compares the visible output of the solver's final turn with the reference against the rubric (the \
+`state` template, `SOLVER_TURN_STATE`; pass another only deliberately), and which model is the host's \
+choice. Calibrate it with `calibrate_decision_grader(context, grader, variants, fluent_wrong_reply=..., \
+hedged_reply=...)` on three equivalent variants of the reference, a confident reply wrong in substance \
+(`fluent_wrong_reply`) and a reply hedging between candidate answers, one of them correct (`hedged_reply`), \
+and ship the grader it returns; when its `problem` is set, the rubric rejects a correct answer, a variant is \
+not equivalent, or the rubric credits a fooling answer. A decision model is fooled by fluent wrong, hedged, \
+negated or truncated answers and by instructions addressed to the grader: the calibration grades one of each \
+on the calibrated grader, `run_build` refuses a decision grader without those grades, and you fix the rubric \
+until each scores at most the rejection ceiling. Its instruction states the deliverable \
+the way a requester would, with no answer block or labelled fields. \
+llm_as_judge, for a reply whose prose is the product: \
+`draft.judge_grader(rubric, reference)` with the same `Rubric` and reference reply: the judge is the \
+host's choice. A judge runs `import \
+verifyit` in a verifier machine, and `GRADER_BASE_IMAGE` has no verifyit ("No module named \
+'verifyit'"); `grade_candidate` calls no judge, so a judge can never be prototyped. Never keyword or \
+regex checks standing in for a judgement. answer_in_box: `draft.answer_grader` with a verifyit mode \
+that grades in process (exact, numeric, mcq, math, ifeval, json_schema, xml_elements, csv_columns, \
+structured_exact, predicted_action), for one value in an unambiguous format. code, the usual kind: the \
+instruction states the exact structure of the answer (a JSON object with named fields, units in their own \
+field, labels from an enumerated set) and the grader parses it strictly, compares every field with the build's \
+ground truth (numbers with tolerance after converting units through a table, labels canonicalised, sets as \
+sets) and gives nothing to a field with several candidates, a missing field or an unparsable answer; or \
+grading runs something (solver-written code, executing files); never keyword, regex or length checks on \
+prose, which stays ungraded: a deterministic grader program in a separate verifier \
+machine: \
 `draft.python_grader(script, config, environment=draft.grader_environment(image), answer_path=..., \
 timeout=...)` runs `python3 /tests/grade.py` after the attempt, in the task image for a task with one \
 (`publish_image(context, DockerBuild(...))`), otherwise on Taskforge's grader-base image (CPython \
@@ -179,6 +208,21 @@ Find the cause, fix it, and write the complete corrected program. Keep the steps
 unchanged, so their memoized outputs are reused.
 """
 
+VERIFICATION_CHANGE_PROMPT = (
+    "This revision changes the verification from {declared} to {revised} ({reason}); build a {revised} grader, "
+    "rewrite the controls for it, and change the instruction's format only as that kind needs."
+)
+
+
+def revision_prompt(revision: Revision) -> str:
+    """The user turn asking for ``revision``, with the verification change it carries, if any."""
+    text = REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)
+    change = revision.verification_change
+    if change is None:
+        return text
+    sentence = VERIFICATION_CHANGE_PROMPT.format(declared=change.declared, revised=change.revised, reason=change.reason)
+    return f"{text}{sentence}\n"
+
 
 NOTES_LIMIT = 2000
 """The longest ``ProgramSubmission.notes`` in characters, room for two to five sentences."""
@@ -234,7 +278,11 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         outputs,
         ("Sources", "ResearchFinding", "WebCall", "Fixtures", "Grader", "GradedCandidate", "Instructions"),
     ),
-    ("Sandbox effects", sandbox_effects, ("build_machine", "grade_candidate", "publish_image")),
+    (
+        "Sandbox effects",
+        sandbox_effects,
+        ("build_machine", "grade_candidate", "calibrate_decision_grader", "DecisionCalibration", "publish_image"),
+    ),
     ("Task types", task_models, ("TaskResource", "InlineFile", "EnvironmentRequirements", "AnswerType")),
     (
         "Grades",
@@ -271,6 +319,7 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "WORKDIR",
             "WORKSPACE",
             "FULL_CREDIT",
+            "EQUIVALENT_VARIANTS",
             "INSTRUCTION_WORD_LIMIT",
             "GRADER_TIMEOUT",
             "ANSWER_FORMAT",
@@ -289,6 +338,8 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "MachineLimits",
             "file",
             "answer_grader",
+            "decision_grader",
+            "judge_grader",
             "grader_environment",
             "python_grader",
             "script_grader",
@@ -301,6 +352,12 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         "The verdict file (`from taskforge.spec import verdict`)",
         verdict,
         ("GRADER_VERDICT_PATH", "GraderCheck", "grader_checks", "reward_in_range"),
+    ),
+    ("Rubrics for `draft.decision_grader` and `draft.judge_grader`", rubric, ("Rubric", "RubricItem", "ItemRole")),
+    (
+        "Decision-model graders",
+        decision,
+        ("DecisionGrader", "StateSource", "SOLVER_TURN_STATE", "REJECTED_REWARD_MAX", "REFERENCE_CONTROL"),
     ),
     (
         "Verifyit specs for `draft.answer_grader`",
@@ -324,9 +381,10 @@ was produced at all.
 - `error`: the message of a grade that is not clean, or `None`.
 - `detail`: a dict or `None`. For a grader program it is the `detail` it wrote beside its reward in \
 `verdict.GRADER_VERDICT_PATH`, with its `checks`; for an in-process verifyit grader it is verifyit's \
-own account (a matched answer, a parse error).
-- `passed`: a bool for a reward with a pass mark or an exit-code reward, otherwise `None`; read the \
-reward instead.
+own account (a matched answer, a parse error); for a decision-model grader it is the read's `level`, \
+the grader's `bar` and whether the reply was `accepted`.
+- `passed`: a bool for a reward with a pass mark or an exit-code reward, and a decision-model grade's \
+`accepted`, otherwise `None`; read the reward instead.
 - `diagnostics`: a dict with the grader command's stdout, stderr and exit code. \
 `grade_diagnostics(grade)` prints the error, the detail and these as one bounded text.
 - `failure`: a `GradingFailure` for an `INFRA_ERROR` (`TIMEOUT` means it timed out twice, on fresh \
@@ -344,16 +402,31 @@ the template grades its candidates as `AnswerType.TEXT` with `ANSWER_FORMAT`.
 validation does: pass the `requirements` step's output as it is, `draft.NO_MACHINE` included, and \
 `workspace` files only for a task with a machine.
 
-A judge grader (`draft.answer_grader(JudgeSpec(...))`) asks a model about the extracted answer and \
+A judge grader (`draft.answer_grader(JudgeSpec(...))`, or `draft.judge_grader(rubric, reference)`, \
+a `"reference"` judge reading the rubric beside the reference) asks a model about the extracted answer and \
 scores by its `rubric`. An empty answer, or one that fails any of its `constraints` (IFEval checks, run \
 first), gets 0.0 without a model call. `rubric="reference"` gives 1.0 to an answer that matches a \
 reference once normalized (`exact_gate`) and otherwise the judge's 0.0, 0.5 or 1.0; `"checklist"` asks \
 one yes/no question per `criteria` entry and gives the fraction answered yes; `"labels"` reads the \
 judge's last line as one of the `label_scores` labels and gives that label's score. The judge reads \
 the answer rather than measuring it, so a length or format rule belongs in `constraints` or in a grader \
-program. `grade_candidate` calls no model, so a build cannot grade a judge (see the rules).
+program. `grade_candidate` calls no judge, so a build cannot grade a judge (see the rules).
+
+A decision-model grader (`draft.decision_grader(rubric, reference)`) is graded on the host, and \
+`grade_candidate` grades it with the host's decision model: the candidate runs with the grader swapped \
+to `NoGrader`, and the decision model reads the visible text of the final reply against the reference \
+and the rubric once, on five levels from 0 (missing) through 1 (contradicts the reference), 2 \
+(partially matches), 3 (equivalent) to 4 (matches exactly). The `level` in `detail` is the \
+probability-weighted level, a float from 0.0 to 4.0. The `bar` is the grader's `acceptance_level`, \
+which `calibrate_decision_grader` sets to the lowest level its reference and equivalent variants read, \
+capped at 3.0, and 2.0 before calibration. A reply whose level reaches the bar is `accepted` and earns \
+1.0. One below it earns at most `REJECTED_REWARD_MAX` (0.5): the credit of its level (0.0 for levels 0 \
+and 1, 0.5 for 2, 1.0 for 3 and 4, interpolated between them) divided by the credit of the bar, times \
+0.5. A reply without visible text is a `SUBMISSION_FAILURE` with reward 0.0, decided without a read. \
+A host without a decision model raises `BuildInfrastructureFailure` (`NO_DECISION_MODEL`).
 """
-"""What the reference says about grades: the fields of ``GradeResult``, the task-machine rule and judge scoring."""
+"""What the reference says about grades: the fields of ``GradeResult``, the task-machine rule, and how a judge and
+a decision-model grader score."""
 
 
 def sdk_reference() -> str:
@@ -408,7 +481,8 @@ class GlmAuthor:
         """Author the program for ``proposal``, revising the workpiece's ``program.py`` when ``revision`` is given.
 
         ``program.py`` and the ``author/`` records live in ``context.workpiece_dir``. The prompt does
-        not carry ``author_state``.
+        not carry ``author_state``. A revision's verification change is applied to the proposal the
+        prompt renders and returned unchanged; this author cannot choose one.
 
         Raises:
             FileNotFoundError: ``revision`` is given and the workpiece has no ``program.py`` to revise.
@@ -416,11 +490,12 @@ class GlmAuthor:
             StructuredOutputError: Every explicitly configured repair failed to load.
         """
         workpiece_dir = context.workpiece_dir
-        messages = author_messages(proposal)
+        change = None if revision is None else revision.verification_change
+        messages = author_messages(proposal if change is None else change.revise(proposal))
         if revision is not None:
             follow_up: list[Message] = [
                 {"role": "assistant", "content": (workpiece_dir / PROGRAM_FILE).read_text()},
-                {"role": "user", "content": REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)},
+                {"role": "user", "content": revision_prompt(revision)},
             ]
             messages += follow_up
         attempts = workpiece_dir / AUTHOR_DIR
@@ -455,7 +530,7 @@ class GlmAuthor:
             "requests": len(result.completions),
         }
         write_bytes_atomic(str(record_dir / RECORD_FILE), json.dumps(record, indent=2).encode())
-        return AuthoredProgram(program, source)
+        return AuthoredProgram(program, source, change)
 
 
 _COMPLETIONS: TypeAdapter[tuple[Completion, ...]] = TypeAdapter(tuple[Completion, ...])

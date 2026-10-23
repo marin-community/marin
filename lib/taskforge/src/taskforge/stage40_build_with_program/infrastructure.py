@@ -38,10 +38,6 @@ a hostname is a typo rather than an unavailable service. The classified executio
   or the closed-machine messages ``sandbox.host_failures`` shares with validation).
 * ``HOST_UNREACHABLE``: a connection to the machine host failed, or the controller answered an RPC
   with a transport, capacity or credential error.
-* ``MODEL_UNAVAILABLE`` / ``model_request_unavailable``: a model call could not complete.
-* ``HTTP_UNAVAILABLE``: an HTTP transport or status failure, including causes wrapped by authored code.
-  These failures remain unavailable evidence; they do not establish a program defect.
-* ``BUDGET_EXHAUSTED``: an explicitly configured execution budget was spent.
 * ``BUILD_PROCESS``: the child process running the build (``build_process.py``) or loading the
   program (``stage30_author.load_process``) exited without writing its result, as when its
   services could not start or the kernel killed it for memory.
@@ -81,6 +77,7 @@ from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, M
 from taskforge.llm.client import ModelRequestRejected, ModelUnavailable
 from taskforge.sandbox.factories import MachineHost, container_backend
 from taskforge.sandbox.host_failures import machine_create_failed, machine_lost
+from taskforge.spec.decision import DecisionUnavailable
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
@@ -108,6 +105,10 @@ class InfrastructureCause(StrEnum):
     NO_IMAGE_BUILDER = "no_image_builder"
     IMAGE_JOB_FAILED = "image_job_failed"
     """A build or push job of ``publish_image`` failed for a host reason (``image_builder.ImageJobFailed``)."""
+    NO_DECISION_MODEL = "no_decision_model"
+    """The build grades a decision-model grader on a host whose services have no decision client."""
+    DECISION_UNAVAILABLE = "decision_unavailable"
+    """The host's decision model failed transiently on a grade and on its one retry."""
     SCHEDULING_TIMEOUT = "scheduling_timeout"
     SANDBOX_DEADLINE = "sandbox_deadline"
     """A startup or verifier deadline expired while a machine started, received files or ran a command."""
@@ -239,6 +240,8 @@ def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure |
             return BuildInfrastructureFailure("model_request_unavailable", str(link))
         if isinstance(link, httpx.HTTPError):
             return BuildInfrastructureFailure("http_unavailable", str(link))
+        if isinstance(link, DecisionUnavailable):
+            return BuildInfrastructureFailure(InfrastructureCause.DECISION_UNAVAILABLE, str(link))
     return None
 
 

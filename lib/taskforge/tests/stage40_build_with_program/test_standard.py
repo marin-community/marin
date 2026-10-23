@@ -6,11 +6,13 @@
 import inspect
 import json
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
 from rolloutengine.models import ModelRequest, ModelTurn
 from shellbox.machine import Backend, PackageSpec
+from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.resources import resource_bytes
@@ -18,12 +20,14 @@ from verifyit.spec import ExactSpec
 
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
-from taskforge.spec import draft
+from taskforge.spec import decision, draft
+from taskforge.spec.decision import DecisionGrader, DecisionUnavailable, ScoreQuestion
 from taskforge.spec.draft import answer_grader, rollout_engine
 from taskforge.spec.verdict import VERDICT_REWARD
-from taskforge.stage10_proposal.model import SolverMachine
+from taskforge.stage10_proposal.model import SolverMachine, TaskProposal, parse
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
+    BuildInfrastructureFailure,
     ExpiredClock,
 )
 from taskforge.stage40_build_with_program.outputs import Fixtures, Grader, Sources
@@ -33,6 +37,7 @@ from taskforge.stage40_build_with_program.sdk import (
     WORKDIR,
     FileDraft,
     FixturesDraft,
+    FoolingKind,
     GraderDraft,
     grader_package,
     machine_facts,
@@ -44,9 +49,11 @@ from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage40_build_with_program.template import standard
 from taskforge.stage50_validate.lowering import lower
 from tests.sandbox.fixture_images import SlowGraderFactory
+from tests.spec.fake_decision import FakeDecisionClient, level_probabilities
 from tests.stage40_build_with_program.conftest import (
     FACTORIES,
     IMAGE,
+    PROPOSAL,
     SAMPLING,
     WORKPIECE,
     RecordingImageBuilder,
@@ -77,6 +84,12 @@ REFERENCE_REPLY = "6 * 7 = 42\nANSWER = 42"
 SHELLSIM = draft.requirements(image=None, workdir=WORKDIR)
 
 
+@pytest.fixture
+def proposal() -> TaskProposal:
+    """The shared proposal, declaring the code verification the grader programs below implement."""
+    return parse(PROPOSAL.replace('"verification": "answer_in_box"', '"verification": "code"'))
+
+
 def file(path: str, content: str) -> dict:
     return {"path": path, "content": content, "executable": False}
 
@@ -85,6 +98,10 @@ def grader_call(script: str) -> dict:
     return {
         "kind": "script",
         "script": script,
+        "rubric": None,
+        "equivalent_variants": [],
+        "fluent_wrong_reply": "",
+        "hedged_reply": "",
         "private_files": [],
         "expected": "",
         "tolerance": 0.0,
@@ -280,6 +297,7 @@ async def test_a_container_task_publishes_its_image_and_grades_in_a_copy_of_it(c
 
     requirements = await standard.requirements.fn(context(images=images), container, fixtures)
     package = grader_package(GraderDraft.model_validate(grader_call("print(1.0)")), fixtures, requirements)
+    assert isinstance(package, GraderPackage)
 
     assert requirements.docker_image == IMAGE
     assert [resource_bytes(f).decode() for f in images.published[0][0].files] == [dockerfile]
@@ -322,6 +340,7 @@ async def test_the_fixtures_and_requirements_steps_build_the_declared_solver_mac
 async def test_cpython_fixtures_choose_the_grader_base_image(context, proposal):
     requirements = await standard.requirements.fn(context(), declaring(proposal, SolverMachine.CPYTHON), FIXTURES)
     package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), FIXTURES, requirements)
+    assert isinstance(package, GraderPackage)
 
     assert requirements.docker_image == GRADER_BASE_IMAGE
     assert machine_facts(requirements).startswith("The task machine is a container with CPython 3.12")
@@ -371,6 +390,7 @@ async def test_package_fixtures_choose_a_package_machine_without_an_image(contex
     fixtures = replace(FIXTURES, packages=("numpy", "pandas==2.2.3"))
     requirements = await standard.requirements.fn(context(), declaring(proposal, SolverMachine.PACKAGES), fixtures)
     package = grader_package(GraderDraft.model_validate(grader_call(GOOD_GRADER)), fixtures, requirements)
+    assert isinstance(package, GraderPackage)
 
     assert (requirements.docker_image, requirements.package_spec) == (
         None,
@@ -397,3 +417,125 @@ async def test_fixtures_list_packages_exactly_for_a_declared_package_machine(pro
     assert problem in (await check(submitted) or "")
     matching = ["numpy"] if machine is SolverMachine.PACKAGES else []
     assert await check(submitted.model_copy(update={"packages": matching})) is None
+
+
+DECISION_REFERENCE = "6 * 7 = 42, so the product is 42."
+DECISION_VARIANTS = ["Multiplying six by seven gives 42.", "6 times 7 is forty-two.", "The product is 42 (6 * 7)."]
+FLUENT_WRONG = "6 * 7 = 48, so the product is 48."
+HEDGED = "The product is 42, or possibly 48."
+LENIENT_CRITERION = "The reply states a product."
+DECISION_RUBRIC = {
+    "deliverable": "The product of 6 and 7.",
+    "items": [
+        {
+            "id": "product",
+            "intent": "The reply states the product.",
+            "pass_criterion": "The product is 42.",
+            "equivalences": ["forty-two"],
+            "negation_handling": "A product named only to be rejected does not count.",
+            "weight": 1.0,
+            "role": "scored",
+            "cap_value": None,
+        }
+    ],
+}
+
+
+def decision_call(variants: list[str]) -> dict:
+    return {
+        **grader_call(""),
+        "kind": "decision_model",
+        "rubric": DECISION_RUBRIC,
+        "equivalent_variants": variants,
+        "fluent_wrong_reply": FLUENT_WRONG,
+        "hedged_reply": HEDGED,
+        "answer_contract": "Tell me the product and how you got it.",
+        "reference_reply": DECISION_REFERENCE,
+        "rejection_ceiling": 0.5,
+    }
+
+
+def decision_proposal():
+    return parse(PROPOSAL.replace('"verification": "answer_in_box"', '"verification": "decision_model"'))
+
+
+async def test_the_grader_step_calibrates_a_decision_grader_on_its_reference_and_variants(context, fake_glm):
+    """A variant the rubric reads as half wrong goes back to the model; the accepted reads set the bar."""
+    misread = "Six sevens: 42."
+    levels = {DECISION_REFERENCE: 3.9, misread: 1.4, DECISION_VARIANTS[0]: 3.1, DECISION_VARIANTS[1]: 2.9}
+    client = FakeDecisionClient({**levels, DECISION_VARIANTS[2]: 3.4})
+    fake_glm.stream(content=json.dumps(decision_call([misread, *DECISION_VARIANTS[1:]])))
+    fake_glm.stream(content=json.dumps(decision_call(DECISION_VARIANTS)))
+
+    grader = await standard.grader.fn(
+        context(decision=client), decision_proposal(), replace(FIXTURES, private_files=()), SHELLSIM
+    )
+
+    assert isinstance(grader.package, DecisionGrader)
+    assert (grader.package.reference, grader.package.acceptance_level, grader.rejection_ceiling) == (
+        DECISION_REFERENCE,
+        2.9,
+        0.5,
+    )
+    assert set(grader.package.calibration) == {"reference", "variant:1", "variant:2", "variant:3"}
+    assert "known-correct candidates read below 'partially matches'" in fake_glm.requests[1]["messages"][-2]["content"]
+    assert [c.reply for c in grader.prototyped[-10:-5]] == [DECISION_REFERENCE, *DECISION_VARIANTS, ""]
+    assert grader.prototyped[-5].reply == FLUENT_WRONG and grader.prototyped[-4].reply == HEDGED
+    assert "decision_model" in fake_glm.requests[0]["messages"][-2]["content"]
+    # The step output keeps the decision grader type through the step store's JSON.
+    stored = TypeAdapter(Grader)
+    assert stored.validate_json(stored.dump_json(grader)) == grader
+
+
+@dataclass
+class RubricSensitiveClient:
+    """Reads as ``reads`` does, except that it credits the fluent wrong reply under a rubric whose criterion is
+    ``LENIENT_CRITERION``, which never says what a correct answer commits to."""
+
+    reads: FakeDecisionClient
+
+    async def decide(
+        self, state: Mapping[str, JsonValue], questions: Mapping[str, ScoreQuestion], *, elastic: str, timeout: float
+    ) -> Mapping[str, tuple[float, ...]]:
+        if state["z_candidate_answer"] == FLUENT_WRONG and LENIENT_CRITERION in json.dumps(state["rubric"]):
+            return {name: level_probabilities(3.5) for name in questions}
+        return await self.reads.decide(state, questions, elastic=elastic, timeout=timeout)
+
+
+async def test_the_grader_step_sends_back_a_rubric_that_credits_a_fooling_answer(context, fake_glm):
+    lenient = json.loads(json.dumps(DECISION_RUBRIC))
+    lenient["items"][0]["pass_criterion"] = LENIENT_CRITERION
+    client = RubricSensitiveClient(
+        FakeDecisionClient({DECISION_REFERENCE: 3.9, **dict.fromkeys(DECISION_VARIANTS, 3.2)})
+    )
+    fake_glm.stream(content=json.dumps({**decision_call(DECISION_VARIANTS), "rubric": lenient}))
+    fake_glm.stream(content=json.dumps(decision_call(DECISION_VARIANTS)))
+
+    grader = await standard.grader.fn(
+        context(decision=client), decision_proposal(), replace(FIXTURES, private_files=()), SHELLSIM
+    )
+
+    assert len(fake_glm.requests) == 2
+    assert "fluent_wrong reward 1.0" in fake_glm.requests[1]["messages"][-2]["content"]
+    assert isinstance(grader.package, DecisionGrader)
+    assert grader.package.rubric.items[0].pass_criterion == "The product is 42."
+    assert set(grader.package.fooling) == {kind.value for kind in FoolingKind}
+
+
+async def test_a_decision_grader_on_a_host_without_a_decision_model_is_the_hosts_failure(context, fake_glm):
+    fake_glm.stream(content=json.dumps(decision_call(DECISION_VARIANTS)))
+
+    with pytest.raises(BuildInfrastructureFailure, match="no_decision_model"):
+        await standard.grader.fn(context(), decision_proposal(), replace(FIXTURES, private_files=()), SHELLSIM)
+
+
+async def test_a_decision_model_down_twice_on_a_calibration_read_is_the_hosts_failure(context, fake_glm, monkeypatch):
+    monkeypatch.setattr(decision, "DECISION_RETRY_BACKOFF", 0.0)
+    client = FakeDecisionClient({}, failures=[DecisionUnavailable("503"), DecisionUnavailable("503")])
+    fake_glm.stream(content=json.dumps(decision_call(DECISION_VARIANTS)))
+
+    with pytest.raises(BuildInfrastructureFailure, match="decision_unavailable"):
+        await standard.grader.fn(
+            context(decision=client), decision_proposal(), replace(FIXTURES, private_files=()), SHELLSIM
+        )
+    assert len(client.requests) == 2

@@ -7733,6 +7733,7 @@ source = { editable = "lib/taskforge" }
 dependencies = [
     { name = "click" },
     { name = "httpx" },
+    { name = "huggingface-hub" },
     { name = "jsonschema" },
     { name = "marin-finelog" },
     { name = "marin-iris" },
@@ -7744,6 +7745,7 @@ dependencies = [
     { name = "marin-zephyr" },
     { name = "openai" },
     { name = "pydantic" },
+    { name = "tokenizers" },
 ]
 
 [package.dev-dependencies]
@@ -7757,6 +7759,7 @@ test = [
 requires-dist = [
     { name = "click" },
     { name = "httpx", specifier = ">=0.27,<1" },
+    { name = "huggingface-hub", specifier = ">=1.0" },
     { name = "jsonschema", specifier = ">=4.20" },
     { name = "marin-finelog", editable = "lib/finelog" },
     { name = "marin-iris", editable = "lib/iris" },
@@ -7768,6 +7771,7 @@ requires-dist = [
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "tokenizers", specifier = ">=0.22" },
 ]
 
 [package.metadata.requires-dev]

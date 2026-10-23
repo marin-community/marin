@@ -25,9 +25,9 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from types import MappingProxyType
 
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
-from taskforge.stage30_author.author import RevisionKind
+from taskforge.stage30_author.author import RevisionKind, VerificationChange
 from taskforge.stage60_review.decision import BandOutcome, RejectKind
 
 EXIT = "exit"
@@ -37,6 +37,9 @@ TERMINAL_ATTR = "terminal"
 REASON_ATTR = "reason"
 AUTHOR_STATE_ATTR = "author_state"
 """The attr holding the author state of a triage accept, as canonical JSON."""
+VERIFICATION_CHANGE_ATTR = "verification_change"
+"""The attr holding the verification change of an author answering a ``modify`` revision, as canonical JSON
+(``null`` for none)."""
 UNNUMBERED = 0
 """The ``seq`` of an event before a log appends it."""
 CALIBRATED = "calibrated"
@@ -55,7 +58,8 @@ class EventKind(StrEnum):
     proposal_file for repair; author_state for accept (the verdict's, as canonical JSON); reason for
     reject (the verdict's reasons, or why a REPAIR verdict was not answered, truncated)."""
     AUTHORED = "authored"
-    """digest: the program's. attrs: exit, revision (the ``RevisionKind`` the program answers)."""
+    """digest: the program's. attrs: exit, revision (the ``RevisionKind`` the program answers);
+    verification_change for a modify revision (the author's ``VerificationChange``, as canonical JSON)."""
     AUTHOR_FAILED = "author_failed"
     """digest: the proposal's. attrs: exit, failure (truncated), failure_file."""
     BUILD_FAILED = "build_failed"
@@ -193,6 +197,9 @@ class WorkpieceState:
         task_digest: The digest of this round's built task, or ``None`` before the build.
         revision: The kind of revision the next author call answers. A build of a program without
             source asks the author again with it, so only ``BUILT`` clears it.
+        verification_change: The swap of the verifier kind every build and author call runs under, relative
+            to the proposal in ``proposal_digest``: the last ``AUTHORED`` event answering a modify revision
+            recorded it, or ``None``.
         triage_repairs: The rewrites answering a REPAIR verdict so far.
         author_state: The author state triage's accept recorded, which every author call receives;
             empty before the accept.
@@ -212,6 +219,7 @@ class WorkpieceState:
     program_digest: str | None
     task_digest: str | None
     revision: RevisionKind
+    verification_change: VerificationChange | None
     triage_repairs: int
     author_state: Mapping[str, JsonValue]
     build_revisions: int
@@ -237,6 +245,7 @@ def opened(event: WorkpieceEvent) -> WorkpieceState:
         program_digest=None,
         task_digest=None,
         revision=RevisionKind.NONE,
+        verification_change=None,
         triage_repairs=0,
         author_state=MappingProxyType({}),
         build_revisions=0,
@@ -256,7 +265,8 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
 
     Raises:
         ValueError: the event follows a final terminal, breaks the ``seq`` order, comes from another
-            stage, has an exit its stage or kind lacks, or is a ``TERMINAL`` disagreeing with the closing.
+            stage, has an exit its stage or kind lacks, is a ``TERMINAL`` disagreeing with the closing, or is
+            an ``AUTHORED`` event recording a verification change for a revision other than modify.
     """
     kind, attrs = event.kind, event.attrs
     if state.terminal in FINAL:
@@ -303,7 +313,14 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
         case (EventKind.TRIAGED, Exit.REJECT):
             return replace(state, closing=Closing(Terminal.REJECTED, attrs[REASON_ATTR], RejectKind.TASK))
         case (EventKind.AUTHORED, Exit.AUTHORED):
-            return replace(state, program_digest=event.digest)
+            state = replace(state, program_digest=event.digest)
+            if VERIFICATION_CHANGE_ATTR not in attrs:
+                return state
+            if state.revision is not RevisionKind.MODIFY:
+                raise ValueError(f"{kind} answering a {state.revision} revision changes the verification")
+            return replace(
+                state, verification_change=_VERIFICATION_CHANGE.validate_json(attrs[VERIFICATION_CHANGE_ATTR])
+            )
         case (EventKind.BUILT, Exit.BUILT):
             return replace(state, task_digest=event.digest, revision=RevisionKind.NONE)
         case (EventKind.AUTHOR_FAILED, Exit.REVISE):
@@ -344,6 +361,9 @@ def transition(state: WorkpieceState, event: WorkpieceEvent) -> WorkpieceState:
             )
         case _:
             raise ValueError(f"{kind} cannot exit {way}")
+
+
+_VERIFICATION_CHANGE: TypeAdapter[VerificationChange | None] = TypeAdapter(VerificationChange | None)
 
 
 def _out_of_revisions(state: WorkpieceState, revision: RevisionKind, terminal: Terminal) -> WorkpieceState:

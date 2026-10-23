@@ -32,6 +32,7 @@ def settings(factory, max_turns: int = 6) -> EngineSettings:
             verifier_timeout=None,
             max_total_tokens=None,
         ),
+        decision=None,
     )
 
 

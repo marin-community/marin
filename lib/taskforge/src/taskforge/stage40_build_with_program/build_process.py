@@ -70,13 +70,16 @@ from taskforge.child_process import stop_process_group
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
+from taskforge.llm.clef.decision_client import ClefDecisionConfig, open_clef_decision_client
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.web import web_tools
 from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge.spec.decision import DecisionClient
 from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage30_author.author import VerificationChange
 from taskforge.stage30_author.loader import program_file
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
@@ -143,6 +146,8 @@ class BuildServiceConfig:
             launcher reads it from Secret Manager with ``image_builder.registry_credential_json``
             at submit time and sets it, conventionally as ``image_builder.REGISTRY_CREDENTIAL_ENV``;
             the host itself never reads Secret Manager.
+        decision: The host's decision model (Clef behind the Orion gateway), or ``None`` for a host without
+            one, where grading a decision-model grader fails as the host's (``NO_DECISION_MODEL``).
     """
 
     host: MachineHost
@@ -154,11 +159,15 @@ class BuildServiceConfig:
     agent_limits: AgentLimits
     image_cluster: str | None
     registry_credential_env: str | None
+    decision: ClefDecisionConfig | None
 
 
 @dataclass(frozen=True)
 class BuildRequest:
-    """One workpiece's round, as ``run_build`` takes it, with the program as source and the host as config."""
+    """One workpiece's round, as ``run_build`` takes it, with the program as source and the host as config.
+
+    ``proposal`` is the revised proposal when ``verification_change`` is set, as ``run_build`` requires.
+    """
 
     workpiece_id: str
     round: int
@@ -171,6 +180,7 @@ class BuildRequest:
     research: ResearchRequirement
     invalidate: frozenset[str]
     model_digest: str | None
+    verification_change: VerificationChange | None
     services: BuildServiceConfig
 
 
@@ -330,6 +340,7 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
     async with (
         GlmClient(endpoint, model.provider) as client,
         httpx.AsyncClient() as http,
+        _decision_client(config.decision) as decision,
     ):
         yield client, RLEnvBuildServices(
             host=config.host,
@@ -339,7 +350,17 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
             ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
             reasoning_replay=config.reasoning_replay,
             agent_limits=config.agent_limits,
+            decision=decision,
         )
+
+
+@asynccontextmanager
+async def _decision_client(config: ClefDecisionConfig | None) -> AsyncIterator[DecisionClient | None]:
+    if config is None:
+        yield None
+        return
+    async with open_clef_decision_client(config) as client:
+        yield client
 
 
 async def build_result(request: BuildRequest) -> BuildResult:
@@ -366,6 +387,7 @@ async def build_result(request: BuildRequest) -> BuildResult:
                 research=request.research,
                 invalidate=request.invalidate,
                 model_digest=request.model_digest,
+                verification_change=request.verification_change,
             )
         except BuildFailure as error:
             return Failed(error.message, error.step)

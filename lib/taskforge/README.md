@@ -31,8 +31,8 @@ src/taskforge/
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
                                verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, AuthorContext, AuthorFailure, the
-                               Author protocol, `static_author`, the program manifest;
+                               author.py: Revision, VerificationChange, AuthoredProgram, AuthorContext,
+                               AuthorFailure, the Author protocol, `static_author`, the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
   stage40_build_with_program/  agentic_author.py: `AgenticAuthor`, the author whose agent sessions write,
                                load, build and grade a build program;
@@ -110,16 +110,21 @@ solver's machine: `null` for a container proposal, which runs in the image its b
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
 The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
 not a relative path inside the build root and a `build` name that repeats.
+`verification` is one of `Verification`. `composite` is a reserved kind: `parse` accepts a document
+that declares it, but proposers are offered only `OFFERED_VERIFICATIONS` (`decision_model`,
+`answer_in_box`, `code`, `llm_as_judge`) until a composite grader type exists, and a task whose
+grading would mix kinds declares its dominant part.
 `document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
-field that constrains a completion to the typed object for that id and source. A reply cut off
+field that constrains a completion to the typed object for that id and source, with an offered
+verification and `composite: []`. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
 
 `experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
 source for catalog capabilities, which takes its model, sampling policy and host environments at
 construction. Its `plan(idea, n)` plans `n` slots in one structured call, each with a solver
-machine and a research decision, and its `write(idea, portfolio, slot)` writes one slot's document
-under the regex with GLM thinking first.
+machine, an offered verification and a research decision, and its `write(idea, portfolio, slot)`
+writes one slot's document under the regex with GLM thinking first.
 `propose_tasks` in the same package proposes the catalog's capabilities from the command line and
 triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
 is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a
@@ -171,7 +176,7 @@ spec, so a move of either is a single-site change.
   in a verifier machine given `environment=`), `python_grader(script, config, environment=,
   answer_path=, timeout=)` (`python3 /tests/grade.py` in a verifier machine) or
   `script_grader(argv, reward, environment=, answer_path=, timeout=, ...)`. RolloutEngine grades an
-  LLM judge (a verifyit `JudgeSpec`) on the host through the judge service of `TaskRolloutSpec.judge_connection`
+  LLM judge (`judge_grader`) on the host through the judge service of `TaskRolloutSpec.judge_connection`
   or `VERIFYIT_JUDGE_BASE_URL`, with no verifier machine, so its `RolloutEngine.check` fails on a host
   that has neither.
   `grader_environment(task_image)` is the verifier machine's environment: the task image, or
@@ -332,7 +337,8 @@ would, `grade_candidate` grades a candidate reply and workspace through `Rollout
 `publish_image` pushes a task image. `grade_candidate` takes the task's requirements as the
 `requirements` step returns them and starts a task machine exactly when they have the shell
 capability, as validation's lowering does, so `draft.NO_MACHINE` grades without one. The SDK
-reference the authors read (`glm_author.sdk_reference`) describes the `GradeResult` it returns.
+reference the authors read (`glm_author.sdk_reference`) describes the `GradeResult` it returns and
+how a decision-model grader scores there: the read's level, the grader's bar and the reward they give.
 `infrastructure.host_checked_factories` wraps the factories first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
 cause chain, even one the program wrapped, so the caller retries or abandons the workpiece instead of
 asking the author for a revision. A host fault is a machine the host could not create or lost
@@ -377,7 +383,11 @@ revision spent and no author adapting the task to the host.
 `grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
 sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
 grader that rejects its own reference, returns a reward outside its score range, or credits the
-empty answer above its declared `rejection_ceiling` is a build failure. A reference whose grader
+empty answer above its declared `rejection_ceiling` is a build failure. A decision-model grader is
+calibrated instead (`calibrate_decision_grader`): its reference and three equivalent variants set the bar,
+five fooling answers (fluent wrong, hedged, retracted, truncated, and a wrong answer addressed to the grader)
+must each score at most the rejection ceiling under it, and `run_build` refuses any program's task whose
+decision grader lacks those reads (`check_decision_grader`). A reference whose grader
 timed out on both of `grade_candidate`'s gradings raises `BuildExpired` (`GRADER`) at once instead of
 going back to the model, and the driver holds the workpiece as `HELD`. The `Grader` it returns
 holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
@@ -409,10 +419,13 @@ an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`
 caller's `ProgramBuilder` (`run_build`, which must build as the caller's build stage does, on the same
 step store, so a program that built in the session rebuilds there from memo hits alone), grade a
 candidate against the last draft the session built (`run_grade_candidate`), and search and fetch the
-web when the proposal lists research. Every load of a program (`run_loader`, `run_build`, `submit`)
-goes through the session's `ProgramLoader`, by default `stage30_author.load_process` in a child process
-bounded by `LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the
-caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A build whose step
+web when the proposal lists research. A session answering a `MODIFY` revision may also swap the verifier
+kind (`change_verification(kind, reason)`, the declared kind undoing the swap); the builder then
+receives the revised proposal and the change, and a program counts as built only for the kind it built.
+Every load of a program (`run_loader`, `run_build`, `submit`) goes through the session's
+`ProgramLoader`, by default `stage30_author.load_process` in a child process bounded by
+`LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the caller's
+event loop. Every tool result is cut to 6,000 characters, head and tail. A build whose step
 raised reaches the model as `failure_text`'s text: the program file, line, step and source line that
 raised it, the error, then its traceback's tail, the same from a build in a child process, whose
 `BuildCrash` carries the head the child wrote. A host failure never
@@ -435,7 +448,8 @@ round's sessions across its author calls:
 ```
 rounds/<n>/agentic/<k>/
   author.json        author_kind, status (accepted, handed_off, author_failed), revision, mode,
-                     stop_reason, wall; accepted adds program_digest and tested
+                     stop_reason, wall; accepted adds program_digest, tested and
+                     verification_change ({declared, revised, reason} or null)
   session.json       turns, tool calls by tool, tokens, cached share, prompts, stop reason, nudges,
                      submissions, in-session builds
   transcript.json    the opening and user turns, then each assistant turn with its tool calls and results
@@ -452,8 +466,8 @@ round, or of the round before when its own has none. With no session yet, it sta
 a build failure, the session that submitted the program continues with the failure as its next user
 turn when it ended by `submit` within `revision_same_session` (its last prompt and its turns used); any
 other revision starts a fresh session from a copy of its workspace. A last session that ended without
-a submission hands its workspace to a fresh session. A session that ends without a submission saves its workspace and conversation, then reports
-an execution failure. A later explicit resume starts a handoff session. There is no automatic
+a submission hands its workspace to a fresh session. A session that ends without a submission saves its
+workspace and conversation, then reports an execution failure. A later explicit resume starts a handoff session. There is no automatic
 handoff-count cap. A relaunch starts from the saved workspace instead of resuming mid-tool.
 
 ## The stage machine
@@ -507,6 +521,20 @@ author stage.
 The coordinator calls the author with an `AuthorContext` (the workpiece id, the round and the
 workpiece's directory), the proposal, the revision and the author state. An author keeps its own
 files in the workpiece's directory, under names the coordinator does not use (the layout below).
+
+A `MODIFY` revision, which sends review's or an adversary's findings back, lets the author swap the
+task's verifier kind with a `VerificationChange` (`declared`, `revised`, `reason`). The agentic
+author decides in its session with the `change_verification` tool; a caller may also put a change on
+the revision, which the author starts from and may keep, replace or undo, and which the one-shot
+`GlmAuthor` keeps unchanged. The author returns its choice as `AuthoredProgram.verification_change`,
+relative to the proposal as declared. Callers build that round and every later one with
+`change.revise(proposal)` and the change, so the build's check of the built grader's kind reads the
+revised kind and `run_build(verification_change=...)` records both kinds in the draft's provenance;
+later author calls receive the revised proposal, and a later `MODIFY` call receives the declared one
+with the change on its revision. The coordinator records the change on the `AUTHORED` event
+(`verification_change`, canonical JSON) and folds it into `WorkpieceState.verification_change`. A
+build or author failure may not swap the kind.
+
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
 workpiece's build and author failures so far, and the build stage loads the program from that file
@@ -704,7 +732,11 @@ fresh machine. `AdversaryPolicy` sets the trials per round, the submissions per 
 them grades nothing), the turns, the sampling and the mode; the round's deadlines, retries and backoff
 apply. A `blackbox` adversary sees the task as the solver does; a `whitebox` one is also shown the
 grader's specification and verifier files, the round's controls with their expected rewards and the
-task's example answers. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
+task's example answers; for a decision-model grader, which has no files, the specification is what its
+decision model reads (the rubric and the reference among it), its question and levels, and the bar. A
+decision-model task's submissions are graded on the host as its solver trials are, and a host without a
+decision client refuses the adversary trial before its first attempt, as `run_trial` refuses a solver
+trial. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
 candidates and a final `NO_SHORTCUT` or `SHORTCUT:` line, recorded as the trial's claim. An attempt is
 reported with its last passing submission, else its last submission. A verifier failure stays
 ungraded with its original cause and retryability. Its attempt file holds the

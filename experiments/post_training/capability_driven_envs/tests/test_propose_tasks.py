@@ -52,6 +52,7 @@ def proposal_document(capability_hash: str) -> str:
                 "environment": "reasoning",
                 "solver_machine": "shellsim",
                 "verification": "code",
+                "composite": [],
                 "research_need": "not_needed",
                 "research_reason": "the recipe and yields are synthetic",
                 "research": [],
@@ -108,7 +109,7 @@ def test_a_slot_whose_model_runs_out_of_retries_fails_alone_and_keeps_the_plan_a
     ideas = selected_ideas(example_catalog_path(), [CAPABILITY_ID])
     unavailable = ModelUnavailable("the router answered 503 on every retry", ())
     model = ScriptedModel()
-    model.reply(json.dumps({**PLAN, "slots": [SLOT, {**SLOT, "slot": 2, "verification": "judge"}]}))
+    model.reply(json.dumps({**PLAN, "slots": [SLOT, {**SLOT, "slot": 2, "verification": "llm_as_judge"}]}))
     model.reply(proposal_document(ideas[CAPABILITY_ID].capability_hash))
     model.fail(unavailable)
     output = tmp_path / "run"

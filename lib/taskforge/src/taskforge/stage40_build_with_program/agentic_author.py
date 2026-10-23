@@ -35,14 +35,24 @@ failure with cause ``BUILD_PROCESS``. A proposal whose solver machine the sessio
 without the local backend) raises before the session starts, so the author never adapts the task to the
 host.
 
+A session answering a ``MODIFY`` revision is also offered ``change_verification(kind, reason)``, which
+swaps the verifier kind of the call's proposal (``VerificationChange``, relative to the proposal as the
+call received it) or, given that proposal's own kind, undoes the swap. The session starts from the
+change the revision carries, if any. Every later ``run_build`` passes the session's current proposal and
+change to the ``ProgramBuilder``, so the build checks the kind the author chose, and a program counts as
+built in the session only under the kind it was built for. The accepted submission returns the session's
+change in ``AuthoredProgram.verification_change`` and records it in ``author.json``. Round 0, a build
+failure and an author failure offer no such tool. A session handed off within a call starts again from the
+revision's change, not from the change an unsubmitted session made.
+
 ``AgenticAuthor`` is the coordinator's ``Author``: each call runs one session in the context's round
 and returns a submitted file's bytes as the program's source, which the coordinator
 writes to ``authored/<k>/``. Each session keeps its records in its own ``agentic/<k>/``: ``author.json``
-(status, revision, mode, stop reason, wall), ``submit.json``, ``record.json`` for a submission,
-``transcript.json`` (every turn: role, tool calls, tool results cut to ``TRANSCRIPT_CHARS``, tokens,
-finish) and ``session.json`` (turns, tool calls by tool, tokens, cached share, wall, stop reason,
-submissions, in-session builds). ``k`` counts the round's sessions, across the author calls of the
-round.
+(status, revision, mode, stop reason, wall, and for a submission its verification change),
+``submit.json``, ``record.json`` for a submission, ``transcript.json`` (every turn: role, tool calls,
+tool results cut to ``TRANSCRIPT_CHARS``, tokens, finish) and ``session.json`` (turns, tool calls by
+tool, tokens, cached share, wall, stop reason, submissions, in-session builds). ``k`` counts the round's
+sessions, across the author calls of the round.
 
 Which session a call runs, from the last session of the round, or of the round before when this round has
 none:
@@ -72,7 +82,7 @@ import time
 import traceback
 from collections import Counter
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path, PurePosixPath
@@ -99,7 +109,7 @@ from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavail
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
 from taskforge.spec import draft as draft_module
-from taskforge.stage10_proposal.model import TaskProposal, render
+from taskforge.stage10_proposal.model import OFFERED_VERIFICATIONS, TaskProposal, Verification, render
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
     ROUNDS_DIR,
@@ -107,6 +117,7 @@ from taskforge.stage30_author.author import (
     AuthoredProgram,
     Revision,
     RevisionKind,
+    VerificationChange,
 )
 from taskforge.stage30_author.load_process import LoaderProcessFailed, ProgramManifest, load_program_in_process
 from taskforge.stage30_author.loader import GRADER_STEP, program_file
@@ -119,8 +130,8 @@ from taskforge.stage40_build_with_program.failure_text import BuildCrash, failur
 from taskforge.stage40_build_with_program.glm_author import (
     AUTHOR_STEP,
     RECORD_FILE,
-    REVISION_PROMPT,
     author_messages,
+    revision_prompt,
     sdk_reference,
 )
 from taskforge.stage40_build_with_program.infrastructure import (
@@ -135,7 +146,7 @@ from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
 from taskforge.stage40_build_with_program.program_sdk import load_program, sdk_exports
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
 from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate_on_host
-from taskforge.stage40_build_with_program.sdk import grade_diagnostics, grading_language
+from taskforge.stage40_build_with_program.sdk import grade_diagnostics, grader_name, grading_language
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 from taskforge.stage40_build_with_program.template import standard
@@ -217,6 +228,12 @@ This is a fresh session continuing earlier work. The workspace holds `{program}`
 HANDOFF_PROMPT = "The earlier session ended without a submission ({reason})."
 NO_REVISION_PROMPT = "Continue from the earlier session's workspace: finish the program and submit it."
 EDIT_AND_SUBMIT = f"Edit `{PROGRAM_FILE}` in the workspace, run it with `run_build`, and submit it."
+CHANGE_VERIFICATION_DESCRIPTION = (
+    "Change the task's verifier kind when the findings show the current kind cannot grade the task well, for "
+    "example a code grader that leaves the prose unenforced. The revision may suggest a swap, but the choice is "
+    "yours, and reason must state why. kind: the new kind, or the proposal's declared kind to undo a change; the "
+    "next run_build checks that the built grader is that kind."
+)
 
 
 @dataclass(frozen=True)
@@ -276,10 +293,21 @@ class AgenticAuthorConfig:
 
 
 class ProgramBuilder(Protocol):
-    async def __call__(self, source: str, run_dir: Path, *, invalidate: frozenset[str]) -> TaskDraft:
-        """Build ``source`` for the session's workpiece and round, as the caller's own build stage would (same step
-        store, model, policy, services and research requirement), leaving ``draft/`` and the build files under
-        ``run_dir``.
+    async def __call__(
+        self,
+        source: str,
+        run_dir: Path,
+        *,
+        invalidate: frozenset[str],
+        proposal: TaskProposal,
+        verification_change: VerificationChange | None,
+    ) -> TaskDraft:
+        """Build ``source`` for the session's workpiece and round, as the caller's own build stage would (same
+        step store, model, policy, services and research requirement), leaving ``draft/`` and the build files
+        under ``run_dir``.
+
+        ``proposal`` and ``verification_change`` are the session's current ones, which ``run_build`` takes as
+        they are: the round's proposal, or ``verification_change.revise`` of it while the session holds a change.
 
         Raises what the build raises; the session turns ``BuildFailure`` and other exceptions into text for the
         model, re-raises ``ModelUnavailable``, ``BuildExpired`` and an ``OSError`` raised outside the program's
@@ -358,7 +386,11 @@ class AuthorStatus(StrEnum):
 
 class SessionBuilds(Protocol):
     def __call__(self, context: AuthorContext, proposal: TaskProposal, /) -> SessionBuild:
-        """How the sessions of ``context``'s workpiece and round load, build and grade ``proposal``'s program."""
+        """How the sessions of ``context``'s workpiece and round load, build and grade ``proposal``'s program.
+
+        ``proposal`` is the one the call received; each build passes the session's current proposal and
+        verification change to the ``ProgramBuilder``.
+        """
         ...
 
 
@@ -497,6 +529,7 @@ class Submission:
     manifest: ProgramManifest
     notes: str
     tested: bool
+    verification_change: VerificationChange | None
 
 
 clip = partial(clip_tool_output, limit=TOOL_OUTPUT_CHARS, head=TOOL_OUTPUT_HEAD, tail=TOOL_OUTPUT_TAIL)
@@ -521,7 +554,12 @@ def _grading_report(draft: TaskDraft) -> str:
 
 
 class AuthorSession:
-    """The workspace, tools and state of one agentic author session."""
+    """The workspace, tools and state of one agentic author session.
+
+    ``original`` is the proposal the round received; ``change`` is the session's verification change
+    relative to it, starting from the revision's, and ``proposal`` the proposal it yields, which the
+    workspace's ``proposal.json`` and every in-session build follow.
+    """
 
     def __init__(
         self,
@@ -529,6 +567,7 @@ class AuthorSession:
         workpiece_id: str,
         round_no: int,
         proposal: TaskProposal,
+        revision: Revision | None,
         build: SessionBuild,
         session_id: str,
     ):
@@ -537,12 +576,16 @@ class AuthorSession:
         self.runs = session_dir / RUNS_DIR
         self.workpiece_id = workpiece_id
         self.round_no = round_no
-        self.proposal = proposal
+        self.original = proposal
+        self.change = None if revision is None else revision.verification_change
+        self.proposal = proposal if self.change is None else self.change.revise(proposal)
+        self.answers_findings = revision is not None and revision.kind is RevisionKind.MODIFY
         self.build = build
         self.ledger = TaggedLedger(build.services.ledger, {"origin": SESSION_ORIGIN, "session": session_id})
         self.services = replace(build.services, ledger=self.ledger)
-        self.built: set[str] = set()
-        self.refused_untested: set[str] = set()
+        self.built: set[tuple[str, Verification]] = set()
+        """Each program digest that built in the session, with the verifier kind it was built for."""
+        self.refused_untested: set[tuple[str, Verification]] = set()
         self.last_draft: TaskDraft | None = None
         self.submissions: list[dict] = []
         self.submission: Submission | None = None
@@ -629,10 +672,17 @@ class AuthorSession:
         ledger = self.build.session_ledger
         offset = ledger.stat().st_size if ledger.exists() else 0
         started = time.monotonic()
-        record: dict = {"path": raw, "program_digest": program.digest, "invalidate": sorted(invalidate)}
+        record: dict = {
+            "path": raw,
+            "program_digest": program.digest,
+            "invalidate": sorted(invalidate),
+            "verification": self.proposal.header.verification,
+        }
 
         async def built() -> tuple[TaskDraft, GradeResult]:
-            draft = await self.build.builder(source, run_dir, invalidate=invalidate)
+            draft = await self.build.builder(
+                source, run_dir, invalidate=invalidate, proposal=self.proposal, verification_change=self.change
+            )
             return draft, await self._check_empty_answer(draft)
 
         try:
@@ -678,7 +728,7 @@ class AuthorSession:
             self.builds.append(record)
             where = f" in step {step}" if step else ""
             return f"build failed ({status}{where})\nsteps: {_steps_line(record['steps'])}\n\n{text}"
-        self.built.add(program.digest)
+        self.built.add((program.digest, self.proposal.header.verification))
         self.last_draft = draft
         record |= {"status": "built", "wall": time.monotonic() - started, "steps": ledger_steps(ledger, offset)}
         _write_json(run_dir / RUN_FILE, record)
@@ -769,20 +819,49 @@ class AuthorSession:
                 f"notes hold {len(notes)} characters, more than {NOTES_CHARS}; nothing handed in ({loaded}). "
                 "Shorten the notes and submit again."
             )
-        tested = program.digest in self.built
-        if not tested and program.digest not in self.refused_untested:
-            self.refused_untested.add(program.digest)
+        built = (program.digest, self.proposal.header.verification)
+        tested = built in self.built
+        if not tested and built not in self.refused_untested:
+            self.refused_untested.add(built)
             self.submissions.append(entry | {"outcome": SubmitOutcome.REFUSED_UNTESTED})
             return (
-                f"not handed in: {loaded}, but this program never built in this session. Run it with run_build "
-                "first, or call submit again with the same file to hand it in untested."
+                f"not handed in: {loaded}, but this program never built in this session for "
+                f"{self.proposal.header.verification} verification. Run it with run_build first, or call submit "
+                "again with the same file to hand it in untested."
             )
-        self.submission = Submission(raw, self.path(raw).read_bytes(), program, notes, tested)
+        self.submission = Submission(raw, self.path(raw).read_bytes(), program, notes, tested, self.change)
         self.submissions.append(entry | {"outcome": SubmitOutcome.ACCEPTED})
         return f"accepted: program {program.digest}{'' if tested else ' (untested)'}. The session ends here."
 
+    async def change_verification(self, arguments: Mapping[str, object]) -> str:
+        """Swap the verifier kind of the round's proposal to ``kind``, or undo the swap given its own kind.
+
+        Raises:
+            ToolRefusal: ``kind`` is the current kind, or ``VerificationChange`` refused the change.
+        """
+        kind, reason = Verification(str(arguments["kind"])), str(arguments["reason"])
+        current, declared = self.proposal.header.verification, self.original.header.verification
+        if kind is current:
+            raise ToolRefusal(f"the verification is already {kind}; nothing changed")
+        if kind is declared:
+            change = None
+        else:
+            try:
+                change = VerificationChange(declared, kind, reason)
+            except ValueError as error:
+                raise ToolRefusal(f"verification unchanged: {error}") from error
+        self.change = change
+        self.proposal = self.original if change is None else change.revise(self.original)
+        _write_text(self.workspace / PROPOSAL_PATH, render(self.proposal))
+        undone = " (the round's own kind)" if change is None else ""
+        return (
+            f"verification changed from {current} to {kind}{undone}; {PROPOSAL_PATH} declares it. The next "
+            f"run_build checks that the built grader is {kind}: build a {kind} grader and make the controls suit it."
+        )
+
     def tools(self, web_tools: Sequence[AgentTool]) -> list[AgentTool]:
-        """The session's tools; ``web_tools`` (search and fetch) are offered when the proposal lists research."""
+        """The session's tools; ``web_tools`` (search and fetch) are offered when the proposal lists research, and
+        ``change_verification`` when the session answers findings (a ``MODIFY`` revision)."""
         read_window = {
             "start_line": {"type": "integer", "minimum": 1, "description": "First line to show, 1-based (default 1)."},
             "max_lines": {"type": "integer", "minimum": 1, "description": f"Lines to show (default {READ_LINES})."},
@@ -872,6 +951,21 @@ class AuthorSession:
                 self.submit,
             ),
         ]
+        if self.answers_findings:
+            tools.append(
+                _tool(
+                    "change_verification",
+                    CHANGE_VERIFICATION_DESCRIPTION,
+                    _schema(
+                        {
+                            "kind": {"type": "string", "enum": [str(kind) for kind in OFFERED_VERIFICATIONS]},
+                            "reason": {"type": "string"},
+                        },
+                        ["kind", "reason"],
+                    ),
+                    self.change_verification,
+                )
+            )
         if self.proposal.header.research:
             tools += [self._capped(tool) for tool in web_tools]
         return tools
@@ -892,7 +986,7 @@ class AuthorSession:
         task = draft.task
         return "\n".join(
             [
-                f"grader: {type(grader.package.grader).__name__}",
+                f"grader: {grader_name(grader.package)}",
                 f"reference: {_prototyped(reference)}",
                 f"empty answer: {empty.status} reward {empty.reward} (graded by the library; ceiling "
                 f"{grader.rejection_ceiling})",
@@ -1174,7 +1268,7 @@ def opening_messages(proposal: TaskProposal, turns: int | None) -> list[Message]
 
 
 def _revision_text(revision: Revision) -> str:
-    return f"{REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)}\n{EDIT_AND_SUBMIT}"
+    return f"{revision_prompt(revision)}\n{EDIT_AND_SUBMIT}"
 
 
 def _submitted(session_dir: Path) -> bool:
@@ -1242,10 +1336,16 @@ def plan_session(
 
 @dataclass(frozen=True)
 class SessionOutcome:
-    """How one session of an author call ended: its ``author.json`` status, the submitted source, the stop."""
+    """How one session of an author call ended: its ``author.json`` status, the submitted source, the
+    verification change it was built under, the stop.
+
+    ``verification_change`` is relative to the proposal the call received, and ``None`` for its own kind or
+    without a submission.
+    """
 
     status: AuthorStatus
     source: str | None
+    verification_change: VerificationChange | None
     stop: SessionStop
 
 
@@ -1277,7 +1377,9 @@ class AgenticAuthor:
         """Run sessions for ``context``'s round until one submits, and return the submitted program.
 
         The sessions work in ``rounds/<n>/agentic/`` under ``context.workpiece_dir``. ``author_state``
-        does not reach them.
+        does not reach them. ``proposal`` is the one the round builds, as declared when ``revision`` answers
+        findings: a ``MODIFY`` revision offers ``change_verification``, its ``verification_change`` is the
+        change each session starts from, and the returned program carries the submitting session's change.
 
         Raises:
             ModelUnavailable: the model or an in-session build or grade ran out of retries.
@@ -1291,7 +1393,7 @@ class AgenticAuthor:
         outcome = await self._session(build, context, proposal, revision)
         if outcome.status is AuthorStatus.ACCEPTED:
             assert outcome.source is not None
-            return AuthoredProgram(load_program(outcome.source), outcome.source)
+            return AuthoredProgram(load_program(outcome.source), outcome.source, outcome.verification_change)
         raise BuildInfrastructureFailure(
             InfrastructureCause.BUDGET_EXHAUSTED if outcome.stop is SessionStop.MAX_TURNS else "author_incomplete",
             f"author session stopped at {outcome.stop}; its workspace and conversation are saved for resumption",
@@ -1305,12 +1407,12 @@ class AgenticAuthor:
         revision: Revision | None,
     ) -> SessionOutcome:
         """Persist one session in ``agentic/<k>/`` before returning its submission or hold."""
-        plan = plan_session(context.workpiece_dir, context.round, proposal, revision, self.config)
         sessions = _round_dir(context.workpiece_dir, context.round) / AGENTIC_DIR
         k = len(_numbered(sessions))
         session_dir = sessions / str(k)
         session_id = f"{context.round}.{k}"
-        session = AuthorSession(session_dir, context.workpiece_id, context.round, proposal, build, session_id)
+        session = AuthorSession(session_dir, context.workpiece_id, context.round, proposal, revision, build, session_id)
+        plan = plan_session(context.workpiece_dir, context.round, session.proposal, revision, self.config)
         session.prepare(plan.seed)
         try:
             result = await drive(session, plan, self.config, self.client, self.policy, self.ledger, session_id)
@@ -1343,7 +1445,7 @@ class AgenticAuthor:
             status = AuthorStatus.HANDED_OFF
             error = f"no submission ({result.stop})"
             _write_json(session_dir / AUTHOR_RECORD, record | {"status": status, "error": error})
-            return SessionOutcome(status, None, result.stop)
+            return SessionOutcome(status, None, None, result.stop)
         _write_json(
             session_dir / SUBMIT_FILE,
             {
@@ -1368,6 +1470,12 @@ class AgenticAuthor:
                 "turns": len(result.turns),
             },
         )
-        accepted = {"status": AuthorStatus.ACCEPTED, "program_digest": submission.manifest.digest}
-        _write_json(session_dir / AUTHOR_RECORD, record | accepted | {"tested": submission.tested})
-        return SessionOutcome(AuthorStatus.ACCEPTED, submission.source.decode(), result.stop)
+        change = submission.verification_change
+        accepted = {
+            "status": AuthorStatus.ACCEPTED,
+            "program_digest": submission.manifest.digest,
+            "tested": submission.tested,
+            "verification_change": None if change is None else asdict(change),
+        }
+        _write_json(session_dir / AUTHOR_RECORD, record | accepted)
+        return SessionOutcome(AuthorStatus.ACCEPTED, submission.source.decode(), change, result.stop)

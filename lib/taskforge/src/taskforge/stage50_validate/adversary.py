@@ -8,13 +8,17 @@ machine, started as the engine starts the solver's (``rolloutengine.machines.tas
 worker files and setup commands). ``submit`` grades one candidate, a final reply and the files it names on that
 machine, exactly as validation replays a control: ``trials.run_trial`` with a ``controls.ScriptedModel`` that
 replays ``spec.controls.candidate_turns`` on a fresh machine, so the verifier's files exist only on the grading
-machine. A task without a task machine offers ``submit`` alone. ``AdversaryPolicy.submissions`` bounds the
+machine. A decision-model task is graded there on the host with ``EngineSettings.decision``, as its solver trials are
+(``spec.decision.run_decision_trial``), and a host without a decision client refuses it before the first attempt as
+``run_trial`` does. A task without a task machine offers ``submit`` alone. ``AdversaryPolicy.submissions`` bounds the
 submissions of an attempt; a ``submit`` past it returns an error and grades nothing.
 
 The two modes differ only in the brief (``adversary_brief``). ``BLACKBOX`` gives the task as the solver sees it
 (the shell harness's ``task_prompt``), the tools, the budget and the verdict line. ``WHITEBOX`` adds the grader's
 specification and verifier files, every control of the round with its expected reward (the reference answer among
-them) and the task's example answers, and asks the adversary to name the grader line its submission defeats.
+them) and the task's example answers, and asks the adversary to name the grader line its submission defeats. A
+decision-model grader has no program: its specification is ``decision_view``, what its decision model reads (the
+rubric and the reference among it), the question and levels it answers and the bar that sets the reward.
 
 Each attempt is one ``TRIAL`` ledger span, step ``adversary/<trial>/<attempt>``, and the agent's model calls and
 tool calls are recorded under the same step. Its attempt file, ``<evidence_dir>/adversary/<trial>/attempt-<n>.json``,
@@ -93,9 +97,20 @@ from taskforge.spec.controls import (
     candidate_turns,
     context_assistant_turns,
 )
+from taskforge.spec.decision import (
+    LEVELS,
+    QUESTION,
+    REJECTED_REWARD_MAX,
+    DecisionGrader,
+    StateSource,
+    decision_state,
+    task_decision_grader,
+)
 from taskforge.spec.draft import GRADER_RESOURCE_ROOT
 from taskforge.stage50_validate.adversary_prompts import (
     BRIEF_TEMPLATE,
+    DECISION_LINE_CLAUSE,
+    DECISION_WHITEBOX_HEADER,
     GRADER_LINE_MARKER,
     NO_CONTROLS,
     NO_EXAMPLES,
@@ -120,6 +135,7 @@ from taskforge.stage50_validate.trials import (
     outcome_json,
     record_attempt,
     refusal,
+    require_decision_client,
     rollout_steps,
     run_attempts,
     run_trial,
@@ -283,8 +299,37 @@ def _text(resource: TaskResource) -> str:
         return f"<{len(data)} bytes, not text>"
 
 
+def decision_view(grader: DecisionGrader) -> dict[str, Any]:
+    """A decision-model grader as a white-box adversary sees it: what decides a submission's reward.
+
+    That is the state its decision model reads, key by key as ``grader.state`` lays it out, without the candidate's
+    keys (``candidate_keys``), which hold the visible text of the submission's final reply; the question and the
+    levels it answers; and the acceptance level and the reward rule. The levels the build's known-correct and fooling
+    answers read (``calibration``, ``fooling``) decide no submission's reward and are not shown.
+    """
+    state = decision_state(grader, "")
+    return {
+        "kind": grader.kind,
+        "state": {key: value for key, value in state.items() if grader.state[key] is not StateSource.SOLVER_TURN_OUTPUT},
+        "candidate_keys": [key for key, source in grader.state.items() if source is StateSource.SOLVER_TURN_OUTPUT],
+        "question": QUESTION,
+        "levels": list(LEVELS),
+        "acceptance_level": grader.bar,
+        "reward_rule": (
+            "an expected level (levels numbered from 0) at or above acceptance_level earns 1.0; below it the reward "
+            f"is at most {REJECTED_REWARD_MAX}"
+        ),
+    }
+
+
 def grader_source(task: TaskSpec) -> dict[str, Any]:
-    """The grader as a white-box adversary sees it: its specification and its verifier files at their grading paths."""
+    """The grader as a white-box adversary sees it: its specification and its verifier files at their grading paths.
+
+    A decision-model grader has no verifier files, and its specification is ``decision_view``.
+    """
+    decision = task_decision_grader(task)
+    if decision is not None:
+        return {"grader_spec": decision_view(decision), "grader_source": []}
     return {
         "grader_spec": task.grader.model_dump(mode="json"),
         "grader_source": [
@@ -317,10 +362,12 @@ def control_view(control: Control) -> dict[str, Any]:
     }
 
 
-def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
-    """The white-box section of the brief: the grader, the controls with their expected rewards, the example answers."""
+def _grader_section(task: TaskSpec) -> str:
+    """The white-box header and the grader: a program's specification and verifier files, or ``decision_view``."""
     source = grader_source(task)
     spec = json.dumps(source["grader_spec"], indent=1, ensure_ascii=False)
+    if task_decision_grader(task) is not None:
+        return f"{DECISION_WHITEBOX_HEADER}\n\n## Decision-model grader\n```json\n{spec}\n```"
     files = (
         "\n\n".join(
             f"### {file['path']}\n```\n{_clip(file['content'], GRADER_FILE_CHARS)}\n```"
@@ -328,6 +375,11 @@ def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
         )
         or NO_VERIFIER_FILES
     )
+    return f"{WHITEBOX_HEADER}\n\n## Grader specification\n```json\n{spec}\n```\n\n## Grader source\n\n{files}"
+
+
+def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
+    """The white-box section of the brief: the grader, the controls with their expected rewards, the example answers."""
     views = [control_view(control) for control in controls]
     control_text = (
         "\n\n".join(
@@ -345,8 +397,7 @@ def whitebox_context(task: TaskSpec, controls: Sequence[Control]) -> str:
     examples = [message for message in conversation_messages(task.context.events) if message.get("role") == "assistant"]
     example_text = "\n\n".join(json.dumps(m, ensure_ascii=False) for m in examples) if examples else NO_EXAMPLES
     return (
-        f"{WHITEBOX_HEADER}\n\n## Grader specification\n```json\n{spec}\n```\n\n## Grader source\n\n{files}\n\n"
-        f"## Controls with expected rewards\n\n{control_text}\n\n"
+        f"{_grader_section(task)}\n\n## Controls with expected rewards\n\n{control_text}\n\n"
         f"## Example answers in the task's conversation\n\n{example_text}"
     )
 
@@ -355,6 +406,7 @@ def adversary_brief(spec: TaskRolloutSpec, controls: Sequence[Control], policy: 
     """The brief of an adversary on ``spec``: the white-box section of ``controls`` only in ``WHITEBOX`` mode."""
     whitebox = policy.mode is AdversaryMode.WHITEBOX
     context = whitebox_context(spec.task, controls) if whitebox else ""
+    line_clause = DECISION_LINE_CLAUSE if task_decision_grader(spec.task) is not None else WHITEBOX_LINE_CLAUSE
     return BRIEF_TEMPLATE.format(
         tools=TOOLS_WITH_SHELL if spec.task_machine is not None else TOOLS_SUBMIT_ONLY,
         submissions="unlimited" if policy.submissions is None else policy.submissions,
@@ -362,7 +414,7 @@ def adversary_brief(spec: TaskRolloutSpec, controls: Sequence[Control], policy: 
             policy.min_probes if policy.submissions is None else min(policy.min_probes, max(policy.submissions - 1, 1))
         ),
         context=f"{PREAMBLE_SEPARATOR}{context}{PREAMBLE_SEPARATOR}" if context else " ",
-        line_clause=WHITEBOX_LINE_CLAUSE if whitebox else "",
+        line_clause=line_clause if whitebox else "",
     )
 
 
@@ -743,7 +795,12 @@ async def run_adversary_trial(
         model: The adversary's model.
         trial: The trial's name.
         submission_retries: The retries of a submission's grading.
+
+    Raises:
+        ValueError: the task has a decision-model grader and ``settings.decision`` is ``None``, raised before any
+            attempt, as ``run_trial`` raises it.
     """
+    require_decision_client(spec.task, settings)
     trial_digest = task_digest(spec, settings.command_timeout)
     grader_digest = digest(grader_source(spec.task))
     refused = refusal(spec, settings.factories)

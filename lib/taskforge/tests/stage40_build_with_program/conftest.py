@@ -9,6 +9,8 @@ so a grader program the fake GLM writes is sh.
 ``context`` is a step context for calling SDK functions outside a program; its model is the
 ``glm_client`` on ``fake_glm``. ``web_tool`` is a ``web_search`` tool that records its queries.
 ``declaring`` changes the proposal's solver machine, and ``RecordingImageBuilder`` publishes no image.
+The ``DECISION_*`` values are a decision-model grader's rubric for the proposal's product, its reference,
+three equivalent variants, and a fluent wrong and a hedged reply.
 """
 
 from collections.abc import Callable, Mapping
@@ -21,6 +23,7 @@ from taskforge.llm.agent import AgentTool, ReasoningReplay
 from taskforge.llm.policy import LLMPolicy
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import DockerBuild
+from taskforge.spec.rubric import Rubric, RubricItem
 from taskforge.stage10_proposal.model import Environment, SolverMachine, TaskProposal, parse
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
@@ -30,7 +33,7 @@ from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderIma
 PROPOSAL = proposal_document(
     proposal_id="d00.arithmetic.products/1",
     source={"kind": "capability", "ref": "d00.arithmetic.products", "hash": "abc123"},
-    verification="simple",
+    verification="answer_in_box",
     research_need="needed",
     research_reason="the task depends on an external fact the build must confirm",
     research=[{"kind": "web", "purpose": "confirm the multiplication table"}],
@@ -62,6 +65,26 @@ LIMITS = AgentLimits(max_turns=8, max_tokens=4096, max_calls=16)
 
 
 IMAGE = f"registry.example/taskforge-tasks/d00@sha256:{'2' * 64}"
+
+DECISION_RUBRIC = Rubric(
+    deliverable="The product of 6 and 7.",
+    items=[
+        RubricItem(
+            id="product",
+            intent="The reply states the product.",
+            pass_criterion="The product is 42.",
+            equivalences=["forty-two"],
+            negation_handling="A product named only to be rejected does not count.",
+            weight=1.0,
+            role="scored",
+            cap_value=None,
+        )
+    ],
+)
+DECISION_REFERENCE = "6 * 7 = 42, so the product is 42."
+DECISION_VARIANTS = ("Multiplying six by seven gives 42.", "6 times 7 is forty-two.", "The product is 42 (6 * 7).")
+DECISION_FLUENT_WRONG = "6 * 7 = 48, so the product is 48."
+DECISION_HEDGED = "The product is 42, or possibly 48."
 
 
 @pytest.fixture
@@ -96,6 +119,7 @@ def services(ledger) -> RLEnvBuildServices:
         ledger=ledger,
         reasoning_replay=ReasoningReplay.KEEP,
         agent_limits=LIMITS,
+        decision=None,
     )
 
 

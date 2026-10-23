@@ -154,6 +154,7 @@ async def test_complete_evidence_is_accepted_in_the_place_the_callers_band_gives
     [
         (Cause.GRADER_REWARD_RANGE, Modify),
         (Cause.MODEL_REJECTED, Hold),
+        (Cause.DECISION_UNAVAILABLE, Hold),
         (Cause.MACHINE_UNSUPPORTED, Hold),
         (Cause.GRADER_INFRA, Hold),
         (Cause.GENERATION_LIMIT, Hold),

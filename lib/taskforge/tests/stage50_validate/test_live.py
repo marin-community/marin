@@ -67,6 +67,7 @@ def settings(factories: dict[str, MachineFactory]) -> EngineSettings:
             verifier_timeout=None,
             max_total_tokens=None,
         ),
+        decision=None,
     )
 
 

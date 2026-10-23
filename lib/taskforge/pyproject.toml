@@ -23,6 +23,9 @@ dependencies = [
     "click",
     "marin-iris",
     "jsonschema>=4.20",
+    # taskforge.llm.clef: Clef's tokenizer (fit_request sizes every decision read) and its download.
+    "tokenizers>=0.22",
+    "huggingface_hub>=1.0",
     # Its failed-run analysis is a Zephyr pipeline over the rollout records of rolloutengine.
     "marin-zephyr",
 ]

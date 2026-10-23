@@ -17,6 +17,8 @@ from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.glm_client import Pool
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
+from taskforge.stage10_proposal.model import Verification
+from taskforge.stage30_author.author import VerificationChange
 from taskforge.stage40_build_with_program.build_process import (
     LOG_FILE,
     REQUEST,
@@ -95,6 +97,7 @@ def make_request(tmp_path, proposal, fake_glm, fast_provider):
             research=ResearchRequirement.OFF,
             invalidate=frozenset(),
             model_digest=None,
+            verification_change=None,
             services=BuildServiceConfig(
                 host=MachineHost.LAPTOP,
                 backends=(Backend.SHELLSIM,),
@@ -105,6 +108,7 @@ def make_request(tmp_path, proposal, fake_glm, fast_provider):
                 agent_limits=LIMITS,
                 image_cluster=None,
                 registry_credential_env=None,
+                decision=None,
             ),
         )
 
@@ -154,6 +158,20 @@ async def test_a_build_in_a_child_process_writes_the_draft_and_ledger_of_the_bui
     # The ledger records steps as they finish and the provenance keeps program order; independent steps overlap.
     assert sorted(steps) == sorted(outcome.memo.name for outcome in child.provenance.steps)
     assert [entry.step for entry in entries if entry.kind == EntryKind.LLM_CALL] == ["question"]
+
+
+async def test_a_build_in_a_child_process_records_the_verification_change(proposal, fake_glm, make_request):
+    fake_glm.stream(content=json.dumps({"text": "What is 6 * 7?"}))
+    declared_code = replace(proposal, header=replace(proposal.header, verification=Verification.CODE))
+    change = VerificationChange(Verification.CODE, proposal.header.verification, "the answer is one number")
+    request = replace(make_request(PROGRAM), proposal=change.revise(declared_code), verification_change=change)
+
+    draft = await run_build_in_process(request, wall_timeout=WALL_TIMEOUT)
+
+    assert (draft.provenance.verification, draft.provenance.verification_change) == (
+        proposal.header.verification,
+        change,
+    )
 
 
 async def test_a_step_that_never_yields_expires_at_the_wall_clock_while_the_driver_loop_runs(make_request):

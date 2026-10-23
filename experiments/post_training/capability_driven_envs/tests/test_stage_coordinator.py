@@ -100,7 +100,7 @@ def catalog_proposal(idea: CapabilityIdea) -> TaskProposal:
             proposal_id=f"{idea.capability_id}/0",
             source={"kind": "capability", "ref": idea.capability_id, "hash": idea.capability_hash},
             environment="shellsim",
-            verification="simple",
+            verification="answer_in_box",
             research_reason="the example program draws its own recipe",
             body=f"{body}\n",
         )
@@ -154,6 +154,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         ledger=DiscardingLedger(),
         reasoning_replay=ReasoningReplay.KEEP,
         agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
+        decision=None,
     )
     coordinator = StageCoordinator(
         stages=stages,

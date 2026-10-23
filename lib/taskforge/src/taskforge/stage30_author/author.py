@@ -16,17 +16,25 @@ an author that revises its own program reads the ``PROGRAM_FILE`` it wrote. ``st
 turns a program written by hand into an author returning no source. An author call that ends
 without a program it can hand in raises ``AuthorFailure``, and the coordinator asks again with
 the failure as an ``AUTHOR_FAILURE`` revision.
+
+An author answering a ``MODIFY`` revision may swap the task's verifier kind, and returns the swap as
+``AuthoredProgram.verification_change``. Such a call receives the proposal as declared, with the change
+already in force, if any, on the revision; the author starts from ``change.revise(proposal)`` and may
+keep, replace or undo the change. Every other call receives the proposal the build checks (the revised
+one after a swap) and returns no change, so a build or author failure cannot change the kind. The caller
+builds that round and every later one with ``change.revise(proposal)`` and the change, until a later
+``MODIFY`` answer replaces or undoes it.
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
 from pydantic import JsonValue
 
-from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage10_proposal.model import OFFERED_VERIFICATIONS, TaskProposal, Verification
 from taskforge.stage30_author.program import RLEnvBuildProgram
 
 PROGRAM_MANIFEST_FILE = "program.json"
@@ -42,14 +50,64 @@ class RevisionKind(StrEnum):
     AUTHOR_FAILURE = "author_failure"
     """The previous author call returned no valid program, as when the output limit cut its reply."""
     MODIFY = "modify"
+    """Review or an adversary sends its findings back; the only kind that may carry a ``VerificationChange``."""
+
+
+@dataclass(frozen=True)
+class VerificationChange:
+    """A swap of the task's verifier kind, made by a revision that answers findings.
+
+    Attributes:
+        declared: The kind the proposal declared.
+        revised: The kind every later round builds, one of ``OFFERED_VERIFICATIONS`` other than ``declared``.
+        reason: Why the kind changes, shown to the author.
+    """
+
+    declared: Verification
+    revised: Verification
+    reason: str
+
+    def __post_init__(self) -> None:
+        if self.revised is self.declared:
+            raise ValueError(f"a verification change swaps the kind, but both kinds are {self.declared}")
+        if self.revised not in OFFERED_VERIFICATIONS:
+            raise ValueError(
+                f"a verification change revises to one of {[str(kind) for kind in OFFERED_VERIFICATIONS]}, "
+                f"got {self.revised}"
+            )
+        if not self.reason.strip():
+            raise ValueError("a verification change states its reason")
+
+    def revise(self, proposal: TaskProposal) -> TaskProposal:
+        """``proposal`` verified by the ``revised`` kind, with no composite parts.
+
+        Raises:
+            ValueError: ``proposal`` does not declare the ``declared`` kind.
+        """
+        if proposal.header.verification is not self.declared:
+            raise ValueError(
+                f"the change revises a {self.declared} proposal, but the proposal declares "
+                f"{proposal.header.verification}"
+            )
+        return replace(proposal, header=replace(proposal.header, verification=self.revised, composite=()))
 
 
 @dataclass(frozen=True)
 class Revision:
-    """The change requested of the next round's author, with ``detail`` explaining it."""
+    """The change requested of the next round's author, with ``detail`` explaining it.
+
+    Only a ``MODIFY`` revision may carry a ``verification_change``, the change in force on the declared
+    proposal, which the author starts from: a swap answers findings, so a build or author failure cannot
+    escape a grader by changing its kind.
+    """
 
     kind: RevisionKind
     detail: str
+    verification_change: VerificationChange | None = None
+
+    def __post_init__(self) -> None:
+        if self.verification_change is not None and self.kind is not RevisionKind.MODIFY:
+            raise ValueError(f"only a {RevisionKind.MODIFY} revision may change the verification, not {self.kind}")
 
 
 @dataclass(frozen=True)
@@ -57,11 +115,14 @@ class AuthoredProgram:
     """A program from an author, with ``source`` holding the Python text defining it.
 
     ``source`` is ``None`` for a program defined in Python, as ``static_author`` hands back,
-    because the coordinator then has no text to write.
+    because the coordinator then has no text to write. ``verification_change`` is the swap of the
+    verifier kind the program is built under, relative to the proposal the author received, or ``None``
+    for that proposal's own kind; only an author answering a ``MODIFY`` revision returns one.
     """
 
     program: RLEnvBuildProgram
     source: str | None
+    verification_change: VerificationChange | None
 
 
 class AuthorFailure(Exception):
@@ -119,8 +180,10 @@ def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
 
 
 def static_author(program: RLEnvBuildProgram) -> Author:
-    """Return an author that hands back ``program``, with no source, for every call."""
-    authored = AuthoredProgram(program, None)
+    """Return an author that hands back ``program``, with no source, for every call.
+
+    It keeps the revision's verification change unchanged and never chooses one.
+    """
 
     async def author(
         context: AuthorContext,
@@ -128,6 +191,6 @@ def static_author(program: RLEnvBuildProgram) -> Author:
         revision: Revision | None,
         author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
-        return authored
+        return AuthoredProgram(program, None, None if revision is None else revision.verification_change)
 
     return author

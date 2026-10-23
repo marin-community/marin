@@ -104,6 +104,7 @@ def engine_settings() -> EngineSettings:
             verifier_timeout=None,
             max_total_tokens=None,
         ),
+        decision=None,
     )
 
 

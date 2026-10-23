@@ -15,9 +15,9 @@ import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import PurePosixPath
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal, get_args
 
-from pydantic import ConfigDict, StringConstraints, TypeAdapter, with_config
+from pydantic import ConfigDict, Field, StringConstraints, TypeAdapter, with_config
 from verifyit.json_objects import unique_object
 
 from taskforge.content_hash import pretty_json, sha256_hex
@@ -81,12 +81,38 @@ few seconds of Python, or a real clock; `{SolverMachine.PACKAGES}` when solving 
 
 
 class Verification(StrEnum):
-    """How the private evaluator grades: exact match, executable checks, a judge rubric, or both."""
+    """How the private evaluator grades.
 
-    SIMPLE = "simple"
+    ``answer_in_box``: a generic match of a final answer whose format is unambiguous (exact, numeric, math,
+    choice). ``code``: the usual kind; the task states an exact answer structure (named fields, a units field
+    per quantity, enumerated labels) that the grader parses strictly against build-computed ground truth, or
+    the work is what only execution can judge (behavioural tests, running systems). ``decision_model``: a
+    decision model compares the answer with the reference answer against a rubric, only where fields cannot
+    capture the answer, and its fooling cases must earn no credit. ``llm_as_judge``: a model judge
+    for deliverables whose prose is the product. ``composite``: a weighted list of the other kinds
+    (``CompositePart``). ``composite`` is reserved: documents that carry it parse, but it is not offered to
+    proposers (``OFFERED_VERIFICATIONS``) until a composite grader type exists, since a TaskSpec holds one
+    grader.
+    """
+
+    ANSWER_IN_BOX = "answer_in_box"
+    DECISION_MODEL = "decision_model"
     CODE = "code"
-    JUDGE = "judge"
+    LLM_AS_JUDGE = "llm_as_judge"
     COMPOSITE = "composite"
+
+
+OfferedVerification = Literal[
+    Verification.DECISION_MODEL, Verification.ANSWER_IN_BOX, Verification.CODE, Verification.LLM_AS_JUDGE
+]
+"""The kinds a proposer may choose: every kind but the reserved ``composite``."""
+OFFERED_VERIFICATIONS: tuple[Verification, ...] = get_args(OfferedVerification)
+
+COMPOSITE_PART_KINDS = tuple(kind for kind in Verification if kind is not Verification.COMPOSITE)
+"""The kinds a composite part may be: every kind but composite, each as often as the proposal needs."""
+COMPOSITE_MIN_PARTS = 2
+COMPOSITE_WEIGHT_TOLERANCE = 1e-6
+"""How far the parts' weights may sum from 1."""
 
 
 class Grounding(StrEnum):
@@ -140,12 +166,26 @@ class BuildItem:
 
 @with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True)
+class CompositePart:
+    """One part of a composite verification: a grader of ``kind`` and its share of the reward.
+
+    For now a composite is deliberately strict: a weighted list of the other kinds, repeats allowed, whose
+    weights sum to 1. It is meant to become an arbitrary program over graders.
+    """
+
+    kind: Verification
+    weight: Annotated[float, Field(strict=True, gt=0, le=1)]
+
+
+@with_config(ConfigDict(extra="forbid"))
+@dataclass(frozen=True)
 class ProposalHeader:
     id: Text
     source: SourceRef
     environment: Environment
     solver_machine: SolverMachine | None
     verification: Verification
+    composite: tuple[CompositePart, ...]
     grounding: Grounding
     research_need: ResearchNeed
     research_reason: Text
@@ -191,6 +231,7 @@ def parse(text: str) -> TaskProposal:
     violation = solver_machine_violation(header.environment, header.solver_machine)
     if violation is not None:
         raise ProposalFormatError(f"solver_machine: {violation}")
+    check_composite(header)
     _check_build(header)
     if header.null_reason is None:
         _check_headings(body)
@@ -245,6 +286,28 @@ def _check_headings(body: str) -> None:
         )
 
 
+def check_composite(header: ProposalHeader) -> None:
+    """A composite lists at least ``COMPOSITE_MIN_PARTS`` parts whose weights sum to 1; other kinds list none.
+
+    A null proposal may leave a composite's parts empty: it is never built.
+
+    Raises:
+        ProposalFormatError: the parts contradict the verification.
+    """
+    parts = header.composite
+    if header.verification is not Verification.COMPOSITE:
+        if parts:
+            raise ProposalFormatError(f"composite: verification is {header.verification}, so composite must be []")
+        return
+    if not parts and header.null_reason is not None:
+        return
+    if len(parts) < COMPOSITE_MIN_PARTS:
+        raise ProposalFormatError(f"composite: a composite verification lists at least {COMPOSITE_MIN_PARTS} parts")
+    total = sum(part.weight for part in parts)
+    if abs(total - 1) > COMPOSITE_WEIGHT_TOLERANCE:
+        raise ProposalFormatError(f"composite: the parts' weights sum to {total}, not 1")
+
+
 def _check_research(header: ProposalHeader, body: str) -> None:
     """The research decision agrees with the list, and a non-null body cites exactly the listed items."""
     count = len(header.research)
@@ -284,6 +347,9 @@ def solver_machine_violation(environment: Environment, machine: SolverMachine | 
 
 
 def _check_build(header: ProposalHeader) -> None:
+    for part in header.composite:
+        if part.kind not in COMPOSITE_PART_KINDS or isinstance(part.weight, bool) or not 0 < part.weight <= 1:
+            raise ProposalFormatError("composite: parts require a non-composite kind and weight in (0, 1]")
     names = [item.name for item in header.build]
     repeated = sorted({name for name in names if names.count(name) > 1})
     if repeated:
@@ -302,6 +368,8 @@ def document_request_fields(proposal_id: str, source: SourceRef) -> dict[str, An
     fields = schema["$defs"]["ProposalHeader"]["properties"]
     fields["id"] = {"const": proposal_id, "type": "string"}
     fields["source"] = {"const": json.loads(source_text(source))}
+    fields["verification"] = {"enum": list(OFFERED_VERIFICATIONS), "type": "string"}
+    fields["composite"] = {"type": "array", "maxItems": 0, "items": {"$ref": "#/$defs/CompositePart"}}
     return {
         "response_format": {
             "type": "json_schema",

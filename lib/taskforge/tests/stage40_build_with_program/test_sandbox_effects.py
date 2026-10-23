@@ -20,9 +20,23 @@ from verifyit.spec import ExactSpec, McqSpec, NumericSpec, StructuredExactSpec
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
 from taskforge.stage40_build_with_program.context import BuildFailure
-from taskforge.stage40_build_with_program.sandbox_effects import build_machine, grade_candidate, publish_image
+from taskforge.stage40_build_with_program.sandbox_effects import (
+    build_machine,
+    calibrate_decision_grader,
+    grade_candidate,
+    publish_image,
+)
+from taskforge.stage40_build_with_program.sdk import FoolingKind, fooling_negatives
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, SlowGraderFactory, shell_grader
-from tests.stage40_build_with_program.conftest import FACTORIES
+from tests.spec.fake_decision import FakeDecisionClient
+from tests.stage40_build_with_program.conftest import (
+    DECISION_FLUENT_WRONG,
+    DECISION_HEDGED,
+    DECISION_REFERENCE,
+    DECISION_RUBRIC,
+    DECISION_VARIANTS,
+    FACTORIES,
+)
 
 SHELLSIM = draft.requirements(image=None)
 MACHINE = draft.machine(startup_timeout=60)
@@ -167,3 +181,41 @@ async def test_publish_image_pushes_under_the_workpieces_repository(context):
 
     assert await publish_image(context(images=images), build) == IMAGE
     assert images.published == [(build, "taskforge-tasks/d00-arithmetic-products-1")]
+
+
+KNOWN_CORRECT_READS = {DECISION_REFERENCE: 3.9, **dict.fromkeys(DECISION_VARIANTS, 3.0)}
+
+
+async def calibrated(context, reads: dict[str, float]):
+    return await calibrate_decision_grader(
+        context(decision=FakeDecisionClient(reads)),
+        draft.decision_grader(DECISION_RUBRIC, DECISION_REFERENCE),
+        DECISION_VARIANTS,
+        fluent_wrong_reply=DECISION_FLUENT_WRONG,
+        hedged_reply=DECISION_HEDGED,
+    )
+
+
+async def test_a_decision_grader_that_credits_a_hedged_reply_is_refused(context):
+    calibration = await calibrated(context, {**KNOWN_CORRECT_READS, DECISION_HEDGED: 3.2})
+
+    assert calibration.problem is not None and "hedged reward 1.0" in calibration.problem
+    assert "fluent_wrong" not in calibration.problem
+    assert calibration.grader.acceptance_level is None and calibration.grader.fooling == {}
+
+
+async def test_a_decision_grader_that_rejects_every_fooling_reply_calibrates_with_their_reads(context):
+    negatives = fooling_negatives(DECISION_REFERENCE, DECISION_FLUENT_WRONG, DECISION_HEDGED)
+    # Just below the 3.0 bar each earns at most the 0.5 ceiling.
+    calibration = await calibrated(context, {**KNOWN_CORRECT_READS, **{n.reply: 2.9 for n in negatives}})
+
+    assert calibration.problem is None
+    assert calibration.grader.acceptance_level == 3.0
+    assert calibration.grader.fooling == {kind.value: 2.9 for kind in FoolingKind}
+    assert [c.reply for c in calibration.candidates] == [
+        DECISION_REFERENCE,
+        *DECISION_VARIANTS,
+        "",
+        *(n.reply for n in negatives),
+    ]
+    assert all(c.status is Outcome.GRADED and (c.reward or 0.0) <= 0.5 for c in calibration.candidates[-5:])

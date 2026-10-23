@@ -5,7 +5,9 @@
 
 ``BRIEF_TEMPLATE`` is the brief of both modes; ``stage50_validate.adversary.adversary_brief`` fills it. A white-box
 brief adds ``WHITEBOX_HEADER`` and the grader, the controls and the example answers as its ``context``, and
-``WHITEBOX_LINE_CLAUSE`` to the verdict line, so the two modes differ only in what the adversary knows.
+``WHITEBOX_LINE_CLAUSE`` to the verdict line, so the two modes differ only in what the adversary knows. For a
+decision-model grader, which has no program, the header is ``DECISION_WHITEBOX_HEADER`` and the clause
+``DECISION_LINE_CLAUSE``.
 """
 
 NO_SHORTCUT_LINE = "NO_SHORTCUT"
@@ -45,7 +47,22 @@ WHITEBOX_HEADER = (
     "find the exact checks, regular expressions, tolerances, parsing and partial-credit rules, and craft "
     "submissions that satisfy those checks without doing the task's intended computation."
 )
+DECISION_WHITEBOX_HEADER = (
+    "What you additionally know (white-box audit): the grader is a decision model, not a program. It reads the "
+    "state shown below, with the visible text of the candidate's final reply under the candidate key, answers the "
+    "question below with one of the levels, and a candidate whose expected level reaches the acceptance level earns "
+    "full reward. You also know every control submission the author wrote with the reward the grader is expected to "
+    "give it (the reference answer is the positive control with concern `reference`), and the task's example "
+    "answers. Read the rubric and the reference first: find what they do not pin down (hedges, several candidate "
+    "values, partial or near-miss values, content-free prose around correct keywords, another reading of the "
+    "instruction) and craft submissions a lenient reader would rate equivalent to the reference without doing the "
+    "task's intended computation."
+)
 WHITEBOX_LINE_CLAUSE = f", then `{GRADER_LINE_MARKER}` and the exact grader line or expression your submission defeats"
+DECISION_LINE_CLAUSE = (
+    f", then `{GRADER_LINE_MARKER}` and the rubric item or the part of the reference the decision model rates your "
+    "submission too leniently against"
+)
 NO_VERIFIER_FILES = "(no verifier files: the grader is the specification alone)"
 NO_CONTROLS = "(no controls recorded)"
 NO_EXAMPLES = "(none beyond the task text)"

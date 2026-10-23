@@ -43,6 +43,10 @@ with the rest of the task. A task whose format cannot carry its answer for its g
 (TaskCompendium ``submission_compatibility``) is not started: each of its trials is one
 ``SUBMISSION_UNSUPPORTED`` attempt naming the reasons.
 
+A task whose grader is a ``DecisionGrader`` (``spec.decision``) is graded outside the engine: each attempt
+runs the trial with the grader swapped to ``NoGrader`` and the host grades the trial's final conversation
+with ``EngineSettings.decision`` (``decision.run_decision_trial``), so its attempt file holds the host's grade.
+
 ``EngineSettings.factories`` come from ``taskforge.sandbox.factories.machine_factories``. Before a
 trial starts, ``task_refusals`` passes each of the task's machines to its factory's
 ``check_environment``. When a factory is missing or rejects a machine, the task is not started: each
@@ -73,6 +77,7 @@ from taskforge.content_hash import sha256_hex
 from taskforge.ledger.records import EntryKind, Ledger, SpanFields, span
 from taskforge.sandbox.factories import Refusal, task_refusals
 from taskforge.spec import draft
+from taskforge.spec.decision import DecisionClient, run_decision_trial, task_decision_grader
 from taskforge.stage50_validate.classify import trial_outcome
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
 
@@ -91,11 +96,15 @@ CLEANUP_ERROR_COUNT = "cleanup_error_count"
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """Factories and limits for validation; verifier_timeout must be None because the grader sets its deadline."""
+    """Factories and limits for validation; verifier_timeout must be None because the grader sets its deadline.
+
+    ``decision`` grades decision-model tasks on the host; without it such tasks are refused.
+    """
 
     factories: Mapping[str, MachineFactory]
     command_timeout: float
     limits: RolloutLimits
+    decision: DecisionClient | None
 
     def __post_init__(self) -> None:
         if self.limits.verifier_timeout is not None:
@@ -174,6 +183,7 @@ async def run_trial(
 ) -> Outcome:
     """Run one trial of ``spec`` under the lowered spec's limits and ``settings``, attempting it again
     after a backoff while it fails for a retryable cause, up to ``plan.max_retries`` times."""
+    require_decision_client(spec.task, settings)
     digest = task_digest(spec, settings.command_timeout)
     refused = refusal(spec, settings.factories)
     if refused is not None:
@@ -181,7 +191,7 @@ async def run_trial(
     engine = settings.engine()
 
     async def attempt(number: int, step: str) -> Outcome:
-        return await _attempt(engine, spec, model.for_step(step), digest, plan, trial, number)
+        return await _attempt(engine, spec, model.for_step(step), digest, plan, trial, number, settings.decision)
 
     return await run_attempts(plan, trial, attempt)
 
@@ -207,6 +217,16 @@ def refusal(spec: TaskRolloutSpec, factories: Mapping[str, MachineFactory]) -> U
     if refusals:
         return Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None)
     return None
+
+
+def require_decision_client(task: TaskSpec, settings: EngineSettings) -> None:
+    """Refuse a decision-model task on a host that cannot grade it, before any attempt of a trial of it starts.
+
+    Raises:
+        ValueError: ``task`` has a decision-model grader and ``settings.decision`` is ``None``.
+    """
+    if task_decision_grader(task) is not None and settings.decision is None:
+        raise ValueError(f"task {task.id!r} has a decision-model grader but this host has no decision client")
 
 
 def refusal_detail(refusals: Sequence[Refusal]) -> str:
@@ -271,16 +291,33 @@ def attempt_span(digest: str, plan: TrialPlan, trial: str, attempt: int) -> Iter
 
 
 async def _attempt(
-    engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, digest: str, plan: TrialPlan, trial: str, attempt: int
+    engine: RolloutEngine,
+    spec: TaskRolloutSpec,
+    model: Model,
+    digest: str,
+    plan: TrialPlan,
+    trial: str,
+    attempt: int,
+    decision: DecisionClient | None,
 ) -> Outcome:
     with attempt_span(digest, plan, trial, attempt) as fields:
         try:
-            result: GradedRollout | Exception = await engine.run_task(spec, model)
+            result: GradedRollout | Exception = await _rollout(engine, spec, model, decision)
         except Exception as error:
             result = error
         outcome = trial_outcome(result, spec.task)
         record_attempt(fields, outcome, plan, trial, attempt, outcome_json(outcome))
     return outcome
+
+
+async def _rollout(
+    engine: RolloutEngine, spec: TaskRolloutSpec, model: Model, decision: DecisionClient | None
+) -> GradedRollout:
+    """One engine run of ``spec``; a decision-model task runs without its grader and is graded on the host."""
+    if task_decision_grader(spec.task) is None:
+        return await engine.run_task(spec, model)
+    assert decision is not None  # run_trial refuses a decision task on a host without a client
+    return await run_decision_trial(engine, spec, model, decision)
 
 
 def record_attempt(

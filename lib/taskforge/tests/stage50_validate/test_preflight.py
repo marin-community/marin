@@ -151,6 +151,7 @@ def settings(local: MachineFactory | None, container: MachineFactory | None = No
             verifier_timeout=None,
             max_total_tokens=None,
         ),
+        decision=None,
     )
 
 

@@ -19,8 +19,14 @@ The steps, in run order:
    (``draft.requirements(packages=...)``), which needs no image. A container proposal gets a
    ``DockerBuild``, which ``publish_image`` pushes; the step's output memoizes the pinned reference.
    ``run_build`` refuses a task whose machine is not the declared one.
-4. ``grader`` writes the grader: an in-process verifyit grader (exact, numeric, math, mcq) when the
-   answer is one value, otherwise a Python grader program in a verifier machine. Before it returns,
+4. ``grader`` writes the grader of the kind the proposal declares: a decision-model grader
+   (``draft.decision_grader``) by default, which ``calibrate_decision_grader`` reads on its reference and
+   three equivalent variants and on five fooling answers built from the reference and the author's fluent
+   wrong and hedged replies, and either sends back (a known-correct candidate below "partially matches",
+   or a fooling answer above the rejection ceiling) or calibrates; an LLM judge (``draft.judge_grader``)
+   for a reply whose prose is the product; an in-process verifyit grader (exact, numeric, math, mcq) for one value in an
+   unambiguous format; otherwise a Python grader program in a verifier machine. A judge calls a model,
+   which no build has, so it is not prototyped. For the other kinds, before it returns,
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
    ``FULL_CREDIT``, a reward outside the grader's score range, or an empty answer above the grader's
    declared ``rejection_ceiling`` goes back to the model until repaired. A reference whose grader timed out
@@ -39,17 +45,23 @@ Validation lowers the task for its host and writes the controls from the ``Grade
 
 import asyncio
 
+from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import AnswerType, EnvironmentRequirements, Source, TaskSpec
 
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft
+from taskforge.spec.decision import DecisionGrader
 from taskforge.spec.verdict import GRADER_VERDICT_PATH, grader_checks, reward_in_range
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
 from taskforge.stage40_build_with_program.outputs import Fixtures, GradedCandidate, Grader, Instructions, Sources
-from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate, publish_image
+from taskforge.stage40_build_with_program.sandbox_effects import (
+    calibrate_decision_grader,
+    grade_candidate,
+    publish_image,
+)
 from taskforge.stage40_build_with_program.sdk import (
     ANSWER_FORMAT,
     DOCKER_IMAGE_REQUIREMENTS,
@@ -147,20 +159,55 @@ async def grader(
         f"# Solver-visible files\n\n{files_text(fixtures.agent_files, '/')}\n\n"
         f"# Private data files already shipped with a grader script\n\n{files_text(fixtures.private_files, '')}\n\n"
         f"{SUBMISSION}\n\n{NUMERIC_LITERALS}\n\n"
-        "Write the grader from the proposal's 'Grader design and controls' section. Prefer an in-process kind "
-        "(exact, numeric, math or mcq) whenever the answer is one value; use kind=script only when the checks "
-        "need code. Rewards lie in [0, 1]. Give partial credit only where the proposal does, and declare "
-        "rejection_ceiling as the most a submission wrong in substance can collect under that scheme (0 without "
-        "partial credit). The reference reply and files must earn full credit."
+        "Write the grader from the proposal's 'Grader design and controls' section, of the kind its verification "
+        f"names: {proposal.header.verification}. decision_model is kind=decision_model: the proposal's rubric, each "
+        "item stated as its meaning with the reference values, tolerances, units and accepted equivalences, a "
+        "reference reply that delivers what the deliverable statement asks for in the form a real requester "
+        "would accept, three equivalent variants of it, a confident reply wrong in substance (fluent_wrong_reply) "
+        "and a reply hedging between candidate answers, one of them correct (hedged_reply); the answer contract "
+        "is that deliverable statement, with no answer block. llm_as_judge is kind=llm_as_judge: the same rubric "
+        "and a reference reply, for a reply whose prose is the product. answer_in_box is an in-process kind (exact, "
+        "numeric, math or mcq) for one value in an unambiguous format. code is kind=script, for a deliverable with "
+        "a strict structure the requester specified whose graded parts are all deterministic, or for what only "
+        "execution can judge; never for prose. Rewards lie in [0, 1]. Give partial credit only where the "
+        "proposal does, and declare rejection_ceiling as the most a submission wrong in substance can collect "
+        "under that scheme (0 without partial credit). The reference reply and files must earn full credit."
     )
     prototyped: list[GradedCandidate] = []
+    calibrated: list[DecisionGrader] = []
+
+    async def decision_problem(submitted: GraderDraft) -> str | None:
+        uncalibrated = grader_package(submitted, fixtures, requirements)
+        assert isinstance(uncalibrated, DecisionGrader)
+        calibration = await calibrate_decision_grader(
+            context,
+            uncalibrated,
+            submitted.equivalent_variants,
+            fluent_wrong_reply=submitted.fluent_wrong_reply,
+            hedged_reply=submitted.hedged_reply,
+        )
+        prototyped.extend(calibration.candidates)
+        if calibration.problem is not None:
+            return calibration.problem
+        calibrated.append(calibration.grader)
+        return None
 
     async def problem(submitted: GraderDraft) -> str | None:
+        if submitted.kind == "decision_model":
+            return await decision_problem(submitted)
+        if submitted.kind == "llm_as_judge":
+            # A judge calls a model and a build has none: validation's controls are its first grades.
+            try:
+                grader_package(submitted, fixtures, requirements)
+            except ValueError as error:
+                return str(error)
+            return None
         if submitted.kind == "script" and not submitted.script.strip():
             return "kind=script needs the script source"
         reference_files = tuple(task_file(f) for f in submitted.reference_files)
         try:
             package = grader_package(submitted, fixtures, requirements)
+            assert isinstance(package, GraderPackage)
             paths = output_paths(package, reference_files)
             reference = await grade_candidate(
                 context,
@@ -220,8 +267,9 @@ async def grader(
         return None
 
     submitted = await structured_until(context, task_messages(proposal, request), GraderDraft, problem)
+    decides = submitted.kind == "decision_model"
     return Grader(
-        package=grader_package(submitted, fixtures, requirements),
+        package=calibrated[-1] if decides else grader_package(submitted, fixtures, requirements),
         answer_contract=submitted.answer_contract,
         reference_reply=submitted.reference_reply,
         reference_files=tuple(task_file(f) for f in submitted.reference_files),

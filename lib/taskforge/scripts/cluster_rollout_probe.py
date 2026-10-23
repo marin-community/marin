@@ -320,7 +320,7 @@ async def run_phase(
     ledger = JsonlLedger(directory / "ledger")
     model = GlmRolloutModel(client, POLICY, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
     timed = {backend: TimedFactory(factory) for backend, factory in factories.items()}
-    settings = EngineSettings(factories=timed, command_timeout=COMMAND_TIMEOUT, limits=LIMITS)
+    settings = EngineSettings(factories=timed, command_timeout=COMMAND_TIMEOUT, limits=LIMITS, decision=None)
     plan = TrialPlan(
         workpiece_id=task.id,
         round=0,
