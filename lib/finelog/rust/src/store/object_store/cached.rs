@@ -955,31 +955,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn oversized_query_fill_leaves_room_for_small_objects() {
-        let (store, roots) = cached_store("object_cache_query_oversize", None);
-        let large = reference("log", "objects/large.parquet", b"large object");
-        let small = reference("log", "indices/small.fidx", b"tiny");
-        for (object, bytes) in [(&large, &b"large object"[..]), (&small, &b"tiny"[..])] {
-            store
-                .source
-                .write(&object.id, bytes::Bytes::copy_from_slice(bytes))
+    async fn query_warming_admits_the_object_that_exhausts_the_byte_budget() {
+        for warm_small_first in [false, true] {
+            let (store, roots) = cached_store("object_cache_query_oversize", None);
+            let small = reference("log", "indices/small.fidx", b"tiny");
+            let large = reference("log", "objects/large.parquet", b"large object");
+            let tail = reference("log", "objects/tail.parquet", b"tail");
+            for (object, bytes) in [
+                (&small, &b"tiny"[..]),
+                (&large, &b"large object"[..]),
+                (&tail, &b"tail"[..]),
+            ] {
+                store
+                    .source
+                    .write(&object.id, bytes::Bytes::copy_from_slice(bytes))
+                    .await
+                    .unwrap();
+            }
+            for _ in 0..2 {
+                let query = QueryCacheAdmission::new(8, 10);
+                if warm_small_first {
+                    store.warm_query(&small, &query);
+                }
+                store.warm_query(&large, &query);
+                store.warm_query(&tail, &query);
+            }
+            let _drained = store
+                .fetches
+                .acquire_many(MAX_PARALLEL_FETCHES as u32)
                 .await
                 .unwrap();
-        }
-        for _ in 0..2 {
-            let query = QueryCacheAdmission::new(4, 1);
-            store.warm_query(&large, &query);
-            store.warm_query(&small, &query);
-        }
-        let _drained = store
-            .fetches
-            .acquire_many(MAX_PARALLEL_FETCHES as u32)
-            .await
-            .unwrap();
-        assert!(store.cached_path(&large).await.unwrap().is_none());
-        assert!(store.cached_path(&small).await.unwrap().is_some());
-        for root in roots {
-            std::fs::remove_dir_all(root).unwrap();
+            let path = store.cached_path(&large).await.unwrap().unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), b"large object");
+            assert_eq!(
+                store.cached_path(&small).await.unwrap().is_some(),
+                warm_small_first
+            );
+            assert!(store.cached_path(&tail).await.unwrap().is_none());
+            for root in roots {
+                std::fs::remove_dir_all(root).unwrap();
+            }
         }
     }
 
