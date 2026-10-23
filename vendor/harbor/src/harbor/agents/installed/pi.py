@@ -5,12 +5,14 @@ import tempfile
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from packaging.version import InvalidVersion, Version
 from upath import UPath
 
 from harbor.agents.installed.base import (
+    SERVER_TIMEOUT_GRACE,
     BaseInstalledAgent,
     CliFlag,
     ModelAuthenticationError,
@@ -27,7 +29,7 @@ from harbor.literal.rollout_build import (
 from harbor.models.agent.context import AgentContext
 from harbor.llms.vllm_tokenization import tokenize_url
 from harbor.models.agent.name import AgentName
-
+from harbor.trial.errors import AgentTimeoutError, PhaseCancellationError
 
 _CURRENT_PI_PACKAGE = "@earendil-works/pi-coding-agent"
 _NODE_VERSION = "22"
@@ -50,6 +52,7 @@ class _ModelLimits:
 
 
 class Pi(BaseInstalledAgent):
+    _SUPERVISOR_PATH = "/tmp/harbor-pi-supervisor.cjs"
     _OUTPUT_FILENAME = "pi.txt"
     _DEFAULT_CONTEXT_WINDOW = 32768
     _DEFAULT_MAX_TOKENS = 16384
@@ -597,6 +600,8 @@ export default function (pi) {
         context: AgentContext,
     ) -> None:
         escaped_instruction = shlex.quote(instruction)
+        timeout = environment.agent_timeout_sec
+        deadline = monotonic() + timeout if timeout is not None else None
 
         if not self.model_alias or "/" not in self.model_alias:
             raise ValueError("Model name must be in the format provider/model_name")
@@ -681,22 +686,63 @@ export default function (pi) {
                 f". {endpoint_path}; {provider_command}; rm -f {endpoint_path}; "
             )
             cli_flags += f"--extension {extension_path} "
+        await environment.upload_file(
+            Path(__file__).with_name("pi_supervisor.cjs"), self._SUPERVISOR_PATH
+        )
+        remaining = deadline - monotonic() if deadline is not None else None
+        if remaining is not None and remaining <= 0:
+            raise AgentTimeoutError("Pi setup exhausted its agent-phase deadline")
+        budget = (
+            str(remaining - min(SERVER_TIMEOUT_GRACE, remaining / 2))
+            if remaining is not None
+            else "none"
+        )
+        control = f"/tmp/harbor-pi-{uuid.uuid4().hex}"
+        command = (
+            f"{runtime_prelude}"
+            f"pi --print --mode json --no-session {model_args}{cli_flags}"
+            f"{escaped_instruction} 2>&1 </dev/null | "
+            f"node -e {shlex.quote(self._VALIDATE_OUTPUT_SCRIPT)} | "
+            f"stdbuf -oL tee /logs/agent/{self._OUTPUT_FILENAME}"
+        )
+        # This runs in a fresh provider session, outside the occupied exec queue.
+        # The marker also cancels a command whose remote startup is still queued.
+        cancel_command = (
+            f"set -e; mkdir -p {control}; touch {control}/cancel; "
+            f"if [ -f {control}/pid ]; then "
+            f"kill -TERM $(cat {control}/pid) 2>/dev/null || true; "
+            f"for i in $(seq 1 100); do [ ! -f {control}/pid ] && exit 0; sleep 0.1; done; "
+            "exit 1; fi"
+        )
         try:
-            await self.exec_as_agent(
-                environment,
-                command=(
-                    f"{runtime_prelude}"
-                    f"pi --print --mode json --no-session "
-                    f"{model_args}"
-                    f"{cli_flags}"
-                    f"{escaped_instruction} "
-                    "2>&1 </dev/null | "
-                    f"node -e {shlex.quote(self._VALIDATE_OUTPUT_SCRIPT)} | "
-                    f"stdbuf -oL tee /logs/agent/{self._OUTPUT_FILENAME}"
-                ),
-                env=env,
-            )
+            with environment.scoped_exec_cancellation(cancel_command):
+                await self.exec_as_agent(
+                    environment,
+                    command=(
+                        f"{self.nvm_shell_command()}; "
+                        f"node {shlex.quote(self._SUPERVISOR_PATH)} {control} "
+                        f"{budget} {shlex.quote(command)}"
+                    ),
+                    env=env,
+                )
         except NonZeroAgentExitCodeError as error:
+            if (
+                error.result is not None
+                and "HARBOR_PI_CLEANUP_FAILED"
+                in (error.result.stderr or "").splitlines()
+            ):
+                raise PhaseCancellationError(
+                    "Pi supervisor could not terminate its process tree"
+                ) from error
+            if (
+                error.result is not None
+                and error.result.return_code == 124
+                and "HARBOR_PI_AGENT_TIMEOUT"
+                in (error.result.stderr or "").splitlines()
+            ):
+                raise AgentTimeoutError(
+                    "Pi exceeded its agent-phase deadline"
+                ) from error
             error_lines = (
                 (error.result.stderr or "").lower().splitlines()
                 if error.result is not None

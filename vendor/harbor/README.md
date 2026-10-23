@@ -40,3 +40,8 @@ removals, and update `UPSTREAM.toml`.
 `UPSTREAM.toml` records the upstream import base; it does not select a Git runtime.
 All Harbor launches execute this checkout. Reproduce historical evaluation cohorts
 from their recorded Marin checkout.
+
+Pi uses a Linux process-tree supervisor to enforce its agent deadline, including
+tools that start detached process groups. Daytona cancellation signals that
+supervisor through a separate control session. Unconfirmed cleanup raises
+`PhaseCancellationError` and prevents verification against a live agent.

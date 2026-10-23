@@ -1,5 +1,7 @@
 """Unit tests for the Pi installed agent."""
 
+import asyncio
+import contextlib
 import json
 import os
 import shlex
@@ -7,8 +9,9 @@ import shutil
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from upath import UPath
@@ -19,9 +22,13 @@ from harbor.agents.installed.base import (
     NonZeroAgentExitCodeError,
 )
 from harbor.agents.installed.pi import Pi
+from harbor.environments.daytona import DaytonaEnvironment
+from harbor.models.task.config import EnvironmentConfig
+from harbor.models.trial.paths import TrialPaths
 from harbor.llms.base import ContextLengthExceededError
 from harbor.literal.proxy import CORRELATION_ID_HEADER
 from harbor.models.agent.context import AgentContext
+from harbor.trial.errors import AgentTimeoutError, PhaseCancellationError
 
 
 @pytest.fixture
@@ -29,7 +36,151 @@ def temp_dir(tmp_path):
     return tmp_path
 
 
+class _LocalDaytonaProcess:
+    """Run SDK commands locally, retaining Daytona's per-session queue."""
+
+    def __init__(self, home, *, hold_submission=False, fail_cleanup=False):
+        self.home = home
+        self.sessions = {}
+        self.commands = {}
+        self.ready = asyncio.Event()
+        self.hold_submission = hold_submission
+        self.fail_cleanup = fail_cleanup
+
+    async def create_session(self, session_id):
+        self.sessions[session_id] = asyncio.Lock()
+
+    async def delete_session(self, session_id):
+        del self.sessions[session_id]
+
+    async def execute_session_command(self, session_id, request, timeout=None):
+        if self.fail_cleanup and not request.run_async:
+            return SimpleNamespace(exit_code=1)
+        command_id = str(len(self.commands))
+        task = asyncio.create_task(self._run(session_id, request.command))
+        self.commands[command_id] = task
+        if request.run_async:
+            if self.hold_submission and command_id == "0":
+                await asyncio.Event().wait()
+            return SimpleNamespace(cmd_id=command_id)
+        result = await task
+        return SimpleNamespace(exit_code=result.return_code)
+
+    async def _run(self, session_id, command):
+        async with self.sessions[session_id]:
+            process = await asyncio.create_subprocess_exec(
+                "/bin/bash",
+                "-c",
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={"HOME": str(self.home), "PATH": "/usr/bin:/bin"},
+            )
+            stderr_task = asyncio.create_task(process.stderr.read())
+            lines = []
+            async for line in process.stdout:
+                lines.append(line)
+                if line.strip() == b"READY":
+                    self.ready.set()
+            return SimpleNamespace(
+                return_code=await process.wait(),
+                stdout=b"".join(lines).decode(),
+                stderr=(await stderr_task).decode(),
+            )
+
+    async def get_session_command(self, session_id, command_id):
+        task = self.commands[command_id]
+        return SimpleNamespace(
+            id=command_id,
+            exit_code=task.result().return_code if task.done() else None,
+        )
+
+    async def get_session_command_logs(self, session_id, command_id):
+        return self.commands[command_id].result()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ending", ["deadline", "cancel", "cancel_submission", "cleanup_failure", "complete"]
+)
+async def test_pi_daytona_session_remains_usable_after_agent_exit(
+    tmp_path, monkeypatch, ending
+):
+    script = (
+        '#!/bin/bash\necho $$ > "$HOME/pi.pid"\n'
+        'setsid bash -c \'echo $$ > "$HOME/tool.pid"; trap "" TERM; '
+        'echo READY; read -r line < "$HOME/block"; touch "$HOME/late"\' &\nwait\n'
+        if ending != "complete"
+        else '#!/bin/bash\nprintf "completed\\n"\n'
+    )
+    shell = _local_pi_shell(tmp_path, monkeypatch, script)
+    os.mkfifo(tmp_path / "block")
+    process = _LocalDaytonaProcess(
+        tmp_path,
+        hold_submission=ending == "cancel_submission",
+        fail_cleanup=ending == "cleanup_failure",
+    )
+    environment = DaytonaEnvironment(
+        environment_dir=tmp_path,
+        environment_name="pi-regression",
+        session_id="pi-regression",
+        trial_paths=TrialPaths(trial_dir=tmp_path / "trial"),
+        task_env_config=EnvironmentConfig(docker_image="ubuntu:22.04"),
+    )
+    environment._sandbox = SimpleNamespace(
+        id="local", process=process, fs=shell.environment
+    )
+    environment.agent_timeout_sec = 2.0 if ending == "deadline" else None
+    agent = Pi(logs_dir=tmp_path, model_name="openai/test-model")
+    task = asyncio.create_task(agent.run("Run a tool", environment, AgentContext()))
+    try:
+        if ending in ("cancel", "cancel_submission", "cleanup_failure"):
+            await asyncio.wait_for(process.ready.wait(), timeout=10)
+            task.cancel()
+            with pytest.raises(
+                PhaseCancellationError
+                if ending == "cleanup_failure"
+                else asyncio.CancelledError
+            ):
+                await task
+        elif ending == "deadline":
+            with pytest.raises(AgentTimeoutError):
+                await asyncio.wait_for(task, timeout=10)
+        else:
+            await asyncio.wait_for(task, timeout=10)
+            assert (shell.artifact_dir / "pi.txt").read_text() == "completed\n"
+
+        if ending == "cleanup_failure":
+            return
+        for name in ("pi.pid", "tool.pid") if ending != "complete" else ():
+            pid = int((tmp_path / name).read_text())
+            stat = Path(f"/proc/{pid}/stat")
+            assert (
+                not stat.exists()
+                or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
+            )
+        assert not (tmp_path / "late").exists()
+        verifier = await asyncio.wait_for(
+            environment.exec("printf verifier-ready"), timeout=5
+        )
+        assert verifier.stdout == "verifier-ready"
+        assert verifier.return_code == 0
+    finally:
+        # Preserve node hygiene even when the regression assertion fails.
+        for name in ("tool.pid", "pi.pid"):
+            path = tmp_path / name
+            if path.exists():
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(int(path.read_text()), 9)
+        if not task.done():
+            task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+        await asyncio.gather(*process.commands.values())
+
+
 def _local_pi_shell(temp_dir, monkeypatch, pi_script):
+    monkeypatch.setattr(Pi, "_SUPERVISOR_PATH", str(temp_dir / "supervisor.cjs"))
     endpoint_path = temp_dir / "harbor-pi-endpoint.env"
     extension_path = temp_dir / "harbor-pi-context-budget.js"
     monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))
@@ -68,6 +219,11 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
     )
 
     class LocalShellEnvironment:
+        agent_timeout_sec = None
+
+        def scoped_exec_cancellation(self, command):
+            return contextlib.nullcontext()
+
         async def upload_file(self, source_path, target_path):
             shutil.copyfile(source_path, target_path)
 
@@ -120,6 +276,10 @@ class TestPiAgent:
     ):
         agent = Pi(logs_dir=temp_dir, version=version)
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
 
         await agent.install(mock_env)
@@ -135,6 +295,10 @@ class TestPiAgent:
     async def test_install_rejects_invalid_package_version(self, temp_dir):
         agent = Pi(logs_dir=temp_dir, version="latest??")
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
 
         with pytest.raises(ValueError, match="not a valid package version"):
             await agent.install(mock_env)
@@ -143,6 +307,10 @@ class TestPiAgent:
     async def test_run_command_structure(self, temp_dir):
         agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
             await agent.run("Fix the bug", mock_env, AsyncMock())
@@ -160,6 +328,10 @@ class TestPiAgent:
     async def test_run_no_model(self, temp_dir):
         agent = Pi(logs_dir=temp_dir)
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with pytest.raises(ValueError, match="provider/model_name"):
             await agent.run("Fix the bug", mock_env, AsyncMock())
@@ -168,6 +340,10 @@ class TestPiAgent:
     async def test_run_no_slash_in_model(self, temp_dir):
         agent = Pi(logs_dir=temp_dir, model_name="claude-sonnet-4-5")
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         with pytest.raises(ValueError, match="provider/model_name"):
             await agent.run("Fix the bug", mock_env, AsyncMock())
@@ -176,6 +352,10 @@ class TestPiAgent:
     async def test_run_with_any_provider(self, temp_dir):
         agent = Pi(logs_dir=temp_dir, model_name="my-provider/my-model")
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         await agent.run("Fix the bug", mock_env, AsyncMock())
         run_command = mock_env.exec.call_args_list[-1].kwargs["command"]
@@ -185,6 +365,10 @@ class TestPiAgent:
     async def test_api_key_forwarding_anthropic(self, temp_dir):
         agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         env_vars = {
             "ANTHROPIC_API_KEY": "ak-123",
@@ -201,6 +385,10 @@ class TestPiAgent:
     async def test_api_key_forwarding_openai(self, temp_dir):
         agent = Pi(logs_dir=temp_dir, model_name="openai/gpt-4")
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         env_vars = {
             "OPENAI_API_KEY": "sk-456",
@@ -224,6 +412,10 @@ class TestPiAgent:
     async def test_provider_base_url_forwarding(self, temp_dir, model_name, variable):
         agent = Pi(logs_dir=temp_dir, model_name=model_name)
         mock_env = AsyncMock()
+        mock_env.agent_timeout_sec = None
+        mock_env.scoped_exec_cancellation = MagicMock(
+            return_value=contextlib.nullcontext()
+        )
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         endpoint = "https://provider.example.test/v1"
 
@@ -382,6 +574,8 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
         thinking_format=thinking_format,
     )
     mock_env = AsyncMock()
+    mock_env.agent_timeout_sec = None
+    mock_env.scoped_exec_cancellation = MagicMock(return_value=contextlib.nullcontext())
     mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
     uploaded_files = {}
 
@@ -438,7 +632,7 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
         ],
     }
     run_call = mock_env.exec.call_args_list[-1]
-    run_tokens = shlex.split(run_call.kwargs["command"])
+    run_tokens = shlex.split(shlex.split(run_call.kwargs["command"])[-1])
     assert run_tokens[run_tokens.index("--provider") + 1] == "hosted_vllm"
     assert run_tokens[run_tokens.index("--model") + 1] == served_id
     assert run_call.kwargs["env"] == {}
@@ -854,6 +1048,8 @@ fetch(`${provider.baseUrl}/chat/completions`, {
 async def test_builtin_provider_does_not_replace_models_document(temp_dir):
     agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
     mock_env = AsyncMock()
+    mock_env.agent_timeout_sec = None
+    mock_env.scoped_exec_cancellation = MagicMock(return_value=contextlib.nullcontext())
     mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
     with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}, clear=False):
@@ -875,6 +1071,8 @@ async def test_builtin_provider_does_not_replace_models_document(temp_dir):
 async def test_malformed_model_alias_fails_before_pi_starts(temp_dir, model_alias):
     agent = Pi(logs_dir=temp_dir, model_name=model_alias)
     mock_env = AsyncMock()
+    mock_env.agent_timeout_sec = None
+    mock_env.scoped_exec_cancellation = MagicMock(return_value=contextlib.nullcontext())
 
     with pytest.raises(ValueError, match="provider/model_name"):
         await agent.run("Fix the bug", mock_env, AgentContext())
@@ -941,6 +1139,8 @@ async def test_hosted_vllm_failure_preserves_capability_url_and_redacts_api_key(
         thinking_format="qwen-chat-template",
     )
     mock_env = AsyncMock()
+    mock_env.agent_timeout_sec = None
+    mock_env.scoped_exec_cancellation = MagicMock(return_value=contextlib.nullcontext())
     mock_env.exec.return_value = SimpleNamespace(
         return_code=1,
         stdout="",
