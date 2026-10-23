@@ -83,7 +83,7 @@ LOCAL_CPYTHON = PackageSpec(pypi_packages=())
 LOCAL_READ_ONLY = "read_only"
 """shellbox's ``SystemDirectories.READ_ONLY``, the local factory's default mode for system directories."""
 LOCAL_COPY_ON_WRITE = "copy_on_write"
-"""shellbox's ``SystemDirectories.COPY_ON_WRITE``, the mode ``sandbox.factories.local_sandbox`` sets."""
+"""shellbox's ``SystemDirectories.COPY_ON_WRITE``, the mode ``sandbox.factories.local_factory`` sets."""
 LOCAL_UNWRITABLE_ROOTS: Mapping[str, tuple[str, ...]] = {
     LOCAL_READ_ONLY: ("/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/sys", "/usr"),
     LOCAL_COPY_ON_WRITE: ("/sys",),
@@ -518,9 +518,7 @@ def machine_runtime(
 ) -> MachineRuntimeSpec:
     """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
 
-    ``requirements`` are the machine's ``host_requirements``. ``lower`` builds every task and verifier
-    machine with it; a builder prototyping a machine outside a task rollout spec uses it too, so the
-    backend choice stays in one place.
+    Pass requirements already resolved for the available factories with ``host_requirements``.
     """
     return MachineRuntimeSpec(
         backend=machine_backend(requirements, host).value,

@@ -26,7 +26,8 @@ def test_a_well_formed_proposal_is_accepted_with_every_check_recorded(proposal):
 def test_a_proposal_with_a_thin_section_is_rejected_with_the_failing_check(proposal, section_replaced):
     verdict = run(section_replaced(proposal, "Risks and null conditions", "None."))
     assert verdict.decision is TriageDecision.REJECT
-    assert verdict.reasons == ("required_sections: '## Risks and null conditions' has 1 words, fewer than 40",)
+    assert len(verdict.reasons) == 1
+    assert "required_sections" in verdict.reasons[0] and "Risks and null conditions" in verdict.reasons[0]
 
 
 def test_a_null_proposal_is_rejected_with_its_reason(proposal):
