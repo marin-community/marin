@@ -76,9 +76,6 @@ pipeline = [
 ]
 
 [tool.uv]
-# 0.13.5 drops the compromised eMudhra root from uv's bundled trust store and
-# rejects chains through its intermediates.
-required-version = ">=0.13.5"
 exclude-dependencies = ["litellm"]
 fork-strategy = "fewest"
 # "explicit": allow pre-releases only for packages whose declared specifier
