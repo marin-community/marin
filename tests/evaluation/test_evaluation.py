@@ -1576,6 +1576,48 @@ def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_pa
     assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
 
 
+def test_launch_group_declares_the_hosts_its_evaluations_reach(monkeypatch):
+    """Harbor's sandbox service and registry, and an Evalchemy judge, become the orchestrator's egress rules."""
+    _install_fake_harbor_preflight(monkeypatch)
+    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
+    monkeypatch.setenv("DAYTONA_API_KEY", "daytona-key")
+    monkeypatch.setenv("TOGETHER_API_KEY", "together-key")
+    captured: dict = {}
+
+    class Client:
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(job_id="/eval/job")
+
+    spec = LaunchSpec(
+        model=models()["qwen3-8b"],
+        evals=("aime-harbor", "tb2"),
+        evalchemy_definitions=(
+            EvalchemyDefinition(
+                name="financebench",
+                config_path=Path("experiments/evaluation/configs/evalchemy/financebench.yaml"),
+            ),
+        ),
+        harbor_definitions=(),
+        platform=Platform.TPU,
+        accelerator=None,
+        limit=1,
+        records_prefix="memory://records",
+        submission_cluster="marin",
+        federated_cluster=None,
+        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
+    )
+
+    launch_group(build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="host"), "tester"), Client())
+
+    assert captured["egress_allow"] == (
+        "app.daytona.io",
+        "*.app.daytona.io",
+        "hlqxxzsirfrgeqasvaps.supabase.co",
+        "api.together.xyz",
+    )
+
+
 @pytest.mark.parametrize(
     ("submission_cluster", "expects_federation"),
     (("cw-us-east-08a", False), ("marin", True)),

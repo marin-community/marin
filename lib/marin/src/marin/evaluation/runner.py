@@ -246,6 +246,8 @@ class EvaluationBatch:
     instances: int = 1
     judge: HostedJudge | None = None
     secret_env: Mapping[str, SecretSpec] = field(default_factory=dict)
+    egress_allow: tuple[str, ...] = ()
+    """Egress rules the orchestrator job and its children need beyond the cluster allowlist."""
     source_model_config: ModelConfigRef | None = None
 
 

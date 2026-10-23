@@ -1040,9 +1040,10 @@ Examples:
     metavar="DEST[:PORT[,PORT...]]",
     callback=_validate_egress_allow,
     help=(
-        "Repeatable. A destination an ALLOWLIST job may reach beyond the cluster allowlist: a "
+        "Repeatable. A destination the job needs beyond the cluster allowlist: a "
         "domain (api.openai.com), a one-label wildcard (*.openai.com) or a CIDR "
-        "(203.0.113.0/24), optionally limited to TCP ports. Implies --egress-policy EGRESS_POLICY_ALLOWLIST."
+        "(203.0.113.0/24), optionally limited to TCP ports. Applies when the job runs under "
+        "EGRESS_POLICY_ALLOWLIST, by default or by --egress-policy."
     ),
 )
 @click.option(

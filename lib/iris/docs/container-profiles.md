@@ -162,8 +162,9 @@ jobs. Outside the cluster it reaches only:
 
 - Iris's base allowlist, `BASE_EGRESS_ALLOWLIST` in `iris.cluster.egress`:
   package indexes (PyPI, PyTorch, NVIDIA, Marin's wheel index, npm, conda,
-  crates, Debian and Ubuntu), GitHub, Hugging Face, Google Cloud APIs and
-  Artifact Registry, and Weights & Biases;
+  crates, Debian and Ubuntu), Astral's uv installer and Python builds, GitHub,
+  Hugging Face, Google Cloud APIs and Artifact Registry, Weights & Biases, and
+  the Iris dashboards on `*.oa.dev`;
 - the cluster's additions in `defaults.egress_allowlist.allow`, such as its
   object store;
 - the job's own rules.
@@ -173,8 +174,11 @@ barrier: an allowlisted service such as GitHub or Cloud Storage can carry data
 out, and Docker workers enforce only DNS (see [Docker workers](#docker-workers)).
 
 A job adds destinations with `--egress-allow`, repeatable, or
-`IrisClient.submit(egress_allow=[...])`. Rules imply `ALLOWLIST`, and the
-controller rejects them under any other policy. A job may carry at most 64.
+`IrisClient.submit(egress_allow=[...])`. Rules take effect when the job runs
+under `ALLOWLIST`, whether by the cluster's default or by
+`--egress-policy EGRESS_POLICY_ALLOWLIST`. Elsewhere they have no effect, so a
+launcher can declare what its jobs need on every cluster. The controller
+rejects rules alongside any other explicit policy. A job may carry at most 64.
 
 ```bash
 iris job run --egress-allow api.openai.com:443 --egress-allow 203.0.113.0/24 -- python eval.py

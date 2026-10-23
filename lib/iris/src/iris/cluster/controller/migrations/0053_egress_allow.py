@@ -3,7 +3,7 @@
 
 """Add ``egress_allow_json`` to ``job_config``.
 
-``egress_allow_json`` holds an ALLOWLIST job's own egress rules as a JSON list
+``egress_allow_json`` holds a job's own egress rules as a JSON list
 of rule strings (``iris.cluster.egress`` syntax). Existing rows get an
 empty list.
 

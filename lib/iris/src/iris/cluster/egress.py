@@ -23,8 +23,8 @@ from iris.rpc import job_pb2
 
 # Destinations every ALLOWLIST task may reach on any cluster that enables the
 # allowlist: package indexes and toolchains, source and model hubs, Google
-# Cloud APIs and storage, and experiment tracking. A "*" stands for one DNS
-# label, so deeper names are listed explicitly.
+# Cloud APIs and storage, experiment tracking, and the Iris dashboards. A "*"
+# stands for one DNS label, so deeper names are listed explicitly.
 BASE_EGRESS_ALLOWLIST: tuple[str, ...] = (
     # Python packages and wheels.
     "pypi.org",
@@ -42,6 +42,9 @@ BASE_EGRESS_ALLOWLIST: tuple[str, ...] = (
     "*.github.com",
     "*.githubusercontent.com",
     "ghcr.io",
+    # Astral's uv installer, and its mirror of uv and Python releases.
+    "astral.sh",
+    "*.astral.sh",
     # Other package ecosystems and OS packages.
     "registry.npmjs.org",
     "registry.yarnpkg.com",
@@ -70,6 +73,8 @@ BASE_EGRESS_ALLOWLIST: tuple[str, ...] = (
     # Weights & Biases.
     "wandb.ai",
     "*.wandb.ai",
+    # Iris dashboards, which also serve capability URLs for task endpoints.
+    "*.oa.dev",
 )
 
 # Upper bound on a job's own rules, and on the cluster's. Each rule becomes a

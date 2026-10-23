@@ -660,21 +660,22 @@ def _validate_launch_profile(
 
 
 def _validate_egress(request: controller_pb2.Controller.LaunchJobRequest) -> None:
-    """Validate the requested egress in place; rules without a policy select ALLOWLIST.
+    """Validate the requested egress.
 
     Rejects an unknown policy, a SANDBOX job on a policy that reaches the
-    controller, a malformed or excessive rule list, and rules under any policy
-    but ALLOWLIST. An UNSPECIFIED policy stays unresolved until the job's
-    placement is known (:func:`_resolve_egress_default`).
+    controller, a malformed or excessive rule list, and rules alongside an
+    explicit policy other than ALLOWLIST. An UNSPECIFIED policy stays
+    unresolved until the job's placement is known
+    (:func:`_resolve_egress_default`); its rules take effect only if it
+    resolves to ALLOWLIST.
     """
     try:
         validate_egress_rules(request.egress_allow)
-        if request.egress_allow and request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
-            request.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
+        if request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
+            return
         if request.egress_allow and request.egress_policy != job_pb2.EGRESS_POLICY_ALLOWLIST:
             raise ValueError("Egress rules require egress policy allowlist")
-        if request.egress_policy != job_pb2.EGRESS_POLICY_UNSPECIFIED:
-            resolve_egress_policy(request.container_profile, request.egress_policy)
+        resolve_egress_policy(request.container_profile, request.egress_policy)
     except ValueError as e:
         raise ConnectError(Code.INVALID_ARGUMENT, str(e)) from e
 

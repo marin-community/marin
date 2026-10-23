@@ -689,7 +689,8 @@ enum ContainerProfile {
 enum EgressPolicy {
   // Resolved by the controller that runs the job: INTERNET for a SANDBOX job;
   // ALLOWLIST on a cluster whose allowlist is the default; CLUSTER otherwise. A
-  // child job that sets neither a policy nor rules inherits its parent's.
+  // child job inherits its parent's policy and adds the parent's rules to its
+  // own.
   EGRESS_POLICY_UNSPECIFIED = 0;
   // The cluster network: the node's host network where configured, the
   // controller, workers and other tasks. Not allowed for SANDBOX.

@@ -124,8 +124,8 @@ message Controller {
     // iris.job.EgressPolicy; SANDBOX rejects CLUSTER and ALLOWLIST.
     iris.job.EgressPolicy egress_policy = 39;
 
-    // Destinations beyond the cluster allowlist. Requires ALLOWLIST; with an
-    // UNSPECIFIED policy, rules select ALLOWLIST.
+    // Destinations the job needs beyond the cluster allowlist. They take effect
+    // when the job runs under ALLOWLIST; an explicit policy must be ALLOWLIST.
     repeated iris.job.EgressRule egress_allow = 40;
 
     // Set only when a federation parent hands a whole job off to this cluster as

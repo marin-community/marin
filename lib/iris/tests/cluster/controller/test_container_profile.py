@@ -245,11 +245,20 @@ def _stored_rules(state, job_id: JobName) -> list[str]:
     return [format_egress_rule(rule) for rule in template.egress_allow]
 
 
-def test_egress_rules_select_allowlist_and_reach_the_run_request(service, state):
+@pytest.mark.parametrize(
+    ("service_fixture", "resolved"),
+    [
+        pytest.param("service", job_pb2.EGRESS_POLICY_CLUSTER, id="open-cluster"),
+        pytest.param("allowlist_default_service", job_pb2.EGRESS_POLICY_ALLOWLIST, id="allowlist-cluster"),
+    ],
+)
+def test_egress_rules_keep_the_clusters_default_policy(request, state, service_fixture, resolved):
+    """A launcher declares rules on every cluster; they never move a job onto ALLOWLIST."""
+    service = request.getfixturevalue(service_fixture)
     job_id = JobName.from_wire("/alice/job")
     _as("user", "alice", service.launch_job, _launch(job_id.to_wire(), DEFAULT, rules=["api.openai.com:443"]), None)
 
-    assert _stored_egress(state, job_id) == (job_pb2.EGRESS_POLICY_ALLOWLIST, job_pb2.EGRESS_POLICY_ALLOWLIST)
+    assert _stored_egress(state, job_id) == (resolved, resolved)
     assert _stored_rules(state, job_id) == ["api.openai.com:443"]
 
 
