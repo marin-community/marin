@@ -66,11 +66,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+import httpx
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rolloutengine.models import RolloutInterrupted, RolloutOperation
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
 
+from taskforge.llm.client import RETRYABLE_STATUSES, ModelUnavailable
 from taskforge.sandbox.factories import MachineHost, container_backend
 from taskforge.sandbox.host_failures import machine_create_failed, machine_lost
 from taskforge.spec.decision import DecisionUnavailable
@@ -112,6 +114,8 @@ class InfrastructureCause(StrEnum):
     """A machine ended under a running command or transfer."""
     HOST_UNREACHABLE = "host_unreachable"
     BUILD_PROCESS = "build_process"
+    MODEL_UNAVAILABLE = "model_unavailable"
+    HTTP_UNAVAILABLE = "http_unavailable"
 
 
 HOST_REJECTIONS = frozenset({InfrastructureCause.NO_FACTORY, InfrastructureCause.NO_IMAGE_BUILDER})
@@ -169,7 +173,7 @@ def storage_fault(error: BaseException, program_files: Collection[str]) -> bool:
 
 
 def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure | None:
-    """A fresh copy of the first ``BuildInfrastructureFailure`` in ``error``'s cause chain, or ``None``.
+    """Preserve a typed host/model outage or retryable HTTP failure through an exception wrapper.
 
     The chain is ``error`` itself, then each ``__cause__`` (or, absent one, ``__context__``), so a
     host failure the engine wrapped in ``RolloutInterrupted``, or the program wrapped in a
@@ -178,6 +182,12 @@ def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure |
     for link in exception_chain(error):
         if isinstance(link, BuildInfrastructureFailure):
             return BuildInfrastructureFailure(link.cause, link.message)
+        if isinstance(link, ModelUnavailable):
+            return BuildInfrastructureFailure(InfrastructureCause.MODEL_UNAVAILABLE, str(link))
+        if isinstance(link, httpx.TransportError) or (
+            isinstance(link, httpx.HTTPStatusError) and link.response.status_code in RETRYABLE_STATUSES
+        ):
+            return BuildInfrastructureFailure(InfrastructureCause.HTTP_UNAVAILABLE, str(link))
     return None
 
 
