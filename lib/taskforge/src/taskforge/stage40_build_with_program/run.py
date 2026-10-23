@@ -416,7 +416,7 @@ def step_output[T](draft: TaskDraft, store_root: str, name: str, output_type: ty
 
     Raises:
         KeyError: the draft's program has no step ``name``.
-        ValueError: the stored blob does not match the digest in its memo.
+        StoreCorruption: the stored blob does not match the digest in its memo.
     """
     memos = {outcome.memo.name: outcome.memo for outcome in draft.provenance.steps}
     if name not in memos:

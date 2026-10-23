@@ -52,7 +52,7 @@ DEFAULT_EVIDENCE_ROOT = Path(tempfile.gettempdir()) / "taskforge-evidence"
 
 @pytest.fixture(autouse=True)
 def no_package_downloads(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
-    if request.node.get_closest_marker("live_glm") is not None:
+    if any(request.node.get_closest_marker(marker) is not None for marker in ("live_glm", "manual")):
         return
 
     def refuse_download(*args, **kwargs):

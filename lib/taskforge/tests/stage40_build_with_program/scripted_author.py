@@ -10,8 +10,8 @@
 ``ProgramLoader`` that loads in the test's process.
 """
 
-import itertools
 import json
+import uuid
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -84,7 +84,6 @@ CONFIG = AgenticAuthorConfig(
     revision_same_session=SameSessionBounds(150_000, 36),
     max_continuations=0,
 )
-CALL_IDS = itertools.count()
 STRUCTURED_REPAIRS = 1
 
 
@@ -126,7 +125,7 @@ def turn(*calls: tuple[str, Mapping[str, object]], prompt: int = 30_000, out: in
     return Completion(
         content="",
         reasoning="thinking",
-        tool_calls=tuple(ToolCall(f"call-{next(CALL_IDS)}", name, json.dumps(args)) for name, args in calls),
+        tool_calls=tuple(ToolCall(f"call-{uuid.uuid4().hex}", name, json.dumps(args)) for name, args in calls),
         finish_reason=FinishReason.TOOL_CALLS,
         usage=Usage(prompt_tokens=prompt, completion_tokens=out, reasoning_tokens=out // 2, cached_tokens=prompt - 1000),
         wall_time=2.0,

@@ -5,8 +5,7 @@
 
 ``IrisImageBuilder`` implements ``taskforge.sandbox.images.ImageBuilder`` with two Iris jobs on
 CoreWeave (``TARGET_CLUSTER`` by default, DEFAULT container profile), so the registry credential
-never shares a container with the model-authored Dockerfile. The build process
-(``stage40_build_with_program.build_process``) constructs one for its ``RLEnvBuildServices.images``, and
+never shares a container with the model-authored Dockerfile.
 ``scripts/build_image_job.py`` runs one from a laptop.
 
 1. The build job runs a pinned ``bash`` image (Iris requires ``bash`` in the task image, so the
@@ -73,6 +72,7 @@ from iris.client.workload import JobState, TaskOutputArchive, TaskOutputArchiveS
 from iris.cluster.client import get_job_info
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.resources.state import is_job_finished
 from iris.rpc import job_pb2
 from rigging.timing import Duration
 
@@ -353,7 +353,7 @@ class IrisImageBuilder:
                 wait_succeeded(push_job, ImageJobFailed)
             finally:
                 for job in jobs:
-                    if job.state not in TERMINAL_JOB_STATES:
+                    if not is_job_finished(job.state):
                         job.cancel()
                 client.shutdown()
         manifest_digest = manifest_readback(credential, repository, tag)
@@ -361,9 +361,6 @@ class IrisImageBuilder:
         return Published(image, digest, str(build_job.job_id), str(push_job.job_id), built, time.monotonic() - start)
 
 
-TERMINAL_JOB_STATES = frozenset(
-    {JobState.SUCCEEDED, JobState.FAILED, JobState.KILLED, JobState.WORKER_FAILED, JobState.UNSCHEDULABLE}
-)
 HOST_JOB_STATES = frozenset({JobState.UNSCHEDULABLE, JobState.WORKER_FAILED, JobState.KILLED})
 """How a job ends when the host stopped it: never scheduled, its worker lost, or cancelled from outside.
 

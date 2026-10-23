@@ -19,8 +19,7 @@ local path or an object-store URL. Under it the store keeps:
 * ``blobs/<sha256>``: each output as canonical JSON, written once and shared by all workpieces;
 * ``workpieces/<workpiece_id>/steps/<name>/<key digest>.json``: the memo of each key a workpiece stored.
 
-A memo holds a step's stored output under one key. The ledger in a later PR calls its own rows
-entries.
+A memo holds a step's stored output under one key; ledger entries record the execution.
 
 The store writes the blob before the memo, so every memo points at a complete blob, and it
 writes each file to a temporary sibling before renaming it into place. A memo or blob that reads back
@@ -69,8 +68,8 @@ class RLEnvBuildStepKey:
 
     Attributes:
         sdk_version: ``SDK_VERSION`` when the output was computed.
-        source_digest: The step's ``RLEnvBuildStep.source_digest``: the sha256 of its source text,
-            followed by the source of its output type when the step's module defines that class.
+        source_digest: The step's ``RLEnvBuildStep.source_digest``, including the module-local
+            helpers, constants and classes its implementation references.
         inputs: For each declared input, the sha256 of that input's canonical JSON: the upstream
             step's output, or the proposal. An upstream step that reruns and returns identical
             content leaves this map unchanged.

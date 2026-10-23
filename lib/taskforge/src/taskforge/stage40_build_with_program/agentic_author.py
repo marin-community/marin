@@ -443,7 +443,7 @@ def ledger_steps(path: Path, offset: int) -> list[dict]:
     with path.open("rb") as f:
         f.seek(offset)
         entries = [LedgerEntry.from_json(json.loads(line)) for line in f if line.strip()]
-    # Spans arrive in completion order (independent steps run at once since #10081); a step cancelled because
+    # Spans arrive in completion order (independent steps run at once); a step cancelled because
     # another failed first has cause CancelledError and no cache attribute.
     return [
         {
@@ -488,18 +488,16 @@ class Submission:
     tested: bool
 
 
-def clip(text: str, limit: int = TOOL_OUTPUT_CHARS) -> str:
-    """``text`` within ``limit`` characters: the head and the tail around a line saying how much was cut."""
-    if len(text) <= limit:
+def clip(text: str) -> str:
+    """Keep a short tool reply whole; otherwise retain its head and tail with a truncation marker."""
+    if len(text) <= TOOL_OUTPUT_CHARS:
         return text
     dropped = len(text) - TOOL_OUTPUT_HEAD - TOOL_OUTPUT_TAIL
     return f"{text[:TOOL_OUTPUT_HEAD]}\n... [{dropped} characters dropped] ...\n{text[-TOOL_OUTPUT_TAIL:]}"
 
 
 def _schema(properties: Mapping[str, object], required: Sequence[str]) -> dict[str, object]:
-    """A tool's JSON schema. Length limits stay out of it: ``run_agent`` returns a schema violation unclipped,
-    and jsonschema's ``maxLength`` message quotes the whole value (a 27k-character file in an early run), so the
-    handlers check lengths and refuse with a short message instead."""
+    """A tool schema whose handlers check length bounds and return concise refusal messages."""
     return {"type": "object", "properties": dict(properties), "required": list(required), "additionalProperties": False}
 
 
