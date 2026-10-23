@@ -147,6 +147,24 @@ cleanup does not acknowledge persistence or return a commit token. Use
 `DataStore.transaction()` when a write must become visible before the caller continues.
 The core `DataStore` and `ReadView` APIs propagate storage and commit errors.
 
+`PersistentKvCache` tolerates expired objects on lifecycle-managed storage. Reads
+exclude confirmed missing shards from their local snapshot and omit incomplete
+chunked values, while retaining healthy hits. An expired schema can be interpreted
+from the cache tables' fixed contracts. Reads never modify storage.
+
+Before its first write, then at most daily while writing, each cache writer checks
+the live shards and schemas. It atomically removes missing shard references,
+recreates expired schemas, and refreshes objects older than half the `ttl=Nd`
+period in the root path. S3 and GCS refreshes use server-side copies of the same
+bytes; local storage updates modification times. Shorter TTLs shorten the check
+interval to one quarter of the TTL. A read that encounters a missing shard requests
+another check on the next write. A writer whose maintenance failed because an
+object expired is replaced after repair.
+
+Permission and transport errors do not remove references. These recovery rules
+apply only to the disposable key/value cache; ordinary archives remain strict.
+An idle cache can still expire, and its next write repairs the remaining manifest.
+
 ## Compaction
 
 The store's maintenance thread flushes on its configured interval and uses bounded

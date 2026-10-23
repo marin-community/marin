@@ -8,20 +8,24 @@ from __future__ import annotations
 import atexit
 import logging
 import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 
 from rigging import telemetry
 from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import StoragePath
 
-from finestore.reader import BlobReadDiagnostics, ReadView
+from finestore.cache_storage import CacheReadView, available_cache_snapshot, maintain_cache
+from finestore.reader import BlobReadDiagnostics
 from finestore.store import DataStore
 
 _CACHE_TTL_DAYS = 30
 _EXIT_FLUSH_TIMEOUT = 10.0
 _MAX_BATCH_DATA_BYTES = 100 * 1024 * 1024
 _MAX_BATCH_OBJECTS = 65_536
+_RETENTION_CHECK_INTERVAL = 24 * 60 * 60.0
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,8 @@ class PersistentKvCache:
         self._background_thread: threading.Thread | None = None
         self._exit_registered = False
         self._closed = False
+        self._repair_needed = threading.Event()
+        self._next_retention_check = 0.0
 
     @classmethod
     def at(cls, root: str) -> PersistentKvCache:
@@ -103,12 +109,22 @@ class PersistentKvCache:
         memory_hits = len(values)
         missing = [key for key in unique_keys if key not in values]
         loaded: dict[str, bytes] = {}
-        view: ReadView | None = None
+        views: list[CacheReadView] = []
         if missing and self._resolve_root is not None:
             # The cache is best-effort: an unreadable, inconsistent, or corrupt archive is a miss.
             try:
-                view = ReadView(self._storage_root())
-                loaded = view.read_blobs(missing)
+                root = self._storage_root()
+                view = CacheReadView(root)
+                views.append(view)
+                try:
+                    loaded = view.read_blobs(missing)
+                except FileNotFoundError:
+                    self._repair_needed.set()
+                    view = CacheReadView(root, available_cache_snapshot(root))
+                    views.append(view)
+                    loaded = view.read_blobs(missing)
+                if view.missing_schema:
+                    self._repair_needed.set()
             except Exception as exc:
                 logger.warning("FineStore cache is unreadable, treating %d keys as misses: %s", len(missing), exc)
         with self._lock:
@@ -121,7 +137,7 @@ class PersistentKvCache:
             diagnostics.memory_hits += memory_hits
             diagnostics.storage_hits += len(loaded)
             diagnostics.misses += len(unique_keys) - len(result)
-            if view is not None:
+            for view in views:
                 diagnostics.blob_reads.add(view.read_diagnostics())
         _CACHE_LOAD_CALLS.add()
         _CACHE_REQUESTED_KEYS.add(len(unique_keys))
@@ -195,8 +211,37 @@ class PersistentKvCache:
 
     def _writer(self) -> DataStore:
         with self._root_lock:
+            root = self._storage_root_unlocked()
+            if self._store is not None:
+                try:
+                    self._store.raise_if_failed()
+                except FileNotFoundError:
+                    # An expired compaction input can terminate maintenance. Repair before
+                    # replacing that writer so future batches can commit and compact again.
+                    self._store.request_stop()
+                    self._store = None
+                    self._repair_needed.set()
+            if self._repair_needed.is_set() or time.monotonic() >= self._next_retention_check:
+                self._repair_needed.clear()
+                ttl = next(
+                    (
+                        int(part[4:-1])
+                        for part in StoragePath(root).segments
+                        if part.startswith("ttl=") and part.endswith("d") and part[4:-1].isdigit()
+                    ),
+                    None,
+                )
+                refresh_age = timedelta(days=ttl / 2) if ttl is not None else None
+                refresh_before = datetime.now(UTC) - refresh_age if refresh_age is not None else None
+                maintain_cache(root, refresh_before=refresh_before)
+                interval = (
+                    min(_RETENTION_CHECK_INTERVAL, refresh_age.total_seconds() / 2)
+                    if refresh_age
+                    else _RETENTION_CHECK_INTERVAL
+                )
+                self._next_retention_check = time.monotonic() + interval
             if self._store is None:
-                self._store = DataStore.open(self._storage_root_unlocked())
+                self._store = DataStore.open(root)
             return self._store
 
     def _storage_root_unlocked(self) -> str:
