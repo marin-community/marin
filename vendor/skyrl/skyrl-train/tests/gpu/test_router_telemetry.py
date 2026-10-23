@@ -44,6 +44,7 @@ def _config(model_path: str, *, pipeline_parallel_size: int, export_path: str | 
     cfg.trainer.use_sample_packing = False
     cfg.trainer.train_batch_size = 4
     cfg.trainer.policy_mini_batch_size = 4
+    cfg.generator.n_samples_per_prompt = 1
     cfg.trainer.micro_train_batch_size_per_gpu = 2
     cfg.trainer.micro_forward_batch_size_per_gpu = 2
     cfg.trainer.algorithm.use_kl_loss = False
@@ -80,7 +81,9 @@ def test_ppo_train_at_pp2_writes_the_sidecar_with_per_task_collision_rows(tmp_pa
             batch.metadata["data_source_names"] = ["task_R", "task_X"]
             batch["data_source_ids"] = torch.tensor([1, 0, 1, 0], dtype=torch.int32)
             batch.metadata["global_step"] = 0
-            ray.get(policy.async_run_ray_method("pass_through", "ppo_train", batch))
+            train_outputs = ray.get(policy.async_run_ray_method("pass_through", "ppo_train", batch))
+            for output in train_outputs:
+                assert output.metadata["train_status"]["policy_update_steps"] == 1
         finally:
             policy.kill_actors()
 
