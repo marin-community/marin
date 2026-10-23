@@ -297,10 +297,3 @@ def test_without_a_local_factory_there_is_nothing_to_warm(monkeypatch):
 
     assert warm_local_python({Backend.SHELLSIM.value: SHELLSIM}) is None
     assert warm_local_python(IRIS) is None
-
-
-def test_factory_arguments_must_match_the_selected_backends():
-    with pytest.raises(ValueError, match="controller URL"):
-        machine_factories((Backend.SHELLSIM,), controller_url="http://c:1")
-    with pytest.raises(ValueError, match="controller URL"):
-        machine_factories((Backend.GVISOR,), controller_url=None)

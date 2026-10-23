@@ -44,14 +44,15 @@ the word "credential", so Iris redacts its value from job descriptions.
 
 Iris copies a parent task's explicit environment into every job the task submits, so a builder in
 a coordinator task would hand that variable, with the coordinator's other secrets, to the build
-job. ``submit_job`` therefore blanks every inherited variable in both jobs, and the push job alone
-receives the credential, as ``REGISTRY_AUTH``.
+job. ``submit_job`` therefore blanks inherited variables and disables mounted-secret inheritance.
+It explicitly passes only CoreWeave storage credentials to both jobs, and the push job alone
+receives the registry credential, as ``REGISTRY_AUTH``.
 
 The registry takes writes with Basic auth only (``WWW-Authenticate: Basic realm="envgen"``), so
 there is no short-lived scoped token to hand the push job instead. Exposure that remains: the
 coordinator's and the push job's pod specs carry the credential (cluster operators can read them),
-and every CoreWeave task pod carries the cluster's object-store keys (``task_env``), which the
-build's RUN steps can read.
+and both image jobs carry the submitter's CoreWeave storage credentials for output archives.
+The build's RUN steps can read those storage credentials.
 """
 
 import asyncio
@@ -74,6 +75,7 @@ from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, Constra
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.state import is_job_finished
 from iris.rpc import job_pb2
+from rigging.secrets import COREWEAVE_SECRET_NAMES, SecretBehavior, get_secret
 from rigging.timing import Duration
 
 from taskforge.sandbox import image_push
@@ -245,17 +247,22 @@ def output_archive(job: Job) -> TaskOutputArchive:
 def submit_job(
     client: IrisClient, *, name: str, entrypoint: Entrypoint, image: str, env: dict[str, str], target_cluster: str
 ) -> Job:
-    """Submit one of a publish's jobs with ``env`` as its whole environment.
+    """Submit an image job with explicit values and the storage credentials it needs.
 
-    Every variable the job would inherit from the Iris task this process runs in, and every
-    variable in ``BLANKED_ENV``, is set empty unless ``env`` names it.
+    Inherited environment values are blanked and mounted-secret inheritance is disabled.
+    Only the submitter's CoreWeave storage credentials and explicit ``env`` values are passed.
     """
     job_info = get_job_info()
     inherited = {} if job_info is None else dict.fromkeys(job_info.env, "")
+    storage = {name: value for name in COREWEAVE_SECRET_NAMES if (value := get_secret(name)) is not None}
     return client.submit(
         entrypoint=entrypoint,
         name=name,
-        environment=EnvironmentSpec(setup_scripts=[], env_vars={**inherited, **dict.fromkeys(BLANKED_ENV, ""), **env}),
+        environment=EnvironmentSpec(
+            setup_scripts=[],
+            env_vars={**inherited, **dict.fromkeys(BLANKED_ENV, ""), **storage, **env},
+            secret_behavior=SecretBehavior.ISOLATE,
+        ),
         resources=ResourceSpec(cpu=2, memory=4 * 1024**3, disk=20 * 1024**3),
         task_image=image,
         container_profile=job_pb2.CONTAINER_PROFILE_DEFAULT,
