@@ -3,6 +3,7 @@
 
 
 import tempfile
+from typing import cast
 
 import equinox as eqx
 import haliax as hax
@@ -134,9 +135,11 @@ def test_siglip2_vision_roundtrip() -> None:
     spatial_shapes = torch.tensor([[8, 8]] * batch_size)
     attention_mask = torch.ones(batch_size, num_patches, dtype=torch.long)
     with torch.no_grad():
-        torch_output = torch_model(
+        torch_outputs = torch_model(
             pixel_values_torch, pixel_attention_mask=attention_mask, spatial_shapes=spatial_shapes
-        ).last_hidden_state.numpy()
+        )
+        torch_output = torch_outputs.last_hidden_state.numpy()
+        torch_pooler = torch_outputs.pooler_output.numpy()
 
     single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
 
@@ -146,7 +149,7 @@ def test_siglip2_vision_roundtrip() -> None:
         config = Siglip2VisionConfig.from_hf_config(torch_model.config)
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
 
-        model = converter.load_pretrained(Siglip2VisionModel)
+        model = cast(Siglip2VisionModel, converter.load_pretrained(Siglip2VisionModel))
 
         Batch = hax.Axis("batch", batch_size)
         NumPatches = hax.Axis("num_patches", num_patches)
@@ -157,21 +160,28 @@ def test_siglip2_vision_roundtrip() -> None:
             (Batch, NumPatches, PatchInput),
         )
 
-        jax_output_array = eqx.filter_jit(
-            lambda pixels, shapes: model(pixels, spatial_shapes=shapes).last_hidden_state.array
-        )(pixel_values, jnp.asarray(spatial_shapes.numpy()))
+        def forward(pixels, shapes):
+            output = model(pixels, spatial_shapes=shapes)
+            assert output.pooler_output is not None
+            return output.last_hidden_state.array, output.pooler_output.array
+
+        jax_output_array, jax_pooler_array = eqx.filter_jit(forward)(pixel_values, jnp.asarray(spatial_shapes.numpy()))
 
         np.testing.assert_allclose(torch_output, jax_output_array, rtol=1e-4, atol=1e-4)
+        np.testing.assert_allclose(torch_pooler, jax_pooler_array, rtol=1e-4, atol=1e-4)
 
         converter.save_pretrained(model, f"{tmpdir}/lev_model", save_reference_code=False)
         torch_model2 = HfSiglip2VisionModel.from_pretrained(f"{tmpdir}/lev_model")
         torch_model2.eval()
 
         with torch.no_grad():
-            torch_output2 = torch_model2(
+            torch_outputs2 = torch_model2(
                 pixel_values_torch, pixel_attention_mask=attention_mask, spatial_shapes=spatial_shapes
-            ).last_hidden_state.numpy()
+            )
+            torch_output2 = torch_outputs2.last_hidden_state.numpy()
+            torch_pooler2 = torch_outputs2.pooler_output.numpy()
         np.testing.assert_allclose(torch_output2, jax_output_array, rtol=1e-4, atol=1e-4)
+        np.testing.assert_allclose(torch_pooler2, jax_pooler_array, rtol=1e-4, atol=1e-4)
 
 
 @pytest.mark.slow
@@ -207,6 +217,7 @@ def test_siglip2_vision_pretrained_random_pixels() -> None:
             pixel_values_torch, pixel_attention_mask=attention_mask, spatial_shapes=spatial_shapes
         )
         torch_output = vision_outputs.last_hidden_state.detach().cpu().numpy()
+        torch_pooler = vision_outputs.pooler_output.detach().cpu().numpy()
 
     single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
 
@@ -216,7 +227,7 @@ def test_siglip2_vision_pretrained_random_pixels() -> None:
         config = Siglip2VisionConfig.from_hf_config(torch_model.config)
         converter = config.hf_checkpoint_converter(ref_checkpoint=f"{tmpdir}/torch_model")
 
-        model = converter.load_pretrained(Siglip2VisionModel)
+        model = cast(Siglip2VisionModel, converter.load_pretrained(Siglip2VisionModel))
 
         pixel_values_np = pixel_values_torch.cpu().numpy().astype(np.float32)
         Batch = hax.Axis("batch", batch_size)
@@ -231,12 +242,15 @@ def test_siglip2_vision_pretrained_random_pixels() -> None:
         )
         jax_output = model(pixel_values, mask=mask, spatial_shapes=spatial_shapes_np)
         jax_output_array = jax_output.last_hidden_state.array
+        assert jax_output.pooler_output is not None
+        jax_pooler_array = jax_output.pooler_output.array
 
     assert torch_output.shape == jax_output_array.shape
     assert not np.any(np.isnan(jax_output_array))
     assert not np.any(np.isinf(jax_output_array))
 
     np.testing.assert_allclose(torch_output, jax_output_array, rtol=1e-4, atol=1e-4)
+    np.testing.assert_allclose(torch_pooler, jax_pooler_array, rtol=1e-4, atol=1e-4)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = f"{tmpdir}/converted_model"
@@ -252,6 +266,8 @@ def test_siglip2_vision_pretrained_random_pixels() -> None:
                 pixel_values_torch, pixel_attention_mask=attention_mask, spatial_shapes=spatial_shapes
             )
             converted_output_np = converted_outputs.last_hidden_state.detach().cpu().numpy()
+            converted_pooler_np = converted_outputs.pooler_output.detach().cpu().numpy()
 
         assert not np.any(np.isnan(converted_output_np))
         np.testing.assert_allclose(jax_output_array, converted_output_np, rtol=1e-4, atol=1e-4)
+        np.testing.assert_allclose(jax_pooler_array, converted_pooler_np, rtol=1e-4, atol=1e-4)

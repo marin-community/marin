@@ -13,6 +13,8 @@ from io import BytesIO
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from PIL import Image
 from tokenizers import Tokenizer
@@ -28,6 +30,7 @@ from levanter.data.image import (
     BatchImageProcessor,
     ImageConversationUrlDataSource,
     ImageDatasetSourceConfig,
+    ImageTextUrlDataSource,
     image_source_urls,
     load_image,
 )
@@ -55,6 +58,17 @@ def test_conversation_source_preserves_other_modalities(tmp_path: Path) -> None:
     source = ImageConversationUrlDataSource([str(path)])
     loaded = list(source.open_shard(source.shard_names[0]))
     assert loaded == [{**record, "images": []}]
+
+
+def test_parquet_image_source_resumes_across_row_groups(tmp_path: Path) -> None:
+    path = tmp_path / "records.parquet"
+    table = pa.table({"picture": ["a.png", "b.png", "c.png"], "caption": ["a", "b", "c"]})
+    pq.write_table(table, path, row_group_size=1)
+    source = ImageTextUrlDataSource([str(path)], image_key="picture", text_key="caption")
+    assert list(source.open_shard_at_row(source.shard_names[0], 1)) == [
+        {"image": "b.png", "text": "b"},
+        {"image": "c.png", "text": "c"},
+    ]
 
 
 def test_hf_source_iteration_is_lazy(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,6 +170,19 @@ def test_caption_source_preserves_images_and_truncated_targets(tmp_path, caption
     np.testing.assert_array_equal(processed["loss_mask"], expected_mask)
 
 
+def test_any_resolution_patch_cap_rejects_incompatible_grid(caption_processor) -> None:
+    processor = BatchImageProcessor(
+        caption_processor,
+        max_num_patches=1,
+        grid_pinpoints=[[8, 8]],
+        patch_size=4,
+        vision_feature_height=1,
+    )
+    record = image_caption_to_conversation({"image": Image.new("RGB", (8, 8)), "text": "red"})
+    with pytest.raises(ValueError, match="requires 4 any-resolution patches"):
+        processor([record])
+
+
 @pytest.mark.parametrize("source_kind", ["caption", "conversation"])
 @pytest.mark.parametrize("use_cache", [False, True])
 def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
@@ -185,17 +212,17 @@ def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
         padding=not use_cache,
         max_length=12,
     )
-    # Different target lengths require single-example batches when padding is disabled.
+    # The dataset must preserve different target lengths even when callers request them together.
     with set_current_client(LocalClient()):
         dataset = config.train_set(options=CacheOptions(batch_size=1), max_num_patches=3)
-        first = asyncio.run(dataset.get_batch([0]))[0]
-        second = asyncio.run(dataset.get_batch([1]))[0]
+        first, second = asyncio.run(dataset.get_batch([0, 1]))
     expected_pixels = caption_processor.image_processor(images=Image.open(image), return_tensors="np")["pixel_values"][
         0
     ]
     for item, length in zip(sorted([first, second], key=lambda item: int(item["attention_mask"].sum())), [8, 9]):
         expected_length = length if use_cache else 12
         assert item["input_ids"].shape == (expected_length,)
+        assert item["pixel_values"] is not None
         assert item["pixel_values"].shape == (4, 3, 4, 4)
         np.testing.assert_allclose(item["pixel_values"][0], expected_pixels)
         np.testing.assert_array_equal(item["grid_mask"], [True, False, False, False])

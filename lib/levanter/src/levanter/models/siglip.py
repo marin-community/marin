@@ -5,13 +5,14 @@
 from haliax._src.state_dict import default_eqx_module_from_state_dict
 
 
-from jaxtyping import PRNGKeyArray
 from dataclasses import dataclass, replace
-from typing import Self, Dict, Optional, Tuple, Type
+from typing import Callable, Dict, Optional, Protocol, Self, Tuple, Type
+
+from jaxtyping import PRNGKeyArray
+
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 from levanter.models.vision_model import VisionEncoderConfig
-from levanter.models.vision_model import vision_activation, vision_hidden_states, VisionEncoderLayer
 
 
 silence_transformer_nag()
@@ -27,10 +28,21 @@ import haliax.nn as hnn  # noqa: E402
 from haliax import Axis, NamedArray  # noqa: E402
 from haliax.jax_utils import maybe_rng_split, named_call, shaped_rng_split  # noqa: E402
 from haliax.nn.scan import Stacked  # noqa: E402
-from haliax.state_dict import ModuleWithStateDictSerialization, with_prefix  # noqa: E402
+from haliax.state_dict import (  # noqa: E402
+    ModuleWithStateDictSerialization,
+    from_state_dict,
+    to_state_dict as eqx_to_state_dict,
+    with_prefix,
+)
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, ModelWithHfSerializationMixin  # noqa: E402
-from levanter.layers.attention import AttentionBackend, AttentionMask  # noqa: E402
+from levanter.layers.attention import (  # noqa: E402
+    Attention,
+    AttentionBackend,
+    AttentionConfig,
+    AttentionMask,
+    dot_product_attention,
+)
 
 
 @dataclass
@@ -43,11 +55,12 @@ class SiglipVisionModelOutput:
             Shape: (batch, num_patches, embed)
         hidden_states: Tuple of hidden states from each layer (including embeddings).
             Each element has shape: (batch, num_patches, embed)
-            Contains all layers when requested, otherwise only the final encoder output.
+        pooler_output: Attention-pooled image representation.
     """
 
     last_hidden_state: NamedArray
-    hidden_states: Optional[Tuple[NamedArray, ...]] = None
+    hidden_states: Tuple[NamedArray, ...]
+    pooler_output: Optional[NamedArray] = None
 
 
 @VisionEncoderConfig.register_subclass("siglip")
@@ -89,7 +102,9 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
     hidden_act: ActivationFunctionEnum = ActivationFunctionEnum.gelu_new
     layer_norm_eps: float = 1e-6
     attention_dropout: float = 0.0
+    initializer_range: float = 0.02
     gradient_checkpointing: bool = True
+    vision_use_head: bool = True
 
     use_flash_attention: bool = True
     attn_backend: Optional[AttentionBackend] = None
@@ -123,7 +138,7 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
             hf_config = vision_config
         assert isinstance(hf_config, HfSiglipVisionConfig)
 
-        activation_fn = vision_activation(hf_config.hidden_act)
+        activation_fn = siglip_activation(hf_config.hidden_act)
 
         return cls(
             hidden_size=hf_config.hidden_size,
@@ -136,6 +151,8 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
             hidden_act=activation_fn,
             layer_norm_eps=hf_config.layer_norm_eps,
             attention_dropout=hf_config.attention_dropout,
+            initializer_range=getattr(hf_config, "initializer_range", 0.02),
+            vision_use_head=getattr(hf_config, "vision_use_head", True),
         )
 
     def to_hf_config(self, vocab_size: int = 1, config_overrides: Optional[Dict] = None) -> HfSiglipVisionConfig:
@@ -168,11 +185,13 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
             "hidden_act": hf_hidden_act,
             "layer_norm_eps": self.layer_norm_eps,
             "attention_dropout": self.attention_dropout,
+            "initializer_range": self.initializer_range,
+            "vision_use_head": self.vision_use_head,
         }
 
         config_dict.update(config_overrides)
 
-        hf_config = HfSiglipVisionConfig(**config_dict)
+        hf_config = HfSiglipVisionConfig.from_dict(config_dict)
 
         return hf_config
 
@@ -226,6 +245,339 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
         """Number of patches axis (calculated from image_size and patch_size)."""
         num_patches = (self.image_size // self.patch_size) ** 2
         return Axis(name="num_patches", size=num_patches)
+
+    def attention_config(self) -> AttentionConfig:
+        """Build the standard Levanter attention configuration for SigLIP."""
+        backend = self.attn_backend if self.use_flash_attention else AttentionBackend.VANILLA
+        return AttentionConfig(
+            Embed=self.Embed,
+            num_heads=self.num_attention_heads,
+            num_kv_heads=self.num_attention_heads,
+            use_bias=True,
+            use_output_bias=True,
+            attn_backend=backend,
+            flash_attention_block_size=self.flash_attention_block_size,
+        )
+
+
+class SiglipBlockConfig(Protocol):
+    @property
+    def Embed(self) -> Axis: ...
+
+    @property
+    def Mlp(self) -> Axis: ...
+
+    @property
+    def Layers(self) -> Axis: ...
+
+    @property
+    def hidden_act(self) -> ActivationFunctionEnum: ...
+
+    @property
+    def layer_norm_eps(self) -> float: ...
+
+    @property
+    def attention_dropout(self) -> float: ...
+
+    @property
+    def initializer_range(self) -> float: ...
+
+    @property
+    def inference(self) -> bool: ...
+
+    def attention_config(self) -> AttentionConfig: ...
+
+
+def siglip_activation(name: str) -> ActivationFunctionEnum:
+    aliases = {"gelu_pytorch_tanh": "gelu_new", "swish": "silu"}
+    return ActivationFunctionEnum(aliases.get(name, name))
+
+
+class SiglipMLP(eqx.Module):
+    """Two-layer feedforward block shared by SigLIP and SigLIP2."""
+
+    fc1: hnn.Linear
+    fc2: hnn.Linear
+    act: Callable = eqx.field(static=True)
+
+    @staticmethod
+    def init(Embed: Axis, Mlp: Axis, activation_fn: ActivationFunctionEnum, *, key: PRNGKeyArray) -> "SiglipMLP":
+        k_fc1, k_fc2 = maybe_rng_split(key, 2)
+        fc1 = hnn.Linear.init(In=Embed, Out=Mlp, key=k_fc1, use_bias=True, out_first=True)
+        fc2 = hnn.Linear.init(In=Mlp, Out=Embed, key=k_fc2, use_bias=True, out_first=True)
+        return SiglipMLP(fc1, fc2, activation_fn.to_fn())
+
+    @named_call
+    def __call__(self, x: NamedArray) -> NamedArray:
+        return self.fc2(self.act(self.fc1(x)))
+
+
+class SiglipAttention(ModuleWithStateDictSerialization, Attention):
+    """SigLIP axis and dropout semantics on Levanter's standard attention layer."""
+
+    attention_dropout: float = eqx.field(static=True, default=0.0)
+    inference: bool = eqx.field(static=True, default=True)
+
+    @staticmethod
+    def init(config: SiglipBlockConfig, *, key: PRNGKeyArray) -> "SiglipAttention":  # type: ignore[override]
+        attention = Attention.init(config.attention_config(), key=key)
+        return SiglipAttention(
+            config=attention.config,
+            q_proj=attention.q_proj,
+            k_proj=attention.k_proj,
+            v_proj=attention.v_proj,
+            o_proj=attention.o_proj,
+            q_norm=attention.q_norm,
+            k_norm=attention.k_norm,
+            rot_embs=attention.rot_embs,
+            attention_dropout=config.attention_dropout,
+            inference=config.inference,
+        )
+
+    def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
+        return {"o_proj": "out_proj"}
+
+    @named_call
+    def __call__(
+        self,
+        x: NamedArray,
+        mask: Optional[AttentionMask] = None,
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> NamedArray:
+        patch_axis = x.resolve_axis("num_patches")
+        position_axis = Axis("position", patch_axis.size)
+        key_position_axis = Axis("key_position", patch_axis.size)
+
+        if mask is not None:
+            explicit_mask = mask.materialize(patch_axis, key_position_axis)
+            mask = (
+                None
+                if explicit_mask is None
+                else AttentionMask.explicit(explicit_mask.rename({patch_axis: position_axis}))
+            )
+
+        x = x.rename({patch_axis: position_axis})
+        key_proj, key_out = maybe_rng_split(key, 2)
+        query, key_states, value = self._compute_qkv(x, key=key_proj)
+        query = query.rearrange((..., "kv_head", "q_heads_per_group", "position", "head_size"))
+        key_states = key_states.rearrange((..., "kv_head", "position", "head_size")).rename(
+            {"position": "key_position"}
+        )
+        value = value.rearrange((..., "kv_head", "position", "head_size")).rename({"position": "key_position"})
+        attention_output = dot_product_attention(
+            "position",
+            "key_position",
+            "head_size",
+            query,
+            key_states,
+            value,
+            mask,
+            attention_dtype=x.dtype,
+            attn_backend=self.config.attn_backend,
+            flash_block_size=self.config.flash_attention_block_size,
+            dropout=self.attention_dropout,
+            inference=self.inference,
+            prng=key,
+        )
+        attention_output = attention_output.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
+        attention_output = self.o_proj(attention_output.astype(x.dtype), key=key_out)
+        return attention_output.rename({position_axis: patch_axis})
+
+
+class SiglipEncoderLayer(eqx.Module):
+    """Pre-normalized SigLIP attention and feedforward residual blocks."""
+
+    config: SiglipBlockConfig = eqx.field(static=True)
+    layer_norm1: hnn.LayerNorm
+    self_attn: SiglipAttention
+    layer_norm2: hnn.LayerNorm
+    mlp: SiglipMLP
+
+    @staticmethod
+    def init(config: SiglipBlockConfig, *, key: PRNGKeyArray) -> "SiglipEncoderLayer":
+        k_attn, k_mlp = maybe_rng_split(key, 2)
+        return SiglipEncoderLayer(
+            config=config,
+            layer_norm1=hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True),
+            self_attn=SiglipAttention.init(config, key=k_attn),
+            layer_norm2=hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True),
+            mlp=SiglipMLP.init(config.Embed, config.Mlp, config.hidden_act, key=k_mlp),
+        )
+
+    @named_call
+    def __call__(
+        self,
+        x: NamedArray,
+        mask: Optional[AttentionMask] = None,
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> NamedArray:
+        key_attention, _ = maybe_rng_split(key, 2)
+        x = x + self.self_attn(self.layer_norm1(x), mask=mask, key=key_attention)
+        return x + self.mlp(self.layer_norm2(x))
+
+
+def siglip_hidden_states(
+    layers: Stacked[SiglipEncoderLayer],
+    hidden_states: NamedArray,
+    mask: Optional[AttentionMask],
+    *,
+    key: Optional[PRNGKeyArray],
+) -> tuple[NamedArray, tuple[NamedArray, ...]]:
+    """Return final encoder features and every pre-normalization layer state."""
+    keys = maybe_rng_split(key, layers.Block.size) if key is not None else None
+
+    def apply_layer(
+        block: SiglipEncoderLayer,
+        carry: NamedArray,
+        attention_mask: Optional[AttentionMask],
+        layer_key: Optional[PRNGKeyArray],
+    ) -> tuple[NamedArray, NamedArray]:
+        output = block(carry, attention_mask, key=layer_key)
+        return output, output
+
+    final, stacked = layers.scan_via(apply_layer)(hidden_states, mask, keys)
+    return final, (hidden_states, *hax.unbind(stacked, layers.Block))
+
+
+class SiglipMultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
+    """Multi-head attention pooling shared by SigLIP and SigLIP2."""
+
+    config: SiglipBlockConfig = eqx.field(static=True)
+    probe: NamedArray
+    q_proj: hnn.Linear
+    k_proj: hnn.Linear
+    v_proj: hnn.Linear
+    out_proj: hnn.Linear
+    layernorm: hnn.LayerNorm
+    mlp: SiglipMLP
+    inference: bool
+
+    @staticmethod
+    def init(config: SiglipBlockConfig, *, key: PRNGKeyArray) -> "SiglipMultiheadAttentionPoolingHead":
+        key_probe, key_q, key_k, key_v, key_out, key_mlp = maybe_rng_split(key, 6)
+        probe_axis = Axis("probe_seq", 1)
+        probe = hax.random.normal(key_probe, (probe_axis, config.Embed)) * config.initializer_range
+        return SiglipMultiheadAttentionPoolingHead(
+            config=config,
+            probe=probe,
+            q_proj=hnn.Linear.init(
+                In=config.Embed,
+                Out=(config.attention_config().Heads, config.attention_config().HeadSize),
+                key=key_q,
+                use_bias=True,
+                out_first=True,
+            ),
+            k_proj=hnn.Linear.init(
+                In=config.Embed,
+                Out=(config.attention_config().Heads, config.attention_config().HeadSize),
+                key=key_k,
+                use_bias=True,
+                out_first=True,
+            ),
+            v_proj=hnn.Linear.init(
+                In=config.Embed,
+                Out=(config.attention_config().Heads, config.attention_config().HeadSize),
+                key=key_v,
+                use_bias=True,
+                out_first=True,
+            ),
+            out_proj=hnn.Linear.init(
+                In=(config.attention_config().Heads, config.attention_config().HeadSize),
+                Out=config.Embed,
+                key=key_out,
+                use_bias=True,
+                out_first=True,
+            ),
+            layernorm=hnn.LayerNorm.init(config.Embed, eps=config.layer_norm_eps, use_bias=True),
+            mlp=SiglipMLP.init(config.Embed, config.Mlp, config.hidden_act, key=key_mlp),
+            inference=config.inference,
+        )
+
+    @named_call
+    def __call__(
+        self,
+        hidden_states: NamedArray,
+        mask: Optional[AttentionMask] = None,
+        *,
+        key: PRNGKeyArray | None = None,
+    ) -> NamedArray:
+        key_dropout = maybe_rng_split(key, 1)[0] if key is not None else None
+        query = self.q_proj(self.probe)
+        key_states = self.k_proj(hidden_states).rename({"num_patches": "key_position"})
+        value = self.v_proj(hidden_states).rename({"num_patches": "key_position"})
+        for axis in (axis for axis in key_states.axes if axis.name not in ("key_position", "heads", "head_size")):
+            query = hax.broadcast_to(query, (axis,) + query.axes)
+        attention_output = dot_product_attention(
+            "probe_seq",
+            "key_position",
+            "head_size",
+            query,
+            key_states,
+            value,
+            mask=mask,
+            inference=self.inference,
+            attn_backend=self.config.attention_config().attn_backend,
+            flash_block_size=self.config.attention_config().flash_attention_block_size,
+            dropout=self.config.attention_dropout,
+            prng=key_dropout,
+        )
+        hidden_states = self.out_proj(attention_output.astype(hidden_states.dtype))
+        probe_axis = hidden_states.resolve_axis("probe_seq")
+        hidden_states = hidden_states[probe_axis, 0]
+        return hidden_states + self.mlp(self.layernorm(hidden_states))
+
+    def to_state_dict(self, prefix: Optional[str] = None) -> Dict[str, jnp.ndarray]:
+        state_dict = {with_prefix(prefix, "probe"): self.probe.array[None, ...]}
+        weights = [
+            projection.weight.array.reshape(self.config.Embed.size, self.config.Embed.size)
+            for projection in (self.q_proj, self.k_proj, self.v_proj)
+        ]
+        state_dict[with_prefix(prefix, "attention.in_proj_weight")] = jnp.concatenate(weights, axis=0)
+        if self.q_proj.bias is not None:
+            biases = [projection.bias.array.reshape(-1) for projection in (self.q_proj, self.k_proj, self.v_proj)]
+            state_dict[with_prefix(prefix, "attention.in_proj_bias")] = jnp.concatenate(biases, axis=0)
+        state_dict.update(eqx_to_state_dict(self.out_proj, with_prefix(prefix, "attention.out_proj")))
+        state_dict.update(eqx_to_state_dict(self.layernorm, with_prefix(prefix, "layernorm")))
+        state_dict.update(eqx_to_state_dict(self.mlp, with_prefix(prefix, "mlp")))
+        return state_dict
+
+    def from_state_dict(self, state_dict: Dict[str, jnp.ndarray], prefix: Optional[str] = None) -> Self:
+        probe_array = state_dict.get(with_prefix(prefix, "probe"), self.probe.array)
+        if probe_array.ndim == 3:
+            probe_array = probe_array.squeeze(0)
+        probe = hax.named(probe_array, self.probe.axes)
+
+        in_proj_weight = state_dict.get(with_prefix(prefix, "attention.in_proj_weight"))
+        if in_proj_weight is None:
+            q_weight, k_weight, v_weight = self.q_proj.weight, self.k_proj.weight, self.v_proj.weight
+        else:
+            q_array, k_array, v_array = jnp.split(in_proj_weight, 3, axis=0)
+            q_weight = hax.named(q_array, self.q_proj.weight.axes)
+            k_weight = hax.named(k_array, self.k_proj.weight.axes)
+            v_weight = hax.named(v_array, self.v_proj.weight.axes)
+
+        in_proj_bias = state_dict.get(with_prefix(prefix, "attention.in_proj_bias"))
+        if in_proj_bias is None:
+            q_bias, k_bias, v_bias = self.q_proj.bias, self.k_proj.bias, self.v_proj.bias
+        else:
+            q_array, k_array, v_array = jnp.split(in_proj_bias, 3, axis=0)
+            assert self.q_proj.bias is not None and self.k_proj.bias is not None and self.v_proj.bias is not None
+            q_bias = hax.named(q_array, self.q_proj.bias.axes)
+            k_bias = hax.named(k_array, self.k_proj.bias.axes)
+            v_bias = hax.named(v_array, self.v_proj.bias.axes)
+
+        return replace(
+            self,
+            probe=probe,
+            q_proj=replace(self.q_proj, weight=q_weight, bias=q_bias),
+            k_proj=replace(self.k_proj, weight=k_weight, bias=k_bias),
+            v_proj=replace(self.v_proj, weight=v_weight, bias=v_bias),
+            out_proj=from_state_dict(self.out_proj, state_dict, with_prefix(prefix, "attention.out_proj")),
+            layernorm=from_state_dict(self.layernorm, state_dict, with_prefix(prefix, "layernorm")),
+            mlp=from_state_dict(self.mlp, state_dict, with_prefix(prefix, "mlp")),
+        )
 
 
 class SiglipVisionEmbeddings(eqx.Module):
@@ -332,7 +684,7 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
 
     config: SiglipVisionConfig = eqx.field(static=True)
     embeddings: SiglipVisionEmbeddings
-    layers: Stacked[VisionEncoderLayer]
+    layers: Stacked[SiglipEncoderLayer]
     post_layernorm: hnn.LayerNorm
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
@@ -357,7 +709,7 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
 
         layers = Stacked.init(
             config.Layers,
-            VisionEncoderLayer,
+            SiglipEncoderLayer,
             gradient_checkpointing=config.gradient_checkpointing,
         )(config, key=shaped_rng_split(k_layers, config.num_hidden_layers))
 
@@ -370,7 +722,6 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
         self,
         pixel_values: NamedArray,
         mask: Optional[AttentionMask] = None,
-        output_hidden_states: bool = False,
         *,
         key: PRNGKeyArray | None = None,
     ) -> SiglipVisionModelOutput:
@@ -380,27 +731,21 @@ class SiglipVisionTransformer(ModuleWithStateDictSerialization):
         Args:
             pixel_values: Input images with shape (batch, channels, height, width)
             mask: Optional attention mask
-            output_hidden_states: Whether to return hidden states from all layers.
-                If True, returns all layer hidden states.
-                If False, only returns the last hidden state (more efficient).
             key: PRNGKey for dropout
 
         Returns:
             SiglipVisionModelOutput containing:
                 - last_hidden_state: Final encoded representations after post_layernorm (batch, num_patches, embed)
-                - hidden_states: Tuple of hidden states. When output_hidden_states=True, contains all layers.
-                    When output_hidden_states=False, contains only the last layer output (before post_layernorm)
-                    to support vision_feature_layer=-1 without collecting all intermediate states.
+                - hidden_states: Embeddings followed by every encoder layer output.
         """
         k_embed, k_layers = maybe_rng_split(key, 2)
 
         hidden_states = self.embeddings(pixel_values, key=k_embed)
 
-        hidden_states, result_hidden_states = vision_hidden_states(
+        hidden_states, result_hidden_states = siglip_hidden_states(
             self.layers,
             hidden_states,
             mask,
-            output_hidden_states,
             key=k_layers,
         )
 
@@ -418,6 +763,7 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
     """
 
     vision_model: SiglipVisionTransformer
+    head: Optional[SiglipMultiheadAttentionPoolingHead]
 
     @property
     def config(self) -> SiglipVisionConfig:
@@ -446,15 +792,16 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
         Returns:
             Initialized SiglipVisionModel
         """
-        vision_model = SiglipVisionTransformer.init(config, key=key)
-        return cls(vision_model=vision_model)
+        key_vision, key_head = maybe_rng_split(key, 2)
+        vision_model = SiglipVisionTransformer.init(config, key=key_vision)
+        head = SiglipMultiheadAttentionPoolingHead.init(config, key=key_head) if config.vision_use_head else None
+        return cls(vision_model=vision_model, head=head)
 
     @named_call
     def __call__(
         self,
         pixel_values: NamedArray,
         mask: Optional[AttentionMask] = None,
-        output_hidden_states: bool = False,
         *,
         key: PRNGKeyArray | None = None,
     ) -> SiglipVisionModelOutput:
@@ -464,13 +811,15 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
         Args:
             pixel_values: Input images with shape (batch, channels, height, width)
             mask: Optional attention mask
-            output_hidden_states: Whether to return hidden states from all layers
             key: PRNGKey for dropout
 
         Returns:
-            SiglipVisionModelOutput containing last_hidden_state and optionally hidden_states
+            SiglipVisionModelOutput containing encoder and pooled features.
         """
-        return self.vision_model(pixel_values, mask=mask, output_hidden_states=output_hidden_states, key=key)
+        key_vision, key_head = maybe_rng_split(key, 2)
+        output = self.vision_model(pixel_values, mask=mask, key=key_vision)
+        pooler_output = self.head(output.last_hidden_state, mask=mask, key=key_head) if self.head is not None else None
+        return replace(output, pooler_output=pooler_output)
 
     def _state_dict_key_map(self) -> Dict[str, Optional[str]]:
         """Map Levanter field names to HuggingFace state dict keys."""
@@ -482,5 +831,8 @@ class SiglipVisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializati
         # Standalone HF vision checkpoints omit the composite model's vision_model prefix.
         if with_prefix(prefix, "embeddings.patch_embedding.weight") in state_dict:
             vision_model = default_eqx_module_from_state_dict(self.vision_model, state_dict, prefix)
-            return replace(self, vision_model=vision_model)
+            head = (
+                from_state_dict(self.head, state_dict, with_prefix(prefix, "head")) if self.head is not None else None
+            )
+            return replace(self, vision_model=vision_model, head=head)
         return default_eqx_module_from_state_dict(self, state_dict, prefix)

@@ -37,6 +37,7 @@ from levanter.data.sharded_datasource import (
     ShardedDataSource,
     UrlBackedShardedDataSource,
     WrappedHFDataSource,
+    _iter_parquet_from_row,
     _sniff_format_for_dataset,
 )
 from levanter.store.cache import CacheOptions, TreeCache, build_or_load_cache
@@ -85,15 +86,12 @@ class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
         i = 0
         format = _sniff_format_for_dataset(url)
         if format == ".parquet":
-
             with StoragePath(url).open("rb") as f:
-                table = pq.read_table(f)
-                data = table.to_pydict()
-                num_rows = table.num_rows
-                for idx in range(row, num_rows):
+                parquet_file = pq.ParquetFile(f)
+                for record in _iter_parquet_from_row(parquet_file, row, columns=[self.image_key, self.text_key]):
                     yield {
-                        "image": data[self.image_key][idx],
-                        "text": data[self.text_key][idx],
+                        "image": record[self.image_key],
+                        "text": record[self.text_key],
                     }
         else:
             with StoragePath(url).open("r", compression="infer") as f:
@@ -145,17 +143,20 @@ class ImageConversationUrlDataSource(UrlBackedShardedDataSource[dict]):
         i = 0
         format = _sniff_format_for_dataset(url)
         if format == ".parquet":
-
             with StoragePath(url).open("rb") as f:
-                table = pq.read_table(f)
-                data = table.to_pydict()
-                num_rows = table.num_rows
-                for idx in range(row, num_rows):
+                parquet_file = pq.ParquetFile(f)
+                optional_columns = [
+                    column
+                    for column in (self.images_key, "audio", "videos")
+                    if column in parquet_file.schema_arrow.names
+                ]
+                columns = [self.messages_key, *optional_columns]
+                for record in _iter_parquet_from_row(parquet_file, row, columns=columns):
                     yield {
-                        "messages": data[self.messages_key][idx],
-                        "images": data[self.images_key][idx] if self.images_key in data else [],
-                        "audio": data["audio"][idx] if "audio" in data else [],
-                        "videos": data["videos"][idx] if "videos" in data else [],
+                        "messages": record[self.messages_key],
+                        "images": record.get(self.images_key, []),
+                        "audio": record.get("audio", []),
+                        "videos": record.get("videos", []),
                     }
         else:
             with StoragePath(url).open("r", compression="infer") as f:
@@ -297,7 +298,7 @@ def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
         response = requests.get(path_or_url, timeout=30)
         response.raise_for_status()
         image = Image.open(BytesIO(response.content))
-    elif path_or_url.startswith(("gs://", "s3://")):
+    elif path_or_url.startswith(("gs://", "s3://", "hf://")):
         with StoragePath(path_or_url).open("rb") as f:
             image = Image.open(f)
             image.load()
@@ -732,6 +733,20 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                     add_generation_prompt=self.add_generation_prompt,
                 )
             )
+
+        if self.max_num_patches is not None and self.grid_pinpoints:
+            image_offset = 0
+            for num_images in images_per_example:
+                if num_images == 1:
+                    image = all_images[image_offset]
+                    grid_height, grid_width = self._compute_grid_shape((image.height, image.width))
+                    required_patches = grid_height * grid_width
+                    if required_patches > self.max_num_patches:
+                        raise ValueError(
+                            f"Image requires {required_patches} any-resolution patches, "
+                            f"but max_num_patches is {self.max_num_patches}"
+                        )
+                image_offset += num_images
 
         if all_images:
             processed: BatchFeature = cast(ImageProcessorCallable, self.processor)(
@@ -1246,9 +1261,8 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
                     continue
 
                 try:
-                    raw_items = [self._raw_data[i] for i in indices_to_prefetch]
                     with self._processor_lock:
-                        processed = self._batch_processor(raw_items)
+                        processed = self._process_items(indices_to_prefetch)
 
                     with self._cache_lock:
                         for idx, item in zip(indices_to_prefetch, processed):
@@ -1270,8 +1284,9 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         """Process items - must be called with _processor_lock held."""
         assert self._raw_data is not None, "Data not loaded"
         raw_items = [self._raw_data[i] for i in indices]
-        processed = self._batch_processor(raw_items)
-        return list(processed)
+        if self.padding:
+            return list(self._batch_processor(raw_items))
+        return [self._batch_processor([item])[0] for item in raw_items]
 
     def _get_from_cache_or_process(self, indices: Sequence[int]) -> List[ImageTextDict]:
         """Consume prefetched items and process cache misses."""
@@ -1292,11 +1307,8 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         if indices_to_process:
             global_indices = [gidx for _, gidx in indices_to_process]
 
-            assert self._raw_data is not None, "Data not loaded"
-            raw_items = [self._raw_data[i] for i in global_indices]
-
             with self._processor_lock:
-                processed = self._batch_processor(raw_items)
+                processed = self._process_items(global_indices)
 
             for (result_idx, _), item in zip(indices_to_process, processed):
                 results[result_idx] = item
