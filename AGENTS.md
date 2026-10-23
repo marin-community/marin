@@ -92,6 +92,12 @@ uv run --no-project infra/ci/run_tests.py
   cluster tests. Run excluded markers only when the user or a dedicated task
   guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
+- Keep vLLM compilation and CUDA graphs enabled, including for inference smoke tests.
+  Do not add `--enforce-eager` or `--i-know-i-am-making-vllm-slow` unless the user
+  explicitly requests eager execution. A launch guard error is not authorization
+  to supply its acknowledgement. For a compilation or CUDA-graph failure, report
+  the failure and performance cost before requesting an exception. See the
+  [serving guidance](experiments/evaluation/serve/models/README.md#vllm-eager-execution).
 - Never read or write large amounts of data across GCS regions; GCS storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
