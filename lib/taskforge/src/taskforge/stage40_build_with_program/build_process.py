@@ -31,8 +31,10 @@ cancelled while it waits stops the child the same way.
 ``run_build_in_process`` raises what ``run_build`` would have raised in process, so a caller
 handles the two alike: ``BuildFailure`` with its step, ``BuildExpired`` with its clock and step,
 ``BuildInfrastructureFailure`` with its cause, ``ModelUnavailable`` and ``OSError`` with their
-messages, and for any other exception a ``RuntimeError`` whose first line is the exception's type and
-message, followed by the child's traceback. A child that exits without a result raises
+type, message and the child's traceback, and for any other exception a ``failure_text.BuildCrash``
+whose head the child wrote with the exception's frames in hand (``failure_head``: the program's
+frame where it was raised, then its type and message), with the child's traceback. A child that
+exits without a result raises
 ``BuildInfrastructureFailure`` with cause ``BUILD_PROCESS`` and the end of its log.
 
 The child calls the model at the fixed ``BuildModelConfig.base_url``. A driver behind an Iris relay
@@ -73,12 +75,14 @@ from taskforge.llm.web import web_tools
 from taskforge.sandbox.factories import MachineHost, machine_factories
 from taskforge.sandbox.image_builder import IrisImageBuilder, RegistryCredential
 from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage30_author.loader import program_file
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
     BuildInfrastructureFailure,
     ExpiredClock,
 )
+from taskforge.stage40_build_with_program.failure_text import BuildCrash, failure_head
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, TaskDraft, load_draft, run_build
@@ -207,10 +211,12 @@ class HostFailed:
 class Crashed:
     """``run_build`` or the program's loading raised another exception.
 
-    ``text`` is the exception's type and message, a blank line, then the child's traceback.
+    ``head`` names it: for ``OTHER``, its ``failure_head`` in the program, and otherwise its type and
+    message. ``text`` is the child's traceback.
     """
 
     raised: Raised
+    head: str
     text: str
     kind: Literal["crashed"] = "crashed"
 
@@ -230,7 +236,7 @@ async def run_build_in_process(request: BuildRequest, *, wall_timeout: float) ->
         BuildInfrastructureFailure: the host failed, or the child wrote no result.
         ModelUnavailable: the model stayed unreachable.
         OSError: the child hit a storage fault.
-        RuntimeError: the build raised any other exception; the message holds its text.
+        BuildCrash: the build raised any other exception; it holds the child's head and traceback.
     """
     round_dir = request.round_dir
     round_dir.mkdir(parents=True, exist_ok=True)
@@ -271,10 +277,10 @@ async def run_build_in_process(request: BuildRequest, *, wall_timeout: float) ->
     if isinstance(result, HostFailed):
         raise BuildInfrastructureFailure(result.cause, result.message)
     if result.raised is Raised.MODEL_UNAVAILABLE:
-        raise ModelUnavailable(result.text, ())
+        raise ModelUnavailable(f"{result.head}\n\n{result.text}", ())
     if result.raised is Raised.OS_ERROR:
-        raise OSError(result.text)
-    raise RuntimeError(result.text)
+        raise OSError(f"{result.head}\n\n{result.text}")
+    raise BuildCrash(result.head, result.text)
 
 
 def _secret(name: str) -> str:
@@ -325,9 +331,12 @@ async def build_result(request: BuildRequest) -> BuildResult:
     a result and the driver reports the host's failure.
     """
     async with _resources(request) as (model, services):
+        steps: set[str] = set()
         try:
+            program = load_program(request.program_source)
+            steps = {*program.steps, program.sink.name}
             await run_build(
-                load_program(request.program_source),
+                program,
                 request.proposal,
                 request.workpiece_id,
                 request.round_dir,
@@ -347,16 +356,17 @@ async def build_result(request: BuildRequest) -> BuildResult:
         except BuildInfrastructureFailure as error:
             return HostFailed(error.cause, error.message)
         except ModelUnavailable as error:
-            return _crashed(Raised.MODEL_UNAVAILABLE, error)
+            return _crashed(Raised.MODEL_UNAVAILABLE, f"{type(error).__name__}: {error}", error)
         except OSError as error:
-            return _crashed(Raised.OS_ERROR, error)
+            return _crashed(Raised.OS_ERROR, f"{type(error).__name__}: {error}", error)
         except Exception as error:
-            return _crashed(Raised.OTHER, error)
+            head = failure_head(error, {program_file(request.program_source)}, steps)
+            return _crashed(Raised.OTHER, head, error)
     return Built()
 
 
-def _crashed(raised: Raised, error: Exception) -> Crashed:
-    return Crashed(raised, f"{type(error).__name__}: {error}\n\n{''.join(traceback.format_exception(error))}")
+def _crashed(raised: Raised, head: str, error: Exception) -> Crashed:
+    return Crashed(raised, head, "".join(traceback.format_exception(error)))
 
 
 def main() -> None:

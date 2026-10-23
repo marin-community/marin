@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The agentic author: one agent session per program round, which can load, build and grade its program.
+"""The agentic author: agent sessions that load, build and grade a program before they hand it in.
 
 A session works in ``rounds/<n>/agentic/<k>/workspace/`` under the workpiece's directory, which starts with
 the standard template as ``program.py``, the proposal, the SDK reference and the template
@@ -17,41 +17,49 @@ program that never built in
 the session is refused once, with the loader's result and the reason, and accepted when submitted
 again; an accepted submission ends the loop through ``run_agent``'s ``stop`` callback.
 
-The model sees a build's failure (the step's message, or the crashing program line first) and a
-grade's diagnostics, never a host failure or an expired clock. A ``BuildInfrastructureFailure`` in
-``run_build`` or ``run_grade_candidate`` is run again up to ``HOST_RETRIES`` times with a doubling
-backoff from ``HOST_RETRY_BACKOFF`` inside the tool, at once re-raised for a cause in
-``HOST_REJECTIONS``, and then re-raised like ``ModelUnavailable``: ``author_round`` ends without a
-record, so the round spends no revision and a relaunch hands the workspace to a fresh session. A
-``BuildExpired`` in ``run_build`` (a wall, step or grader clock) is re-raised at once, without a
-retry, and ends the round the same way, so the driver holds the workpiece as abandoned instead of asking
-for a rewrite. An ``OSError`` raised outside the program's frames (``infrastructure.storage_fault``: the
-step store failed, or a blob or memo is missing or corrupt) is re-raised at once too, as the
-coordinator's build stage does, since no program change repairs the store. A failed build still writes
-its ``run.json``, ``status: "infrastructure"`` for the host's, ``status: "expired"`` with its ``clock``
-for an expiry and ``status: "storage"`` for a storage fault. A loader child the host killed
-(``LoaderProcessFailed``) raises the same failure with cause ``BUILD_PROCESS``. A proposal whose
-solver machine the session's services cannot provide (``infrastructure.machine_available``: a
-container on a host without an image builder, a package machine without the local backend) raises
-before the session starts, so the author never adapts the task to the host.
+The model sees a build's failure (the step's message, or for a crash the program's frame that raised it and
+the error, then the traceback's tail) and a grade's diagnostics, never a host failure or an expired clock. A
+``BuildInfrastructureFailure`` in ``run_build`` or ``run_grade_candidate`` is run again up to
+``HOST_RETRIES`` times with a doubling backoff from ``HOST_RETRY_BACKOFF`` inside the tool, at once
+re-raised for a cause in ``HOST_REJECTIONS``, and then re-raised like ``ModelUnavailable``: the author call
+ends without a record, so it spends no revision and a relaunch hands the workspace to a fresh session. A
+``BuildExpired`` in ``run_build`` (a wall, step or grader clock) is re-raised at once, without a retry, and
+ends the call the same way, so the driver holds the workpiece as abandoned instead of asking for a rewrite.
+An ``OSError`` raised outside the program's frames (``infrastructure.storage_fault``: the step store failed,
+or a blob or memo is missing or corrupt) is re-raised at once too, as the coordinator's build stage does,
+since no program change repairs the store. A failed build still writes its ``run.json``,
+``status: "infrastructure"`` for the host's, ``status: "expired"`` with its ``clock`` for an expiry and
+``status: "storage"`` for a storage fault. A loader child the host killed (``LoaderProcessFailed``) raises the same
+failure with cause ``BUILD_PROCESS``. A proposal whose solver machine the session's services cannot provide
+(``infrastructure.machine_available``: a container on a host without an image builder, a package machine
+without the local backend) raises before the session starts, so the author never adapts the task to the
+host.
 
-``author_round`` is the author stage. It writes the AUTHORED record from the submitted file's bytes
-into ``rounds/<n>/authored/<k>/`` (``program.py``, ``program.json``, ``author.json``, ``record.json``),
-with ``submit.json``, ``transcript.json`` (every turn: role, tool calls, tool results cut to
-``TRANSCRIPT_CHARS``, tokens, finish) and ``session.json`` (turns, tool calls by tool, tokens, cached
-share, wall, stop reason, submissions, in-session builds).
+``AgenticAuthor`` is the coordinator's ``Author``: each call runs sessions in the context's round until
+one submits, and returns the submitted file's bytes as the program's source, which the coordinator
+writes to ``authored/<k>/``. Each session keeps its records in its own ``agentic/<k>/``: ``author.json``
+(status, revision, mode, stop reason, wall), ``submit.json``, ``record.json`` for a submission,
+``transcript.json`` (every turn: role, tool calls, tool results cut to ``TRANSCRIPT_CHARS``, tokens,
+finish) and ``session.json`` (turns, tool calls by tool, tokens, cached share, wall, stop reason,
+submissions, in-session builds). ``k`` counts the round's sessions, across the author calls of the
+round.
 
-Which session a round runs:
+Which session a call runs, from the last session of the round, or of the round before when this round has
+none:
 
-* round 0: a fresh session;
-* a downstream build failure: the same session (its saved ``conversation.json`` plus the failure as the
-  next user turn, ``turns - max_turns_used`` more turns) when it ended by submit, its last prompt held at
-  most ``max_prompt_tokens`` and it used at most ``max_turns_used`` turns; otherwise a fresh session
-  seeded from its workspace, with the failure text as the first user turn after the opening;
-* a session that ends without a submission hands its workspace to one fresh session in the same round
-  (``HANDED_OFF``); if that one ends unsubmitted too, the round is ``AUTHOR_FAILED`` and spends a
-  revision. A session stopped by the context guard hands off until ``MAX_SESSIONS_PER_ROUND`` ran. A
-  relaunch never resumes a session mid-way: it starts a handoff session from the workspace.
+* no session yet: a fresh session;
+* a last session that ended without a submission, or was interrupted: a fresh session seeded from its
+  workspace (``HANDOFF``), with the revision, if any, after the handoff note;
+* a last session that submitted, with a build failure to revise: the same session (its saved
+  ``conversation.json`` plus the failure as the next user turn, ``turns - max_turns_used`` more turns)
+  when it ended by submit, its last prompt held at most ``max_prompt_tokens`` and it used at most
+  ``max_turns_used`` turns; otherwise, and for any other revision, a fresh session seeded from its
+  workspace, with the revision text as the first user turn after the opening.
+
+Within one call, a session that ends without a submission hands its workspace to one fresh session
+(``HANDED_OFF``); if that one ends unsubmitted too, the call raises ``AuthorFailure``, which spends a
+revision. A session stopped by the context guard hands off until ``MAX_SESSIONS_PER_CALL`` ran. A
+relaunch never resumes a session mid-way: it starts a handoff session from the workspace.
 
 Author turns record under the ledger step ``author`` with ``author_kind``, ``session`` and ``segment``
 attributes; every ledger entry of an in-session grade carries ``origin=author_session``.
@@ -64,12 +72,13 @@ import shutil
 import time
 import traceback
 from collections import Counter
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
+from pydantic import JsonValue
 from rigging.filesystem.atomic import atomic_rename
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskResource, TextMessage
@@ -80,11 +89,12 @@ from taskforge.llm.client import ModelClient, ModelUnavailable, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
 from taskforge.spec import draft as draft_module
-from taskforge.spec.draft import SHELL_CAPABILITY
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
-    PROGRAM_MANIFEST_FILE,
+    AuthorContext,
+    AuthoredProgram,
+    AuthorFailure,
     Revision,
     RevisionKind,
 )
@@ -96,6 +106,7 @@ from taskforge.stage40_build_with_program.context import (
     BuildInfrastructureFailure,
     RLEnvBuildContext,
 )
+from taskforge.stage40_build_with_program.failure_text import failure_head, failure_text
 from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
 from taskforge.stage40_build_with_program.infrastructure import (
     HOST_REJECTIONS,
@@ -104,7 +115,7 @@ from taskforge.stage40_build_with_program.infrastructure import (
     storage_fault,
 )
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
-from taskforge.stage40_build_with_program.program_sdk import sdk_exports
+from taskforge.stage40_build_with_program.program_sdk import load_program, sdk_exports
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
 from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
 from taskforge.stage40_build_with_program.sdk import grade_diagnostics, grading_language
@@ -115,7 +126,6 @@ from taskforge.stage40_build_with_program.template import standard
 AUTHOR_KIND = "agentic"
 """The ``author_kind`` this author writes into ``author.json``, ``record.json`` and its ledger entries."""
 ROUNDS_DIR = "rounds"
-AUTHORED_DIR = "authored"
 AGENTIC_DIR = "agentic"
 AUTHOR_RECORD = "author.json"
 AUTHOR_STEP = "author"
@@ -145,8 +155,8 @@ READ_LINES = 400
 WEB_CALLS = 8
 MAX_NUDGES = 2
 """Nudges after replies without a tool call that were not cut; a cut reply gets ``LENGTH_NUDGE`` instead."""
-MAX_SESSIONS_PER_ROUND = 4
-"""Sessions one round may start; a session stopped by the context guard hands off until this many ran."""
+MAX_SESSIONS_PER_CALL = 4
+"""Sessions one author call may start; a session stopped by the context guard hands off until this many ran."""
 REPLAY = ReasoningReplay.KEEP
 LOAD_TIMEOUT = 120.0
 """Seconds the default ``ProgramLoader`` gives a program's module body before it refuses the load."""
@@ -197,7 +207,7 @@ This is a fresh session continuing earlier work. The workspace holds `{program}`
 `{notes}` and the files the earlier session left. {submitted}Read them before you change anything.
 """
 HANDOFF_PROMPT = "The earlier session ended without a submission ({reason})."
-NO_REVISION_PROMPT = "The earlier sessions ended without a submission; finish the program and submit it."
+NO_REVISION_PROMPT = "Continue from the earlier session's workspace: finish the program and submit it."
 EDIT_AND_SUBMIT = f"Edit `{PROGRAM_FILE}` in the workspace, run it with `run_build`, and submit it."
 
 
@@ -311,7 +321,7 @@ class SessionBuild:
         client: The in-process model of ``grade_candidate``'s context (grading never calls it).
         policy: The sampling policy of that context.
         services: The build's services: ``grade_candidate``'s factories, host, ledger and web tools, and the
-            image builder the in-session builds publish with (``None`` when they cannot). ``author_round``
+            image builder the in-session builds publish with (``None`` when they cannot). ``AgenticAuthor``
             checks the proposal's solver machine against them before the session starts.
         session_ledger: The ledger file in-session builds append to (``<root>/<workpiece_id>.jsonl``); a build's step
             statuses are the ``STEP`` spans appended to it during the build.
@@ -331,14 +341,14 @@ class SessionBuild:
 class AuthorStatus(StrEnum):
     ACCEPTED = "accepted"
     HANDED_OFF = "handed_off"
-    """The session ended without a submission and hands its workspace to a fresh session in the same round."""
+    """The session ended without a submission and hands its workspace to the call's next session."""
     AUTHOR_FAILED = "author_failed"
 
 
-@dataclass(frozen=True)
-class AuthorOutcome:
-    status: AuthorStatus
-    source: str | None
+class SessionBuilds(Protocol):
+    def __call__(self, context: AuthorContext, proposal: TaskProposal, /) -> SessionBuild:
+        """How the sessions of ``context``'s workpiece and round load, build and grade ``proposal``'s program."""
+        ...
 
 
 def _write_json(path: Path, value: object) -> None:
@@ -374,12 +384,18 @@ def _traceback_tail(error: BaseException) -> str:
     return "".join(traceback.format_exception(error))[-TOOL_OUTPUT_CHARS:]
 
 
-def _failure_text(error: Exception) -> tuple[str, str | None, str]:
+def _failed_build(error: Exception, path: str, source: str, steps: Collection[str]) -> tuple[str, str | None, str]:
     """A failed in-session build the host did not fail and no clock ended, as (status, step, text) for ``run.json``
-    and the model."""
+    and the model.
+
+    A ``BuildFailure`` is its step's message. Any other error is a crash, whose text leads with the frame of
+    the program at ``path`` that raised it, then the error (``failure_text.failure_head``), above the tail of
+    its traceback.
+    """
     if isinstance(error, BuildFailure):
         return "build_failure", error.step, error.message
-    return "crash", None, _traceback_tail(error)
+    head = failure_head(error, {program_file(source)}, steps, shown_as=path)
+    return "crash", None, failure_text(head, error, TOOL_OUTPUT_CHARS)
 
 
 class SessionStop(StrEnum):
@@ -646,7 +662,7 @@ class AuthorSession:
                 _write_json(run_dir / RUN_FILE, record)
                 self.builds.append(record)
                 raise
-            status, step, text = _failure_text(error)
+            status, step, text = _failed_build(error, raw, source, program.steps)
             record |= {"status": status, "step": step}
             record |= {"wall": time.monotonic() - started, "steps": ledger_steps(ledger, offset), "text": text}
             _write_json(run_dir / RUN_FILE, record)
@@ -697,10 +713,9 @@ class AuthorSession:
             services=self.services,
             step=GRADE_STEP,
         )
-        machine = SHELL_CAPABILITY in task.environment_requirements.capabilities
         return await grade_candidate(
             context,
-            task.environment_requirements if machine else None,
+            task.environment_requirements,
             grader.package,
             task.answer_type,
             task.answer_format,
@@ -815,7 +830,8 @@ class AuthorSession:
                 "Build the task with a program file, exactly as the build stage will: the real model, machines and step "
                 "store. Steps whose source and inputs are unchanged load their stored output. path: the program "
                 "file; invalidate: optional step names to rerun even when stored. Returns each step's cache status "
-                "and wall, then the failure (the step's message, or the crashing program line first) or a digest "
+                "and wall, then the failure (the step's message, or for a crash the program file, line and source line "
+                "that raised it, the error and the traceback's tail) or a digest "
                 "of the built task. After a build the library grades the empty answer itself: a reward above the "
                 "grader's declared rejection_ceiling fails the build in the grader step.",
                 _schema({"path": PATH_ARGUMENT, "invalidate": {"type": "array", "items": {"type": "string"}}}, ["path"]),
@@ -1147,13 +1163,14 @@ def _revision_text(revision: Revision) -> str:
     return f"{REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)}\n{EDIT_AND_SUBMIT}"
 
 
-def authored_of(session_dir: Path) -> Path:
-    """``rounds/<n>/authored/<k>/`` of the session in ``rounds/<n>/agentic/<k>/``."""
-    return session_dir.parent.parent / AUTHORED_DIR / session_dir.name
+def _submitted(session_dir: Path) -> bool:
+    """Whether the session in ``session_dir`` handed in a program."""
+    record = session_dir / AUTHOR_RECORD
+    return record.exists() and _read_json(record)["status"] == AuthorStatus.ACCEPTED
 
 
 def _seed_message(previous: Path, lead: str) -> Message:
-    submitted = authored_of(previous) / SUBMIT_FILE
+    submitted = previous / SUBMIT_FILE
     notes = _read_json(submitted).get("notes", "") if submitted.exists() else ""
     note = SEED_NOTE.format(
         program=PROGRAM_FILE,
@@ -1171,18 +1188,20 @@ def plan_session(
     sessions = _round_dir(workpiece_dir, round_no) / AGENTIC_DIR
     if _numbered(sessions):
         previous = sessions / str(_numbered(sessions)[-1])
-        record = authored_of(previous) / AUTHOR_RECORD
-        reason = _read_json(record).get("stop_reason", "unsubmitted") if record.exists() else "interrupted"
-        lead = HANDOFF_PROMPT.format(reason=reason)
-        if revision is not None:
-            lead = f"{lead}\n\n{_revision_text(revision)}"
-        seed = _seed_message(previous, lead)
-        return SessionPlan(SessionMode.HANDOFF, previous / WORKSPACE_DIR, (*opening, seed), 3, config.turns, 0, None)
-    if round_no == 0:
+        if not _submitted(previous):
+            record = previous / AUTHOR_RECORD
+            reason = _read_json(record).get("stop_reason", "unsubmitted") if record.exists() else "interrupted"
+            lead = HANDOFF_PROMPT.format(reason=reason)
+            if revision is not None:
+                lead = f"{lead}\n\n{_revision_text(revision)}"
+            seed = _seed_message(previous, lead)
+            return SessionPlan(SessionMode.HANDOFF, previous / WORKSPACE_DIR, (*opening, seed), 3, config.turns, 0, None)
+    elif round_no == 0:
         return SessionPlan(SessionMode.FRESH, None, tuple(opening), 2, config.turns, 0, None)
-    earlier = _round_dir(workpiece_dir, round_no - 1) / AGENTIC_DIR
-    previous = earlier / str(_numbered(earlier)[-1])
-    prior = _read_json(authored_of(previous) / SESSION_FILE)
+    else:
+        earlier = _round_dir(workpiece_dir, round_no - 1) / AGENTIC_DIR
+        previous = earlier / str(_numbered(earlier)[-1])
+    prior = _read_json(previous / SESSION_FILE)
     bounds = config.revision_same_session
     if (
         revision is not None
@@ -1207,98 +1226,130 @@ def plan_session(
     return SessionPlan(SessionMode.REVISION, previous / WORKSPACE_DIR, (*opening, seed), 3, config.turns, 0, None)
 
 
-async def author_round(
-    config: AgenticAuthorConfig,
-    client: ModelClient,
-    policy: LLMPolicy,
-    ledger: Ledger,
-    build: SessionBuild,
-    workpiece_dir: Path,
-    workpiece_id: str,
-    round_no: int,
-    proposal: TaskProposal,
-    revision: Revision | None,
-) -> AuthorOutcome:
-    """One agentic author session for round ``round_no``; writes ``authored/<k>/`` and ``agentic/<k>/``.
+@dataclass(frozen=True)
+class SessionOutcome:
+    """How one session of an author call ended: its ``author.json`` status, the submitted source, the stop."""
 
-    Args:
-        config: The session's budgets.
-        client: The model the session drives.
+    status: AuthorStatus
+    source: str | None
+    stop: SessionStop
+
+
+@dataclass(frozen=True)
+class AgenticAuthor:
+    """The agentic author, an ``Author``: sessions in the workpiece's directory until one submits a program.
+
+    Attributes:
+        config: The budgets of each session.
+        client: The model the sessions drive.
         policy: The sampling policy of every turn; ``max_tokens`` and ``max_continuations`` come from ``config``.
-        ledger: Where the session's turns and tool calls are recorded.
-        build: How the session builds and grades its program.
-        workpiece_dir: The workpiece's directory; the round's records live under ``rounds/<round_no>/``.
-        workpiece_id: The workpiece's id.
-        round_no: The round being authored.
-        proposal: The proposal the program builds.
-        revision: What the previous round's program needs, or ``None`` in round 0.
-
-    Raises:
-        ModelUnavailable: the model or an in-session build or grade ran out of retries.
-        BuildInfrastructureFailure: the host cannot provide the proposal's solver machine
-            (``machine_available``), before the session starts or writes a record; or the host failed an
-            in-session load, or a build or grade past its retries.
-        BuildExpired: an in-session build ran past a wall, step or grader clock.
+        ledger: Where the sessions' turns and tool calls are recorded.
+        builds: How the sessions of a call build and grade, for the call's workpiece, round and proposal.
     """
-    machine_available(build.services, proposal)
-    plan = plan_session(workpiece_dir, round_no, proposal, revision, config)
-    rdir = _round_dir(workpiece_dir, round_no)
-    k = len(_numbered(rdir / AGENTIC_DIR))
-    session_dir = rdir / AGENTIC_DIR / str(k)
-    target = rdir / AUTHORED_DIR / str(k)
-    session_id = f"{round_no}.{k}"
-    session = AuthorSession(session_dir, workpiece_id, round_no, proposal, build, session_id)
-    session.prepare(plan.seed)
-    result = await drive(session, plan, config, client, policy, ledger, session_id)
-    _write_json(session_dir / CONVERSATION_FILE, list(result.messages))
-    _write_json(target / TRANSCRIPT_FILE, list(result.transcript))
-    summary = session_record(session_id, plan, session, result)
-    _write_json(target / SESSION_FILE, summary)
-    record: dict = {
-        "author_kind": AUTHOR_KIND,
-        "revision": None if revision is None else {"kind": str(revision.kind), "detail": revision.detail},
-        "session_dir": f"{AGENTIC_DIR}/{k}",
-        "mode": plan.mode,
-        "stop_reason": result.stop,
-        "wall": result.wall,
-    }
-    submission = result.submission
-    calls = {"calls": session.submissions}
-    if submission is None:
-        _write_json(target / SUBMIT_FILE, {"accepted": False, **calls})
-        handoff = k == 0 or result.stop is SessionStop.CONTEXT
-        status = AuthorStatus.HANDED_OFF if handoff and k + 1 < MAX_SESSIONS_PER_ROUND else AuthorStatus.AUTHOR_FAILED
-        _write_json(target / AUTHOR_RECORD, record | {"status": status, "error": f"no submission ({result.stop})"})
-        return AuthorOutcome(status, None)
-    _write_bytes(target / PROGRAM_FILE, submission.source)
-    _write_json(target / PROGRAM_MANIFEST_FILE, submission.manifest.model_dump())
-    _write_json(
-        target / SUBMIT_FILE,
-        {
-            "accepted": True,
-            "path": submission.path,
-            "digest": submission.manifest.digest,
-            "notes": submission.notes,
-            "tested": submission.tested,
-            "submitted_by": session_id,
-            **calls,
-        },
-    )
-    _write_json(
-        target / RECORD_FILE,
-        {
+
+    config: AgenticAuthorConfig
+    client: ModelClient
+    policy: LLMPolicy
+    ledger: Ledger
+    builds: SessionBuilds
+
+    async def __call__(
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
+    ) -> AuthoredProgram:
+        """Run sessions for ``context``'s round until one submits, and return the submitted program.
+
+        The sessions work in ``rounds/<n>/agentic/`` under ``context.workpiece_dir``. ``author_state``
+        does not reach them.
+
+        Raises:
+            AuthorFailure: the call's sessions all ended without a submission.
+            ModelUnavailable: the model or an in-session build or grade ran out of retries.
+            BuildInfrastructureFailure: the host cannot provide the proposal's solver machine
+                (``machine_available``), before a session starts or writes a record; or the host failed an
+                in-session load, or a build or grade past its retries.
+            BuildExpired: an in-session build ran past a wall, step or grader clock.
+        """
+        build = self.builds(context, proposal)
+        machine_available(build.services, proposal)
+        index = 0
+        while True:
+            outcome = await self._session(build, context, proposal, revision, index)
+            if outcome.status is AuthorStatus.ACCEPTED:
+                assert outcome.source is not None
+                return AuthoredProgram(load_program(outcome.source), outcome.source)
+            if outcome.status is AuthorStatus.AUTHOR_FAILED:
+                raise AuthorFailure(
+                    f"{index + 1} agentic sessions of round {context.round} ended without a submission; "
+                    f"the last stopped at {outcome.stop}"
+                )
+            index += 1
+
+    async def _session(
+        self,
+        build: SessionBuild,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        index: int,
+    ) -> SessionOutcome:
+        """The call's session ``index``: writes ``agentic/<k>/``, ``k`` counting the round's sessions."""
+        plan = plan_session(context.workpiece_dir, context.round, proposal, revision, self.config)
+        sessions = _round_dir(context.workpiece_dir, context.round) / AGENTIC_DIR
+        k = len(_numbered(sessions))
+        session_dir = sessions / str(k)
+        session_id = f"{context.round}.{k}"
+        session = AuthorSession(session_dir, context.workpiece_id, context.round, proposal, build, session_id)
+        session.prepare(plan.seed)
+        result = await drive(session, plan, self.config, self.client, self.policy, self.ledger, session_id)
+        _write_json(session_dir / CONVERSATION_FILE, list(result.messages))
+        _write_json(session_dir / TRANSCRIPT_FILE, list(result.transcript))
+        _write_json(session_dir / SESSION_FILE, session_record(session_id, plan, session, result))
+        record: dict = {
             "author_kind": AUTHOR_KIND,
-            "program_digest": submission.manifest.digest,
-            "sdk_version": SDK_VERSION,
-            "model": client.model,
-            "revision": None if revision is None else str(revision.kind),
-            "notes": submission.notes,
-            "turns": len(result.turns),
-        },
-    )
-    _write_json(
-        target / AUTHOR_RECORD,
-        record
-        | {"status": AuthorStatus.ACCEPTED, "program_digest": submission.manifest.digest, "tested": submission.tested},
-    )
-    return AuthorOutcome(AuthorStatus.ACCEPTED, submission.source.decode())
+            "revision": None if revision is None else {"kind": str(revision.kind), "detail": revision.detail},
+            "mode": plan.mode,
+            "stop_reason": result.stop,
+            "wall": result.wall,
+        }
+        submission = result.submission
+        calls = {"calls": session.submissions}
+        if submission is None:
+            _write_json(session_dir / SUBMIT_FILE, {"accepted": False, **calls})
+            handoff = index == 0 or result.stop is SessionStop.CONTEXT
+            status = (
+                AuthorStatus.HANDED_OFF if handoff and index + 1 < MAX_SESSIONS_PER_CALL else AuthorStatus.AUTHOR_FAILED
+            )
+            error = f"no submission ({result.stop})"
+            _write_json(session_dir / AUTHOR_RECORD, record | {"status": status, "error": error})
+            return SessionOutcome(status, None, result.stop)
+        _write_json(
+            session_dir / SUBMIT_FILE,
+            {
+                "accepted": True,
+                "path": submission.path,
+                "digest": submission.manifest.digest,
+                "notes": submission.notes,
+                "tested": submission.tested,
+                "submitted_by": session_id,
+                **calls,
+            },
+        )
+        _write_json(
+            session_dir / RECORD_FILE,
+            {
+                "author_kind": AUTHOR_KIND,
+                "program_digest": submission.manifest.digest,
+                "sdk_version": SDK_VERSION,
+                "model": self.client.model,
+                "revision": None if revision is None else str(revision.kind),
+                "notes": submission.notes,
+                "turns": len(result.turns),
+            },
+        )
+        accepted = {"status": AuthorStatus.ACCEPTED, "program_digest": submission.manifest.digest}
+        _write_json(session_dir / AUTHOR_RECORD, record | accepted | {"tested": submission.tested})
+        return SessionOutcome(AuthorStatus.ACCEPTED, submission.source.decode(), result.stop)

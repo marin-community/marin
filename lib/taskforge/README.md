@@ -31,11 +31,11 @@ src/taskforge/
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
                                verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
-                               the program manifest;
+                               author.py: Revision, AuthoredProgram, AuthorContext, AuthorFailure, the
+                               Author protocol, `static_author`, the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
-  stage40_build_with_program/  agentic_author.py: `author_round`, the agent session that writes, loads,
-                               builds and grades a build program;
+  stage40_build_with_program/  agentic_author.py: `AgenticAuthor`, the author whose agent sessions write,
+                               load, build and grade a build program;
                                context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
                                BuildExpired;
                                services.py: RLEnvBuildServices, AgentLimits;
@@ -45,6 +45,8 @@ src/taskforge/
                                program_sdk.py: `sdk_exports`, the SDK's names for the loader, and
                                `load_program`;
                                infrastructure.py: host failures told apart from program failures;
+                               failure_text.py: the failure text an author reads, led by the program's
+                               frame that raised it, and `BuildCrash`;
                                template/standard.py: the standard six-step program;
                                glm_author.py: GlmAuthor and its prompts;
                                step_store.py: step keys, memos, the memo store and `memoized`;
@@ -312,8 +314,11 @@ build without a ledger records nothing.
 
 A step uses the host through `sandbox_effects`: `build_machine` prepares a machine as a task attempt
 would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run_task`, and
-`publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
-first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
+`publish_image` pushes a task image. `grade_candidate` takes the task's requirements as the
+`requirements` step returns them and starts a task machine exactly when they have the shell
+capability, as validation's lowering does, so `draft.NO_MACHINE` grades without one. The SDK
+reference the authors read (`glm_author.sdk_reference`) describes the `GradeResult` it returns.
+`infrastructure.host_checked_factories` wraps the factories first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
 cause chain, even one the program wrapped, so the caller retries or abandons the workpiece instead of
 asking the author for a revision. A host fault is a machine the host could not create or lost
 (classified by the message table in `sandbox.host_failures`, which validation's classifier reads too),
@@ -350,7 +355,7 @@ a package machine and no files for `none`, and `requirements` builds that machin
 for `none`). `run_build` refuses a task whose machine is not the declared one (`check_solver_machine`)
 as a `BuildFailure`, the program's, so no revision can move the solver between no machine, ShellSim,
 CPython and a container. Nor can the host: before anything runs,
-`run_build` and the agentic author's `author_round` call `infrastructure.machine_available`, which
+`run_build` and every call of the agentic author call `infrastructure.machine_available`, which
 raises `NO_IMAGE_BUILDER` for a container proposal on a host without an image builder and `NO_FACTORY`
 for a package machine on a host without the local backend, so the workpiece ends as the host's, with no
 revision spent and no author adapting the task to the host.
@@ -378,8 +383,11 @@ refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `
 program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
 the author receives.
 
-`stage40_build_with_program.agentic_author.author_round` is the agentic author: one agent session (`run_agent`,
-reasoning replay KEEP) per program round, working in a workspace that starts with the template as
+`stage40_build_with_program.agentic_author.AgenticAuthor` is the agentic author, an `Author` the
+coordinator calls as its author stage. Each call runs agent sessions (`run_agent`, reasoning replay
+KEEP) in the context's round until one submits, and returns the submitted file as the program's
+source. `AgenticAuthor.builds` gives the sessions of a call their `SessionBuild` for the call's
+workpiece, round and proposal. A session works in a workspace that starts with the template as
 `program.py`, the proposal, the SDK reference and the template under the read-only `reference/`, and
 an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`, `read_reference`,
 `write_file`, `edit_file`, `list_files`), run the loader (`run_loader`), build the program with the
@@ -389,7 +397,10 @@ candidate against the last draft the session built (`run_grade_candidate`), and 
 web when the proposal lists research. Every load of a program (`run_loader`, `run_build`, `submit`)
 goes through the session's `ProgramLoader`, by default `stage30_author.load_process` in a child process
 bounded by `LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the
-caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A host failure never
+caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A build whose step
+raised reaches the model as `failure_text`'s text: the program file, line, step and source line that
+raised it, the error, then its traceback's tail, the same from a build in a child process, whose
+`BuildCrash` carries the head the child wrote. A host failure never
 reaches the model: `run_build` and `run_grade_candidate` retry a `BuildInfrastructureFailure` up to
 `HOST_RETRIES` times with a doubling backoff (at once re-raising a cause in `HOST_REJECTIONS`), then
 re-raise it like `ModelUnavailable`, so the round ends without a record and spends no revision; a
@@ -404,33 +415,34 @@ program that never built in the session is refused once and handed in untested w
 an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
 when a turn's prompt and output plus `turn_max_tokens` exceed `session_token_cap`, at the turn budget,
 or after a third reply without a tool call (a reply cut at the output limit is nudged to take a
-smaller step instead). It writes, under the workpiece's directory:
+smaller step instead). Each session writes, under the workpiece's directory, with `k` counting the
+round's sessions across its author calls:
 
 ```
-rounds/<n>/authored/<k>/
-  author.json        author_kind, status (accepted, handed_off, author_failed), revision, session_dir,
-                     mode, stop_reason, wall; accepted adds program_digest and tested
+rounds/<n>/agentic/<k>/
+  author.json        author_kind, status (accepted, handed_off, author_failed), revision, mode,
+                     stop_reason, wall; accepted adds program_digest and tested
   session.json       turns, tool calls by tool, tokens, cached share, prompts, stop reason, nudges,
                      submissions, in-session builds
   transcript.json    the opening and user turns, then each assistant turn with its tool calls and results
   submit.json        accepted and every submit call with its outcome
-  program.py         accepted only: the submitted file's bytes
-  program.json       accepted only: program_manifest
   record.json        accepted only: GlmAuthor's record fields, with author_kind and turns
-rounds/<n>/agentic/<k>/
   conversation.json  the messages as sent, read by a same-session revision
   workspace/         program.py, proposal.md, notes.md, reference/
   runs/<j>/          one per in-session build: draft/ and run.json (status built, build_failure,
                      crash, infrastructure, storage, or expired with its clock)
 ```
 
-Round 0 starts a fresh session. After a build failure, the session that submitted the program
-continues with the failure as its next user turn when it ended by `submit` within
-`revision_same_session` (its last prompt and its turns used); any other revision starts a fresh session
-from a copy of its workspace. A session that ends without a submission hands its workspace to a fresh
-session in the same round once (`handed_off`), and the next unsubmitted one ends the round
-`author_failed`; a session stopped by the context guard hands off up to four sessions per round. A
-relaunch never resumes a session mid-way: a session directory without an `author.json` starts a handoff.
+The coordinator writes the submitted program to `authored/<k>/`. A call reads the last session of its
+round, or of the round before when its own has none. With no session yet, it starts a fresh one. After
+a build failure, the session that submitted the program continues with the failure as its next user
+turn when it ended by `submit` within `revision_same_session` (its last prompt and its turns used); any
+other revision starts a fresh session from a copy of its workspace. A last session that ended without
+a submission hands its workspace to a fresh session. Within one call, a session that ends without a
+submission hands off once (`handed_off`), and the next unsubmitted one (`author_failed`) makes the call
+raise `AuthorFailure`, which spends a revision; a session stopped by the context guard hands off up to
+four sessions per call. A relaunch never resumes a session mid-way: a session directory without an
+`author.json` starts a handoff.
 
 ## The stage machine
 
@@ -476,16 +488,20 @@ closes as rejected with the reason.
 An accept records the verdict's `author_state` on its `TRIAGED` event: a JSON mapping, empty
 unless the triage attached state such as findings or obligations for the author. The workpiece
 state folds it from the event, so a relaunch reads the same state, and the coordinator passes it
-to every author call as the `Author`'s third argument. The preflight attaches none, and the
+to every author call as the `Author`'s last argument. The preflight attaches none, and the
 package's authors ignore it.
 
 A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
 `ModelUnavailable` and `OSError`, which fail the workpiece at the build stage. An author call
-raising `StructuredOutputError` costs a revision from the same budget. Its structured reply stayed
-invalid through the repair turns, as when the output limit cut it, and the next author call samples
-again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
+raising `StructuredOutputError` or `AuthorFailure` costs a revision from the same budget. Its
+structured reply stayed invalid through the repair turns, as when the output limit cut it, or it ended
+without a program to hand in, as when the agentic author's sessions did not submit, and the next author
+call tries again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
 author stage.
 
+The coordinator calls the author with an `AuthorContext` (the workpiece id, the round and the
+workpiece's directory), the proposal, the revision and the author state. An author keeps its own
+files in the workpiece's directory, under names the coordinator does not use (the layout below).
 The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
 workpiece's build and author failures so far, and the build stage loads the program from that file
@@ -525,7 +541,8 @@ workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it
     draft/                         task.json, provenance.json
-    build-failures/<k>.txt         the k-th build or author failure: its step and program line, then its traceback
+    build-failures/<k>.txt         the k-th build or author failure: where the program raised it (file, line,
+                                   step, source line) and the error, then its traceback's tail
     validation.json                the ValidationResult returned by validate (`write_validation`)
     decision.json                  the decision returned by review
 store/                             the step store: blobs/, workpieces/<workpiece_id>/steps/

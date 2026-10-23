@@ -54,9 +54,9 @@ code is the program's.
 
 The proposal pins the solver's machine, so the host never chooses it: ``machine_available`` raises
 ``NO_FACTORY`` for a package machine on a host without the local backend and ``NO_IMAGE_BUILDER`` for
-a container proposal on a host without an image builder. ``run_build`` and the agentic author's
-``author_round`` call it before anything runs, so such a workpiece ends as the host's before its author
-or its program spends a model call.
+a container proposal on a host without an image builder. ``run_build`` and every call of the agentic
+author call it before anything runs, so such a workpiece ends as the host's before its author or its
+program spends a model call.
 """
 
 import traceback

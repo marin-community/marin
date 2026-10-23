@@ -148,12 +148,16 @@ async def grade_candidate(
 ) -> GradeResult:
     """Grade one candidate, a final ``reply`` and the ``workspace`` files it leaves, as validation would.
 
-    The grader receives a provisional task: ``instruction`` as its only message, the task machine of
-    ``requirements`` with the agent-visible ``files`` (no machine when ``requirements`` is
-    ``None``), ``grader`` with ``answer_type`` and ``answer_format``, and ``output_paths``. The
-    candidate writes each ``workspace`` file with a shell call, paths relative to the machine root,
-    then replies with ``reply`` in the form ``answer_format`` extracts. A grader with an environment
-    runs in its own verifier machine. ``settings`` applies to both machines. No model is called.
+    The grader receives a provisional task: ``instruction`` as its only message, the task's
+    environment ``requirements`` with the agent-visible ``files``, ``grader`` with ``answer_type``
+    and ``answer_format``, and ``output_paths``. Pass the task's own requirements: a task machine
+    (``draft.requirements(...)``), or ``draft.NO_MACHINE`` or ``None`` for a task without one. The
+    grading starts a task machine exactly when they have the shell capability, as validation's
+    lowering does, so a step passes the ``requirements`` step's output whatever machine it declares.
+    The candidate writes each ``workspace`` file with a shell call, paths relative to the machine
+    root, then replies with ``reply`` in the form ``answer_format`` extracts. A grader with an
+    environment runs in its own verifier machine. ``settings`` applies to both machines. No model is
+    called.
 
     A grader step calls this on its reference answer, on the empty answer and on wrong answers it
     invents, and keeps every candidate in ``Grader.prototyped``.
@@ -175,8 +179,6 @@ async def grade_candidate(
         BuildInfrastructureFailure: the host failed to create or drive a grading machine, or a machine
             start or the grading outlasted its deadline (``SANDBOX_DEADLINE``).
     """
-    if workspace and requirements is None:
-        raise BuildFailure("grade_candidate: workspace files need a task machine")
     try:
         task = draft.assemble(
             task_id=f"{context.workpiece_id}.grade_candidate",
@@ -196,13 +198,16 @@ async def grade_candidate(
         )
     except ValueError as error:
         raise BuildFailure(f"grade_candidate: {error}") from error
+    machine = draft.SHELL_CAPABILITY in task.environment_requirements.capabilities
+    if workspace and not machine:
+        raise BuildFailure("grade_candidate: workspace files need a task machine")
     turns = candidate_turns(reply, sorted(workspace, key=lambda resource: resource.path))
     factories = host_checked_factories(context.services.factories, context.services.host)
     try:
         spec = draft.lower(
             task,
             host=context.services.host,
-            task_machine=None if requirements is None else settings,
+            task_machine=settings if machine else None,
             verifier_machine=None if grading_environment(task) is None else settings,
             limits=draft.rollout_limits(
                 max_turns=len(turns),
