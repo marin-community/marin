@@ -28,7 +28,7 @@ from rolloutengine.models import (
     RolloutLimits,
     TaskRolloutSpec,
 )
-from shellbox.backends.local.machine import SYSTEM_DIRECTORIES, LocalMachineFactory
+from shellbox.backends.local.machine import LocalMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import (
     Backend,
@@ -47,12 +47,11 @@ from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollou
     FAILURE_OPERATION,
     POLICY_INTERRUPTIONS,
 )
-from experiments.post_training.capability_driven_envs.generate_tasks_agentic import COMMAND_TIMEOUT
+from experiments.post_training.capability_driven_envs.generate_tasks_agentic import COMMAND_TIMEOUT, interpreter_mounts
 
 logger = logging.getLogger(__name__)
 
 SHELL_HARNESS = "shell"
-UV_ARCHIVE_DIRECTORY = "archive-v0"
 MACHINE_BACKENDS = {CommandSemantics.LINUX_PROCESS: Backend.LOCAL, CommandSemantics.SHELL_SIMULATOR: Backend.SHELLSIM}
 """The solver machine of a task with a shell, from its command semantics: bubblewrap or ShellSim."""
 PROGRESS_EVERY = 50
@@ -69,46 +68,12 @@ def machine_factories(grader_slots: int) -> dict[str, MachineFactory]:
     the privileged container profile.
     """
     venv = Path(sys.prefix)
-    # The sandbox sees the system directories already, and mounts inside them fail.
-    interpreter = tuple(
-        path
-        for path in dict.fromkeys((Path(sys.base_prefix), interpreter_home(venv)))
-        if not any(path.is_relative_to(system) for system in SYSTEM_DIRECTORIES)
-    )
-    mounts = (venv, venv.parent / "lib", *interpreter, *linked_archives(venv))
+    mounts = (venv, venv.parent / "lib", *interpreter_mounts(venv))
     graders = LocalMachineFactory(read_only=mounts, bin_dirs=(venv / "bin",))
     return {
         Backend.LOCAL: BoundedFactory(graders, asyncio.Semaphore(grader_slots)),
         Backend.SHELLSIM: ShellSimMachineFactory(),
     }
-
-
-def interpreter_home(environment: Path) -> Path:
-    """The base interpreter's directory by the path that ``pyvenv.cfg`` of ``environment`` names.
-
-    uv names its minor-version link (``cpython-3.12-linux-x86_64-gnu``), which ``sys.base_prefix`` resolves to the
-    patch version. Without the link in the sandbox, ``bin/python`` dangles and ``python3`` is the system interpreter,
-    which has none of the environment's packages.
-    """
-    for line in (environment / "pyvenv.cfg").read_text().splitlines():
-        key, _, value = line.partition("=")
-        if key.strip() == "home":
-            return Path(value.strip()).parent
-    raise ValueError(f"{environment}/pyvenv.cfg names no interpreter home")
-
-
-def linked_archives(environment: Path) -> tuple[Path, ...]:
-    """The uv ``archive-v0`` directories that the package files of ``environment`` link to, if uv linked them: the
-    links do not resolve in a sandbox that does not mount their targets."""
-    archives = []
-    for site_packages in environment.glob("lib/python*/site-packages"):
-        link = next((path for path in site_packages.rglob("*") if path.is_symlink()), None)
-        if link is None:
-            continue
-        archive = next((parent for parent in link.resolve().parents if parent.name == UV_ARCHIVE_DIRECTORY), None)
-        if archive is not None:
-            archives.append(archive)
-    return tuple(archives)
 
 
 @dataclass
