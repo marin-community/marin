@@ -19,7 +19,6 @@ Plan or run one arm::
 
 from __future__ import annotations
 
-import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from types import MappingProxyType
@@ -200,6 +199,7 @@ def training_config(
     samples_per_prompt: int,
     lr: float,
     seed: int,
+    export_every: int,
 ) -> dict:
     """The SkyRL recipe: GRPO with the rollout-anchored clipped loss on the feed, at staleness 1."""
     plan = profile.role_plan(train_batch, samples_per_prompt)
@@ -231,8 +231,8 @@ def training_config(
             "eval_interval": -1,
             "eval_before_train": False,
             "ckpt_interval": CHECKPOINT_EVERY,
-            # The terminal export only; its interval must be a multiple of the checkpoint interval.
-            "hf_save_interval": math.ceil(steps / CHECKPOINT_EVERY) * CHECKPOINT_EVERY,
+            # An HF export every export_every steps, which the loop's evaluation serves with vLLM.
+            "hf_save_interval": export_every,
             "resume_mode": "latest",
             "restore_dataloader_state": True,
             "seed": seed,
@@ -316,8 +316,11 @@ def build_run(
     samples_per_prompt: int,
     lr: float,
     seed: int,
+    export_every: int,
 ) -> ArtifactStep[SkyRLRun]:
     profile = PROFILES[model]
+    if export_every % CHECKPOINT_EVERY:
+        raise click.BadParameter(f"must be a multiple of {CHECKPOINT_EVERY}", param_hint="--export-every")
     if not feed_root.startswith("s3://"):
         raise click.BadParameter(f"the feed must be an s3:// prefix, got {feed_root!r}", param_hint="--feed-root")
     if steps <= 0 or train_batch <= 0 or samples_per_prompt <= 0:
@@ -336,6 +339,7 @@ def build_run(
         samples_per_prompt=samples_per_prompt,
         lr=lr,
         seed=seed,
+        export_every=export_every,
     )
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{model}-{arm}-seed{seed}"
     return skyrl_step(
@@ -390,6 +394,9 @@ def build_run(
 @click.option("--samples-per-prompt", type=int, default=8, show_default=True)
 @click.option("--lr", type=float, default=1.0e-6, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
+@click.option(
+    "--export-every", type=int, required=True, help=f"Steps between HF exports, a multiple of {CHECKPOINT_EVERY}."
+)
 @rl_build_options
 def main(
     model: str,
@@ -400,6 +407,7 @@ def main(
     samples_per_prompt: int,
     lr: float,
     seed: int,
+    export_every: int,
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
         model=model,
@@ -410,6 +418,7 @@ def main(
         samples_per_prompt=samples_per_prompt,
         lr=lr,
         seed=seed,
+        export_every=export_every,
     )
 
 
