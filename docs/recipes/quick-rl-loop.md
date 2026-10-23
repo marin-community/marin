@@ -2,8 +2,7 @@
 
 Use this loop to improve task selection and the RL recipe: curate tasks, publish
 a fixed selection, train from the pinned SFT model, and compare evaluation before
-and after training. This page describes the current recipe; update it alongside
-the selection and launcher when the recipe changes.
+and after training.
 
 The current entry points are the
 [Snowball selection recipe](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-100k.json)
