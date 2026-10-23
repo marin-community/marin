@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from taskforge.test_support import unique_run_name
+from taskforge.llm.test_support import unique_run_name
 
 
 def test_unique_run_names_differ_within_one_second(monkeypatch):

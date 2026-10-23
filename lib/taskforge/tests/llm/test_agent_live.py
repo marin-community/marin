@@ -42,8 +42,8 @@ from taskforge.llm.client import FinishReason, ModelRequestRejected
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, request_kwargs
 from taskforge.llm.policy import LLMPolicy, Message, ReasoningEffort
 from taskforge.llm.recording import CallLedger
+from taskforge.llm.test_support import GLM_MODEL, unique_run_name
 from taskforge.llm.web import web_tools
-from taskforge.test_support import GLM_MODEL, unique_run_name
 
 PYPI_PACKAGE_URL = "https://pypi.org/pypi/shellsim/json"
 RUNS = TypeAdapter(tuple[AgentRun, ...])

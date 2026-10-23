@@ -37,7 +37,7 @@ import pytest
 from taskforge.ledger.records import LedgerEntry
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
 from taskforge.llm.policy import LLMProviderConfig
-from taskforge.test_support import GLM_MODEL, fake_source
+from taskforge.llm.test_support import GLM_MODEL, fake_source
 
 BASE_URL_ENV = "TASKFORGE_GLM_BASE_URL"
 TOKEN_ENV = "GLM_HIGH_TOKEN"

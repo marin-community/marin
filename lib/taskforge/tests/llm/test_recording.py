@@ -18,7 +18,7 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import StructuredOutputError
-from taskforge.test_support import fake_source
+from taskforge.llm.test_support import fake_source
 
 ROLLOUT_POLICY = LLMPolicy(max_continuations=0)
 CONTEXT_ERROR = json.dumps({"error": {"message": "This model's maximum context length is 262144 tokens.", "code": 400}})

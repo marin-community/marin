@@ -27,7 +27,7 @@ from taskforge.llm.agent import (
 from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 from taskforge.llm.recording import CallLedger
-from taskforge.test_support import fake_source
+from taskforge.llm.test_support import fake_source
 
 MESSAGES: list[Message] = [{"role": "system", "content": "be useful"}, {"role": "user", "content": "do it"}]
 ECHO_SCHEMA = {

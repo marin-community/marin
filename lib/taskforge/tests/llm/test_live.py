@@ -29,7 +29,7 @@ from taskforge.llm.policy import GLM_MAX_OUTPUT_TOKENS, LLMPolicy, Message, Reas
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
 from taskforge.llm.structured import response_format
-from taskforge.test_support import GLM_MODEL, unique_run_name
+from taskforge.llm.test_support import GLM_MODEL, unique_run_name
 
 COMPLETIONS = TypeAdapter(tuple[Completion, ...])
 
