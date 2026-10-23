@@ -19,7 +19,7 @@
 //! An object-backed table instead snapshots exact object references planned
 //! from an immutable `TableSnapshot`. Those objects are immutable and never
 //! unlinked while referenced, so the scan prunes by the pinned metadata first
-//! and localizes only the objects it selected.
+//! and reads selected objects from the cache or backing store.
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,13 +42,9 @@ use futures::{stream, StreamExt, TryStreamExt};
 use crate::errors::StatsError;
 use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
-use crate::store::object_store::{ObjectId, ObjectStore, QueryCacheAdmission};
+use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
+use crate::store::object_store::{ObjectId, ObjectStore, QueryCacheAdmission, ScanSource};
 use crate::store::table::query_view::SegmentObjectMap;
-
-/// Tail bytes fetched per remote Parquet file when reading its footer. Large
-/// enough to cover the metadata of a target-size object in one ranged GET; a
-/// larger footer falls back to a second fetch.
-const REMOTE_FOOTER_SIZE_HINT: usize = 512 * 1024;
 
 /// Concurrent exact existence probes for selected uncached source objects.
 const MAX_PARALLEL_SOURCE_PROBES: usize = 32;
@@ -132,26 +128,18 @@ impl ObjectSources {
             };
             match self
                 .store
-                .cached_path(&objects.source)
+                .scan_source(&objects.source)
                 .await
                 .map_err(external)?
             {
-                Some(local) => resolved.local.push(local.to_string_lossy().into_owned()),
-                None => match self.store.remote_scan_url(&objects.source.id) {
-                    Some(url) => {
-                        self.store.warm_query(&objects.source, admission);
-                        resolved.remote.push(url);
-                        remote_sources.push(objects.source.id.clone());
-                    }
-                    None => {
-                        let local = self
-                            .store
-                            .local_path(&objects.source)
-                            .await
-                            .map_err(external)?;
-                        resolved.local.push(local.to_string_lossy().into_owned());
-                    }
-                },
+                ScanSource::Local(local) => {
+                    resolved.local.push(local.to_string_lossy().into_owned())
+                }
+                ScanSource::Remote(url) => {
+                    self.store.warm_query(&objects.source, admission);
+                    resolved.remote.push(url);
+                    remote_sources.push(objects.source.id.clone());
+                }
             }
             for reference in objects
                 .artifacts

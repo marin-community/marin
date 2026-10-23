@@ -1,8 +1,8 @@
 //! Driving compaction for an object-backed table.
 //!
 //! One step plans a run with the pure leveled planner, takes a maintenance
-//! lease over its exact inputs, localizes them, runs the shared executor into a
-//! staging directory, uploads each output as an immutable object, and commits
+//! lease over its exact inputs, reads them through the cache or backing store,
+//! runs the shared executor into a staging directory, uploads immutable outputs, and commits
 //! the replacement under the lease.
 //!
 //! The heavy work runs outside the table controller: the controller serializes
@@ -21,14 +21,16 @@ use tokio::sync::RwLock;
 
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
+use crate::query::file_scan::read_parquet_batches;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
     run_job_with_partition_policy, run_merge_thread, CompactionExecution, OutputPolicy,
+    READ_BATCH_ROWS,
 };
 use crate::store::compaction::planner::{plan, plan_forced_l0, UnpartitionedRunPolicy};
 use crate::store::compaction::staging::StagingDir;
-use crate::store::object_store::OBJECTS_PREFIX;
+use crate::store::object_store::{ObjectReference, ScanSource, OBJECTS_PREFIX};
 use crate::store::table::controller::{MaintenanceLease, TableController};
 use crate::store::table::index_artifacts::publish_segment_artifacts;
 use crate::store::table::segment_format::SegmentFormat;
@@ -145,29 +147,14 @@ pub async fn compact_once(
     // encoding, and uploading then run outside the controller; only the
     // replacement commit is serialized against concurrent flushes.
     let lease = compaction.controller.begin_compaction_for(&lifecycle)?;
-    let localize_started = Instant::now();
+    let mut input_objects = HashMap::new();
     for input in &job.inputs {
         let record = object_records.get(&input.path).ok_or_else(|| {
             StatsError::Internal(format!("object compaction lost input {}", input.path))
         })?;
-        let localized = compaction.controller.localize(&record.source).await?;
-        if localized != Path::new(&input.path) {
-            return Err(StatsError::Internal(format!(
-                "object {} localized to {} rather than its catalog path",
-                input.path,
-                localized.display()
-            )));
-        }
-    }
-    let localize_ms = localize_started.elapsed().as_millis() as u64;
-    if localize_ms > 1_000 {
-        // Uncached inputs are fetched from remote storage one at a time; when
-        // that dominates a cycle it explains a table's stalled maintenance.
-        tracing::info!(
-            namespace = %compaction.table,
-            inputs = job.inputs.len(),
-            localize_ms,
-            "object compaction localized inputs"
+        input_objects.insert(
+            input.path.clone(),
+            ObjectReference::try_from(&record.source)?,
         );
     }
 
@@ -178,7 +165,7 @@ pub async fn compact_once(
         table_spec_version,
         migration_backfill,
     };
-    let outcome = run(&leased, &staging, &job).await;
+    let outcome = run(&leased, &staging, &job, input_objects).await;
     drop(staging);
     outcome
 }
@@ -188,6 +175,7 @@ async fn run(
     leased: &LeasedCompaction<'_, '_>,
     staging: &StagingDir,
     job: &CompactionJob,
+    input_objects: HashMap<String, ObjectReference>,
 ) -> Result<CompactionOutcome, StatsError> {
     let compaction = leased.resources;
     let index_config = compaction.index_config.clone();
@@ -203,14 +191,21 @@ async fn run(
         .collect();
     let job_for_run = job.clone();
     let staging_dir = staging.path().to_path_buf();
+    let objects = Arc::clone(compaction.controller.object_store().ok_or_else(|| {
+        StatsError::Internal("object compaction has no backing store".to_string())
+    })?);
+    let visibility = Arc::clone(compaction.query_visibility);
+    let runtime = tokio::runtime::Handle::current();
     // Same dedicated merge thread as a migration rewrite, mildly deprioritized:
     // an ordinary compaction merge at blocking-pool priority competes with
     // query threads for cores, and a backlog of large merges makes dashboards
     // unusable. nice(10) yields to busy serving threads but still finishes
     // (nice(19) would starve outright on a saturated box).
     let merge_started = Instant::now();
-    let swap = run_merge_thread("finelog-compact", 10, move || {
-        run_job_with_partition_policy(
+    let (swap, cached_inputs, remote_inputs) = run_merge_thread("finelog-compact", 10, move || {
+        let mut cached_inputs = 0;
+        let mut remote_inputs = 0;
+        let swap = run_job_with_partition_policy(
             &job_for_run,
             &staging_dir,
             &arrow_schema,
@@ -223,10 +218,36 @@ async fn run(
                 index_config: &index_config,
                 partition_policy: None,
                 max_merge_arrow_bytes,
-                output: OutputPolicy::PromoteWhenUnchanged,
+                output: OutputPolicy::ReuseImmutable,
             },
             move |path| key_bounds.get(path).cloned().unwrap_or((None, None)),
-        )
+            |path| {
+                let reference = input_objects.get(path).ok_or_else(|| {
+                    StatsError::Internal(format!("compaction reader lost input {path}"))
+                })?;
+                runtime.block_on(async {
+                    let guard = visibility.read().await;
+                    match objects.scan_source(reference).await? {
+                        ScanSource::Local(path) => {
+                            cached_inputs += 1;
+                            read_parquet_batches(
+                                &path.to_string_lossy(),
+                                reference.version.byte_size,
+                                READ_BATCH_ROWS,
+                            )
+                            .await
+                        }
+                        ScanSource::Remote(url) => {
+                            drop(guard);
+                            remote_inputs += 1;
+                            read_parquet_batches(&url, reference.version.byte_size, READ_BATCH_ROWS)
+                                .await
+                        }
+                    }
+                })
+            },
+        )?;
+        Ok::<_, StatsError>((swap, cached_inputs, remote_inputs))
     })
     .await??;
     let merge_ms = merge_started.elapsed().as_millis() as u64;
@@ -279,6 +300,8 @@ async fn run(
     tracing::info!(
         namespace = %compaction.table,
         inputs = job.inputs.len(),
+        cached_inputs,
+        remote_inputs,
         merge_ms,
         upload_ms = upload_started.elapsed().as_millis() as u64,
         "object compaction rewrite finished"

@@ -34,8 +34,8 @@ use crate::store::catalog::{
 };
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::executor::{
-    run_job_with_partition_policy, run_merge_thread, CompactionExecution, CompactionLayout,
-    OutputPolicy,
+    read_segment_projected, run_job_with_partition_policy, run_merge_thread, CompactionExecution,
+    CompactionLayout, OutputPolicy,
 };
 use crate::store::compaction::staging::StagingDir;
 use crate::store::object_store::OBJECTS_PREFIX;
@@ -584,6 +584,7 @@ async fn rewrite_batch(
                 output: OutputPolicy::AlwaysRewrite,
             },
             move |path| bounds_by_path.get(path).cloned().unwrap_or((None, None)),
+            |path| read_segment_projected(Path::new(path), None),
         )
     })
     .await??;

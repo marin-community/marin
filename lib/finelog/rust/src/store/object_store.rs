@@ -62,6 +62,12 @@ pub struct ObjectReference {
     pub version: ObjectVersion,
 }
 
+/// A cached file or the backing object's scan location.
+pub enum ScanSource {
+    Local(PathBuf),
+    Remote(String),
+}
+
 /// Result of a best-effort batch deletion.
 ///
 /// Confirmed IDs are safe to forget even when the provider reports a later
@@ -249,6 +255,18 @@ pub trait ObjectStore: Send + Sync {
         _reference: &ObjectReference,
     ) -> Result<Option<PathBuf>, StatsError> {
         Ok(None)
+    }
+
+    /// Resolve an input using the cache when present, otherwise its backing
+    /// scan location. Callers must protect cached paths from concurrent eviction.
+    async fn scan_source(&self, reference: &ObjectReference) -> Result<ScanSource, StatsError> {
+        if let Some(path) = self.cached_path(reference).await? {
+            return Ok(ScanSource::Local(path));
+        }
+        if let Some(url) = self.remote_scan_url(&reference.id) {
+            return Ok(ScanSource::Remote(url));
+        }
+        Ok(ScanSource::Local(self.local_path(reference).await?))
     }
 
     /// Begin a maintenance cache fill without waiting. Query callers use

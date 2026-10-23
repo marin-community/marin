@@ -10,6 +10,54 @@ use crate::support::{
 };
 use finelog::test_support::ObjectOp;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn compaction_reads_cold_and_mixed_inputs_without_caching_them() {
+    for keep_cached in [false, true] {
+        let cluster = Cluster::new("compaction_scan_sources");
+        let (store, _) = cluster.open();
+        register_v1(&store).await;
+        for (worker, mem_bytes) in [("w-1", 10), ("w-2", 20), ("w-3", 30)] {
+            write_row(&store, worker, mem_bytes).await;
+        }
+        let before = cluster.states().load(TABLE).await.unwrap().unwrap();
+        let inputs = live_objects(&before.catalog);
+        let cached = keep_cached.then(|| inputs.first().unwrap().clone());
+        let mut cached_remote = None;
+        for id in &inputs {
+            if cached.as_ref() == Some(id) {
+                // A usable cache entry must avoid even opening its remote copy.
+                let path = cluster.remote_dir.join(id);
+                cached_remote = Some((path.clone(), std::fs::read(&path).unwrap()));
+                std::fs::write(path, b"invalid remote parquet").unwrap();
+            } else {
+                std::fs::remove_file(cluster.data_dir.join(id)).unwrap();
+            }
+        }
+
+        store.maintain_namespace(TABLE, true).await.unwrap();
+        if let Some((path, bytes)) = cached_remote {
+            std::fs::write(path, bytes).unwrap();
+        }
+        let cache = cached_data_objects(&cluster.data_dir);
+        for id in &inputs {
+            assert_eq!(
+                cache.contains(id),
+                cached.as_ref() == Some(id),
+                "compaction must not populate the cache with its input objects"
+            );
+        }
+        let after = Invariants::new(&cluster.remote_dir).check(&store).await;
+        assert_eq!(after.seqs, vec![1, 2, 3]);
+        let outputs = live_objects(&after.state);
+        assert_eq!(outputs.len(), 1);
+        assert!(outputs.is_disjoint(&inputs));
+        assert_eq!(live_levels(&after.state), vec![1]);
+
+        store.shutdown(Duration::from_secs(1)).await;
+        cluster.cleanup();
+    }
+}
+
 /// A store that restarts with no local cache and no local catalog bootstraps
 /// from the object directory alone. Recovery downloads no data, the first reads
 /// scan the object directory directly. Repeated queries warm only live objects,
