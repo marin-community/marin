@@ -32,6 +32,7 @@ from taskforge.sandbox import image_builder
 from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
+from taskforge.spec.decision import DecisionUnavailable
 from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
@@ -490,6 +491,7 @@ async def test_a_custom_grader_gets_its_own_timeout_before_the_host_deadline(con
     "outage,cause",
     [
         (ModelUnavailable("model unavailable", ()), InfrastructureCause.MODEL_UNAVAILABLE),
+        (DecisionUnavailable("decision model unavailable"), InfrastructureCause.DECISION_UNAVAILABLE),
         (httpx.ConnectError("web provider disconnected"), InfrastructureCause.HTTP_UNAVAILABLE),
         (
             httpx.HTTPStatusError(
@@ -508,7 +510,7 @@ async def test_a_custom_grader_gets_its_own_timeout_before_the_host_deadline(con
             None,
         ),
     ],
-    ids=["model-outage", "transport-outage", "http-outage", "invalid-authored-url"],
+    ids=["model-outage", "decision-outage", "transport-outage", "http-outage", "invalid-authored-url"],
 )
 async def test_wrapped_service_failures_preserve_their_classification(
     proposal, services, glm_client, tmp_path, outage, cause

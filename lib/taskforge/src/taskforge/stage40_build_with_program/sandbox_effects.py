@@ -60,7 +60,6 @@ from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfr
 from taskforge.stage40_build_with_program.infrastructure import (
     InfrastructureCause,
     deadline_failure,
-    decision_failure,
     host_checked_factories,
     infrastructure_failure,
 )
@@ -364,7 +363,7 @@ async def _graded(
         else:
             result = await run_decision_trial(engine, spec, model, decision)
     except RolloutInterrupted as error:
-        failure = infrastructure_failure(error) or decision_failure(error) or deadline_failure(error)
+        failure = infrastructure_failure(error) or deadline_failure(error)
         if failure is None:
             raise
         raise failure from error

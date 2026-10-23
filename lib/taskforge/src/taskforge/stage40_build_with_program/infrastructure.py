@@ -182,6 +182,8 @@ def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure |
     for link in exception_chain(error):
         if isinstance(link, BuildInfrastructureFailure):
             return BuildInfrastructureFailure(link.cause, link.message)
+        if isinstance(link, DecisionUnavailable):
+            return BuildInfrastructureFailure(InfrastructureCause.DECISION_UNAVAILABLE, str(link))
         if isinstance(link, ModelUnavailable):
             return BuildInfrastructureFailure(InfrastructureCause.MODEL_UNAVAILABLE, str(link))
         if isinstance(link, httpx.TransportError) or (
@@ -189,14 +191,6 @@ def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure |
         ):
             return BuildInfrastructureFailure(InfrastructureCause.HTTP_UNAVAILABLE, str(link))
     return None
-
-
-def decision_failure(error: RolloutInterrupted) -> BuildInfrastructureFailure | None:
-    """The ``DECISION_UNAVAILABLE`` failure of a grade whose decision reads failed transiently, or ``None``."""
-    unavailable = next((link for link in exception_chain(error) if isinstance(link, DecisionUnavailable)), None)
-    if unavailable is None:
-        return None
-    return BuildInfrastructureFailure(InfrastructureCause.DECISION_UNAVAILABLE, f"{error}: {unavailable}")
 
 
 def deadline_failure(error: RolloutInterrupted) -> BuildInfrastructureFailure | None:
