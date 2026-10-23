@@ -326,18 +326,43 @@ def test_boxed_preserves_physics_reference_raw_fallback():
     assert missing.reward == 0
 
 
-def test_relation_answers_the_verifier_cannot_compare_are_invalid_not_crashes():
-    """math-verify's comparison table lacks Unequality, so a \\neq-style answer can
-    never be graded; the verdict is InvalidTask (the task is dropped), not a crash."""
-    spec = MathSpec(expected=r"x \neq 3", profile=MathProfile.BOXED)
-    with pytest.raises(InvalidTask, match="cannot compare"):
-        grade_math.grade_math_candidate(spec, r"The final answer is $\boxed{x \neq 3X'}$.")
+@pytest.mark.parametrize(
+    ("expected", "candidate", "reward"),
+    [
+        # math-verify raises on chains whose deduplicated relations differ in number
+        # (huggingface/Math-Verify#93); chains compare as sets of constraints.
+        ("m < -n < n < -m", "m < -n < n < -m", 1),
+        ("m < -n < n < -m", "m < -n < n", 1),  # n < -m restates m < -n
+        ("m < -n < n < -m", "m < -n < n < -mX'", 0),
+        ("1<x<3", r"\frac{2}{2} < x < 3", 1),
+        ("1<x<3", "3 > x > 1", 1),
+        ("1<x<3", r"1 < x \le 3", 0),
+        ("1<x<3", "1<x<3<5", 0),
+        ("1<x<3", "x<3", 0),
+        # Unit stripping deleted a chain's spaced trailing letter (s as seconds).
+        ("m < -n < n < -m", "-m > n > -n > m", 1),
+        ("p < q < r < s", "p<q<r<s", 1),
+        ("p < q < r < s", "p < q < r", 0),
+        (r"5 \text{ m}", "5", 1),  # a real unit is still stripped
+        # math-verify reads 10:00 as 10/0; clock times compare as times.
+        ("10:00", "10:00 AM", 1),
+        ("10:00", "11:00", 0),
+        (r"02\!:\!00 \text{ PM}", "14:00", 1),
+        (r"02\!:\!00 \text{ PM}", "2:00 p.m.", 1),
+        (r"02\!:\!00 \text{ PM}", "2:00 AM", 0),
+        (r"18\!:\!00", "6:00 PM", 1),
+        ("16:25", "32:50", 1),  # without clock markers a:b stays a ratio
+        # math-verify cannot compare Unequality; a != b compares as a = b.
+        (r"x \neq 3", r"x \ne 3", 1),
+        (r"x \neq 3", r"x \neq 4", 0),
+        (r"x \neq 3", "x = 3", 0),
+    ],
+)
+def test_answers_math_verify_cannot_compare_grade_by_their_meaning(expected, candidate, reward):
+    spec = MathSpec(expected=expected, profile=MathProfile.ANCHORED)
+    assert grade_math.grade_math_candidate(spec, candidate).reward == reward
 
 
-@pytest.mark.parametrize("profile", [MathProfile.BOXED, MathProfile.RAW])
-def test_relation_chains_of_different_length_grade_as_a_mismatch(profile):
-    """math-verify raises on chains of different length (huggingface/Math-Verify#93);
-    a longer chain is a wrong answer, not a grading failure."""
-    spec = MathSpec(expected="1<x<3", profile=profile)
-    assert grade_math.grade_math_candidate(spec, r"\boxed{1<x<3<5}").reward == 0
-    assert grade_math.grade_math_candidate(spec, r"\boxed{1<x<3}").reward == 1
+def test_an_undefined_reference_is_an_invalid_task():
+    with pytest.raises(InvalidTask, match="undefined"):
+        grade_math.grade_math_candidate(MathSpec(expected=r"\frac{1}{0}"), "1")
