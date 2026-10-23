@@ -5,7 +5,7 @@ from dataclasses import replace
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from eval.chat_benchmarks.LABBench import eval_instruct as lab
+from eval.sources import labbench as lab
 from eval.completion_response import CompletionContentPolicy, CompletionText, completion_response_from_chat_choice
 from eval.execution.engine import ItemResult
 from eval.execution.metrics import SourceMetrics

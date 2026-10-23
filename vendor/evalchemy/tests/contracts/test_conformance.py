@@ -12,11 +12,9 @@ from eval.task import BaseBenchmark
 
 def test_every_registered_name_has_one_complete_contract():
     root = Path("eval/chat_benchmarks")
-    packaged_modules = {path.parent.name for path in root.glob("*/eval_instruct.py")}
-    registered_modules = {module.split(".")[-2] for module, _class in SOURCES.values()}
-    assert packaged_modules == registered_modules
-    contracts = discover_task_contracts(Path("eval/lm_eval_tasks"))
-    assert set(SOURCES) == {contract.task_name for contract in contracts if contract.route is TaskRoute.CUSTOM}
+    custom_names = {path.parent.name for path in root.glob("*/eval_instruct.py")}
+    contracts = discover_task_contracts(root, Path("eval/lm_eval_tasks"))
+    assert custom_names == set(SOURCES) == {contract.task_name for contract in contracts if contract.route is TaskRoute.CUSTOM}
     assert any(contract.route is TaskRoute.LM_EVAL for contract in contracts)
 
 

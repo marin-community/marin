@@ -9,6 +9,8 @@ rest means fetching tens of gigabytes of datasets, so that is
 than on every PR.
 """
 
+from pathlib import Path
+
 import pytest
 
 from eval.contracts.prompt_corpus import load_reference_tokenizer, render_prompt_corpus
@@ -18,7 +20,8 @@ from eval.contracts.prompt_length import (
     load_prompt_lengths,
     resolve_task_max_tokens,
 )
-from eval.sources import SOURCES
+
+CUSTOM_BENCHMARK_ROOT = Path("eval/chat_benchmarks")
 
 REPO_LOCAL_BENCHMARKS = (
     "AIME24",
@@ -48,7 +51,7 @@ def _lengths(longest_prompt_tokens: int, margin: int = 256) -> PromptLengths:
 
 
 def test_every_registered_benchmark_has_a_stored_prompt_length():
-    registered = set(SOURCES)
+    registered = {path.parent.name for path in CUSTOM_BENCHMARK_ROOT.glob("*/eval_instruct.py")}
     lengths = load_prompt_lengths()
 
     assert registered == set(lengths.benchmarks) | set(lengths.unmeasured)

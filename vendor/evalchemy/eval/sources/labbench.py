@@ -4,6 +4,7 @@ import hashlib
 import random
 from dataclasses import dataclass
 from string import ascii_uppercase
+from types import MappingProxyType
 
 import pyarrow.parquet as pq
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
@@ -38,11 +39,11 @@ class Component:
     count: int
 
 
-COMPONENTS = {
+COMPONENTS = MappingProxyType({
     "LABBenchProtocolQA": Component("ProtocolQA", 108),
     "LABBenchSeqQA": Component("SeqQA", 600),
     "LABBenchCloning": Component("CloningScenarios", 33),
-}
+})
 
 
 def prepare_question(row: dict, subset: str, seed: int) -> dict:
