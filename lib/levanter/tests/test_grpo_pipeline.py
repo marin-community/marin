@@ -322,7 +322,13 @@ def test_pipeline_gradient_mean_matches_spmd_accumulation_and_update(compute_dty
         for stage in model:
             hidden = stage.run_blocks(hidden, batch.attention_mask.array, batch.position_ids.array)
         logits = hidden[:, -3:-1].astype(jnp.float32) @ model[-1].get_lm_head().astype(jnp.float32)
-        logprobs = jax.nn.log_softmax(logits)
+        # Match the fused CE reference's TPU transcendental accuracy. The
+        # approximate default log_softmax can change a BF16 pullback rounding.
+        shifted = logits - jax.lax.stop_gradient(jnp.max(logits, axis=-1, keepdims=True))
+        accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
+        logprobs = shifted - jax.lax.log(
+            jnp.sum(jax.lax.exp(shifted, accuracy=accuracy), axis=-1, keepdims=True), accuracy=accuracy
+        )
         scores = jnp.take_along_axis(logprobs, ids[:, -2:, None], axis=-1)[..., 0]
         return grpo_loss(
             hax.named(scores, batch.old_logprobs.axes),
