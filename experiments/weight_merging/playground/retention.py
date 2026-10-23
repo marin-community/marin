@@ -41,4 +41,3 @@ def prune_checkpoints(output: Path, *, final_saved: bool = False) -> list[str]:
             shutil.rmtree(checkpoint)
             removed.append(str(checkpoint))
     return removed
-
