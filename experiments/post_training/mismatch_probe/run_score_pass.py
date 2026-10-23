@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""C2–C5: run the WP4 scoring passes over the dev sequences.
+"""C2-C5: run the WP4 scoring passes over the dev sequences.
 
 One SkyRL GPU job per subcommand; each boots the Megatron policy worker on one
 checkpoint with the production scoring geometry (TP1, PP1, EP8, packing off) and
@@ -33,6 +33,7 @@ import numpy as np
 import ray
 import torch
 
+from experiments.post_training.mismatch_probe.long_context import scoring_config
 from experiments.post_training.mismatch_probe.scoring_pass import (
     TOP_K,
     build_score_batch,
@@ -42,7 +43,6 @@ from experiments.post_training.mismatch_probe.scoring_pass import (
     load_probe_sequences,
     write_rows_parquet,
 )
-from experiments.post_training.mismatch_probe.long_context import scoring_config, vocabulary_size_of
 
 PAD_TOKEN_ID = 0
 EXACT_RATE = 0.01
@@ -51,11 +51,11 @@ MASTER_SEED = 20261023
 
 def boot_worker(model_path: str, *, num_gpus: int):
     """The policy worker with the model loaded, and nothing else."""
-    from ray.util.placement_group import placement_group
-
-    from skyrl_train.utils import get_ray_pg_ready_with_timeout
-    from skyrl_train.workers.megatron.megatron_worker import PolicyWorker
-    from skyrl_train.workers.worker import PPORayActorGroup
+    # skyrl_train exists only in a SkyRL runtime environment.
+    from ray.util.placement_group import placement_group  # noqa: PLC0415
+    from skyrl_train.utils import get_ray_pg_ready_with_timeout  # noqa: PLC0415
+    from skyrl_train.workers.megatron.megatron_worker import PolicyWorker  # noqa: PLC0415
+    from skyrl_train.workers.worker import PPORayActorGroup  # noqa: PLC0415
 
     cfg = scoring_config(model_path, num_gpus=num_gpus)
     pg = placement_group([{"GPU": num_gpus, "CPU": num_gpus}], strategy="PACK")
@@ -77,11 +77,9 @@ def boot_worker(model_path: str, *, num_gpus: int):
 
 def run_score(policy, batch: dict, *, top_k: int | None, micro_batch_size: int = 1) -> tuple[dict, float]:
     """One ``probe_score_forward`` call over the whole batch, CPU tensors back."""
-    from skyrl_train.training_batch import TrainingInputBatch
+    from skyrl_train.training_batch import TrainingInputBatch  # noqa: PLC0415  # skyrl_train only in a SkyRL runtime
 
-    data = TrainingInputBatch(
-        {key: torch.from_numpy(value) for key, value in batch.items() if value is not None}
-    )
+    data = TrainingInputBatch({key: torch.from_numpy(value) for key, value in batch.items() if value is not None})
     data.metadata = {
         "response_length": batch["sequences"].shape[1],
         "probe_micro_batch_size": micro_batch_size,
@@ -102,7 +100,12 @@ def reference_pass(args) -> None:
     sequences = load_probe_sequences(args.sequences)
     policy = boot_worker(args.model_path, num_gpus=args.num_gpus)
     batch = build_score_batch(
-        sequences, pad_token_id=PAD_TOKEN_ID, gather_ids=None, exact_positions=False, exact_rate=0.0, master_seed=MASTER_SEED
+        sequences,
+        pad_token_id=PAD_TOKEN_ID,
+        gather_ids=None,
+        exact_positions=False,
+        exact_rate=0.0,
+        master_seed=MASTER_SEED,
     )
     results, duration = run_score(policy, batch, top_k=TOP_K)
     np.savez(
@@ -166,7 +169,12 @@ def candidate_pass(args) -> None:
 def exact_pass(args) -> None:
     sequences = load_probe_sequences(args.sequences)
     batch = build_score_batch(
-        sequences, pad_token_id=PAD_TOKEN_ID, gather_ids=None, exact_positions=True, exact_rate=EXACT_RATE, master_seed=MASTER_SEED
+        sequences,
+        pad_token_id=PAD_TOKEN_ID,
+        gather_ids=None,
+        exact_positions=True,
+        exact_rate=EXACT_RATE,
+        master_seed=MASTER_SEED,
     )
     passes = {}
     for label, model_path in (("reference", args.reference_model), ("candidate", args.candidate_model)):
@@ -205,7 +213,12 @@ def noise_pass(args) -> None:
     sequences = load_probe_sequences(args.sequences)
     policy = boot_worker(args.model_path, num_gpus=args.num_gpus)
     batch = build_score_batch(
-        sequences, pad_token_id=PAD_TOKEN_ID, gather_ids=None, exact_positions=False, exact_rate=0.0, master_seed=MASTER_SEED
+        sequences,
+        pad_token_id=PAD_TOKEN_ID,
+        gather_ids=None,
+        exact_positions=False,
+        exact_rate=0.0,
+        master_seed=MASTER_SEED,
     )
     reference, _duration = run_score(policy, batch, top_k=TOP_K, micro_batch_size=1)
     order = np.arange(len(sequences))[::-1]
@@ -261,9 +274,9 @@ def main() -> None:
     noise.add_argument("--num-gpus", type=int, default=8)
 
     args = parser.parse_args()
-    {"reference": reference_pass, "candidate": candidate_pass, "exact": exact_pass, "noise": noise_pass}[
-        args.command
-    ](args)
+    {"reference": reference_pass, "candidate": candidate_pass, "exact": exact_pass, "noise": noise_pass}[args.command](
+        args
+    )
     ray.shutdown()
 
 

@@ -23,12 +23,12 @@ import argparse
 import json
 import time
 
+import fsspec
+import numpy as np
 import ray
+import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
 import torch
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
-
-import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
 from skyrl_train.entrypoints.main_base import config_dir
 from skyrl_train.mismatch_probe.modes import NATIVE_MODE
 from skyrl_train.training_batch import TrainingInputBatch
@@ -68,8 +68,6 @@ def scoring_config(model_path: str, *, num_gpus: int) -> object:
 
 def synthetic_batch(length: int, vocabulary_size: int, seed: int) -> TrainingInputBatch:
     """One synthetic sequence of ``length`` in-vocabulary token ids."""
-    import numpy as np
-
     generator = np.random.default_rng(seed)
     token_ids = generator.integers(10, vocabulary_size, size=(1, length))
     batch = TrainingInputBatch(
@@ -95,8 +93,6 @@ def score_length(policy, length: int, vocabulary_size: int, seed: int) -> dict:
 
 
 def vocabulary_size_of(model_path: str) -> int:
-    import fsspec
-
     filesystem, path = fsspec.core.url_to_fs(model_path)
     with filesystem.open(f"{path.rstrip('/')}/config.json") as handle:
         return int(json.load(handle)["vocab_size"])
@@ -113,10 +109,9 @@ def main() -> None:
 
     cfg = scoring_config(args.model_path, num_gpus=args.num_gpus)
     initialize_ray(cfg)
-    from ray.util.placement_group import placement_group
-
-    from skyrl_train.utils import get_ray_pg_ready_with_timeout
-    from skyrl_train.workers.worker import PPORayActorGroup
+    from ray.util.placement_group import placement_group  # noqa: PLC0415  # the runtime has ray only
+    from skyrl_train.utils import get_ray_pg_ready_with_timeout  # noqa: PLC0415  # skyrl_train only in a SkyRL runtime
+    from skyrl_train.workers.worker import PPORayActorGroup  # noqa: PLC0415
 
     bundles = [{"GPU": args.num_gpus, "CPU": args.num_gpus} for _ in range(1)]
     pg = placement_group(bundles, strategy="PACK")
@@ -140,7 +135,7 @@ def main() -> None:
         for length in sorted(args.lengths):
             try:
                 record = score_length(policy, length, vocabulary_size, args.seed)
-            except Exception as error:  # noqa: BLE001 — an OOM or actor death IS the measurement
+            except Exception as error:
                 records.append({"length": length, "failed": type(error).__name__, "detail": str(error)[:500]})
                 print(f"length {length}: FAILED {type(error).__name__}")
                 break

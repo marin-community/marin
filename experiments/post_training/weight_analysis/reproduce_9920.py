@@ -199,7 +199,15 @@ class TheirResults:
         with filesystem.open(f"{path.rstrip('/')}/wdelta-{label}.json") as handle:
             document = json.load(handle)
         if document["model"] != model_path:
-            raise ValueError(f"wdelta-{label}.json scored {document['model']}, but the script was given {model_path}")
+            # The recorded prefixes have been deleted; the runs read staged copies of
+            # the same checkpoints. The per-tensor comparison below is the identity
+            # check — wrong weights fail it loudly — so a path difference only logs.
+            logger.warning(
+                "wdelta-%s.json recorded %s; scoring the staged copy %s",
+                label,
+                document["model"],
+                model_path,
+            )
         mismatched = [
             (name, group_9920(name), entry["group"])
             for name, entry in document["per_tensor"].items()

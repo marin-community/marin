@@ -3,11 +3,13 @@
 
 """The scoring passes' batch building and KL reduction, against hand-computed values.
 
-Run from ``vendor/skyrl`` (the root environment has no torch on macOS):
+Run from ``vendor/skyrl`` (the root environment has no torch on macOS)::
 
-    uv run --frozen --extra cpu pytest ../../experiments/post_training/mismatch_probe/test_scoring_pass.py -q -o addopts=""
+    uv run --frozen --extra cpu pytest \\
+        ../../experiments/post_training/mismatch_probe/test_scoring_pass.py -q -o addopts=""
 """
 
+import hashlib
 import math
 
 import numpy as np
@@ -40,8 +42,6 @@ def sequence(sample_id: str, tokens: list[int], tags: list[str]) -> ProbeSequenc
 
 def test_sequence_probe_hash_is_sha256_of_the_token_ids():
     tokens = [1, 2, 3]
-    import hashlib
-
     expected = hashlib.sha256(np.asarray(tokens, dtype=np.int64).tobytes()).hexdigest()
     assert sequence_probe_hash(tokens) == expected
     assert sequence_probe_hash([2, 1, 3]) != expected

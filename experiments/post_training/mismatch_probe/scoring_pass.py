@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import torch
 
 from experiments.post_training.mismatch_probe.sequence_kl import (
@@ -269,9 +271,6 @@ def exact_rows_from_passes(
 
 def write_rows_parquet(rows: list[SequenceKLRow], output_path: str | Path) -> int:
     """One parquet file of SequenceKLRow records; returns the row count."""
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
     if not rows:
         raise ValueError("refusing to write an empty parquet file")
     schema = pa.schema(
@@ -309,7 +308,5 @@ def write_rows_parquet(rows: list[SequenceKLRow], output_path: str | Path) -> in
 
 def read_rows_parquet(input_path: str | Path) -> list[SequenceKLRow]:
     """The rows of one pass's parquet file."""
-    import pyarrow.parquet as pq
-
     table = pq.read_table(str(input_path))
     return [SequenceKLRow(**record) for record in table.to_pylist()]

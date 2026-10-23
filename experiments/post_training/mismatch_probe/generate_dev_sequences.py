@@ -24,8 +24,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import random
 import time
 
+import fsspec
 from transformers import AutoTokenizer
 
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
@@ -66,15 +68,18 @@ def render_prompt_ids(tokenizer, prompt: str) -> list[int]:
 
 def select_prompts(reserved_rows: list[dict], x_rows: list[dict], *, count_per_source: int, seed: int) -> list[dict]:
     """``count_per_source`` AIME/HMMT prompts and X prompts, in a seeded order."""
-    import random
-
     generator = random.Random(seed)
     math_rows = [row for row in reserved_rows if any(tag in str(row.get("source", "")) for tag in ("aime", "hmmt"))]
     if len(math_rows) < count_per_source or len(x_rows) < count_per_source:
         raise ValueError(f"need {count_per_source} prompts per source; have {len(math_rows)} math, {len(x_rows)} X")
     chosen = generator.sample(math_rows, count_per_source) + generator.sample(x_rows, count_per_source)
     return [
-        {"sample_id": f"dev-math-{index}", "bucket_group": "P_think", "prompt": row["prompt"], "max_tokens": MATH_MAX_TOKENS}
+        {
+            "sample_id": f"dev-math-{index}",
+            "bucket_group": "P_think",
+            "prompt": row["prompt"],
+            "max_tokens": MATH_MAX_TOKENS,
+        }
         for index, row in enumerate(chosen[:count_per_source])
     ] + [
         {"sample_id": f"dev-x-{index}", "bucket_group": "P_X", "prompt": row["prompt"], "max_tokens": X_MAX_TOKENS}
@@ -84,7 +89,7 @@ def select_prompts(reserved_rows: list[dict], x_rows: list[dict], *, count_per_s
 
 async def generate(engines_client, tokenizer, requests: list[dict], *, master_seed: int) -> list[dict]:
     """One sampled continuation per request; returns the scored-sequence rows."""
-    from skyrl_train.inference_engines.base import InferenceEngineInput
+    from skyrl_train.inference_engines.base import InferenceEngineInput  # noqa: PLC0415  # skyrl_train only in a runtime
 
     prompt_texts = []
     for request in requests:
@@ -140,16 +145,12 @@ def sequence_rows(requests: list[dict], responses: list[str], tokenizer) -> list
 
 
 def read_jsonl(path: str) -> list[dict]:
-    import fsspec
-
     filesystem, path_in_fs = fsspec.core.url_to_fs(path)
     with filesystem.open(path_in_fs) as handle:
         return [json.loads(line) for line in handle if line.strip()]
 
 
 def write_jsonl(path: str, rows: list[dict]) -> None:
-    import fsspec
-
     filesystem, path_in_fs = fsspec.core.url_to_fs(path)
     with filesystem.open(path_in_fs, "w") as handle:
         for row in rows:
@@ -167,14 +168,16 @@ def main() -> None:
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
 
-    import ray
-    from hydra import compose, initialize_config_dir
-    from omegaconf import OmegaConf
-
-    from skyrl_train.entrypoints.main_base import config_dir
-    from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
-    from skyrl_train.inference_engines.ray_wrapped_inference_engine import create_ray_wrapped_inference_engines
-    from skyrl_train.utils import initialize_ray
+    # skyrl_train exists only in a SkyRL runtime environment.
+    import ray  # noqa: PLC0415
+    from hydra import compose, initialize_config_dir  # noqa: PLC0415
+    from omegaconf import OmegaConf  # noqa: PLC0415
+    from skyrl_train.entrypoints.main_base import config_dir  # noqa: PLC0415
+    from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient  # noqa: PLC0415
+    from skyrl_train.inference_engines.ray_wrapped_inference_engine import (  # noqa: PLC0415
+        create_ray_wrapped_inference_engines,
+    )
+    from skyrl_train.utils import initialize_ray  # noqa: PLC0415
 
     with initialize_config_dir(config_dir=config_dir, version_base=None):
         cfg = compose(config_name="ppo_base_config")
