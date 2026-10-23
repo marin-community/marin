@@ -22,7 +22,7 @@ skyrl:
       use_kl_loss: false
       use_kl_in_reward: false
       loss_reduction: token_mean
-      group_advantage_min_size: 4
+      group_advantage_min_size: null
       dynamic_sampling:
         type: null
       policy_loss_type: mixed_policy_grpo
