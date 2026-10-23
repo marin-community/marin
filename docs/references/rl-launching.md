@@ -223,14 +223,17 @@ data-dependent numerical failures in runtime diagnosis rather than guessing at t
 For live submission, monitoring, or recovery, follow the `launch-rl` and `use-iris` skills and
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
-## Snowball inventory
+## Snowball calendar trial
 
 `experiments.post_training.inventory.train` starts RL from Datakit SFT revision
 `fe666478454e79fe6027a0bab0388d9abd68f51a`, using its tokenizer at the same revision.
-It consumes the versioned [task-selection artifact](task-curation.md#final-task-selection).
-For the Snowball inventory, that artifact must contain 100,000 canonical training
-`TaskSpec` rows and a fixed 100-task heldout panel with 20 per family. The same
-artifact retains all 910 heldout source tasks in `full_validation.parquet`.
+It defaults to the `calendar-trial/2026.10.23.1`
+[task-selection artifact](task-curation.md#final-task-selection). The documented
+recipe selects 100 calendar training `TaskSpec` rows and a fixed 100-task heldout
+panel with 20 per family. It retains all 910 heldout source tasks in
+`full_validation.parquet`.
+The curation driver must publish this selection before a live run; the default URI
+comes from its documented recipe, and publication has not been verified.
 SkyRL binds the task harness, rollout limits and verifier backend when loading
 the `task_spec` rows.
 
@@ -238,12 +241,11 @@ Print the three-update qualification plan:
 
 ```bash
 uv run python -m experiments.post_training.inventory.train \
-  --version 2026.10.23.1 --steps 3 \
-  --selection-uri "$SELECTION_URI"
+  --version 2026.10.23.1 --steps 3
 ```
 
-Set `SELECTION_URI` to the `task_selection` path printed by the curation driver
-after `--selection RECIPE.json --run`. Its path includes the selection name and
+To use another published selection, pass its `task_selection` path from the
+curation driver as `--selection-uri`. Its path includes the selection name and
 version and contains `train.parquet`, `validation.parquet` and `summary.json`.
 Check the summary's row counts and family counts before submission.
 Add `--run` to submit. Use a fresh run version for subsequent iterations; the
