@@ -92,11 +92,10 @@ class _Workers:
         return SAMPLES_PER_PROMPT
 
 
+# Starting a real buffer actor spawns a Ray worker that imports the trainer,
+# which takes seconds per test.
 class _InProcessActor:
-    """Serves an actor's ``method.remote(...)`` calls on the caller's event loop.
-
-    Starting a real buffer actor spawns a Ray worker that imports the trainer, which takes seconds per test.
-    """
+    """Serve an actor's ``method.remote(...)`` calls on the caller's event loop."""
 
     def __init__(self, instance):
         self._instance = instance
