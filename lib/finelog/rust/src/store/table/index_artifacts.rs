@@ -15,18 +15,22 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use tokio::sync::RwLock;
+
 use crate::errors::StatsError;
 use crate::indices::{
-    fixed_index_artifacts_exist, local_sidecar_artifacts, needs_rebuild, remove_index_artifacts,
-    IndexBuildRequest, IndexRegistry, SegmentIndexConfig,
+    fixed_index_artifacts_exist, local_sidecar_artifacts, needs_rebuild, needs_rebuild_for_binding,
+    remove_index_artifacts, IndexBuildRequest, IndexRegistry, SegmentIndexConfig,
 };
 use crate::maintenance::MaintenanceLimits;
 use crate::proto::finelog::stats::ObjectRef;
+use crate::query::file_scan::{open_cached_parquet, open_parquet};
 use crate::store::catalog::Catalog;
-use crate::store::compaction::executor::read_segment_projected;
-use crate::store::object_store::{INDICES_PREFIX, PROJECTIONS_PREFIX};
-use crate::store::segment::segment_id;
-use crate::store::table::controller::{TableController, WrittenObject};
+use crate::store::compaction::executor::READ_BATCH_ROWS;
+use crate::store::compaction::staging::StagingDir;
+use crate::store::object_store::{ObjectReference, INDICES_PREFIX, PROJECTIONS_PREFIX};
+use crate::store::segment::{segment_id_of, segment_identity};
+use crate::store::table::controller::TableController;
 use crate::store::table::segment_view::SegmentView;
 use crate::store::table_state::{ArtifactReferences, LocalArtifacts, SourceBinding};
 use crate::store::types::LocalSegment;
@@ -49,16 +53,12 @@ pub async fn publish_segment_artifacts(
     controller: &TableController,
     table: &str,
     staged: &Path,
-    stored: &WrittenObject,
 ) -> Result<(ArtifactReferences, LocalArtifacts), StatsError> {
     let built = local_sidecar_artifacts(staged);
     if built.is_empty() {
         return Ok((ArtifactReferences::default(), LocalArtifacts::default()));
     }
-    let binding = SourceBinding {
-        segment_uuid: segment_id(&stored.path).map(|id| id.to_string()),
-        row_count: built.binding.row_count,
-    };
+    let binding = built.binding.clone();
     let mut references = ArtifactReferences {
         binding: binding.clone(),
         ..Default::default()
@@ -109,6 +109,8 @@ pub async fn publish_segment_artifacts(
 /// Everything the backfill reads and commits through.
 pub struct IndexBackfill<'a> {
     pub table: &'a str,
+    pub table_dir: &'a Path,
+    pub query_visibility: &'a Arc<RwLock<()>>,
     pub catalog: &'a Catalog,
     pub controller: &'a TableController,
     pub segments: &'a SegmentView,
@@ -157,71 +159,115 @@ async fn rebuild_missing_artifacts(backfill: &IndexBackfill<'_>, max: usize) -> 
         }
     };
     for candidate in candidates {
-        let path = match &candidate.source {
-            Some(source) => match backfill.controller.localize(source).await {
-                Ok(path) => path,
-                Err(error) => {
-                    tracing::warn!(namespace = %table, path = %candidate.path, %error, "index backfill source localization failed");
-                    continue;
-                }
-            },
-            None => PathBuf::from(&candidate.path),
-        };
-        let registry = Arc::clone(backfill.registry);
-        let config = backfill.config.clone();
-        let build_path = path.clone();
-        let artifacts = match tokio::task::spawn_blocking(move || {
-            let projection = config.input_columns();
-            let batches = read_segment_projected(&build_path, Some(&projection))?;
-            registry
-                .build(IndexBuildRequest {
-                    source: &build_path,
-                    batches: &batches,
-                    config: &config,
-                })
-                .map_err(|error| StatsError::Internal(format!("build segment index: {error}")))
-        })
-        .await
-        {
-            Ok(Ok(artifacts)) => artifacts,
-            Ok(Err(error)) => {
-                tracing::warn!(namespace = %table, path = %candidate.path, %error, "index backfill build failed");
-                continue;
-            }
+        match rebuild_candidate(backfill, &candidate).await {
+            Ok(changed) => built += usize::from(changed),
             Err(error) => {
-                tracing::warn!(namespace = %table, path = %candidate.path, %error, "index backfill task panicked");
-                continue;
+                tracing::warn!(namespace = %table, path = %candidate.path, %error, "index backfill build failed")
             }
-        };
-        if !artifacts.is_empty() {
-            if let Err(error) = commit_built_artifacts(backfill, &candidate.path).await {
-                tracing::warn!(namespace = %table, path = %candidate.path, %error, "index backfill commit failed");
-                continue;
-            }
-            built += 1;
-            tracing::debug!(namespace = %table, path = %candidate.path, "backfilled segment index artifacts");
-        }
-        if needs_rebuild(
-            &path,
-            candidate.expected_rows,
-            &local_sidecar_artifacts(&path),
-            &backfill.config,
-        ) {
-            tracing::debug!(namespace = %table, path = %candidate.path, "segment cannot satisfy the current index policy; not retrying");
-            backfill.skips.lock().unwrap().paths.insert(candidate.path);
         }
     }
     built
 }
 
-/// Publish the artifacts just built beside `path` and make them live.
+/// Return whether the candidate produced nonempty artifacts.
+async fn rebuild_candidate(
+    backfill: &IndexBackfill<'_>,
+    candidate: &BackfillCandidate,
+) -> Result<bool, StatsError> {
+    let staging = candidate
+        .source
+        .as_ref()
+        .map(|_| StagingDir::create(backfill.table_dir))
+        .transpose()?;
+    let path = staging
+        .as_ref()
+        .map(|dir| dir.path().join("source.parquet"))
+        .unwrap_or_else(|| PathBuf::from(&candidate.path));
+    let input = match &candidate.source {
+        Some(source) => {
+            let store = backfill
+                .controller
+                .object_store()
+                .expect("object segment has a backing store");
+            open_cached_parquet(
+                store.as_ref(),
+                &ObjectReference::try_from(source)?,
+                backfill.query_visibility,
+            )
+            .await?
+        }
+        None => {
+            let size = tokio::fs::metadata(&path)
+                .await
+                .map_err(|error| {
+                    StatsError::Internal(format!("stat index source {}: {error}", path.display()))
+                })?
+                .len();
+            open_parquet(&path.to_string_lossy(), size).await?
+        }
+    };
+    let source_id = segment_id_of(input.metadata())
+        .or_else(|| {
+            candidate
+                .source
+                .is_none()
+                .then(|| segment_identity(&path))
+                .flatten()
+        })
+        .ok_or_else(|| {
+            StatsError::Internal(format!(
+                "index source {} has no immutable identity",
+                candidate.path
+            ))
+        })?;
+    let registry = Arc::clone(backfill.registry);
+    let config = backfill.config.clone();
+    let build_path = path.clone();
+    let runtime = tokio::runtime::Handle::current();
+    let artifacts = tokio::task::spawn_blocking(move || {
+        let projection = config.input_columns();
+        let batches = runtime.block_on(input.read_batches(READ_BATCH_ROWS, Some(&projection)))?;
+        registry
+            .build(IndexBuildRequest {
+                source: &build_path,
+                source_id,
+                batches: &batches,
+                config: &config,
+            })
+            .map_err(|error| StatsError::Internal(format!("build segment index: {error}")))
+    })
+    .await
+    .map_err(|error| StatsError::Internal(format!("index backfill task: {error}")))??;
+    if !artifacts.is_empty() {
+        commit_built_artifacts(backfill, &candidate.path, &path).await?;
+    }
+    if needs_rebuild_for_binding(
+        &SourceBinding {
+            segment_uuid: Some(source_id.to_string()),
+            row_count: candidate.expected_rows,
+        },
+        candidate.expected_rows,
+        &local_sidecar_artifacts(&path),
+        &backfill.config,
+    ) {
+        backfill
+            .skips
+            .lock()
+            .unwrap()
+            .paths
+            .insert(candidate.path.clone());
+    }
+    Ok(!artifacts.is_empty())
+}
+
+/// Publish artifacts built beside `staged` for the catalog segment at `path`.
 async fn commit_built_artifacts(
     backfill: &IndexBackfill<'_>,
     path: &str,
+    staged: &Path,
 ) -> Result<(), StatsError> {
-    let staged = PathBuf::from(path);
     if !backfill.controller.is_object_backed() {
-        let local = local_sidecar_artifacts(&staged);
+        let local = local_sidecar_artifacts(staged);
         if let Some(bundle) = local.bundle.as_ref() {
             backfill.registry.invalidate(bundle);
         }
@@ -230,21 +276,8 @@ async fn commit_built_artifacts(
         });
         return Ok(());
     }
-    let record = backfill
-        .catalog
-        .object_segments(backfill.table)?
-        .into_iter()
-        .find(|record| record.path == path)
-        .ok_or_else(|| {
-            StatsError::Internal(format!("index backfill lost object segment {path}"))
-        })?;
-    let stored = WrittenObject {
-        path: staged.clone(),
-        source: record.source.clone(),
-        byte_size: 0,
-    };
     let (references, local) =
-        publish_segment_artifacts(backfill.controller, backfill.table, &staged, &stored).await?;
+        publish_segment_artifacts(backfill.controller, backfill.table, staged).await?;
     if references.is_empty() {
         return Ok(());
     }
@@ -341,7 +374,7 @@ fn candidates(
         .catalog
         .object_segments(backfill.table)?
         .into_iter()
-        .map(|record| (record.path, record.source))
+        .map(|record| (record.path.clone(), record))
         .collect();
     let fingerprint = format!("{:?}", backfill.config.policy_fingerprint());
     let mut skips = backfill.skips.lock().unwrap();
@@ -356,12 +389,20 @@ fn candidates(
         .filter(|segment| {
             segment.level >= 1
                 && (backfill.layout_is_current)(&segment.path)
-                && needs_rebuild(
-                    Path::new(&segment.path),
-                    segment.row_count,
-                    &segment.artifacts,
-                    &backfill.config,
-                )
+                && match object_sources.get(&segment.path) {
+                    Some(record) => needs_rebuild_for_binding(
+                        &record.artifacts.binding,
+                        segment.row_count,
+                        &segment.artifacts,
+                        &backfill.config,
+                    ),
+                    None => needs_rebuild(
+                        Path::new(&segment.path),
+                        segment.row_count,
+                        &segment.artifacts,
+                        &backfill.config,
+                    ),
+                }
         })
         .collect::<Vec<_>>();
     candidates.sort_by_key(|segment| Reverse(segment.max_seq));
@@ -371,7 +412,9 @@ fn candidates(
         .map(|segment| BackfillCandidate {
             path: segment.path.clone(),
             expected_rows: segment.row_count,
-            source: object_sources.get(&segment.path).cloned(),
+            source: object_sources
+                .get(&segment.path)
+                .map(|record| record.source.clone()),
         })
         .collect())
 }
