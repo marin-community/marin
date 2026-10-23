@@ -4,7 +4,6 @@
 """Select the pinned Snowball tasks and publish canonical TaskSpecs."""
 
 import json
-import shutil
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -25,7 +24,7 @@ from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import SCHEMA_VERSION, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.fingerprints import semantic_digest
 from taskcompendium.pipeline.models import NormalizedTask, RawRow
-from taskcompendium.pipeline.sampling import seeded_order
+from taskcompendium.pipeline.sampling import seeded_order, seeded_sample
 from verifyit.json_objects import unique_object
 from zephyr.writers import write_parquet_file
 
@@ -59,6 +58,13 @@ class IngestConfig:
     validation: str
     validation_rows: int
     output_path: str
+
+
+@dataclass(frozen=True)
+class HeldoutSelection:
+    full: tuple[TaskSpec, ...]
+    sample: tuple[TaskSpec, ...]
+    family_counts: dict[str, int]
 
 
 def current_task(document: dict[str, Any]) -> TaskSpec:
@@ -115,28 +121,38 @@ def validation_task(row: dict[str, Any]) -> TaskSpec:
     return task
 
 
-def prepare(config: IngestConfig) -> None:
-    """Publish the complete training pool and a fixed, disjoint heldout sample."""
-    with StoragePath(config.validation).open("rb") as source:
-        heldout = pq.read_table(source).to_pylist()
-    if len(heldout) != config.validation_rows:
-        raise ValueError("Heldout source row count changed")
-    full = [validation_task(row) for row in heldout]
-    by_id = {task.id: task for task in full}
-    if len(by_id) != len(full):
+def select_heldout(rows: list[dict[str, Any]]) -> HeldoutSelection:
+    """Keep all heldout tasks and select 20 per family in source order."""
+    full = tuple(validation_task(row) for row in rows)
+    if len({task.id for task in full}) != len(full):
         raise ValueError("Heldout task IDs are not unique")
-    if {row["evaluation_family"] for row in heldout} != set(FAMILIES):
+    if {row["evaluation_family"] for row in rows} != set(FAMILIES):
         raise ValueError("Heldout source families changed")
     selected: set[str] = set()
     for family in FAMILIES:
-        candidates = [row for row in heldout if row["evaluation_family"] == family]
-        if len(candidates) < TASKS_PER_FAMILY:
-            raise ValueError(f"Heldout source lacks enough {family} tasks")
-        selected.update(
-            row["task_id"]
-            for row in sorted(candidates, key=lambda row: seeded_order(row["task_id"], SPLIT_SEED))[:TASKS_PER_FAMILY]
+        count, sample = seeded_sample(
+            (row for row in rows if row["evaluation_family"] == family),
+            size=TASKS_PER_FAMILY,
+            key=lambda row: seeded_order(row["task_id"], SPLIT_SEED),
         )
-    fixed = [task for task in full if task.id in selected]
+        if count < TASKS_PER_FAMILY:
+            raise ValueError(f"Heldout source lacks enough {family} tasks")
+        selected.update(row["task_id"] for row in sample)
+    return HeldoutSelection(
+        full=full,
+        sample=tuple(task for task in full if task.id in selected),
+        family_counts=dict(Counter(row["evaluation_family"] for row in rows if row["task_id"] in selected)),
+    )
+
+
+def task_records(tasks: Iterator[TaskSpec]) -> Iterator[dict[str, str]]:
+    for task in tasks:
+        yield {TASK_SPEC_COLUMN: task.model_dump_json()}
+
+
+def write_training(config: IngestConfig, full: tuple[TaskSpec, ...], destination: Path) -> tuple[int, int]:
+    """Write training tasks after auditing them against the full heldout set."""
+    heldout_ids = {task.id for task in full}
     full_public = {semantic_digest(task, False) for task in full}
     full_contexts = {canonical_sha256(task.context.model_dump(mode="json")) for task in full}
     train_ids: set[str] = set()
@@ -152,7 +168,7 @@ def prepare(config: IngestConfig) -> None:
                 for row in batch.to_pylist():
                     task = training_task(row)
                     if (
-                        task.id in by_id
+                        task.id in heldout_ids
                         or semantic_digest(task, False) in full_public
                         or (canonical_sha256(task.context.model_dump(mode="json")) in full_contexts)
                     ):
@@ -170,30 +186,36 @@ def prepare(config: IngestConfig) -> None:
                     train_ids.add(task.id)
                     yield task
 
-    def records(tasks: Iterator[TaskSpec]) -> Iterator[dict[str, str]]:
-        for task in tasks:
-            yield {TASK_SPEC_COLUMN: task.model_dump_json()}
+    write_parquet_file(task_records(training_tasks()), str(destination), schema=TASK_SCHEMA)
+    if len(train_ids) != config.training_rows:
+        raise ValueError("Training import did not preserve every source row")
+    return len(train_ids), rebound_count
 
+
+def prepare(config: IngestConfig) -> None:
+    """Publish the complete training pool and a fixed, disjoint heldout sample."""
+    with StoragePath(config.validation).open("rb") as source:
+        heldout = pq.read_table(source).to_pylist()
+    if len(heldout) != config.validation_rows:
+        raise ValueError("Heldout source row count changed")
+    selection = select_heldout(heldout)
     with TemporaryDirectory(prefix="snowball-inventory-") as temporary:
         directory = Path(temporary)
-        for name, tasks in (
-            (TRAIN_FILENAME, training_tasks()),
-            (VALIDATION_FILENAME, iter(fixed)),
-            (FULL_VALIDATION_FILENAME, iter(full)),
-        ):
-            write_parquet_file(records(tasks), str(directory / name), schema=TASK_SCHEMA)
-        if len(train_ids) != config.training_rows:
-            raise ValueError("Training import did not preserve every source row")
+        training_rows, rebound_count = write_training(config, selection.full, directory / TRAIN_FILENAME)
+        write_parquet_file(
+            task_records(iter(selection.sample)), str(directory / VALIDATION_FILENAME), schema=TASK_SCHEMA
+        )
+        write_parquet_file(
+            task_records(iter(selection.full)), str(directory / FULL_VALIDATION_FILENAME), schema=TASK_SCHEMA
+        )
         summary = {
             "training_source": config.training,
             "validation_source": config.validation,
-            "training_rows": len(train_ids),
-            "validation_rows": len(fixed),
-            "full_validation_rows": len(full),
-            "validation_family_counts": dict(
-                Counter(row["evaluation_family"] for row in heldout if row["task_id"] in selected)
-            ),
-            "validation_task_ids": [task.id for task in fixed],
+            "training_rows": training_rows,
+            "validation_rows": len(selection.sample),
+            "full_validation_rows": len(selection.full),
+            "validation_family_counts": selection.family_counts,
+            "validation_task_ids": [task.id for task in selection.sample],
             "split_seed": SPLIT_SEED,
             "environment_derivation": {
                 "kind": "derived-deployment-environment",
@@ -207,8 +229,7 @@ def prepare(config: IngestConfig) -> None:
         destination = StoragePath(config.output_path)
         destination.mkdirs()
         for name in (TRAIN_FILENAME, VALIDATION_FILENAME, FULL_VALIDATION_FILENAME):
-            with (directory / name).open("rb") as source, (destination / name).open("wb") as target:
-                shutil.copyfileobj(source, target)
+            (destination / name).upload_from(str(directory / name))
         (destination / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
 
