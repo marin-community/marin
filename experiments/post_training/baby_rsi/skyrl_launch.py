@@ -203,6 +203,7 @@ def training_config(
     lr: float,
     seed: int,
     export_every: int,
+    request_window_tokens: int,
 ) -> dict:
     """The SkyRL recipe: GRPO with the rollout-anchored clipped loss on the feed, at staleness 1."""
     plan = profile.role_plan(train_batch, samples_per_prompt)
@@ -210,7 +211,7 @@ def training_config(
     config = {
         "entrypoint": "taskcompendium",
         "context_budget": {
-            "request_window_tokens": profile.request_window_tokens,
+            "request_window_tokens": request_window_tokens,
             "max_new_tokens_per_turn": profile.max_new_tokens_per_turn,
             "max_turns": SESSION["max_turns"],
         },
@@ -322,6 +323,7 @@ def build_run(
     lr: float,
     seed: int,
     export_every: int,
+    request_window_tokens: int | None,
 ) -> ArtifactStep[SkyRLRun]:
     profile = PROFILES[model]
     if export_every % CHECKPOINT_EVERY:
@@ -345,6 +347,7 @@ def build_run(
         lr=lr,
         seed=seed,
         export_every=export_every,
+        request_window_tokens=request_window_tokens or profile.request_window_tokens,
     )
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{model}-{arm}-seed{seed}"
     return skyrl_step(
@@ -402,6 +405,11 @@ def build_run(
 @click.option(
     "--export-every", type=int, required=True, help=f"Steps between HF exports, a multiple of {CHECKPOINT_EVERY}."
 )
+@click.option(
+    "--request-window-tokens",
+    type=int,
+    help="The tokens of a whole multi-turn trajectory, in place of the profile's; a long window can exhaust GPU memory.",
+)
 @rl_build_options
 def main(
     model: str,
@@ -413,6 +421,7 @@ def main(
     lr: float,
     seed: int,
     export_every: int,
+    request_window_tokens: int | None,
 ) -> ArtifactStep[SkyRLRun]:
     return build_run(
         model=model,
@@ -424,6 +433,7 @@ def main(
         lr=lr,
         seed=seed,
         export_every=export_every,
+        request_window_tokens=request_window_tokens,
     )
 
 
