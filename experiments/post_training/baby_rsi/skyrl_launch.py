@@ -75,6 +75,9 @@ CPUS_PER_ROLLOUT_WORKER = 8
 ATTEMPTS_PER_WORKER = 64
 GRADER_MACHINES = 32
 TASK_CPUS = 96
+# A synthesized task gives the solver a shell tool, and the engines refuse a chat request with tools (HTTP 400)
+# unless they parse tool calls. Qwen3 and Snowball write Hermes <tool_call> tags.
+TOOL_CALLS = MappingProxyType({"enable_auto_tools": True, "tool_parser": "hermes"})
 # The rollout limits of the Baby RSI policy (run.py POLICY_LIMITS) and the shell tool of its shell harness.
 SESSION = MappingProxyType(
     {
@@ -157,7 +160,7 @@ PROFILES: Mapping[str, PolicyProfile] = MappingProxyType(
             host_memory="512GB",
             disk="1TB",
             max_num_seqs=128,
-            generator=MappingProxyType({"gpu_memory_utilization": 0.8}),
+            generator=MappingProxyType({"gpu_memory_utilization": 0.8, "engine_init_kwargs": dict(TOOL_CALLS)}),
         ),
         # The 40-GPU geometry of experiments/post_training/async_rl.py: four policy nodes (Megatron TP1, PP2, EP8,
         # so DP16) and one node-sized engine that shards the 256 experts over its eight ranks (DP8, EP8).
@@ -182,7 +185,7 @@ PROFILES: Mapping[str, PolicyProfile] = MappingProxyType(
                     # Each expert matrix goes from the Megatron rank that holds it to the vLLM ranks that serve it.
                     "weight_sync_transport": "expert_block",
                     "expert_block_sync": {"timeout_seconds": 600, "verify": False},
-                    "engine_init_kwargs": {"moe_backend": "triton"},
+                    "engine_init_kwargs": {"moe_backend": "triton", **TOOL_CALLS},
                 }
             ),
         ),
