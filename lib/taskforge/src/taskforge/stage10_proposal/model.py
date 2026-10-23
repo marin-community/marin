@@ -1,59 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The TaskProposal document: a strictly validated YAML front matter plus a markdown body.
+"""Typed proposal JSON with a Markdown body.
 
-A proposal is written as::
-
-    ---
-    id: "d01.algebra.linear-transformations/3"
-    source: {kind: capability, ref: "d01.algebra.linear-transformations", hash: "9f3a..."}
-    grounding: unverified
-    null_reason: null
-    environment: container
-    solver_machine: null
-    verification: composite
-    research_need: needed
-    research_reason: "the deliverable should follow real lab handouts"
-    research:
-      - {kind: web, purpose: "two real lab handouts to model the deliverable on"}
-    build:
-      - "fixtures": "30 matrices with known eigen-structure, generated and checked"
-    resources: ["fixtures/*.json", "grader/check.py"]
-    ---
-    ## Task
-    ...
-
-The body must contain every heading in ``REQUIRED_HEADINGS`` as a level-two heading, once each,
-in that order, unless ``null_reason`` is set, in which case the body may be abbreviated.
-``solver_machine`` pins the machine the solver works on: ``null`` for a container proposal, which runs
-in the image its build publishes, and one of ``SolverMachine`` for any other, so no later stage chooses
-it. ``none``, no machine at all, is legal only for a reasoning proposal.
-``research_need`` must agree with ``research``: ``needed`` lists at least one item and ``not_needed``
-none, and the body of a non-null proposal cites every item, and only listed items, as ``research[i]``.
-``render`` produces the canonical bytes: string scalars are JSON-quoted (valid YAML), keys appear
-in a fixed order, and the body is stripped of trailing whitespace. ``digest`` hashes those bytes,
-so a proposal's identity does not depend on how its author formatted the header.
-
-``document_regex`` constrains generation to that canonical layout: a ``structured_outputs.regex``
-that fully matches ``render(p)`` for every valid ``p`` whose string values hold no ``"``, backslash
-or newline and whose body, outside fenced code, starts with the first required heading, has no other
-level-two heading, and has a line under every required heading but the last.
+The JSON object holds ``header`` and ``body``. Parsing checks the environment,
+research decision and citations, and the ordered Markdown section headings.
+Canonical rendering sorts keys and normalizes body whitespace, so formatting
+alone does not change a proposal's content digest. Generation uses the JSON
+schema derived from these same dataclasses; semantic checks run after decoding.
 """
 
 import json
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
+from typing import Annotated, Any
 
-import yaml
+from pydantic import ConfigDict, StringConstraints, TypeAdapter, ValidationError, with_config
 
-from taskforge.content_hash import sha256_hex
+from taskforge.content_hash import pretty_json, sha256_hex
 
-FRONT_MATTER_DELIMITER = "---"
+Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+
 CODE_FENCES = ("```", "~~~")
-# A fence marker may be indented by spaces and tabs only, which document_regex can express.
 FENCE_INDENT = " \t"
 
 REQUIRED_HEADINGS = (
@@ -63,22 +32,6 @@ REQUIRED_HEADINGS = (
     "Build plan",
     "Grader design and controls",
     "Risks and null conditions",
-)
-
-# Authoring order: render writes the keys in this order and document_regex pins it.
-HEADER_KEYS = (
-    "id",
-    "source",
-    "grounding",
-    "null_reason",
-    "environment",
-    "solver_machine",
-    "verification",
-    "research_need",
-    "research_reason",
-    "research",
-    "build",
-    "resources",
 )
 
 RESEARCH_CITATION = re.compile(r"research\[(\d+)\]")
@@ -157,58 +110,59 @@ class ProposalFormatError(ValueError):
     """The document does not match the proposal format; the message names the field."""
 
 
-class _UniqueKeyLoader(yaml.SafeLoader):
-    """A safe loader that refuses a mapping that repeats a key, which ``safe_load`` resolves to the last value."""
-
-    def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict:
-        seen = []
-        for key_node, _ in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            if key in seen:
-                raise yaml.constructor.ConstructorError(None, None, f"duplicate key {key!r}", key_node.start_mark)
-            seen.append(key)
-        return super().construct_mapping(node, deep=deep)
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ProposalFormatError(f"duplicate key {key!r}")
+        result[key] = value
+    return result
 
 
+@with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True)
 class SourceRef:
     """Where the proposal came from: a catalog capability id or a repository, and its content hash."""
 
     kind: SourceKind
-    ref: str
-    hash: str
+    ref: Text
+    hash: Text
 
 
+@with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True)
 class ResearchItem:
     kind: ResearchKind
-    purpose: str
+    purpose: Text
 
 
+@with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True)
 class BuildItem:
     """One named build artifact and a one-line description; the body explains it."""
 
-    name: str
-    description: str
+    name: Text
+    description: Text
 
 
+@with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True)
 class ProposalHeader:
-    id: str
+    id: Text
     source: SourceRef
     environment: Environment
     solver_machine: SolverMachine | None
     verification: Verification
     grounding: Grounding
     research_need: ResearchNeed
-    research_reason: str
+    research_reason: Text
     research: tuple[ResearchItem, ...]
     build: tuple[BuildItem, ...]
-    resources: tuple[str, ...]
-    null_reason: str | None
+    resources: tuple[Text, ...]
+    null_reason: Text | None
 
 
+@with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True)
 class TaskProposal:
     header: ProposalHeader
@@ -219,37 +173,14 @@ class TaskProposal:
         return sha256_hex(render(self).encode())
 
 
-def _quoted(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
-
-
 def source_text(ref: SourceRef) -> str:
-    """The canonical text of a ``source`` header value."""
-    return f"{{kind: {ref.kind}, ref: {_quoted(ref.ref)}, hash: {_quoted(ref.hash)}}}"
+    """The canonical JSON of a source reference."""
+    return pretty_json(ref)
 
 
 def render(p: TaskProposal) -> str:
-    """Return the canonical text of ``p``."""
-    h = p.header
-    lines = [
-        FRONT_MATTER_DELIMITER,
-        f"id: {_quoted(h.id)}",
-        f"source: {source_text(h.source)}",
-        f"grounding: {h.grounding}",
-        f"null_reason: {'null' if h.null_reason is None else _quoted(h.null_reason)}",
-        f"environment: {h.environment}",
-        f"solver_machine: {'null' if h.solver_machine is None else h.solver_machine}",
-        f"verification: {h.verification}",
-        f"research_need: {h.research_need}",
-        f"research_reason: {_quoted(h.research_reason)}",
-        "research:" if h.research else "research: []",
-        *(f"  - {{kind: {item.kind}, purpose: {_quoted(item.purpose)}}}" for item in h.research),
-        "build:" if h.build else "build: []",
-        *(f"  - {_quoted(item.name)}: {_quoted(item.description)}" for item in h.build),
-        f"resources: [{', '.join(_quoted(r) for r in h.resources)}]",
-        FRONT_MATTER_DELIMITER,
-    ]
-    return "\n".join(lines) + "\n" + _canonical_body(p.body)
+    """Return the canonical JSON of ``p``."""
+    return pretty_json(replace(p, body=_canonical_body(p.body))) + "\n"
 
 
 def _canonical_body(body: str) -> str:
@@ -259,18 +190,12 @@ def _canonical_body(body: str) -> str:
 
 def parse(text: str) -> TaskProposal:
     """Parse and validate a proposal document; raise ``ProposalFormatError`` naming the bad field."""
-    lines = text.replace("\r\n", "\n").split("\n")
-    if lines[0].strip() != FRONT_MATTER_DELIMITER:
-        raise ProposalFormatError(f"document must start with a '{FRONT_MATTER_DELIMITER}' front-matter line")
-    closing = next((i for i in range(1, len(lines)) if lines[i].strip() == FRONT_MATTER_DELIMITER), None)
-    if closing is None:
-        raise ProposalFormatError(f"front matter has no closing '{FRONT_MATTER_DELIMITER}' line")
     try:
-        raw = yaml.load("\n".join(lines[1:closing]), Loader=_UniqueKeyLoader)
-    except yaml.YAMLError as error:
-        raise ProposalFormatError(f"front matter is not valid YAML: {error}") from error
-    header = _header(raw)
-    body = "\n".join(lines[closing + 1 :])
+        proposal = _PROPOSAL.validate_python(json.loads(text, object_pairs_hook=_unique_object))
+    except (json.JSONDecodeError, ValidationError) as error:
+        raise ProposalFormatError(str(error)) from error
+    header, body = proposal.header, proposal.body
+    _solver_machine(header.solver_machine, header.environment)
     if header.null_reason is None:
         _check_headings(body)
     elif not body.strip():
@@ -342,34 +267,7 @@ def _check_research(header: ProposalHeader, body: str) -> None:
             raise ProposalFormatError(f"body: research[{index}] is never cited as research[{index}]")
 
 
-def _header(raw: object) -> ProposalHeader:
-    if not isinstance(raw, Mapping):
-        raise ProposalFormatError(f"front matter must be a mapping, got {type(raw).__name__}")
-    unknown = sorted(str(k) for k in raw if k not in HEADER_KEYS)
-    if unknown:
-        raise ProposalFormatError(f"front matter: unknown key(s) {unknown}; allowed keys are {list(HEADER_KEYS)}")
-    missing = [k for k in HEADER_KEYS if k not in raw]
-    if missing:
-        raise ProposalFormatError(f"front matter: missing key(s) {missing}")
-    null_reason = raw["null_reason"]
-    environment = _enum(Environment, raw["environment"], "environment")
-    return ProposalHeader(
-        id=_text(raw["id"], "id"),
-        source=_source(raw["source"]),
-        environment=environment,
-        solver_machine=_solver_machine(raw["solver_machine"], environment),
-        verification=_enum(Verification, raw["verification"], "verification"),
-        grounding=_enum(Grounding, raw["grounding"], "grounding"),
-        research_need=_enum(ResearchNeed, raw["research_need"], "research_need"),
-        research_reason=_text(raw["research_reason"], "research_reason"),
-        research=tuple(_research(item, f"research[{i}]") for i, item in enumerate(_list(raw["research"], "research"))),
-        build=tuple(_build(item, f"build[{i}]") for i, item in enumerate(_list(raw["build"], "build"))),
-        resources=tuple(_text(item, f"resources[{i}]") for i, item in enumerate(_list(raw["resources"], "resources"))),
-        null_reason=None if null_reason is None else _text(null_reason, "null_reason"),
-    )
-
-
-def _solver_machine(value: object, environment: Environment) -> SolverMachine | None:
+def _solver_machine(value: SolverMachine | None, environment: Environment) -> SolverMachine | None:
     if environment is Environment.CONTAINER:
         if value is not None:
             raise ProposalFormatError(
@@ -380,7 +278,7 @@ def _solver_machine(value: object, environment: Environment) -> SolverMachine | 
         raise ProposalFormatError(
             f"solver_machine: a {environment} proposal declares one of {[str(m) for m in SolverMachine]}, got null"
         )
-    machine = _enum(SolverMachine, value, "solver_machine")
+    machine = value
     if machine is SolverMachine.NONE and environment is not Environment.REASONING:
         raise ProposalFormatError(
             f"solver_machine: only a reasoning proposal may declare {SolverMachine.NONE}; a {environment} "
@@ -389,130 +287,22 @@ def _solver_machine(value: object, environment: Environment) -> SolverMachine | 
     return machine
 
 
-def _text(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ProposalFormatError(f"{field}: expected a non-empty string, got {value!r}")
-    return value.strip()
+_PROPOSAL = TypeAdapter(TaskProposal)
 
 
-def _enum[E: StrEnum](enum: type[E], value: object, field: str) -> E:
-    allowed = [str(member) for member in enum]
-    if value not in allowed:
-        raise ProposalFormatError(f"{field}: {value!r} is not one of {allowed}")
-    return enum(value)
-
-
-def _list(value: object, field: str) -> list:
-    if not isinstance(value, list):
-        raise ProposalFormatError(f"{field}: expected a list, got {value!r}")
-    return value
-
-
-def _mapping(value: object, field: str, keys: tuple[str, ...]) -> Mapping:
-    if not isinstance(value, Mapping) or set(value) != set(keys):
-        raise ProposalFormatError(f"{field}: expected a mapping with exactly the keys {list(keys)}, got {value!r}")
-    return value
-
-
-def _source(value: object) -> SourceRef:
-    raw = _mapping(value, "source", ("kind", "ref", "hash"))
-    return SourceRef(
-        kind=_enum(SourceKind, raw["kind"], "source.kind"),
-        ref=_text(raw["ref"], "source.ref"),
-        hash=_text(raw["hash"], "source.hash"),
-    )
-
-
-def _research(value: object, field: str) -> ResearchItem:
-    raw = _mapping(value, field, ("kind", "purpose"))
-    return ResearchItem(
-        kind=_enum(ResearchKind, raw["kind"], f"{field}.kind"), purpose=_text(raw["purpose"], f"{field}.purpose")
-    )
-
-
-def _build(value: object, field: str) -> BuildItem:
-    if not isinstance(value, Mapping) or len(value) != 1:
-        raise ProposalFormatError(f"{field}: expected a one-entry mapping 'name: description', got {value!r}")
-    ((name, description),) = value.items()
-    return BuildItem(name=_text(name, f"{field} name"), description=_text(description, f"{field}.{name}"))
-
-
-# The document regex. The server's regex dialect rejects escapes of non-metacharacters (``\ ``, ``\-``), so
-# literals escape only REGEX_META rather than going through ``re.escape``.
-REGEX_META = frozenset("\\.+*?()|[]{}^$")
-QUOTED = r'"[^"\\\n]+"'
-
-
-def _not_fence(char: str) -> str:
-    """Text after a line's indent that does not start with three ``char``s, so it neither opens nor closes."""
-    return rf"(?:{char}(?:[^{char}\n][^\n]*)?|{char}{char}(?:[^{char}\n][^\n]*)?)"
-
-
-def _fence_patterns(char: str) -> tuple[str, str]:
-    """A closed fenced block of ``char`` without its final newline, and an unclosed one running to the end."""
-    marker = rf"[ \t]*{char * 3}[^\n]*"
-    inner = rf"[ \t]*(?:[^ \t\n{char}][^\n]*|{_not_fence(char)})?"
-    return rf"{marker}\n(?:{inner}\n)*{marker}", rf"{marker}(?:\n{inner})*"
-
-
-# One body line outside fenced code that is neither a level-two heading nor a fence marker.
-TEXT = (
-    r"(?:[^ \t\n#`~][^\n]*|#[^#\n][^\n]*|##[^ \n][^\n]*|##?"
-    rf"|{_not_fence('`')}|{_not_fence('~')}|[ \t]+(?:[^ \t\n`~][^\n]*|{_not_fence('`')}|{_not_fence('~')})?)"
-)
-_BACKTICK_BLOCK, _BACKTICK_OPEN = _fence_patterns("`")
-_TILDE_BLOCK, _TILDE_OPEN = _fence_patterns("~")
-# A body line, or a whole fenced block, inside which any line, a level-two heading included, is code.
-BODY_LINE = rf"(?:{TEXT}|{_BACKTICK_BLOCK}|{_TILDE_BLOCK})"
-LINE = rf"{BODY_LINE}?\n"
-# The last section: EOS is reachable after any line, inside an unclosed fence too, so decoding does not
-# run on to max_tokens.
-END = rf"(?:{LINE})*(?:{BODY_LINE}|{_BACKTICK_OPEN}|{_TILDE_OPEN})?"
-
-
-def _literal(text: str) -> str:
-    return "".join(r"\n" if ch == "\n" else "\\" + ch if ch in REGEX_META else ch for ch in text)
-
-
-def _alternation(enum: type[StrEnum]) -> str:
-    return "(?:" + "|".join(_literal(str(member)) for member in enum) + ")"
-
-
-def _header_rest() -> str:
-    """The front matter after ``null_reason``, through the closing delimiter."""
-    item = rf"  - \{{kind: {_alternation(ResearchKind)}, purpose: {QUOTED}\}}\n"
-    with_machine = "(?:" + "|".join(_literal(str(m)) for m in SolverMachine if m is not SolverMachine.NONE) + ")"
-    return (
-        rf"(?:environment: {_literal(Environment.CONTAINER)}\nsolver_machine: null\n"
-        rf"|environment: {_literal(Environment.REASONING)}\nsolver_machine: {_alternation(SolverMachine)}\n"
-        rf"|environment: {_literal(Environment.SHELLSIM)}\nsolver_machine: {with_machine}\n)"
-        rf"verification: {_alternation(Verification)}\n"
-        rf"(?:research_need: {ResearchNeed.NEEDED}\nresearch_reason: {QUOTED}\nresearch:\n(?:{item})+"
-        rf"|research_need: {ResearchNeed.NOT_NEEDED}\nresearch_reason: {QUOTED}\nresearch: \[\]\n)"
-        rf"build:(?: \[\]\n|\n(?:  - {QUOTED}: {QUOTED}\n)+)"
-        rf"resources: \[(?:{QUOTED}(?:, {QUOTED})*)?\]\n"
-        rf"{_literal(FRONT_MATTER_DELIMITER)}\n"
-    )
-
-
-def document_regex(proposal_id: str, source: SourceRef) -> str:
-    """A ``structured_outputs.regex`` over a whole proposal document.
-
-    Front-matter keys, their order and enum values are pinned and the ``id`` and ``source`` lines are literal;
-    ``solver_machine`` is ``null`` exactly for a container proposal, and ``none`` only for a reasoning proposal.
-    A proposed document (``null_reason: null``) has every required heading, in order, each but the last with
-    at least one line under it; a null document has a free body. Bodies are free text in which a level-two
-    heading line appears only inside fenced code, and EOS is allowed after any line of the last section.
-    """
-    fixed = _literal(f"{FRONT_MATTER_DELIMITER}\nid: {_quoted(proposal_id)}\nsource: {source_text(source)}\n")
-    sections = "".join(rf"## {_literal(h)}\n(?:{LINE})+" for h in REQUIRED_HEADINGS[:-1])
-    sections += rf"## {_literal(REQUIRED_HEADINGS[-1])}\n{END}"
-    rest = _header_rest()
-    proposed = rf"null\n{rest}\n*{sections}"
-    null = rf"{QUOTED}\n{rest}{END}"
-    return rf"{fixed}grounding: {_alternation(Grounding)}\nnull_reason: (?:{proposed}|{null})"
-
-
-def document_request_fields(proposal_id: str, source: SourceRef) -> dict[str, object]:
-    """Request fields that constrain a completion to ``document_regex``."""
-    return {"structured_outputs": {"regex": document_regex(proposal_id, source)}}
+def document_request_fields(proposal_id: str, source: SourceRef) -> dict[str, Any]:
+    """Constrain generation to the typed proposal schema with fixed identity fields."""
+    schema = _PROPOSAL.json_schema()
+    fields = schema["$defs"]["ProposalHeader"]["properties"]
+    fields["id"] = {"const": proposal_id, "type": "string"}
+    fields["source"] = {"const": json.loads(source_text(source))}
+    return {
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "TaskProposal",
+                "schema": schema,
+                "strict": True,
+            },
+        }
+    }

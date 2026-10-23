@@ -7744,7 +7744,6 @@ dependencies = [
     { name = "marin-zephyr" },
     { name = "openai" },
     { name = "pydantic" },
-    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -7769,7 +7768,6 @@ requires-dist = [
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "openai" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [package.metadata.requires-dev]

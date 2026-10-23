@@ -1,8 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import re
+import json
+from dataclasses import replace
 
+import jsonschema
 import pytest
 
 from taskforge.stage10_proposal.model import (
@@ -19,7 +21,8 @@ from taskforge.stage10_proposal.model import (
     SourceRef,
     TaskProposal,
     Verification,
-    document_regex,
+    body_sections,
+    document_request_fields,
     parse,
     render,
 )
@@ -44,269 +47,143 @@ check.py scores the JSON.
 None known.
 """
 
-# Hand-written by an author: unquoted scalars, block-style mappings, keys out of order, trailing spaces, CRLF.
-AUTHORED = (
-    "---\n"
-    "id: d01.algebra.linear-transformations/3\n"
-    "source:\n"
-    "  kind: capability\n"
-    "  ref: d01.algebra.linear-transformations\n"
-    "  hash: 9f3a12\n"
-    "environment: container\n"
-    "solver_machine: null\n"
-    "verification: composite\n"
-    "grounding: unverified\n"
-    "research_need: needed\n"
-    "research_reason: the deliverable should follow real handouts\n"
-    "research:\n"
-    "  - kind: web\n"
-    "    purpose: two real lab handouts   \n"
-    "build:\n"
-    "  - fixtures: 30 matrices with known eigen-structure\n"
-    "  - grader: 'check.py: scores the JSON'\n"
-    "resources: [fixtures/data.json, 'grader/*.py']\n"
-    "null_reason: null\n"
-    "---\n\n" + BODY.replace("\n", "\r\n") + "\n\n"
-)
-
-PROPOSAL_ID = "d01.algebra.linear-transformations/3"
 SOURCE = SourceRef(SourceKind.CAPABILITY, "d01.algebra.linear-transformations", "9f3a12")
+PROPOSAL_ID = "d01.algebra.linear-transformations/3"
 
 
-def _proposal(
-    research_need: ResearchNeed = ResearchNeed.NEEDED,
-    research: tuple[ResearchItem, ...] = (ResearchItem(ResearchKind.WEB, "two real lab handouts"),),
-    build: tuple[BuildItem, ...] = (BuildItem("fixtures", "30 matrices"), BuildItem("grader", "check.py")),
-    null_reason: str | None = None,
-    body: str = BODY,
-) -> TaskProposal:
-    header = ProposalHeader(
-        id=PROPOSAL_ID,
-        source=SOURCE,
-        grounding=Grounding.UNVERIFIED,
-        null_reason=null_reason,
-        environment=Environment.CONTAINER,
-        solver_machine=None,
-        verification=Verification.COMPOSITE,
-        research_need=research_need,
-        research_reason="the deliverable should follow real handouts",
-        research=research,
-        build=build,
-        resources=("fixtures/data.json", "grader/*.py"),
+@pytest.fixture
+def proposal():
+    return TaskProposal(
+        ProposalHeader(
+            id=PROPOSAL_ID,
+            source=SOURCE,
+            environment=Environment.CONTAINER,
+            solver_machine=None,
+            verification=Verification.CODE,
+            grounding=Grounding.UNVERIFIED,
+            research_need=ResearchNeed.NEEDED,
+            research_reason="Follow real handouts",
+            research=(ResearchItem(ResearchKind.WEB, "two real lab handouts"),),
+            build=(BuildItem("fixtures", "30 matrices"), BuildItem("grader", "check.py")),
+            resources=("fixtures/data.json", "grader/*.py"),
+            null_reason=None,
+        ),
+        BODY,
     )
-    return parse(render(TaskProposal(header, body)))
 
 
-NOT_NEEDED = dict(research_need=ResearchNeed.NOT_NEEDED, research=(), body=BODY.replace(", research[0]", ""))
-NULL = {**NOT_NEEDED, "build": (), "null_reason": "no realistic grader exists", "body": "No private evidence.\nNone.\n"}
+def test_json_round_trip_preserves_typed_content_and_canonical_digest(proposal):
+    authored = json.loads(render(proposal))
+    authored["body"] = authored["body"].replace("\n", "\r\n") + "  \n"
+    authored["header"]["research"][0]["purpose"] += "   "
+    parsed = parse(json.dumps(authored, sort_keys=True, indent=4))
+    assert parsed == proposal
+    assert parsed.header.source.kind is SourceKind.CAPABILITY
+    assert parsed.header.build == proposal.header.build
+    assert render(parse(render(parsed))) == render(parsed)
+    assert parsed.digest == proposal.digest
+    assert replace(parsed, body=BODY.replace("kernel", "image")).digest != parsed.digest
 
 
-def test_authored_document_parses_to_typed_header_and_canonical_form_is_stable():
-    proposal = parse(AUTHORED)
-    header = proposal.header
-    assert header.environment is Environment.CONTAINER
-    assert header.verification is Verification.COMPOSITE
-    assert header.research_need is ResearchNeed.NEEDED
-    assert header.research[0].kind is ResearchKind.WEB
-    assert header.build == (
-        BuildItem("fixtures", "30 matrices with known eigen-structure"),
-        BuildItem("grader", "check.py: scores the JSON"),
+def test_escaped_strings_and_fenced_headings_survive_round_trip(proposal):
+    body = BODY.replace(
+        "Find the kernel of the map.", 'Use "quoted" Unicode λ and path C:\\tmp.\n```markdown\n## Build plan\n```'
     )
-    assert header.resources == ("fixtures/data.json", "grader/*.py")
-
-    canonical = render(proposal)
-    assert parse(canonical) == proposal
-    assert render(parse(canonical)) == canonical
-    assert parse(canonical).digest == proposal.digest
+    expected = replace(
+        proposal, body=body, header=replace(proposal.header, build=(BuildItem('a"b', "line one\nline two\\three"),))
+    )
+    parsed = parse(render(expected))
+    assert parsed == expected
+    assert "## Build plan" in body_sections(parsed.body)["Task"]
+    schema = document_request_fields(PROPOSAL_ID, SOURCE)["response_format"]["json_schema"]["schema"]
+    jsonschema.validate(json.loads(render(parsed)), schema)
 
 
 @pytest.mark.parametrize(
-    ("environment", "machine"),
+    "environment,machine",
     [
         *((Environment.REASONING, machine) for machine in SolverMachine),
         *((Environment.SHELLSIM, machine) for machine in SolverMachine if machine is not SolverMachine.NONE),
     ],
 )
-def test_an_imageless_proposal_declares_its_solver_machine(environment, machine):
-    text = AUTHORED.replace("environment: container", f"environment: {environment}").replace(
-        "solver_machine: null", f"solver_machine: {machine}"
-    )
-
-    proposal = parse(text)
-
-    assert proposal.header.solver_machine is machine
-    assert f"solver_machine: {machine}\n" in render(proposal)
-    assert parse(render(proposal)) == proposal
-    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), render(proposal))
-
-
-def test_only_a_reasoning_proposal_declares_no_machine():
-    text = AUTHORED.replace("environment: container", "environment: shellsim").replace(
-        "solver_machine: null", "solver_machine: none"
-    )
-
-    with pytest.raises(ProposalFormatError, match="only a reasoning proposal may declare none"):
-        parse(text)
-    assert not re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), text)
+def test_imageless_proposal_round_trip_preserves_machine(proposal, environment, machine):
+    expected = replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
+    assert parse(render(expected)) == expected
 
 
 @pytest.mark.parametrize(
-    ("edit", "message"),
+    "environment,machine",
     [
-        (("solver_machine: null\n", ""), "missing key(s) ['solver_machine']"),
-        (("solver_machine: null", "solver_machine: cpython"), "a container proposal runs in its own image"),
-        (("environment: container", "environment: reasoning"), "a reasoning proposal declares one of"),
-        (("solver_machine: null", "solver_machine: container"), "a container proposal runs in its own image"),
-    ],
-    ids=["missing", "container-with-a-machine", "imageless-without-one", "container-as-a-machine"],
-)
-def test_the_solver_machine_must_match_the_environment(edit, message):
-    with pytest.raises(ProposalFormatError, match=re.escape(message)):
-        parse(AUTHORED.replace(*edit))
-
-
-def test_digest_changes_with_content():
-    proposal = parse(AUTHORED)
-    edited = parse(AUTHORED.replace("Find the kernel", "Find the image"))
-    assert edited.digest != proposal.digest
-
-
-@pytest.mark.parametrize(
-    ("edit", "field"),
-    [
-        (("null_reason: null\n", "null_reason: null\nsummary: x\n"), "summary"),
-        (("verification: composite", "verification: rubric"), "verification"),
-        (("research_need: needed", "research_need: maybe"), "research_need"),
-        (("  - kind: web", "  - kind: arxiv"), "research[0].kind"),
-        (("## Build plan", "## Construction"), "## Build plan"),
-        (("hash: 9f3a12", "hash: 12345"), "source.hash"),
+        (Environment.CONTAINER, SolverMachine.CPYTHON),
+        (Environment.SHELLSIM, SolverMachine.NONE),
+        (Environment.REASONING, None),
     ],
 )
-def test_strict_parse_names_the_offending_field(edit, field):
-    with pytest.raises(ProposalFormatError, match=re.escape(field)):
-        parse(AUTHORED.replace(*edit))
+def test_incompatible_environment_and_machine_are_rejected(proposal, environment, machine):
+    invalid = replace(proposal, header=replace(proposal.header, environment=environment, solver_machine=machine))
+    with pytest.raises(ProposalFormatError, match="solver_machine"):
+        parse(render(invalid))
 
 
-FENCED_EXAMPLE = "Find the kernel of the map.\nThe deliverable looks like:\n```markdown\n## Task\n## Build plan\n```\n"
+@pytest.mark.parametrize("key,value", [("unexpected", 1), ("source", {"kind": "capability", "ref": "x", "hash": 7})])
+def test_json_header_contract_rejects_unknown_fields_and_wrong_types(proposal, key, value):
+    raw = json.loads(render(proposal))
+    raw["header"][key] = value
+    with pytest.raises(ProposalFormatError):
+        parse(json.dumps(raw))
 
 
-def test_headings_inside_code_fences_are_not_section_headings():
-    proposal = parse(AUTHORED.replace("Find the kernel of the map.\r\n", FENCED_EXAMPLE))
-    assert "## Build plan\n```" in proposal.body
-    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), render(proposal))
-
-
-@pytest.mark.parametrize(
-    "edit",
-    [("id: d01", "id: d02.other/1\nid: d01"), ("  hash: 9f3a12\n", "  hash: 9f3a12\n  ref: elsewhere\n")],
-    ids=["header", "nested"],
-)
-def test_a_repeated_front_matter_key_is_refused(edit):
+@pytest.mark.parametrize("key", ["id", "hash"])
+def test_duplicate_json_keys_cannot_replace_identity(proposal, key):
+    raw = render(proposal)
+    raw = raw.replace(f'"{key}":', f'"{key}": "forged", "{key}":', 1)
     with pytest.raises(ProposalFormatError, match="duplicate key"):
-        parse(AUTHORED.replace(*edit))
-
-
-def test_null_proposal_may_have_abbreviated_body():
-    text = AUTHORED.split("---\n\n")[0].replace("null_reason: null", "null_reason: no realistic grader exists")
-    proposal = parse(text + "---\nNo private evidence can separate good from bad answers.\n")
-    assert proposal.header.null_reason == "no realistic grader exists"
-    assert parse(render(proposal)) == proposal
+        parse(raw)
 
 
 @pytest.mark.parametrize(
-    ("edit", "message"),
+    "body",
     [
-        (
-            ("research:\n  - kind: web\n    purpose: two real lab handouts   \n", "research: []\n"),
-            "research: research_need is needed but research is empty",
-        ),
-        (
-            ("research_need: needed", "research_need: not_needed"),
-            "research: research_need is not_needed but research lists 1 items",
-        ),
-        (("Generate fixtures.", "Generate fixtures from research[1]."), "body: cites research[1] but research has 1"),
-        (("Two handouts, research[0].", "Two handouts."), "body: research[0] is never cited as research[0]"),
-    ],
-    ids=["needed-empty", "not_needed-with-items", "citation-out-of-range", "item-never-cited"],
-)
-def test_research_consistency_errors(edit, message):
-    with pytest.raises(ProposalFormatError, match=re.escape(message)):
-        parse(AUTHORED.replace(*edit))
-
-
-def test_null_proposal_skips_citation_rules():
-    head = AUTHORED.split("---\n\n")[0].replace("null_reason: null", "null_reason: no realistic grader exists")
-    proposal = parse(head + "---\nNo private evidence; research[3] would not help.\n")
-    assert proposal.header.research_need is ResearchNeed.NEEDED
-
-    header_rule = head.replace("research_need: needed", "research_need: not_needed")
-    with pytest.raises(ProposalFormatError, match="research_need is not_needed"):
-        parse(header_rule + "---\nNo private evidence.\n")
-
-
-@pytest.mark.parametrize("variant", [{}, NOT_NEEDED, NULL], ids=["needed", "not_needed", "null"])
-def test_document_regex_matches_canonical_render(variant):
-    assert re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), render(_proposal(**variant)))
-
-
-@pytest.mark.parametrize(
-    "edit",
-    [
-        ("environment: container", 'environment: "shellsim"'),
-        ("solver_machine: null", "solver_machine: shellsim"),
-        ('build:\n  - "fixtures": "30 matrices"\n  - "grader": "check.py"\n', 'build: {"fixtures": "30 matrices"}\n'),
-        ('hash: "9f3a12"', 'hash: "9f3a"'),
-        ("/3", "/4"),
-        ('"grader/*.py"]\n---\n', '"grader/*.py"]\n'),
-        ('research:\n  - {kind: web, purpose: "two real lab handouts"}\n', "research: []\n"),
-        ("## Build plan\n", ""),
-    ],
-    ids=[
-        "quoted-enum",
-        "container-with-a-machine",
-        "build-mapping",
-        "hash-copy",
-        "changed-id",
-        "missing-closing-delimiter",
-        "needed-with-empty-research",
-        "missing-heading",
+        BODY.replace("## Build plan", "## Construction"),
+        BODY.replace("## Build plan", "## Research plan"),
+        BODY.replace("Find the kernel of the map.", "Find the kernel.\n```"),
     ],
 )
-def test_document_regex_rejects_drift(edit: tuple[str, str]):
-    old, new = edit
-    canonical = render(_proposal())
-    assert old in canonical
-    assert not re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), canonical.replace(old, new, 1))
+def test_malformed_section_boundaries_are_rejected(proposal, body):
+    with pytest.raises(ProposalFormatError, match="body"):
+        parse(render(replace(proposal, body=body)))
 
 
-def test_document_regex_rejects_a_fence_that_swallows_the_next_heading():
-    canonical = render(_proposal())
-    unclosed = canonical.replace("Find the kernel of the map.\n", "Find the kernel of the map.\n```\n")
-    with pytest.raises(ProposalFormatError, match="missing required heading"):
-        parse(unclosed)
-    assert not re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), unclosed)
+@pytest.mark.parametrize("body", [BODY.replace(", research[0]", ""), BODY + "Use research[1].\n"])
+def test_research_references_must_cover_exactly_the_declared_items(proposal, body):
+    with pytest.raises(ProposalFormatError, match="research"):
+        parse(render(replace(proposal, body=body)))
 
 
-def test_document_regex_rejects_headings_out_of_order():
-    swapped = (
-        render(_proposal())
-        .replace("## Research plan", "## SWAP")
-        .replace("## Build plan", "## Research plan")
-        .replace("## SWAP", "## Build plan")
-    )
-    assert not re.fullmatch(document_regex(PROPOSAL_ID, SOURCE), swapped)
+def test_research_decision_and_list_agree_even_for_null_proposals(proposal):
+    invalid = replace(proposal, header=replace(proposal.header, research_need=ResearchNeed.NOT_NEEDED))
+    with pytest.raises(ProposalFormatError, match="research_need"):
+        parse(render(invalid))
+    null = replace(invalid, header=replace(invalid.header, null_reason="No private evidence"), body="No task.\n")
+    with pytest.raises(ProposalFormatError, match="research_need"):
+        parse(render(null))
+    valid = replace(null, header=replace(null.header, research=()))
+    assert parse(render(valid)) == valid
+    assert parse(
+        render(
+            replace(
+                proposal,
+                header=replace(proposal.header, null_reason="No private evidence"),
+                body="No private evidence; research[3] would not help.\n",
+            )
+        )
+    ).header.null_reason
 
 
-@pytest.mark.parametrize(
-    ("variant", "last_section_start"),
-    [({}, "## Risks and null conditions\n"), (NULL, "\n---\n")],
-    ids=["proposed", "null"],
-)
-def test_document_regex_allows_eos_after_any_body_line(variant, last_section_start):
-    canonical = render(_proposal(**variant))
-    start = canonical.index(last_section_start) + len(last_section_start)
-    line_ends = [i + 1 for i in range(start, len(canonical)) if canonical[i] == "\n"]
-    assert line_ends
-    regex = document_regex(PROPOSAL_ID, SOURCE)
-    for end in [start, *line_ends]:
-        assert re.fullmatch(regex, canonical[:end]), canonical[:end]
+def test_generation_schema_pins_identity(proposal):
+    schema = document_request_fields(PROPOSAL_ID, SOURCE)["response_format"]["json_schema"]["schema"]
+    raw = json.loads(render(proposal))
+    jsonschema.validate(raw, schema)
+    raw["header"]["source"]["hash"] = "wrong hash"
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(raw, schema)
