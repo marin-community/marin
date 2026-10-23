@@ -25,6 +25,7 @@ from skyrl_train.workers.megatron.router_telemetry import (
     collision_summary_metrics,
     layer_index,
     local_expert_index,
+    response_row_mask,
     router_telemetry_enabled,
     router_telemetry_record,
     routed_expert_parameters,
@@ -268,3 +269,12 @@ def test_telemetry_flag_defaults_off_and_reads_the_config():
     assert router_telemetry_enabled(cfg) is False
     enabled = OmegaConf.merge(cfg, OmegaConf.create({"trainer": {"router_telemetry": {"enabled": True}}}))
     assert router_telemetry_enabled(enabled) is True
+
+
+def test_response_row_mask_follows_megatrons_sequence_major_router_rows():
+    """Router rows are [s, b] flattened, so row s * b + i is position s of sequence i."""
+    attention_mask = torch.ones(2, 5, dtype=torch.long)
+    loss_mask = torch.tensor([[1, 0, 1], [0, 1, 1]])
+    mask = response_row_mask(attention_mask, loss_mask, num_actions=3)
+    supervised = {(row // 2, row % 2) for row in torch.nonzero(mask).flatten().tolist()}
+    assert supervised == {(2, 0), (4, 0), (3, 1), (4, 1)}
