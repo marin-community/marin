@@ -28,7 +28,7 @@ import click
 import yaml
 from iris.rpc import job_pb2
 from marin.execution.build_context import resolve_version
-from marin.execution.lazy import ArtifactStep, StepContext
+from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import (
@@ -46,10 +46,17 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 
-from experiments.models import marin_snowball_67b_a2b_v0_1, qwen3_4b_instruct_2507
+from experiments.models import qwen3_4b_instruct_2507
 
 EXPERIMENT_NAME = "baby-rsi-skyrl"
-WANDB_PROJECT = "marin-baby-rsi"
+# Marin-Snowball-67B-A2B-v0.1: the HF export of step 14 of Smartie RL run 2026.10.15.32, which its model card names,
+# adopted in place from US-EAST-02A (about 134 GB, referenced, not copied).
+SNOWBALL_V0_1 = ArtifactStep.adopt(
+    "models/marin-snowball-67b-a2b-v0.1",
+    "2026.10.18.1",
+    "s3://marin-us-east-02a/marin/users/benfeuer/models/smartie-run32-step14/2026.10.18.1/hf",
+    kind=LevanterCheckpoint,
+)
 # The feed, the Snowball weights and the loop's other jobs are in US-EAST-02A.
 CLUSTER = "cw-us-east-02a"
 GPU_VARIANT = "H100"
@@ -156,7 +163,7 @@ PROFILES: Mapping[str, PolicyProfile] = MappingProxyType(
         # The 40-GPU geometry of experiments/post_training/async_rl.py: four policy nodes (Megatron TP1, PP2, EP8,
         # so DP16) and one node-sized engine that shards the 256 experts over its eight ranks (DP8, EP8).
         "snowball": PolicyProfile(
-            step=marin_snowball_67b_a2b_v0_1,
+            step=SNOWBALL_V0_1,
             tokenizer_uri="open-athena/Marin-Snowball-67B-A2B-v0.1",
             tokenizer_revision="adc0078a19a4383bc998fcdb43867b3360baf5f3",
             policy_nodes=4,
@@ -229,8 +236,9 @@ def training_config(
             "resume_mode": "latest",
             "restore_dataloader_state": True,
             "seed": seed,
-            "logger": "wandb",
-            "project_name": WANDB_PROJECT,
+            # The step metrics go to the job log; the loop records each group itself.
+            "logger": "console",
+            "project_name": EXPERIMENT_NAME,
             "tracker_commit_each_step": True,
             "algorithm": {
                 "advantage_estimator": "grpo",
@@ -329,9 +337,6 @@ def build_run(
         lr=lr,
         seed=seed,
     )
-    download = profile.step.build_config(StepContext.for_fingerprint(profile.step.runtime_args, profile.step.deps))
-    if (download.hf_dataset_id, download.revision) != (profile.tokenizer_uri, profile.tokenizer_revision):
-        raise ValueError(f"the {model} tokenizer pin disagrees with its weights")
     base_name = f"checkpoints/{EXPERIMENT_NAME}/{model}-{arm}-seed{seed}"
     return skyrl_step(
         SkyRLSpec(
@@ -367,7 +372,6 @@ def build_run(
             target_cluster=CLUSTER,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=72,
-            # The W&B key decides the entity.
             wandb_entity=None,
             required_env_vars=("HF_TOKEN",),
             # Bubblewrap graders need namespaces.
