@@ -7,13 +7,16 @@ import dataclasses
 import itertools
 import json
 import shlex
+import urllib.request
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
 from pydantic import BaseModel
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import PackageSpec
 from taskcompendium.models import VerifyitGrader
 
 from taskforge.agentic import example_build
@@ -29,9 +32,18 @@ from taskforge.llm.policy import LLMPolicy, Message
 
 TASK_ID = "ledger--00"
 TASK = f"tasks/{TASK_ID}.json"
-TASK_JSON = example_build.task_spec(TASK_ID).model_dump_json()
+EXAMPLE_TASK = example_build.task_spec(TASK_ID)
+# Scripted solvers need only the shell and ledger file, not the downloaded CPython runtime.
+SHELL_TASK = EXAMPLE_TASK.model_copy(
+    update={
+        "environment_requirements": EXAMPLE_TASK.environment_requirements.model_copy(
+            update={"capabilities": ("shell", "filesystem"), "package_spec": PackageSpec()}
+        )
+    }
+)
+TASK_JSON = SHELL_TASK.model_dump_json()
 CHANGED = "tasks/changed.json"
-GRADER = example_build.task_spec(TASK_ID).grader
+GRADER = SHELL_TASK.grader
 assert isinstance(GRADER, VerifyitGrader)
 EXPECTED = str(GRADER.parameters["expected"])
 IDEA = CapabilityIdea(
@@ -53,6 +65,17 @@ LIMITS = RolloutLimits(
     verifier_timeout=None,
     cleanup_timeout=30,
 )
+
+
+@pytest.fixture(autouse=True)
+def no_package_downloads(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
+    if request.node.get_closest_marker("integration") is not None:
+        return
+
+    def refuse_download(*args, **kwargs):
+        raise AssertionError("Unit tests must not download ShellSim catalog or runtime assets")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse_download)
 
 
 def call(name: str, **arguments: object) -> tuple[str, dict[str, object]]:
@@ -229,7 +252,7 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     assert replies["call-7"]["results"][TASK]["next"] == "This version has its evidence: submit it now."
     assert replies["call-9"]["missing"] == ["controls", "solver band", "adversary"]
     [accepted] = result.tasks
-    assert accepted.task == example_build.task_spec(TASK_ID)
+    assert accepted.task == SHELL_TASK
     assert (accepted.evidence.solver_runs, accepted.evidence.solver_passes) == (8, 4)
     assert (accepted.evidence.adversary_runs, accepted.evidence.adversary_passes) == (4, 0)
     assert accepted.evidence.controls == [(True, False), (True, True), (False, False)]
@@ -350,9 +373,11 @@ async def test_a_control_that_the_answer_format_rejects_is_no_control():
     assert "controls" in submit["missing"]
 
 
+@pytest.mark.integration
 async def test_the_solver_of_the_example_task_has_python():
+    task_json = EXAMPLE_TASK.model_dump_json()
     script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
+        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task_json)} > {TASK}"),
         call("rollout", paths=[TASK], n=1, role="solver"),
         call("finish", report="done"),
     )
@@ -496,7 +521,7 @@ async def test_finish_refuses_once_while_most_of_the_budget_is_left():
 async def test_submit_refuses_a_grader_that_accepts_a_wrong_answer_made_from_the_controls():
     # The reference is an integer, so a tolerance of 1 also accepts the right control plus or minus 1.
     loose = GRADER.model_copy(update={"parameters": {**GRADER.parameters, "tolerance_abs": 1.0}})
-    task = example_build.task_spec(TASK_ID).model_copy(update={"grader": loose})
+    task = SHELL_TASK.model_copy(update={"grader": loose})
     script = (
         call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task.model_dump_json())} > {TASK}"),
         call("grade", path=TASK, answer=EXPECTED, expect="pass"),
