@@ -72,9 +72,13 @@ uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-02a --
 its feed position; a restarted loop continues the feed, does not write its pool tasks again, gives back the
 synthesized instances that are not in the feed, and does not synthesize the same idea again (`resume.py`).
 
-`evaluate` runs in an Iris GPU task through `job.sh`, which installs vLLM in its own environment and selects the
-task's own GPUs. It takes `--checkpoint NAME=URL` for each HF export and `--probes` for each RSI output directory,
-and `report.py` compares the policies with paired bootstrap intervals over tasks.
+`evaluate` runs in an Iris GPU task through `job.sh`, which installs the Marin vLLM wheel of the SkyRL engines in
+its own environment and selects the task's own GPUs. It takes `--checkpoint NAME=URL` for each HF export and
+`--probes` for each RSI output directory, and `report.py` compares the policies with paired bootstrap intervals over
+tasks. vLLM streams s3:// weights, so no checkpoint goes to the task's disk. Snowball needs a whole 8×H100 node
+(`--gpu H100x8`, about 512 GB of memory), `--weights` with its s3:// copy, and the vLLM arguments of the Marin
+evaluation: `--vllm-arg=--data-parallel-size=8 --vllm-arg=--enable-expert-parallel` (GrugMoE serves only with
+tensor parallel size 1, and without LoRA).
 
 ## Results of the LoRA trainer (2026-10-21)
 
