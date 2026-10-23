@@ -89,6 +89,8 @@ fork-strategy = "fewest"
 # release).
 prerelease = "explicit"
 constraint-dependencies = [
+    # CVE-2026-111497: reject vulnerable transitive Brotli releases.
+    "brotli>=1.2.1",
     # Enable pre-releases for transitive deps that publish no stable release at
     # all. A constraint intersects (rather than replaces) the upstream
     # specifier, so the resolved version still follows whatever requires them;
