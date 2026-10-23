@@ -48,7 +48,7 @@ class ReasoningSpanRule(StrEnum):
 def reasoning_span_violation(text: str, stop_reason: str) -> ReasoningViolation | None:
     """Name the malformed reasoning span in a reply decoded with its special tokens.
 
-    A span left open by a length stop is truncation, not a format error, so it is not a violation.
+    A length stop may leave a reasoning span open without causing a violation.
     """
     openings = [match in _OPENING_MARKERS for match in _REASONING_MARKER.findall(text)]
     if not openings:
