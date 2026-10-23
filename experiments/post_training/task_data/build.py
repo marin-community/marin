@@ -79,10 +79,11 @@ def x(output_dir: Path, cruxeval_prompts: str, train_count: int, probe_count: in
 @click.option("--reserved-pool", required=True, type=click.Path(exists=True, dir_okay=False))
 @click.option("--seed", required=True, type=int)
 @click.option("--limit", default=None, type=int, help="cap the pool rows read, to measure the draw rate")
-def r(output_dir: Path, reserved_pool: str, seed: int, limit: int | None) -> None:
+@click.option("--workers", default=1, show_default=True, type=int, help="processes screening the answers")
+def r(output_dir: Path, reserved_pool: str, seed: int, limit: int | None, workers: int) -> None:
     """Draw the R splits from the pinned pool, excluding the P_think-reserved benchmarks."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    build_r_tasks(output_dir, seed=seed, reserved_pool_path=reserved_pool, limit=limit)
+    build_r_tasks(output_dir, seed=seed, reserved_pool_path=reserved_pool, limit=limit, workers=workers)
 
 
 @cli.command()
