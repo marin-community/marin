@@ -7,9 +7,8 @@
 whose message an author can act on. The caller turns it into the next round's revision detail, and
 the GLM author also sends it back within its structured call.
 
-1. Before running anything it reads the module's top level. A step's memo key covers its own
-   source alone, so a helper function or a constant beside the steps could change without
-   changing any key. The top level may therefore hold only imports, classes (the output models of
+1. Before running anything it checks the module's top level against the authored-program contract.
+   The top level may hold only imports, classes (the output models of
    the steps), ``@rl_env_build_step`` steps, the ``@rl_env_build_sink`` sink and, last,
    ``PROGRAM = rl_env_build_program(..., sink=...)``.
    A step reads whatever else it needs from its inputs, its own body or the build SDK

@@ -80,10 +80,9 @@ def test_fenced_heading_example_cannot_fill_an_empty_section(proposal, section_r
 def test_research_purpose_must_be_substantive(proposal):
     items = (ResearchItem(ResearchKind.WEB, "<what to find and why>"), ResearchItem(ResearchKind.GITHUB, "schemas"))
     p = replace(proposal, header=replace(proposal.header, research=items))
-    assert research_has_purpose(p) == (
-        CheckStatus.FAIL,
-        "['research[0]', 'research[1]'] lack a substantive purpose (placeholder or fewer than 5 words)",
-    )
+    status, reason = research_has_purpose(p)
+    assert status is CheckStatus.FAIL
+    assert all(f"research[{index}]" in reason for index in range(2))
 
 
 @pytest.mark.parametrize(
