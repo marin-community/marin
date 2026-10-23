@@ -10,7 +10,6 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
 import draccus
-import equinox as eqx
 import jax
 import jax.numpy as jnp
 from levanter.compat.hf_checkpoints import DEFAULT_MAX_SHARD_SIZE, _shard_hf_checkpoint
@@ -23,12 +22,12 @@ from rigging.log_setup import configure_logging
 
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, grugmoe_inference_state_dict
 from experiments.grug.moe_hero_ep.ops.vibe_check.completions import digest
-from experiments.grug.moe_hero_ep.weights import restore_weights
+from experiments.grug.moe_hero_ep.weights import cast_weights, restore_weights
 
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
 EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
 
 
@@ -75,7 +74,7 @@ def export(config: ExportConfig) -> None:
     with jax.set_mesh(mesh):
         model = restore_weights(config.checkpoint, config.metadata_digest, config.model, mesh)
         # restore_weights already applied the pending QB update to authoritative weights.
-        model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, model)
+        model = cast_weights(model, jnp.bfloat16)
         jax.block_until_ready(model)
         gc.collect()
         state_dict = grugmoe_inference_state_dict(model)
@@ -108,6 +107,11 @@ def export(config: ExportConfig) -> None:
                     "shards": [asdict(record) for record in records],
                     "mesh": dict(mesh.shape),
                     "process_count": jax.process_count(),
+                    "precision": {
+                        "learned_weights": "bfloat16",
+                        "effective_routing_bias": "float32",
+                        "native_router_projection_output": "bfloat16, widened to float32 before bias/top-k",
+                    },
                 },
             )
 

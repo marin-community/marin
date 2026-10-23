@@ -53,7 +53,7 @@ def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Tr
             ],
         )
         model = eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.router_bias, model, jnp.full((2, 4), 9.0))
-        pending = jnp.array([[1, -2, 4, -1], [-4, 1, 2, 7]], dtype=jnp.float32)
+        pending = jnp.array([[1 + 1 / 1024, -2 - 2 / 1024, 4 + 1 / 1024, -1], [-4, 1, 2, 7]], dtype=jnp.float32)
         state = {"params": model, "pending_qb_betas": pending}
         if master:
             state["master_params"] = model
@@ -91,7 +91,7 @@ def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
         # The established HF mapping is the oracle for unchanged ordinary weights.
         expected = model.to_state_dict()
         # Known centered negative betas replace the saved bias (9).
-        for layer, bias in enumerate([[-0.5, 2.5, -3.5, 1.5], [5.5, 0.5, -0.5, -5.5]]):
+        for layer, bias in enumerate([[-0.5 - 1 / 1024, 2.5 + 2 / 1024, -3.5 - 1 / 1024, 1.5], [5.5, 0.5, -0.5, -5.5]]):
             expected[f"model.layers.{layer}.mlp.router.bias"] = jnp.asarray(bias)
         # Check routed experts independently from the exporter and its bank mapping.
         bank = model.stacked_blocks.stacked.mlp.expert_mlp
@@ -102,7 +102,8 @@ def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
                     expected[f"model.layers.{layer}.mlp.experts.{expert}.{projection}.weight"] = values[layer, expert].T
         assert tensors.keys() == expected.keys()
         for name, value in expected.items():
-            wanted = np.asarray(jax.sharding.reshard(value.astype(jnp.bfloat16), P()))
+            dtype = jnp.float32 if name.endswith(".mlp.router.bias") else jnp.bfloat16
+            wanted = np.asarray(jax.sharding.reshard(value.astype(dtype), P()))
             actual = tensors[name]
             assert actual.shape == wanted.shape and actual.dtype == wanted.dtype, name
             assert actual.tobytes() == wanted.tobytes(), name

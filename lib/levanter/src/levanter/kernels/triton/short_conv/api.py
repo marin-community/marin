@@ -22,6 +22,7 @@ from .reference import OOB_SEGMENT, short_conv_reference
 from .triton_gpu import (
     SEQUENCE_MULTIPLE as TRITON_SEQUENCE_MULTIPLE,
     short_conv_triton_bwd_local,
+    short_conv_triton_dx_local,
     short_conv_triton_fwd_local,
     triton_short_conv_available,
     triton_short_conv_shapes_supported,
@@ -81,21 +82,36 @@ def _short_conv_triton_local(
 
 
 def _short_conv_triton_local_fwd(weight, x, segment_ids, exact_reference_rounding):
-    out = short_conv_triton_fwd_local(weight, x, segment_ids, exact_reference_rounding=exact_reference_rounding)
-    return out, (weight, x, segment_ids)
+    # AD perturbation is static even when the primal arrays are JIT inputs.
+    # An activation-only VJP needs neither x nor the weight-gradient buffer.
+    out = short_conv_triton_fwd_local(
+        weight.value, x.value, segment_ids.value, exact_reference_rounding=exact_reference_rounding
+    )
+    # Scan's transpose requires the same residual leaf count across frozen and
+    # trainable calls. An empty array retains no activation elements.
+    activation = x.value if weight.perturbed else jnp.zeros((0,), dtype=x.value.dtype)
+    return out, (weight.value, activation, segment_ids.value)
 
 
 def _short_conv_triton_local_bwd(exact_reference_rounding, residuals, dy):
+    if isinstance(dy, jax.custom_derivatives.SymbolicZero):
+        return None, None, None
     weight, x, segment_ids = residuals
+    if x.shape == (0,):
+        dx = short_conv_triton_dx_local(weight, segment_ids, dy, exact_reference_rounding=exact_reference_rounding)
+        return None, dx, None
     dx, dw_partials = short_conv_triton_bwd_local(
         weight, x, segment_ids, dy, exact_reference_rounding=exact_reference_rounding
     )
     return jnp.sum(dw_partials, axis=0).astype(weight.dtype), dx, None
 
 
-_short_conv_triton_local.defvjp(_short_conv_triton_local_fwd, _short_conv_triton_local_bwd)
+_short_conv_triton_local.defvjp(_short_conv_triton_local_fwd, _short_conv_triton_local_bwd, symbolic_zeros=True)
 
 
+# Stage the perturbation-aware VJP before shard_map's eager manual-axis trace,
+# which cannot interpret custom_vjp calls with symbolic_zeros=True.
+@functools.partial(jax.jit, static_argnames=("exact_reference_rounding",))
 def _triton_local_call(
     weight: jax.Array,
     x: jax.Array,
@@ -236,6 +252,8 @@ def short_conv(
     path, XLA fusion can change fp32 results.
     Input gradients near shard boundaries combine separately rounded local and
     neighboring contributions, so they can differ from the unsharded reference.
+    Triton reverse-mode differentiation uses an activation-only backward when
+    weights are not differentiated, avoiding weight-gradient work and buffers.
 
     Args:
       weight: ``[kernel_size, channels]`` taps; ``weight[0]`` is the current token.
