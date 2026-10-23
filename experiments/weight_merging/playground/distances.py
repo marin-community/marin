@@ -39,6 +39,10 @@ def main() -> None:
         "active_rounded_to_zero": 0,
         "elements": 0,
     }
+    cast_sums = {
+        coefficient: {"fp32_update_sq": 0.0, "error_sq": 0.0, "fp32_changed": 0, "bf16_changed": 0}
+        for coefficient in (0.1, 0.25, 0.5, 1.0)
+    }
     gram = torch.zeros((3, 3), dtype=torch.float64)
     for name in sorted(anchor_map):
         with ExitStack() as stack:
@@ -56,6 +60,14 @@ def main() -> None:
                 sums["active"] += (delta != 0).sum().item()
                 sums["active_rounded_to_zero"] += ((delta != 0) & (rounded == 0)).sum().item()
                 sums["elements"] += delta.numel()
+                for coefficient, metrics in cast_sums.items():
+                    # Match FP32 task arithmetic, then measure only the serving cast.
+                    target = (b.float() - a.float()).mul_(coefficient).add_(a.float()).double()
+                    served = target.bfloat16().double()
+                    metrics["fp32_update_sq"] += (target - a).square().sum().item()
+                    metrics["error_sq"] += (served - target).square().sum().item()
+                    metrics["fp32_changed"] += (target != a).sum().item()
+                    metrics["bf16_changed"] += (served != a).sum().item()
     sums.update(base_sq=gram[0, 0].item(), donor_sq=gram[1, 1].item(), delta_sq=gram[2, 2].item(), dot=gram[0, 1].item())
     result = {
         "anchor": str(args.anchor),
@@ -65,6 +77,16 @@ def main() -> None:
         "relative_l2": (sums["delta_sq"] / sums["base_sq"]) ** 0.5,
         "cosine": sums["dot"] / (sums["base_sq"] * sums["donor_sq"]) ** 0.5,
         "rounding_error_over_delta": (sums["rounding_error_sq"] / sums["delta_sq"]) ** 0.5,
+    }
+    result["final_bf16_cast"] = {
+        str(coefficient): {
+            **metrics,
+            "surviving_fraction": metrics["bf16_changed"] / max(1, metrics["fp32_changed"]),
+            "error_over_fp32_update": (
+                (metrics["error_sq"] / metrics["fp32_update_sq"]) ** 0.5 if metrics["fp32_update_sq"] else 0.0
+            ),
+        }
+        for coefficient, metrics in cast_sums.items()
     }
     hashes = {}
     for filename in sorted(set(donor_map.values())):

@@ -43,5 +43,10 @@ def test_checkpoint_diagnostic_measures_small_updates_lost_by_bf16_rounding(tmp_
     expected_distance = math.sqrt(sum(value * value for value in differences) / 6)
     assert actual["relative_l2"] == pytest.approx(expected_distance, rel=1e-12)
     assert actual["rounding_error_over_delta"] > 0.2
+    cast = actual["final_bf16_cast"]
+    assert cast["0.1"]["surviving_fraction"] == 0
+    assert cast["1.0"]["surviving_fraction"] == 0.5
+    assert cast["0.1"]["error_over_fp32_update"] == pytest.approx(1.0)
+    assert cast["1.0"]["error_over_fp32_update"] == pytest.approx(actual["rounding_error_over_delta"])
     for filename, digest in actual["donor_sha256"].items():
         assert digest == hashlib.sha256((donor / filename).read_bytes()).hexdigest()
