@@ -19,7 +19,6 @@ GCP_PROJECT = "hai-gcp-models"
 GCP_LOG_BUCKET = "marin-usage-logs"
 CLOUDFLARE_ACCOUNT_ID = "74981a43be0de7712369306c7b19133d"
 R2_BUCKET_NAME = "marin-na"
-R2_PUBLIC_BUCKET_NAME = "marin-na-public"
 R2_PUBLIC_HOSTNAME = "public.oa.dev"
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIRS = (REPO_ROOT / "config",)
@@ -27,6 +26,7 @@ CONFIG_DIRS = (REPO_ROOT / "config",)
 
 def main() -> None:
     gcp_data_config = load_cluster_config_from_dirs("marin", CONFIG_DIRS)
+    public_data_config = load_cluster_config_from_dirs("r2", CONFIG_DIRS)
     s3_data_config = load_cluster_config_from_dirs("coreweave", CONFIG_DIRS)
     gcp_provider = gcp.Provider("gcp", project=GCP_PROJECT)
     coreweave_provider = coreweave.Provider(
@@ -51,7 +51,7 @@ def main() -> None:
     public = R2PublicBucket(
         "public-r2",
         account_id=CLOUDFLARE_ACCOUNT_ID,
-        bucket_name=R2_PUBLIC_BUCKET_NAME,
+        bucket_name=public_data_config.region_buckets["na"].name,
         hostname=R2_PUBLIC_HOSTNAME,
         zone_id=CLOUDFLARE_OA_DEV_ZONE_ID,
         cloudflare_provider=cloudflare_provider,

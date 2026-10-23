@@ -15,7 +15,7 @@ The CLI reads `workerImage`, `publicationPrefix` and `url` from the
 and `--url-prefix` override those outputs.
 
 The publisher needs `CW_KEY_ID`/`CW_KEY_SECRET` for the build store and
-`R2_KEY_ID`/`R2_KEY_SECRET` scoped to writes in `marin-na-public`. Credentials
+`R2_KEY_ID`/`R2_KEY_SECRET` with object read/write access to `marin-na-public`. Credentials
 are needed only while publishing; rotating them does not interrupt downloads.
 Export uploads missing shared assets before writing a versioned catalog, then
 promotes the stable catalog. Assets are immutable and cached for one year;
