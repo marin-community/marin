@@ -3,7 +3,7 @@
 
 """Compare the policies of one ``evaluate`` run on the same tasks, with paired bootstrap intervals over tasks.
 
-Run on the output directory of ``run.py evaluate``::
+Run on the output directory of ``evaluate.py evaluate``::
 
     python -m experiments.post_training.rsi.report s3://<bucket>/<prefix>/evaluate --pair rsi:control
 """
