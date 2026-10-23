@@ -629,9 +629,7 @@ class ToolSession:
         )
         if result.exit_code != 0:
             stderr = result.stderr.decode(errors="replace")
-            raise ToolError(
-                f"`{shlex.join(command)}` failed with exit code {result.exit_code}: {_clip(stderr)}"
-            )
+            raise ToolError(f"`{shlex.join(command)}` failed with exit code {result.exit_code}: {_clip(stderr)}")
         return await self._load(output)
 
     async def _snapshot(self) -> bytes:

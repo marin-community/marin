@@ -353,7 +353,7 @@ async def _feedback_boxes(
     web = await stack.enter_async_context(ParallelWeb(os.environ[PARALLEL_API_KEY_ENV]))
     endpoint = source.current()
     agentic = AgenticConfig(
-        agent_model=chat_model(endpoint.base_url, endpoint.token, GLM_MODEL, "low"),
+        agent_model=chat_model(endpoint, model=GLM_MODEL, reasoning_effort="low", cache_key=None),
         workspace_factory=workspace_factory(),
         solver_model=served.policy,
         judge=judge,
