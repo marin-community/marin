@@ -57,7 +57,7 @@ def triaged(digest: str, **attrs: str) -> WorkpieceEvent:
 
 
 REPAIRED = triaged(
-    "p2", exit="repair", decision="repair", repairs="1", triaged_digest="p1", proposal_file="repaired/1.md"
+    "p2", exit="repair", decision="repair", repairs="1", triaged_digest="p1", proposal_file="repaired/1.json"
 )
 
 

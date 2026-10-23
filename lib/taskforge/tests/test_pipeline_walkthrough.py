@@ -100,23 +100,27 @@ from tests.stage40_build_with_program.scripted_author import PROGRAM as AGENTIC_
 
 WORKPIECE = "toy-0"
 PROPOSAL = parse(
-    """---
-id: "toy/0"
-source: {kind: capability, ref: "toy", hash: "0"}
-grounding: unverified
-null_reason: null
-environment: shellsim
-solver_machine: shellsim
-verification: simple
-research_need: not_needed
-research_reason: "the numbers are in the task's own file"
-research: []
-build:
-  - "numbers": "the file holding the two numbers"
-  - "grader": "checks the product"
-resources: ["workspace/numbers.txt"]
----
-## Task
+    json.dumps(
+        {
+            "header": {
+                "id": "toy/0",
+                "source": {"kind": "capability", "ref": "toy", "hash": "0"},
+                "grounding": "unverified",
+                "null_reason": None,
+                "environment": "shellsim",
+                "solver_machine": "shellsim",
+                "verification": "simple",
+                "research_need": "not_needed",
+                "research_reason": "the numbers are in the task's own file",
+                "research": [],
+                "build": [
+                    {"name": "numbers", "description": "the file holding the two numbers"},
+                    {"name": "grader", "description": "checks the product"},
+                ],
+                "resources": ["workspace/numbers.txt"],
+            },
+            "body": (
+                """## Task
 Multiply the two numbers in /workspace/numbers.txt. The file holds two positive integers on one
 line, separated by a space. Read them, multiply them, and reply with the product alone inside the
 answer box, written as a plain integer with no units, no separators and no explanation around it.
@@ -146,6 +150,9 @@ None. The numbers are small and fixed, so the product cannot overflow and the an
 unambiguous. A solver that guesses cannot reach the product by chance often, and the file holds
 no hint of the answer. No condition makes this task impossible to build in ShellSim.
 """
+            ),
+        }
+    )
 )
 BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_validation_retries=1, max_modify_rounds=1)
 REPAIRING = replace(BUDGET, max_triage_repairs=1)
@@ -926,7 +933,7 @@ async def test_a_repair_verdict_triages_the_repaired_proposal_and_the_later_stag
     assert (repaired.attrs["decision"], repaired.attrs["repairs"]) == ("repair", "1")
     assert (accepted.digest, accepted.attrs["repairs"]) == (content_hash.digest(PROPOSAL), "1")
     assert (tmp_path / "workpieces" / WORKPIECE / repaired.attrs["proposal_file"]).read_text() == render(PROPOSAL)
-    assert repaired.attrs["proposal_file"] == f"{REPAIRED_DIR}/1.md"
+    assert repaired.attrs["proposal_file"] == f"{REPAIRED_DIR}/1.json"
     assert (triage.proposals, repair.calls, proposals) == ([MACHINELESS_SHELLSIM, PROPOSAL], 1, [PROPOSAL])
     assert derive_state(log.events()).triage_repairs == 1
 
