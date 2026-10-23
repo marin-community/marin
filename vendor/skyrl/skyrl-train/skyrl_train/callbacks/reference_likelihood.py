@@ -1,8 +1,4 @@
-"""Fixed-reference likelihood diagnostics on the synchronized rollout policy.
-
-NLL measures reference likelihood, not generated-answer correctness. This callback
-never selects checkpoints, stops training, or applies preservation thresholds.
-"""
+"""Fixed-reference likelihood diagnostics on the synchronized rollout policy."""
 
 import asyncio
 import json
@@ -107,7 +103,7 @@ class ReferenceLikelihoodCallback(TrainerCallback):
     """Score explicit Parquet references at each existing evaluation event.
 
     Inputs contain id, validation_domain, reference_token_ids (prompt + answer),
-    and reference_start. Callers render the full native chat template beforehand.
+    and reference_start.
     Output JSONL retains token IDs and answer logprobs for each training step.
     """
 
