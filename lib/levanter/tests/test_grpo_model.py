@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from levanter.grpo import GrpoConfig, KlGradient, grpo_loss
-from levanter.grpo_model import GrpoExample, grpo_model_loss, response_logprobs
+from levanter.grpo_model import GrpoExample, grpo_model_loss, pack_grpo_examples, response_logprobs
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import QwenConfig
@@ -53,7 +53,8 @@ def model_batch(request):
 
 def full_softmax_scores(model, batch):
     model = inference_mode(model, True)
-    mask = AttentionMask.causal().with_segment_ids(batch.attention_mask.astype(jnp.int32))
+    segments = batch.segment_ids if batch.segment_ids is not None else batch.attention_mask.astype(jnp.int32)
+    mask = AttentionMask.causal().with_segment_ids(segments)
     logits = model(batch.tokens, mask, pos_ids=batch.position_ids).rearrange(("batch", "position", "vocab"))
     tokens = batch.tokens.rearrange(("batch", "position"))
     width = batch.response_mask.axis_size("response")
@@ -122,3 +123,89 @@ def test_grpo_model_value_and_gradients_match_full_softmax(model_batch):
     ):
         np.testing.assert_allclose(observed, reference, atol=1e-6, rtol=1e-5)
     assert max(float(jnp.max(jnp.abs(g))) for g in jax.tree_util.tree_leaves(gradient)) > 1e-3
+
+
+@pytest.mark.parametrize("with_reference", [False, True])
+def test_packed_response_scores_preserve_context_positions_and_objectives(model_batch, with_reference):
+    model, batch = model_batch
+    batch = dataclasses.replace(
+        batch, reference_logprobs=hax.full(batch.response_mask.axes, -3.2) if with_reference else None
+    )
+    packed = pack_grpo_examples(batch, sequence_length=13, pad_token_id=0, batch_size_multiple=2, minimum_rows=3)
+    expected_rows = ((max(3, len(jax.devices())) + 1) // 2) * 2
+    assert packed.tokens.array.shape == (expected_rows, 13)
+    assert packed.response_mask.array.shape == (expected_rows, 12)
+    assert packed.segment_ids is not None
+    source_active = np.asarray(batch.response_mask.array) > 0
+    packed_active = np.asarray(packed.response_mask.array) > 0
+    original_scores = eqx.filter_jit(response_logprobs)(model, batch, block_size=8)
+    packed_scores = eqx.filter_jit(response_logprobs)(model, packed, block_size=8)
+    np.testing.assert_allclose(
+        packed_scores.array[packed_active], original_scores.array[source_active], atol=1e-5, rtol=1e-5
+    )
+    np.testing.assert_allclose(packed_scores.array, full_softmax_scores(model, packed).array, atol=1e-5, rtol=1e-5)
+    response_names = ("response_mask", "advantages", "policy_weights", "kl_weights", "old_logprobs")
+    if with_reference:
+        response_names += ("reference_logprobs",)
+    else:
+        assert packed.reference_logprobs is None
+    for name in response_names:
+        np.testing.assert_array_equal(
+            np.asarray(getattr(packed, name).array)[packed_active],
+            np.asarray(getattr(batch, name).array)[source_active],
+        )
+    segments = np.asarray(packed.segment_ids.array)
+    for document in range(batch.tokens.axis_size("batch")):
+        locations = segments == document
+        valid = np.asarray(batch.attention_mask.array[document]) > 0
+        np.testing.assert_array_equal(np.asarray(packed.tokens.array)[locations], batch.tokens.array[document][valid])
+        np.testing.assert_array_equal(
+            np.asarray(packed.position_ids.array)[locations], batch.position_ids.array[document][valid]
+        )
+    boundary = (segments[:, 1:] != segments[:, :-1]) | (segments[:, 1:] < 0)
+    for name in ("response_mask", "policy_weights", "kl_weights"):
+        assert np.all(np.asarray(getattr(packed, name).array)[boundary] == 0)
+    if expected_rows > len(jax.devices()):
+        assert np.all(segments[len(jax.devices()) :] == -1)
+    with pytest.raises(ValueError, match="exceeds"):
+        pack_grpo_examples(batch, sequence_length=7, pad_token_id=0)
+    with pytest.raises(ValueError, match="unpacked trajectories"):
+        pack_grpo_examples(packed, sequence_length=13, pad_token_id=0)
+
+
+@pytest.mark.parametrize("with_reference", [False, True])
+def test_packed_grpo_value_and_gradients_match_unpacked_full_softmax(model_batch, with_reference):
+    model, batch = model_batch
+    old = full_softmax_scores(model, batch)
+    Batch = batch.tokens.resolve_axis("batch")
+    signs = hax.named(jnp.where(jnp.arange(Batch.size) % 2 == 0, 0.7, -1.2), Batch)
+    batch = dataclasses.replace(
+        batch,
+        advantages=batch.response_mask * signs,
+        old_logprobs=old + 0.03,
+        reference_logprobs=old - 0.2 if with_reference else None,
+    )
+    packed = pack_grpo_examples(batch, sequence_length=13, pad_token_id=0)
+    config = GrpoConfig(0.2, 0.2, 0.15 if with_reference else 0.0, KlGradient.DIFFERENTIABLE)
+
+    def packed_loss(model):
+        return grpo_model_loss(model, packed, key=None, config=config, accumulation_steps=1, block_size=8)[0]
+
+    def reference_loss(model):
+        return grpo_loss(
+            full_softmax_scores(model, batch),
+            batch.old_logprobs,
+            batch.reference_logprobs,
+            batch.advantages,
+            batch.policy_weights,
+            batch.kl_weights,
+            config=config,
+            accumulation_steps=1,
+        )[0]
+
+    actual, gradient = eqx.filter_jit(eqx.filter_value_and_grad(packed_loss))(model)
+    expected, expected_gradient = eqx.filter_jit(eqx.filter_value_and_grad(reference_loss))(model)
+    np.testing.assert_allclose(actual, expected, atol=1e-5, rtol=1e-5)
+    for observed, reference in zip(jax.tree.leaves(gradient), jax.tree.leaves(expected_gradient), strict=True):
+        np.testing.assert_allclose(observed, reference, atol=1e-6, rtol=1e-5)
+    assert max(float(jnp.max(jnp.abs(g))) for g in jax.tree.leaves(gradient)) > 1e-3
