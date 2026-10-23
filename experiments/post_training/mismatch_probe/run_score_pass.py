@@ -195,16 +195,16 @@ def exact_pass(args) -> None:
 
 
 def noise_pass(args) -> None:
-    """B against B under changed batch layouts: the pre-registered floor.
+    """B against B under changed batch layouts: the pre-registered floor, in KL nats/token.
 
-    Three rescorings are each compared with a micro-batch-1 pass in file order:
-    the same layout again (run-to-run nondeterminism), the order reversed (each
-    sequence on a different rank beside different neighbours), and the order
-    reversed at micro-batch 4 (padding shared within a micro-batch). Per-sequence
-    deltas show which change carries the floor.
+    B's micro-batch-1 pass in file order supplies the top-K support and tail; B is
+    then gathered on that support under each changed layout and reduced exactly as
+    the E-vs-B signal is. The layouts separate run-to-run nondeterminism (same
+    layout), rank and neighbour placement (order reversed), and micro-batch
+    composition (order reversed at micro-batch 4).
     """
     sequences = load_probe_sequences(args.sequences)
-    batch = build_score_batch(
+    plain = build_score_batch(
         sequences,
         pad_token_id=PAD_TOKEN_ID,
         gather_ids=None,
@@ -212,8 +212,6 @@ def noise_pass(args) -> None:
         exact_rate=0.0,
         master_seed=MASTER_SEED,
     )
-    mask = batch["attention_mask"].astype(bool)
-    mask[:, 0] = False  # position 0's support belongs to no scored token
     reversed_order = np.arange(len(sequences))[::-1]
     layouts = {
         "same layout": (np.arange(len(sequences)), 1),
@@ -222,37 +220,61 @@ def noise_pass(args) -> None:
     }
     report = {"model_path": args.model_path, "layouts": {}}
     with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
-        base, _duration = run_score(policy, batch, top_k=TOP_K, micro_batch_size=1)
+        support, _duration = run_score(policy, plain, top_k=TOP_K, micro_batch_size=1)
+        padded_len = support["topk_ids"].shape[1]
+        gather = np.stack(
+            [
+                candidate_gather_ids(
+                    sequence, support["topk_ids"][row, padded_len - len(sequence.token_ids) : -1], padded_len
+                )
+                for row, sequence in enumerate(sequences)
+            ]
+        )
+        gathered_batch = build_score_batch(
+            sequences,
+            pad_token_id=PAD_TOKEN_ID,
+            gather_ids=gather,
+            exact_positions=False,
+            exact_rate=0.0,
+            master_seed=MASTER_SEED,
+        )
         for name, (order, micro_batch_size) in layouts.items():
             rescored, duration = run_score(
-                policy, shuffled_batch(batch, order), top_k=TOP_K, micro_batch_size=micro_batch_size
+                policy,
+                shuffled_batch(gathered_batch, order),
+                top_k=None,
+                micro_batch_size=micro_batch_size,
+                support_width=TOP_K,
             )
             # order is a permutation that is its own inverse (identity or reversal).
             rescored = {key: value[order] for key, value in rescored.items()}
-            delta = np.abs(rescored["topk_logprobs"].astype(np.float64) - base["topk_logprobs"].astype(np.float64))
-            same_ids = rescored["topk_ids"] == base["topk_ids"]
-            per_sequence = [
-                {
-                    "sample_id": sequence.sample_id,
-                    "length": len(sequence.token_ids),
-                    "abs_mean": float(delta[row][mask[row]].mean()),
-                    "abs_max": float(delta[row][mask[row]].max()),
-                    "top1_id_agreement": float(same_ids[row][mask[row]][:, 0].mean()),
-                }
-                for row, sequence in enumerate(sequences)
-            ]
-            report["layouts"][name] = {
-                "compared_values": int(delta[mask].size),
-                "abs_max": float(delta[mask].max()),
-                "abs_mean": float(delta[mask].mean()),
-                "rms": float(np.sqrt((delta[mask] ** 2).mean())),
-                "top1_id_agreement": float(same_ids[mask][:, 0].mean()),
-                "seconds": duration,
-                "per_sequence": per_sequence,
-            }
-            print(
-                name, json.dumps({key: value for key, value in report["layouts"][name].items() if key != "per_sequence"})
+            rows = kl_rows_from_passes(
+                sequences,
+                support["topk_ids"],
+                support["topk_logprobs"],
+                support["topk_tail_logmass"],
+                rescored["gathered_logprobs"],
+                rescored["gathered_tail_logmass"],
+                reference_id=f"{args.model_path} micro-batch 1",
+                candidate_id=f"{args.model_path} {name}",
+                candidate_step=0,
             )
+            kls = np.asarray([row.kl for row in rows])
+            per_sequence = {}
+            for row in rows:
+                per_sequence.setdefault(row.sequence_id, []).append(row.kl)
+            report["layouts"][name] = {
+                "positions": len(rows),
+                "token_mean_kl": float(kls.mean()),
+                "p50": float(np.percentile(kls, 50)),
+                "p90": float(np.percentile(kls, 90)),
+                "max": float(kls.max()),
+                "sequence_mean_kl": float(np.mean([np.mean(values) for values in per_sequence.values()])),
+                "seconds": duration,
+                "per_sequence_mean_kl": {key: float(np.mean(values)) for key, values in per_sequence.items()},
+            }
+            summary = {key: value for key, value in report["layouts"][name].items() if key != "per_sequence_mean_kl"}
+            print(name, json.dumps(summary))
     with open(args.out, "w") as handle:
         json.dump(report, handle, indent=2)
 
