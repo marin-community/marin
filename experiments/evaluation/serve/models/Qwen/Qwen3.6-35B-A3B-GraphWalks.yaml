@@ -1,0 +1,21 @@
+name: qwen3.6-35b-a3b-graphwalks
+location: Qwen/Qwen3.6-35B-A3B
+apply_chat_template: true
+resource_hint:
+  memory: 320g
+  gpu:
+    H100: 4
+serve:
+  tensor_parallel_size: 2
+  data_parallel_size: 2
+  max_model_len: 262144
+  limit_mm_per_prompt: '{"image":0,"video":0}'
+  vllm_extra_args:
+  - --enable-prefix-caching
+generation:
+  chat_template_kwargs:
+    enable_thinking: true
+agent:
+  agent_kwargs:
+    thinking_format: qwen-chat-template
+    extra_body: '{"chat_template_kwargs":{"enable_thinking":true}}'

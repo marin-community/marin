@@ -23,6 +23,7 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    SIMULATED_EPOCHING_MAX_FLOPS,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
@@ -320,7 +321,7 @@ def build_diagnostic_run(
             total_steps=total_schedule_steps,
             batch_size=batch_size,
             max_seq_len=model.max_seq_len,
-            experiment_flops=experiment_flops,
+            enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
             validation=validation,
         )
         return GrugRunConfig(

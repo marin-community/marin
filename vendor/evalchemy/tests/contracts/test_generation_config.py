@@ -11,6 +11,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 import transformers
 import yaml
@@ -25,6 +27,7 @@ from finestore.eval import ARCHIVE_SAMPLES_TABLE
 from finestore.reader import ReadView
 from tokenizers import Tokenizer, models, pre_tokenizers
 
+from eval.chat_benchmarks.GraphWalks import eval_instruct as graphwalks
 from eval.chat_benchmarks.MATH500.eval_instruct import MATH500Benchmark
 from eval.chat_benchmarks.AIME24.eval_instruct import AIME24Benchmark
 from eval.chat_benchmarks.MMLUPro.eval_instruct import MMLUProBenchmark, generate_cot_prompt
@@ -932,3 +935,28 @@ def generate(model, request):
         async with LMBackend(model) as backend:
             return await backend.execute(request)
     return asyncio.run(run())
+
+
+def test_graphwalks_wire_retains_per_example_budget_under_global_override(endpoint, tmp_path, monkeypatch):
+    rows = [{"prompt": "Find the nodes", "prompt_chars": 14, "answer_nodes": nodes, "problem_type": "bfs"}
+            for nodes in (["a", "b"], ["node"] * 100)]
+    for index, filename in enumerate(graphwalks.GRAPHWALKS_FILES):
+        pq.write_table(pa.Table.from_pylist(rows if index == 0 else [], schema=pa.Table.from_pylist(rows).schema),
+                       tmp_path / filename)
+    monkeypatch.setattr(graphwalks, "fetch_hf", lambda _repo, filename, **_kwargs: str(tmp_path / filename))
+    endpoint.outputs = ["Final Answer: [a, b]", "Final Answer: [node]"]
+    model = _model(endpoint, LocalChatCompletion, header={"Authorization": "Bearer offline-test"})
+    model.tokenizer = SimpleNamespace(
+        encode=lambda text, **_kwargs: text.split(),
+        apply_chat_template=lambda messages, **_kwargs: [0] * (len(messages[0]["content"].split()) + 2),
+    )
+    args = Namespace(model_args="", max_length=10000, max_tokens=32768, gen_kwargs={"temperature": 0.7})
+    result = evaluate(
+        model, SimpleNamespace(get_benchmark=lambda _task: graphwalks.GraphWalksBenchmark()), None,
+        ["GraphWalks"], {"GraphWalks": "Evalchemy chat benchmark"}, [1], args=args,
+    )
+
+    assert [payload["max_tokens"] for payload in endpoint.requests] == [8200, 8396]
+    assert [payload["temperature"] for payload in endpoint.requests] == [0.7, 0.7]
+    assert [sample["arguments"][0][1]["max_gen_toks"] for sample in result["samples"]["GraphWalks"]] == [8200, 8396]
+    assert result["results"]["GraphWalks"]["f1"] == 1.0

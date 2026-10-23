@@ -33,6 +33,9 @@ const MAX_PARALLEL_FETCHES: usize = 8;
 
 const MAX_PARALLEL_UPLOADS: usize = 8;
 
+/// Let queued readers run between batches of filesystem removals.
+const CACHE_DELETE_BATCH_FILES: usize = 16;
+
 /// Minimum gap between eviction sweeps. `gc` runs once per table per
 /// maintenance cycle; the sweep is store-wide, so most calls return
 /// immediately.
@@ -160,6 +163,14 @@ impl CachedObjectStore {
         let _permit = self.fetches.acquire().await.map_err(|error| {
             StatsError::Internal(format!("object cache fetch semaphore: {error}"))
         })?;
+        self.materialize_reserved(reference).await
+    }
+
+    /// Materialize with a download slot already held by the caller.
+    async fn materialize_reserved(
+        &self,
+        reference: &ObjectReference,
+    ) -> Result<PathBuf, StatsError> {
         // A concurrent fetch of the same object may have won while this one
         // waited for a download slot.
         if let Some(path) = self.lookup(reference).await? {
@@ -211,32 +222,45 @@ impl CachedObjectStore {
             victims.push(entry.path);
         }
         let evicted = victims.len();
-        // No scan may hold any of these paths: eviction waits out every pinned
-        // read before the first unlink.
-        let _visibility = self.query_visibility.write().await;
-        tokio::task::spawn_blocking(move || {
-            for path in victims {
-                match std::fs::remove_file(&path) {
-                    Ok(()) => {}
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(error) => {
-                        return Err(StatsError::Internal(format!(
-                            "evict object cache {}: {error}",
-                            path.display()
-                        )))
-                    }
-                }
-            }
-            Ok(())
-        })
-        .await
-        .map_err(|error| StatsError::Internal(format!("object cache evict task: {error}")))??;
+        self.remove_cached_paths(victims).await?;
         tracing::info!(
             evicted,
             cache_bytes = total,
             capacity_bytes,
             "object cache evicted least-recently-used files"
         );
+        Ok(())
+    }
+
+    async fn remove_cached_paths(&self, paths: Vec<PathBuf>) -> Result<(), StatsError> {
+        for batch in paths.chunks(CACHE_DELETE_BATCH_FILES) {
+            let batch = batch.to_vec();
+            // Readers pin cache paths until their scan completes. Move the
+            // guard into the blocking task so cancellation cannot release it
+            // while that task is still unlinking files.
+            let visibility = self.query_visibility.clone().write_owned().await;
+            tokio::task::spawn_blocking(move || {
+                let _visibility = visibility;
+                for path in batch {
+                    match std::fs::remove_file(&path) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(error) => {
+                            return Err(StatsError::Internal(format!(
+                                "remove object cache {}: {error}",
+                                path.display()
+                            )))
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .await
+            .map_err(|error| {
+                StatsError::Internal(format!("object cache removal task: {error}"))
+            })??;
+            tokio::task::yield_now().await;
+        }
         Ok(())
     }
 }
@@ -326,10 +350,17 @@ impl ObjectStore for CachedObjectStore {
     }
 
     fn warm(&self, reference: &ObjectReference) {
+        // Warming is optional: scans can read the remote object directly.
+        // Reserving before spawning prevents a broad or cancelled query from
+        // leaving thousands of queued downloads churning the cache afterward.
+        let Ok(permit) = self.fetches.clone().try_acquire_owned() else {
+            return;
+        };
         let store = self.clone();
         let reference = reference.clone();
         tokio::spawn(async move {
-            if let Err(error) = store.materialize(&reference).await {
+            let _permit = permit;
+            if let Err(error) = store.materialize_reserved(&reference).await {
                 tracing::debug!(%error, object = ?reference.id.as_str(),
                     "background cache fill failed; the next scan reads remote again");
             }
@@ -364,23 +395,12 @@ impl ObjectStore for CachedObjectStore {
         if outcome.deleted.is_empty() {
             return outcome;
         }
-        let _visibility = self.query_visibility.write().await;
-        let cache = self.cache.clone();
-        let deleted = outcome.deleted.clone();
-        let cache_result = tokio::task::spawn_blocking(move || {
-            for id in &deleted {
-                cache.remove(id)?;
-            }
-            Ok::<(), StatsError>(())
-        })
-        .await;
-        let cache_error = match cache_result {
-            Ok(Ok(())) => None,
-            Ok(Err(error)) => Some(error),
-            Err(error) => Some(StatsError::Internal(format!(
-                "object cache delete task: {error}"
-            ))),
-        };
+        let paths = outcome
+            .deleted
+            .iter()
+            .map(|id| self.cache.path(id))
+            .collect();
+        let cache_error = self.remove_cached_paths(paths).await.err();
         DeleteManyOutcome {
             deleted: outcome.deleted,
             error: outcome.error.or(cache_error),
@@ -501,7 +521,10 @@ mod tests {
     use super::*;
     use crate::store::object_store::build_remote_object_store;
     use crate::store::object_store::ObjectVersion;
-    use crate::test_support::unique_dir;
+    use crate::test_support::{
+        unique_dir, FaultAction, FaultGate, FaultInjectingObjectStore, ObjectFault, ObjectOp,
+        ObjectPattern,
+    };
 
     fn reference(table: &str, key: &str, bytes: &[u8]) -> ObjectReference {
         ObjectReference {
@@ -635,5 +658,118 @@ mod tests {
         roots.iter().for_each(|root| {
             std::fs::remove_dir_all(root).ok();
         });
+    }
+
+    #[tokio::test]
+    async fn cache_cleanup_admits_readers_before_removing_every_file() {
+        let (store, roots) = cached_store("object_cache_cleanup_readers", None);
+        let paths: Vec<_> = (0..CACHE_DELETE_BATCH_FILES * 3)
+            .map(|index| roots[1].join(format!("victim-{index}")))
+            .collect();
+        for path in &paths {
+            std::fs::write(path, b"cached").unwrap();
+        }
+
+        let original_reader = store.query_visibility.read().await;
+        let mut cleanup = Box::pin(store.remove_cached_paths(paths.clone()));
+        assert!(futures::poll!(&mut cleanup).is_pending());
+        let mut next_reader = Box::pin(store.query_visibility.read());
+        assert!(futures::poll!(&mut next_reader).is_pending());
+        drop(original_reader);
+
+        let (removed, ()) = tokio::join!(cleanup, async {
+            let _reader = next_reader.await;
+            let remaining = paths.iter().filter(|path| path.exists()).count();
+            assert!(
+                remaining > 0,
+                "cleanup monopolized the lock until every unlink finished"
+            );
+            assert!(
+                remaining < paths.len(),
+                "reader did not follow the first cleanup batch"
+            );
+        });
+        removed.unwrap();
+        assert!(paths.iter().all(|path| !path.exists()));
+        roots.iter().for_each(|root| {
+            std::fs::remove_dir_all(root).unwrap();
+        });
+    }
+
+    #[tokio::test]
+    async fn optional_warming_does_not_queue_ahead_of_required_downloads() {
+        let remote_root = unique_dir("object_cache_warm_bound_remote");
+        let cache_root = unique_dir("object_cache_warm_bound_local");
+        let remote = Arc::new(
+            build_remote_object_store(remote_root.to_str().unwrap())
+                .unwrap()
+                .unwrap(),
+        );
+        let objects: Vec<_> = (0..MAX_PARALLEL_FETCHES + 3)
+            .map(|index| reference("log", &format!("objects/{index}.parquet"), b"rows"))
+            .collect();
+        for object in &objects {
+            remote
+                .write(&object.id, bytes::Bytes::from_static(b"rows"))
+                .await
+                .unwrap();
+        }
+        let source = FaultInjectingObjectStore::new(remote);
+        let gate = FaultGate::new();
+        source.arm(
+            ObjectFault::new(
+                ObjectOp::Read,
+                ObjectPattern::Contains("/objects/".to_string()),
+                FaultAction::Park(Arc::clone(&gate)),
+            )
+            .forever(),
+        );
+        let store = CachedObjectStore::new(
+            source.clone(),
+            cache_root.clone(),
+            Arc::new(RwLock::new(())),
+            None,
+        )
+        .unwrap();
+        for object in &objects[..MAX_PARALLEL_FETCHES] {
+            store.warm(object);
+        }
+        for _ in 0..MAX_PARALLEL_FETCHES {
+            gate.entered().await;
+        }
+        for object in &objects[MAX_PARALLEL_FETCHES..objects.len() - 1] {
+            store.warm(object);
+        }
+        let required = objects.last().unwrap();
+        let download_store = store.clone();
+        let required_object = required.clone();
+        let download =
+            tokio::spawn(async move { download_store.local_path(&required_object).await });
+
+        gate.release();
+        gate.entered().await;
+        assert_eq!(
+            source.keys_for(ObjectOp::Read).last().unwrap(),
+            required.id.as_str(),
+            "optional cache fills kept running ahead of the required download"
+        );
+        source.clear_faults();
+        for _ in 0..MAX_PARALLEL_FETCHES {
+            gate.release();
+        }
+        let path = download.await.unwrap().unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"rows");
+        // Drain background writes before removing their directories.
+        let _drained = store
+            .fetches
+            .acquire_many(MAX_PARALLEL_FETCHES as u32)
+            .await
+            .unwrap();
+        for skipped in &objects[MAX_PARALLEL_FETCHES..objects.len() - 1] {
+            assert!(store.cached_path(skipped).await.unwrap().is_none());
+        }
+        for root in [remote_root, cache_root] {
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 }

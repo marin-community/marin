@@ -21,7 +21,7 @@ from eval.contracts.eval_spec import EvalSpec, Grade, GraderSpec, ModelRequest, 
 from eval.contracts.failures import FailureCategory
 from eval.contracts.finestore_output import FineStoreOutput
 from eval.contracts.task_outcome import EvaluationRunError, TaskRoute, TaskStatus, validate_result_document
-from eval.eval import handle_evaluation_output
+from eval.eval import evaluate, handle_evaluation_output
 from lm_eval.loggers.evaluation_tracker import GeneralConfigTracker
 from eval.execution.driver import SourcePlan, run_evaluations, source_plans
 from eval.execution.grading import Grader
@@ -67,6 +67,27 @@ def plan(task="task", items=None, graders=None):
 
 def run(outputs, plans=None, **kwargs):
     return asyncio.run(run_evaluations(Model(outputs), plans or [plan()], workers=1, **kwargs))
+
+
+def test_evaluate_without_args_returns_scores_and_benchmark_metadata():
+    class Source(BaseBenchmark):
+        METRICS = ("accuracy",)
+
+        def benchmark_size(self):
+            return 1
+
+        def iter_specs(self, options):
+            return iter([spec(options.task)])
+
+    source = Source()
+    result = evaluate(
+        Model(["yes"]), Namespace(get_benchmark=lambda _task: source), None,
+        ["task"], {"task": TaskRoute.CUSTOM}, [1],
+    )
+
+    assert result["results"]["task"]["accuracy"] == 1.0
+    assert result["benchmark_metadata"]["task"]["n_attempted"] == 1
+    assert result["task_outcomes"]["task"]["status"] is TaskStatus.SUCCEEDED
 
 
 def test_zero_score_is_a_successful_typed_outcome():
