@@ -21,6 +21,7 @@ from typing import Any
 import pyarrow.parquet as pq
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.models import GradedRollout, MachineRuntimeSpec, TaskRolloutSpec
 from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
 from skyrl_gym.rollout_specs import SHELLBOX_HARNESS, rollout_spec
@@ -36,8 +37,6 @@ CHUNKS = "chunks"
 GRADED = "graded"
 SKIPPED = "skipped"
 POLICY_ENDPOINT = "policy_endpoint.json"
-PREFILL_HARNESS = "prefill"
-"""The harness that continues a task's final assistant message once."""
 
 
 class GradedGroup(BaseModel):
@@ -123,13 +122,13 @@ def needs_machine(task: TaskSpec) -> bool:
 def lower_feed_task(task: TaskSpec, session: Mapping[str, Any]) -> TaskRolloutSpec:
     """The rollout spec of a feed task.
 
-    A task whose context ends with an assistant text message continues it with the prefill harness. Every other
-    task gets the Shellbox shell harness with ``session``. A task that needs a machine gets a bubblewrap machine
+    A task whose context ends with an assistant text message continues it with the assistant-prefix harness. Every
+    other task gets the Shellbox shell harness with ``session``. A task that needs a machine gets a bubblewrap machine
     for Linux process semantics, else a ShellSim machine. A script grader, or a verifyit grader with an
     environment, grades in a bubblewrap machine. Machines have no network.
     """
     last = task.context.events[-1] if task.context.events else None
-    prefill = isinstance(last, TextMessage) and last.role == "assistant"
+    assistant_prefix = isinstance(last, TextMessage) and last.role == "assistant"
     task_machine = None
     if needs_machine(task):
         semantics = task.environment_requirements.command_semantics
@@ -142,7 +141,7 @@ def lower_feed_task(task: TaskSpec, session: Mapping[str, Any]) -> TaskRolloutSp
     )
     return rollout_spec(
         task,
-        {**session, "task_session": PREFILL_HARNESS if prefill else SHELLBOX_HARNESS},
+        {**session, "task_session": ASSISTANT_PREFIX_HARNESS if assistant_prefix else SHELLBOX_HARNESS},
         task_machine=task_machine,
         verifier_machine=machine_runtime(Backend.LOCAL) if graded_in_machine else None,
     )

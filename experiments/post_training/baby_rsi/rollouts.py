@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Protocol
 
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import (
     GradedRollout,
@@ -52,7 +52,6 @@ from experiments.post_training.capability_driven_envs.generate_tasks_agentic imp
 logger = logging.getLogger(__name__)
 
 SHELL_HARNESS = "shell"
-PREFILL_HARNESS = "prefill"
 UV_ARCHIVE_DIRECTORY = "archive-v0"
 MACHINE_BACKENDS = {CommandSemantics.LINUX_PROCESS: Backend.LOCAL, CommandSemantics.SHELL_SIMULATOR: Backend.SHELLSIM}
 """The solver machine of a task with a shell, from its command semantics: bubblewrap or ShellSim."""
@@ -162,21 +161,24 @@ class _ReleasingMachine:
 def rollout_engine(grader_slots: int) -> RolloutEngine:
     """The engine of the policy's rollouts, with at most ``grader_slots`` script graders at a time, for example the
     task's CPUs."""
-    harnesses = {SHELL_HARNESS: ShellHarness(command_timeout=COMMAND_TIMEOUT), PREFILL_HARNESS: PrefillHarness()}
+    harnesses = {
+        SHELL_HARNESS: ShellHarness(command_timeout=COMMAND_TIMEOUT),
+        ASSISTANT_PREFIX_HARNESS: AssistantPrefixHarness(),
+    }
     return RolloutEngine(machine_factories(grader_slots), harnesses)
 
 
 def rollout_spec(task: TaskSpec, limits: RolloutLimits) -> TaskRolloutSpec:
-    """The harness and machines of ``task``: a prefill task continues its last assistant message."""
+    """The harness and machines of ``task``: an assistant-prefix task continues its last assistant message."""
     last = task.context.events[-1]
-    prefill = isinstance(last, TextMessage) and last.role == "assistant"
+    assistant_prefix = isinstance(last, TextMessage) and last.role == "assistant"
     grader = task.grader
     graded_in_sandbox = isinstance(grader, ScriptGrader) or (
         isinstance(grader, VerifyitGrader) and grader.environment is not None
     )
     return TaskRolloutSpec(
         task=task,
-        harness=PREFILL_HARNESS if prefill else SHELL_HARNESS,
+        harness=ASSISTANT_PREFIX_HARNESS if assistant_prefix else SHELL_HARNESS,
         task_machine=_solver_machine(task),
         verifier_machine=machine_runtime(Backend.LOCAL) if graded_in_sandbox else None,
         limits=limits,
