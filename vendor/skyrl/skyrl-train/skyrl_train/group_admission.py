@@ -105,6 +105,8 @@ class AdmissionRejection(StrEnum):
     MISSING_ROLLOUT_LOGPROBS = "missing_rollout_logprobs"
     MISSING_BEHAVIOR_TOPK = "missing_behavior_topk"
     DUPLICATE_UID = "duplicate_uid"
+    SKIPPED = "skipped"
+    """The worker could not generate the prompt's group; a task feed skips such a row instead of failing."""
 
 
 # Rejections that mean the harness broke the run's structural contract; they fail training.
