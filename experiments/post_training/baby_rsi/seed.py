@@ -22,6 +22,7 @@ from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
+from itertools import islice
 
 import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
@@ -99,12 +100,7 @@ class TaskPool:
 
     def sample(self, n: int, seed: int, *, exclude: frozenset[str] = frozenset()) -> list[PoolTask]:
         """``n`` tasks of the pool with its strata weights: the first ``n`` tasks of ``stream``."""
-        tasks = []
-        for task in self.stream(seed, exclude=exclude):
-            tasks.append(task)
-            if len(tasks) == n:
-                break
-        return tasks
+        return list(islice(self.stream(seed, exclude=exclude), n))
 
     def task(self, index: int) -> PoolTask | None:
         """The task of one row, or ``None`` when the row does not convert."""
