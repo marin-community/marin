@@ -120,6 +120,7 @@ nav:
       - Task rollouts: references/task-rollouts.md
       - Training Configuration: references/train-config.md
       - HBM Optimization: references/hbm-optimization.md
+      - Hero Pipeline on H100: references/hero-pipeline-h100.md
       - Perplexity Gap Analysis: references/perplexity-gap-analysis.md
       - Browsing Buckets with fsutil: references/fsutil.md
       - Analyzing Large Logs: references/logscan.md

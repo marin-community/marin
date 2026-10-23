@@ -10,7 +10,10 @@ The source comes from
 at commit `09d27c93a8846531e84fb30cfa11dacd2ef404c5`. It retains all 42 custom
 benchmark dataset sources, their required data and preparation scripts, lm-eval task overrides,
 graders, streaming execution, FineStore output and resume support. Marin owns
-serving and evaluation orchestration. Database tracking, Curator dispatch,
+serving and evaluation orchestration. A local GraphWalks adapter adds the pinned
+`openai/graphwalks` dataset to the shared execution and grading flow, selecting
+examples with the served tokenizer and preserving their output budgets.
+Database tracking, Curator dispatch,
 W&B reporting, standalone serving launchers, benchmark websites and unused
 leaderboard outputs have been removed. Nested benchmark packages retain only
 the dataset, prompt-processing and scoring code used by this runtime. Their
