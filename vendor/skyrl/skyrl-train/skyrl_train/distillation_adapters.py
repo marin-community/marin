@@ -10,7 +10,7 @@ from typing import Any, cast
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-from marinskyrl.distillation import TeacherEvidenceKind
+from marinskyrl.distillation import TeacherEvidenceKind, TeacherPromptInsertion
 from skyrl_train.distillation import (
     ChosenTokenTeacherEvidence,
     PreparedTeacherInput,
@@ -243,6 +243,7 @@ def build_teacher_scoring_work(
     route_weights: tuple[float, ...],
     evidence: TeacherEvidenceKind = TeacherEvidenceKind.CHOSEN_TOKEN,
     top_k: int | None = None,
+    prompt_insertions: tuple[TeacherPromptInsertion, ...] = (),
 ) -> TeacherScoringWork:
     """Collate exact admitted rollout tokens into the shared oracle contract."""
     trajectory_ids = trajectory_batch.get("trajectory_ids")
@@ -262,7 +263,19 @@ def build_teacher_scoring_work(
     if any(length != batch_size for length in aligned_fields.values()):
         raise ValueError(f"teacher scoring fields must align with {batch_size} trajectories: {aligned_fields}")
 
-    padded_prompts, prompt_mask = _pad_token_rows(prompt_token_ids)
+    teacher_prompts = prompt_token_ids
+    if prompt_insertions:
+        teacher_prompts = []
+        for prompt in prompt_token_ids:
+            matching = [
+                insertion
+                for insertion in prompt_insertions
+                if tuple(prompt[: len(insertion.after_prefix)]) == insertion.after_prefix
+            ]
+            if len(matching) != 1:
+                raise ValueError("teacher prompt must match exactly one insertion prefix")
+            teacher_prompts.append(matching[0].apply(prompt))
+    padded_prompts, prompt_mask = _pad_token_rows(teacher_prompts)
     padded_responses, response_mask = _pad_token_rows(response_token_ids)
     per_trajectory_weights = torch.tensor(route_weights, dtype=torch.float32).unsqueeze(1)
     loss_weights = per_trajectory_weights.expand_as(padded_responses).masked_fill(~response_mask, 0)
@@ -299,6 +312,7 @@ def build_routed_teacher_scoring_work(
     *,
     tokenizer_fingerprints: Mapping[str, str],
     top_k_by_teacher: Mapping[str, int] | None = None,
+    prompt_insertions: Mapping[str, tuple[TeacherPromptInsertion, ...]] | None = None,
 ) -> RoutedTeacherScoringWork:
     """Build one exact request per logical-teacher partition."""
     missing_fingerprints = sorted(
@@ -307,6 +321,7 @@ def build_routed_teacher_scoring_work(
     if missing_fingerprints:
         raise ValueError(f"missing tokenizer fingerprints for teachers: {', '.join(missing_fingerprints)}")
     top_k_by_teacher = top_k_by_teacher or {}
+    prompt_insertions = prompt_insertions or {}
     if routed_batch.evidence in {TeacherEvidenceKind.TOPK_DISTRIBUTION, TeacherEvidenceKind.STUDENT_SELECTED_TOPK}:
         missing_top_k = sorted(
             {partition.teacher_id for partition in routed_batch.partitions} - top_k_by_teacher.keys()
@@ -327,6 +342,7 @@ def build_routed_teacher_scoring_work(
                 route_weights=tuple(route.weight for route in partition.routes),
                 evidence=routed_batch.evidence,
                 top_k=top_k_by_teacher.get(partition.teacher_id),
+                prompt_insertions=prompt_insertions.get(partition.teacher_id, ()),
             ),
         )
         for partition in routed_batch.partitions

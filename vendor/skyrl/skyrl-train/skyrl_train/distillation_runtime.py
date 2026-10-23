@@ -29,6 +29,9 @@ class _RoutedDistillationPlanner:
         self._router = PlanTeacherRouter(plan)
         self._tokenizer_fingerprints = dict(tokenizer_fingerprints)
         self._top_k_by_teacher = {teacher.id: teacher.top_k for teacher in plan.teachers if teacher.top_k is not None}
+        self._prompt_insertions = {
+            teacher.id: teacher.prompt_insertions for teacher in plan.teachers if teacher.prompt_insertions
+        }
         self._default_route_key = plan.routing.routes[0].key if len(plan.routing.routes) == 1 else None
 
     def build_work(self, trajectory_batch: TrajectoryBatch) -> RoutedTeacherScoringWork:
@@ -46,6 +49,7 @@ class _RoutedDistillationPlanner:
             routed,
             tokenizer_fingerprints=self._tokenizer_fingerprints,
             top_k_by_teacher=self._top_k_by_teacher,
+            prompt_insertions=self._prompt_insertions,
         )
 
 

@@ -105,3 +105,22 @@ Require successful training and export jobs, evidence that the fresh job
 loads step two and advances to step four, a complete final export, and a
 successful evaluation artifact. This smoke checks pipeline handoffs. Use
 the nightly learning gates to assess learning behavior.
+
+## Teacher-only context for distillation
+
+A teacher specification can set `prompt_insertions` to a list of
+`{after_prefix: [token IDs], tokens: [token IDs]}` entries. For each routed prompt,
+exactly one `after_prefix` must match. Its `tokens` are inserted immediately after
+that prefix for teacher scoring. Different entries can handle native thinking
+and nonthinking headers. Ambiguous or unmatched prefixes fail before scoring.
+
+Student prompts, rollout response IDs, response masks, and route weights are
+unchanged. Teacher capability validation includes the inserted tokens when
+checking the context window. Tokenize insertions for the teacher's verified
+shared tokenizer and include valid native role delimiters yourself; the runtime
+does not synthesize or repair a chat template. Check the concatenated token
+sequence against the intended full-template rendering before training.
+
+Leave `prompt_insertions` empty for unconditioned routes. This supports
+privileged-information distillation without adding those facts or instructions
+to student inference prompts; it does not establish successful knowledge transfer.
