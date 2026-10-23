@@ -451,6 +451,14 @@ def _observation(submission: SubmissionRecord, budget: int) -> dict[str, object]
     return {**head, **body}
 
 
+@dataclass(frozen=True)
+class Submission:
+    """A recorded candidate and the exact verifier outcome it produced."""
+
+    record: SubmissionRecord
+    outcome: Outcome
+
+
 @dataclass
 class Verifier:
     """The ``submit`` handler of one attempt: grades each candidate as a control is graded, on a fresh machine."""
@@ -460,8 +468,7 @@ class Verifier:
     plan: TrialPlan
     machine: Machine | None
     budget: int
-    submissions: list[SubmissionRecord] = field(default_factory=list)
-    outcomes: list[Outcome] = field(default_factory=list)
+    submissions: list[Submission] = field(default_factory=list)
 
     async def submit(self, arguments: Mapping[str, object]) -> str:
         if len(self.submissions) >= self.budget:
@@ -482,7 +489,6 @@ class Verifier:
         started = time.monotonic()
         model = ScriptedModel(candidate_turns(reply, files), context_assistant_turns(self.spec.task))
         outcome = await run_trial(self.spec, self.plan, self.settings, model, name)
-        self.outcomes.append(outcome)
         grade = _submission_grade(outcome)
         submission = SubmissionRecord(
             ordinal=ordinal,
@@ -494,18 +500,17 @@ class Verifier:
             passed=passed(grade),
             wall_time=time.monotonic() - started,
         )
-        self.submissions.append(submission)
+        self.submissions.append(Submission(submission, outcome))
         return json.dumps(_observation(submission, self.budget))
 
 
-def trial_outcome(rollout: Rollout, submissions: Sequence[SubmissionRecord], outcomes: Sequence[Outcome]) -> Outcome:
+def trial_outcome(rollout: Rollout, submissions: Sequence[Submission]) -> Outcome:
     """Use the last passing submission, or the last submission, preserving verifier failures."""
-    accepted = [submission for submission in submissions if submission.passed]
+    accepted = [submission for submission in submissions if submission.record.passed]
     chosen = accepted[-1] if accepted else submissions[-1] if submissions else None
     if chosen is None:
         return Graded(rollout, GradeResult(GradeStatus.SUBMISSION_FAILURE, None, "no verifier submission"), False)
-    outcome = outcomes[chosen.ordinal - 1]
-    return replace(outcome, rollout=rollout)
+    return replace(chosen.outcome, rollout=rollout)
 
 
 AGENT_STOPS: Mapping[AgentStop, str] = {
@@ -631,7 +636,7 @@ async def _agent_attempt(
     model: ModelClient,
     record: CallLedger,
     opening: tuple[dict[str, Any], ...],
-    submissions: list[SubmissionRecord],
+    submissions: list[Submission],
     submission_plan: TrialPlan,
     run_id: str,
 ) -> Outcome:
@@ -645,12 +650,9 @@ async def _agent_attempt(
     finished = False
     lost = False
     cleanup_errors = 0
-    outcomes: list[Outcome] = []
     try:
         async with deadline, attempt_machine(spec, settings, run_id) as machine:
-            verifier = Verifier(
-                spec, settings, submission_plan, machine, policy.submissions, submissions, outcomes=outcomes
-            )
+            verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions, submissions)
             submit = AgentTool(
                 SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, submit_parameters(machine is not None), verifier.submit
             )
@@ -680,13 +682,18 @@ async def _agent_attempt(
         cleanup_errors = 1
     if run is not None:
         turns = submission_turns(run)
-        submissions[:] = [replace(submission, turn=turns.get(submission.ordinal)) for submission in submissions]
+        submissions[:] = [
+            replace(submission, record=replace(submission.record, turn=turns.get(submission.record.ordinal)))
+            for submission in submissions
+        ]
     if lost:
         stop = MACHINE_LOST_STOP_REASON
     else:
         stop = TOTAL_TURN_TIMEOUT_STOP_REASON if run is None else AGENT_STOPS[run.stop]
-    rollout = agent_rollout(run_id, opening, run, stop, cleanup_errors, submissions)
-    return trial_outcome(rollout, submissions, outcomes)
+    rollout = agent_rollout(
+        run_id, opening, run, stop, cleanup_errors, tuple(submission.record for submission in submissions)
+    )
+    return trial_outcome(rollout, submissions)
 
 
 def _attempt_json(outcome: Outcome, record: AdversaryRecord) -> bytes:
@@ -730,7 +737,7 @@ async def run_adversary_trial(
     system = str(opening[0]["content"])
 
     async def attempt_once(attempt: int, step: str) -> Outcome:
-        submissions: list[SubmissionRecord] = []
+        submissions: list[Submission] = []
         submission_plan = replace(
             plan,
             kind=TrialKind.CONTROL,
@@ -745,13 +752,15 @@ async def run_adversary_trial(
                 spec, policy, settings, model, calls, opening, submissions, submission_plan, step
             )
             claim = claim_of(outcome)
-            record = AdversaryRecord(policy.mode, brief, system, claim, grader_digest, tuple(submissions))
+            record = AdversaryRecord(
+                policy.mode, brief, system, claim, grader_digest, tuple(submission.record for submission in submissions)
+            )
             record_attempt(fields, outcome, plan, trial, attempt, _attempt_json(outcome, record))
             fields.attrs.update(
                 {
                     "mode": str(policy.mode),
                     "submissions": str(len(submissions)),
-                    "passes": str(sum(submission.passed for submission in submissions)),
+                    "passes": str(sum(submission.record.passed for submission in submissions)),
                     "claim": str(claim.kind),
                 }
             )

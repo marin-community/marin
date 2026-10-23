@@ -625,6 +625,28 @@ async def test_a_relaunch_reruns_only_a_missing_adversary_attempt(glm_client, fa
     assert (again.solver, again.controls) == (first.solver, first.controls)
 
 
+async def test_an_adversary_attempt_deadline_records_an_ungraded_retry(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
+    settings = replace(
+        settings,
+        engine=replace(settings.engine, limits=settings.engine.limits.model_copy(update={"attempt_timeout": 0.5})),
+    )
+    result = await validate_round(
+        built_draft(tmp_path / "store"),
+        context,
+        settings,
+        SolverModel(),
+        glm_client,
+        AdversaryScript(PROBES, hold_at=0),
+    )
+
+    (trial,) = result.adversary
+    assert (trial.status, trial.cause) == (TrialStatus.UNGRADED, Cause.ATTEMPT_TIMEOUT)
+    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+    assert (context.round_dir / trial.attempt_file).exists()
+
+
 async def test_an_adversary_attempt_cancelled_in_flight_leaves_no_attempt_file(glm_client, fake_glm, ledger, tmp_path):
     fake_glm.stream(content=controls_reply("41"))
     context, settings = round_context(tmp_path), round_settings(ledger, k=1, adversary=adversary_policy(k=1))
