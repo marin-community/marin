@@ -446,17 +446,10 @@ batch is one sequence per batch shard: 64 × racks (704 on the hero) without con
 (64 / CP) × racks with CP-way context parallelism (176 at CP4). The step budget is 791 tokens per active parameter
 (18T at d6144); pass `--num-steps` to override.
 
-The eval batch follows the batch shards rather than staying at 704 because of how the dropless eval
-shards it. That eval runs on a mesh with the expert axis folded into `data`, and it keeps the
-context axis, so it splits the batch over the same 64 / CP shards per rack and each sequence over CP
-devices. One sequence per shard gives every device max_seq_len / CP tokens per eval batch: 16,384 at
-16K CP1 and again at 65K CP4. A fixed 704 at 65K CP4 would give each device four sequences, or 65,536
-tokens, which is the 16K eval's per-device load ×4 and is untested on the dropless local backend,
-which has no capacity bound. The eval sets are concatenated into one stream, so the batch size changes
-only how that stream is cut. The token-weighted `eval_dropless/*` losses do not depend on it, and
-total eval work changes only by the padding of the final batch. The 16K hero's eval takes about 19 s
-(`eval_dropless/total_time`), and the eval hook suspends the 15-minute step deadline, leaving it
-bounded by the 1-hour process-stall deadline.
+The dropless eval folds the expert axis into `data` and keeps the context axis, so one sequence per
+batch shard gives every device max_seq_len / CP tokens per eval batch at any context. A batch held at its CP1 size would
+multiply that load by CP. The eval sets are read as one stream, so the batch size does not change the
+`eval_dropless/*` losses.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every hour goes to region-local temp
