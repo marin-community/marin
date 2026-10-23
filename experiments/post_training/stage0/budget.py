@@ -21,6 +21,7 @@ LEARNING_RATE = 5e-6
 STAGE0_SEED = 0
 ADAM_BETA1 = 0.9
 ADAM_BETA2 = 0.95
+ADAM_EPSILON = 1e-8
 LR_SCHEDULE = "cosine"
 MAX_GRAD_NORM = 1.0
 WEIGHT_DECAY = 0.0
@@ -30,10 +31,11 @@ SEQUENCE_LEN = 32768
 GLOBAL_BATCH = 64
 EPOCHS_PER_STAGE = 1
 
-# Axolotl side: one conversation per sequence, 8 per device on the launcher's default
-# 8-GPU torchrun width with accumulation 1 — 8 x 8 x 1 = 64 examples per step.
-PER_DEVICE_BATCH = 8
-GRADIENT_ACCUMULATION_STEPS = 1
+# Axolotl side: one conversation per sequence and per micro-batch (unpacked 32k-token
+# sequences do not fit eight to a GPU), on the launcher's 8-GPU torchrun width with
+# accumulation 8 — 1 x 8 x 8 = 64 examples per step.
+PER_DEVICE_BATCH = 1
+GRADIENT_ACCUMULATION_STEPS = 8
 
 # Snowball side: the mesh's context axis spans the DCN, one axis unit per node.
 TRAIN_NODES = 8

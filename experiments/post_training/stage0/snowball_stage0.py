@@ -48,6 +48,7 @@ from experiments.post_training.chat_template import GRUG_TOKENS, shared_template
 from experiments.post_training.stage0.budget import (
     ADAM_BETA1,
     ADAM_BETA2,
+    ADAM_EPSILON,
     EPOCHS_PER_STAGE,
     GLOBAL_BATCH,
     GPUS_PER_NODE,
@@ -134,7 +135,7 @@ def _stage_optimizer() -> AdamConfig:
         learning_rate=LEARNING_RATE,
         beta1=ADAM_BETA1,
         beta2=ADAM_BETA2,
-        epsilon=1e-8,
+        epsilon=ADAM_EPSILON,
         weight_decay=WEIGHT_DECAY,
         max_grad_norm=MAX_GRAD_NORM,
         lr_schedule=LR_SCHEDULE,

@@ -1,0 +1,162 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Pod-side Axolotl SFT runner, executed inside the pinned Axolotl task image.
+
+The image carries torch, CUDA and an upstream Axolotl install; it does not carry
+Marin's environment, so this script uses only the standard library, PyYAML and the
+image's ``aws`` CLI. It reads one JSON payload (``AXOLOTL_PAYLOAD``) built by
+:mod:`experiments.post_training.axolotl_sft.launcher` and:
+
+1. clones the ``marin-community/axolotl`` fork at the pinned revision and puts its
+   ``src`` first on ``PYTHONPATH`` (so the fork's plugins, e.g. ``template_integrity``,
+   shadow the image's Axolotl), and re-pins transformers;
+2. stages the CL12 data file and, for a chained stage, the previous stage's export
+   from object storage onto local disk;
+3. trains through ``torchrun -m axolotl.cli.train``, syncing the output directory to
+   object storage every few minutes so a lost pod keeps its latest checkpoint;
+4. checks the saved tokenizer embeds the configured chat template byte for byte,
+   records the realized token counts, and uploads the output plus a run manifest.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import logging
+import os
+import subprocess
+import sys
+import threading
+from pathlib import Path
+
+import yaml
+
+logger = logging.getLogger("axolotl_pod_runner")
+
+PAYLOAD_ENV = "AXOLOTL_PAYLOAD"
+WORK_ROOT = Path("/tmp/axolotl-run")
+SYNC_INTERVAL = 600
+FORK_REPO = "https://github.com/marin-community/axolotl"
+IMAGE_PYTHON = "/workspace/axolotl-venv/bin/python"
+RUN_MANIFEST = "axolotl_run_manifest.json"
+# The plugins this directory ships (the fp32-master plugin) import from here.
+PLUGIN_DIR = Path(__file__).resolve().parent
+
+
+def _run(command: list[str], **kwargs) -> None:
+    logger.info("+ %s", " ".join(command))
+    subprocess.run(command, check=True, **kwargs)
+
+
+def _aws_environment() -> dict[str, str]:
+    # CoreWeave object storage requires virtual-hosted addressing.
+    config = WORK_ROOT / "aws-config"
+    config.write_text("[default]\ns3 =\n    addressing_style = virtual\n")
+    return os.environ | {"AWS_CONFIG_FILE": str(config), "AWS_MAX_ATTEMPTS": "20", "AWS_RETRY_MODE": "adaptive"}
+
+
+def _s3(arguments: list[str]) -> None:
+    _run(["aws", "s3", *arguments, "--only-show-errors"], env=_aws_environment())
+
+
+def _install_fork(revision: str, transformers_pin: str) -> Path:
+    fork = WORK_ROOT / "axolotl-fork"
+    _run(["git", "clone", "--quiet", FORK_REPO, str(fork)])
+    _run(["git", "-C", str(fork), "checkout", "--quiet", revision])
+    _run(["uv", "pip", "install", "--python", IMAGE_PYTHON, f"transformers=={transformers_pin}"])
+    return fork / "src"
+
+
+def _stage_inputs(payload: dict) -> dict:
+    """Download the data and any init checkpoint; return the config with local paths."""
+    config = dict(payload["config"])
+    data_dir = WORK_ROOT / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    local_data = data_dir / payload["data_uri"].rsplit("/", 1)[-1]
+    _s3(["cp", payload["data_uri"], str(local_data)])
+    config["datasets"] = [dict(config["datasets"][0], path=str(local_data))]
+    if payload["init_uri"] is not None:
+        init_dir = WORK_ROOT / "init"
+        _s3(["sync", payload["init_uri"].rstrip("/"), str(init_dir), "--exclude", "checkpoint-*"])
+        config["base_model"] = str(init_dir)
+    config["output_dir"] = str(WORK_ROOT / "output")
+    config["dataset_prepared_path"] = str(WORK_ROOT / "prepared")
+    return config
+
+
+class _PeriodicSync:
+    """Sync the output directory to object storage every ``SYNC_INTERVAL`` seconds."""
+
+    def __init__(self, source: Path, target: str):
+        self._source, self._target = source, target
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(SYNC_INTERVAL):
+            if self._source.exists():
+                try:
+                    _s3(["sync", str(self._source), self._target])
+                except subprocess.CalledProcessError:
+                    # The next tick retries; the final sync after training is checked.
+                    logger.exception("periodic sync failed")
+
+    def __enter__(self) -> _PeriodicSync:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        self._thread.join()
+
+
+def _check_template(output_dir: Path, expected: str) -> None:
+    """The fork's template_integrity contract, re-checked outside the save path."""
+    with open(output_dir / "tokenizer_config.json") as handle:
+        embedded = json.load(handle).get("chat_template")
+    if embedded != expected:
+        raise ValueError(f"{output_dir}/tokenizer_config.json does not embed the configured chat template")
+
+
+def _realized_tokens(output_dir: Path) -> dict:
+    """Token totals from the last ``trainer_state.json`` (Axolotl logs them per step)."""
+    states = sorted(glob.glob(str(output_dir / "**" / "trainer_state.json"), recursive=True))
+    if not states:
+        return {"source": None, "counts": {}, "global_step": None}
+    with open(states[-1]) as handle:
+        state = json.load(handle)
+    counts: dict[str, int] = {}
+    for entry in state.get("log_history", []):
+        for key, value in entry.items():
+            if "token" in key and "per_second" not in key and isinstance(value, (int, float)):
+                counts[key] = max(counts.get(key, 0), int(value))
+    return {"source": states[-1], "counts": counts, "global_step": state.get("global_step")}
+
+
+def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", stream=sys.stdout)
+    payload = json.loads(os.environ[PAYLOAD_ENV])
+    WORK_ROOT.mkdir(parents=True, exist_ok=True)
+    fork_src = _install_fork(payload["fork_revision"], payload["transformers_pin"])
+    config = _stage_inputs(payload)
+    config_path = WORK_ROOT / "axolotl_config.yaml"
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+    output_dir = Path(config["output_dir"])
+    output_uri = payload["output_uri"].rstrip("/")
+
+    environment = os.environ | {"PYTHONPATH": os.pathsep.join([str(fork_src), str(PLUGIN_DIR)])}
+    command = ["torchrun", "--nnodes=1", f"--nproc-per-node={payload['gpus']}", "-m", "axolotl.cli.train"]
+    with _PeriodicSync(output_dir, output_uri):
+        _run([*command, str(config_path)], env=environment, cwd=WORK_ROOT)
+
+    _check_template(output_dir, config["chat_template_jinja"])
+    manifest = dict(payload["manifest"], realized_tokens=_realized_tokens(output_dir))
+    (output_dir / RUN_MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True))
+    (output_dir / "axolotl_config.yaml").write_text(config_path.read_text())
+    _s3(["sync", str(output_dir), output_uri])
+    logger.info("uploaded %s to %s", output_dir, output_uri)
+
+
+if __name__ == "__main__":
+    main()

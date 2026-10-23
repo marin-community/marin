@@ -10,7 +10,6 @@ requires at token granularity, not text presence.
 """
 
 import gzip
-import inspect
 import json
 import os
 
@@ -20,7 +19,7 @@ from transformers.utils.chat_template_utils import _compile_jinja_template
 
 import experiments.post_training.stage0.convert as convert_module
 from experiments.post_training.axolotl_sft.bases import AXOLOTL_BASES
-from experiments.post_training.axolotl_sft.launcher import axolotl_config, launch_axolotl
+from experiments.post_training.axolotl_sft.launcher import GPUS_PER_NODE, axolotl_config
 from experiments.post_training.chat_template import (
     FAMILY_TOKEN_MAPS,
     GRUG_TOKENS,
@@ -439,12 +438,12 @@ def test_axolotl_stages_chain_through_the_launchers_real_output_layout():
         # (os.path.join(output_root, spec.name)), never a separately recomputed path.
         for index, spec in enumerate(specs):
             if index == 0:
-                assert spec.init_checkpoint is None
+                assert spec.init_uri is None
             else:
                 expected = os.path.join(output_root, specs[index - 1].name)
-                assert spec.init_checkpoint == expected == stage_output(specs[index - 1], output_root=output_root)
+                assert spec.init_uri == expected == stage_output(specs[index - 1], output_root=output_root)
         for source, spec in zip(STAGE_ORDER, specs, strict=True):
-            assert spec.data_manifest == f"{data_root}/{source_filename(source)}"
+            assert spec.data_uri == f"{data_root}/{source_filename(source)}"
 
 
 def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
@@ -464,7 +463,7 @@ def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
 
     base_names = {base.architecture: base_name for base_name, base in AXOLOTL_BASES.items()}
     # The launcher launches 8 processes per node; anything else re-derives the budget.
-    gpus_per_node = inspect.signature(launch_axolotl).parameters["gpus_per_node"].default
+    gpus_per_node = GPUS_PER_NODE
     assert gpus_per_node == 8
     templates = {}
     for architecture, base_name in base_names.items():
@@ -472,18 +471,18 @@ def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
         for spec in specs:
             assert spec.sequence_len == SEQUENCE_LEN
             assert spec.epochs == EPOCHS_PER_STAGE
-            assert spec.sample_packing is False
-            # Global batch 64 examples = 8 per device x 8 GPUs x accumulation 1 — matched
+            # Global batch 64 examples = 1 per device x 8 GPUs x accumulation 8 — matched
             # to the Snowball run.
             assert spec.per_device_batch_size == PER_DEVICE_BATCH
             assert spec.gradient_accumulation_steps == GRADIENT_ACCUMULATION_STEPS
             assert spec.per_device_batch_size * gpus_per_node * spec.gradient_accumulation_steps == GLOBAL_BATCH
             # The family's shared-template instance, identical on every stage of the base.
             assert spec.chat_template == shared_template(FAMILY_TOKEN_MAPS[architecture])
-            config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
+            config = axolotl_config(spec)
+            assert config["sample_packing"] is False
             assert config["sequence_len"] == SEQUENCE_LEN
             assert config["num_epochs"] == EPOCHS_PER_STAGE
-            assert config["per_device_train_batch_size"] == PER_DEVICE_BATCH
+            assert config["micro_batch_size"] == PER_DEVICE_BATCH
             assert config["gradient_accumulation_steps"] == GRADIENT_ACCUMULATION_STEPS
         templates[architecture] = specs[0].chat_template
     # One structure per family: the two Qwen bases share an instance, Nemotron differs.
@@ -501,13 +500,12 @@ def test_axolotl_stage_1_pins_the_base_and_later_stages_init_from_the_chain():
     base_name = "qwen3-30b-a3b-base"
     output_root = "/out"
     specs = stage_specs(base_name, data_root="/data", output_root=output_root)
-    stage1_config = axolotl_config(specs[0], scratch_output_dir=f"/scratch/axolotl/{specs[0].name}")
+    stage1_config = axolotl_config(specs[0])
     assert stage1_config["base_model"] == specs[0].base.hf_id
     assert stage1_config["revision_of_model"] == specs[0].base.revision
     for index in (1, 2):
-        config = axolotl_config(specs[index], scratch_output_dir=f"/scratch/axolotl/{specs[index].name}")
-        assert config["base_model"] == specs[index].init_checkpoint
-        assert config["base_model"] == f"{output_root}/{specs[index - 1].name}"
+        # The pod runner stages init_uri locally and points base_model at it.
+        assert specs[index].init_uri == f"{output_root}/{specs[index - 1].name}"
 
 
 def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
@@ -534,7 +532,7 @@ def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
     assert optimizer.warmup_steps == WARMUP_STEPS
     assert optimizer.max_grad_norm == MAX_GRAD_NORM
     spec = stage_specs("nemotron-3-nano-30b-a3b-base", data_root="/data", output_root="/out")[0]
-    config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
+    config = axolotl_config(spec)
     assert config["learning_rate"] == optimizer.learning_rate
     assert config["adam_beta1"] == ADAM_BETA1
     assert config["adam_beta2"] == ADAM_BETA2
@@ -557,10 +555,7 @@ def test_axolotl_router_policy_is_explicit_per_architecture():
         expected = ROUTER_AUX_LOSS[base.architecture]
         for spec in specs:
             assert spec.output_router_logits is expected
-            config = axolotl_config(spec, scratch_output_dir=f"/scratch/axolotl/{spec.name}")
-            # The key emits only when the aux loss trains; its absence IS the
-            # False case (the launcher never dispatches on architecture itself).
-            assert ("output_router_logits" in config) is expected
+            assert axolotl_config(spec)["output_router_logits"] is expected
     # The deviation is deliberate: Qwen arms carry the aux loss, Nemotron-H does not.
     assert ROUTER_AUX_LOSS["qwen3_moe"] is True
     assert ROUTER_AUX_LOSS["qwen3_5_moe"] is True

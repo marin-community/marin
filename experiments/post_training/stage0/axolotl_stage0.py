@@ -4,10 +4,10 @@
 """Axolotl Stage 0 configs (CL12): the same three stages on the three MoE bases.
 
 Each base runs the #8225 curriculum in order — chat, thinking, terminal — under the same
-budget as the Snowball run: global batch 64 examples per step (8 per device x the
-launcher's 8-GPU torchrun width, accumulation 1), one epoch per source, fresh optimizer
-per stage, with betas, schedule, clip and warmup identical to the Snowball config — both
-are built from :mod:`.budget`, never from trainer defaults.
+budget as the Snowball run: global batch 64 examples per step (1 per device x the
+launcher's 8-GPU torchrun width x 8 accumulation steps), one epoch per source, fresh
+optimizer per stage, with betas, epsilon, schedule, clip and warmup identical to the
+Snowball config — both are built from :mod:`.budget`, never from trainer defaults.
 
 Every base trains on its family's instance of the shared template,
 ``shared_template(FAMILY_TOKEN_MAPS[arch])``, baked into the spec. No published template
@@ -20,9 +20,9 @@ Nemotron-H's router correction bias is a frozen buffer under this fork, so its r
 ``output_router_logits=False`` — a recorded deviation from the other arms, not an
 omission.
 
-Stage N+1 initializes from stage N's exported checkpoint directory, derived from the
-previous spec's own run name, so the chain and the launcher's output layout cannot drift
-apart (the review's doubled-path bug).
+Stage N+1 initializes from stage N's uploaded export, derived from the previous spec's
+own run name through :func:`stage_output`, so the chain and the launcher's output layout
+cannot drift apart (the review's doubled-path bug).
 """
 
 from experiments.post_training.axolotl_sft.bases import AXOLOTL_BASES, AxolotlBaseModel
@@ -31,6 +31,7 @@ from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_te
 from experiments.post_training.stage0.budget import (
     ADAM_BETA1,
     ADAM_BETA2,
+    ADAM_EPSILON,
     EPOCHS_PER_STAGE,
     GRADIENT_ACCUMULATION_STEPS,
     LEARNING_RATE,
@@ -61,6 +62,7 @@ def stage_optimizer() -> AxolotlOptimizer:
         weight_decay=WEIGHT_DECAY,
         adam_beta1=ADAM_BETA1,
         adam_beta2=ADAM_BETA2,
+        adam_epsilon=ADAM_EPSILON,
         lr_scheduler=LR_SCHEDULE,
         warmup_steps=WARMUP_STEPS,
         max_grad_norm=MAX_GRAD_NORM,
@@ -68,13 +70,11 @@ def stage_optimizer() -> AxolotlOptimizer:
 
 
 def stage_output(spec: AxolotlSpec, *, output_root: str) -> str:
-    """Where the launcher leaves ``spec``'s exported checkpoint: the run's own directory.
+    """Where the pod runner uploads ``spec``'s output: ``{output_root}/{spec.name}``.
 
-    ``launch_axolotl`` addresses a run at ``{output_root}/{spec.name}`` (its
-    ``AXOLOTL_WORKDIR``), and the pod-side entrypoint trains in scratch and uploads the
-    run directory there. The stage chain derives each init path from the previous spec's
-    own name through this one function, so renaming a stage breaks the chain loudly at
-    config time instead of silently loading a stale checkpoint.
+    The stage chain derives each init path from the previous spec's own name through
+    this one function, so renaming a stage breaks the chain loudly at config time
+    instead of silently loading a stale checkpoint.
     """
     return f"{output_root}/{spec.name}"
 
@@ -98,7 +98,7 @@ def stage_specs(base_name: str, *, data_root: str, output_root: str) -> list[Axo
             AxolotlSpec(
                 name=f"stage0-{base_name}/s{stage_index + 1}-{source}",
                 base=base,
-                data_manifest=f"{data_root}/{source_filename(source)}",
+                data_uri=f"{data_root}/{source_filename(source)}",
                 optimizer=optimizer,
                 output_router_logits=router_aux_loss,
                 sequence_len=SEQUENCE_LEN,
@@ -107,9 +107,9 @@ def stage_specs(base_name: str, *, data_root: str, output_root: str) -> list[Axo
                 epochs=EPOCHS_PER_STAGE,
                 chat_template=chat_template,
                 template_sha256=template_sha256(tokens),
+                turn_close=tokens.turn_close,
                 seed=STAGE0_SEED,
-                sample_packing=False,
-                init_checkpoint=None if previous is None else stage_output(previous, output_root=output_root),
+                init_uri=None if previous is None else stage_output(previous, output_root=output_root),
             )
         )
     return specs
