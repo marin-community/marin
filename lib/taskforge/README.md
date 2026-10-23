@@ -88,7 +88,8 @@ and no network: a bubblewrap `LocalMachineFactory`, which needs the privileged c
 Iris. Its tools do only what the shell cannot:
 
 - `grade`: grade a control answer with the task's grader.
-- `rollout`: run solver or adversary rollouts on ShellSim machines.
+- `rollout`: run solver or adversary rollouts on machines of `AgenticConfig.solver_factory`: ShellSim, or
+  bubblewrap (`--solver-backend local`), where a task sets `command_semantics` to `linux_process`.
 - `web_search`, `web_fetch`: search and read the web with Parallel.
 - `submit`: accept a task when its evidence satisfies the `Gate` and a blind review accepts it.
 - `finish`: end the session with a report.

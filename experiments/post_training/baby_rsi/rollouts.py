@@ -22,6 +22,7 @@ from rolloutengine.harness.shell import ShellHarness
 from rolloutengine.models import (
     GradedRollout,
     GradedRolloutInterrupted,
+    MachineRuntimeSpec,
     ModelRequest,
     ModelTurn,
     RolloutLimits,
@@ -39,7 +40,7 @@ from shellbox.machine import (
     Result,
 )
 from taskcompendium.grading_result import Outcome
-from taskcompendium.models import ScriptGrader, TaskSpec, TextMessage, VerifyitGrader
+from taskcompendium.models import CommandSemantics, ScriptGrader, TaskSpec, TextMessage, VerifyitGrader
 from taskforge.agentic.tools import machine_runtime, needs_machine
 
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollouts import (
@@ -52,6 +53,8 @@ logger = logging.getLogger(__name__)
 
 SHELL_HARNESS = "shell"
 PREFILL_HARNESS = "prefill"
+MACHINE_BACKENDS = {CommandSemantics.LINUX_PROCESS: Backend.LOCAL, CommandSemantics.SHELL_SIMULATOR: Backend.SHELLSIM}
+"""The solver machine of a task with a shell, from its command semantics: bubblewrap or ShellSim."""
 PROGRESS_EVERY = 50
 PASS_REWARD = 1.0
 """A rollout passes with a reward of at least this value; some graders give partial credit below it."""
@@ -145,10 +148,18 @@ def rollout_spec(task: TaskSpec, limits: RolloutLimits) -> TaskRolloutSpec:
     return TaskRolloutSpec(
         task=task,
         harness=PREFILL_HARNESS if prefill else SHELL_HARNESS,
-        task_machine=machine_runtime(Backend.SHELLSIM) if needs_machine(task) else None,
+        task_machine=_solver_machine(task),
         verifier_machine=machine_runtime(Backend.LOCAL) if graded_in_sandbox else None,
         limits=limits,
     )
+
+
+def _solver_machine(task: TaskSpec) -> MachineRuntimeSpec | None:
+    if not needs_machine(task):
+        return None
+    semantics = task.environment_requirements.command_semantics
+    assert semantics is not None, f"The task {task.id} has a shell but no command semantics"
+    return machine_runtime(MACHINE_BACKENDS[semantics])
 
 
 def reward(graded: GradedRollout) -> float | None:
