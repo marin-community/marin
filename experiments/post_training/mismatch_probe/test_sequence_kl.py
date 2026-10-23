@@ -103,9 +103,7 @@ def test_no_tail_is_floored():
     reference = torch.tensor(
         [[math.log(0.25), math.log(0.25), math.log(0.5 - tail), math.log(tail)]], dtype=torch.float64
     )
-    candidate = torch.tensor(
-        [[math.log(0.25), math.log(0.25), math.log(0.49), math.log(0.01)]], dtype=torch.float64
-    )
+    candidate = torch.tensor([[math.log(0.25), math.log(0.25), math.log(0.49), math.log(0.01)]], dtype=torch.float64)
     support, ids = reference.topk(3, dim=-1)
     assert float(tail_log_mass(support).exp()) == pytest.approx(tail, rel=1e-2, abs=0)
     assert torch.allclose(
@@ -114,9 +112,7 @@ def test_no_tail_is_floored():
 
 
 def test_tail_log_mass_is_derived_from_the_stored_logprobs():
-    support = torch.tensor(
-        [[math.log(0.4), math.log(0.3), math.log(0.3 - 1e-13)]], dtype=torch.float64
-    )
+    support = torch.tensor([[math.log(0.4), math.log(0.3), math.log(0.3 - 1e-13)]], dtype=torch.float64)
     assert torch.allclose(tail_log_mass(support).exp(), torch.tensor([1e-13], dtype=torch.float64), rtol=1e-2, atol=0)
     # A peaked support keeps its true near-zero tail; no floor substitutes a constant.
     peaked = torch.tensor([[0.0, -40.0, -40.0]], dtype=torch.float64)
