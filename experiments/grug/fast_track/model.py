@@ -7023,6 +7023,8 @@ class Transformer(eqx.Module):
                 out[f"halt_g_P{point}"] = g[n]
                 out[f"halt_exit_loss_P{point}"] = exit_stats.logsumexp - exit_stats.label_logit
                 out[f"halt_exit_correct_P{point}"] = (exit_stats.top_id == labels).astype(jnp.float32)
+                out[f"halt_exit_entropy_P{point}"] = exit_stats.entropy
+                out[f"halt_exit_maxp_P{point}"] = jnp.exp(exit_stats.top_logit - exit_stats.logsumexp)
         return out
 
     def mid_head_diagnostics(self, token_ids: Int[Array, "B S"], mask: AttentionMask) -> dict[str, Float[Array, "B S"]]:
