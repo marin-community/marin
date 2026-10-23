@@ -120,6 +120,33 @@ the control: it trains on half as many pool tasks. On Snowball, most of the loss
 control learned to finish its reasoning within 8,192 tokens and give an answer, and the RSI arm did so less often (135
 of 220 attempts without an answer, control 66, base 148).
 
+Two more 4B seeds (1 and 2) repeat the 4B arms from scratch with `--held-out-idea-share 0.25`: the loop never trains on
+the tasks of a quarter of its ideas, so their probes (`probe-heldout`) measure transfer to families that the policy
+never saw. The probes are those of every task that the RSI arm accepted. The 300 pool tasks are the same as above:
+
+| Seed | Task set | Tasks | Base | Control | RSI | RSI − control (95% CI) |
+|---|---|---|---|---|---|---|
+| 1 | Held-out pool tasks | 300 | 0.223 | 0.400 | 0.402 | +0.002 [−0.029, +0.033] |
+| 1 | Probes of trained families | 942 | 0.214 | 0.223 | 0.429 | +0.205 [+0.178, +0.232] |
+| 1 | Probes of held-out families | 376 | 0.143 | 0.217 | 0.423 | +0.205 [+0.164, +0.247] |
+| 2 | Held-out pool tasks | 299 | 0.211 | 0.377 | 0.353 | −0.024 [−0.052, +0.002] |
+| 2 | Probes of trained families | 945 | 0.121 | 0.111 | 0.633 | +0.521 [+0.491, +0.551] |
+| 2 | Probes of held-out families | 208 | 0.161 | 0.145 | 0.543 | +0.398 [+0.335, +0.463] |
+
+The gain transfers to synthesized families that the policy never trained on, in both seeds. These families come from
+the same Taskforge pipeline, so this is transfer within that kind of task. The pool loss of the first seed does not
+occur again: both intervals contain zero.
+
+The gain does not transfer to standard benchmarks. On IFEval, IFBench, GSM8K (0-shot), MATH500, HumanEval+ and MBPP+
+(full test sets, Evalchemy through `experiments.evaluation`), every RSI − control difference of the first 4B and
+Snowball checkpoints is within its 95% interval of zero. Both RL arms of Snowball score a little below the base on
+instruction following, and the RSI arm is lowest (IFEval −0.037 [−0.065, −0.009] against the base).
+
+A check of the passing RSI attempts of the first seed found no reward hacking: 67 of 68 sampled 4B passes and 14 of
+14 Snowball passes are legitimate (one 4B pass is doubtful), and none of the 2,340 passing 4B attempts touches the
+grader. With the corrected audit prompt, DeepSeek finds no problem in 143 of 171 4B tasks and 34 of 39 Snowball tasks
+that the GLM reviewer accepted.
+
 ## Results of the LoRA trainer (2026-10-21)
 
 These runs used an in-process LoRA trainer beside one vLLM server, before SkyRL became the train box.
