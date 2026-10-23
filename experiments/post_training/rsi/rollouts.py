@@ -9,13 +9,15 @@ or ShellSim machine. Script graders run in a bubblewrap sandbox with the host's 
 """
 
 import asyncio
+import json
 import logging
 import sys
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
+from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, AssistantPrefixHarness
 from rolloutengine.harness.shell import ShellHarness
@@ -55,6 +57,7 @@ SHELL_HARNESS = "shell"
 MACHINE_BACKENDS = {CommandSemantics.LINUX_PROCESS: Backend.LOCAL, CommandSemantics.SHELL_SIMULATOR: Backend.SHELLSIM}
 """The solver machine of a task with a shell, from its command semantics: bubblewrap or ShellSim."""
 PROGRESS_EVERY = 50
+DIAGNOSTIC_CHARS = 1000
 PASS_REWARD = 1.0
 """A rollout passes with a reward of at least this value; some graders give partial credit below it."""
 
@@ -241,3 +244,40 @@ class PolicyRunner:
             return group
 
         return list(await asyncio.gather(*(run(task) for task in tasks)))
+
+
+def group_record(group: TaskRollouts, *, transcripts: bool) -> dict[str, Any]:
+    """The JSON record of one task's attempts: rewards and grades, and the conversations if ``transcripts``."""
+    record: dict[str, Any] = {
+        "task_id": group.task.id,
+        "tags": list(group.task.tags),
+        "model": group.model,
+        "pass_rate": group.pass_rate,
+        "rewards": [reward(graded) for graded in group.rollouts],
+        "grades": [
+            {
+                "status": graded.grade.status.value,
+                "reward": graded.grade.reward,
+                "error": graded.grade.error,
+                "diagnostics": json.dumps(graded.grade.diagnostics, default=str)[:DIAGNOSTIC_CHARS],
+            }
+            for graded in group.rollouts
+        ],
+        "stop_reasons": [graded.rollout.stop_reason for graded in group.rollouts],
+        "response_tokens": [
+            sum(sum(conversation.loss_mask) for conversation in graded.rollout.conversations)
+            for graded in group.rollouts
+        ],
+    }
+    if transcripts:
+        record["conversations"] = [
+            [list(conversation.messages) for conversation in graded.rollout.conversations] for graded in group.rollouts
+        ]
+        record["failures"] = [
+            asdict(graded.rollout.failure) if graded.rollout.failure else None for graded in group.rollouts
+        ]
+    return record
+
+
+def write_jsonl(path: StoragePath, records: Iterable[Mapping[str, Any]]) -> None:
+    path.write_text("".join(json.dumps(record, default=str) + "\n" for record in records))

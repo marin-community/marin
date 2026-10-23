@@ -8,33 +8,38 @@ restarted loop gives the training instances of the accepted tasks that are not i
 ideas of the finished synthesis sessions are known, so the analysis does not yield them again.
 """
 
-import json
 from collections.abc import AsyncIterator, Iterable, Iterator
 from dataclasses import dataclass
 
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import MachineFactory
 from taskcompendium.models import TaskSpec
-from taskforge.agentic.gate import Evidence
 from taskforge.agentic.instances import task_instances
-from taskforge.agentic.tools import AcceptedTask, TaskReview
+from taskforge.agentic.tools import AcceptedTask
 from taskforge.capability import CapabilityIdea
 
-from experiments.post_training.baby_rsi.feedback import (
-    HELD_OUT_MARKER,
+from experiments.post_training.rsi.feedback import (
+    IDEAS_DIRECTORY,
     INSTANCE_TIMEOUT,
+    SESSION_FILE,
+    TASKS_DIRECTORY,
+    WORKSPACE_FILE,
+    SessionRecord,
     synthesized,
     synthesized_id,
     training_ids,
 )
 
 
+def sessions(output: StoragePath) -> Iterator[tuple[StoragePath, SessionRecord]]:
+    """The records of the synthesis sessions that finished in ``output``, each with its directory."""
+    for path in sorted((output / IDEAS_DIRECTORY / "*" / SESSION_FILE).glob(), key=str):
+        yield path.parent, SessionRecord.model_validate_json(path.read_text())
+
+
 def known_ideas(output: StoragePath) -> frozenset[str]:
     """The capability IDs of the synthesis sessions that finished."""
-    return frozenset(
-        CapabilityIdea.model_validate_json(path.read_text()).capability_id
-        for path in (output / "ideas" / "*" / "idea.json").glob()
-    )
+    return frozenset(record.idea.capability_id for _, record in sessions(output))
 
 
 async def untrained_instances(
@@ -61,7 +66,7 @@ async def untrained_instances(
 
 @dataclass(frozen=True)
 class SavedTask:
-    """An accepted task of a finished session, its idea, and the directory of its files."""
+    """An accepted task of a finished session, its idea, and the directory of its workspace and probes."""
 
     idea: CapabilityIdea
     accepted: AcceptedTask
@@ -71,19 +76,15 @@ class SavedTask:
 
 
 def accepted_tasks(output: StoragePath) -> Iterator[SavedTask]:
-    """The accepted tasks of the finished sessions in ``output``.
-
-    A session writes ``idea.json`` last and a task ``task.json`` last, so only complete records count.
-    """
-    for idea_path in sorted((output / "ideas" / "*" / "idea.json").glob(), key=str):
-        idea = CapabilityIdea.model_validate_json(idea_path.read_text())
-        for path in sorted((idea_path.parent / "tasks" / "*" / "task.json").glob(), key=str):
-            directory = path.parent
+    """The accepted tasks of the synthesis sessions that finished in ``output``."""
+    for directory, record in sessions(output):
+        for saved in record.tasks:
+            task_directory = directory / TASKS_DIRECTORY / saved.task.id
             accepted = AcceptedTask(
-                task=TaskSpec.model_validate_json(path.read_text()),
-                evidence=Evidence(**json.loads((directory / "evidence.json").read_text())),
-                review=TaskReview.model_validate_json((directory / "review.json").read_text()),
-                program=(directory / "program.txt").read_text(),
-                workspace=(directory / "workspace.tgz").read_bytes(),
+                task=saved.task,
+                evidence=saved.evidence,
+                review=saved.review,
+                program=saved.program,
+                workspace=(task_directory / WORKSPACE_FILE).read_bytes(),
             )
-            yield SavedTask(idea, accepted, directory, (idea_path.parent / HELD_OUT_MARKER).exists())
+            yield SavedTask(record.idea, accepted, task_directory, record.held_out)

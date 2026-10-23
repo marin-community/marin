@@ -14,12 +14,8 @@ import asyncio
 import json
 import logging
 import re
-import socket
-import subprocess
-import time
 import uuid
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -34,6 +30,7 @@ POLICY_ENDPOINT_FILE = "policy_endpoint.json"
 """The file of a SkyRL task feed that holds the endpoint of the job's live policy (see ``skyrl_box``)."""
 BASE_MODEL_NAME = "base"
 """The served name of the weights."""
+MAX_MODEL_LEN = 16384
 TOKEN_ID_PREFIX = "token_id:"
 TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
 REASONING = re.compile(r"\s*(?:<\|start_think\|>|<think>)(.*?)(?:<\|end_think\|>|</think>|$)", re.DOTALL)
@@ -42,10 +39,6 @@ turn used all its tokens) holds the rest of the reply."""
 MARKUP_TOKENS = frozenset({"<tool_call>", "</tool_call>", "<|start_think|>", "<|end_think|>"})
 """Special tokens of the Snowball tokenizer that mark tool calls and reasoning; the decoded text keeps them."""
 OBJECT_STORE_SCHEMES = ("s3://", "gs://")
-OBJECT_STORE_LOADER = ("--model-loader-extra-config", json.dumps({"distributed": True}))
-"""vLLM streams the weights of an object-store path with the Run:ai loader. ``distributed`` divides the reads among
-the ranks of the server, as the Marin evaluation serves Snowball; vLLM refuses it for local weights."""
-STARTUP_TIMEOUT = 1800.0
 REQUEST_TIMEOUT = 1800.0
 BOUNDARY_PROBE = "boundary"
 
@@ -56,75 +49,6 @@ class Sampling:
     top_p: float
     max_tokens: int
     """The most tokens of one model turn."""
-
-
-@dataclass
-class VllmServer:
-    """A running ``vllm serve`` process for one set of weights."""
-
-    base_url: str
-    process: subprocess.Popen[bytes]
-
-    @classmethod
-    @contextmanager
-    def start(
-        cls,
-        model: str,
-        *,
-        executable: str,
-        max_model_len: int,
-        gpu_memory_utilization: float,
-        extra_args: Sequence[str] = (),
-    ) -> Iterator["VllmServer"]:
-        """Start the server on a free port, wait until it is healthy, and stop it.
-
-        ``model`` is a Hugging Face ID, a local directory or an object-store path. The server uses the GPUs of
-        ``CUDA_VISIBLE_DEVICES`` that ``extra_args`` ask for (one by default). Pods on CoreWeave share the host's
-        network, so a fixed port can belong to another task on the same node.
-        """
-        port = _free_port()
-        loader = OBJECT_STORE_LOADER if model.startswith(OBJECT_STORE_SCHEMES) else ()
-        command = [
-            executable,
-            "serve",
-            model,
-            "--served-model-name",
-            BASE_MODEL_NAME,
-            "--port",
-            str(port),
-            "--max-model-len",
-            str(max_model_len),
-            "--gpu-memory-utilization",
-            str(gpu_memory_utilization),
-            "--disable-uvicorn-access-log",
-            *loader,
-            *extra_args,
-        ]
-        # The server writes its log to the task's log.
-        process = subprocess.Popen(command)
-        server = cls(f"http://127.0.0.1:{port}", process)
-        try:
-            server._wait_healthy()
-            yield server
-        finally:
-            process.terminate()
-            try:
-                process.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                process.kill()
-
-    def _wait_healthy(self) -> None:
-        deadline = time.monotonic() + STARTUP_TIMEOUT
-        while time.monotonic() < deadline:
-            if self.process.poll() is not None:
-                raise RuntimeError(f"vllm serve exited with code {self.process.returncode}")
-            try:
-                if httpx.get(f"{self.base_url}/health", timeout=5).status_code == 200:
-                    return
-            except httpx.HTTPError:
-                pass
-            time.sleep(5)
-        raise TimeoutError("vllm serve did not become healthy")
 
 
 @dataclass
@@ -261,12 +185,6 @@ class VllmPolicy:
             default=0,
         )
         return [*served, *boundary[overlap:], *suffix]
-
-
-def _free_port() -> int:
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
 
 
 def _continues_final(request: ModelRequest) -> bool:

@@ -30,7 +30,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import GradedRollout
 from taskcompendium.models import TaskSpec
 
-from experiments.post_training.baby_rsi.rollouts import TaskRollouts
+from experiments.post_training.rsi.rollouts import TaskRollouts
 
 logger = logging.getLogger(__name__)
 

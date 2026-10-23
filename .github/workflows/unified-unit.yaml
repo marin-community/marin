@@ -462,7 +462,7 @@ jobs:
         run: >-
           uv run --package marin-taskforge --frozen --group test pytest
           -c lib/taskforge/pyproject.toml lib/taskforge/tests
-          experiments/post_training/capability_driven_envs/tests experiments/post_training/baby_rsi/tests -q
+          experiments/post_training/capability_driven_envs/tests experiments/post_training/rsi/tests -q
 
       - name: Type-check Taskforge
         working-directory: lib/taskforge

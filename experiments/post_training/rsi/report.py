@@ -5,7 +5,7 @@
 
 Run on the output directory of ``run.py evaluate``::
 
-    python -m experiments.post_training.baby_rsi.report s3://<bucket>/<prefix>/evaluate --pair rsi:control
+    python -m experiments.post_training.rsi.report s3://<bucket>/<prefix>/evaluate --pair rsi:control
 """
 
 import json
