@@ -12,8 +12,8 @@ use finelog::test_support::ObjectOp;
 
 /// A store that restarts with no local cache and no local catalog bootstraps
 /// from the object directory alone. Recovery downloads no data, the first reads
-/// scan the object directory directly while the cache fills in the background
-/// with only the live objects, and the table compacts cleanly afterwards.
+/// scan the object directory directly. Repeated queries warm only live objects,
+/// and the table compacts cleanly afterwards.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_cold_restart_scans_remotely_and_warms_only_the_live_objects() {
     let cluster = Cluster::new("scenario_cold_restart");
@@ -58,9 +58,7 @@ async fn a_cold_restart_scans_remotely_and_warms_only_the_live_objects() {
         "a claimed HEAD makes a cold projection's first publication list-free"
     );
 
-    // A full scan, before any maintenance cycle. The cold cache never blocks
-    // the read: the scan runs against the object directory itself and the
-    // cache fills behind it.
+    // A one-off full scan reads remotely and does not populate the cache.
     faults.clear_calls();
     assert!(cached_data_objects(&cluster.data_dir).is_empty());
     let scanned = seq_column(&run_sql(&restarted, &format!("SELECT seq FROM \"{TABLE}\"")).await);
@@ -69,6 +67,11 @@ async fn a_cold_restart_scans_remotely_and_warms_only_the_live_objects() {
         localized_data_objects(&faults).is_empty(),
         "a cold scan must not block on object downloads"
     );
+    assert!(cached_data_objects(&cluster.data_dir).is_empty());
+
+    // A second independent request demonstrates reuse and admits the fill.
+    let repeated = seq_column(&run_sql(&restarted, &format!("SELECT seq FROM \"{TABLE}\"")).await);
+    assert_eq!(repeated, scanned);
     let warmed = wait_for_cache_fill(&cluster.data_dir, &live).await;
     assert_eq!(
         warmed, live,

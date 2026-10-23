@@ -4,12 +4,14 @@
 //! paths, local cache membership, and legacy layout translation are private to
 //! the implementations of [`ObjectStore`].
 
+mod admission;
 mod cached;
 mod legacy;
 mod local_file;
 mod provider;
 mod remote;
 
+pub use admission::QueryCacheAdmission;
 pub use cached::CachedObjectStore;
 pub use legacy::LegacyObjectStore;
 pub use provider::is_remote_object_store;
@@ -248,9 +250,14 @@ pub trait ObjectStore: Send + Sync {
         Ok(None)
     }
 
-    /// Begin materializing `reference` into the local cache without waiting
-    /// for it. A store without a cache does nothing.
+    /// Begin a maintenance cache fill without waiting. Query callers use
+    /// [`ObjectStore::warm_query`] so they share reuse and admission limits.
+    /// A store without a cache does nothing.
     fn warm(&self, _reference: &ObjectReference) {}
+
+    /// Consider an optional fill after a query cache miss. Reuse history and
+    /// the query's shared budget decide whether a cached store admits it.
+    fn warm_query(&self, _reference: &ObjectReference, _query: &QueryCacheAdmission) {}
 
     /// Conditionally replace a mutable pointer object. Stores whose objects
     /// are all immutable reject this.

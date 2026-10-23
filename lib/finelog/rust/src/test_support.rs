@@ -335,6 +335,14 @@ impl ObjectStore for FaultInjectingObjectStore {
         self.inner.warm(reference)
     }
 
+    fn warm_query(
+        &self,
+        reference: &ObjectReference,
+        query: &crate::store::object_store::QueryCacheAdmission,
+    ) {
+        self.inner.warm_query(reference, query)
+    }
+
     async fn compare_and_swap(
         &self,
         id: &ObjectId,

@@ -80,6 +80,24 @@ queued readers can proceed. Background warming uses only immediately available
 download slots; a broad query cannot leave an unbounded queue of cache fills
 after its deadline. Required local reads still wait for a download slot.
 
+Query misses qualify for background warming on the second distinct query
+request within ten minutes. A query shares a 256 MiB / 64-object fill budget
+across all namespaces, source Parquet, index bundles, and projections. Repeated
+scans of an object in one query count once. Objects larger than the remaining
+byte budget continue scanning remotely; smaller objects can still qualify.
+Each cached store remembers at most 65,536 objects' first observations and
+expires them after ten minutes, so old bulk scans cannot accumulate demand
+indefinitely. A process restart clears this history. Separate RPC requests,
+including retries, count as separate queries.
+
+These are admission limits, not a hard disk quota. Uploads still seed the cache,
+required local reads and bounded key-bounds repair bypass query admission, and
+five-minute LRU eviction still enforces `object_cache_gb`. Compare eviction
+volume and repeat-query latency before increasing the admission constants in
+`rust/src/store/object_store/admission.rs`. A repeated broad query can admit
+another budget on each request; the limits reduce its fill rate, not its total
+working set over time.
+
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
 correct key with many segments points to a different problem than a
