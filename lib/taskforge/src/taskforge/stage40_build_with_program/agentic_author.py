@@ -148,7 +148,7 @@ AUTHOR_RECORD = "author.json"
 WORKSPACE_DIR = "workspace"
 RUNS_DIR = "runs"
 REFERENCE_DIR = "reference"
-PROPOSAL_PATH = "proposal.md"
+PROPOSAL_PATH = "proposal.json"
 NOTES_PATH = "notes.md"
 SDK_PATH = f"{REFERENCE_DIR}/sdk.md"
 TEMPLATE_PATH = f"{REFERENCE_DIR}/template.py"
@@ -552,7 +552,7 @@ class AuthorSession:
 
     ``original`` is the proposal the round received; ``change`` is the session's verification change
     relative to it, starting from the revision's, and ``proposal`` the proposal it yields, which the
-    workspace's ``proposal.md`` and every in-session build follow.
+    workspace's ``proposal.json`` and every in-session build follow.
     """
 
     def __init__(

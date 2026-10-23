@@ -3,6 +3,7 @@
 
 """The stage coordinator runs the catalog entry ``d43.culinary.scaling`` to an accepted task."""
 
+import json
 from functools import partial
 
 import pytest
@@ -90,23 +91,26 @@ def catalog_proposal(idea: CapabilityIdea) -> TaskProposal:
     sections["Task"] = f"{idea.capability['outcome']} {SECTION}"
     body = "\n\n".join(f"## {heading}\n{text}" for heading, text in sections.items())
     return parse(
-        f"""---
-id: "{idea.capability_id}/0"
-source: {{kind: capability, ref: "{idea.capability_id}", hash: "{idea.capability_hash}"}}
-grounding: unverified
-null_reason: null
-environment: shellsim
-solver_machine: shellsim
-verification: answer_in_box
-composite: []
-research_need: not_needed
-research_reason: "the example program draws its own recipe"
-research: []
-build: []
-resources: []
----
-{body}
-"""
+        json.dumps(
+            {
+                "header": {
+                    "id": f"{idea.capability_id}/0",
+                    "source": {"kind": "capability", "ref": idea.capability_id, "hash": idea.capability_hash},
+                    "grounding": "unverified",
+                    "null_reason": None,
+                    "environment": "shellsim",
+                    "solver_machine": "shellsim",
+                    "verification": "answer_in_box",
+                    "composite": [],
+                    "research_need": "not_needed",
+                    "research_reason": "the example program draws its own recipe",
+                    "research": [],
+                    "build": [],
+                    "resources": [],
+                },
+                "body": f"{body}\n",
+            }
+        )
     )
 
 

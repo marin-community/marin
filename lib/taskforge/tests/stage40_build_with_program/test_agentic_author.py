@@ -844,7 +844,7 @@ async def test_a_session_answering_findings_swaps_the_verifier_kind_and_builds_a
         "reason": TO_ANSWER_IN_BOX.reason,
     }
     session = agentic(workpiece, 1, 0)
-    assert "verification: answer_in_box" in (session / "workspace" / "proposal.md").read_text()
+    assert json.loads((session / "workspace" / "proposal.json").read_text())["header"]["verification"] == "answer_in_box"
     provenance = load_draft(session / "runs" / "1" / DRAFT_DIR).provenance
     assert (provenance.verification, provenance.verification_change) == (Verification.ANSWER_IN_BOX, TO_ANSWER_IN_BOX)
 

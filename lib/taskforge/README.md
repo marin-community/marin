@@ -100,8 +100,8 @@ and one outcome per slot, in slot order, so a failed slot does not drop its sibl
 `propose_all(source, idea, n)` plans, writes every slot concurrently and returns that batch, for a
 caller that wants everything at once.
 
-`stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalHeader`, keys in `HEADER_KEYS`
-order) plus a markdown body with required section headings. `parse` and `render`
+`stage10_proposal.model.TaskProposal` is a JSON object with a typed `header` (`ProposalHeader`)
+and a Markdown `body` with required section headings. `parse` and `render`
 round-trip it and `digest` is the sha256 of the canonical form. `parse` also checks the research
 decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
 non-null body cites every item, and only listed items, as `research[i]`. `solver_machine` pins the
@@ -114,8 +114,8 @@ not a relative path inside the build root and a `build` name that repeats.
 that declares it, but proposers are offered only `OFFERED_VERIFICATIONS` (`decision_model`,
 `answer_in_box`, `code`, `llm_as_judge`) until a composite grader type exists, and a task whose
 grading would mix kinds declares its dominant part.
-`document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
-field that constrains a completion to the canonical layout for that id and source, with an offered
+`document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
+field that constrains a completion to the typed object for that id and source, with an offered
 verification and `composite: []`. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
@@ -457,7 +457,7 @@ rounds/<n>/agentic/<k>/
   submit.json        accepted and every submit call with its outcome
   record.json        accepted only: GlmAuthor's record fields, with author_kind and turns
   conversation.json  the messages as sent, read by a same-session revision
-  workspace/         program.py, proposal.md, notes.md, reference/
+  workspace/         program.py, proposal.json, notes.md, reference/
   runs/<j>/          one per in-session build: draft/ and run.json (status built, build_failure,
                      crash, infrastructure, storage, or expired with its clock)
 ```
@@ -508,7 +508,7 @@ of zero never takes the modify edge; the round number counts the `Modify` decisi
 Triage returns a `Verdict`. The preflight's exits accept or reject, and a reject records the
 verdict's reasons. REPAIR is the surface described under Triage, and a `max_triage_repairs` of zero
 sends any REPAIR verdict to reject. On a REPAIR verdict within the budget, the coordinator calls
-`StageFunctions.repair`, writes the rewrite to `repaired/<k>.md`, and records `TRIAGED` exiting
+`StageFunctions.repair`, writes the rewrite to `repaired/<k>.json`, and records `TRIAGED` exiting
 repair with the rewrite's digest, the triaged proposal's digest, the file and the rewrites spent.
 Triage judges the rewrite, and every later stage runs it, read back from its file. A REPAIR verdict
 past the budget exits reject, and so does a rewrite that is not a valid proposal; the workpiece
@@ -579,7 +579,7 @@ A run root holds:
 
 ```
 workpieces/<workpiece_id>/events.json
-workpieces/<workpiece_id>/repaired/<k>.md   the k-th rewrite answering a REPAIR verdict
+workpieces/<workpiece_id>/repaired/<k>.json   the k-th rewrite answering a REPAIR verdict
 workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it

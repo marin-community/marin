@@ -99,7 +99,7 @@ async def test_a_revisions_verification_change_reaches_the_prompt_and_comes_back
     messages = fake_glm.requests[0]["messages"]
     asked = messages[-2]["content"]
     assert "answer_in_box" in asked and "decision_model" in asked
-    assert "verification: decision_model" in messages[1]["content"]
+    assert '"verification": "decision_model"' in messages[1]["content"]
     assert authored.verification_change == change
 
 

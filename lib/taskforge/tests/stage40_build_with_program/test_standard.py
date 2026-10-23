@@ -89,7 +89,7 @@ SHELLSIM = draft.requirements(image=None, workdir=WORKDIR)
 @pytest.fixture
 def proposal() -> TaskProposal:
     """The shared proposal, declaring the code verification the grader programs below implement."""
-    return parse(PROPOSAL.replace("verification: answer_in_box", "verification: code"))
+    return parse(PROPOSAL.replace('"verification": "answer_in_box"', '"verification": "code"'))
 
 
 def file(path: str, content: str) -> dict:
@@ -460,7 +460,7 @@ def decision_call(variants: list[str]) -> dict:
 
 
 def decision_proposal():
-    return parse(PROPOSAL.replace("verification: answer_in_box", "verification: decision_model"))
+    return parse(PROPOSAL.replace('"verification": "answer_in_box"', '"verification": "decision_model"'))
 
 
 async def test_the_grader_step_calibrates_a_decision_grader_on_its_reference_and_variants(context, fake_glm):
