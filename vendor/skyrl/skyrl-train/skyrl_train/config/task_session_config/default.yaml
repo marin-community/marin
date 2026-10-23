@@ -1,5 +1,10 @@
 # @package environment.task_sessions
 local: null # Explicitly enable with {} on Linux hosts with working bubblewrap.
+# Optional keys of local:
+#   read_only: [<dir>, ...]   host directories that each sandbox sees read-only at their own path
+#   bin_dirs: [<dir>, ...]    directories ahead of the standard PATH in each sandbox
+#   python_environment: host  mount the rollout worker's Python environment read-only and put its bin on PATH
+#   max_machines: <int>       open sandboxes in each rollout worker; more creations wait
 max_verifier_workers: 32 # verifier threads in each rollout worker
 remote_judge: null # Set base_url and api_key_env to grade judge tasks on the rollout host.
 daytona: null # Set api_key_env and ttl_minutes for tasks with the daytona backend.

@@ -41,7 +41,9 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rolloutengine.chat import ChatModel
 from rolloutengine.models import Model, ModelRequest, ModelTurn, RolloutLimits
-from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.local.machine import SYSTEM_DIRECTORIES, LocalMachineFactory
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend, MachineFactory
 from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
@@ -109,14 +111,70 @@ def agent_limits(turns: int) -> RolloutLimits:
     )
 
 
+UV_ARCHIVE_DIRECTORY = "archive-v0"
+
+
 def workspace_factory() -> LocalMachineFactory:
     """A bubblewrap sandbox whose shell has this environment's Python, and with it taskcompendium and verifyit.
 
-    It mounts the directory of the virtual environment read-only, for example ``/app`` with ``/app/.venv`` on Iris.
-    Bubblewrap needs namespaces, which an Iris task has only under the privileged container profile.
+    It mounts the directory of the virtual environment read-only, for example ``/app`` with ``/app/.venv`` on Iris,
+    and the base interpreter. Bubblewrap needs namespaces, which an Iris task has only under the privileged container
+    profile.
     """
     venv = Path(sys.prefix)
-    return LocalMachineFactory(read_only=(venv.parent,), bin_dirs=(venv / "bin",))
+    return LocalMachineFactory(read_only=(venv.parent, *interpreter_mounts(venv)), bin_dirs=(venv / "bin",))
+
+
+def interpreter_mounts(environment: Path) -> tuple[Path, ...]:
+    """The directories outside ``environment`` that its Python needs in a sandbox: the base interpreter, by its
+    resolved path and by the path that ``pyvenv.cfg`` names, and the uv archive that its package files link to.
+
+    The sandbox sees the system directories already, and mounts inside them fail.
+    """
+    candidates = (Path(sys.base_prefix), interpreter_home(environment), *linked_archives(environment))
+    return tuple(
+        path
+        for path in dict.fromkeys(candidates)
+        if not any(path.is_relative_to(system) for system in SYSTEM_DIRECTORIES)
+    )
+
+
+def interpreter_home(environment: Path) -> Path:
+    """The base interpreter's directory by the path that ``pyvenv.cfg`` of ``environment`` names.
+
+    uv names its minor-version link (``cpython-3.12-linux-x86_64-gnu``), which ``sys.base_prefix`` resolves to the
+    patch version. Without the link in the sandbox, ``bin/python`` dangles and ``python3`` is the system interpreter,
+    which has none of the environment's packages.
+    """
+    for line in (environment / "pyvenv.cfg").read_text().splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "home":
+            return Path(value.strip()).parent
+    raise ValueError(f"{environment}/pyvenv.cfg names no interpreter home")
+
+
+def linked_archives(environment: Path) -> tuple[Path, ...]:
+    """The uv ``archive-v0`` directories that the package files of ``environment`` link to, if uv linked them: the
+    links do not resolve in a sandbox that does not mount their targets."""
+    archives = []
+    for site_packages in environment.glob("lib/python*/site-packages"):
+        link = next((path for path in site_packages.rglob("*") if path.is_symlink()), None)
+        if link is None:
+            continue
+        archive = next((parent for parent in link.resolve().parents if parent.name == UV_ARCHIVE_DIRECTORY), None)
+        if archive is not None:
+            archives.append(archive)
+    return tuple(archives)
+
+
+def solver_factory(backend: Backend) -> MachineFactory:
+    """The machines of the solver rollouts: ShellSim, or a bubblewrap sandbox with no host directory mounted, whose
+    tasks install their Python with ``PackageSpec.pypi_packages``."""
+    if backend == Backend.SHELLSIM:
+        return ShellSimMachineFactory()
+    if backend == Backend.LOCAL:
+        return LocalMachineFactory()
+    raise ValueError(f"No solver machines on {backend}")
 
 
 def chat_model(endpoint: GlmEndpoint, *, model: str, reasoning_effort: str, cache_key: str | None) -> ChatModel:
@@ -172,6 +230,7 @@ async def generate_all(
     concurrency: int,
     output: StoragePath,
     parallel_api_key: str,
+    solver_backend: Backend,
 ) -> list[dict[str, Any]]:
     """Run one agent for each idea, at most ``concurrency`` at a time, and write each result when it finishes."""
 
@@ -186,6 +245,7 @@ async def generate_all(
             agent_model=relay_model(GLM_MODEL, agent_reasoning_effort, None),
             workspace_factory=workspace_factory(),
             solver_model=solver,
+            solver_factory=solver_factory(solver_backend),
             judge=judge,
             judge_policy=LLMPolicy(temperature=JUDGE_TEMPERATURE),
             web=web,
@@ -278,6 +338,13 @@ def _write(path: StoragePath, text: str) -> None:
     show_default=True,
     help=f"The reasoning effort of the solvers. {NO_REASONING!r} switches the thinking of DeepSeek off.",
 )
+@click.option(
+    "--solver-backend",
+    type=click.Choice([Backend.SHELLSIM.value, Backend.LOCAL.value]),
+    default=Backend.SHELLSIM.value,
+    show_default=True,
+    help="The machines of the solver rollouts: ShellSim, or bubblewrap (local), which needs the privileged profile.",
+)
 @click.option("--concurrency", type=click.IntRange(min=1), default=4, show_default=True, help="Ideas at once.")
 def main(
     output_dir: str,
@@ -292,6 +359,7 @@ def main(
     agent_reasoning_effort: str,
     solver_model: str,
     solver_reasoning_effort: str,
+    solver_backend: str,
     concurrency: int,
 ) -> None:
     """Generate TaskSpecs for catalog capabilities, with one GLM agent for each capability."""
@@ -318,6 +386,7 @@ def main(
             concurrency=concurrency,
             output=output,
             parallel_api_key=os.environ[PARALLEL_API_KEY_ENV],
+            solver_backend=Backend(solver_backend),
         )
     )
     _write(output / SUMMARY_FILE, json.dumps(summary, indent=2))
