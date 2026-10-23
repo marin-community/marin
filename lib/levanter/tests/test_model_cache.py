@@ -329,7 +329,7 @@ def test_resolve_keeps_distinct_refs_in_distinct_cache_dirs(monkeypatch):
         lambda model_id, *, revision=None: SimpleNamespace(sha=revisions[(model_id, revision)]),
     )
 
-    def fake_cache(cache_path, repo, *, revision=None, complete_marker):
+    def fake_cache(cache_path, repo, *, revision=None, complete_marker, max_workers=1):
         mirrored[cache_path] = (repo, revision)
         return cache_path
 
@@ -382,3 +382,82 @@ def test_resolve_tracks_mutable_hf_revision(tmp_path, monkeypatch):
     for filename in repo_files:
         assert Path(first_path, filename).read_text() == first_commit
         assert Path(second_path, filename).read_text() == second_commit
+
+
+def test_parallel_cache_transfers_overlap_and_finish_before_marker(tmp_path, monkeypatch):
+    contents = {f"shard-{i}.bin": bytes([i]) * 10 for i in range(4)}
+    revision = "a" * 40
+    barrier = threading.Barrier(2, timeout=10)
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    scratch_paths = []
+    destination = tmp_path / "mirror"
+    monkeypatch.setattr(
+        model_cache,
+        "list_repo_tree",
+        lambda *args, **kwargs: [_repo_file(name, data) for name, data in contents.items()],
+    )
+
+    def download(model_id, filename, *, revision, local_dir):
+        nonlocal active, peak
+        assert revision == "a" * 40
+        with lock:
+            active += 1
+            peak = max(peak, active)
+            scratch_paths.append(local_dir)
+        barrier.wait()
+        assert not (destination / DEFAULT_COMPLETE_MARKER).exists()
+        path = Path(local_dir) / filename
+        path.write_bytes(contents[filename])
+        with lock:
+            active -= 1
+        return str(path)
+
+    monkeypatch.setattr(model_cache, "hf_hub_download", download)
+    cache_hf_model(str(destination), "org/model", revision=revision, max_workers=2)
+    assert peak == 2
+    assert all((destination / name).read_bytes() == data for name, data in contents.items())
+    assert all(not Path(path).exists() for path in scratch_paths)
+    assert json.loads((destination / DEFAULT_COMPLETE_MARKER).read_text())["source_revision"] == revision
+
+
+def test_parallel_failure_leaves_completed_shards_for_retry(tmp_path, monkeypatch):
+    contents = {"good.bin": b"complete", "retry.bin": b"recovered"}
+    destination = tmp_path / "mirror"
+    completed = threading.Event()
+    fail = True
+    monkeypatch.setattr(
+        model_cache,
+        "list_repo_tree",
+        lambda *args, **kwargs: [_repo_file(name, data) for name, data in contents.items()],
+    )
+    filesystem = fsspec.filesystem("file")
+    put_file = filesystem.put_file
+
+    def upload(source, target, **kwargs):
+        put_file(source, target, **kwargs)
+        if target.endswith("good.bin"):
+            completed.set()
+
+    monkeypatch.setattr(filesystem, "put_file", upload)
+
+    def download(model_id, filename, *, revision, local_dir):
+        if filename == "retry.bin" and fail:
+            assert completed.wait(timeout=10)
+            raise OSError("interrupted transfer")
+        if filename == "good.bin" and not fail:
+            pytest.fail("completed shard was downloaded again")
+        path = Path(local_dir) / filename
+        path.write_bytes(contents[filename])
+        return str(path)
+
+    monkeypatch.setattr(model_cache, "hf_hub_download", download)
+    with pytest.raises(OSError, match="interrupted transfer"):
+        cache_hf_model(str(destination), "org/model", revision="a" * 40, max_workers=2)
+    assert not (destination / DEFAULT_COMPLETE_MARKER).exists()
+    assert (destination / "good.bin").read_bytes() == contents["good.bin"]
+    fail = False
+    cache_hf_model(str(destination), "org/model", revision="a" * 40, max_workers=2)
+    assert (destination / DEFAULT_COMPLETE_MARKER).exists()
+    assert (destination / "retry.bin").read_bytes() == contents["retry.bin"]

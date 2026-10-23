@@ -13,7 +13,7 @@ read the snapshot from the nearby cache.
 
 The populate step streams **directly into the cache filesystem** — there is no
 full local copy of the snapshot. :func:`cache_hf_model` is the easy path for the
-common case (mirror an HF repo by id), downloading and uploading one file at a
+common case (mirror an HF repo by id), downloading and uploading a bounded number of files at a
 time so a multi-hundred-GB repo never has to fit on local disk. If a worker stops
 before the completion marker is written, the next worker compares existing file
 sizes with the requested Hugging Face tree and downloads missing or partial files.
@@ -31,6 +31,7 @@ import re
 import tempfile
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 
 import fsspec
@@ -143,11 +144,12 @@ def cache_hf_model(
     revision: str | None = None,
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
     poll_interval: float = _DEFAULT_POLL_INTERVAL,
+    max_workers: int = 1,
 ) -> str:
     """Mirror HuggingFace repo *model_id* to *cache_path* once under a distributed lock.
 
     The easy path over :func:`cache_to_prefix`: streams the repo into the cache
-    one file at a time (see :func:`_stream_hf_snapshot`), excluding the cache
+    up to ``max_workers`` files at a time (see :func:`_stream_hf_snapshot`), excluding the cache
     completion marker, so the snapshot never has to fit on local disk. An incomplete
     prefix is checked against source file sizes and resumed under the same lock.
     The caller chooses ``cache_path``; use :func:`resolve_cached_model_path` when a branch
@@ -158,12 +160,13 @@ def cache_hf_model(
         model_id: HuggingFace repo id, e.g. ``Qwen/Qwen3-0.6B``.
         revision: Optional git revision (branch, tag, or commit) to mirror and record in
             the cache metadata.
+        max_workers: Maximum simultaneous shard transfers; each uses one local scratch file.
         complete_marker: Filename written last to mark the cache complete.
         poll_interval: Seconds a blocked worker waits between marker re-checks.
     """
     return cache_to_prefix(
         cache_path,
-        lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision, complete_marker),
+        lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision, complete_marker, max_workers),
         metadata=CacheMetadata(source_revision=revision),
         complete_marker=complete_marker,
         poll_interval=poll_interval,
@@ -176,6 +179,7 @@ def resolve_cached_model_path(
     cache_ttl_days: int,
     cache_prefix: str,
     complete_marker: str = DEFAULT_COMPLETE_MARKER,
+    max_workers: int = 1,
 ) -> str:
     """Resolve *model* to a path to load it from, mirroring a HuggingFace repo to a TTL cache.
 
@@ -191,6 +195,7 @@ def resolve_cached_model_path(
             object-store / local path holding a snapshot.
         cache_ttl_days: TTL in days for the region-local mirror; ``<= 0`` disables mirroring.
         cache_prefix: Sub-path under the TTL bucket the mirror is written to.
+        max_workers: Maximum simultaneous shard transfers on a cache miss.
         complete_marker: Filename written last to mark the cache complete.
 
     Returns:
@@ -214,7 +219,9 @@ def resolve_cached_model_path(
 
     resolved_model = f"{repo}@{resolved_revision}"
     cache_path = marin_temp_bucket(cache_ttl_days, f"{cache_prefix}/{_cache_slug(resolved_model)}")
-    return cache_hf_model(cache_path, repo, revision=resolved_revision, complete_marker=complete_marker)
+    return cache_hf_model(
+        cache_path, repo, revision=resolved_revision, complete_marker=complete_marker, max_workers=max_workers
+    )
 
 
 def _cache_slug(model: str) -> str:
@@ -232,13 +239,19 @@ def _cache_slug(model: str) -> str:
 
 
 def _stream_hf_snapshot(
-    fs: fsspec.AbstractFileSystem, dest: str, model_id: str, revision: str | None, complete_marker: str
+    fs: fsspec.AbstractFileSystem,
+    dest: str,
+    model_id: str,
+    revision: str | None,
+    complete_marker: str,
+    max_workers: int = 1,
 ) -> None:
     """Copy HF repo *model_id* into *dest*, excluding the completion marker.
 
-    Each file is downloaded to a scratch dir, uploaded to ``dest``, then deleted
-    before the next download, so peak local disk is one file rather than the full
-    repo.
+    Each worker downloads one file to its own scratch directory, uploads it,
+    and removes the scratch directory before accepting another file. Local disk
+    use is bounded by max_workers simultaneous files. The caller holds the
+    snapshot lease until all workers finish, including on transfer failure.
     """
     # A repository may contain this filename; only cache_to_prefix may write it.
     files = [
@@ -247,12 +260,13 @@ def _stream_hf_snapshot(
         if isinstance(entry, RepoFile) and entry.path != complete_marker
     ]
     logger.info("streaming %d files from HF repo %s into %s", len(files), model_id, dest)
-    with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
-        for file in files:
+
+    def transfer(file: RepoFile) -> None:
+        with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
             remote_path = f"{dest}/{file.path}"
             if _has_expected_size(fs, remote_path, file.size):
                 logger.info("model cache file hit: %s", remote_path)
-                continue
+                return
 
             local_path = hf_hub_download(model_id, file.path, revision=revision, local_dir=scratch)
             if os.path.getsize(local_path) != file.size:
@@ -264,6 +278,11 @@ def _stream_hf_snapshot(
             if not _has_expected_size(fs, remote_path, file.size):
                 raise OSError(f"Uploaded model cache file has the wrong size: {remote_path}")
             os.remove(local_path)
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Consume every result so a failed transfer prevents the completion marker.
+        for _ in executor.map(transfer, files):
+            pass
 
 
 def _has_expected_size(fs: fsspec.AbstractFileSystem, path: str, expected_size: int) -> bool:
