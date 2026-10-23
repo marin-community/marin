@@ -105,6 +105,23 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
     assert dispatch(MathSpec(expected=expected), tmp_path, tmp_path).status == Status.INVALID_TASK
 
 
+@pytest.mark.parametrize(
+    "expected,candidate",
+    [("1<x<3", "1<x<3<5"), ("1<x<3<5", "1<x<3")],
+)
+@pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])
+def test_math_chained_relations_with_different_lengths_score_zero(expected, candidate, profile):
+    result = grade_math.grade_math_candidate(MathSpec(expected=expected, profile=profile), candidate)
+    assert (result.status, result.reward) == (Status.SCORED, 0.0)
+
+
+@pytest.mark.parametrize("candidate", [r"x \neq 3", r"x \neq 4"])
+@pytest.mark.parametrize("profile", list(MathProfile))
+def test_math_unequality_reference_is_invalid_task(candidate, profile):
+    with pytest.raises(InvalidTask):
+        grade_math.grade_math_candidate(MathSpec(expected=r"x \neq 3", profile=profile), candidate)
+
+
 def test_math_grades_from_a_worker_thread(tmp_path):
     """Pipelines grade in worker threads, where math-verify's signal-based timeout cannot be armed."""
     _answer(tmp_path, "\\boxed{\\frac{1}{2}}")

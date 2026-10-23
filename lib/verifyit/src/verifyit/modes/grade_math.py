@@ -64,19 +64,36 @@ def _parse(text: str) -> list:
 
 def _verify(expected: Any, candidate: Any, allow_set_relation_comp: bool = False) -> bool:
     from math_verify import verify  # noqa: PLC0415
+    from sympy import And  # noqa: PLC0415
 
-    return verify(
-        expected,
-        candidate,
-        allow_set_relation_comp=allow_set_relation_comp,
-        timeout_seconds=_timeout(),
-        raise_on_error=True,
-    )
+    gold_values = expected if isinstance(expected, list) else [expected]
+    prediction_values = candidate if isinstance(candidate, list) else [candidate]
+    for gold in gold_values:
+        for prediction in prediction_values:
+            # math-verify's strict zip raises for chained relations with different numbers of terms.
+            if isinstance(gold, And) and isinstance(prediction, And) and len(gold.args) != len(prediction.args):
+                continue
+            if verify(
+                gold,
+                prediction,
+                allow_set_relation_comp=allow_set_relation_comp,
+                timeout_seconds=_timeout(),
+                raise_on_error=True,
+            ):
+                return True
+    return False
 
 
 def _is_expression(parsed: list) -> bool:
     """Whether math-verify recovered an expression rather than only the original string."""
     return any(not isinstance(item, str) for item in parsed)
+
+
+def _validate_reference(parsed: list) -> None:
+    from sympy import Basic, Unequality  # noqa: PLC0415
+
+    if any(isinstance(value, Basic) and value.has(Unequality) for value in parsed):
+        raise InvalidTask("math-verify cannot compare an unequality reference")
 
 
 def _split_members(text: str) -> list[str]:
@@ -247,6 +264,7 @@ def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:
     )
     if not _is_expression(expected):
         raise InvalidTask("raw math profile could not parse the reference")
+    _validate_reference(expected)
     parsed = parse(
         candidate,
         extraction_config=[ExprExtractionConfig(), LatexExtractionConfig()],
@@ -278,17 +296,18 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     if spec.profile is MathProfile.RAW:
         return _grade_raw_math(spec, candidate)
     if spec.profile is MathProfile.BOXED:
-        from math_verify import parse, verify  # noqa: PLC0415
+        from math_verify import parse  # noqa: PLC0415
 
         if spec.math_type is not MathType.SCALAR:
             raise InvalidTask("boxed math profile requires scalar math_type")
         expected = parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
         if not expected:
             raise InvalidTask("math-verify cannot parse boxed reference")
+        _validate_reference(expected)
         parsed = parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
-        match = bool(verify(gold=expected, target=parsed, timeout_seconds=_timeout(), raise_on_error=True))
+        match = _verify(expected, parsed)
         if not match and spec.allow_additive_constant:
             match = _additive_constant_match(expected, parsed)
         return scored(float(match), extracted=candidate, expected=spec.expected)
@@ -296,6 +315,8 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     expected = _parsed_members(spec.expected) if is_list else [_parse(spec.expected)]
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
+    for member in expected:
+        _validate_reference(member)
 
     parsed = _parsed_members(candidate) if is_list else [_parse(candidate)]
     if not any(parsed):
