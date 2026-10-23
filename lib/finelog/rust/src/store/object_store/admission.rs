@@ -13,6 +13,14 @@ const MIN_QUERY_REQUESTS: u8 = 2;
 const REQUEST_WINDOW: Duration = Duration::from_secs(10 * 60);
 const REQUESTS_PER_PRUNE: usize = 32_768;
 
+pub(super) enum AdmissionDecision {
+    Admitted,
+    Duplicate,
+    Cold,
+    ObjectLimit,
+    ByteLimit,
+}
+
 /// Shared by every table and scan in one query's SessionConfig.
 pub struct QueryCacheAdmission {
     state: Mutex<QueryBudget>,
@@ -45,25 +53,28 @@ impl QueryCacheAdmission {
         &self,
         reference: &ObjectReference,
         history: &Mutex<RequestHistory>,
-    ) -> bool {
+    ) -> AdmissionDecision {
         let mut budget = self.state.lock().unwrap();
         // Replanning and self-joins must not turn one request into reuse.
         if !budget.seen.insert(reference.id.clone()) {
-            return false;
+            return AdmissionDecision::Duplicate;
         }
         let repeated = history
             .lock()
             .unwrap()
             .observe(&reference.id, Instant::now());
-        if !repeated
-            || budget.remaining_objects == 0
-            || reference.version.byte_size > budget.remaining_bytes
-        {
-            return false;
+        if !repeated {
+            return AdmissionDecision::Cold;
+        }
+        if budget.remaining_objects == 0 {
+            return AdmissionDecision::ObjectLimit;
+        }
+        if reference.version.byte_size > budget.remaining_bytes {
+            return AdmissionDecision::ByteLimit;
         }
         budget.remaining_objects -= 1;
         budget.remaining_bytes -= reference.version.byte_size;
-        true
+        AdmissionDecision::Admitted
     }
 }
 
@@ -74,6 +85,8 @@ impl QueryCacheAdmission {
 pub(super) struct RequestHistory {
     objects: HashMap<ObjectId, RequestStats>,
     requests_since_prune: usize,
+    prunes: u64,
+    pruned_entries: usize,
 }
 
 struct RequestStats {
@@ -97,14 +110,31 @@ impl RequestHistory {
 
         self.requests_since_prune += 1;
         if self.requests_since_prune == REQUESTS_PER_PRUNE {
+            let before = self.objects.len();
             self.objects.retain(|_, stats| {
                 stats.requests /= 2;
                 stats.requests > 0 && now.duration_since(stats.last_seen) < REQUEST_WINDOW
             });
+            self.prunes += 1;
+            self.pruned_entries += before - self.objects.len();
             self.requests_since_prune = 0;
         }
         repeated
     }
+
+    pub(super) fn take_diagnostics(&mut self) -> HistoryDiagnostics {
+        HistoryDiagnostics {
+            entries: self.objects.len(),
+            prunes: std::mem::take(&mut self.prunes),
+            pruned_entries: std::mem::take(&mut self.pruned_entries),
+        }
+    }
+}
+
+pub(super) struct HistoryDiagnostics {
+    pub entries: usize,
+    pub prunes: u64,
+    pub pruned_entries: usize,
 }
 
 #[cfg(test)]

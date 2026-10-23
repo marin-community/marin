@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -26,7 +27,8 @@ use crate::store::object_store::{
     ObjectVersion, StoredObject, FINELOG_ROOT_COMPONENT,
 };
 
-use super::admission::{QueryCacheAdmission, RequestHistory};
+use super::admission::{AdmissionDecision, QueryCacheAdmission, RequestHistory};
+use super::diagnostics::{CacheDiagnostics, FillReason};
 use super::local_file::atomic_write;
 
 /// Concurrent cache-miss downloads across every caller of this store.
@@ -129,6 +131,7 @@ pub struct CachedObjectStore {
     /// are the only copy of the bytes, so eviction never selects them.
     staged: Arc<Mutex<HashSet<PathBuf>>>,
     request_history: Arc<Mutex<RequestHistory>>,
+    diagnostics: Arc<CacheDiagnostics>,
 }
 
 impl CachedObjectStore {
@@ -148,15 +151,25 @@ impl CachedObjectStore {
             last_gc: Arc::new(Mutex::new(None)),
             staged: Arc::new(Mutex::new(HashSet::new())),
             request_history: Arc::new(Mutex::new(RequestHistory::default())),
+            diagnostics: Arc::new(CacheDiagnostics::default()),
         })
     }
 
     async fn lookup(&self, reference: &ObjectReference) -> Result<Option<PathBuf>, StatsError> {
         let cache = self.cache.clone();
         let reference = reference.clone();
-        tokio::task::spawn_blocking(move || cache.cached_path(&reference))
+        let path = tokio::task::spawn_blocking(move || cache.cached_path(&reference))
             .await
-            .map_err(|error| StatsError::Internal(format!("object cache lookup task: {error}")))?
+            .map_err(|error| {
+                StatsError::Internal(format!("object cache lookup task: {error}"))
+            })??;
+        let counter = if path.is_some() {
+            &self.diagnostics.hits
+        } else {
+            &self.diagnostics.misses
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        Ok(path)
     }
 
     async fn materialize(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
@@ -166,13 +179,15 @@ impl CachedObjectStore {
         let _permit = self.fetches.acquire().await.map_err(|error| {
             StatsError::Internal(format!("object cache fetch semaphore: {error}"))
         })?;
-        self.materialize_reserved(reference).await
+        self.materialize_reserved(reference, FillReason::Required)
+            .await
     }
 
     /// Materialize with a download slot already held by the caller.
     async fn materialize_reserved(
         &self,
         reference: &ObjectReference,
+        reason: FillReason,
     ) -> Result<PathBuf, StatsError> {
         // A concurrent fetch of the same object may have won while this one
         // waited for a download slot.
@@ -193,25 +208,33 @@ impl CachedObjectStore {
         }
         let cache = self.cache.clone();
         let reference = reference.clone();
-        tokio::task::spawn_blocking(move || cache.write(&reference, &object.bytes))
-            .await
-            .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))?
+        let diagnostics = self.diagnostics.clone();
+        tokio::task::spawn_blocking(move || {
+            let path = cache.write(&reference, &object.bytes)?;
+            diagnostics.fills(reason).record(object.bytes.len() as u64);
+            Ok(path)
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))?
     }
 
     /// Evict least-recently-used cache files until the cache fits its capacity.
     async fn evict_over_capacity(&self, capacity_bytes: u64) -> Result<(), StatsError> {
+        let started = Instant::now();
         let root = self.cache.root.join(FINELOG_ROOT_COMPONENT);
         let mut entries = tokio::task::spawn_blocking(move || scan_cache_files(&root))
             .await
             .map_err(|error| StatsError::Internal(format!("object cache scan task: {error}")))??;
         let total: u64 = entries.iter().map(|entry| entry.bytes).sum();
-        if total <= capacity_bytes {
-            return Ok(());
+        let files = entries.len();
+        let scan_ms = started.elapsed().as_millis() as u64;
+        if total > capacity_bytes {
+            entries.sort_by_key(|entry| entry.modified);
         }
-        entries.sort_by_key(|entry| entry.modified);
         let staged = self.staged.lock().unwrap().clone();
-        let mut excess = total - capacity_bytes;
+        let mut excess = total.saturating_sub(capacity_bytes);
         let mut victims = Vec::new();
+        let mut selected_bytes = 0;
         for entry in entries {
             if excess == 0 {
                 break;
@@ -222,31 +245,47 @@ impl CachedObjectStore {
                 continue;
             }
             excess = excess.saturating_sub(entry.bytes);
+            selected_bytes += entry.bytes;
             victims.push(entry.path);
         }
-        let evicted = victims.len();
-        self.remove_cached_paths(victims).await?;
+        let selected_files = victims.len();
+        let removal = self.remove_cached_paths(victims).await?;
         tracing::info!(
-            evicted,
+            evicted = removal.removed,
+            selected_files,
+            selected_bytes,
             cache_bytes = total,
             capacity_bytes,
-            "object cache evicted least-recently-used files"
+            files,
+            remaining_excess_bytes = excess,
+            scan_ms,
+            sweep_ms = started.elapsed().as_millis() as u64,
+            lock_wait_ms = removal.lock_wait.as_millis() as u64,
+            lock_hold_ms = removal.lock_hold.as_millis() as u64,
+            max_lock_hold_us = removal.max_lock_hold.as_micros() as u64,
+            "object cache sweep"
         );
         Ok(())
     }
 
-    async fn remove_cached_paths(&self, paths: Vec<PathBuf>) -> Result<(), StatsError> {
+    async fn remove_cached_paths(&self, paths: Vec<PathBuf>) -> Result<RemovalStats, StatsError> {
+        let mut stats = RemovalStats::default();
         for batch in paths.chunks(CACHE_DELETE_BATCH_FILES) {
             let batch = batch.to_vec();
             // Readers pin cache paths until their scan completes. Move the
             // guard into the blocking task so cancellation cannot release it
             // while that task is still unlinking files.
+            let waiting = Instant::now();
             let visibility = self.query_visibility.clone().write_owned().await;
-            tokio::task::spawn_blocking(move || {
+            let lock_wait = waiting.elapsed();
+            let holding = Instant::now();
+            let diagnostics = self.diagnostics.clone();
+            let (removed, lock_hold) = tokio::task::spawn_blocking(move || {
                 let _visibility = visibility;
-                for path in batch {
+                let mut removed = 0;
+                let result = batch.into_iter().try_for_each(|path| {
                     match std::fs::remove_file(&path) {
-                        Ok(()) => {}
+                        Ok(()) => removed += 1,
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                         Err(error) => {
                             return Err(StatsError::Internal(format!(
@@ -255,17 +294,61 @@ impl CachedObjectStore {
                             )))
                         }
                     }
-                }
-                Ok(())
+                    Ok(())
+                });
+                let lock_hold = holding.elapsed();
+                diagnostics.cleanup_batches.fetch_add(1, Ordering::Relaxed);
+                diagnostics
+                    .cleanup_lock_wait_us
+                    .fetch_add(lock_wait.as_micros() as u64, Ordering::Relaxed);
+                diagnostics
+                    .cleanup_lock_hold_us
+                    .fetch_add(lock_hold.as_micros() as u64, Ordering::Relaxed);
+                diagnostics
+                    .cleanup_max_lock_hold_us
+                    .fetch_max(lock_hold.as_micros() as u64, Ordering::Relaxed);
+                result.map(|()| (removed, lock_hold))
             })
             .await
             .map_err(|error| {
                 StatsError::Internal(format!("object cache removal task: {error}"))
             })??;
+            stats.removed += removed;
+            stats.lock_wait += lock_wait;
+            stats.lock_hold += lock_hold;
+            stats.max_lock_hold = stats.max_lock_hold.max(lock_hold);
             tokio::task::yield_now().await;
         }
-        Ok(())
+        Ok(stats)
     }
+
+    fn start_warm(&self, reference: &ObjectReference, reason: FillReason) {
+        let Ok(permit) = self.fetches.clone().try_acquire_owned() else {
+            self.diagnostics.warm_busy.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let store = self.clone();
+        let reference = reference.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            if let Err(error) = store.materialize_reserved(&reference, reason).await {
+                store
+                    .diagnostics
+                    .warm_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(%error, object = ?reference.id.as_str(),
+                    "background cache fill failed; the next scan reads remote again");
+            }
+        });
+    }
+}
+
+#[derive(Default)]
+struct RemovalStats {
+    removed: usize,
+    lock_wait: Duration,
+    lock_hold: Duration,
+    max_lock_hold: Duration,
 }
 
 #[async_trait]
@@ -277,9 +360,14 @@ impl ObjectStore for CachedObjectStore {
             id: id.clone(),
             version: version.clone(),
         };
-        tokio::task::spawn_blocking(move || cache.write(&reference, &bytes))
-            .await
-            .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))??;
+        let diagnostics = self.diagnostics.clone();
+        tokio::task::spawn_blocking(move || {
+            cache.write(&reference, &bytes)?;
+            diagnostics.writes.record(bytes.len() as u64);
+            Ok::<_, StatsError>(())
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))??;
         Ok(version)
     }
 
@@ -298,9 +386,14 @@ impl ObjectStore for CachedObjectStore {
             id: id.clone(),
             version: version.clone(),
         };
-        let path = tokio::task::spawn_blocking(move || cache.write(&reference, &bytes))
-            .await
-            .map_err(|error| StatsError::Internal(format!("object stage task: {error}")))??;
+        let diagnostics = self.diagnostics.clone();
+        let path = tokio::task::spawn_blocking(move || {
+            let path = cache.write(&reference, &bytes)?;
+            diagnostics.writes.record(bytes.len() as u64);
+            Ok::<_, StatsError>(path)
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("object stage task: {error}")))??;
         self.staged.lock().unwrap().insert(path);
         Ok(version)
     }
@@ -356,24 +449,21 @@ impl ObjectStore for CachedObjectStore {
         // Warming is optional: scans can read the remote object directly.
         // Reserving before spawning prevents a broad or cancelled query from
         // leaving thousands of queued downloads churning the cache afterward.
-        let Ok(permit) = self.fetches.clone().try_acquire_owned() else {
-            return;
-        };
-        let store = self.clone();
-        let reference = reference.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            if let Err(error) = store.materialize_reserved(&reference).await {
-                tracing::debug!(%error, object = ?reference.id.as_str(),
-                    "background cache fill failed; the next scan reads remote again");
-            }
-        });
+        self.start_warm(reference, FillReason::Repair);
     }
 
     fn warm_query(&self, reference: &ObjectReference, query: &QueryCacheAdmission) {
-        if query.admit(reference, &self.request_history) {
-            self.warm(reference);
-        }
+        let counter = match query.admit(reference, &self.request_history) {
+            AdmissionDecision::Admitted => {
+                self.start_warm(reference, FillReason::Query);
+                &self.diagnostics.query_admitted
+            }
+            AdmissionDecision::Cold => &self.diagnostics.query_cold,
+            AdmissionDecision::Duplicate => &self.diagnostics.query_duplicate,
+            AdmissionDecision::ObjectLimit => &self.diagnostics.query_object_limit,
+            AdmissionDecision::ByteLimit => &self.diagnostics.query_byte_limit,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     // Mutable pointers are only ever written through CAS and never cached, so
@@ -425,6 +515,12 @@ impl ObjectStore for CachedObjectStore {
     }
 
     async fn gc(&self) -> Result<(), StatsError> {
+        let staged_objects = self.staged.lock().unwrap().len();
+        self.diagnostics.log_if_due(
+            &self.request_history,
+            MAX_PARALLEL_FETCHES - self.fetches.available_permits(),
+            staged_objects,
+        );
         let Some(capacity_bytes) = self.capacity_bytes else {
             return Ok(());
         };

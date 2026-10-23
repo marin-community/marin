@@ -6,6 +6,7 @@
 
 mod admission;
 mod cached;
+mod diagnostics;
 mod legacy;
 mod local_file;
 mod provider;
