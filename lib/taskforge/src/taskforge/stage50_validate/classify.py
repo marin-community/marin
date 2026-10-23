@@ -81,16 +81,7 @@ def classify(failure: BaseException | GradedRollout, task: TaskSpec) -> Cause:
 
 
 def candidate_code_error(grade: GradeResult, task: TaskSpec) -> bool:
-    """Whether a verifyit pytest grader gave reward 0 because the candidate's own code did not load.
-
-    verifyit scores a candidate's startup or collection error as a failed attempt with reward 0.
-    The attribution arguably belongs upstream in verifyit: it should surface it as a documented
-    field of ``GradeResult.detail`` (today it is an undocumented ``reason`` key, with ``category``
-    "agent", that TaskCompendium copies through), so that every consumer can tell a candidate that
-    did not load from a wrong one. Taskforge reads the key locally for now: the trial stays a failed
-    attempt, as RL training upstream scores it, but a curation run must see when most trials fail
-    this way, because then a broken scaffold or environment, not the solver, is the likely cause.
-    """
+    """Whether a zero-reward verifyit pytest result reports candidate startup or collection failure."""
     grader = task.grader
     return (
         isinstance(grader, VerifyitGrader)
@@ -150,8 +141,7 @@ def _matches_rolloutengine_setup_message(error: BaseException | None) -> bool:
 
     RolloutEngine's environment setup raises these as a bare
     ``RuntimeError`` or ``TimeoutError``, the same types as machine failures, so this matches
-    message prefixes. Replace it with the typed errors requested in #9782 once #9799 (rolloutengine
-    typed setup failures) lands.
+    message prefixes.
     """
     return isinstance(error, RuntimeError | TimeoutError) and str(error).startswith(ROLLOUTENGINE_SETUP_MESSAGE_PREFIXES)
 

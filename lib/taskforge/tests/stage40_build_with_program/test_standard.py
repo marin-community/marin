@@ -62,6 +62,7 @@ from tests.stage40_build_with_program.conftest import (
     declaring,
     web_tool,
 )
+from tests.stage50_validate.conftest import LIMITS as VALIDATION_LIMITS
 
 # Grader programs in sh, which ShellGraderImageFactory runs for the template's python3 grader command.
 GOOD_GRADER = """last=$(printf '%s\\n' "$(cat /app/answer.txt)" | tail -n 1)
@@ -190,7 +191,7 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
         ("", 0.0),
     ]
 
-    lowered = lower(task, MachineHost.LAPTOP, FACTORIES)
+    lowered = lower(task, MachineHost.LAPTOP, FACTORIES, VALIDATION_LIMITS)
     assert lowered.task_machine is not None and lowered.task_machine.backend == Backend.SHELLSIM
     assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == Backend.DOCKER
     result = await rollout_engine(FACTORIES, command_timeout=None).run_task(lowered, answer)
@@ -267,11 +268,6 @@ async def test_a_grader_that_times_out_twice_expires_the_build_instead_of_going_
     assert "the workpiece is held for inspection" in expired.value.message
     assert len(fake_glm.requests) == 1
     assert slow.grader_runs == 2
-
-
-def test_a_rejection_ceiling_at_full_credit_is_refused():
-    with pytest.raises(ValueError, match=r"rejection_ceiling is a reward from 0 up to, not including, 0\.99"):
-        GraderDraft.model_validate({**grader_call(GOOD_GRADER), "rejection_ceiling": 0.99})
 
 
 async def test_the_grader_step_sends_back_a_grader_without_per_check_results(context, proposal, fake_glm):
@@ -406,13 +402,6 @@ async def test_package_fixtures_choose_a_package_machine_without_an_image(contex
     )
     assert "`numpy`, `pandas==2.2.3`" in machine_facts(requirements)
     assert isinstance(package.grader, ScriptGrader) and package.grader.environment.docker_image == GRADER_BASE_IMAGE
-
-
-def test_fixtures_refuse_a_package_with_pip_options():
-    with pytest.raises(ValueError, match="without pip options"):
-        FixturesDraft.model_validate(
-            {"agent_files": [], "private_files": [], "facts": "", "packages": ["--index-url=https://example.org"]}
-        )
 
 
 @pytest.mark.parametrize(

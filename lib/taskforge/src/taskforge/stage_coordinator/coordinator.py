@@ -87,7 +87,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import TypeAdapter
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 
 from taskforge.content_hash import canonical_json, digest, pretty_json
 from taskforge.ledger.records import check_workpiece_id
@@ -99,6 +99,7 @@ from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
     PROGRAM_MANIFEST_FILE,
+    ROUNDS_DIR,
     AuthorContext,
     AuthoredProgram,
     AuthorFailure,
@@ -115,7 +116,6 @@ from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage50_validate.round import ValidationContext, load_validation, write_validation
 from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, RejectKind, Retry
-from taskforge.stage60_review.rules import BandRules, ReviewContext
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import (
@@ -137,7 +137,6 @@ from taskforge.stage_coordinator.workpiece_machine import (
 )
 
 STORE_DIR = "store"
-ROUNDS_DIR = "rounds"
 AUTHORED_DIR = "authored"
 REPAIRED_DIR = "repaired"
 FAILURES_DIR = "build-failures"
@@ -181,7 +180,6 @@ class StageCoordinator:
     Attributes:
         stages: The caller's function for each stage.
         budget: The budget of every workpiece. ``OPENED`` records its digest.
-        band: The band rules every review receives in its ``ReviewContext``.
         root: The run root holding ``workpieces/`` and the step store in ``store/``.
         event_store: The store each workpiece's events are saved to on reaching a terminal.
         model: The model build steps call.
@@ -196,7 +194,6 @@ class StageCoordinator:
 
     stages: StageFunctions
     budget: WorkpieceBudget
-    band: BandRules
     root: Path
     event_store: WorkpieceEventStore
     model: ModelClient
@@ -346,12 +343,6 @@ def _open(workpiece: _Workpiece) -> None:
         )
 
 
-def _write(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_rename(str(path)) as temp:
-        Path(temp).write_bytes(content)
-
-
 async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
     """Triage the workpiece's proposal and exit on the verdict's decision.
 
@@ -387,7 +378,7 @@ def _repaired(workpiece: _Workpiece, state: WorkpieceState, proposal: TaskPropos
     """Write the rewritten ``proposal`` to ``repaired/<k>.md`` and return the ``TRIAGED`` event exiting repair."""
     repairs = state.triage_repairs + 1
     relative = _repaired_file(repairs)
-    _write(workpiece.directory / relative, render(proposal).encode())
+    write_bytes_atomic(str(workpiece.directory / relative), render(proposal).encode())
     attrs = {
         EXIT: Exit.REPAIR,
         "decision": TriageDecision.REPAIR.value,
@@ -452,9 +443,9 @@ async def _author(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
             f"only an author answering {RevisionKind.MODIFY} may"
         )
     directory = workpiece.authored_dir(state)
-    _write(directory / PROGRAM_MANIFEST_FILE, pretty_json(program_manifest(authored.program)).encode())
+    write_bytes_atomic(str(directory / PROGRAM_MANIFEST_FILE), pretty_json(program_manifest(authored.program)).encode())
     if authored.source is not None:
-        _write(directory / PROGRAM_FILE, authored.source.encode())
+        write_bytes_atomic(str(directory / PROGRAM_FILE), authored.source.encode())
     return WorkpieceEvent(EventKind.AUTHORED, state.round, authored.program.digest, attrs)
 
 
@@ -535,7 +526,7 @@ def _failure_attrs(workpiece: _Workpiece, state: WorkpieceState, error: Exceptio
     """
     failures = state.build_revisions + 1
     relative = Path(ROUNDS_DIR) / str(state.round) / FAILURES_DIR / f"{failures}.txt"
-    _write(workpiece.directory / relative, failure_text(head, error, FAILURE_CHARS).encode())
+    write_bytes_atomic(str(workpiece.directory / relative), failure_text(head, error, FAILURE_CHARS).encode())
     return {
         EXIT: Exit.REVISE if failures <= workpiece.coordinator.budget.max_build_revisions else Exit.REJECT,
         "failure": head[:ATTR_CHARS],
@@ -584,15 +575,11 @@ async def _validate(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEv
 
 
 async def _review(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent:
-    """Decide on the result read back from ``validation.json`` and write the decision to ``decision.json``.
-
-    Review receives the round, the MODIFY rounds the workpiece has left and the coordinator's band rules.
-    """
+    """Decide on the result read back from ``validation.json`` and write the decision to ``decision.json``."""
     coordinator = workpiece.coordinator
     round_dir = workpiece.round_dir(state.round)
-    context = ReviewContext(state.round, _modify_rounds_left(workpiece, state), coordinator.band)
-    decision = await coordinator.stages.review(load_validation(round_dir), context)
-    _write(round_dir / DECISION_FILE, _DECISION.dump_json(decision, indent=2))
+    decision = await coordinator.stages.review(load_validation(round_dir))
+    write_bytes_atomic(str(round_dir / DECISION_FILE), _DECISION.dump_json(decision, indent=2))
     return WorkpieceEvent(EventKind.DECIDED, state.round, state.task_digest, _decision_attrs(workpiece, state, decision))
 
 

@@ -36,8 +36,8 @@ caller's validate function closes over what the coordinator does not own, such a
 The coordinator writes the ``ValidationResult`` returned by validate to ``validation.json``
 (``write_validation``), the file's one writer. The review stage hands review the result read back from
 that file (``load_validation``), so a resumed review receives the same value as a review in the first
-process, with the round's ``ReviewContext``: the round, the MODIFY rounds left and the coordinator's
-``BandRules``.
+process. The caller binds review settings, for example ``partial(default_review, band=band)``;
+the coordinator enforces the MODIFY budget on every review decision.
 """
 
 from dataclasses import dataclass
@@ -54,7 +54,6 @@ from taskforge.stage40_build_with_program.run import ResearchRequirement, TaskDr
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage50_validate.round import ValidationContext, ValidationResult
 from taskforge.stage60_review.decision import Decision
-from taskforge.stage60_review.rules import ReviewContext
 
 
 class Triage(Protocol):
@@ -104,9 +103,9 @@ class Validate(Protocol):
 
 
 class Review(Protocol):
-    """Decide on a validation round's ``result`` in its review ``context``."""
+    """Decide on a validation round's ``result`` using the caller's review settings."""
 
-    async def __call__(self, result: ValidationResult, context: ReviewContext, /) -> Decision: ...
+    async def __call__(self, result: ValidationResult, /) -> Decision: ...
 
 
 @dataclass(frozen=True)

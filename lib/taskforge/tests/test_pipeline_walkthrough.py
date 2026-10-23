@@ -14,6 +14,7 @@ import inspect
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -26,6 +27,7 @@ from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, Tas
 from verifyit.spec import JudgeSpec, NumericSpec
 
 from taskforge import content_hash
+from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
@@ -95,7 +97,7 @@ from taskforge.stage50_validate.round import (
     load_validation,
 )
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
-from taskforge.stage60_review.rules import BandRules, ReviewContext, default_review
+from taskforge.stage60_review.rules import BandRules, default_review
 from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
     DECISION_FILE,
@@ -173,7 +175,7 @@ SERVICES = RLEnvBuildServices(
     factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
     images=None,
     web_tools=(),
-    ledger=None,
+    ledger=DiscardingLedger(),
     reasoning_replay=ReasoningReplay.KEEP,
     agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
     decision=None,
@@ -318,7 +320,7 @@ STAGES = StageFunctions(
     load_program=load_toy_program,
     build=run_build,
     validate=validate,
-    review=default_review,
+    review=partial(default_review, band=BAND),
 )
 UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
@@ -402,7 +404,7 @@ def coordinator(
     research: ResearchRequirement = ResearchRequirement.OFF,
 ) -> StageCoordinator:
     return StageCoordinator(
-        stages, budget, BAND, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, research, digest
+        stages, budget, root, JsonEventStore(root), UnusedModel(), SAMPLING, SERVICES, research, digest
     )
 
 
@@ -868,10 +870,10 @@ async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds
 ):
     validate_once = UnavailableOnce(failing=2)
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
-    reviewed: list[tuple[ValidationResult, ReviewContext]] = []
+    reviewed: list[ValidationResult] = []
 
-    async def review_in_turn(result: ValidationResult, context: ReviewContext) -> Decision:
-        reviewed.append((result, context))
+    async def review_in_turn(result: ValidationResult) -> Decision:
+        reviewed.append(result)
         return decisions.pop(0)
 
     stages = replace(STAGES, author=RecordingAuthor(PROGRAM), validate=validate_once, review=review_in_turn)
@@ -888,10 +890,7 @@ async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds
     )
     assert validate_once.contexts == [first, second, second]
     assert load_validation(rounds / "1") == passing_result(second)
-    assert reviewed == [
-        (passing_result(first), ReviewContext(round=0, modify_rounds_left=1, band=BAND)),
-        (passing_result(second), ReviewContext(round=1, modify_rounds_left=0, band=BAND)),
-    ]
+    assert reviewed == [passing_result(first), passing_result(second)]
     assert [(event.kind, event.round) for event in log.events()][-4:] == [
         ("terminal", 1),
         ("validated", 1),
@@ -963,7 +962,7 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
 
-    async def review_in_turn(result: ValidationResult, context: ReviewContext) -> Decision:
+    async def review_in_turn(result: ValidationResult) -> Decision:
         return decisions.pop(0)
 
     stages = replace(STAGES, author=author, review=review_in_turn)
@@ -1024,7 +1023,7 @@ async def test_an_authored_verification_change_reaches_every_later_build_and_aut
         Accept(band=BandOutcome.IN_BAND),
     ]
 
-    async def review_in_turn(result: ValidationResult, context: ReviewContext) -> Decision:
+    async def review_in_turn(result: ValidationResult) -> Decision:
         return decisions.pop(0)
 
     author, build = SwappingAuthor(), RecordingBuild(fails=3)
@@ -1071,7 +1070,7 @@ async def test_an_author_swapping_the_kind_outside_a_modify_revision_fails_the_w
     assert (state.stage, state.terminal, state.verification_change) == (Stage.AUTHOR, Terminal.FAILED, None)
 
 
-async def always_modify(result: ValidationResult, context: ReviewContext) -> Decision:
+async def always_modify(result: ValidationResult) -> Decision:
     return Modify(findings=("the file states the product",))
 
 
@@ -1467,11 +1466,9 @@ def agentic_author(model: ScriptedModel, root: Path) -> AgenticAuthor:
                 verification_change=verification_change,
             )
 
-        return SessionBuild(
-            builder, store, UnusedModel(), SAMPLING, SERVICES, root / "sessions.jsonl", in_process_loader
-        )
+        return SessionBuild(builder, store, SERVICES, root / "sessions.jsonl", in_process_loader)
 
-    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.recording, builds)
+    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds)
 
 
 class RecordingValidate:

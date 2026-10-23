@@ -6,7 +6,7 @@
 from dataclasses import replace
 
 import pytest
-from rigging.timing import ExponentialBackoff
+from rolloutengine.models import RolloutLimits
 from shellbox.machine import Backend
 from taskcompendium.grading_result import Outcome
 
@@ -14,18 +14,24 @@ from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.spec.controls import ControlCategory, ControlKind, Expectation
 from taskforge.stage50_validate.controls import ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.outcome import Graded
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings
+from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff
 from tests.sandbox.fixture_images import FixtureImageFactory
 
 
 def settings(factory, max_turns: int = 6) -> EngineSettings:
     return EngineSettings(
         factories={Backend.SHELLSIM.value: factory, Backend.DOCKER.value: FixtureImageFactory()},
-        max_turns=max_turns,
         command_timeout=10,
-        tool_turn_timeout=20,
-        model_turn_timeout=30,
-        cleanup_timeout=10,
+        limits=RolloutLimits(
+            max_turns=max_turns,
+            tool_turn_timeout=20,
+            model_turn_timeout=30,
+            cleanup_timeout=10,
+            total_turn_timeout=30,
+            attempt_timeout=60,
+            verifier_timeout=None,
+            max_total_tokens=None,
+        ),
         decision=None,
     )
 
@@ -34,9 +40,8 @@ def plan(tmp_path, first_attempts: dict[str, int] | None = None) -> ControlPlan:
     return ControlPlan(
         workpiece_id="workpiece",
         round=0,
-        deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
         max_retries=1,
-        retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
+        retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=2.0, jitter=0.1),
         evidence_dir=tmp_path,
         ledger=JsonlLedger(tmp_path / "ledger"),
         first_attempts=first_attempts or {},

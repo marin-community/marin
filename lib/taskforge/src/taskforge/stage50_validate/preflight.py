@@ -32,18 +32,19 @@ local backend alone, so it has no container to move to and is not probed; its tr
 that fails there.
 
 The probe is not evidence: it records no attempt file and no ledger span. Like every trial it runs
-under the engine's messages trace (``EngineSettings.apply``), so its empty reply carries no token ids.
+under the engine's messages trace (``lowering.lower``), so its empty reply carries no token ids.
 """
 
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn, TaskRolloutSpec
+from rolloutengine.models import GradedRollout, TaskRolloutSpec
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import TaskSpec
 
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
+from taskforge.spec.controls import ScriptedModel, context_assistant_turns
 from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
@@ -51,7 +52,7 @@ from taskforge.stage40_build_with_program.sdk import solver_machine
 from taskforge.stage50_validate.classify import trial_outcome
 from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Cause, Ungraded
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings
+from taskforge.stage50_validate.trials import EngineSettings
 
 FALLBACK_CAUSES = frozenset({Cause.MACHINE_UNSUPPORTED, Cause.TASK_SETUP})
 """The probe outcomes that mean the task cannot be prepared on the local backend: the task machine moves."""
@@ -79,29 +80,10 @@ class Preflight:
     fallback: BackendFallback | None
 
 
-class _ProbeModel:
-    """Answers the first request with an empty final reply, so the engine prepares the machine and grades."""
-
-    def for_step(self, step: str) -> "_ProbeModel":
-        return self
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        return ModelTurn(
-            message={"role": "assistant", "content": PROBE_REPLY},
-            prompt_token_ids=(),
-            response_token_ids=(),
-            logprobs=None,
-            stop_reason="stop",
-            text=PROBE_REPLY,
-        )
-
-
 async def preflight(
     task: TaskSpec,
     host: MachineHost,
-    factories: Mapping[str, MachineFactory],
     settings: EngineSettings,
-    deadlines: Deadlines,
 ) -> Preflight:
     """Lower ``task`` for ``host``, probing a local grader-base task machine and falling back to a container when
     the task cannot be prepared there.
@@ -110,15 +92,16 @@ async def preflight(
         ValueError: RolloutEngine rejects the lowered spec (``lowering.lower``).
         BuildInfrastructureFailure: the local task machine did not start, or not in time, on two probes.
     """
-    spec = lower(task, host, factories)
+    factories = settings.factories
+    spec = lower(task, host, factories, settings.limits)
     machine = spec.task_machine
     if machine is None or machine.backend != Backend.LOCAL.value:
         return Preflight(spec, None)
     if solver_machine(task.environment_requirements) is not SolverMachine.CPYTHON:
         return Preflight(spec, None)
-    outcome = await _probe(spec, settings, deadlines)
+    outcome = await _probe(spec, settings)
     if isinstance(outcome, Ungraded) and outcome.cause in HOST_CAUSES:
-        outcome = await _probe(spec, settings, deadlines)
+        outcome = await _probe(spec, settings)
         if isinstance(outcome, Ungraded) and outcome.cause in HOST_CAUSES:
             raise BuildInfrastructureFailure(
                 HOST_CAUSES[outcome.cause],
@@ -139,22 +122,23 @@ def _task_machine_fallback(
 ) -> TaskRolloutSpec:
     """``spec`` with its task machine on the container backend and its verifier as it was."""
     without_local = {backend: factory for backend, factory in factories.items() if backend != Backend.LOCAL.value}
-    container = lower(task, host, without_local)
+    container = lower(task, host, without_local, spec.limits)
     hosted = container.task.model_copy(update={"grader": spec.task.grader})
     fallback = spec.model_copy(update={"task": hosted, "task_machine": container.task_machine})
     draft.check(fallback, factories)
     return fallback
 
 
-async def _probe(spec: TaskRolloutSpec, settings: EngineSettings, deadlines: Deadlines):
+async def _probe(spec: TaskRolloutSpec, settings: EngineSettings):
     """One engine run of ``spec`` with the probe model, classified as a trial outcome would be.
 
-    The engine holds the run to ``deadlines.attempt_timeout`` itself, so an expired probe is an
+    The engine holds the run to ``spec.limits.attempt_timeout`` itself, so an expired probe is an
     ``ATTEMPT_TIMEOUT`` as in a trial.
     """
-    prepared = settings.apply(deadlines.apply(spec))
     try:
-        result: GradedRollout | Exception = await settings.engine().run_task(prepared, _ProbeModel())
+        result: GradedRollout | Exception = await settings.engine().run_task(
+            spec, ScriptedModel(({"role": "assistant", "content": PROBE_REPLY},), context_assistant_turns(spec.task))
+        )
     except Exception as error:
         result = error
-    return trial_outcome(result, prepared.task)
+    return trial_outcome(result, spec.task)

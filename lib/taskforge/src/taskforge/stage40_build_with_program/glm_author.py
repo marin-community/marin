@@ -27,12 +27,11 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter, field_validator
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from shellbox.machine import PackageSpec
 from taskcompendium import grading_result
 from taskcompendium import models as task_models
@@ -506,7 +505,7 @@ class GlmAuthor:
         record_dir.mkdir()
         # The library appends the field instruction as the final user turn; the record keeps what was sent.
         sent = [*messages, {"role": "user", "content": schema_instruction(ProgramSubmission)}]
-        _write(record_dir / REQUEST_FILE, json.dumps(sent, indent=2).encode())
+        write_bytes_atomic(str(record_dir / REQUEST_FILE), json.dumps(sent, indent=2).encode())
         try:
             result = await recorded_structured(
                 self.model,
@@ -517,11 +516,11 @@ class GlmAuthor:
                 {"revision": "none" if revision is None else str(revision.kind)},
             )
         except StructuredOutputError as error:
-            _write(record_dir / COMPLETIONS_FILE, _COMPLETIONS.dump_json(error.completions, indent=2))
+            write_bytes_atomic(str(record_dir / COMPLETIONS_FILE), _COMPLETIONS.dump_json(error.completions, indent=2))
             raise
-        _write(record_dir / COMPLETIONS_FILE, _COMPLETIONS.dump_json(result.completions, indent=2))
+        write_bytes_atomic(str(record_dir / COMPLETIONS_FILE), _COMPLETIONS.dump_json(result.completions, indent=2))
         source = result.value.source
-        _write(workpiece_dir / PROGRAM_FILE, source.encode())
+        write_bytes_atomic(str(workpiece_dir / PROGRAM_FILE), source.encode())
         program = load_program(source)
         record = {
             "program_digest": program.digest,
@@ -531,13 +530,8 @@ class GlmAuthor:
             "notes": result.value.notes,
             "requests": len(result.completions),
         }
-        _write(record_dir / RECORD_FILE, json.dumps(record, indent=2).encode())
+        write_bytes_atomic(str(record_dir / RECORD_FILE), json.dumps(record, indent=2).encode())
         return AuthoredProgram(program, source, change)
-
-
-def _write(path: Path, content: bytes) -> None:
-    with atomic_rename(str(path)) as temp:
-        Path(temp).write_bytes(content)
 
 
 _COMPLETIONS: TypeAdapter[tuple[Completion, ...]] = TypeAdapter(tuple[Completion, ...])

@@ -3,10 +3,8 @@
 
 """The functions, constants and structured-call schemas a build program's steps call.
 
-An authored program defines only steps, output models and ``PROGRAM`` at module level, because a
-step's memo key covers its own source alone. Everything else a step needs comes from here,
-injected into the program's namespace by ``loader.compile_program`` (``SDK_EXPORTS``). A change to
-this module that alters what an unchanged step returns comes with an ``SDK_VERSION`` bump.
+Authored steps import the SDK names they use. A change to this module that alters what an
+unchanged step returns comes with an ``SDK_VERSION`` bump.
 
 Model calls go through ``structured``, ``structured_until`` and ``agent``, which record each call
 under the running step (``context.call_ledger``). ``structured_until`` feeds a failed check back to
@@ -46,7 +44,7 @@ from taskforge.llm.structured import CutReplyError, StructuredOutputError
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.decision import REJECTED_REWARD_MAX, DecisionGrader, decision_grade
-from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT
+from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT, GRADER_TIMEOUT
 from taskforge.spec.rubric import Rubric
 from taskforge.spec.verdict import GRADER_VERDICT_PATH, VERDICT_REWARD
 from taskforge.stage10_proposal.model import ProposalHeader, SolverMachine, TaskProposal, render
@@ -58,7 +56,6 @@ WORKDIR = "/workspace"
 WORKSPACE = "workspace"
 """Solver-visible files live under this directory, relative to the machine root."""
 GRADER_PROGRAM = "grade.py"
-GRADER_TIMEOUT = 300.0
 """Seconds a grader program may run on one candidate."""
 FULL_CREDIT = 0.99
 """The least reward a reference answer must receive."""

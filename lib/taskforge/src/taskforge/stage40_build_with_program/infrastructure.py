@@ -139,16 +139,6 @@ def machine_available(services: RLEnvBuildServices, proposal: TaskProposal) -> N
         )
 
 
-def _chain(error: BaseException) -> Iterator[BaseException]:
-    """``error``, then each ``__cause__`` (or, absent one, ``__context__``), each link once."""
-    seen: set[int] = set()
-    current: BaseException | None = error
-    while current is not None and id(current) not in seen:
-        yield current
-        seen.add(id(current))
-        current = current.__cause__ or current.__context__
-
-
 def exception_chain(error: BaseException) -> list[BaseException]:
     """List ``error`` and the exceptions it was raised from or during, outermost first."""
     chain: list[BaseException] = []
@@ -185,7 +175,7 @@ def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure |
     host failure the engine wrapped in ``RolloutInterrupted``, or the program wrapped in a
     ``BuildFailure``, is found. Raise the copy ``from error`` to keep the whole chain.
     """
-    for link in _chain(error):
+    for link in exception_chain(error):
         if isinstance(link, BuildInfrastructureFailure):
             return BuildInfrastructureFailure(link.cause, link.message)
     return None
@@ -193,7 +183,7 @@ def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure |
 
 def decision_failure(error: RolloutInterrupted) -> BuildInfrastructureFailure | None:
     """The ``DECISION_UNAVAILABLE`` failure of a grade whose decision reads failed transiently, or ``None``."""
-    unavailable = next((link for link in _chain(error) if isinstance(link, DecisionUnavailable)), None)
+    unavailable = next((link for link in exception_chain(error) if isinstance(link, DecisionUnavailable)), None)
     if unavailable is None:
         return None
     return BuildInfrastructureFailure(InfrastructureCause.DECISION_UNAVAILABLE, f"{error}: {unavailable}")
@@ -207,7 +197,7 @@ def deadline_failure(error: RolloutInterrupted) -> BuildInfrastructureFailure | 
     """
     if error.operation not in DEADLINE_OPERATIONS:
         return None
-    if not any(isinstance(link, TimeoutError) for link in _chain(error)):
+    if not any(isinstance(link, TimeoutError) for link in exception_chain(error)):
         return None
     return BuildInfrastructureFailure(
         InfrastructureCause.SANDBOX_DEADLINE,
