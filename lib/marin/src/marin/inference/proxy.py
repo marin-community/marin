@@ -26,9 +26,11 @@ from starlette.types import Receive, Scope, Send
 
 from marin.inference.http_proxy import forwardable_request_headers
 from marin.inference.types import (
+    METADATA_REQUEST_SLOTS,
     STREAM_BUFFER_BYTES,
     InferenceBackendState,
     InferenceRequest,
+    InferenceRequestKind,
     InferenceResponse,
     InferenceResponseProvider,
     OpenAIEndpoint,
@@ -326,8 +328,19 @@ class InferenceProxy:
         future: Future[InferenceResponse] = Future()
         pending_count = 0
         timeout_seconds = self._request_timeout_seconds if timeout_seconds is None else timeout_seconds
+        broker_request = InferenceRequest(
+            request_id=request_id,
+            method=method,
+            path=path,
+            payload=body,
+            query_string=query_string,
+            headers=tuple((headers or {}).items()),
+        )
+        pending_limit = self._max_pending_requests + (
+            METADATA_REQUEST_SLOTS if broker_request.kind is InferenceRequestKind.METADATA else 0
+        )
         with self._lock:
-            if len(self._pending) + len(self._streams) >= self._max_pending_requests:
+            if len(self._pending) + len(self._streams) >= pending_limit:
                 self.stats.rejected_requests += 1
                 logger.warning(
                     "InferenceProxy rejecting request method=%s path=%s pending=%d/%d",
@@ -345,14 +358,6 @@ class InferenceProxy:
             pending_count = len(self._pending)
 
         try:
-            broker_request = InferenceRequest(
-                request_id=request_id,
-                method=method,
-                path=path,
-                payload=body,
-                query_string=query_string,
-                headers=tuple((headers or {}).items()),
-            )
             await anyio.to_thread.run_sync(lambda: self._broker.submit_request(broker_request))
             logger.info(
                 "InferenceProxy submitted request request_id=%s method=%s path=%s pending=%d/%d",

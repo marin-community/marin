@@ -1170,6 +1170,53 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "path", "expected_status"),
+    [("GET", "/v1/models", 200), ("GET", "/metrics", 404), ("POST", "/tokenize", 200)],
+)
+async def test_metadata_bypasses_full_generation_queue(method, path, expected_status) -> None:
+    broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
+    release = threading.Event()
+    with serve_deterministic_openai_stub(prompt_pauses={"slow": release}) as upstream_stub:
+        upstream = RunningModel(OpenAIEndpoint(upstream_stub.base_url, upstream_stub.model))
+        worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=10)
+        with (
+            _serve_inference_proxy(
+                broker=broker, model=upstream_stub.model, request_timeout_seconds=10, max_pending_requests=1
+            ) as proxy,
+            run_inference_worker(
+                worker, max_in_flight=1, backoff=ExponentialBackoff(initial=0.01, maximum=0.01, jitter=0)
+            ),
+        ):
+            async with httpx.AsyncClient(base_url=proxy.endpoint.base_url.removesuffix("/v1")) as client:
+                generation = asyncio.create_task(
+                    client.post(
+                        "/v1/completions",
+                        content=_completion_inference_request(request_id="slow", prompt="slow").payload,
+                    )
+                )
+                try:
+                    async with asyncio.timeout(5):
+                        while not upstream_stub.requests_for("/v1/completions"):
+                            await asyncio.sleep(0.01)
+                    # Also put a generation ahead of metadata in the broker's FIFO.
+                    broker.submit_request(_completion_inference_request(request_id="queued", prompt="queued"))
+                    response = await client.request(
+                        method, path, content=_json_bytes({"model": upstream_stub.model, "prompt": "hello"})
+                    )
+                    assert response.status_code == expected_status
+                    assert not generation.done()
+                    assert len(upstream_stub.requests_for("/v1/completions")) == 1
+                    if path == "/v1/models":
+                        assert response.json()["data"][0]["id"] == upstream_stub.model
+                    elif path == "/tokenize":
+                        assert response.json()["count"] == 3
+                finally:
+                    release.set()
+                    await generation
+
+
+@pytest.mark.asyncio
 async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     broker.submit_request(_completion_inference_request(request_id="slow", prompt="slow"))
