@@ -30,6 +30,7 @@ from skyrl_train.rollouts.buffer import (
     RolloutGroup,
     RolloutLease,
     RolloutWriter,
+    skipped_verdict,
 )
 
 PAYLOAD_IO_THREADS = 16
@@ -82,6 +83,9 @@ class MemoryRolloutWriter:
             payload = await asyncio.get_running_loop().run_in_executor(_writes, ray.put, group)
         await self.buffer.commit.remote(lease.lease_id, group.prompt, verdict, PayloadReference(payload))
 
+    async def skip_rollout(self, lease: RolloutLease, prompt: dict) -> None:
+        await self.buffer.commit.remote(lease.lease_id, prompt, skipped_verdict(prompt["uid"]), PayloadReference(None))
+
 
 class MemoryPayloads:
     """Payloads in Ray's object store; a checkpoint holds the groups themselves."""
@@ -126,6 +130,9 @@ class ObjectStoreRolloutWriter:
             await asyncio.get_running_loop().run_in_executor(_writes, _write_group, uri, group)
             payload = uri
         await self.buffer.commit.remote(lease.lease_id, group.prompt, verdict, PayloadReference(payload))
+
+    async def skip_rollout(self, lease: RolloutLease, prompt: dict) -> None:
+        await self.buffer.commit.remote(lease.lease_id, prompt, skipped_verdict(prompt["uid"]), PayloadReference(None))
 
 
 @dataclass(frozen=True)

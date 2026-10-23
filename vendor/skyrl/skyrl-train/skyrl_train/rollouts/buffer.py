@@ -169,6 +169,14 @@ class RolloutContentPolicy:
 class RolloutWriter(Protocol):
     async def write_rollout(self, lease: RolloutLease, group: RolloutGroup) -> None: ...
 
+    async def skip_rollout(self, lease: RolloutLease, prompt: dict) -> None:
+        """Release ``lease`` without a group; the buffer rejects the prompt as skipped and frees its uid."""
+        ...
+
+
+def skipped_verdict(uid: str) -> RolloutVerdict:
+    return RolloutVerdict(uid, (AdmissionRejection.SKIPPED,), None, None, GeneratedWork(0, 0, 0))
+
 
 async def write_trajectory_batch(task: RolloutTask, writer: RolloutWriter, batch: TrajectoryBatch) -> int:
     """Write a completed batch under its prompt group's lease."""
