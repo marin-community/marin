@@ -76,6 +76,8 @@ class Experience:
     # DPO pairing evidence: +1 chosen / -1 rejected per row; present only for
     # static preference-pair batches.
     pair_roles: Optional[Float[torch.Tensor, "batch"]] = None  # noqa: F821
+    # Router telemetry's per-row task tag: an index into metadata["data_source_names"], -1 untagged.
+    data_source_ids: Optional[Integer[torch.Tensor, "batch"]] = None  # noqa: F821
 
     @torch.no_grad()
     def to_device(self, device: torch.device) -> None:
@@ -101,6 +103,8 @@ class Experience:
             self.correction_weights = to(self.correction_weights, device)
         if self.pair_roles is not None:
             self.pair_roles = to(self.pair_roles, device)
+        if self.data_source_ids is not None:
+            self.data_source_ids = to(self.data_source_ids, device)
         if self.rollout_routed_experts is not None:
             self.rollout_routed_experts = to(self.rollout_routed_experts, device)
         if self.response_span_tags is not None:
@@ -133,6 +137,8 @@ class Experience:
             self.correction_weights = self.correction_weights.pin_memory()
         if self.pair_roles is not None:
             self.pair_roles = self.pair_roles.pin_memory()
+        if self.data_source_ids is not None:
+            self.data_source_ids = self.data_source_ids.pin_memory()
         if self.rollout_routed_experts is not None:
             self.rollout_routed_experts = self.rollout_routed_experts.pin_memory()
         if self.response_span_tags is not None:
