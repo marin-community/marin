@@ -24,14 +24,11 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None =
     """
 
     def stop_at(node):
-        return isinstance(node, (ArrayStacked, hax.nn.Stacked)) or (is_leaf is not None and is_leaf(node))
+        return isinstance(node, ArrayStacked) or (is_leaf is not None and is_leaf(node))
 
     mapped_fn = functools.partial(scan_aware_tree_map, fn, is_leaf=is_leaf)
 
     def apply(node, *others):
-        if isinstance(node, hax.nn.Stacked):
-            inner = hax.vmap(mapped_fn, node.Block)(node.stacked, *[other.stacked for other in others])
-            return dataclasses.replace(node, stacked=inner)
         if isinstance(node, ArrayStacked):
             bodies = (node.stacked, *[other.stacked for other in others])
             in_axes = tuple(
@@ -49,7 +46,7 @@ def scan_aware_tree_map(fn, tree, *rest, is_leaf: Callable[[Any], bool] | None =
             return dataclasses.replace(node, stacked=inner)
         return fn(node, *others)
 
-    return hax.tree_util.tree_map(apply, tree, *rest, is_leaf=stop_at)
+    return hax.tree_util.scan_aware_tree_map(apply, tree, *rest, is_leaf=stop_at)
 
 
 class NonePolicy(str, Enum):

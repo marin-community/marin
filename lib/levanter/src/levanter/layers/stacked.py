@@ -3,7 +3,7 @@
 
 import dataclasses
 import functools
-from typing import Any, Callable, Generic, Protocol, Self, Sequence, TypeVar
+from typing import Any, Callable, Generic, Protocol, Self, Sequence, TypeVar, runtime_checkable
 
 import equinox as eqx
 import jax
@@ -23,6 +23,21 @@ InAxesSpec = AxisSpec | tuple[Any, Any]
 
 class ModuleInit(Protocol[M]):
     def __call__(self, *args, **kwargs) -> M: ...
+
+
+@runtime_checkable
+class _StateDictWriter(Protocol):
+    def to_state_dict(self, prefix: str | None = None) -> StateDict: ...
+
+
+@runtime_checkable
+class _StateDictReader(Protocol):
+    def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> Self: ...
+
+
+@runtime_checkable
+class _StateDictKeyMap(Protocol):
+    def _state_dict_key_map(self) -> dict[str, str | None]: ...
 
 
 def _is_array_like(value: Any) -> bool:
@@ -411,10 +426,10 @@ def _with_prefix(prefix: str | None, key: str | None) -> str | None:
 def _to_state_dict(tree: Any, prefix: str | None) -> StateDict:
     if tree is None:
         return {}
-    if hasattr(tree, "to_state_dict"):
+    if isinstance(tree, _StateDictWriter):
         return tree.to_state_dict(prefix)
     if isinstance(tree, eqx.Module):
-        key_map = getattr(tree, "_state_dict_key_map", lambda: {})()
+        key_map = tree._state_dict_key_map() if isinstance(tree, _StateDictKeyMap) else {}
         state: StateDict = {}
         for field in dataclasses.fields(tree):
             if not field.metadata.get("static", False):
@@ -439,10 +454,10 @@ def _to_state_dict(tree: Any, prefix: str | None) -> StateDict:
 def _from_state_dict(tree: Any, state: StateDict, prefix: str | None) -> Any:
     if tree is None:
         return None
-    if hasattr(tree, "from_state_dict"):
+    if isinstance(tree, _StateDictReader):
         return tree.from_state_dict(state, prefix)
     if isinstance(tree, eqx.Module):
-        key_map = getattr(tree, "_state_dict_key_map", lambda: {})()
+        key_map = tree._state_dict_key_map() if isinstance(tree, _StateDictKeyMap) else {}
         values = {
             field.name: _from_state_dict(
                 getattr(tree, field.name), state, _with_prefix(prefix, key_map.get(field.name, field.name))
