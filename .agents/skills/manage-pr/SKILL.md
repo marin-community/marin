@@ -18,9 +18,10 @@ Before authoring a commit or PR title or body, read:
 - `docs/dev-guide/writing-style/pull-requests.md`
 - `docs/dev-guide/writing-style/ai-writing-donts.md`
 
-Clean and validate the diff, commit it, run the advisory review over the
-committed branch, push, update the PR, then monitor it. A WIP checkpoint may
-stop after clean-up, lint, staging, commit, and push.
+Clean and format the diff, commit it, then run advisory review and independent
+validation concurrently. Resolve their results before pushing and publishing,
+then monitor the PR. A WIP checkpoint may stop after clean-up, lint, staging,
+commit, and push.
 
 ## 1. Clean up your own diff
 
@@ -42,19 +43,16 @@ commit.
 This is the required entry point; do not substitute `uv run pre-commit`, skip
 hooks, or weaken checks.
 
-## 3. Tests and docs checks (when relevant)
+Finish automatic fixes before starting concurrent readers of the diff. This
+entry point also runs Pyrefly when applicable; do not repeat an equivalent
+standalone type check on unchanged inputs.
 
-- `uv run --no-project infra/ci/run_tests.py` to run affected safe unit tests.
-  Do not override the repository's default marker expression.
-- If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`.
-- If the change is docs-heavy: `uv run mkdocs build --strict`.
-
-## 4. Stage changes
+## 3. Stage changes
 
 Review `git status` and `git diff`, then stage only this task's explicit files.
 Never stage secrets or unrelated work.
 
-## 5. Commit
+## 4. Commit
 
 Follow `docs/dev-guide/writing-style/pull-requests.md` for the commit subject and body.
 
@@ -67,28 +65,63 @@ user asks.
 
 If there are no changes to commit, say so and stop.
 
-## 6. Lint-catalog review (before every PR)
+## 5. Run advisory review and validation concurrently
+
+After the initial commit, launch advisory review alongside affected tests.
+Use separate command sessions or the runtime's concurrent tool calls; retain
+each process handle, output, and exit status. Do not wait for test results to
+start the review.
 
 ```bash
 ./infra/pre-commit.py --review --calling-agent=claude
 ```
 
-Run this after the initial commit and before publishing the PR. It reviews the
-whole branch diff against the merge base, including uncommitted work. Resolve
-every finding and put fixes in a new commit. Inspect the matching `infra/lint`
-rule and apply findings when they improve the change.
+The advisory review is required before every PR. It reviews the whole branch
+diff against the merge base, including uncommitted work.
 
 Set `--calling-agent` to your agent (`claude` or `codex`) and run the review
 without asking for confirmation.
+
+Run these checks while the review proceeds, concurrently where independent:
+
+- `uv run --no-project infra/ci/run_tests.py` for affected safe unit tests.
+  Do not override the repository's default marker expression.
+- If docs pages were added/deleted/renamed: `uv run python infra/check_docs_source_links.py`.
+- If the change is docs-heavy: `uv run mkdocs build --strict`.
+
+While commands run, draft the PR title/body and gather issue links. Keep the
+reviewed files and Git base stable until all readers finish: reviewers inspect
+the live checkout throughout their run. Do not edit, auto-fix, rebase, or run
+checks that rewrite reviewed files concurrently. The affected-test runner syncs
+the checkout's `.venv`; serialize other commands that sync that environment.
+For example, queue docs checks behind tests while review continues, or use
+`uv run --no-sync` for docs checks once their dependencies are installed and
+the environment sync has finished. Serialize commands that share mutable
+outputs. Reuse existing environments and shared caches.
+
+Reuse passing checks from implementation when their inputs remain unchanged.
+Run only outstanding checks and those invalidated by subsequent edits. Prefer
+the affected-test runner over a full suite unless the change requires broader
+coverage.
+
+Artifacts from advisory review are written under
+`/tmp/marin-linter/<branch>/<timestamp>-<uniq>/`.
+
+## 6. Collect results and resolve findings
+
+Wait for every started command and inspect its output and exit status before
+pushing or publishing. A launched process is not a completed check; advisory
+review can exit successfully while reporting findings or an incomplete run.
+Confirm it actually reviewed the branch and inspect its findings and failures.
+Resolve every finding, checking the matching `infra/lint` rule, and fix failed
+checks. Put fixes in a new commit after validating the affected behavior.
 
 Do not recursively rerun `--review` after small, targeted touch-ups made in
 response to its findings. Validate behavioral edits with the normal mechanical
 checks and relevant tests. For a formatter-only mechanical edit, rerun formatting
 and lint checks only. Rerun the advisory review only when the follow-up materially
 changes the branch's implementation approach or scope, or when the user asks for
-another pass.
-
-Artifacts are written under `/tmp/marin-linter/<branch>/<timestamp>-<uniq>/`.
+another pass. Apply the same rule to fixes prompted by tests or docs checks.
 
 ## 7. Push
 
@@ -118,7 +151,7 @@ gh pr create --title "<title>" --body-file "<body-file>" \
 ```
 
 - Always add the `agent-generated` label.
-- Add `agentic-lint` only after step 6 ran and every finding was fixed or answered.
+- Add `agentic-lint` only after advisory review completed and every finding was fixed or answered.
   The label records that lint pass; without it, CI launches a Loom lint review.
 - Never credit yourself in commits or PR descriptions.
 - Include `Fixes #NNNN` when addressing a pre-existing issue.
