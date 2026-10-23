@@ -49,6 +49,7 @@ from experiments.post_training.baby_rsi.feedback import (
 from experiments.post_training.baby_rsi.loop import Boxes, LoopConfig, rsi_loop
 from experiments.post_training.baby_rsi.policy import BASE_MODEL_NAME, LivePolicy, Sampling, VllmPolicy, VllmServer
 from experiments.post_training.baby_rsi.resume import (
+    SavedTask,
     accepted_tasks,
     known_ideas,
     untrained_instances,
@@ -91,6 +92,8 @@ cheap, and a weak policy needs more rounds to bring a task into the gate's band.
 ANALYSIS_POLICY = LLMPolicy(reasoning_effort=ReasoningEffort.LOW, max_tokens=32768)
 FEED_POLL_SECONDS = 10.0
 UPLOAD_EVERY_GROUPS = 8
+PROBE_BUILD_SLOTS = 16
+"""Accepted tasks whose training instances the evaluation builds at a time, to find the held-out probes."""
 
 
 @dataclass(frozen=True)
@@ -487,17 +490,20 @@ async def _evaluate(
 async def read_probes(roots: Sequence[str], instances_per_task: int) -> list[TaskSpec]:
     """The held-out probes of the accepted tasks in ``roots``; a probe equal to a training instance is dropped."""
     factory = workspace_factory()
-    probes = []
-    for root in roots:
-        for saved in accepted_tasks(StoragePath(root)):
-            ids = training_ids(saved.accepted, instances_per_task)
+    slots = asyncio.Semaphore(PROBE_BUILD_SLOTS)
+
+    async def held_out_probes(saved: SavedTask) -> list[TaskSpec]:
+        ids = training_ids(saved.accepted, instances_per_task)
+        async with slots:
             training = await task_instances(saved.accepted, ids, factory, timeout=INSTANCE_TIMEOUT)
-            lines = (saved.directory / "probes.jsonl").read_text().splitlines()
-            stored = [TaskSpec.model_validate_json(line) for line in lines if line]
-            kept = held_out(stored, saved.accepted, training)
-            logger.info("%s: %d of %d probes are held out", saved.accepted.task.id, len(kept), len(stored))
-            probes += kept
-    return probes
+        lines = (saved.directory / "probes.jsonl").read_text().splitlines()
+        stored = [TaskSpec.model_validate_json(line) for line in lines if line]
+        kept = held_out(stored, saved.accepted, training)
+        logger.info("%s: %d of %d probes are held out", saved.accepted.task.id, len(kept), len(stored))
+        return kept
+
+    saved_tasks = [saved for root in roots for saved in accepted_tasks(StoragePath(root))]
+    return [probe for kept in await asyncio.gather(*map(held_out_probes, saved_tasks)) for probe in kept]
 
 
 if __name__ == "__main__":
