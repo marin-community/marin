@@ -16,6 +16,7 @@ from cloud.iris.export_hf_checkpoint import (
 from cloud.iris.launch_config import validate_iris_allocation
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
 from skyrl_train.hf_export_schema import HFExportRequest
+from marinskyrl.checkpoint_paths import selected_export_step
 
 
 def _training_config():
@@ -185,3 +186,15 @@ def test_nested_export_reads_cluster_config_relative_to_parent_launch(tmp_path: 
     _run_export(spec, command)
 
     assert json.loads(output.read_text())["platform"]["coreweave"]["kube_context"] == "export-cluster"
+
+
+def test_export_selection_distinguishes_best_saved_step_from_latest(tmp_path: Path) -> None:
+    (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
+    assert selected_export_step(str(tmp_path), "best", 20) == 15
+    assert selected_export_step(str(tmp_path), "latest", 20) == 20
+
+
+def test_export_selection_does_not_substitute_training_for_best_initializer(tmp_path: Path) -> None:
+    (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 0, "model_format": "hf"}))
+    with pytest.raises(ValueError, match="initial HF model"):
+        selected_export_step(str(tmp_path), "best", 20)

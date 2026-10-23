@@ -43,6 +43,7 @@ checkpoint_export:
   hf_upload_mode: latest
 
 trainer:
+  hf_export_checkpoint: latest  # latest or best native checkpoint for HF export
   evaluation_runner: training # task or harbor selects generated validation for offline preference training
   trajectory_selector:
     type: null # null | best_of_n; selection runs after reward postprocessing and before teacher scoring
