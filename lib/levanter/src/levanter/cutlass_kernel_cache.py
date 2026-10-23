@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 
 _KERNEL_IDENTITY_ATTR = "_levanter_cute_kernel_identity"
 _KERNEL_SOURCE_COVERED_ATTR = "_levanter_cute_kernel_source_covered"
-_KERNEL_CACHE_PREFIX = "cutlass-kernels"
+# Keep cache-history-floor manifests separate from caches used by older binaries.
+_KERNEL_CACHE_PREFIX = "cutlass-kernels/v2"
 _KERNEL_CACHE_SCHEMA = "cutlass-object-v3"
 
 
