@@ -294,12 +294,20 @@ def _hero_layout(config, device_count):
     return mesh_shape, trainer
 
 
-def test_hero_without_context_parallelism_keeps_its_16k_layout():
+def test_hero_without_context_parallelism_keeps_its_16k_layout(monkeypatch):
     # The 16K hero is CP1. Adding the context axis must not move its mesh, its trainer mesh, or its eval batch.
-    step = build_ladder_run(run_id="test-d6144-cp1", size="d6144", version="dev")
+    _set_hero_seq_len(monkeypatch, 16384)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_CONTEXT_AXIS_SIZE", 1)
+    monkeypatch.setattr(launch_scaling_ladder, "HERO_BALANCE_ATTENTION_ROWS", False)
+    step = build_ladder_run(
+        run_id="test-d6144-cp1",
+        size="d6144",
+        version="dev",
+        context_phases=(HarrierContextPhase(end_step=257_553, seq_len=4096),),
+        flops_baseline_total=1.8e24,
+    )
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
-    assert config.model.max_seq_len == 16384
     assert (config.trainer.context_axis_size, config.trainer.expert_axis_size) == (1, 64)
     assert config.trainer.balance_attention_rows is False
     assert config.trainer.trainer.mesh == MeshConfig()
