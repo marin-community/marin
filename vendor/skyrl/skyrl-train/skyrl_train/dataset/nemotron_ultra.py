@@ -16,6 +16,7 @@ from transformers import PreTrainedTokenizerBase
 from skyrl_train.dataset.harbor import HARBOR_ID_PREFIX, materialize_harbor_tasks
 from skyrl_train.dataset.tasks import (
     TASK_ROLLOUT_COLUMN,
+    TASK_SPEC_COLUMN,
     PARQUET_BATCH_SIZE,
     SourceTaskDataset,
     TaskDataset,
@@ -121,6 +122,8 @@ class NemotronTaskDataset(SourceTaskDataset):
     def prepare_dataset(self, dataset: Dataset) -> Dataset:
         if TASK_ROLLOUT_COLUMN in dataset.column_names:
             return TaskDataset.prepare_dataset(self, dataset)
+        if TASK_SPEC_COLUMN in dataset.column_names:
+            return super().prepare_dataset(dataset)
         return self._map_task_rows(
             dataset,
             partial(

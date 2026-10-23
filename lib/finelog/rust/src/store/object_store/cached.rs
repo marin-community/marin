@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -26,6 +27,8 @@ use crate::store::object_store::{
     ObjectVersion, StoredObject, FINELOG_ROOT_COMPONENT,
 };
 
+use super::admission::{AdmissionDecision, QueryCacheAdmission, RequestHistory};
+use super::diagnostics::{CacheDiagnostics, FillReason};
 use super::local_file::atomic_write;
 
 /// Concurrent cache-miss downloads across every caller of this store.
@@ -127,6 +130,8 @@ pub struct CachedObjectStore {
     /// Objects staged locally whose upload has not completed. Their cache files
     /// are the only copy of the bytes, so eviction never selects them.
     staged: Arc<Mutex<HashSet<PathBuf>>>,
+    request_history: Arc<Mutex<RequestHistory>>,
+    diagnostics: Arc<CacheDiagnostics>,
 }
 
 impl CachedObjectStore {
@@ -145,15 +150,26 @@ impl CachedObjectStore {
             query_visibility,
             last_gc: Arc::new(Mutex::new(None)),
             staged: Arc::new(Mutex::new(HashSet::new())),
+            request_history: Arc::new(Mutex::new(RequestHistory::default())),
+            diagnostics: Arc::new(CacheDiagnostics::default()),
         })
     }
 
     async fn lookup(&self, reference: &ObjectReference) -> Result<Option<PathBuf>, StatsError> {
         let cache = self.cache.clone();
         let reference = reference.clone();
-        tokio::task::spawn_blocking(move || cache.cached_path(&reference))
+        let path = tokio::task::spawn_blocking(move || cache.cached_path(&reference))
             .await
-            .map_err(|error| StatsError::Internal(format!("object cache lookup task: {error}")))?
+            .map_err(|error| {
+                StatsError::Internal(format!("object cache lookup task: {error}"))
+            })??;
+        let counter = if path.is_some() {
+            &self.diagnostics.hits
+        } else {
+            &self.diagnostics.misses
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+        Ok(path)
     }
 
     async fn materialize(&self, reference: &ObjectReference) -> Result<PathBuf, StatsError> {
@@ -163,13 +179,15 @@ impl CachedObjectStore {
         let _permit = self.fetches.acquire().await.map_err(|error| {
             StatsError::Internal(format!("object cache fetch semaphore: {error}"))
         })?;
-        self.materialize_reserved(reference).await
+        self.materialize_reserved(reference, FillReason::Required)
+            .await
     }
 
     /// Materialize with a download slot already held by the caller.
     async fn materialize_reserved(
         &self,
         reference: &ObjectReference,
+        reason: FillReason,
     ) -> Result<PathBuf, StatsError> {
         // A concurrent fetch of the same object may have won while this one
         // waited for a download slot.
@@ -190,25 +208,33 @@ impl CachedObjectStore {
         }
         let cache = self.cache.clone();
         let reference = reference.clone();
-        tokio::task::spawn_blocking(move || cache.write(&reference, &object.bytes))
-            .await
-            .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))?
+        let diagnostics = self.diagnostics.clone();
+        tokio::task::spawn_blocking(move || {
+            let path = cache.write(&reference, &object.bytes)?;
+            diagnostics.fills(reason).record(object.bytes.len() as u64);
+            Ok(path)
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))?
     }
 
     /// Evict least-recently-used cache files until the cache fits its capacity.
     async fn evict_over_capacity(&self, capacity_bytes: u64) -> Result<(), StatsError> {
+        let started = Instant::now();
         let root = self.cache.root.join(FINELOG_ROOT_COMPONENT);
         let mut entries = tokio::task::spawn_blocking(move || scan_cache_files(&root))
             .await
             .map_err(|error| StatsError::Internal(format!("object cache scan task: {error}")))??;
         let total: u64 = entries.iter().map(|entry| entry.bytes).sum();
-        if total <= capacity_bytes {
-            return Ok(());
+        let files = entries.len();
+        let scan_ms = started.elapsed().as_millis() as u64;
+        if total > capacity_bytes {
+            entries.sort_by_key(|entry| entry.modified);
         }
-        entries.sort_by_key(|entry| entry.modified);
         let staged = self.staged.lock().unwrap().clone();
-        let mut excess = total - capacity_bytes;
+        let mut excess = total.saturating_sub(capacity_bytes);
         let mut victims = Vec::new();
+        let mut selected_bytes = 0;
         for entry in entries {
             if excess == 0 {
                 break;
@@ -219,31 +245,47 @@ impl CachedObjectStore {
                 continue;
             }
             excess = excess.saturating_sub(entry.bytes);
+            selected_bytes += entry.bytes;
             victims.push(entry.path);
         }
-        let evicted = victims.len();
-        self.remove_cached_paths(victims).await?;
+        let selected_files = victims.len();
+        let removal = self.remove_cached_paths(victims).await?;
         tracing::info!(
-            evicted,
+            evicted = removal.removed,
+            selected_files,
+            selected_bytes,
             cache_bytes = total,
             capacity_bytes,
-            "object cache evicted least-recently-used files"
+            files,
+            remaining_excess_bytes = excess,
+            scan_ms,
+            sweep_ms = started.elapsed().as_millis() as u64,
+            lock_wait_ms = removal.lock_wait.as_millis() as u64,
+            lock_hold_ms = removal.lock_hold.as_millis() as u64,
+            max_lock_hold_us = removal.max_lock_hold.as_micros() as u64,
+            "object cache sweep"
         );
         Ok(())
     }
 
-    async fn remove_cached_paths(&self, paths: Vec<PathBuf>) -> Result<(), StatsError> {
+    async fn remove_cached_paths(&self, paths: Vec<PathBuf>) -> Result<RemovalStats, StatsError> {
+        let mut stats = RemovalStats::default();
         for batch in paths.chunks(CACHE_DELETE_BATCH_FILES) {
             let batch = batch.to_vec();
             // Readers pin cache paths until their scan completes. Move the
             // guard into the blocking task so cancellation cannot release it
             // while that task is still unlinking files.
+            let waiting = Instant::now();
             let visibility = self.query_visibility.clone().write_owned().await;
-            tokio::task::spawn_blocking(move || {
+            let lock_wait = waiting.elapsed();
+            let holding = Instant::now();
+            let diagnostics = self.diagnostics.clone();
+            let (removed, lock_hold) = tokio::task::spawn_blocking(move || {
                 let _visibility = visibility;
-                for path in batch {
+                let mut removed = 0;
+                let result = batch.into_iter().try_for_each(|path| {
                     match std::fs::remove_file(&path) {
-                        Ok(()) => {}
+                        Ok(()) => removed += 1,
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                         Err(error) => {
                             return Err(StatsError::Internal(format!(
@@ -252,17 +294,65 @@ impl CachedObjectStore {
                             )))
                         }
                     }
-                }
-                Ok(())
+                    Ok(())
+                });
+                let lock_hold = holding.elapsed();
+                diagnostics.cleanup_batches.fetch_add(1, Ordering::Relaxed);
+                diagnostics
+                    .cleanup_lock_wait_us
+                    .fetch_add(lock_wait.as_micros() as u64, Ordering::Relaxed);
+                diagnostics
+                    .cleanup_lock_hold_us
+                    .fetch_add(lock_hold.as_micros() as u64, Ordering::Relaxed);
+                diagnostics
+                    .cleanup_max_lock_hold_us
+                    .fetch_max(lock_hold.as_micros() as u64, Ordering::Relaxed);
+                result.map(|()| (removed, lock_hold))
             })
             .await
             .map_err(|error| {
                 StatsError::Internal(format!("object cache removal task: {error}"))
             })??;
+            stats.removed += removed;
+            stats.lock_wait += lock_wait;
+            stats.lock_hold += lock_hold;
+            stats.max_lock_hold = stats.max_lock_hold.max(lock_hold);
             tokio::task::yield_now().await;
         }
-        Ok(())
+        Ok(stats)
     }
+
+    fn start_warm(&self, reference: &ObjectReference) {
+        // Reserve before spawning so cancelled queries cannot leave queued fills.
+        let Ok(permit) = self.fetches.clone().try_acquire_owned() else {
+            self.diagnostics.warm_busy.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+        let store = self.clone();
+        let reference = reference.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            if let Err(error) = store
+                .materialize_reserved(&reference, FillReason::Query)
+                .await
+            {
+                store
+                    .diagnostics
+                    .warm_errors
+                    .fetch_add(1, Ordering::Relaxed);
+                tracing::debug!(%error, object = ?reference.id.as_str(),
+                    "background cache fill failed; the next scan reads remote again");
+            }
+        });
+    }
+}
+
+#[derive(Default)]
+struct RemovalStats {
+    removed: usize,
+    lock_wait: Duration,
+    lock_hold: Duration,
+    max_lock_hold: Duration,
 }
 
 #[async_trait]
@@ -274,9 +364,14 @@ impl ObjectStore for CachedObjectStore {
             id: id.clone(),
             version: version.clone(),
         };
-        tokio::task::spawn_blocking(move || cache.write(&reference, &bytes))
-            .await
-            .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))??;
+        let diagnostics = self.diagnostics.clone();
+        tokio::task::spawn_blocking(move || {
+            cache.write(&reference, &bytes)?;
+            diagnostics.writes.record(bytes.len() as u64);
+            Ok::<_, StatsError>(())
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("object cache write task: {error}")))??;
         Ok(version)
     }
 
@@ -295,9 +390,14 @@ impl ObjectStore for CachedObjectStore {
             id: id.clone(),
             version: version.clone(),
         };
-        let path = tokio::task::spawn_blocking(move || cache.write(&reference, &bytes))
-            .await
-            .map_err(|error| StatsError::Internal(format!("object stage task: {error}")))??;
+        let diagnostics = self.diagnostics.clone();
+        let path = tokio::task::spawn_blocking(move || {
+            let path = cache.write(&reference, &bytes)?;
+            diagnostics.writes.record(bytes.len() as u64);
+            Ok::<_, StatsError>(path)
+        })
+        .await
+        .map_err(|error| StatsError::Internal(format!("object stage task: {error}")))??;
         self.staged.lock().unwrap().insert(path);
         Ok(version)
     }
@@ -349,22 +449,18 @@ impl ObjectStore for CachedObjectStore {
         self.lookup(reference).await
     }
 
-    fn warm(&self, reference: &ObjectReference) {
-        // Warming is optional: scans can read the remote object directly.
-        // Reserving before spawning prevents a broad or cancelled query from
-        // leaving thousands of queued downloads churning the cache afterward.
-        let Ok(permit) = self.fetches.clone().try_acquire_owned() else {
-            return;
-        };
-        let store = self.clone();
-        let reference = reference.clone();
-        tokio::spawn(async move {
-            let _permit = permit;
-            if let Err(error) = store.materialize_reserved(&reference).await {
-                tracing::debug!(%error, object = ?reference.id.as_str(),
-                    "background cache fill failed; the next scan reads remote again");
+    fn warm_query(&self, reference: &ObjectReference, query: &QueryCacheAdmission) {
+        let counter = match query.admit(reference, &self.request_history) {
+            AdmissionDecision::Admitted => {
+                self.start_warm(reference);
+                &self.diagnostics.query_admitted
             }
-        });
+            AdmissionDecision::Cold => &self.diagnostics.query_cold,
+            AdmissionDecision::Duplicate => &self.diagnostics.query_duplicate,
+            AdmissionDecision::ObjectLimit => &self.diagnostics.query_object_limit,
+            AdmissionDecision::ByteLimit => &self.diagnostics.query_byte_limit,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
     }
 
     // Mutable pointers are only ever written through CAS and never cached, so
@@ -416,6 +512,12 @@ impl ObjectStore for CachedObjectStore {
     }
 
     async fn gc(&self) -> Result<(), StatsError> {
+        let staged_objects = self.staged.lock().unwrap().len();
+        self.diagnostics.log_if_due(
+            &self.request_history,
+            MAX_PARALLEL_FETCHES - self.fetches.available_permits(),
+            staged_objects,
+        );
         let Some(capacity_bytes) = self.capacity_bytes else {
             return Ok(());
         };
@@ -519,8 +621,12 @@ fn scan_cache_files(root: &Path) -> Result<Vec<CacheFile>, StatsError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::query::provider::NamespaceProvider;
+    use crate::query::{make_ctx, run_query_over, RegisteredProvider};
     use crate::store::object_store::build_remote_object_store;
     use crate::store::object_store::ObjectVersion;
+    use crate::store::table::query_view::SegmentObjects;
+    use crate::store::table_state::ArtifactReferences;
     use crate::test_support::{
         unique_dir, FaultAction, FaultGate, FaultInjectingObjectStore, ObjectFault, ObjectOp,
         ObjectPattern,
@@ -731,14 +837,19 @@ mod tests {
             None,
         )
         .unwrap();
+        let first_query = QueryCacheAdmission::default();
+        for object in &objects {
+            store.warm_query(object, &first_query);
+        }
+        let repeated_query = QueryCacheAdmission::default();
         for object in &objects[..MAX_PARALLEL_FETCHES] {
-            store.warm(object);
+            store.warm_query(object, &repeated_query);
         }
         for _ in 0..MAX_PARALLEL_FETCHES {
             gate.entered().await;
         }
         for object in &objects[MAX_PARALLEL_FETCHES..objects.len() - 1] {
-            store.warm(object);
+            store.warm_query(object, &repeated_query);
         }
         let required = objects.last().unwrap();
         let download_store = store.clone();
@@ -769,6 +880,184 @@ mod tests {
             assert!(store.cached_path(skipped).await.unwrap().is_none());
         }
         for root in [remote_root, cache_root] {
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn query_warming_requires_reuse_and_shares_byte_and_object_limits() {
+        // The first limit binds bytes, the second binds object count.
+        for (bytes, objects) in [(8, 10), (100, 2)] {
+            let (store, roots) = cached_store("object_cache_query_admission", None);
+            let references: Vec<_> = (0..4)
+                .map(|index| reference("log", &format!("objects/{index}.parquet"), b"rows"))
+                .collect();
+            for object in &references {
+                store
+                    .source
+                    .write(&object.id, bytes::Bytes::from_static(b"rows"))
+                    .await
+                    .unwrap();
+            }
+
+            let first_query = QueryCacheAdmission::new(bytes, objects);
+            for object in &references {
+                // Multiple scans in one query do not qualify as reuse.
+                store.warm_query(object, &first_query);
+                store.warm_query(object, &first_query);
+            }
+            {
+                let _drained = store
+                    .fetches
+                    .acquire_many(MAX_PARALLEL_FETCHES as u32)
+                    .await
+                    .unwrap();
+                for object in &references {
+                    assert!(store.cached_path(object).await.unwrap().is_none());
+                }
+            }
+
+            // Only two four-byte fills fit either case.
+            let second_query = QueryCacheAdmission::new(bytes, objects);
+            for object in &references {
+                store.warm_query(object, &second_query);
+            }
+            {
+                let _drained = store
+                    .fetches
+                    .acquire_many(MAX_PARALLEL_FETCHES as u32)
+                    .await
+                    .unwrap();
+                for (index, object) in references.iter().enumerate() {
+                    let path = store.cached_path(object).await.unwrap();
+                    assert_eq!(path.is_some(), index < 2);
+                    if let Some(path) = path {
+                        assert_eq!(std::fs::read(path).unwrap(), b"rows");
+                    }
+                }
+            }
+
+            // Exhausting one query's allowance cannot block required reads or
+            // prevent a later query from warming previously skipped objects.
+            let path = store.local_path(&references[2]).await.unwrap();
+            assert_eq!(std::fs::read(path).unwrap(), b"rows");
+            store.warm_query(&references[3], &QueryCacheAdmission::new(bytes, objects));
+            let _drained = store
+                .fetches
+                .acquire_many(MAX_PARALLEL_FETCHES as u32)
+                .await
+                .unwrap();
+            assert!(store.cached_path(&references[3]).await.unwrap().is_some());
+            for root in roots {
+                std::fs::remove_dir_all(root).unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn oversized_query_fill_leaves_room_for_small_objects() {
+        let (store, roots) = cached_store("object_cache_query_oversize", None);
+        let large = reference("log", "objects/large.parquet", b"large object");
+        let small = reference("log", "indices/small.fidx", b"tiny");
+        for (object, bytes) in [(&large, &b"large object"[..]), (&small, &b"tiny"[..])] {
+            store
+                .source
+                .write(&object.id, bytes::Bytes::copy_from_slice(bytes))
+                .await
+                .unwrap();
+        }
+        for _ in 0..2 {
+            let query = QueryCacheAdmission::new(4, 1);
+            store.warm_query(&large, &query);
+            store.warm_query(&small, &query);
+        }
+        let _drained = store
+            .fetches
+            .acquire_many(MAX_PARALLEL_FETCHES as u32)
+            .await
+            .unwrap();
+        assert!(store.cached_path(&large).await.unwrap().is_none());
+        assert!(store.cached_path(&small).await.unwrap().is_some());
+        for root in roots {
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn sql_query_shares_admission_across_namespaces_and_repeated_scans() {
+        let (store, roots) = cached_store("object_cache_sql_budget", None);
+        let store = Arc::new(store);
+        let batch = arrow::record_batch::RecordBatch::try_from_iter(vec![(
+            "seq",
+            Arc::new(arrow::array::Int64Array::from(vec![1])) as arrow::array::ArrayRef,
+        )])
+        .unwrap();
+        let bytes = bytes::Bytes::from(crate::store::segment::write_segment(&batch).unwrap());
+        let mut sources = Vec::new();
+        for name in ["left_table", "right_table"] {
+            let id = ObjectId::table(name, "objects/one.parquet").unwrap();
+            let version = store.source.write(&id, bytes.clone()).await.unwrap();
+            sources.push((name, ObjectReference { id, version }));
+        }
+        for query_number in 0..2 {
+            let config = make_ctx()
+                .copied_config()
+                .with_extension(Arc::new(QueryCacheAdmission::new(u64::MAX, 1)));
+            let ctx = datafusion::prelude::SessionContext::new_with_config(config);
+            let providers = sources
+                .iter()
+                .map(|(name, source)| {
+                    let path = store
+                        .planned_local_path(&source.id)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    RegisteredProvider {
+                        name: name.to_string(),
+                        provider: NamespaceProvider::build_with_local_artifacts(
+                            batch.schema(),
+                            std::slice::from_ref(&path),
+                        )
+                        .unwrap()
+                        .with_object_sources(
+                            store.clone(),
+                            std::collections::BTreeMap::from([(
+                                path,
+                                SegmentObjects {
+                                    source: source.clone(),
+                                    artifacts: ArtifactReferences::default(),
+                                },
+                            )]),
+                        ),
+                    }
+                })
+                .collect();
+            let result = run_query_over(&ctx, providers,
+                "SELECT seq FROM left_table UNION ALL SELECT seq FROM right_table UNION ALL SELECT seq FROM left_table")
+                .await.unwrap();
+            assert_eq!(
+                result
+                    .batches
+                    .iter()
+                    .map(|batch| batch.num_rows())
+                    .sum::<usize>(),
+                3
+            );
+            let _drained = store
+                .fetches
+                .acquire_many(MAX_PARALLEL_FETCHES as u32)
+                .await
+                .unwrap();
+            let mut cached = 0;
+            for (_, source) in &sources {
+                cached += usize::from(store.cached_path(source).await.unwrap().is_some());
+            }
+            assert_eq!(
+                cached, query_number,
+                "one SQL request must share one fill budget"
+            );
+        }
+        for root in roots {
             std::fs::remove_dir_all(root).unwrap();
         }
     }

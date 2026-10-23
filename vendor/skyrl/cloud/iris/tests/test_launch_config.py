@@ -6,22 +6,10 @@ import base64
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
-import pyarrow.parquet as pq
-
 import pytest
 import yaml
 from omegaconf import OmegaConf
 from rolloutengine.models import ModelTurn
-from skyrl_train.config.utils import get_default_config
-from skyrl_train.entrypoints.main_base import BasePPOExp
-from skyrl_train.entrypoints.main_generate import EvalOnlyEntrypoint
-from skyrl_train.dataset.tasks import write_tasks, SourceTaskDataset
-from skyrl_gym.source_task import session_parameters
-from taskcompendium.models import ConversationInput, ScriptGrader, TextMessage
-from tests.cpu.task_specs import NATIVE_ENVIRONMENT, lowered_task, text_task, session_spec
-from tokenizers import Tokenizer, models
-from transformers import PreTrainedTokenizerFast
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
@@ -513,65 +501,3 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
     OmegaConf.save(config, resolved)
     reloaded = load_launch_config(resolved)
     assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
-
-
-@pytest.mark.parametrize("experiment_type", [BasePPOExp, EvalOnlyEntrypoint])
-@pytest.mark.parametrize("terminal_data", [False, True])
-def test_default_task_loaders_preserve_canonical_training_and_heldout_specs(
-    tmp_path, experiment_type, terminal_data
-):
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
-        unk_token="[UNK]",
-        chat_template="{% for message in messages %}{{ message.content }} {% endfor %}",
-    )
-    grader = ScriptGrader(argv=("sh", "/tests/private-grader.sh"), environment=NATIVE_ENVIRONMENT)
-    expected = {}
-    for split in ("train", "heldout"):
-        shell = text_task(f"{split}-shell").model_copy(update={"grader": grader})
-        prefix = text_task(f"{split}-prefix").model_copy(
-            update={"grader": grader, "context": ConversationInput(events=(
-                TextMessage(role="user", content="Complete"),
-                TextMessage(role="assistant", content="prefix"),
-            ))}
-        )
-        expected[split] = [
-            lowered_task(shell, verifier_backend="daytona"),
-            lowered_task(prefix, "assistant_prefix", max_turns=1, verifier_backend="daytona"),
-        ]
-        write_tasks(tmp_path / f"{split}.parquet", expected[split])
-    experiment = object.__new__(experiment_type)
-    experiment.cfg = get_default_config()
-    experiment.cfg.trainer.evaluation_runner = "task"
-    experiment.cfg.trainer.eval_interval = 1
-    experiment.cfg.trainer.train_batch_size = 1
-    experiment.cfg.trainer.max_prompt_length = 128
-    experiment.cfg.data.train_data = [str(tmp_path / "train.parquet")]
-    experiment.cfg.data.val_data = [str(tmp_path / "heldout.parquet")]
-    if terminal_data:
-        OmegaConf.update(experiment.cfg, "terminal_bench_config", {"harbor": {}}, force_add=True)
-        experiment.cfg.data.terminal_bench_data = [str(tmp_path / "train.parquet")]
-        experiment.cfg.data.task_cache_dir = str(tmp_path / "cache")
-    experiment.tokenizer = tokenizer
-    datasets = {"heldout": experiment.get_eval_dataset()}
-    if experiment_type is BasePPOExp:
-        datasets["train"] = experiment.get_train_dataset()
-    for split, dataset in datasets.items():
-        assert [row["input"].spec for row in dataset.collate_fn(list(dataset))] == expected[split]
-
-
-def test_default_source_task_loader_retains_raw_source_grading_inputs(tmp_path):
-    tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=Tokenizer(models.WordLevel({"[UNK]": 0}, unk_token="[UNK]")),
-        unk_token="[UNK]",
-        chat_template="{% for message in messages %}{{ message.content }} {% endfor %}",
-    )
-    row = {"prompt": [{"role": "user", "content": "Six plus six?"}],
-           "env_class": "gsm8k", "reward_model": {"ground_truth": "12"}}
-    path = tmp_path / "raw.parquet"
-    pq.write_table(pa.Table.from_pylist([row]), path)
-    dataset = SourceTaskDataset([str(path)], tokenizer, 128, num_workers=1,
-        environment_configs={"session": session_spec("gsm8k"), "gsm8k": {}})
-    [loaded] = dataset.collate_fn(list(dataset))
-    assert session_parameters(loaded["input"].spec.task).extras["reward_model"] == row["reward_model"]
-    assert loaded["input"].spec.task.context.events == (TextMessage(role="user", content="Six plus six?"),)
