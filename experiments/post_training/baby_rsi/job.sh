@@ -46,6 +46,9 @@ CUDA_TOOLCHAIN=13.2.86
   # The policy's tokenizer, and pandas for the script graders of the pool tasks.
   uv pip install --quiet --python "$TASK_PYTHON" transformers==4.57.1 pandas==2.3.3
 )
+# The script graders of the pool tasks run in bubblewrap with this environment; without these imports every grade of
+# their strata fails, so stop here instead.
+"$TASK_PYTHON" -c "import numpy, pandas, reasoning_gym, verifyit"
 # FlashInfer compiles kernels at run time, and the task image has no CUDA compiler. vLLM uses the compiler of the
 # NVIDIA wheels, with the library names that the linker looks for (as marin.inference.vllm_server does).
 cuda_home="$VLLM_VENV/lib/python3.12/site-packages/nvidia/cu13"
