@@ -408,6 +408,13 @@ async def _record_groups(stream: AsyncIterator[TaskRollouts], strata: Mapping[st
 @policy_options
 @click.option("--output-dir", required=True)
 @click.option("--checkpoint", "checkpoints", multiple=True, help="NAME=URL of a trained HF checkpoint; repeatable.")
+@click.option(
+    "--base-runs",
+    type=click.IntRange(0, 2),
+    default=2,
+    show_default=True,
+    help="Evaluations of the base policy; 0 lets parallel jobs of other policies write to the same directory.",
+)
 @click.option("--probes", "probe_roots", multiple=True, help="An rsi output directory with held-out probes.")
 @click.option("--instances-per-task", type=int, default=32, show_default=True, help="As the rsi run made them.")
 @click.option("--pool-tasks", type=int, default=400, show_default=True, help="Held-out validation pool tasks.")
@@ -416,6 +423,7 @@ async def _record_groups(stream: AsyncIterator[TaskRollouts], strata: Mapping[st
 def evaluate(
     output_dir: str,
     checkpoints: tuple[str, ...],
+    base_runs: int,
     probe_roots: tuple[str, ...],
     instances_per_task: int,
     pool_tasks: int,
@@ -429,6 +437,7 @@ def evaluate(
             PolicyOptions(**options),
             StoragePath(output_dir),
             dict(checkpoint.split("=", 1) for checkpoint in checkpoints),
+            base_runs,
             probe_roots,
             instances_per_task,
             pool_tasks,
@@ -442,6 +451,7 @@ async def _evaluate(
     options: PolicyOptions,
     output: StoragePath,
     checkpoints: Mapping[str, str],
+    base_runs: int,
     probe_roots: Sequence[str],
     instances_per_task: int,
     pool_tasks: int,
@@ -456,12 +466,14 @@ async def _evaluate(
         labels[probe.id] = f"probe:{capability_of(probe)}"
     logger.info("Evaluation tasks: %s", Counter(label.split(":")[0] for label in labels.values()))
     results = {}
-    with serve(options) as server:
-        runner = Served(options, server).runner
-        # A second evaluation of the base weights measures how often a task that the base never passes passes by
-        # chance on new samples. One policy at a time, so that the graders of all policies see the same load.
-        for name in (BASE_MODEL_NAME, REPEAT_NAME):
-            results[name] = await eval_policy(runner, tasks, labels, samples)
+    # A second evaluation of the base weights measures how often a task that the base never passes passes by chance
+    # on new samples. One policy at a time, so that the graders of all policies see the same load.
+    base_names = (BASE_MODEL_NAME, REPEAT_NAME)[:base_runs]
+    if base_names:
+        with serve(options) as server:
+            runner = Served(options, server).runner
+            for name in base_names:
+                results[name] = await eval_policy(runner, tasks, labels, samples)
     for name, url in checkpoints.items():
         local = Path(CHECKPOINT_DIR) / name
         await asyncio.to_thread(_download_tree, url, local)
