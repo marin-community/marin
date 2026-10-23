@@ -1,11 +1,17 @@
+import asyncio
 import math
 import random
+import sys
 
 import pytest
+from aiohttp import ClientSession
 from examples.cat_count.cpu_canary import PROMPT, build_tokenizer
-from examples.cat_count.synthetic_teacher import EvenNumbersTarget, SyntheticTeacher, TeacherNoise, WordCountTarget
-
-from tests.cpu.tiny_training.cat_count_opd import cat_count_opd_config
+from examples.cat_count.synthetic_teacher import (
+    EvenNumbersTarget,
+    SyntheticTeacher,
+    TeacherNoise,
+    WordCountTarget,
+)
 
 HIGH = math.log(0.95)
 # The tiny word-level vocabulary has 38 tokens; the other 0.05 is spread over 37 of them.
@@ -55,6 +61,46 @@ def test_teacher_prefers_the_exact_count(tokenizer, n, response, expected):
 def test_flipped_teacher_swaps_preferences(tokenizer):
     teacher = SyntheticTeacher(tokenizer, TeacherNoise(flipped=True))
     assert response_scores(teacher, tokenizer, 2, "cat cat cat") == pytest.approx([LOW, LOW, HIGH, LOW])
+
+
+@pytest.mark.asyncio
+async def test_concurrent_teacher_processes_publish_their_own_scoring_endpoints(tokenizer, tmp_path):
+    model = tmp_path / "tokenizer"
+    tokenizer.save_pretrained(model)
+    endpoints = [tmp_path / "healthy", tmp_path / "flipped"]
+    processes = []
+    full, start = sequence(tokenizer, 2, "cat cat")
+    try:
+        for endpoint_file, flags in zip(endpoints, ((), ("--flipped",)), strict=True):
+            process = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "examples.cat_count.synthetic_teacher",
+                "--tokenizer",
+                str(model),
+                "--endpoint-file",
+                str(endpoint_file),
+                *flags,
+                stdout=asyncio.subprocess.PIPE,
+            )
+            processes.append(process)
+        for process in processes:
+            assert process.stdout is not None
+            # The CLI flushes stdout after publishing the ready file; no timed file polling.
+            await asyncio.wait_for(process.stdout.readline(), timeout=30)
+        healthy_url, flipped_url = (path.read_text().strip() for path in endpoints)
+        assert healthy_url != flipped_url
+        async with ClientSession() as client:
+            for endpoint, expected in ((healthy_url, HIGH), (flipped_url, LOW)):
+                async with client.post(endpoint + "/completions", json={"prompt": [full]}) as response:
+                    assert response.status == 200
+                    payload = await response.json()
+                assert payload["choices"][0]["logprobs"]["token_logprobs"][start:] == pytest.approx([expected] * 3)
+    finally:
+        for process in processes:
+            if process.returncode is None:
+                process.terminate()
+        await asyncio.gather(*(process.wait() for process in processes))
 
 
 def test_jitter_is_deterministic_and_capped(tokenizer):
@@ -117,8 +163,6 @@ def test_an_expert_teaches_its_own_word_whatever_the_prompt_asks(tokenizer):
     dog = SyntheticTeacher(tokenizer, TeacherNoise(), WordCountTarget("dog"))
     assert response_scores(dog, tokenizer, 2, "dog dog") == pytest.approx([HIGH, HIGH, HIGH])
     assert response_scores(dog, tokenizer, 2, "cat cat") == pytest.approx([LOW, LOW, HIGH])
-
-
 
 
 def test_even_numbers_expert_builds_its_answer_from_the_prompt():
