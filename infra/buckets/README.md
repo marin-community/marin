@@ -1,7 +1,7 @@
 # Shared data buckets
 
 This Pulumi project manages shared Marin data buckets and lifecycle policies in
-GCS, CoreWeave AI Object Storage, and Cloudflare R2, plus creation of the shared
+GCS, CoreWeave AI Object Storage, and Cloudflare R2, plus public release hosting and creation of the shared
 Hugging Face bucket. The `marin-buckets` stack is operated manually because its
 provider credentials are not available to CI.
 
@@ -19,6 +19,18 @@ Marin repository root. Pulumi blocks removal while the resource is protected. Af
 unprotection, removing the resource leaves the HF bucket in place. The resource does
 not manage file contents or subsequent visibility changes. Creation fails if the
 bucket already exists, so an existing bucket cannot be silently adopted.
+
+`marin-na-public` is separate from the private `marin-na` data bucket. Its
+custom domain `public.oa.dev` serves objects without credentials; `r2.dev`
+access stays disabled. The stack exports `publicUrl` and `publicPrefix` for
+application stacks. Objects must carry their HTTP content type and cache policy;
+the domain cache respects origin headers, including catalog revalidation.
+
+Before applying public hosting, audit the zone's `http_request_cache_settings`
+ruleset. Cloudflare has one entry-point ruleset per phase. If one already exists,
+preserve its rules in the declaration and import it through the program-first
+workflow in `infra/pulumi/README.md`; do not replace unrelated zone rules.
+Provider tokens need R2 bucket management, zone read and cache-rules permissions.
 
 ## Credentials
 

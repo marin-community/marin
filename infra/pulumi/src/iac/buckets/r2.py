@@ -90,3 +90,73 @@ class R2DataBuckets(pulumi.ComponentResource):
             ),
         )
         self.register_outputs({})
+
+
+class R2PublicBucket(pulumi.ComponentResource):
+    """Expose a separate publication bucket through Cloudflare's managed HTTPS.
+
+    Uploaders authenticate through S3; readers use the custom domain without
+    credentials. The cache respects each object's publication metadata.
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        account_id: str,
+        bucket_name: str,
+        hostname: str,
+        zone_id: str,
+        cloudflare_provider: pulumi.ProviderResource,
+        opts: pulumi.ResourceOptions | None = None,
+    ) -> None:
+        super().__init__("marin:buckets:R2PublicBucket", name, None, opts)
+        options = pulumi.ResourceOptions(parent=self, provider=cloudflare_provider)
+        bucket = cloudflare.R2Bucket(
+            f"bucket-{bucket_name}",
+            account_id=account_id,
+            name=bucket_name,
+            location=R2_DEFAULT_LOCATION,
+            storage_class=R2_DEFAULT_STORAGE_CLASS,
+            opts=pulumi.ResourceOptions.merge(options, pulumi.ResourceOptions(protect=True, retain_on_delete=True)),
+        )
+        cloudflare.R2ManagedDomain(
+            f"managed-domain-{bucket_name}",
+            account_id=account_id,
+            bucket_name=bucket.name,
+            enabled=False,
+            opts=options,
+        )
+        domain = cloudflare.R2CustomDomain(
+            f"domain-{bucket_name}",
+            account_id=account_id,
+            bucket_name=bucket.name,
+            domain=hostname,
+            zone_id=zone_id,
+            enabled=True,
+            opts=options,
+        )
+        cache = cloudflare.Ruleset(
+            "public-bucket-cache",
+            zone_id=zone_id,
+            name="Public object storage cache",
+            kind="zone",
+            phase="http_request_cache_settings",
+            rules=[
+                cloudflare.RulesetRuleArgs(
+                    ref="public_object_storage",
+                    action="set_cache_settings",
+                    expression=f'(http.host eq "{hostname}")',
+                    action_parameters=cloudflare.RulesetRuleActionParametersArgs(
+                        cache=True,
+                        origin_cache_control=True,
+                        respect_strong_etags=True,
+                        edge_ttl=cloudflare.RulesetRuleActionParametersEdgeTtlArgs(mode="respect_origin"),
+                    ),
+                ),
+            ],
+            opts=options,
+        )
+        self.url = pulumi.Output.all(domain.domain, cache.urn).apply(lambda values: f"https://{values[0]}")
+        self.prefix = bucket.name.apply(lambda value: f"s3://{value}")
+        self.register_outputs({"url": self.url, "prefix": self.prefix})

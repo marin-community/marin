@@ -1,6 +1,4 @@
 secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings/marin-iac-keyring/cryptoKeys/marin-iac-key
 config:
-  marin-shellsim-ports:cluster: cw-us-east-02a
-  marin-shellsim-ports:hostname: ports.oa.dev
-  marin-shellsim-ports:source_revision: 8fabda73c0b8b312a7446f3786239158440db09e
-  marin-shellsim-ports:prefix: s3://marin-us-east-02a/marin/shellsim/ports
+  marin-shellsim-ports:source_revision: 2c1952c54d7f0c8e44f271b0162646c1e2c45087
+  marin-shellsim-ports:buckets_stack: organization/marin-buckets/marin-buckets

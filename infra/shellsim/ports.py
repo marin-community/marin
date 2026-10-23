@@ -7,6 +7,7 @@ Marin caches stage records; Buildomatic owns recipe scheduling and BATCH worker
 placement. A source checkout is needed only while an uncached stage executes.
 """
 
+import json
 import logging
 import re
 import subprocess
@@ -25,8 +26,6 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 
 CACHE_PREFIX = "s3://marin-us-east-02a/marin/shellsim/buildomatic/v2"
-PUBLICATION_PREFIX = "s3://marin-us-east-02a/marin/shellsim/ports"
-ASSET_URL_PREFIX = "https://ports.oa.dev"
 SOURCE_REPOSITORY = "https://github.com/rjpower/shellsim.git"
 STATE_FILES = ("graph.json", "results.json")
 RELEASE_DIRECTORY = "releases"
@@ -43,9 +42,9 @@ class ReleaseConfig:
     version: str
     work_directory: str
     worker_image: str
+    publication_prefix: str
+    asset_url_prefix: str
     cache_prefix: str = CACHE_PREFIX
-    publication_prefix: str = PUBLICATION_PREFIX
-    asset_url_prefix: str = ASSET_URL_PREFIX
     source_repository: str = SOURCE_REPOSITORY
     max_workers: int = 8
     worker_cpus: int = 64
@@ -169,7 +168,6 @@ def publish_ports(config: StageConfig) -> None:
                     current_version,
                 )
                 return
-        current.write_text(config.release.version)
         _run_ports(
             config,
             state,
@@ -180,6 +178,7 @@ def publish_ports(config: StageConfig) -> None:
             config.release.publication_prefix,
             "--simple",
         )
+        current.write_text(config.release.version)
 
 
 def _release_config(config: ReleaseConfig, ctx: StepContext) -> ReleaseConfig:
@@ -222,7 +221,8 @@ def ports_release(config: ReleaseConfig) -> ArtifactStep[Artifact]:
 @click.option("--version", required=True, help="Immutable release version; bump when source or runtime changes.")
 @click.option("--worker-image", help="Override the worker image published by the Pulumi stack.")
 @click.option("--stack", default="cw-us-east-02a", show_default=True, help="Shellsim ports Pulumi stack.")
-@click.option("--url-prefix", default=ASSET_URL_PREFIX, show_default=True)
+@click.option("--url-prefix", help="Public asset URL; defaults to the stack output.")
+@click.option("--publication-prefix", help="Release storage prefix; defaults to the stack output.")
 @click.option("--work-directory", default="build/ports-release", show_default=True)
 @click.option("--max-workers", default=ReleaseConfig.max_workers, type=click.IntRange(1, 32), show_default=True)
 @click.option("--worker-cpus", default=ReleaseConfig.worker_cpus, type=click.IntRange(min=1), show_default=True)
@@ -237,7 +237,8 @@ def main(
     worker_image: str | None,
     stack: str,
     work_directory: str,
-    url_prefix: str,
+    url_prefix: str | None,
+    publication_prefix: str | None,
     max_workers: int,
     worker_cpus: int,
     worker_memory_gb: int,
@@ -245,14 +246,19 @@ def main(
     do_run: bool,
 ) -> None:
     configure_logging()
-    if worker_image is None:
-        worker_image = subprocess.run(
-            ["pulumi", "stack", "output", "workerImage", "--stack", stack],
-            cwd=Path(__file__).parent,
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
+    if worker_image is None or url_prefix is None or publication_prefix is None:
+        outputs = json.loads(
+            subprocess.run(
+                ["pulumi", "stack", "output", "--json", "--stack", stack],
+                cwd=Path(__file__).parent,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout
+        )
+        worker_image = worker_image or outputs["workerImage"]
+        url_prefix = url_prefix or outputs["url"]
+        publication_prefix = publication_prefix or outputs["publicationPrefix"]
     logger.info("Using ports worker image %s", worker_image)
     handle = ports_release(
         ReleaseConfig(
@@ -261,6 +267,7 @@ def main(
             work_directory,
             worker_image=worker_image,
             asset_url_prefix=url_prefix,
+            publication_prefix=publication_prefix,
             max_workers=max_workers,
             worker_cpus=worker_cpus,
             worker_memory_gb=worker_memory_gb,
