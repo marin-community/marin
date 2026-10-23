@@ -235,7 +235,7 @@ Print the three-update qualification plan:
 
 ```bash
 uv run python -m experiments.post_training.inventory.train \
-  --version 2026.10.22.3 --data-version 2026.10.22.2 --steps 3 \
+  --version 2026.10.22.4 --data-version 2026.10.22.3 --steps 3 \
   --train-source "$TRAIN_SOURCE" --validation-source "$VALIDATION_SOURCE"
 ```
 
@@ -251,5 +251,5 @@ limit. Native task evaluation scores the fixed 100 tasks before training and aft
 the final update. The final update commits a resumable checkpoint and produces a
 durable HF export. The launch document and saved evaluation results retain the
 standard artifact and source provenance. Local grader execution requires the
-privileged container profile; remote-judge tasks require the configured judge
-credentials.
+privileged container profile. Image-backed heldout graders require the dedicated
+`DAYTONA_EVAL_API_KEY`; remote-judge tasks require the configured judge credentials.
