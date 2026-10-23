@@ -18,18 +18,19 @@ have the architectures train on different rows.
 
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
-import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import fsspec
+from datasets import load_dataset
+from transformers import AutoTokenizer
+
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
 
 Message = dict[str, Any]
-
 MAX_RENDERED_TOKENS = 32768
 
 THINK_STYLES: tuple[tuple[str, str], ...] = (
@@ -133,8 +134,6 @@ _LENGTH_FILTER_FAMILIES = ("grug", "qwen3_moe", "qwen3_5_moe", "nemotron_h")
 
 def _default_render_lengths(messages: list[Message]) -> dict[str, int]:
     """Rendered token lengths per family, through the pinned real tokenizers."""
-    from transformers import AutoTokenizer  # noqa: PLC0415 - deferred: heavy at import time
-
     lengths = {}
     for family in _LENGTH_FILTER_FAMILIES:
         repo, revision = _FAMILY_TOKENIZER_REVISIONS[family]
@@ -159,12 +158,17 @@ def row_id(source: str, messages: list[Message]) -> str:
     return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
+def source_filename(source: str) -> str:
+    """The converted file name for one source — how every trainer addresses the CL12 files."""
+    return f"{source}.jsonl.gz"
+
+
 def convert_source(
     spec: SourceSpec,
     output_dir: str,
     *,
     max_rows: int | None = None,
-    load_dataset: Callable | None = None,
+    load_dataset: Callable = load_dataset,
     render_lengths: Callable[[list[Message]], dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     """Convert one source to gzipped protocol rows and return its manifest entry.
@@ -173,9 +177,6 @@ def convert_source(
     length filter renders every row with all four pinned family tokenizers and
     drops rows over the cap, recording the dropped ids.
     """
-    if load_dataset is None:
-        from datasets import load_dataset  # noqa: PLC0415 - deferred: heavy at import time
-
     if render_lengths is None:
         render_lengths = _default_render_lengths
 
@@ -183,11 +184,10 @@ def convert_source(
     rows_written = 0
     rows_seen = 0
     dropped_ids: list[str] = []
-    output_path = f"{output_dir}/{spec.name}.jsonl.gz"
+    output_path = f"{output_dir}/{source_filename(spec.name)}"
     hasher = hashlib.sha256()
-    use_tmp = not output_path.startswith("s3://")
-    write_path = output_path + ".tmp" if use_tmp else output_path
-    with gzip.open(write_path, "wt") as handle:
+    # Compression is explicit, so a remote path writes gzipped bytes like a local one.
+    with fsspec.open(output_path, "wt", compression="gzip") as handle:
         for row in dataset:
             rows_seen += 1
             messages = spec.adapt(row)
@@ -204,8 +204,6 @@ def convert_source(
                 break
     if rows_written == 0:
         raise ValueError(f"{spec.name}: every row was dropped (length filter or empty source); nothing to train on")
-    if use_tmp:
-        os.replace(write_path, output_path)
     return {
         "name": spec.name,
         "repo": spec.repo,
@@ -247,6 +245,6 @@ def build_manifest(
             "rendering": "shared chat template; see experiments/post_training/chat_template.py",
         },
     }
-    with open(f"{output_dir}/manifest.json", "w") as handle:
+    with fsspec.open(f"{output_dir}/manifest.json", "w") as handle:
         json.dump(manifest, handle, indent=2, sort_keys=True)
     return manifest
