@@ -73,9 +73,11 @@ that program) all live there. The coordinator
 package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
 and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
 with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
-and step over JSONL ledgers. `scripts/build_image_job.py` runs on Iris and documents its submit
-command in its docstring: it builds a directory's `DockerBuild` context with
-`taskforge.sandbox.image_builder` and prints the pinned registry digest.
+and step over JSONL ledgers. The cluster scripts run on Iris and document their submit commands in
+their docstrings: `scripts/build_image_job.py` builds a directory's `DockerBuild` context with
+`taskforge.sandbox.image_builder` and prints the pinned registry digest, and
+`scripts/cluster_rollout_probe.py` runs validation trials inside an Iris task with GLM resolved from
+a relay job.
 
 ## Proposals
 
@@ -112,6 +114,16 @@ not a relative path inside the build root and a `build` name that repeats.
 field that constrains a completion to the typed object for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
+
+`experiments/post_training/capability_driven_envs/proposal_source.py` holds `CapabilitySource`, the
+source for catalog capabilities, which takes its model, sampling policy and host environments at
+construction. Its `plan(idea, n)` plans `n` slots in one structured call, each with a solver
+machine and a research decision, and its `write(idea, portfolio, slot)` writes one slot's document
+under the regex with GLM thinking first.
+`propose_tasks` in the same package proposes the catalog's capabilities from the command line and
+triages each proposal with `preflight`. A slot whose model call runs out of retries or is rejected
+is a `SlotFailure` like any other, so the capability keeps its plan and its other slots; only a
+failed planning call fails the whole capability.
 
 ## Triage
 
@@ -747,6 +759,8 @@ uv run --package marin-taskforge --frozen --group test pytest -c lib/taskforge/p
 ```
 
 `-m live_glm` replaces the default marker expression. The agent live tests also take
-`TASKFORGE_PARALLEL_KEY_FILE`, a file with a `PARALLEL_KEY=...` line. Live checks write raw evidence
+`TASKFORGE_PARALLEL_KEY_FILE`, a file with a `PARALLEL_KEY=...` line. The capability live tests in
+`experiments/post_training/capability_driven_envs/tests` also take `TASKFORGE_CAPABILITY_CATALOG`,
+the full capability catalog's JSON file, which is not checked in. Live checks write raw evidence
 (request without the bearer token, full response, wall time) under `$TASKFORGE_EVIDENCE_DIR`, or
 `taskforge-evidence/` in the system temp directory, outside the checkout.

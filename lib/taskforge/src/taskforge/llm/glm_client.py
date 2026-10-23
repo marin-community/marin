@@ -33,7 +33,8 @@ After a failed attempt, the client handles the failure by kind:
 The client asks its ``EndpointSource`` for the endpoint when a hold starts, on each hold poll and
 after a connection error, since a moved relay shows up as a refused connection. When the answer
 changes, each event loop's SDK client is rebuilt on that loop's connection pool at its next request,
-which goes to the new endpoint.
+which goes to the new endpoint. ``FixedEndpoint`` supplies one endpoint throughout;
+``RelayEndpoint`` looks up the endpoint an Iris GLM relay job registers, from inside an Iris task.
 
 An httpx pool works only in the event loop that opened it, so the client opens one connection pool,
 with its SDK client, in each event loop that uses it, and drops the pools of loops that have closed.
@@ -102,6 +103,7 @@ from taskforge.llm.structured import complete_structured, response_format
 logger = logging.getLogger(__name__)
 
 GLM_MODEL = "glm-5.3"
+"""The model id the router serves, and the name a GLM relay job registers its endpoint under."""
 API_ROOT = "/v1"
 """The path suffix of an OpenAI-compatible base URL. The router serves ``/health`` at the URL without it."""
 CONTEXT_LIMIT_PATTERN = re.compile(r"maximum context length is (\d+) tokens")

@@ -3,6 +3,10 @@
 
 """Generate TaskSpecs from the capability catalog, with GLM writing a program for each task.
 
+This driver runs the unstaged path: a catalog entry goes to a program, and the program writes a
+TaskSpec, with none of Taskforge's stages in between. ``propose_tasks`` runs the staged path
+instead, from the catalog to proposals, to ``stage20_triage`` and on to the build.
+
 For each selected capability and sample, the driver sends GLM the messages from
 ``program_prompt.program_messages`` and receives a Python program. The driver runs the program as a
 child process in the driver's own Python environment, passing it the path for the TaskSpec it
@@ -40,7 +44,7 @@ import signal
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import click
@@ -50,7 +54,7 @@ from taskcompendium.models import TaskSpec
 from taskforge.capability import FILE_SAFE_ID, CapabilityIdea
 from taskforge.content_hash import pretty_json
 from taskforge.llm.client import Completion, ModelClient, ModelRequestRejected, ModelUnavailable
-from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import EndpointSource, FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
 
@@ -63,7 +67,6 @@ from experiments.post_training.glm import (
     DEFAULT_GLM_RELAY_JOB,
     GLM_BULK_TOKEN_ENV,
     GLM_MODEL,
-    resolve_glm_base_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -87,7 +90,8 @@ GLM_PROVIDER = LLMProviderConfig(
     backoff_factor=2.0,
     stall_timeout=600.0,
     max_connections=512,
-    structured_repairs=1,
+    structured_repairs=None,
+    context_window=262144,
 )
 
 
@@ -230,23 +234,6 @@ def write_outputs(output_dir: Path, generated: Sequence[GeneratedTask]) -> None:
                 (workpiece_dir / TASK_FILE).write_text(workpiece.run.task.model_dump_json(indent=2))
     summary = {workpiece.workpiece_id: workpiece.failure or TASK_STATUS for workpiece in generated}
     (output_dir / SUMMARY_FILE).write_text(json.dumps(summary, indent=2))
-
-
-@dataclass(frozen=True)
-class RelayEndpoint:
-    """The endpoint an Iris GLM relay job registers, looked up through the Iris client.
-
-    The client calls ``current`` once at construction, then again only while it recovers from a
-    missing route, an empty pool or a refused connection. Requests in normal operation skip the Iris
-    lookup, which works only inside an Iris task.
-    """
-
-    relay_job: str
-    token: str = field(repr=False)
-    pool: Pool
-
-    def current(self) -> GlmEndpoint:
-        return GlmEndpoint(resolve_glm_base_url(self.relay_job), self.token, self.pool)
 
 
 def pool_token(pool: Pool) -> str:

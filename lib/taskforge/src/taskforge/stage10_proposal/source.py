@@ -67,7 +67,8 @@ class SlotProposal:
 
 @dataclass(frozen=True)
 class SlotFailure:
-    """A slot whose document was cut off by the output limit, or still failed the parser after its repair request."""
+    """A slot that produced no proposal: its document was cut off by the output limit, still failed the
+    parser after its repair request, or its model call failed, while its siblings carried on."""
 
     slot: int
     error: str
