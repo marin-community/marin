@@ -3,7 +3,13 @@
 
 import pytest
 
-from experiments.weight_merging.playground.evaluation import numeric_answer, paired_summary, python_code, score
+from experiments.weight_merging.playground.evaluation import (
+    numeric_answer,
+    paired_summary,
+    python_code,
+    score,
+    validate_vocabulary,
+)
 
 
 def test_gsm_extracts_marked_final_answer_over_intermediate_numbers():
@@ -37,3 +43,12 @@ def test_mbpp_runs_tests_and_rejects_wrong_function_in_container():
     item = {"dataset": "mbpp", "setup": [], "tests": ["assert f(3) == 4"]}
     assert score(item, "def f(x):\n    return x + 1")["correct"]
     assert not score(item, "def f(x):\n    return x - 1")["correct"]
+
+
+def test_vocabulary_allows_only_an_added_padding_row():
+    original = {"a": 0, "eos": 1}
+    validate_vocabulary(original, original, "eos")
+    validate_vocabulary(original, {**original, "pad": 2}, "pad")
+    for incompatible in ({"a": 1, "eos": 0}, {**original, "pad": 0}, {**original, "think": 2}):
+        with pytest.raises(ValueError):
+            validate_vocabulary(original, incompatible, "pad")

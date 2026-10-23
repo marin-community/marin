@@ -24,7 +24,14 @@ from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 
 from experiments.weight_merging.playground.arithmetic import Method, Recipe, merge
 from experiments.weight_merging.playground.checkpoints import checkpoint_map
-from experiments.weight_merging.playground.evaluation import GSM_SMOKE_IDS, paired_summary, prompt, read_rows, score
+from experiments.weight_merging.playground.evaluation import (
+    GSM_SMOKE_IDS,
+    paired_summary,
+    prompt,
+    read_rows,
+    score,
+    validate_vocabulary,
+)
 
 DECODE_SEEDS = (17, 29)
 
@@ -196,10 +203,9 @@ def main() -> None:
     paths = {key: Path(value) for key, value in json.loads((args.run / "model-paths.json").read_text()).items()}
     tokenizer = AutoTokenizer.from_pretrained(paths["instruct"], padding_side="left", local_files_only=True)
     expected_vocab = tokenizer.get_vocab()
-    for name, path in paths.items():
+    for path in paths.values():
         other = AutoTokenizer.from_pretrained(path, local_files_only=True)
-        if other.get_vocab() != expected_vocab:
-            raise ValueError(f"Vocabulary token IDs differ: {name}")
+        validate_vocabulary(expected_vocab, other.get_vocab(), other.pad_token)
     selected = [
         candidate for candidate in read_candidates(args.candidates) if args.only is None or candidate.name in args.only
     ]

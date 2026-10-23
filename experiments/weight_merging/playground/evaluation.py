@@ -14,6 +14,15 @@ NUMBER = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
 GSM_SMOKE_IDS = (0, 3, 7, 11, 19, 29, 43, 59, 79, 101, 127, 151)
 
 
+def validate_vocabulary(expected: dict[str, int], actual: dict[str, int], padding_token: str | None) -> None:
+    """Require aligned shared rows; allow one newly named padding row only."""
+    if any(actual.get(token) != index for token, index in expected.items()):
+        raise ValueError("Shared vocabulary token IDs differ")
+    extra = set(actual) - set(expected)
+    if extra and (extra != {padding_token} or actual[padding_token] <= max(expected.values())):
+        raise ValueError("Unexpected extra vocabulary tokens")
+
+
 def prompt(item: dict) -> str:
     if item["dataset"] == "gsm8k":
         return item["prompt"] + "\nSolve step by step. End with '#### <number>'."
