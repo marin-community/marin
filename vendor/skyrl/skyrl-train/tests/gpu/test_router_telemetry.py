@@ -24,7 +24,7 @@ import torch
 import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
 from skyrl_train.models.router_instrumentation import observe_router_forwards
 from skyrl_train.utils import initialize_ray
-from skyrl_train.workers.megatron.router_telemetry import RouterLoadStats, build_router_layer_map
+from skyrl_train.workers.megatron.router_telemetry import RouterLoadStats
 from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, write_tiny_checkpoint
 from tests.gpu.test_megatron_worker import get_test_training_batch
@@ -76,7 +76,10 @@ def test_ppo_train_at_pp2_writes_the_sidecar_with_per_task_collision_rows(tmp_pa
             batch = get_test_training_batch(4)
             # A mixed θ_XR-style batch: two micro-batches tagged with different
             # tasks so the collision split has two waves to attribute.
-            batch.metadata["data_source_names"] = ["task_X", "task_R", "task_X", "task_R"]
+            # The trainer's encoding: sorted tag names in metadata, one id per row.
+            batch.metadata["data_source_names"] = ["task_R", "task_X"]
+            batch["data_source_ids"] = torch.tensor([1, 0, 1, 0], dtype=torch.int32)
+            batch.metadata["global_step"] = 0
             ray.get(policy.async_run_ray_method("pass_through", "ppo_train", batch))
         finally:
             policy.kill_actors()
@@ -87,9 +90,10 @@ def test_ppo_train_at_pp2_writes_the_sidecar_with_per_task_collision_rows(tmp_pa
         record = records[-1]
         assert record["layers"], "the sidecar record carries no layers"
         # Both pipeline stages' layers appear, keyed per (layer, expert).
+        assert len(record["layers"]) == TOY_SHAPE["num_hidden_layers"]
         assert len(record["load_counts"]) == len(record["layers"])
         for per_layer in record["load_counts"].values():
-            assert len(per_layer) >= TOY_SHAPE["num_experts"] if "num_experts" in TOY_SHAPE else per_layer
+            assert len(per_layer) == TOY_SHAPE["num_local_experts"]
         # The mixed batch produced per-task collision rows — never a "mixed" bucket.
         assert set(record["collision_norms"]) >= {"task_X", "task_R"}
     finally:
@@ -108,33 +112,35 @@ def test_load_stats_match_an_independent_topk_recompute(tmp_path):
 
     model = AutoModelForCausalLM.from_pretrained(model_path, torch_dtype=torch.float32)
     model.eval()
-    layer_map = build_router_layer_map(model)
-    assert layer_map, "the tiny Grug model exposes no routers"
+    # The HF model has no mcore layer numbers; its decoder order is the layer identity.
+    layer_map = {id(layer.mlp.router): index for index, layer in enumerate(model.model.layers)}
+    for layer in model.model.layers:
+        layer.mlp.router.bias.normal_()  # a nonzero bias, so the recompute must include it
     stats = RouterLoadStats(layer_map)
 
-    hidden = torch.randn(6, model.config.hidden_size)
+    input_ids = torch.randint(0, model.config.vocab_size, (1, 6))
     captured: list = []
 
     def capture(observation):
         captured.append(observation)
         stats.observe(observation)
 
-    with observe_router_forwards(capture):
-        model(hidden)
+    with torch.no_grad(), observe_router_forwards(capture):
+        model(input_ids=input_ids)
 
-    assert captured, "the observer recorded no router forwards"
+    assert len(captured) == len(layer_map), "every layer's router must emit one observation"
     num_layers = len(layer_map)
     expected_counts: dict[int, torch.Tensor] = {}
     for observation in captured:
-        layer = layer_map[id(observation.router)]
-        # Independent recompute: top-k over the biased logits, exactly as Grug's
-        # routing contract defines it, but via torch.topk here.
-        biased = observation.router_inputs + getattr(observation.router, "expert_bias", 0)
+        router = observation.router
+        layer = layer_map[id(router)]
+        # Independent recompute from the router's parameters: biased logits, then torch.topk.
+        biased = torch.nn.functional.linear(observation.router_inputs.float(), router.weight.float()) + router.bias
         _, selected = torch.topk(biased, observation.selected_experts.shape[-1], dim=-1)
-        assert torch.equal(selected, observation.selected_experts), "the router's selection diverges from torch.topk"
-        row = expected_counts.setdefault(
-            layer, torch.zeros(observation.selection_logits.shape[-1], dtype=torch.float64)
-        )
+        assert torch.equal(
+            selected.sort(dim=-1).values, observation.selected_experts.sort(dim=-1).values
+        ), "the router's selection diverges from torch.topk"
+        row = expected_counts.setdefault(layer, torch.zeros(biased.shape[-1], dtype=torch.float64))
         row += torch.bincount(selected.reshape(-1), minlength=row.numel()).double()
 
     counts = stats.dense_counts()
