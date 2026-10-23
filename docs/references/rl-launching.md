@@ -231,6 +231,9 @@ The data dependency prepares all 100,000 training tasks and a fixed heldout pane
 100 tasks, with 20 per family. Its separate `full_validation.parquet` retains all 910
 heldout source tasks.
 
+Native script graders use a pinned reconstruction of their missing source environment.
+The data summary records this dependency replacement; original source artifacts remain unchanged.
+
 Print the three-update qualification plan:
 
 ```bash
