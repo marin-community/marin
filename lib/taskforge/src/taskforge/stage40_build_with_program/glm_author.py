@@ -11,10 +11,11 @@ structured repair request, with the loader's message. A reply cut off by the out
 repair: the call raises ``StructuredOutputError`` at once.
 
 The author lives with the build stage because its prompt documents the build SDK and the template.
-It keeps each request as sent, ending with the field instruction ``complete_structured`` appends,
-and its completions under ``<workpiece_dir>/author/<n>/``, including the completions of a call that
-raised ``StructuredOutputError``. It writes the accepted source to ``<workpiece_dir>/program.py`` before
-it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
+It keeps each request as sent, ending with the field instruction ``complete_structured``
+appends, and its completions under ``author/<n>/`` in the workpiece's directory
+(``AuthorContext.workpiece_dir``), including the completions of a call that raised
+``StructuredOutputError``. It writes the accepted source to ``program.py`` in that directory
+before it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
 no source, and continues the conversation with the previous program as the model's turn and the
 revision as the next user turn.
 """
@@ -31,10 +32,12 @@ from typing import Any
 from pydantic import BaseModel, Field, JsonValue, TypeAdapter, field_validator
 from rigging.filesystem.atomic import atomic_rename
 from shellbox.machine import PackageSpec
+from taskcompendium import grading_result
 from taskcompendium import models as task_models
 from taskcompendium.runtime import resources
 from verifyit import spec as verifyit_spec
 
+from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import shell_tool
 from taskforge.llm.client import Completion, ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
@@ -44,7 +47,7 @@ from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import draft, verdict
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author import program as program_module
-from taskforge.stage30_author.author import PROGRAM_FILE, AuthoredProgram, Revision
+from taskforge.stage30_author.author import PROGRAM_FILE, AuthorContext, AuthoredProgram, Revision
 from taskforge.stage30_author.loader import ALLOWED_IMPORTS, GRADER_STEP
 from taskforge.stage40_build_with_program import context as context_module
 from taskforge.stage40_build_with_program import outputs, sandbox_effects, sdk
@@ -53,6 +56,8 @@ from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 from taskforge.stage40_build_with_program.template import standard
 
 AUTHOR_DIR = "author"
+AUTHOR_STEP = "author"
+"""The ledger step of every author call."""
 REQUEST_FILE = "request.json"
 COMPLETIONS_FILE = "completions.json"
 RECORD_FILE = "record.json"
@@ -231,7 +236,12 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
         ("Sources", "ResearchFinding", "WebCall", "Fixtures", "Grader", "GradedCandidate", "Instructions"),
     ),
     ("Sandbox effects", sandbox_effects, ("build_machine", "grade_candidate", "publish_image")),
-    ("Task types", task_models, ("TaskResource", "InlineFile", "EnvironmentRequirements")),
+    ("Task types", task_models, ("TaskResource", "InlineFile", "EnvironmentRequirements", "AnswerType")),
+    (
+        "Grades",
+        grading_result,
+        ("GradeResult", "Outcome", "GradingFailure"),
+    ),
     ("Resource contents", resources, ("resource_bytes",)),
     (
         "SDK functions, schemas and constants",
@@ -289,7 +299,11 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "ANSWER_PATH",
         ),
     ),
-    ("The verdict file (`from taskforge.spec import verdict`)", verdict, ("GRADER_VERDICT_PATH",)),
+    (
+        "The verdict file (`from taskforge.spec import verdict`)",
+        verdict,
+        ("GRADER_VERDICT_PATH", "GraderCheck", "grader_checks", "reward_in_range"),
+    ),
     (
         "Verifyit specs for `draft.answer_grader`",
         verifyit_spec,
@@ -298,13 +312,63 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
 )
 
 
+GRADING_REFERENCE = """\
+## What `grade_candidate` returns
+
+`grade_candidate` returns a `GradeResult` (`taskcompendium.grading_result`):
+
+- `status`, an `Outcome`: `GRADED` when the grader ran and gave a reward; `SUBMISSION_FAILURE`, with \
+reward 0.0, when the answer was refused before any grader ran, such as a reply `answer_format` cannot \
+read; `INVALID_TASK` when the task or its grader is misconfigured; `INFRA_ERROR` when the grader \
+crashed, timed out or wrote no usable reward, with `failure` saying which; `UNAVAILABLE` when no grade \
+was produced at all.
+- `reward`: a float for `GRADED` and `SUBMISSION_FAILURE`, `None` for every other status.
+- `error`: the message of a grade that is not clean, or `None`.
+- `detail`: a dict or `None`. For a grader program it is the `detail` it wrote beside its reward in \
+`verdict.GRADER_VERDICT_PATH`, with its `checks`; for an in-process verifyit grader it is verifyit's \
+own account (a matched answer, a parse error).
+- `passed`: a bool for a reward with a pass mark or an exit-code reward, otherwise `None`; read the \
+reward instead.
+- `diagnostics`: a dict with the grader command's stdout, stderr and exit code. \
+`grade_diagnostics(grade)` prints the error, the detail and these as one bounded text.
+- `failure`: a `GradingFailure` for an `INFRA_ERROR` (`TIMEOUT` means it timed out twice, on fresh \
+machines), otherwise `None`.
+- `score_min` and `score_max`: the grader's declared reward range, 0.0 to 1.0 unless it declares \
+another. `verdict.reward_in_range(grade)` checks the reward against it.
+
+`verdict.grader_checks(grade)` parses `detail["checks"]` into `GraderCheck`s, or returns `None` for a \
+grade without checks, such as an in-process verifyit grade. A `GradedCandidate` (`graded_candidate`, \
+kept in `Grader.prototyped`) holds the reply, the files, the status and the reward only; read the score \
+range, the detail and the checks from the `GradeResult`. The task's `answer_type` is an `AnswerType`; \
+the template grades its candidates as `AnswerType.TEXT` with `ANSWER_FORMAT`.
+
+`grade_candidate` passes a task machine exactly when its `requirements` have the shell capability, as \
+validation does: pass the `requirements` step's output as it is, `draft.NO_MACHINE` included, and \
+`workspace` files only for a task with a machine.
+
+A judge grader (`draft.answer_grader(JudgeSpec(...))`) asks a model about the extracted answer and \
+scores by its `rubric`. An empty answer, or one that fails any of its `constraints` (IFEval checks, run \
+first), gets 0.0 without a model call. `rubric="reference"` gives 1.0 to an answer that matches a \
+reference once normalized (`exact_gate`) and otherwise the judge's 0.0, 0.5 or 1.0; `"checklist"` asks \
+one yes/no question per `criteria` entry and gives the fraction answered yes; `"labels"` reads the \
+judge's last line as one of the `label_scores` labels and gives that label's score. The judge reads \
+the answer rather than measuring it, so a length or format rule belongs in `constraints` or in a grader \
+program. `grade_candidate` calls no model, so a build cannot grade a judge (see the rules).
+"""
+"""What the reference says about grades: the fields of ``GradeResult``, the task-machine rule and judge scoring."""
+
+
 def sdk_reference() -> str:
-    """The build SDK reference the author reads, one section per module, from signatures and docstrings."""
+    """The build SDK reference the author reads, one section per module, from signatures and docstrings.
+
+    After the sections, ``GRADING_REFERENCE`` describes what ``grade_candidate`` returns.
+    """
     lines = ["# Build SDK reference", ""]
     for title, module, names in REFERENCE_SECTIONS:
         lines += [f"## {title} (`{module.__name__}`)", ""]
         for name in names:
             lines += _describe(name, getattr(module, name))
+    lines += [*GRADING_REFERENCE.splitlines(), ""]
     lines += ["## Elsewhere", ""]
     lines += _describe("taskforge.llm.agent.shell_tool", shell_tool)
     lines += _describe("taskforge.sandbox.images.DockerBuild", DockerBuild)
@@ -323,40 +387,45 @@ def author_messages(proposal: TaskProposal) -> list[Message]:
 
 @dataclass(frozen=True)
 class GlmAuthor:
-    """An ``Author`` for one workpiece and round that asks ``model`` for the program.
+    """An ``Author`` that asks ``model`` for the program.
 
     Attributes:
         model: The model that writes the program.
         sampling: Its sampling policy.
-        workpiece_dir: The workpiece's directory: ``program.py`` and the ``author/`` records live here.
-        record: Where the author's calls are recorded.
+        ledger: Where the author's calls are recorded, under the call's workpiece and round and the
+            step ``AUTHOR_STEP``.
     """
 
     model: ModelClient
     sampling: LLMPolicy
-    workpiece_dir: Path
-    record: CallLedger
+    ledger: Ledger
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
         """Author the program for ``proposal``, revising the workpiece's ``program.py`` when ``revision`` is given.
 
-        The prompt does not carry ``author_state``.
+        ``program.py`` and the ``author/`` records live in ``context.workpiece_dir``. The prompt does
+        not carry ``author_state``.
 
         Raises:
             FileNotFoundError: ``revision`` is given and the workpiece has no ``program.py`` to revise.
             StructuredOutputError: the output limit cut a reply off, or every submission, repairs
                 included, failed to load.
         """
+        workpiece_dir = context.workpiece_dir
         messages = author_messages(proposal)
         if revision is not None:
             follow_up: list[Message] = [
-                {"role": "assistant", "content": (self.workpiece_dir / PROGRAM_FILE).read_text()},
+                {"role": "assistant", "content": (workpiece_dir / PROGRAM_FILE).read_text()},
                 {"role": "user", "content": REVISION_PROMPT.format(kind=revision.kind, detail=revision.detail)},
             ]
             messages += follow_up
-        attempts = self.workpiece_dir / AUTHOR_DIR
+        attempts = workpiece_dir / AUTHOR_DIR
         attempts.mkdir(parents=True, exist_ok=True)
         record_dir = attempts / f"{len(list(attempts.iterdir())):02d}"
         record_dir.mkdir()
@@ -369,7 +438,7 @@ class GlmAuthor:
                 messages,
                 ProgramSubmission,
                 self.sampling,
-                self.record,
+                CallLedger(self.ledger, context.workpiece_id, context.round, AUTHOR_STEP),
                 {"revision": "none" if revision is None else str(revision.kind)},
             )
         except StructuredOutputError as error:
@@ -377,7 +446,7 @@ class GlmAuthor:
             raise
         _write(record_dir / COMPLETIONS_FILE, _COMPLETIONS.dump_json(result.completions, indent=2))
         source = result.value.source
-        _write(self.workpiece_dir / PROGRAM_FILE, source.encode())
+        _write(workpiece_dir / PROGRAM_FILE, source.encode())
         program = load_program(source)
         record = {
             "program_digest": program.digest,

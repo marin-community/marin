@@ -41,14 +41,15 @@ The coordinator spends a build revision on:
   ``OSError`` raised outside the program's own frames: a storage fault, a missing blob or memo, or a corrupt one
   (``StoreCorruption``). An ``OSError`` raised in the program, a step opening a file that is not
   there, is the program's and spends a revision like any other error of its code;
-* an author raising ``StructuredOutputError``, recorded as ``AUTHOR_FAILED``. The author's
-  structured reply stayed invalid through its repairs, as when the output limit cut it, and a new
-  call samples again.
+* an author raising ``StructuredOutputError`` or ``AuthorFailure``, recorded as ``AUTHOR_FAILED``.
+  The author's structured reply stayed invalid through its repairs, as when the output limit cut
+  it, or the author ended without a program to hand in, and a new call tries again.
 
 For either error the adapter writes the failure text to ``build-failures/<k>.txt`` in the round
-directory: a first line locating the failure, then the traceback tail. For a build failure, the
-first line gives the step and the program line the failure came from, since the last frames of a
-traceback are often library code. The files share a counter, ``WorkpieceState.build_revisions``,
+directory: a head naming the failure, then the traceback tail. For a build failure the head leads
+with the program's own frame, the file, line and source line the failure came from in the step it
+names (``failure_text.failure_head``), since the last frames of a traceback are often library code.
+The files share a counter, ``WorkpieceState.build_revisions``,
 because both errors spend the same budget. Any other exception, from these stages or any other,
 ends the run with ``TERMINAL`` failed. The coordinator then saves the log and re-raises, and the
 next ``run_workpiece`` on the workpiece resumes at that stage, with the step store serving the steps already
@@ -64,15 +65,14 @@ The build stage reads ``k`` from the same state and loads the program from
 ``authored/<k>/program.py`` with ``StageFunctions.load_program``. A later author call writes to a
 new directory, so a relaunch resuming at build after a process was killed mid-revision still finds
 the program its ``AUTHORED`` event records. For a program without source, as ``static_author``
-returns, the build stage asks the author again with the revision kept in the state. Such an author
-has to return the same program for the same proposal and revision. Either way, the build stage
-refuses a program whose digest differs from the ``AUTHORED`` event.
+returns, the build stage asks the author again with the context and the revision kept in the state.
+Such an author has to return the same program for the same context, proposal and revision. Either
+way, the build stage refuses a program whose digest differs from the ``AUTHORED`` event.
 
 The layout of the run root is in ``lib/taskforge/README.md``.
 """
 
 import inspect
-import traceback
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -90,13 +90,16 @@ from taskforge.stage20_triage.verdict import TriageDecision
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
     PROGRAM_MANIFEST_FILE,
+    AuthorContext,
+    AuthorFailure,
     Revision,
     RevisionKind,
     program_manifest,
 )
 from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure
-from taskforge.stage40_build_with_program.infrastructure import exception_chain, storage_fault
+from taskforge.stage40_build_with_program.failure_text import error_line, failure_head, failure_text
+from taskforge.stage40_build_with_program.infrastructure import storage_fault
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
@@ -134,7 +137,7 @@ RESEARCH = "research"
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
 ATTR_CHARS = 500
-"""The length of the failure's first line kept in a ``BUILD_FAILED`` or ``AUTHOR_FAILED`` event.
+"""The length of the failure's head kept in a ``BUILD_FAILED`` or ``AUTHOR_FAILED`` event.
 
 The failure file keeps the rest.
 """
@@ -209,6 +212,10 @@ class _Workpiece:
     def authored_dir(self, state: WorkpieceState) -> Path:
         """The directory of the author call made at ``state``, keyed by the build and author failures so far."""
         return self.round_dir(state.round) / AUTHORED_DIR / str(state.build_revisions)
+
+    def author_context(self, state: WorkpieceState) -> AuthorContext:
+        """The context of the author call made at ``state``: the workpiece, its round and its directory."""
+        return AuthorContext(self.workpiece_id, state.round, self.directory)
 
     def proposal_at(self, state: WorkpieceState) -> TaskProposal:
         """The proposal the stages run at ``state``: the opened one, or the last repair read back from its file.
@@ -393,17 +400,21 @@ async def _author(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     """Ask the author for the program and write its manifest and any source to ``authored/<k>/``.
 
     An author raising ``StructuredOutputError`` returned no valid reply even after its repairs, as
-    when the output limit cut the reply. The adapter writes the failure to ``build-failures/`` and
+    when the output limit cut the reply, and one raising ``AuthorFailure`` ended without a program
+    to hand in. For either, the adapter writes the failure to ``build-failures/`` and
     returns ``AUTHOR_FAILED``, so the next author call samples again with the failure as its
     revision. Every other exception passes through unchanged, and ``run_workpiece`` fails the workpiece in
     place at the author stage.
     """
     try:
         authored = await workpiece.coordinator.stages.author(
-            workpiece.proposal_at(state), _revision(workpiece, state), state.author_state
+            workpiece.author_context(state),
+            workpiece.proposal_at(state),
+            _revision(workpiece, state),
+            state.author_state,
         )
-    except StructuredOutputError as error:
-        attrs = _failure_attrs(workpiece, state, error, _error_line(error))
+    except (StructuredOutputError, AuthorFailure) as error:
+        attrs = _failure_attrs(workpiece, state, error, error_line(error))
         return WorkpieceEvent(EventKind.AUTHOR_FAILED, state.round, state.proposal_digest, attrs)
     directory = workpiece.authored_dir(state)
     _write(directory / PROGRAM_MANIFEST_FILE, pretty_json(program_manifest(authored.program)).encode())
@@ -424,9 +435,11 @@ async def _authored_program(workpiece: _Workpiece, state: WorkpieceState) -> RLE
         program = workpiece.coordinator.stages.load_program(source.read_text())
         found = f"{source} holds program {program.digest}"
     else:
-        revision = _revision(workpiece, state)
+        context, revision = workpiece.author_context(state), _revision(workpiece, state)
         program = (
-            await workpiece.coordinator.stages.author(workpiece.proposal_at(state), revision, state.author_state)
+            await workpiece.coordinator.stages.author(
+                context, workpiece.proposal_at(state), revision, state.author_state
+            )
         ).program
         found = f"the author now returns program {program.digest}"
     if program.digest != state.program_digest:
@@ -438,7 +451,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
     """Build the authored program, spending a revision only on a failure the author can fix.
 
     A ``BuildFailure`` or any other exception from the program's own code becomes ``BUILD_FAILED``,
-    and the next author call receives its traceback, led by the line from ``_build_failure_line``.
+    and the next author call receives its traceback, led by its ``failure_text.failure_head``.
     These errors pass through unchanged, so ``run_workpiece`` fails the workpiece in place and spends no
     revision:
 
@@ -472,7 +485,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
         if storage_fault(error, _program_files(program)):
             raise
         attrs = {
-            **_failure_attrs(workpiece, state, error, _build_failure_line(error, program)),
+            **_failure_attrs(workpiece, state, error, _build_failure_head(error, program)),
             "step": (error.step or "") if isinstance(error, BuildFailure) else "",
         }
         return WorkpieceEvent(EventKind.BUILD_FAILED, state.round, program.digest, attrs)
@@ -482,75 +495,27 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
     return WorkpieceEvent(EventKind.BUILT, state.round, digest(draft.task), attrs)
 
 
-def _failure_attrs(workpiece: _Workpiece, state: WorkpieceState, error: Exception, first_line: str) -> dict[str, str]:
+def _failure_attrs(workpiece: _Workpiece, state: WorkpieceState, error: Exception, head: str) -> dict[str, str]:
     """Write the workpiece's next failure to ``build-failures/<k>.txt``, and return its attrs.
 
-    The file holds ``first_line``, a blank line, then the tail of the traceback. ``k`` is
-    ``build_revisions + 1``, counting build and author failures together. The attrs exit revise
-    while ``k`` is within ``max_build_revisions`` and reject past it, and keep ``first_line`` as
-    ``failure``.
+    The file holds ``failure_text(head, error, FAILURE_CHARS)``: ``head``, a blank line, then the
+    tail of the traceback. ``k`` is ``build_revisions + 1``, counting build and author failures
+    together. The attrs exit revise while ``k`` is within ``max_build_revisions`` and reject past
+    it, and keep ``head`` as ``failure``.
     """
     failures = state.build_revisions + 1
     relative = Path(ROUNDS_DIR) / str(state.round) / FAILURES_DIR / f"{failures}.txt"
-    tail = "".join(traceback.format_exception(error))[-FAILURE_CHARS:]
-    _write(workpiece.directory / relative, f"{first_line}\n\n{tail}".encode())
+    _write(workpiece.directory / relative, failure_text(head, error, FAILURE_CHARS).encode())
     return {
         EXIT: Exit.REVISE if failures <= workpiece.coordinator.budget.max_build_revisions else Exit.REJECT,
-        "failure": first_line[:ATTR_CHARS],
+        "failure": head[:ATTR_CHARS],
         "failure_file": str(relative),
     }
 
 
-def _error_line(error: BaseException) -> str:
-    """Give the error's type and the first line of its message, or the type alone for an empty message."""
-    message = error.message if isinstance(error, BuildFailure) else str(error)
-    first = message.partition("\n")[0]
-    return f"{type(error).__name__}: {first}" if first else type(error).__name__
-
-
-def _build_failure_line(error: Exception, program: RLEnvBuildProgram) -> str:
-    """Locate a build failure in the program and describe it in a line.
-
-    The function finds the program's frames by the file of each step's function. For a program
-    from ``load_program_source`` that file is ``<taskforge_program_...>``, the name the loader
-    registers in ``linecache``. It then picks a traceback from the error's chain:
-
-    1. the innermost exception whose traceback passes through the program, since the runner
-       re-raises a step's ``BuildFailure`` from the original;
-    2. otherwise the innermost exception with a traceback.
-
-    In that traceback it takes the step, ``BuildFailure.step`` or else the outermost program frame
-    running a step's function, and the deepest program frame from the step's frame on. The line
-    reads, for a failure raised in the program, in library code called from it, or with no program
-    frame at all::
-
-        NameError: name 'scale' is not defined at numbers, program line 12: return scale * 2
-        TypeError: ... in library code at pydantic/main.py:253 (__init__), called from numbers, program line 12: ...
-        ValueError: ... outside the program, at taskforge/stage40_build_with_program/run.py:124 (run)
-    """
-    files = _program_files(program)
-    steps = {*program.steps, program.sink.name}
-    named = error.step if isinstance(error, BuildFailure) else None
-    tracebacks = [traceback.extract_tb(link.__traceback__) for link in reversed(exception_chain(error))]
-    passing = [frames for frames in tracebacks if any(frame.filename in files for frame in frames)]
-    frames = passing[0] if passing else next((frames for frames in tracebacks if frames), [])
-    headline = _error_line(error)
-    if not frames:
-        return headline
-    last = frames[-1]
-    library = f"{Path(*Path(last.filename).parts[-2:])}:{last.lineno} ({last.name})"
-    inside = [index for index, frame in enumerate(frames) if frame.filename in files]
-    wanted = {named} if named is not None else steps
-    entries = [index for index in inside if frames[index].name in wanted]
-    step = named or (frames[entries[0]].name if entries else None)
-    deepest = [index for index in inside if not entries or index >= entries[0]]
-    if not deepest:
-        return f"{headline} outside the program{f' in step {step}' if step else ''}, at {library}"
-    frame = frames[deepest[-1]]
-    location = f"{f'{step}, ' if step else ''}program line {frame.lineno}: {(frame.line or '').strip()}"
-    if deepest[-1] == len(frames) - 1:
-        return f"{headline} at {location}"
-    return f"{headline} in library code at {library}, called from {location}"
+def _build_failure_head(error: Exception, program: RLEnvBuildProgram) -> str:
+    """``failure_head`` of a build failure in ``program``, located by its step functions' files."""
+    return failure_head(error, _program_files(program), {*program.steps, program.sink.name})
 
 
 def _program_files(program: RLEnvBuildProgram) -> set[str]:

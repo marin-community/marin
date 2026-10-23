@@ -19,11 +19,12 @@ as they are and may also call any stage directly::
 
 The Protocols defined here take positional-only parameters, so a caller's function may use its own
 parameter names; ``Build`` passes ``run_build``'s keyword-only ``research`` and ``model_digest`` by
-name. ``Author`` comes from ``stage30_author.author``, and the coordinator calls it with
-``proposal`` and ``revision`` in that order. The triage stage calls ``repair`` only on a REPAIR
-verdict within ``WorkpieceBudget.max_triage_repairs``, and triages the proposal it returns; under a
-budget of zero it never calls it. The build stage calls ``load_program`` on the source the author
-returned, read back from ``authored/<k>/program.py``. The validate stage passes the draft with the
+name. ``Author`` comes from ``stage30_author.author``, and the coordinator calls it with an
+``AuthorContext`` for the workpiece and round, ``proposal``, ``revision`` and the author state, in
+that order. The triage stage calls ``repair`` only on a REPAIR verdict within
+``WorkpieceBudget.max_triage_repairs``, and triages the proposal it returns; under a budget of zero
+it never calls it. The build stage calls ``load_program`` on the source the author returned, read
+back from ``authored/<k>/program.py``. The validate stage passes the draft with the
 round's ``ValidationContext``: the workpiece, the round, its directory, the proposal it built, the step
 store, the MODIFY rounds left and the validation pass of the round it runs. A
 caller's validate function closes over what the coordinator does not own, such as the host's
