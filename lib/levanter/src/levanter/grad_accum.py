@@ -172,7 +172,8 @@ def _reshape_for_microbatch(Batch: Axis, Microbatch: Axis, AccumStep: Axis, inpu
         if isinstance(x, hax.NamedArray):
             if not x.has_axis(Batch.name):
                 return x
-            x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
+            with hax.axis_mapping(axis_mapping):
+                x = x.unflatten_axis(Batch, (AccumStep, Microbatch))
             return hax.shard(x, axis_mapping)
         elif isinstance(x, jnp.ndarray) and x.ndim > 0 and x.shape[0] == Batch.size:
             x = reshape_array_into_microbatches(x, AccumStep.size)
