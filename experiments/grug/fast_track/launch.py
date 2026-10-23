@@ -10,8 +10,6 @@ data-matches or compute-matches it (``--match``, default data), or sets ``--batc
 """
 
 import dataclasses
-import hashlib
-import importlib.metadata
 import math
 import os
 import shlex
@@ -24,7 +22,6 @@ from enum import StrEnum
 from typing import Any
 
 import click
-import fsspec
 import jmp
 from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfilerConfig
@@ -42,7 +39,6 @@ from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
 from marin.training.training import temporary_checkpoint_base_path
-from rigging.filesystem.cluster_config import marin_temp_bucket
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.paloma import _PALOMA_DETOK_RAW, paloma_datasets
@@ -60,7 +56,6 @@ from experiments.grug.fast_track.train import (
     GrugRunConfig,
     GrugTrainerConfig,
     LayerSkipRule,
-    MasterParamMode,
     RaggedTransport,
     WatchMode,
     _compute_match_flops,
@@ -70,23 +65,7 @@ from experiments.grug.fast_track.train import (
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 
 # Run defaults.
-H100_LADDER_SIZES = ("d512", "d768", "d1024", "d1280", "d1536")
-# Hero-shaped validation rung on one GB200 rack as the hero uses it: 16 nodes x 4 GPUs, expert parallel over all 64.
-GB200_SIZES = ("gb200-d6144",)
-LADDER_SIZES = H100_LADDER_SIZES + GB200_SIZES
-# GB200 runs load every CUDA module at startup: a run that loads the shared XLA autotune cache autotunes nothing at
-# compile time, so kernels (e.g. XLA's CUB sort) would first load lazily inside the first step while NCCL kernels spin,
-# and every rank hangs in the driver's module load (lc1-gb200-tp1..tp4). It must be set before the CUDA driver
-# initializes, so it goes in the job environment, not the training process.
-GB200_CUDA_MODULE_LOADING = "CUDA_MODULE_LOADING=EAGER"
-# GB200 compiles against XLA's GB200 device description (its spec file with our CUDA 13.0 / cuDNN 9.19 versions;
-# path relative to the bundle root). That makes the compile a cross-compilation that needs no other process, so
-# process 0 can compile the shared train-step executable alone (``shared_executable_dir``); the ordinary JIT compile
-# of the multi-process program waits on the other processes (lc1-gb200-shx2 hung 60 min in it).
-GB200_TARGET_CONFIG_FLAG = "--xla_gpu_target_config_filename=experiments/grug/fast_track/gb200_target_config.txtpb"
-# Seconds the first (compiled, preloaded) GB200 step may run before the trainer exits so the gang restarts: a normal
-# first step finishes in about a minute; a startup deadlock never does.
-GB200_FIRST_STEP_TIMEOUT = 420.0
+LADDER_SIZES = ("d512", "d768", "d1024", "d1280", "d1536")
 DEFAULT_WANDB_PROJECT = "marin_moe"
 # Default tokens-per-active-param budgets defining each variant's baseline: dense compute-optimal, MoE 3x.
 DENSE_TPP = 20
@@ -124,15 +103,6 @@ _BASELINE_FLOPS_PER_EXAMPLE: dict[tuple[str, bool], int] = {
     ("d1280", False): 9_975_229_317_120,
     ("d1280", True): 9_242_400_522_240,
 }
-
-
-class XlaAutotune(StrEnum):
-    """How a GB200 run gets its XLA kernel choices."""
-
-    CACHE = "cache"
-    """Load the shared autotune results seeded for this program (``--seed-xla-autotune-cache``)."""
-    OFF = "off"
-    """No autotuning (``--xla_gpu_autotune_level=0`` in the job's XLA_FLAGS): library heuristics pick the kernels."""
 
 
 class OptimizerKind(StrEnum):
@@ -202,6 +172,10 @@ MAX_RETRIES_FAILURE = 3
 Z_LOSS_WEIGHT = 1e-4
 MAX_TASK_FAILURES = 3
 PROFILE_NUM_STEPS = 5
+# Mixed precision: fp32 params and optimizer state on device, bf16 compute.
+MP_POLICY = "params=float32,compute=bfloat16,output=bfloat16"
+# H100 node resources per task.
+H100_CPU, H100_RAM, H100_DISK = 32, "600g", "900g"
 
 
 class ThroughputResult(Artifact):
@@ -228,13 +202,10 @@ class H100LadderRung:
     attn_res_layer_backward: AttnResLayerBackward = AttnResLayerBackward.RECOMPUTE
     kda_save_chunk_states: bool = False
     attn_res_remat_attention: bool = False
-    device: str = "H100"
     nodes: int = 1
     # Sequential local-expert rounds of the ragged EP transport (``moe_ragged_chunks``): fewer rounds, fewer
     # collectives, at the cost of the transport buffers' peak memory.
     moe_ragged_chunks: int = 2
-    # Hero-scale memory: bf16 device params with a pinned-host fp32 master and offloaded optimizer state.
-    hero_memory: bool = False
 
     @property
     def global_device_count(self) -> int:
@@ -264,17 +235,6 @@ def _h100_ladder_rung(size: str) -> H100LadderRung:
     if size == "d1536":
         # 24 layers, 12 heads x 128, GQA 3:1; no recorded baseline budget (pass --num-steps).
         return H100LadderRung(SmallShape(1536, 24, 12, 4, 4), gpus_per_task=8, baseline_batch=256)
-    if size == "gb200-d6144":
-        return H100LadderRung(
-            SmallShape(6144, 48, 48, 1, 1),
-            gpus_per_task=4,
-            nodes=16,
-            baseline_batch=1024,
-            device="GB200",
-            hero_memory=True,
-            # One round: 17.54 s/step vs 17.71 s with two at the hero gate (lc1-gb200-rc1 vs prof201), and it fits.
-            moe_ragged_chunks=1,
-        )
     raise ValueError(f"size must be one of {list(LADDER_SIZES)}, got {size!r}")
 
 
@@ -415,8 +375,6 @@ def build_h100_ladder_run(
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
     token_dump: bool = False,
-    seed_xla_autotune_cache: bool = False,
-    xla_autotune: XlaAutotune = XlaAutotune.CACHE,
     watch_interval: int = WATCH_INTERVAL,
     token_dump_skip_layers: tuple[int, ...] = (),
     routing_dump_steps: tuple[int, ...] = (),
@@ -424,9 +382,6 @@ def build_h100_ladder_run(
     extra_mlp_start_frac: float = 0.5,
     resume_from: str | None = None,
     xla_memory_report: bool = False,
-    master_param_mode: MasterParamMode | None = None,
-    pgle_runs: int = 0,
-    pipeline_depth: int = 0,
     loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE,
     ema_beta: float | None = None,
     ema_last_steps: int | None = None,
@@ -434,7 +389,7 @@ def build_h100_ladder_run(
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
     z_loss_weight: float = Z_LOSS_WEIGHT,
-    ragged_transport: RaggedTransport = RaggedTransport.DEVICE,
+    ragged_transport: RaggedTransport = RaggedTransport.ONE_SHOT,
     collective_overlap_limit: int | None = None,
     single_process: bool = False,
     grad_accum_microbatches: int = 1,
@@ -475,13 +430,6 @@ def build_h100_ladder_run(
             raise ValueError("attn_res_remat_attention requires the kma recipe")
         model = dataclasses.replace(model, attn_res_remat_attention=True)
     model = _apply_settings(model, model_settings or {})
-    if master_param_mode is None:
-        master_param_mode = MasterParamMode.FP32_PINNED_HOST if rung.hero_memory else MasterParamMode.DEVICE
-    mp_policy = (
-        "params=bfloat16,compute=bfloat16,output=bfloat16"
-        if master_param_mode == MasterParamMode.FP32_PINNED_HOST
-        else "params=float32,compute=bfloat16,output=bfloat16"
-    )
     if expert_axis_size is None:
         expert_axis_size = 1 if dense else rung.global_device_count
     if rung.global_device_count % expert_axis_size != 0:
@@ -546,34 +494,13 @@ def build_h100_ladder_run(
         save_checkpoints=save_checkpoints or temporary_checkpoints_only,
         expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
-        offload_opt_state=rung.hero_memory,
-        master_param_mode=master_param_mode,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,
         grad_accum_microbatches=grad_accum_microbatches,
     )
-    # GB200 nodes as the hero requests them (moe_hero_ep.hero_recipe); H100 nodes as the ladder always has.
-    cpu, ram, disk = (120, "890g", "1t") if rung.device == "GB200" else (32, "600g", "900g")
     train_resources = ResourceConfig.with_gpu(
-        rung.device,
-        # The seed is one process on one GPU (GB200 runs one process per GPU), standing in for all of them.
-        count=1 if seed_xla_autotune_cache else rung.gpus_per_task,
-        cpu=cpu,
-        ram=ram,
-        disk=disk,
-        replicas=1 if seed_xla_autotune_cache else rung.nodes,
+        "H100", count=rung.gpus_per_task, cpu=H100_CPU, ram=H100_RAM, disk=H100_DISK, replicas=rung.nodes
     )
-    if xla_autotune == XlaAutotune.OFF and "--xla_gpu_autotune_level=0" not in os.environ.get("XLA_FLAGS", ""):
-        raise ValueError("--xla-autotune off needs --xla_gpu_autotune_level=0 in the job's XLA_FLAGS")
-    use_cache = rung.device == "GB200" and xla_autotune == XlaAutotune.CACHE
-    autotune_cache_path = _xla_autotune_cache_path(model, rung, watch_interval) if use_cache else None
-    if autotune_cache_path is not None and not seed_xla_autotune_cache and not _path_exists(autotune_cache_path):
-        # Without a cache every rank autotunes and exchanges results, and that multi-process compile hangs ~7 times
-        # in 8 on GB200. A one-GPU seed builds it in ~2 minutes.
-        raise ValueError(
-            f"No XLA autotune cache for this GB200 program ({autotune_cache_path}). Seed it first: rerun this "
-            "command with --seed-xla-autotune-cache."
-        )
     name = f"grug/{run_id}"
     version = resolve_version(name, version)
     eval_tag = tokenizer.rsplit("/", 1)[-1]
@@ -595,17 +522,13 @@ def build_h100_ladder_run(
             seed=seed,
             train_batch_size=batch_size,
             num_train_steps=num_steps,
-            jax_config=(
-                {**DEFAULT_JAX_CONFIG, "jax_enable_pgle": True, "jax_pgle_profiling_runs": pgle_runs}
-                if pgle_runs
-                else dict(DEFAULT_JAX_CONFIG)
-            ),
+            jax_config=dict(DEFAULT_JAX_CONFIG),
             profiler=ProfilerConfig(
                 enabled=profile_start_step is not None,
                 start_step=profile_start_step if profile_start_step is not None else 0,
                 num_steps=PROFILE_NUM_STEPS,
             ),
-            mp=jmp.get_policy(mp_policy),
+            mp=jmp.get_policy(MP_POLICY),
             tracker=WandbConfig(
                 entity="marin-community",
                 project=wandb_project,
@@ -659,19 +582,9 @@ def build_h100_ladder_run(
                     prefix_join(ctx.output_path, "lm_head_grad") if model.lm_head_grad_dump_every else None
                 ),
                 routing_dump_steps=routing_dump_steps,
-                xla_autotune_cache_path=autotune_cache_path,
-                preload_library_kernels=rung.device == "GB200",
-                first_step_timeout=GB200_FIRST_STEP_TIMEOUT if rung.device == "GB200" else None,
-                shared_executable_dir=(
-                    prefix_join(marin_temp_bucket(SHARED_EXECUTABLE_TTL_DAYS, "train-step-executables"), run_id)
-                    if rung.device == "GB200" and not seed_xla_autotune_cache
-                    else None
-                ),
-                xla_autotune_seed_topology=(f"1x{rung.global_device_count}x1" if seed_xla_autotune_cache else None),
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
-                pipeline_depth=pipeline_depth,
                 loader_buffer_batches=loader_buffer_batches,
                 xla_memory_report_path=prefix_join(ctx.output_path, "xla_memory") if xla_memory_report else None,
             ),
@@ -687,7 +600,7 @@ def build_h100_ladder_run(
                 )
             ),
             stop_after_steps=num_steps if stop_after_steps is None else stop_after_steps,
-            processes_per_task=1 if single_process or seed_xla_autotune_cache else rung.gpus_per_task,
+            processes_per_task=1 if single_process else rung.gpus_per_task,
             ragged_transport=ragged_transport,
             collective_overlap_limit=collective_overlap_limit,
             max_retries_failure=max_retries_failure,
@@ -751,13 +664,6 @@ def _submit_to_cluster(run_id: str, target_cluster: str | None, priority: str, j
     os.execvp(cmd[0], cmd)
 
 
-def _with_xla_flag(job_env: tuple[str, ...], flag: str) -> tuple[str, ...]:
-    """``job_env`` with ``flag`` appended to its ``XLA_FLAGS`` entry (added when there is none)."""
-    if not any(item.startswith("XLA_FLAGS=") for item in job_env):
-        return (*job_env, f"XLA_FLAGS={flag}")
-    return tuple(f"{item} {flag}" if item.startswith("XLA_FLAGS=") else item for item in job_env)
-
-
 def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
     """``iris job run -e KEY VALUE`` pairs for ``--job-env KEY=VALUE`` (the dispatcher forwards ``XLA_*`` and friends
     from the coordinator to the train child)."""
@@ -768,27 +674,6 @@ def _job_env_args(job_env: tuple[str, ...]) -> list[str]:
             raise click.BadParameter(f"--job-env needs KEY=VALUE, got {item!r}")
         args += ["-e", key, value]
     return args
-
-
-XLA_AUTOTUNE_CACHE_TTL_DAYS = 30
-SHARED_EXECUTABLE_TTL_DAYS = 7
-
-
-def _path_exists(path: str) -> bool:
-    return fsspec.core.url_to_fs(path)[0].exists(path)
-
-
-def _xla_autotune_cache_path(model: GrugModelConfig, rung: H100LadderRung, watch_interval: int) -> str:
-    """Region-temp path of the shared XLA autotune results for this program: keyed by the full model config, the
-    rung's mesh, the job's XLA flags, jaxlib and a non-default watch interval (the inline watch's statistics are
-    part of the step), so only runs that compile the same fusions share them. A new key (any config change,
-    including a changed default) needs a seed (``--seed-xla-autotune-cache``, ~2 min, one GPU)."""
-    parts = (model, rung, os.environ.get("XLA_FLAGS", ""), importlib.metadata.version("jaxlib"))
-    if watch_interval != WATCH_INTERVAL:
-        parts = (*parts, f"watch_interval={watch_interval}")
-    identity = repr(parts)
-    key = hashlib.sha256(identity.encode()).hexdigest()[:24]
-    return prefix_join(marin_temp_bucket(XLA_AUTOTUNE_CACHE_TTL_DAYS, "xla-autotune-results"), f"{key}.textproto")
 
 
 def _layer_skip_rule(
@@ -812,9 +697,7 @@ def _layer_skip_rule(
 
 @click.command()
 @click.option("--run-id", required=True, help="Run identifier for artifact and W&B names.")
-@click.option(
-    "--size", required=True, type=click.Choice(LADDER_SIZES), help="Ladder rung (H100 widths or the GB200 rack)."
-)
+@click.option("--size", required=True, type=click.Choice(LADDER_SIZES), help="H100 ladder rung.")
 @click.option(
     "--match",
     type=click.Choice([m.value for m in MatchMode]),
@@ -899,23 +782,11 @@ def _layer_skip_rule(
     "moe_null_layers) to <output>/token_dump.npz.",
 )
 @click.option(
-    "--seed-xla-autotune-cache",
-    is_flag=True,
-    help="GB200: seed the shared XLA autotune cache from one node under a mock topology of the full rack, then stop.",
-)
-@click.option(
     "--watch-interval",
     type=click.IntRange(min=0),
     default=WATCH_INTERVAL,
     show_default=True,
     help="Steps between logged parameter/gradient watch statistics; 0 turns the watch off.",
-)
-@click.option(
-    "--xla-autotune",
-    type=click.Choice([m.value for m in XlaAutotune]),
-    default=XlaAutotune.CACHE.value,
-    show_default=True,
-    help="GB200 kernel choice: the seeded autotune cache, or off (needs --xla_gpu_autotune_level=0 in XLA_FLAGS).",
 )
 @click.option(
     "--routing-dump-steps",
@@ -934,29 +805,9 @@ def _layer_skip_rule(
     help="Load this checkpoint directory (another run's <output>/checkpoints) first.",
 )
 @click.option(
-    "--master-param-mode",
-    type=click.Choice([m.value for m in MasterParamMode]),
-    default=None,
-    help="Where the fp32 weights live (default: pinned host on hero-memory rungs, device otherwise).",
-)
-@click.option(
     "--xla-memory-report",
     is_flag=True,
     help="Dump XLA's train-step buffer assignment and memory-usage report to <output>/xla_memory/ (also on OOM).",
-)
-@click.option(
-    "--pgle-runs",
-    type=int,
-    default=0,
-    help="Profile-guided latency estimation: profile this many steps, then recompile with measured collective "
-    "latencies for the latency-hiding scheduler (0: off).",
-)
-@click.option(
-    "--pipeline-depth",
-    type=click.IntRange(0, 1),
-    default=0,
-    help="Train steps dispatched before the previous step's host work (1: overlap, crashes near step 515; "
-    "0: finish each step first).",
 )
 @click.option(
     "--loader-buffer-batches",
@@ -983,9 +834,9 @@ def _layer_skip_rule(
 @click.option(
     "--ragged-transport",
     type=click.Choice([t.value for t in RaggedTransport]),
-    default=RaggedTransport.DEVICE.value,
+    default=RaggedTransport.ONE_SHOT.value,
     show_default=True,
-    help="XLA kernel for --model-set moe_implementation=ragged_all_to_all. device/one_shot need --single-process.",
+    help="XLA kernel for --model-set moe_implementation=ragged_all_to_all. one_shot needs --single-process.",
 )
 @click.option(
     "--collective-overlap-limit",
@@ -1081,8 +932,6 @@ def main(
     profile_start_step: int | None,
     dump_hlo: bool,
     token_dump: bool,
-    seed_xla_autotune_cache: bool,
-    xla_autotune: str,
     watch_interval: int,
     token_dump_skip_layers: str | None,
     routing_dump_steps: str | None,
@@ -1093,9 +942,6 @@ def main(
     layer_skip_token_ids_file: str | None,
     resume_from: str | None,
     xla_memory_report: bool,
-    master_param_mode: str | None,
-    pgle_runs: int,
-    pipeline_depth: int,
     loader_buffer_batches: int,
     ema_beta: float | None,
     ema_last_steps: int | None,
@@ -1117,8 +963,6 @@ def main(
     target_cluster: str | None,
 ) -> ArtifactStep[ThroughputResult]:
     if submit:
-        if size in GB200_SIZES:
-            job_env = (*_with_xla_flag(job_env, GB200_TARGET_CONFIG_FLAG), GB200_CUDA_MODULE_LOADING)
         _submit_to_cluster(run_id, target_cluster, priority, job_env)  # re-execs iris; never returns
     return build_h100_ladder_run(
         run_id=run_id,
@@ -1137,8 +981,6 @@ def main(
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
         token_dump=token_dump,
-        seed_xla_autotune_cache=seed_xla_autotune_cache,
-        xla_autotune=XlaAutotune(xla_autotune),
         watch_interval=watch_interval,
         routing_dump_steps=tuple(int(x) for x in routing_dump_steps.split(",")) if routing_dump_steps else (),
         token_dump_skip_layers=(
@@ -1148,9 +990,6 @@ def main(
         layer_skip=_layer_skip_rule(layer_skip_layers, layer_skip_rate, layer_skip_positions, layer_skip_token_ids_file),
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
-        master_param_mode=MasterParamMode(master_param_mode) if master_param_mode else None,
-        pgle_runs=pgle_runs,
-        pipeline_depth=pipeline_depth,
         loader_buffer_batches=loader_buffer_batches,
         ema_beta=ema_beta,
         ema_last_steps=ema_last_steps,

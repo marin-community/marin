@@ -6,8 +6,10 @@ below from 9.4e16 to 4.3e19 FLOPs.
 ## Belay Ckpt 1
 
 [`belay_ckpt1.py`](belay_ckpt1.py) is the Marin Belay checkpoint-1 recipe (marin#9451): the exact flags of the
-H100 scaling ladder (d512–d1280 at 171 tokens per active parameter) and of the one-rack GB200 throughput run
-(`gb200-d6144`: 14.59 s/step, 28.9% MFU). Launch a rung with
+H100 scaling ladder (d512–d1280 at 171 tokens per active parameter). The one-rack GB200 throughput run
+(`gb200-d6144`: 14.59 s/step, 28.9% MFU) and the GB200 performance code it needs (scanned layers with offloaded
+partials, MXFP8, the shared-expert overlap, XLA autotune caches, shared executables, pinned-host master weights,
+PGLE) live on the `marin_belay_v1_ckpt1` and `marin_belay_v1_mfuladder_*` branches. Launch a rung with
 
 ```bash
 uv run python -m experiments.grug.fast_track.belay_ckpt1 --size d1024 --submit --run-id belay-ckpt1-d1024 \

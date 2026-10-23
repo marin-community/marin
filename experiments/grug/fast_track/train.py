@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
@@ -34,9 +34,7 @@ import optax
 from fray.cluster import ResourceConfig
 from haliax import Axis
 from haliax.partitioning import set_mesh
-from jax._src import distributed as jax_distributed
 from jax.experimental import multihost_utils
-from jax.experimental.serialize_executable import deserialize_and_load, serialize
 from jax.sharding import Mesh, NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from jax.tree_util import register_dataclass
@@ -49,7 +47,7 @@ from levanter.data.mixture import MixtureDataset, rescale_mixture_schedule_for_b
 from levanter.data.text.datasets import LmDataConfig
 from levanter.data.text.examples import GrugLmExample, grug_lm_example_from_named
 from levanter.eval import TaggedEvaluator, cb_tagged_evaluate, eval_model
-from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_NCCL_SEND_RECV_XLA_FLAGS, RAGGED_REQUIRED_XLA_FLAGS
+from levanter.grug._moe.ep_ragged_all_to_all import RAGGED_NCCL_SEND_RECV_XLA_FLAGS
 from levanter.grug.attention import AttentionMask
 from levanter.grug.grug_moe import MoeImplementation
 from levanter.grug.sharding import compact_grug_mesh
@@ -63,14 +61,12 @@ from levanter.training_control import TrainingDashboard
 from levanter.utils.flop_utils import lm_flops_per_token
 from levanter.utils.jax_utils import parameter_count
 from levanter.utils.logging import LoadingTimeTrackerIterator
-from rigging.filesystem.storage_path import prefix_join
 
 from experiments.grug.checkpointing import (
     restore_grug_state_from_checkpoint,
 )
 from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.host_stall import HostStallSampler
-from experiments.grug.fast_track.library_kernels import load_library_kernels
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
     DenseMLP,
@@ -87,13 +83,11 @@ from experiments.grug.fast_track.model import (
 
 logger = logging.getLogger(__name__)
 
-_HOST_MEMORY_LIMIT_ENV = "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB"
 RUNTIME_ENV = {
     "LD_PRELOAD": "libjemalloc.so.2",
     "MALLOC_CONF": "background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0,narenas:2",
     # Per-process CUPTI sessions collide with each other and CoreWeave's DCGM, so PGLE only adds failure modes.
     "JAX_ENABLE_PGLE": "false",
-    "XLA_PJRT_GPU_HOST_MEMORY_LIMIT_GB": "192",
     "XLA_PYTHON_CLIENT_ALLOCATOR": "cuda_async",
 }
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
@@ -113,15 +107,12 @@ RAGGED_COLLECTIVE_OVERLAP_LIMIT = 1
 
 
 class RaggedTransport(StrEnum):
-    """XLA GPU kernel behind ``ragged_all_to_all`` (all three ship in the stock x86_64 PJRT plugin).
+    """XLA GPU kernel behind ``ragged_all_to_all`` (both ship in the stock x86_64 PJRT plugin).
 
     ``ONE_SHOT`` writes straight into peer GPUs' buffers over peer pointers, which XLA only allows when one process
-    owns every GPU of the collective (``processes_per_task=1``). ``DEVICE`` goes through NCCL symmetric buffers and,
-    like ``NCCL``, runs with one process per GPU (the GB200 hero runs it with 4 processes per node).
+    owns every GPU of the collective (``processes_per_task=1``); ``NCCL`` runs with one process per GPU.
     """
 
-    DEVICE = "device"
-    """Device-initiated NCCL GIN + LSA kernel on NCCL symmetric buffers: the GB200 hero's transport."""
     ONE_SHOT = "one_shot"
     """XLA's stock default: the host-launched one-shot copy kernel over peer pointers."""
     NCCL = "nccl"
@@ -129,7 +120,6 @@ class RaggedTransport(StrEnum):
 
 
 RAGGED_TRANSPORT_XLA_FLAGS: dict[RaggedTransport, tuple[str, ...]] = {
-    RaggedTransport.DEVICE: RAGGED_REQUIRED_XLA_FLAGS,
     RaggedTransport.ONE_SHOT: (
         "--xla_gpu_experimental_ragged_all_to_all_use_device_kernel=false",
         "--xla_gpu_unsupported_use_ragged_all_to_all_one_shot_kernel=true",
@@ -149,12 +139,7 @@ class WatchMode(StrEnum):
 
 
 def restore_template_from(state):
-    """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves.
-
-    `jax.eval_shape` drops the `pinned_host` memory kind that `initial_state` puts on
-    offloaded optimizer state, which is most of a large checkpoint. Reading the sharding off a
-    built state keeps it.
-    """
+    """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves (the restore target)."""
     template = jax.tree.map(
         lambda leaf: (
             jax.ShapeDtypeStruct(leaf.shape, leaf.dtype, sharding=leaf.sharding) if isinstance(leaf, jax.Array) else leaf
@@ -208,55 +193,9 @@ def _apply_runtime_defaults(
     os.environ["XLA_FLAGS"] = " ".join(xla_flags)
 
 
-@contextmanager
-def _pgle_disabled():
-    """Turn PGLE off process-wide for the duration. ``jax_config.enable_pgle(False)`` is thread-local, so the
-    data loader's background thread would keep profiling its batch jit under PGLE and abort mid-eval."""
-    prev = jax.config.jax_enable_pgle
-    jax.config.update("jax_enable_pgle", False)
-    try:
-        yield
-    finally:
-        jax.config.update("jax_enable_pgle", prev)
-
-
 TRAIN_LOADER_BUFFER_SIZE = 512
 # Models with at most this many experts log each expert's QB bias (``moe_bias/qb_beta_L*_E*``).
 _LOGGED_QB_BETA_MAX_EXPERTS = 16
-
-
-class MasterParamMode(StrEnum):
-    """Where the authoritative weights live.
-
-    DEVICE keeps them as the device params themselves, with no separate master copy; FP32_PINNED_HOST keeps a
-    pinned-host fp32 master while the device params are its cast to the param dtype (as in grug/moe_hero_ep).
-    """
-
-    DEVICE = "device"
-    FP32_PINNED_HOST = "fp32_pinned_host"
-
-
-_FP32_POLICY = jmp.get_policy("params=float32,compute=float32,output=float32")
-
-
-def _tree_to_memory_kind(tree, memory_kind: str):
-    """Move named-sharded arrays to a JAX memory kind."""
-
-    def _move(leaf):
-        if not isinstance(leaf, jax.Array):
-            return leaf
-        sharding = jax.typeof(leaf).sharding
-        mesh = getattr(sharding, "mesh", None)
-        if mesh is None or len(getattr(mesh, "axis_names", ())) == 0:
-            if jax.sharding.get_abstract_mesh().empty:
-                return leaf
-            # Scalar optimizer metadata has no operand to inherit the active mesh from; bind it before changing
-            # the memory kind so the initial and updated states have the same JIT input signature.
-            leaf = jax.sharding.reshard(leaf, P())
-            sharding = jax.typeof(leaf).sharding
-        return jax.device_put(leaf, sharding.with_memory_kind(memory_kind))
-
-    return jax.tree.map(_move, tree)
 
 
 @dataclass(frozen=True)
@@ -309,34 +248,10 @@ class GrugTrainerConfig:
     # neuron activity to ``<routing_dump_dir>/step-<step>.npz`` (``write_routing_dump``).
     routing_dump_dir: str | None = None
     routing_dump_steps: tuple[int, ...] = ()
-    # XLA GPU autotune results shared across runs of the same program (``_use_xla_autotune_cache``): loaded at start
-    # when present, written by process 0 after the first step otherwise. None: autotune every compile.
-    xla_autotune_cache_path: str | None = None
-    # Seed ``xla_autotune_cache_path`` from one process: run under this mock GPU topology ("slices x hosts x
-    # devices"; "1x64x1" for a GB200 rack, which runs one process per GPU), so the one process compiles the full
-    # mesh's train step and autotunes it alone (no cross-process exchange); compile ahead of time, publish the
-    # results and stop before running a step. None: a normal run.
-    xla_autotune_seed_topology: str | None = None
-    # Before the first step, run each cuBLAS call of the compiled train step once alone on each local device
-    # (``library_kernels``), so no kernel library loads mid-step (a first-step deadlock on GB200).
-    preload_library_kernels: bool = False
-    # Exit the process (``FIRST_STEP_HANG_EXIT_CODE``) when the first step, compiled and preloaded, has not finished
-    # this many seconds after its dispatch, so the scheduler restarts a gang that deadlocked at startup (a lazy
-    # kernel load inside the step on GB200). None: wait forever.
-    first_step_timeout: float | None = None
-    # Process 0 compiles the train step and writes the executable here; the other processes load it instead of
-    # compiling their own. XLA's memory-aware scheduling and remat read each GPU's own reported memory, which
-    # differs by a few hundred KB between ranks and starts, and a step above the limit then compiles to a
-    # different program on some rank (mismatched collectives, a 100%-GPU deadlock). None: every process compiles.
-    shared_executable_dir: str | None = None
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None
     # When the extra_mlp_layers MLPs switch on, as a fraction of training (0: from the start).
     extra_mlp_start_frac: float = 0.5
-    # Train steps dispatched before the previous step's host work: 1 overlaps that work (logging, callbacks) with
-    # the devices; 0 finishes every step before dispatching the next. 1 crashes the devices around step 515
-    # (CUDA_ERROR_ILLEGAL_ADDRESS, with or without PGLE; batch 160), so it is opt-in until that is understood.
-    pipeline_depth: int = 0
     # Batches the train loader's background thread keeps on the devices ahead of the step.
     loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE
     # Dump XLA's buffer assignment and memory-usage report for the train step and upload them here (process 0),
@@ -364,9 +279,6 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
-    # Hero-scale memory: optimizer state on pinned host memory between steps, and where the master weights live.
-    offload_opt_state: bool = False
-    master_param_mode: MasterParamMode = MasterParamMode.DEVICE
 
 
 @dataclass(frozen=True)
@@ -403,7 +315,7 @@ class GrugRunConfig:
     # via the iris.hooks.multigpu_main supervisor instead of one process per node.
     processes_per_task: int = 1
     # XLA kernel behind the ragged all-to-all; read only when `model.moe_implementation` is ragged.
-    ragged_transport: RaggedTransport = RaggedTransport.DEVICE
+    ragged_transport: RaggedTransport = RaggedTransport.ONE_SHOT
     # XLA's concurrent-collective limit; None takes the mode default (ragged 1, inline watch 1, otherwise 4).
     collective_overlap_limit: int | None = None
     # Retry budgets for the training job. The two are separate gates and the job fails when either
@@ -765,7 +677,6 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 class GrugTrainState:
     step: jax.Array
     params: Transformer
-    master_params: Transformer | None
     ema_params: Transformer | None  # EMA of params for eval/checkpoint; None unless ema_beta is set.
     opt_state: optax.OptState
     pending_qb_betas: jax.Array
@@ -794,25 +705,12 @@ def initial_state(
     mp: jmp.Policy,
     key: PRNGKeyArray,
     ema_beta: float | None = None,
-    offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
 ) -> GrugTrainState:
-    initialized = Transformer.init(model_config, key=key)
-    if master_param_mode == MasterParamMode.FP32_PINNED_HOST:
-        master_params = _FP32_POLICY.cast_to_param(initialized)
-        params = mp.cast_to_param(master_params)
-        opt_state = optimizer.init(master_params)
-        master_params = _tree_to_memory_kind(master_params, "pinned_host")
-    else:
-        params = mp.cast_to_param(initialized)
-        master_params = None
-        opt_state = optimizer.init(params)
-    if offload_opt_state:
-        opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+    params = mp.cast_to_param(Transformer.init(model_config, key=key))
+    opt_state = optimizer.init(params)
     return GrugTrainState(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
-        master_params=master_params,
         ema_params=params if ema_beta is not None else None,
         opt_state=opt_state,
         pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.qb_num_experts)),
@@ -1152,8 +1050,6 @@ def _make_train_step(
     ema_start_step: int = 0,
     watch_config: WatchConfig | None = None,
     grad_accum_microbatches: int = 1,
-    offload_opt_state: bool = False,
-    master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_step: int = 0,
     lm_head_grad_probe_site: GradProbeSite | None = None,
@@ -1164,8 +1060,7 @@ def _make_train_step(
     ``lm_head_grad_probe_site`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
     ``token_embed_stats`` the ``_token_embed_stats``.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
-    (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
-    between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
+    (``_accumulated_loss_and_grads``)."""
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
     if lm_head_grad_probe_site is not None and grad_accum_microbatches > 1:
@@ -1194,33 +1089,10 @@ def _make_train_step(
                 qb_params, batch, mp, z_loss, layer_skip, extra_active, lm_head_grad_probe_site, lm_head_grad_clip
             )
         metrics = {"train/loss": loss, **summarized_metrics}
-        opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
-        if os.environ.get("GRUG_SKIP_OPTIMIZER"):
-            # MFU-baseline mode: run fwd+bwd (grads above) but skip the optimizer update (Muon NS).
-            # Params/master/opt_state pass through unchanged, so loss does not descend -- this isolates
-            # the optimizer's share of step time (MFU_skip vs MFU_full = the Muon overhead).
-            updates = jax.tree_util.tree_map(jnp.zeros_like, qb_params)
-            opt_state = opt_state_in
-            params = qb_params
-            master_params = state.master_params
-        elif master_param_mode == MasterParamMode.FP32_PINNED_HOST:
-            if state.master_params is None:
-                raise ValueError("master_params must be initialized for an fp32 pinned-host master")
-            master_in = _apply_qb_betas(_tree_to_memory_kind(state.master_params, "device"), state.pending_qb_betas)
-            with jax.named_scope("opt_update"):
-                updates, opt_state = optimizer.update(_FP32_POLICY.cast_to_param(grads), opt_state_in, master_in)
-            with jax.named_scope("apply_updates"):
-                master_params = optax.apply_updates(master_in, updates)
-            params = mp.cast_to_param(master_params)
-            master_params = _tree_to_memory_kind(master_params, "pinned_host")
-        else:
-            with jax.named_scope("opt_update"):
-                updates, opt_state = optimizer.update(grads, opt_state_in, qb_params)
-            with jax.named_scope("apply_updates"):
-                params = optax.apply_updates(qb_params, updates)
-            master_params = None
-        if offload_opt_state:
-            opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
+        with jax.named_scope("opt_update"):
+            updates, opt_state = optimizer.update(grads, state.opt_state, qb_params)
+        with jax.named_scope("apply_updates"):
+            params = optax.apply_updates(qb_params, updates)
         if token_embed_stats:
             metrics.update(_token_embed_stats(qb_params.token_embed, params.token_embed))
 
@@ -1248,7 +1120,7 @@ def _make_train_step(
                 params=qb_params,
                 grads=grads,
                 updates=updates,
-                opt_state=opt_state_in,
+                opt_state=state.opt_state,
                 model_tree_type=type(state.params),
             )
 
@@ -1256,7 +1128,6 @@ def _make_train_step(
             state,
             step=state.step + one,
             params=params,
-            master_params=master_params,
             ema_params=ema_params,
             opt_state=opt_state,
             # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
@@ -1321,21 +1192,6 @@ def _stall_diagnostic(timeout) -> None:
 
 def _run_grug_local(config: GrugRunConfig) -> None:
     """Entry point for the grug template training loop."""
-    # The GPU client reads the pinned-host limit when it is created, which happens in this process after the
-    # dispatcher: an environment variable forwarded from the coordinator does not reach it on GB200 (probe
-    # lc1-hostlim2 saw it unset and capped at 64 GB), so set it here before any device is touched.
-    os.environ.setdefault(_HOST_MEMORY_LIMIT_ENV, RUNTIME_ENV[_HOST_MEMORY_LIMIT_ENV])
-    seed_topology = config.trainer.xla_autotune_seed_topology
-    if seed_topology is not None:
-        if config.trainer.xla_autotune_cache_path is None:
-            raise ValueError("xla_autotune_seed_topology needs xla_autotune_cache_path")
-        _seed_xla_autotune_cache(config, seed_topology)
-        return
-    autotune_cache_loaded = (
-        _use_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
-        if config.trainer.xla_autotune_cache_path is not None
-        else None
-    )
     marker = config.trainer.completion_marker_path
     if marker is not None and fsspec.core.url_to_fs(marker)[0].exists(marker):
         logger.info("run already completed (%s exists); not retraining", marker)
@@ -1388,8 +1244,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 mp=trainer.mp,
                 key=model_rng,
                 ema_beta=config.trainer.ema_beta,
-                offload_opt_state=config.trainer.offload_opt_state,
-                master_param_mode=config.trainer.master_param_mode,
             )
 
         state = _init_state(model_key)
@@ -1494,11 +1348,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
             # From the EMA start on, evals score the EMA weights.
-            # Lagged steps (``_LaggedStateView``) carry no params; only the per-step hooks see them.
             eval_model_getter=lambda s: (
-                None
-                if s.params is None
-                else (s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params)
+                s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params
             ),
             opt_state_getter=lambda s: s.opt_state,
         )
@@ -1554,8 +1405,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     # its temporary buffer, thus this copy must die before the next step.
                     with set_mesh(_mesh):
                         model = _reshard_tree_to_mesh(step.eval_model, _mesh)
-                        with _pgle_disabled():
-                            log_dict = eval_model(_ev, model, prefix=_prefix)
+                        log_dict = eval_model(_ev, model, prefix=_prefix)
                         levanter.tracker.log(log_dict, step=step_count)
 
                 eval_hooks.append(dropless_eval_hook)
@@ -1577,53 +1427,33 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc.disable()
         hlo_written = False
         routing_dump = None
-        autotune_published = False
 
         # The step runs on the state's flat leaves (``_flat_train_step``); ``state`` is rebuilt from them each step.
         state_leaves, state_treedef = jax.tree.flatten(state)
         train_step = _flat_train_step(train_step_fn, state_treedef)
         # The train step's optimized HLO, set when the first step compiles it ahead of time.
         train_step_hlo: str | None = None
-        first_step_watchdog: threading.Timer | None = None
 
-        eval_interval = eval_cfg.steps_per_eval if eval_cfg is not None and eval_cfg.steps_per_eval else None
-        last_ready_time: float | None = None
-
-        def finish_step(rec: "_PendingStep", step_state: GrugTrainState | None) -> None:
-            """Wait for ``rec``'s step and do its host work. With ``step_state`` (the state after the step, not yet
-            donated) the state-dependent work runs too; without it the step was finished lagged, behind the next
-            dispatch, and the callbacks see only its step number and loss."""
-            nonlocal state, state_leaves, last_loss, last_step_duration, host_gap_start, hlo_written, last_ready_time
-            nonlocal autotune_published, first_step_watchdog
+        def finish_step(rec: "_PendingStep", step_state: GrugTrainState) -> None:
+            """Wait for ``rec``'s step and do its host work; ``step_state`` is the state after the step."""
+            nonlocal last_loss, last_step_duration, host_gap_start, hlo_written
             metrics, step = rec.metrics, rec.step
-            # A host float, and no device math on the metrics below: a device op would queue behind the step
-            # dispatched after this one and wait for it, undoing the overlap.
+            # A host float, and no device math on the metrics below.
             loss = float(jax.device_get(metrics["train/loss"]))
             ready_time = time.perf_counter()
             stall_sampler.arm()
-            # The devices' time for this step: from its dispatch, or from the previous step's completion when it was
-            # dispatched before that (the pipelined case).
-            duration = ready_time - (rec.step_start if last_ready_time is None else max(last_ready_time, rec.step_start))
-            last_ready_time = ready_time
-            if step_state is not None and config.trainer.hlo_dump_path is not None and not hlo_written:
+            duration = ready_time - rec.step_start
+            if config.trainer.hlo_dump_path is not None and not hlo_written:
                 if jax.process_index() == 0:
                     assert train_step_hlo is not None
                     _write_train_step_hlo(train_step_hlo, config.trainer.hlo_dump_path)
                 hlo_written = True
             state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_FINISHED)
-            if first_step_watchdog is not None:
-                first_step_watchdog.cancel()
-                first_step_watchdog = None
-            if autotune_cache_loaded is False and not autotune_published:
-                # The first finished step: train_step compiled, so its autotune results are on disk.
-                _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
-                autotune_published = True
             if not math.isfinite(loss):
                 raise RuntimeError(f"Non-finite loss ({loss}) at step {step + 1}.")
             hook_start = time.perf_counter()
             with jax.profiler.TraceAnnotation("callbacks"):
-                view = step_state if step_state is not None else _LaggedStateView(step=step + 1)
-                state_callbacks.run(view, loss=loss, step_duration=duration)
+                state_callbacks.run(step_state, loss=loss, step_duration=duration)
                 last_loss = loss
                 last_step_duration = duration
                 levanter.tracker.log({"throughput/hook_time": time.perf_counter() - hook_start}, step=step)
@@ -1672,14 +1502,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 dump_dir = config.trainer.lm_head_grad_dump_dir
                 if dump_dir is not None and lm_head_grad_dump_due(step, config.model.lm_head_grad_dump_every):
                     _write_lm_head_grad_dump(dump_dir, step, metrics, rec.batch)
-            if step_state is not None:
-                if checkpointer is not None:
-                    with callbacks.progress_event_scope(
-                        state_callbacks.emit_event,
-                        callbacks.ProgressEvent.CHECKPOINT_STARTED,
-                        callbacks.ProgressEvent.CHECKPOINT_FINISHED,
-                    ):
-                        checkpointer.on_step(tree=step_state, step=step + 1)
+            if checkpointer is not None:
+                with callbacks.progress_event_scope(
+                    state_callbacks.emit_event,
+                    callbacks.ProgressEvent.CHECKPOINT_STARTED,
+                    callbacks.ProgressEvent.CHECKPOINT_FINISHED,
+                ):
+                    checkpointer.on_step(tree=step_state, step=step + 1)
             if step % GC_EVERY_STEPS == 0:
                 gc.collect()
                 gc.freeze()
@@ -1693,21 +1522,16 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     jax.process_index(),
                 )
 
-        # Main optimization loop.
+        # Main optimization loop. Each step's host work runs after the next batch is loaded and before the next
+        # step is dispatched (the dispatch donates the state).
         try:
             with HostStallSampler(HOST_STALL_SAMPLE_THRESHOLD) as stall_sampler:
-                # Pipelined loop: step n+1 is dispatched before step n's loss is waited on, so the host's dispatch
-                # and logging overlap the devices' work. A step whose follow-up needs its state (an eval, a
-                # checkpoint poll, the router-tie release, the HLO dump, the last step) is finished before the
-                # next dispatch, since that dispatch donates the state.
                 host_step = int(state.step)
                 pending: _PendingStep | None = None
-                if config.trainer.pipeline_depth not in (0, 1):
-                    raise ValueError(f"pipeline_depth must be 0 or 1, got {config.trainer.pipeline_depth}")
                 while host_step < stop_step:
                     with jax.profiler.TraceAnnotation("load_batch"):
                         batch = next(iterator)
-                    if pending is not None and pending.needs_state:
+                    if pending is not None:
                         finish_step(pending, state)
                         pending = None
                     current_step = host_step
@@ -1737,13 +1561,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     state_callbacks.emit_event(callbacks.ProgressEvent.TRAIN_STEP_STARTED)
                     if train_step_hlo is None:
                         # Compile ahead of time and run the executable directly: its HLO is then free to read.
-                        lowered_step = train_step.lower(state_leaves, batch)
-                        if config.trainer.shared_executable_dir is not None and jax.process_count() > 1:
-                            compiled_step = _compile_on_process_zero(lowered_step, config.trainer.shared_executable_dir)
-                        else:
-                            compiled_step = lowered_step.compile()
+                        compiled_step = train_step.lower(state_leaves, batch).compile()
                         train_step_hlo = compiled_step.as_text()
-                        # Every rank must compile the same program; a mismatch deadlocks its collectives.
                         logger.info(
                             "train step HLO sha256 %s (%d chars) on process %d, device memory limit %s",
                             hashlib.sha256(train_step_hlo.encode()).hexdigest()[:16],
@@ -1751,17 +1570,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                             jax.process_index(),
                             (jax.local_devices()[0].memory_stats() or {}).get("bytes_limit"),
                         )
-                        if config.trainer.preload_library_kernels:
-                            load_library_kernels(train_step_hlo, jax.local_devices())
                         train_step = compiled_step
-                        if config.trainer.first_step_timeout is not None:
-                            first_step_watchdog = threading.Timer(
-                                config.trainer.first_step_timeout,
-                                _exit_on_first_step_hang,
-                                (config.trainer.first_step_timeout,),
-                            )
-                            first_step_watchdog.daemon = True
-                            first_step_watchdog.start()
                     dispatch_start = time.perf_counter()
                     state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
                     state = jax.tree.unflatten(state_treedef, state_leaves)
@@ -1777,9 +1586,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     if inline_watch_stats is not None and watch_due:
                         watch_stats = inline_watch_stats
                     host_step += 1
-                    if pending is not None:
-                        # The previous step, finished while this one runs on the devices.
-                        finish_step(pending, None)
                     pending = _PendingStep(
                         step=current_step,
                         metrics=metrics,
@@ -1787,13 +1593,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         watch_stats=watch_stats,
                         dispatch_time=dispatch_time,
                         step_start=step_start,
-                        needs_state=(
-                            host_step >= stop_step
-                            or config.trainer.pipeline_depth == 0
-                            or (eval_interval is not None and host_step % eval_interval == 0)
-                            or host_step % CHECKPOINT_POLL_STEPS == 0
-                            or (config.trainer.hlo_dump_path is not None and not hlo_written)
-                        ),
                     )
                 if pending is not None:
                     finish_step(pending, state)
@@ -1994,42 +1793,13 @@ def _routing_dump_runner(config: GrugRunConfig, mesh: Mesh):
     return write
 
 
-def _autotune_dump_file() -> str:
-    # One file per process: the processes of a multi-GPU task share /tmp.
-    return f"/tmp/xla_autotune_results_{os.getpid()}.textproto"
-
-
-def _use_xla_autotune_cache(path: str) -> bool:
-    """Point XLA at the shared autotune results: load ``path`` when it exists, and dump this process's results.
-
-    Multi-process GB200 compiles hang in sharded autotuning's cross-process key-value exchange (every rank waits in
-    ``ConfigAssigner::AssignConfigs`` for keys that never arrive), and loading results alone does not skip it. With a
-    cache, every rank takes its configs from the same file with sharding off, so nothing is exchanged and all ranks
-    pick identical kernels. Must run before the backend is created; returns whether a cache was loaded."""
-    fs = fsspec.core.url_to_fs(path)[0]
-    flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}"]
-    loaded = fs.exists(path)
-    if loaded:
-        local = f"/tmp/xla_autotune_cached_{os.getpid()}.textproto"
-        fs.get(path, local)
-        flags += [
-            f"--xla_gpu_load_autotune_results_from={local}",
-            "--xla_gpu_require_complete_aot_autotune_results=true",
-            "--xla_gpu_shard_autotuning=false",
-        ]
-    os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
-    logger.info("XLA autotune cache %s: %s", "loaded" if loaded else "empty, will publish", path)
-    return loaded
-
-
 def _ema_start_step(config: GrugRunConfig) -> int:
     num_steps, last = config.trainer.trainer.num_train_steps, config.trainer.ema_last_steps
     return 0 if last is None else max(0, num_steps - last)
 
 
 def _build_train_step(config: GrugRunConfig, optimizer):
-    """The jitted train step and the optional diagnostic watch step, shared by training and the autotune seed so
-    both compile the same program."""
+    """The train step and the optional diagnostic watch step."""
     trainer = config.trainer.trainer
     watch_config = trainer.watch
     diagnostic_watch_step = None
@@ -2049,8 +1819,6 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         ema_start_step=_ema_start_step(config),
         watch_config=inline_watch_config,
         grad_accum_microbatches=config.trainer.grad_accum_microbatches,
-        offload_opt_state=config.trainer.offload_opt_state,
-        master_param_mode=config.trainer.master_param_mode,
         layer_skip=config.trainer.layer_skip,
         # Late by default, once the entropy head has learned something.
         extra_mlp_start_step=int(trainer.num_train_steps * config.trainer.extra_mlp_start_frac),
@@ -2061,100 +1829,6 @@ def _build_train_step(config: GrugRunConfig, optimizer):
     return train_step_fn, diagnostic_watch_step
 
 
-def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
-    """Seed ``xla_autotune_cache_path`` from this one process standing in for ``topology``'s full mesh (mock NCCL):
-    build the state and one real batch, compile the train step ahead of time with sharded autotuning off (so the
-    process autotunes every fusion itself) and publish the results. Skips the trainer's host-level setup (tracker,
-    distributed syncs, data loader), which waits for processes that do not exist. Must run before the backend is
-    created."""
-    assert config.trainer.xla_autotune_cache_path is not None
-    # The mock compile's executables use no-op NCCL: they must never reach the persistent compilation cache, where a
-    # real run's ranks would load them and deadlock in collectives that do nothing.
-    jax.config.update("jax_enable_compilation_cache", False)
-    jax.config.update("jax_mock_gpu_topology", topology)
-    flags = [f"--xla_gpu_dump_autotune_results_to={_autotune_dump_file()}", "--xla_gpu_shard_autotuning=false"]
-    if config.trainer.hlo_dump_path is not None:
-        # XLA's per-module memory report (largest live buffers at the peak) for the uploaded summary below.
-        flags += [f"--xla_dump_to={SEED_XLA_DUMP_DIR}", "--xla_dump_hlo_module_re=train_step", "--xla_dump_hlo_as_text"]
-    os.environ["XLA_FLAGS"] = " ".join([os.environ.get("XLA_FLAGS", ""), *flags]).strip()
-    logger.info("Seeding the XLA autotune cache under mock topology %s", topology)
-    trainer = config.trainer.trainer
-    optimizer = config.optimizer.build(trainer.num_train_steps)
-    train_step_fn, _ = _build_train_step(config, optimizer)
-    mesh = compact_grug_mesh(
-        expert_axis_size=config.trainer.expert_axis_size,
-        replica_axis_size=config.trainer.replica_axis_size,
-    )
-    with set_mesh(mesh):
-        state = jax.jit(
-            lambda key: initial_state(
-                config.model,
-                optimizer=optimizer,
-                mp=trainer.mp,
-                key=key,
-                ema_beta=config.trainer.ema_beta,
-                offload_opt_state=config.trainer.offload_opt_state,
-                master_param_mode=config.trainer.master_param_mode,
-            )
-        )(jax.random.PRNGKey(trainer.seed))
-        dataset = build_train_dataset(
-            config.data,
-            max_seq_len=config.model.max_seq_len,
-            batch_schedule=trainer.batch_schedule,
-            key=jax.random.PRNGKey(0),
-        ).as_sync_dataset()
-        batch_size = trainer.batch_schedule.batch_size_at_step(0)
-        host = jax.tree.map(
-            lambda *xs: np.stack([np.asarray(x) for x in xs]), *dataset.get_batch(list(range(batch_size)))
-        )
-        batch = jax.tree.map(
-            lambda x: jax.make_array_from_callback(
-                x.shape, NamedSharding(mesh, P(_BATCH_AXES, *([None] * (x.ndim - 1)))), lambda index, x=x: x[index]
-            ),
-            host,
-        )
-        state_leaves, state_treedef = jax.tree.flatten(state)
-        compile_start = time.perf_counter()
-        compiled = _flat_train_step(train_step_fn, state_treedef).lower(state_leaves, batch).compile()
-        logger.info("Seed compile of the train step took %.0f s", time.perf_counter() - compile_start)
-        _log_memory_analysis(compiled)
-    if config.trainer.hlo_dump_path is not None:
-        _upload_memory_reports(os.path.dirname(config.trainer.hlo_dump_path))
-    _publish_xla_autotune_cache(config.trainer.xla_autotune_cache_path)
-
-
-def _upload_memory_reports(directory: str) -> None:
-    """Copy the seed compile's XLA memory-usage reports and optimized HLO to ``directory`` (the HLO dump's
-    directory)."""
-    patterns = ("*memory-usage-report*", "*train_step*after_optimizations.txt")
-    for local in [path for pattern in patterns for path in glob.glob(os.path.join(SEED_XLA_DUMP_DIR, pattern))]:
-        remote = prefix_join(directory, os.path.basename(local))
-        with open(local, "rb") as src, fsspec.open(remote, "wb") as dst:
-            dst.write(src.read())
-        logger.info("Uploaded the XLA memory report to %s", remote)
-
-
-def _log_memory_analysis(compiled: jax.stages.Compiled) -> None:
-    """Log the compiled train step's memory analysis (argument, output, alias, temp and code sizes) in GiB."""
-    stats = compiled.memory_analysis()
-    sizes = {
-        name.removesuffix("_in_bytes"): getattr(stats, name) / 2**30
-        for name in dir(stats)
-        if name.endswith("_in_bytes") and getattr(stats, name)
-    }
-    logger.info("Train step memory (GiB): %s", ", ".join(f"{k} {v:.2f}" for k, v in sorted(sizes.items())))
-
-
-def _publish_xla_autotune_cache(path: str) -> None:
-    """Process 0 uploads its autotune results (written during the compile) to the shared cache."""
-    dump = _autotune_dump_file()
-    if jax.process_index() != 0 or not os.path.exists(dump):
-        return
-    with open(dump, "rb") as src, fsspec.open(path, "wb") as dst:
-        dst.write(src.read())
-    logger.info("Published the XLA autotune results to %s", path)
-
-
 # Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
 HOST_GAP_WARN = 0.1
 # Post-step host work above this is logged with the Python stacks that ran during it (see `host_stall`).
@@ -2162,19 +1836,6 @@ HOST_STALL_SAMPLE_THRESHOLD = 0.3
 
 
 GC_EVERY_STEPS = 50
-# The pipelined loop finishes a step with its state (for the checkpointer's time-based saves) at least this often.
-CHECKPOINT_POLL_STEPS = 25
-
-
-@dataclasses.dataclass(frozen=True)
-class _LaggedStateView:
-    """What the per-step callbacks see for a step finished behind the next dispatch: its step number only (the
-    state was donated). Hooks that need the model (evals) run on steps finished with their state."""
-
-    step: int
-    params: None = None
-    ema_params: None = None
-    opt_state: None = None
 
 
 @dataclasses.dataclass
@@ -2187,7 +1848,6 @@ class _PendingStep:
     watch_stats: object
     dispatch_time: float
     step_start: float
-    needs_state: bool
 
 
 GC_PAUSE_WARN = 0.05
@@ -2201,66 +1861,6 @@ def _warn_on_long_gc(phase: str, info: dict) -> None:
     pause = time.perf_counter() - _gc_start.get("t", time.perf_counter())
     if pause > GC_PAUSE_WARN:
         logger.warning("gc gen%d pause %.3f s on process %d", info.get("generation", -1), pause, jax.process_index())
-
-
-FIRST_STEP_HANG_EXIT_CODE = 75
-# Seconds the other processes wait for process 0 to compile and publish the shared train-step executable.
-SHARED_EXECUTABLE_TIMEOUT = 3600
-# Distributed key-value key under which process 0 publishes its lowered train step's key.
-SEED_XLA_DUMP_DIR = "/tmp/xla_seed_dump"
-SHARED_EXECUTABLE_KEY = "grug/shared_train_step_key"
-
-
-def _compile_on_process_zero(lowered: jax.stages.Lowered, directory: str) -> jax.stages.Compiled:
-    """``lowered`` compiled once on process 0 and loaded from its serialized executable everywhere else, so every
-    process runs byte-identical code. Process 0 publishes its lowered program's key first; a process whose own
-    lowering differs writes it next to the executable and fails at once, since loading another program would be
-    wrong (and a key-named rendezvous would wait out its timeout)."""
-    text = lowered.as_text()
-    key = hashlib.sha256(text.encode()).hexdigest()[:24]
-    client = jax_distributed.global_state.client
-    assert client is not None, "a shared executable needs the JAX distributed client"
-    if jax.process_index() == 0:
-        # Kept as the reference a mismatching process's lowering is diffed against.
-        with fsspec.open(prefix_join(directory, f"lowered-process0-{key}.mlir"), "w") as f:
-            f.write(text)
-        client.key_value_set(SHARED_EXECUTABLE_KEY, key)
-    expected = client.blocking_key_value_get(SHARED_EXECUTABLE_KEY, SHARED_EXECUTABLE_TIMEOUT * 1000)
-    if key != expected:
-        mismatch_path = prefix_join(directory, f"lowered-process{jax.process_index()}-{key}.mlir")
-        with fsspec.open(mismatch_path, "w") as f:
-            f.write(text)
-        raise RuntimeError(
-            f"process {jax.process_index()} lowered the train step to {key}, process 0 to {expected}: the "
-            f"processes would run different programs (this process's lowering: {mismatch_path})"
-        )
-    path = prefix_join(directory, f"train_step-{key}.jaxexec")
-    if jax.process_index() == 0:
-        start = time.perf_counter()
-        compiled = lowered.compile()
-        _log_memory_analysis(compiled)
-        payload, _, _ = serialize(compiled)
-        with fsspec.open(path, "wb") as f:
-            f.write(payload)
-        logger.info(
-            "Compiled the train step in %.0f s and shared it (%d MB) at %s",
-            time.perf_counter() - start,
-            len(payload) >> 20,
-            path,
-        )
-    client.wait_at_barrier("shared_train_step", SHARED_EXECUTABLE_TIMEOUT * 1000)
-    if jax.process_index() == 0:
-        return compiled
-    with fsspec.open(path, "rb") as f:
-        payload = f.read()
-    _, in_tree = jax.tree_util.tree_flatten(lowered.args_info)
-    return deserialize_and_load(payload, in_tree, lowered.out_tree)
-
-
-def _exit_on_first_step_hang(timeout: float) -> None:
-    logger.error("First train step not finished %.0f s after dispatch: exiting so the job restarts", timeout)
-    faulthandler.dump_traceback(all_threads=True)
-    os._exit(FIRST_STEP_HANG_EXIT_CODE)
 
 
 def _write_train_step_hlo(text: str, path: str) -> None:

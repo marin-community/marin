@@ -12,8 +12,9 @@ The ladder runs every rung at 171 tokens per active parameter, the hero budget's
     uv run python -m experiments.grug.fast_track.belay_ckpt1 --size d512 --submit --run-id my-d512 \\
         --target-cluster cw-us-east-02a --priority production
 
-``--size gb200-d6144`` gives the one-rack throughput configuration (8 steps by default; 14.59 s/step, 28.9% MFU).
-Arguments after the recipe's own are passed to ``experiments.grug.fast_track.launch`` and override it.
+The GB200 one-rack throughput configuration (``--size gb200-d6144``, 14.59 s/step, 28.9% MFU) lives on the
+``marin_belay_v1_ckpt1`` branch with the GB200 performance code. Arguments after the recipe's own are passed to
+``experiments.grug.fast_track.launch`` and override it.
 """
 
 import sys
@@ -63,62 +64,20 @@ LADDER_RUNGS = {"d512": (4, 8821), "d768": (6, 24995), "d1024": (8, 32323), "d12
 LADDER_ARGS = ("--single-process", "--ragged-transport", "one_shot", "--save-checkpoints")
 LADDER_MODEL_SETTINGS = ("kda_state_grads=pallas",)
 
-GB200_SIZE = "gb200-d6144"
-# The XLA scheduler's memory slop must stay at 90: higher values grow the peak past what NCCL leaves free.
-GB200_XLA_FLAGS = (
-    "--xla_gpu_enable_latency_hiding_scheduler=true --xla_gpu_enable_command_buffer= "
-    "--xla_gpu_memory_limit_slop_factor=90"
-)
-GB200_ARGS = (
-    "--ragged-transport",
-    "device",
-    "--master-param-mode",
-    "device",
-    "--num-steps",
-    "8",
-    "--no-eval",
-    "--max-retries",
-    "3",
-    "--job-env",
-    f"XLA_FLAGS={GB200_XLA_FLAGS}",
-    "--job-env",
-    "XLA_PYTHON_CLIENT_MEM_FRACTION=0.78",
-)
-GB200_MODEL_SETTINGS = (
-    "mla_num_heads=48",
-    "intermediate_dim=4608",
-    "shared_expert_intermediate_dim=4608",
-    "moe_shared_placement=overlap",
-    "scan_save_routed_output=true",
-    "attn_res_fused_source_grads=true",
-    "gpu_attention=gpu_pallas_fa4",
-    "kda_state_block_v=64",
-    "kda_state_grads=xla",
-    "scan_layers=true",
-    "scan_offload_partials=true",
-    "value_embed_fsdp=true",
-    "fp8_recipe=mxfp8",
-    "moe_mxfp8_dispatch=true",
-    "mxfp8_fused_grad_quant=true",
-)
-
 
 def recipe_args(size: str) -> list[str]:
-    """Launcher arguments for Belay Ckpt 1 at ``size`` (an H100 ladder rung or ``gb200-d6144``)."""
-    if size == GB200_SIZE:
-        extra_args, extra_settings = GB200_ARGS, GB200_MODEL_SETTINGS
-    elif size in LADDER_RUNGS:
-        heads, steps = LADDER_RUNGS[size]
-        width = 3 * int(size.removeprefix("d")) // 4
-        extra_args = (*LADDER_ARGS, "--num-steps", str(steps))
-        extra_settings = (
-            *LADDER_MODEL_SETTINGS,
-            f"mla_num_heads={heads}",
-            f"intermediate_dim={width}",
-            f"shared_expert_intermediate_dim={width}",
-        )
-    else:
-        raise ValueError(f"size must be one of {[*LADDER_RUNGS, GB200_SIZE]}, got {size!r}")
+    """Launcher arguments for Belay Ckpt 1 at the H100 ladder rung ``size``."""
+    if size not in LADDER_RUNGS:
+        raise ValueError(f"size must be one of {list(LADDER_RUNGS)}, got {size!r}")
+    heads, steps = LADDER_RUNGS[size]
+    width = 3 * int(size.removeprefix("d")) // 4
+    extra_args = (*LADDER_ARGS, "--num-steps", str(steps))
+    extra_settings = (
+        *LADDER_MODEL_SETTINGS,
+        f"mla_num_heads={heads}",
+        f"intermediate_dim={width}",
+        f"shared_expert_intermediate_dim={width}",
+    )
     args = ["--size", size, "--recipe", "kma", "--version", VERSION, *extra_args]
     for setting in (*MODEL_SETTINGS, *extra_settings):
         args += ["--model-set", setting]
@@ -129,7 +88,7 @@ def recipe_args(size: str) -> list[str]:
 
 def main(argv: list[str]) -> None:
     if "--size" not in argv:
-        raise SystemExit("usage: belay_ckpt1 --size <d512|d768|d1024|d1280|gb200-d6144> [launch args...]")
+        raise SystemExit("usage: belay_ckpt1 --size <d512|d768|d1024|d1280> [launch args...]")
     i = argv.index("--size")
     size, rest = argv[i + 1], argv[:i] + argv[i + 2 :]
     args = [*recipe_args(size), *rest]
