@@ -650,6 +650,15 @@ def _prebuilt_chat_data_config(spec: SFTSpec, cache_paths: Sequence[str], tokeni
     return _chat_mixture_data_config(spec, components, tokenizer, auto_build_caches=False)
 
 
+def sft_run_id(spec: SFTSpec) -> str:
+    """The run's tracker id, unique per artifact: ``{name}@{version}`` without the kind prefix.
+
+    Without it the id falls back to the output path's basename, the version alone, so every
+    run of one version shares a W&B run and each later run's early steps are dropped.
+    """
+    return f"{spec.name.split('/', 1)[-1].replace('/', '-')}-{spec.version}"
+
+
 def _trainer(
     spec: SFTSpec, *, num_train_steps: int, gpu_allocator: bool, use_explicit_mesh_axes: bool = False
 ) -> TrainerConfig:
@@ -660,6 +669,7 @@ def _trainer(
         # allocator:... to PJRT_Client_Create aborts the TPU backend and JAX falls back to CPU.
         jax_config["jax_pjrt_client_create_options"] = "allocator:cuda_async"
     return TrainerConfig(
+        id=sft_run_id(spec),
         train_batch_size=spec.batch_size,
         num_train_steps=num_train_steps,
         steps_per_eval=500,

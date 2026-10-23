@@ -58,7 +58,7 @@ from experiments.post_training.stage0.snowball_stage0 import (
     snowball_stage0,
     stage0_convert,
 )
-from experiments.sft.launcher import _TRAIN_RESOURCES, ArtifactDatasetSpec
+from experiments.sft.launcher import _TRAIN_RESOURCES, ArtifactDatasetSpec, sft_run_id
 
 _HF_REVISIONS = {
     "grug": ("open-athena/snowball-67b-a2b-base-262k-qk175", "11c9430da3075ef4596f92ee0af142d9d08215c1"),
@@ -638,6 +638,14 @@ def test_snowball_smoke_runs_the_same_recipe_on_the_ladder_model_and_truncated_d
         for field in ("chat_template", "optimizer", "seq_len", "pack", "num_train_epochs"):
             assert getattr(smoke_spec, field) == getattr(full_spec, field), field
         assert smoke.steps[stage_name].runtime_args[_TRAIN_RESOURCES].replicas == 1
+
+
+def test_snowball_stage_runs_have_distinct_tracker_ids():
+    ids = [
+        sft_run_id(spec) for graph in (snowball_stage0(), snowball_stage0(smoke_run())) for spec in graph.specs.values()
+    ]
+    assert len(set(ids)) == len(ids) == 6
+    assert sft_run_id(snowball_stage0().specs["s1-chat"]) == "stage0-snowball-s1-chat-2026.10.22"
 
 
 def test_snowball_and_axolotl_budgets_agree():
