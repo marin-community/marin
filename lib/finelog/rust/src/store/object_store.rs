@@ -286,11 +286,6 @@ pub trait ObjectStore: Send + Sync {
         )))
     }
 
-    /// Begin a maintenance cache fill without waiting. Query callers use
-    /// [`ObjectStore::warm_query`] so they share reuse and admission limits.
-    /// A store without a cache does nothing.
-    fn warm(&self, _reference: &ObjectReference) {}
-
     /// Consider an optional fill after a query cache miss. Reuse history and
     /// the query's shared budget decide whether a cached store admits it.
     fn warm_query(&self, _reference: &ObjectReference, _query: &QueryCacheAdmission) {}

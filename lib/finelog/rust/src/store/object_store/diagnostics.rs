@@ -10,7 +10,6 @@ const CACHE_LOG_INTERVAL: Duration = Duration::from_secs(60);
 pub(super) enum FillReason {
     Query,
     Required,
-    Repair,
 }
 
 #[derive(Default)]
@@ -43,7 +42,6 @@ pub(super) struct CacheDiagnostics {
     pub cleanup_max_lock_hold_us: AtomicU64,
     query: FillCounters,
     required: FillCounters,
-    repair: FillCounters,
     pub writes: FillCounters,
 }
 
@@ -66,7 +64,6 @@ impl Default for CacheDiagnostics {
             cleanup_max_lock_hold_us: AtomicU64::default(),
             query: FillCounters::default(),
             required: FillCounters::default(),
-            repair: FillCounters::default(),
             writes: FillCounters::default(),
         }
     }
@@ -77,7 +74,6 @@ impl CacheDiagnostics {
         match reason {
             FillReason::Query => &self.query,
             FillReason::Required => &self.required,
-            FillReason::Repair => &self.repair,
         }
     }
 
@@ -111,8 +107,6 @@ impl CacheDiagnostics {
             query_fill_bytes = take(&self.query.bytes),
             required_fill_objects = take(&self.required.objects),
             required_fill_bytes = take(&self.required.bytes),
-            repair_fill_objects = take(&self.repair.objects),
-            repair_fill_bytes = take(&self.repair.bytes),
             write_objects = take(&self.writes.objects),
             write_bytes = take(&self.writes.bytes),
             history_entries = history.entries,

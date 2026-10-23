@@ -169,6 +169,7 @@ async fn rebuild_missing_artifacts(backfill: &IndexBackfill<'_>, max: usize) -> 
     built
 }
 
+/// Return whether the candidate produced nonempty artifacts.
 async fn rebuild_candidate(
     backfill: &IndexBackfill<'_>,
     candidate: &BackfillCandidate,
@@ -259,7 +260,7 @@ async fn rebuild_candidate(
     Ok(!artifacts.is_empty())
 }
 
-/// Publish the artifacts just built beside `path` and make them live.
+/// Publish artifacts built beside `staged` for the catalog segment at `path`.
 async fn commit_built_artifacts(
     backfill: &IndexBackfill<'_>,
     path: &str,

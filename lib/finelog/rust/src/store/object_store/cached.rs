@@ -322,7 +322,8 @@ impl CachedObjectStore {
         Ok(stats)
     }
 
-    fn start_warm(&self, reference: &ObjectReference, reason: FillReason) {
+    fn start_warm(&self, reference: &ObjectReference) {
+        // Reserve before spawning so cancelled queries cannot leave queued fills.
         let Ok(permit) = self.fetches.clone().try_acquire_owned() else {
             self.diagnostics.warm_busy.fetch_add(1, Ordering::Relaxed);
             return;
@@ -331,7 +332,10 @@ impl CachedObjectStore {
         let reference = reference.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            if let Err(error) = store.materialize_reserved(&reference, reason).await {
+            if let Err(error) = store
+                .materialize_reserved(&reference, FillReason::Query)
+                .await
+            {
                 store
                     .diagnostics
                     .warm_errors
@@ -445,17 +449,10 @@ impl ObjectStore for CachedObjectStore {
         self.lookup(reference).await
     }
 
-    fn warm(&self, reference: &ObjectReference) {
-        // Warming is optional: scans can read the remote object directly.
-        // Reserving before spawning prevents a broad or cancelled query from
-        // leaving thousands of queued downloads churning the cache afterward.
-        self.start_warm(reference, FillReason::Repair);
-    }
-
     fn warm_query(&self, reference: &ObjectReference, query: &QueryCacheAdmission) {
         let counter = match query.admit(reference, &self.request_history) {
             AdmissionDecision::Admitted => {
-                self.start_warm(reference, FillReason::Query);
+                self.start_warm(reference);
                 &self.diagnostics.query_admitted
             }
             AdmissionDecision::Cold => &self.diagnostics.query_cold,
@@ -840,14 +837,19 @@ mod tests {
             None,
         )
         .unwrap();
+        let first_query = QueryCacheAdmission::default();
+        for object in &objects {
+            store.warm_query(object, &first_query);
+        }
+        let repeated_query = QueryCacheAdmission::default();
         for object in &objects[..MAX_PARALLEL_FETCHES] {
-            store.warm(object);
+            store.warm_query(object, &repeated_query);
         }
         for _ in 0..MAX_PARALLEL_FETCHES {
             gate.entered().await;
         }
         for object in &objects[MAX_PARALLEL_FETCHES..objects.len() - 1] {
-            store.warm(object);
+            store.warm_query(object, &repeated_query);
         }
         let required = objects.last().unwrap();
         let download_store = store.clone();

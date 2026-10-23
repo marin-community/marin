@@ -331,10 +331,6 @@ impl ObjectStore for FaultInjectingObjectStore {
         self.inner.cached_path(reference).await
     }
 
-    fn warm(&self, reference: &ObjectReference) {
-        self.inner.warm(reference)
-    }
-
     fn warm_query(
         &self,
         reference: &ObjectReference,
