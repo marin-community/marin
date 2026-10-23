@@ -88,6 +88,7 @@ nav:
       - Markdownified Datasets: reports/markdownified-datasets.md
   - Reproducibility:
       - Pretraining source pool: reproducibility/pretraining-source-pool.md
+      - Delphi seed repeats: reproducibility/delphi-seed-repeats.md
   - Developer Guide:
       - Contributing: dev-guide/contributing.md
       - Agent Workflows: dev-guide/agent-workflows.md
