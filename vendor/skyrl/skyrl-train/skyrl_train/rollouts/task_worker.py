@@ -548,6 +548,11 @@ class TaskRolloutWorker:
         sink.bind_runner(type(self).__name__)
         self.trajectory_sink = sink
 
+    def machine_factory(self, backend: str) -> MachineFactory | None:
+        """The provider this worker's rollouts use for ``backend``, or None when the worker has no such backend."""
+        owned = self.factories.get(backend)
+        return None if owned is None else owned.factory
+
     async def startup(self) -> None:
         if self.installed_agents is not None:
             await self.installed_agents.startup()
