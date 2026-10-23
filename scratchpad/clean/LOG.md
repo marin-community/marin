@@ -8,3 +8,4 @@
 - 2026-10-23 15:00:52 pass 1 (GB200/MFU launcher+trainer+recipe removal): 20 HLO cases identical to hlo_before
 - 2026-10-23 15:06:58 pass 2 model rewrite: all 20 HLO cases identical (fixed: final-gate z order, per-pass stack order)
 - 2026-10-23 15:15:08 pass 2 (dead flags): 19/19 HLO cases identical, tiny 2-step losses identical, fast_track+grug tests 46 passed 1 skipped (test_kda_local erase-gate options dropped)
+- 2026-10-23 15:22:38 phase B (HLO no-op residue: x*1.0, +0/-0, ones-multiplied head gate + zero head_skip_frac metric, leaky_relu(0)->relu, size-1 pass stack/reduce, unused entropy-scan carries): 2-step tiny losses AND full train state bitwise identical; op diff in phaseB_opdiff.txt; tests 46 passed

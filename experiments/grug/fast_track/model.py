@@ -602,13 +602,10 @@ class InklingRelPos(eqx.Module):
         )
 
 
-def _head_gate_stats(head_gate: Float[Array, "B S N"], stats: dict[str, jax.Array]) -> jax.Array:
-    """Log the fraction of heads whose output gate, normalized to (0, 1), is near off (``head_gate_off``) into
-    ``stats``; returns the per-head keep mask, all ones."""
+def _log_head_gate_off(head_gate: Float[Array, "B S N"], stats: dict[str, jax.Array]) -> None:
+    """Log into ``stats`` the fraction of heads whose output gate, normalized to (0, 1), is near off."""
     g = jax.lax.stop_gradient(head_gate.astype(jnp.float32))
     stats[f"{_OUTSTAT_PREFIX}head_gate_off"] = jnp.mean((g < _HEAD_GATE_OFF).astype(jnp.float32))
-    stats[f"{_OUTSTAT_PREFIX}head_skip_frac"] = jnp.zeros((), jnp.float32)
-    return jnp.ones_like(g)
 
 
 class CausalSelfAttention(eqx.Module):
@@ -804,7 +801,7 @@ class CausalSelfAttention(eqx.Module):
         if self.qk_mult is None:
             q = q * cfg.qk_mult
         else:
-            q = q * (self.qk_mult * 1.0).astype(q.dtype)  # HLO-NOOP
+            q = q * self.qk_mult.astype(q.dtype)
         return q, k
 
     @named_call
@@ -847,8 +844,8 @@ class CausalSelfAttention(eqx.Module):
             attn_out = attn_out - xsa
         if self.attn_gate is not None:
             gate_logit = jnp.einsum("bsd,dn->bsn", x, self.attn_gate).astype(jnp.float32)
-            head_keep = _head_gate_stats(jax.nn.sigmoid(gate_logit), stats)
-            gate = (2 * jax.nn.sigmoid(gate_logit) * head_keep).astype(attn_out.dtype)  # HLO-NOOP: head_keep
+            _log_head_gate_off(jax.nn.sigmoid(gate_logit), stats)
+            gate = (2 * jax.nn.sigmoid(gate_logit)).astype(attn_out.dtype)
             attn_out = gate[..., None] * attn_out
         # Merge heads into the hidden dim while keeping model-axis sharding for w_o.
         attn_out = jnp.reshape(
@@ -1029,7 +1026,7 @@ class KimiDeltaAttention(eqx.Module):
         o = jnp.reshape(o, (b, s, cfg.num_heads * head_dim), out_sharding=P(_BATCH_AXES, None, "model"))
         gate = jax.nn.sigmoid(_proj(x, self.w_g))
         gate_heads = rearrange(gate, "... (n d) -> ... n d", d=head_dim)
-        _head_gate_stats(jnp.mean(gate_heads.astype(jnp.float32), axis=-1), stats)
+        _log_head_gate_off(jnp.mean(gate_heads.astype(jnp.float32), axis=-1), stats)
         out = _proj(o * gate, self.w_o, out_sharding=_batch_spec())
         return out, stats
 
@@ -1193,7 +1190,7 @@ class MoEMLP(eqx.Module):
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         topk_logits, selected_experts = _small_top_k(biased_logits, k + 1)
         alpha = topk_logits[:, -1:]
-        selected_experts = selected_experts[:, :-1] + 0  # HLO-NOOP
+        selected_experts = selected_experts[:, :-1]
         # Combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = self._combine_weights(unbiased_topk)
@@ -1227,8 +1224,8 @@ class MoEMLP(eqx.Module):
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
         routed_flat, overflow = _run_expert_bank(
-            self.expert_mlp, self.cfg, routed_input, (selected_experts - 0).astype(jnp.int32), combine_weights
-        )  # HLO-NOOP: - 0
+            self.expert_mlp, self.cfg, routed_input, selected_experts, combine_weights
+        )
         router_stats["capacity_overflow"] = overflow.dropped
         router_stats["sender_capacity_overflow"] = overflow.sender_dropped
         router_stats["receiver_capacity_overflow"] = overflow.receiver_dropped
@@ -1257,7 +1254,7 @@ def _shared_experts_tail(
         act = ActivationFunctionEnum(cfg.expert_activation).to_jax_fn()
         hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
     else:
-        hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, 0.0)) for u in parts], axis=1)  # HLO-NOOP
+        hidden = jnp.concatenate([jnp.square(jax.nn.relu(u)) for u in parts], axis=1)
     return _proj(hidden, w_down, out_sharding=out_sharding)
 
 
@@ -1465,9 +1462,6 @@ def _run_expert_bank(
             pooled_transport_capacity_factor=em.pooled_transport_capacity_factor,
             report_capacity_overflow=True,
             expert_chunks=em.expert_chunks,
-            num_expert_waves=em.num_expert_waves,
-            fp8_dispatch=em.fp8_dispatch,
-            expert_remat=em.expert_remat,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
         )
     return em(routed_input, selected, combine_weights, mesh=get_abstract_mesh(), report_capacity_overflow=True)
@@ -1536,42 +1530,26 @@ def _vocab_entropy(
     """Stop-gradient entropy of each position's next-token distribution, one online pass over vocabulary chunks
     (``H = log s + m - t / s`` with running max ``m``, ``s = sum e^(z - m)``, ``t = sum e^(z - m) z``), so the
     ``[B, S, V]`` logits are never materialized. ``cap`` applies the logit soft cap first."""
-    labels = jnp.zeros(head_in.shape[:2], jnp.int32)
     head_in = jax.lax.stop_gradient(head_in)
     vocab = lm_head.shape[1]
     chunk = math.gcd(vocab, _ENTROPY_CHUNK)
     # Scanned chunks must be unsharded along the scan axis: gather the (FSDP / model-sharded) head first.
     weights = rearrange(reshard(jax.lax.stop_gradient(lm_head), P(None, None)), "e (n c) -> n e c", c=chunk)
     b, s_len, _ = head_in.shape
-    spec = P(_BATCH_AXES, None)
-    init = (
-        *(reshard(jnp.full((b, s_len), v, jnp.float32), spec) for v in (-jnp.inf, 0.0, 0.0, 0.0)),
-        reshard(jnp.zeros((b, s_len), jnp.int32), spec),
-    )
-    # The scan also carries the label logit and the top token (unused here) so it stays the program it was.
-    labels = reshard(labels, spec)
+    init = tuple(reshard(jnp.full((b, s_len), v, jnp.float32), P(_BATCH_AXES, None)) for v in (-jnp.inf, 0.0, 0.0))
 
-    def step(carry, chunk_in):
-        m, total, weighted, label_logit, top_id = carry
-        w, start = chunk_in
+    def step(carry, w):
+        m, total, weighted = carry
         z = jnp.einsum("bse,ec->bsc", head_in, w.astype(head_in.dtype), preferred_element_type=jnp.float32)
         z = reshard(z, P(_BATCH_AXES, None, None))
         if cap is not None:
             z = cap * jnp.tanh(z / cap)
-        chunk_max = jnp.max(z, axis=-1)
-        top_id = jnp.where(chunk_max > m, start + jnp.argmax(z, axis=-1).astype(jnp.int32), top_id)
-        m_new = jnp.maximum(m, chunk_max)
+        m_new = jnp.maximum(m, jnp.max(z, axis=-1))
         scale = jnp.exp(m - m_new)
         e = jnp.exp(z - m_new[..., None])
-        offset = labels - start
-        in_chunk = (offset >= 0) & (offset < chunk)
-        at_label = jnp.take_along_axis(z, jnp.clip(offset, 0, chunk - 1)[..., None], axis=-1)[..., 0]
-        label_logit = jnp.where(in_chunk, at_label, label_logit)
-        carry = (m_new, total * scale + jnp.sum(e, -1), weighted * scale + jnp.sum(e * z, -1), label_logit, top_id)
-        return carry, None
+        return (m_new, total * scale + jnp.sum(e, -1), weighted * scale + jnp.sum(e * z, -1)), None
 
-    starts = jnp.arange(weights.shape[0], dtype=jnp.int32) * chunk
-    (m, total, weighted, _, _), _ = jax.lax.scan(step, init, (weights, starts))
+    (m, total, weighted), _ = jax.lax.scan(step, init, weights)
     lse = jnp.log(total) + m
     return lse - weighted / total
 
@@ -2147,14 +2125,6 @@ class Transformer(eqx.Module):
         entropy = jax.lax.stop_gradient(jnp.mean(-jnp.sum(weights * jnp.log(jnp.maximum(weights, 1e-30)), axis=0)))
         z_final = _gate_z(logits)
         z_total = (sum(z_out) + z_final) / (len(z_out) + 1)
-        # HLO-NOOP: one pass, stacked and reduced over a size-1 pass axis.
-        per_pass = [jax.tree.map(lambda *xs: jnp.stack(xs), stats) for stats in stats_out]
-        layer_stats = [
-            jax.tree.map(
-                lambda x: jnp.sum(x, axis=0) if jnp.issubdtype(x.dtype, jnp.integer) else jnp.mean(x, axis=0), p
-            )
-            for p in per_pass
-        ]
 
         if self.skip_adapter is not None and layer_skip is not None:
             adapted = self.skip_adapter(rms_norm(mixed, eps))
@@ -2186,7 +2156,7 @@ class Transformer(eqx.Module):
         final_stats["attn_res_query_norm_max"] = jnp.max(query_norms)
         for g in range(queries.shape[0]):
             final_stats[f"attn_res_query_norm_g{g:02d}"] = query_norms[g]
-        stacked = jax.tree.map(lambda *xs: jnp.stack(xs), *layer_stats)
+        stacked = jax.tree.map(lambda *xs: jnp.stack(xs), *stats_out)
         return hidden, stacked, final_stats
 
     def _skip_router_keep(self, stream: Float[Array, "B S D"]) -> tuple[Float[Array, "B S"], jax.Array]:

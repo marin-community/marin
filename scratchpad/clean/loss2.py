@@ -5,6 +5,7 @@
 #
 #   XLA_FLAGS=--xla_force_host_platform_device_count=2 python scratchpad/clean/loss2.py
 import dataclasses
+import hashlib
 import sys
 import types
 
@@ -111,7 +112,8 @@ def two_losses(model_cfg: GrugModelConfig, opt_settings: dict[str, str]) -> list
             )
             leaves, metrics, _ = step(leaves, batch)
             losses.append(float(metrics["train/loss"]))
-    return losses
+        digest = hashlib.sha256(b"".join(np.asarray(x).tobytes() for x in leaves)).hexdigest()[:16]
+    return [*losses, digest]
 
 
 def main() -> None:
@@ -119,7 +121,8 @@ def main() -> None:
     configs = tiny_configs()
     for name in names:
         cfg, opt = configs[name]
-        print(name, [repr(x) for x in two_losses(cfg, opt)], flush=True)
+        *losses, digest = two_losses(cfg, opt)
+        print(name, [repr(x) for x in losses], "state", digest, flush=True)
 
 
 if __name__ == "__main__":
