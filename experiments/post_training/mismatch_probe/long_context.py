@@ -6,8 +6,9 @@
 Boots the SkyRL Megatron policy worker on a Snowball checkpoint with the production
 scoring geometry — tensor-parallel 1, pipeline-parallel 1, expert-parallel 8, no
 context parallelism (Snowball's sliding-window layers and five KV heads block both
-context-parallel backends) — then scores synthetic token ids at increasing lengths,
-recording peak memory, wall time, and the largest length that succeeds.
+context-parallel backends) — then runs the reference score pass (top-256 per
+position, ``probe_score_forward``) on synthetic token ids at increasing lengths,
+recording memory, wall time, and the largest length that succeeds.
 
     python -m experiments.post_training.mismatch_probe.long_context \
         --model-path s3://marin-rno2a/.../models/b-step92 --lengths 32768 65536
@@ -32,10 +33,11 @@ import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Gr
 import torch
 from hydra import compose, initialize_config_dir
 from skyrl_train.entrypoints.main_base import config_dir
-from skyrl_train.mismatch_probe.modes import NATIVE_MODE
 from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.utils import initialize_ray
 from skyrl_train.workers.megatron.megatron_worker import PolicyWorker
+
+from experiments.post_training.mismatch_probe.scoring_pass import TOP_K
 
 
 def scoring_config(model_path: str, *, num_gpus: int) -> object:
@@ -87,12 +89,12 @@ def synthetic_batch(length: int, vocabulary_size: int, seed: int, *, rows: int) 
 
 
 def score_length(policy, length: int, vocabulary_size: int, seed: int, *, num_gpus: int) -> dict:
-    """One probe forward of one ``length``-token sequence per GPU; returns the timing and memory record."""
+    """One reference score pass of one ``length``-token sequence per GPU; returns the timing and memory record."""
     batch = synthetic_batch(length, vocabulary_size, seed, rows=num_gpus)
-    batch.metadata["probe_mode"] = NATIVE_MODE
     batch.metadata["probe_micro_batch_size"] = 1
+    batch.metadata["probe_score_top_k"] = TOP_K
     started = time.monotonic()
-    ray.get(policy.async_run_ray_method("mesh", "probe_forward", data=batch))
+    ray.get(policy.async_run_ray_method("mesh", "probe_score_forward", data=batch))
     duration = time.monotonic() - started
     memory = ray.get(policy.async_run_ray_method("pass_through", "get_cuda_memory"))
     return {"length": length, "seconds": duration, "memory": memory[0]}
