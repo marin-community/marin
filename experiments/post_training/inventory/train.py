@@ -40,6 +40,7 @@ SEED = 20261020
 REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
 EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
+JUDGE_API_KEY_ENV = "TOGETHER_API_KEY"
 
 
 def training_recipe(steps: int) -> dict:
@@ -63,7 +64,7 @@ def training_recipe(steps: int) -> dict:
         "task_sessions": {
             "local": {},
             "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
-            "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": "TOGETHER_API_KEY"},
+            "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": JUDGE_API_KEY_ENV},
         }
     }
     config["extra_env"].update(
@@ -151,7 +152,7 @@ def build_run(
             job_timeout_seconds=24 * 60 * 60,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             wandb_entity="marin-community",
-            required_env_vars=(EVALUATION_API_KEY_ENV,),
+            required_env_vars=(EVALUATION_API_KEY_ENV, JUDGE_API_KEY_ENV),
         ),
         export_hf=True,
     )

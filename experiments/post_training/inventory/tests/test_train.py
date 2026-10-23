@@ -7,10 +7,39 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 from marin.execution.lazy import StepContext
 from marin.rl.skyrl import skyrl_cpu_command
 
-from experiments.post_training.inventory.train import build_run
+from experiments.post_training.inventory.train import build_run, main
+
+
+def test_missing_judge_credential_rejects_inventory_run_before_iris_submission(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "offline-test-key")
+
+    def unexpected_connection(**_kwargs):
+        pytest.fail("Missing judge credential reached the external Iris connection")
+
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", unexpected_connection)
+    result = CliRunner().invoke(
+        main,
+        [
+            "--version",
+            "2026.10.23.1",
+            "--train-source",
+            "s3://test/training.parquet",
+            "--validation-source",
+            "s3://test/validation.parquet",
+            "--steps",
+            "3",
+            "--run",
+        ],
+    )
+    assert result.exit_code != 0
+    assert isinstance(result.exception, KeyError)
+    assert result.exception.args == ("TOGETHER_API_KEY",)
 
 
 @pytest.mark.timeout(180)
