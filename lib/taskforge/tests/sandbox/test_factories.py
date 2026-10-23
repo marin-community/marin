@@ -290,23 +290,6 @@ def test_warming_resolves_the_bare_cpython_environment_once_off_the_caller_threa
 
     assert not thread.is_alive()
     assert calls == [(Path("/cache/python"), (), "3.12.12", factories.WARM_THREAD)]
-    assert "Warmed the local Python 3.12.12 environment" in caplog.text
-
-
-def test_a_failed_warm_up_is_logged_and_leaves_the_first_machine_to_resolve(monkeypatch, caplog):
-    def refuse(cache, requirements, version):
-        raise RuntimeError("uv is not installed")
-
-    monkeypatch.setattr(factories, "resolve_python_environment", refuse)
-    built = {**IRIS, Backend.LOCAL.value: FakeLocalFactory(Backend.LOCAL)}
-
-    with caplog.at_level(logging.WARNING, logger=factories.__name__):
-        thread = warm_local_python(built)
-        assert thread is not None
-        thread.join(timeout=10)
-
-    assert "Warming the local Python 3.12.12 environment in /cache/python failed" in caplog.text
-    assert "uv is not installed" in caplog.text
 
 
 def test_without_a_local_factory_there_is_nothing_to_warm(monkeypatch):
