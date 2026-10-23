@@ -3544,9 +3544,13 @@ def _halt_init(
     cfg: GrugModelConfig, attn: "CausalSelfAttention | KimiDeltaAttention", mlp: "MoEMLP | DenseMLP", shared
 ) -> dict[str, jax.Array | None]:
     """``Block``'s zero-init halting-stream writes (``halt_layers``, ``halt_write``)."""
-    out: dict[str, jax.Array | None] = dict.fromkeys(("halt_read", "halt_attn", "halt_shared", "halt_routed"))
+    out: dict[str, jax.Array | None] = dict.fromkeys(
+        ("halt_read", "halt_attn", "halt_shared", "halt_routed", "halt_bias")
+    )
     if not cfg.halt_layers:
         return out
+    # A per-layer scalar: a [G] replicated vector indexed per gated layer got a NaN gradient on the GPU.
+    out["halt_bias"] = jnp.asarray(cfg.halt_bias_init, jnp.float32)
     if cfg.halt_write == HaltWrite.READ:
         out["halt_read"] = reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None))
         return out
@@ -3584,6 +3588,7 @@ class Block(eqx.Module):
     halt_attn: Float[Array, " NH"] | None  # halt_write=unit: per attention output channel (before w_o)
     halt_shared: Float[Array, " I"] | None  # halt_write=unit: per shared-expert unit
     halt_routed: Float[Array, "E I"] | None  # halt_write=unit: per routed-expert unit (times its combine weight)
+    halt_bias: Float[Array, ""] | None  # the halting bias b_l a gated layer adds to the stream (every layer carries one)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
@@ -5674,7 +5679,6 @@ class Transformer(eqx.Module):
     skip_adapter: DenseMLP | None  # cfg.skip_adapter_dim: the skipped tokens' readout MLP
     skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
     skip_router_bias: Float[Array, ""] | None
-    halt_bias: Float[Array, " G"] | None  # cfg.halt_layers: each gated layer's halting bias b_l
     skip_probe_w1: Float[Array, "3 D H"] | None  # cfg.skip_probe_layer probes (f0, f1, g)
     skip_probe_b1: Float[Array, "3 H"] | None
     skip_probe_w2: Float[Array, "3 H"] | None
@@ -5797,11 +5801,6 @@ class Transformer(eqx.Module):
                 else None
             ),
             skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
-            halt_bias=(
-                reshard(jnp.full((len(cfg.halt_layers),), cfg.halt_bias_init, jnp.float32), P(None))
-                if cfg.halt_layers
-                else None
-            ),
             **_mid_head_params(cfg, output_proj.shape, random.fold_in(key, 5)),
             **_final_conf_params(cfg, random.fold_in(key, 7)),
             **_probe_mlp_params("skip_probe", 3 if cfg.skip_probe_layer is not None else 0, cfg, random.fold_in(key, 8)),
@@ -6214,8 +6213,9 @@ class Transformer(eqx.Module):
 
         def halt_gate(i: int) -> jax.Array:
             """Gated layer ``i``'s output scale from the halting stream written by the layers below it."""
-            assert self.halt_bias is not None and "halt_z" in extra_state
-            step_gate = jax.nn.sigmoid(extra_state["halt_z"] + self.halt_bias[cfg.halt_layers.index(i)])
+            bias = layers[i].halt_bias
+            assert bias is not None and "halt_z" in extra_state
+            step_gate = jax.nn.sigmoid(extra_state["halt_z"] + bias)
             gate = step_gate if "halt_g" not in extra_state else extra_state["halt_g"] * step_gate
             extra_state["halt_g"] = gate
             halt_gates.append(gate)
