@@ -30,6 +30,7 @@ from rolloutengine.models import (
     RolloutFailure,
     RolloutOperation,
     Prompt,
+    Rollout,
     TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
@@ -38,6 +39,7 @@ from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
+from skyrl_train.dataset.task_feed import graded_group, write_graded_group, write_skipped
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
@@ -343,8 +345,10 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        feed_root: str | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
+        self.feed_root = feed_root
         self.model_client = model_client
         self.judge_connection = judge_connection
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
@@ -591,9 +595,45 @@ class TaskRolloutWorker:
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
+            if self.feed_root is not None:
+                return await self._run_feed_task(task, writer)
             rollouts = await self.generate(task.request)
             batch = await self.training_batch(task.request, rollouts)
             return await write_trajectory_batch(task, writer, batch)
+
+    async def _run_feed_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
+        assert self.feed_root is not None
+        uid = task.prompt["uid"]
+        try:
+            rollouts = await self.generate(task.request)
+        except Exception as error:
+            logger.opt(exception=error).warning("Feed row {} failed", uid)
+            await asyncio.to_thread(write_skipped, self.feed_root, uid, f"{type(error).__name__}: {error}")
+            await writer.skip_rollout(task.lease, task.prompt)
+            return 0
+        trajectory_ids = task.request.trajectory_ids
+        graded = [
+            GradedRollout(
+                Rollout(
+                    trajectory_ids[index].to_string() if trajectory_ids is not None else f"{uid}_{index}",
+                    rollout.conversations,
+                    rollout.stop_reason,
+                    rollout.metrics,
+                    rollout.outputs,
+                    rollout.failure,
+                ),
+                rollout.grade,
+            )
+            for index, rollout in enumerate(rollouts)
+        ]
+        await asyncio.to_thread(write_graded_group, self.feed_root, graded_group(uid, task.lease.policy_step, graded))
+        try:
+            batch = await self.training_batch(task.request, rollouts)
+        except Exception as error:
+            logger.opt(exception=error).warning("Feed row {} has no training batch; skipping it", uid)
+            await writer.skip_rollout(task.lease, task.prompt)
+            return 0
+        return await write_trajectory_batch(task, writer, batch)
 
 
 @dataclass(frozen=True)
@@ -668,4 +708,5 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            feed_root=self.config.data.feed.root,
         )
