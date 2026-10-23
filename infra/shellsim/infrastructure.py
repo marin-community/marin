@@ -93,6 +93,9 @@ def deploy(config: ProxyConfig) -> DeploymentOutputs:
             )
         ),
         platforms=[docker_build.Platform.LINUX_AMD64],
+        # Resolve base image tags against the registry so a workstation's stale local
+        # base image cannot carry an outdated trust store into the release.
+        pull=True,
         tags=[IMAGE_TAG],
         build_on_preview=False,
         push=True,
