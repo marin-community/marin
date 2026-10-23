@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+from pydantic import JsonValue
+
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.stage10_proposal.model import TaskProposal
@@ -77,6 +79,7 @@ class Build(Protocol):
         /,
         *,
         research: ResearchRequirement,
+        build_input: JsonValue,
         model_digest: str,
     ) -> TaskDraft: ...
 

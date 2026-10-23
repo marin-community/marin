@@ -9,7 +9,8 @@ parameter after the context in order. When the program runs, the step receives t
 first, then one keyword argument per input:
 
 * for a parameter whose name is another step's name, that step's output;
-* for the parameter named ``proposal``, the proposal the caller passed to the runner.
+* for the parameter named ``proposal``, the proposal the caller passed to the runner;
+* for the parameter named ``build_input``, the caller's immutable source-specific build input.
 
 The author writes the final step the same way, annotates it as returning a ``TaskSpec``, and
 decorates it with ``@rl_env_build_sink``. ``rl_env_build_program`` receives the steps and, as
@@ -31,6 +32,12 @@ from taskforge.content_hash import canonical_json, digest, sha256_hex
 
 PROPOSAL_INPUT = "proposal"
 """The parameter name a step takes to receive the proposal. A step may not use it as its own name."""
+
+BUILD_INPUT = "build_input"
+"""The parameter name a step takes to receive the caller's immutable build input."""
+
+PROGRAM_INPUTS = frozenset({PROPOSAL_INPUT, BUILD_INPUT})
+"""Inputs supplied by the build runner rather than another program step."""
 
 
 @dataclass(frozen=True)
@@ -241,8 +248,8 @@ def rl_env_build_program(*steps: RLEnvBuildStep, sink: RLEnvBuildSink) -> RLEnvB
     nodes = (*steps, sink)
     by_name: dict[str, RLEnvBuildStep | RLEnvBuildSink] = {}
     for node in nodes:
-        if node.name == PROPOSAL_INPUT:
-            raise ValueError(f"A step may not be named {PROPOSAL_INPUT!r}: steps use it to receive the proposal")
+        if node.name in PROGRAM_INPUTS:
+            raise ValueError(f"A step may not be named {node.name!r}: the runner supplies that input")
         if node.name in by_name:
             raise ValueError(f"Two steps are named {node.name!r}")
         by_name[node.name] = node
@@ -251,10 +258,10 @@ def rl_env_build_program(*steps: RLEnvBuildStep, sink: RLEnvBuildSink) -> RLEnvB
     for node in nodes:
         if sink.name in node.inputs:
             raise ValueError(f"Step {node.name} takes the sink {sink.name} as an input")
-        unknown = [name for name in node.inputs if name not in by_name and name != PROPOSAL_INPUT]
+        unknown = [name for name in node.inputs if name not in by_name and name not in PROGRAM_INPUTS]
         if unknown:
             raise ValueError(f"Step {node.name} declares inputs {unknown} with no step of that name")
-        waiting[node.name] = {name for name in node.inputs if name != PROPOSAL_INPUT}
+        waiting[node.name] = {name for name in node.inputs if name not in PROGRAM_INPUTS}
         for name in waiting[node.name]:
             consumers[name].append(node.name)
     dead = [step.name for step in steps if not consumers[step.name]]

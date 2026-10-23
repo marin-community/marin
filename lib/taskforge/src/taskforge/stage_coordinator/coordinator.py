@@ -78,7 +78,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 from rigging.filesystem.atomic import atomic_rename
 
 from taskforge.content_hash import canonical_json, digest, pretty_json
@@ -130,6 +130,7 @@ VALIDATION_FILE = "validation.json"
 DECISION_FILE = "decision.json"
 BUDGET_DIGEST = "budget_digest"
 MODEL_DIGEST = "model_digest"
+BUILD_INPUT_DIGEST = "build_input_digest"
 RESEARCH = "research"
 FAILURE_CHARS = 6000
 """The length of the traceback tail kept from a build or author failure for the author's revision."""
@@ -174,6 +175,8 @@ class StageCoordinator:
             records it.
         model_digest: The model part of every step key, usually
             ``run.build_model_digest(model, sampling, services)``. ``OPENED`` records it.
+        build_input: Immutable source-specific data exposed to build-program steps taking ``build_input``.
+            ``OPENED`` records its digest.
     """
 
     stages: StageFunctions
@@ -185,6 +188,7 @@ class StageCoordinator:
     services: RLEnvBuildServices
     research: ResearchRequirement
     model_digest: str
+    build_input: JsonValue = None
 
 
 @dataclass(frozen=True)
@@ -291,6 +295,7 @@ def _open(workpiece: _Workpiece) -> None:
         BUDGET_DIGEST: digest(coordinator.budget),
         MODEL_DIGEST: coordinator.model_digest,
         RESEARCH: str(coordinator.research),
+        BUILD_INPUT_DIGEST: digest(coordinator.build_input),
     }
     events = workpiece.log.events()
     if not events:
@@ -311,6 +316,11 @@ def _open(workpiece: _Workpiece) -> None:
     if first.attrs[RESEARCH] != attrs[RESEARCH]:
         raise ValueError(
             f"{workpiece.workpiece_id} was opened with research {first.attrs[RESEARCH]}, not {attrs[RESEARCH]}"
+        )
+    if first.attrs[BUILD_INPUT_DIGEST] != attrs[BUILD_INPUT_DIGEST]:
+        raise ValueError(
+            f"{workpiece.workpiece_id} was opened with build input {first.attrs[BUILD_INPUT_DIGEST]}, "
+            f"not {attrs[BUILD_INPUT_DIGEST]}"
         )
 
 
@@ -456,6 +466,7 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
             coordinator.services,
             state.round,
             research=coordinator.research,
+            build_input=coordinator.build_input,
             model_digest=coordinator.model_digest,
         )
     except (BuildInfrastructureFailure, BuildExpired, ModelUnavailable):

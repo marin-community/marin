@@ -65,6 +65,12 @@ PROGRAM = (
     )
     .replace(QUESTION, ASKED)
 )
+BUILD_INPUT_PROGRAM = PROGRAM.replace(
+    "async def assemble(context: RLEnvBuildContext, question: Question, grader: Grader) -> TaskSpec:",
+    "async def assemble(context: RLEnvBuildContext, question: Question, grader: Grader, "
+    "build_input: object) -> TaskSpec:",
+).replace("        context.workpiece_id,\n", '        build_input["task_id"],\n')
+BUILD_INPUT = {"task_id": "task-from-build-input"}
 
 
 def with_question(body: str) -> str:
@@ -127,7 +133,7 @@ async def test_a_build_in_a_child_process_writes_the_draft_and_ledger_of_the_bui
     for _ in range(2):
         fake_glm.stream(content=json.dumps({"text": "What is 6 * 7?"}))
     in_process = await run_build(
-        load_program(PROGRAM),
+        load_program(BUILD_INPUT_PROGRAM),
         proposal,
         WORKPIECE,
         tmp_path / "here" / "round",
@@ -137,12 +143,14 @@ async def test_a_build_in_a_child_process_writes_the_draft_and_ledger_of_the_bui
         services,
         0,
         research=ResearchRequirement.OFF,
+        build_input=BUILD_INPUT,
     )
-    request = make_request(PROGRAM)
+    request = replace(make_request(BUILD_INPUT_PROGRAM), build_input=BUILD_INPUT)
 
     child = await run_build_in_process(request, wall_timeout=WALL_TIMEOUT)
 
     assert child == in_process
+    assert child.task.id == BUILD_INPUT["task_id"]
     assert {outcome.status for outcome in child.provenance.steps} == {CacheStatus.MISS}
     assert fake_glm.request_headers[1]["authorization"] == f"Bearer {TOKEN}"
     ledger = JsonlLedger(tmp_path / "child" / "ledger")
