@@ -177,6 +177,7 @@ _SKIP_KEEP = "layer_skip_keep"
 # Per-layer extras key carrying the extra-MLP token mask (``extra_mlp_layers``), and the entropy head's prediction.
 _EXTRA_KEEP = "extra_mlp_keep"
 _ENTROPY_PRED = "entropy_pred"
+_SKIP_ROUTER_SCORE = "skip_router_score"
 _ENTROPY_CHUNK = 1024
 # Per-layer router stats carrying each token's ``[T, K]`` selected experts and combine weights to
 # ``Transformer.routing_assignments``.
@@ -889,6 +890,11 @@ class GrugModelConfig:
     extra_mlp_frac: float = 0.25
     attn_res_kv_source_layers: int | None = None
     """How many leading layers' outputs ``attn_res_kv_layers`` may read (None: ``num_layers // 2``)."""
+    attn_res_kv_strict: bool = False
+    """On ``attn_res_kv_layers``, everything a token contributes to later tokens reads the KV mix, not only the K/V
+    projections: KDA's decay, beta and write / erase gates (the state update) and MLA's value-embedding gate. Only
+    the query side (q, the Inkling bias, the output gates) keeps the attention gate's mix, so a token that skips
+    these layers still writes exactly the K/V (and KDA state) other tokens read."""
     attn_res_partial_scale: bool = False
     """Learned scalars ``(a_attn, a_mlp)`` per layer, init 1: each sublayer adds ``a * out`` to its block's partial,
     so a block (and the MLP gate's in-layer partial) weights its attention and MLP outputs."""
@@ -1144,8 +1150,8 @@ class GrugModelConfig:
         if self.skip_adapter_dim and not self.attn_res:
             raise ValueError("skip_adapter_dim needs attn_res")
         if self.skip_router_layers:
-            if not self.attn_res or self.scan_layers or not 0.0 < self.skip_router_frac < 1.0:
-                raise ValueError("skip_router_layers needs attn_res, the unrolled layer loop and 0 < frac < 1")
+            if not self.attn_res or self.scan_layers or not 0.0 <= self.skip_router_frac < 1.0:
+                raise ValueError("skip_router_layers needs attn_res, the unrolled layer loop and 0 <= frac < 1")
         if self.final_conf_layers and (
             not self.attn_res or self.scan_layers or not all(0 <= i < self.num_layers for i in self.final_conf_layers)
         ):
@@ -1169,6 +1175,8 @@ class GrugModelConfig:
                 raise ValueError(f"attn_res_kv_source_layers must be in 1..{self.num_layers - 1}, got {cutoff}")
             if bad := [i for i in self.attn_res_kv_layers if not cutoff <= i < self.num_layers]:
                 raise ValueError(f"attn_res_kv_layers {bad} must read only earlier layers (>= {cutoff})")
+        if self.attn_res_kv_strict and not self.attn_res_kv_layers:
+            raise ValueError("attn_res_kv_strict needs attn_res_kv_layers")
         if (self.moe_null_renorm_scale != 1.0 or self.moe_null_learned_gain) and not self.moe_null_layers:
             raise ValueError("moe_null_renorm_scale / moe_null_learned_gain need moe_null_layers")
         if self.moe_null_target_frac is not None:
@@ -1622,7 +1630,8 @@ class CausalSelfAttention(eqx.Module):
             ve = _embedding_gather(reshard(table, P(None, None)) if self.cfg.value_embed_fsdp else table, token_ids)
             ve = rearrange(ve, "... (n d) -> ... n d", d=head_dim)
             lam = self.ve_lambda.astype(x.dtype)
-            ve_weight = _value_embed_weight(self.cfg.value_embeds, x, self.ve_gate, lam)
+            ve_in = kv_input if self.cfg.attn_res_kv_strict and kv_input is not None else x
+            ve_weight = _value_embed_weight(self.cfg.value_embeds, ve_in, self.ve_gate, lam)
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
             if self.cfg.value_embed_probe:
                 lam32 = jax.lax.stop_gradient(self.ve_lambda).astype(jnp.float32)
@@ -2147,7 +2156,8 @@ class KimiDeltaAttention(eqx.Module):
         token_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``kv_input`` (``kv_stream_dim``) is the normed KV side stream that the ``k`` / ``v`` projections
-        (and their SConvs) read instead of ``x``; the erase / write gates, beta and decay stay on ``x``.
+        (and their SConvs) read instead of ``x``; the erase / write gates, beta and decay stay on ``x`` unless
+        ``attn_res_kv_strict``.
         ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
         ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1; ``kv_share`` /
         ``value_residual`` as in ``CausalSelfAttention``. Also returns logging stats (``kda_dd_rope`` rates;
@@ -2155,6 +2165,8 @@ class KimiDeltaAttention(eqx.Module):
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
+        # attn_res_kv_strict: the state update (decay, beta, write / erase gates) reads the KV mix too.
+        state_in = kv_input if cfg.attn_res_kv_strict and kv_input is not None else x
 
         proj_inputs = proj_inputs or {}
         # Every projection of x as one block-scaled GEMM: x is quantized once and the GEMM is 4-6x wider. Only under
@@ -2182,11 +2194,11 @@ class KimiDeltaAttention(eqx.Module):
         k = project(self.w_k, self.sconv_k, 1, "k")
         v = project(self.w_v, self.sconv_v, 2, "v")
         if self.w_write is not None:
-            write = fused["write"] if fused else _proj(cfg, proj_inputs.get("v", x), self.w_write)
+            write = fused["write"] if fused else _proj(cfg, proj_inputs.get("v", state_in), self.w_write)
             v = v * rearrange(
                 2.0 * jax.nn.sigmoid(write.astype(jnp.float32)), "... (n d) -> ... n d", d=head_dim
             ).astype(v.dtype)
-        a_low = jnp.einsum("bsd,dr->bsr", x, self.w_a_down)
+        a_low = jnp.einsum("bsd,dr->bsr", state_in, self.w_a_down)
         a = jnp.einsum("bsr,re->bse", a_low, self.w_a_up)
         a = rearrange(a, "... (n d) -> ... n d", d=self.dt_bias.shape[-1])
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
@@ -2196,7 +2208,7 @@ class KimiDeltaAttention(eqx.Module):
         else:
             g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a.astype(jnp.float32) + self.dt_bias.astype(jnp.float32)))
         assert self.w_beta is not None
-        beta_logits = jnp.einsum("bsd,dn->bsn", x, self.w_beta)
+        beta_logits = jnp.einsum("bsd,dn->bsn", state_in, self.w_beta)
         beta = jax.nn.sigmoid(beta_logits.astype(jnp.float32))
         if no_decay:
             g = jnp.zeros_like(g)
@@ -2216,7 +2228,7 @@ class KimiDeltaAttention(eqx.Module):
             extras["gate_bias"] = reshard(self.dt_bias.astype(jnp.float32), head_spec)
             extra_specs["gate_p"] = extra_specs["gate_bias"] = head_spec
         if self.w_erase is not None:
-            z = fused["erase"] if fused else _proj(cfg, proj_inputs.get("k", x), self.w_erase)
+            z = fused["erase"] if fused else _proj(cfg, proj_inputs.get("k", state_in), self.w_erase)
             z = rearrange(z, "... (n d) -> ... n d", d=head_dim)
             erase_logits = z.astype(jnp.float32)
             if cfg.kda_onchip_erase_gate:
@@ -6020,7 +6032,8 @@ class Transformer(eqx.Module):
                     )
                 if cfg.skip_router_layers and i == min(cfg.skip_router_layers) and pass_index == 0:
                     stream = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
-                    extra_state["router_keep"], extra_state["router_frac"] = self._skip_router_keep(stream)
+                    router = self._skip_router_keep(stream)
+                    extra_state["router_keep"], extra_state["router_frac"], extra_state["router_score"] = router
                 if i == cfg.mid_head_layer and pass_index == 0:
                     extra_state["mid"] = functools.reduce(jnp.add, [*blocks, *([] if partial is None else [partial])])
                     if cfg.mid_skip_layers:
@@ -6140,9 +6153,17 @@ class Transformer(eqx.Module):
             )
             state = run_pass(state, 0)
         mixed, layer_stats, z_total, max_weight, entropy = finish(state, [stats_out], z_out)
-        if self.skip_adapter is not None and layer_skip is not None:
+        # Tokens that skip some layers (any mechanism) pass the final stream through the skip adapter.
+        skip_masks = []
+        if layer_skip is not None:
+            skip_masks.append(~layer_skip.keep)
+        if cfg.entropy_skip_layers:
+            skip_masks.append(extra_state["keep"])
+        if cfg.skip_router_layers:
+            skip_masks.append(extra_state["router_keep"] == 0)
+        if self.skip_adapter is not None and skip_masks:
             adapted = self.skip_adapter(rms_norm(mixed, eps), moe_output_reshard=False)
-            skipped = (~layer_skip.keep)[..., None].astype(mixed.dtype)
+            skipped = functools.reduce(jnp.logical_or, skip_masks)[..., None].astype(mixed.dtype)
             mixed = mixed + skipped * adapted.astype(mixed.dtype)
         final_stats = {"attn_res_final_max_weight": max_weight, "attn_res_final_entropy": entropy}
         if "pred" in extra_state:
@@ -6158,6 +6179,7 @@ class Transformer(eqx.Module):
             final_stats["attn_res_mid_skip_frac"] = extra_state["mid_skip_frac"]
         if "router_frac" in extra_state:
             final_stats["attn_res_skip_router_frac"] = extra_state["router_frac"]
+            final_stats[_SKIP_ROUTER_SCORE] = extra_state["router_score"]
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
@@ -6424,16 +6446,21 @@ class Transformer(eqx.Module):
         h = jax.nn.relu(jnp.einsum("bsd,dh->bsh", x, self.final_conf_w1[n]) + self.final_conf_b1[n])
         return jnp.einsum("bsh,h->bs", h, self.final_conf_w2[n]) + self.final_conf_b2[n]
 
-    def _skip_router_keep(self, stream: Float[Array, "B S D"]) -> tuple[Float[Array, "B S"], jax.Array]:
-        """Per-token output scale for ``skip_router_layers`` (0: skip) and the skipped fraction."""
+    def _skip_router_keep(
+        self, stream: Float[Array, "B S D"]
+    ) -> tuple[Float[Array, "B S"], jax.Array, Float[Array, "B S"]]:
+        """Per-token output scale for ``skip_router_layers`` (0: skip), the skipped fraction and the
+        stop-gradient score (``skip_router_frac`` 0: every token keeps the layers)."""
         cfg = self.config
         assert self.skip_router is not None and self.skip_router_bias is not None
         score = jnp.einsum("bsd,d->bs", rms_norm(stream.astype(jnp.float32), cfg.layer_norm_eps), self.skip_router)
         score = score + self.skip_router_bias
         chosen = jax.lax.stop_gradient(score)
-        threshold = jnp.quantile(reshard(chosen, P(None, None)), cfg.skip_router_frac)
-        keep = chosen > threshold
-        return keep * 2.0 * jax.nn.sigmoid(score), 1.0 - jnp.mean(keep.astype(jnp.float32))
+        if cfg.skip_router_frac == 0.0:
+            keep = jnp.ones(chosen.shape, jnp.bool_)
+        else:
+            keep = chosen > jnp.quantile(reshard(chosen, P(None, None)), cfg.skip_router_frac)
+        return keep * 2.0 * jax.nn.sigmoid(score), 1.0 - jnp.mean(keep.astype(jnp.float32)), chosen
 
     def _extra_mlp_selection(
         self, stream: Float[Array, "B S D"], token_ids: Int[Array, "B S"], active: jax.Array | bool
@@ -6574,6 +6601,19 @@ class Transformer(eqx.Module):
             out[f"final_conf_L{layer}"] = jax.nn.sigmoid(stats[_FINAL_CONF_LOGITS][n])
         return out
 
+    def skip_signal_diagnostics(
+        self, token_ids: Int[Array, "B S"], mask: AttentionMask
+    ) -> dict[str, Float[Array, "B S"]]:
+        """Per position, the learned skip signals of the normal forward: the skip router's score
+        (``skip_router_layers``; low skips) and the entropy head's prediction (``entropy_head_layers``)."""
+        _, stats = self(token_ids, mask=mask)
+        out = {}
+        if _SKIP_ROUTER_SCORE in stats:
+            out["skip_router_score"] = stats[_SKIP_ROUTER_SCORE]
+        if _ENTROPY_PRED in stats:
+            out["entropy_pred"] = stats[_ENTROPY_PRED]
+        return out
+
     def mid_head_diagnostics(self, token_ids: Int[Array, "B S"], mask: AttentionMask) -> dict[str, Float[Array, "B S"]]:
         """Per-position mid-head outputs (``_mid_head_terms``) and the final head's ``final_correct``."""
         hidden, stats = self(token_ids, mask=mask)
@@ -6634,6 +6674,7 @@ class Transformer(eqx.Module):
         final_conf_logits = router_metrics.pop(_FINAL_CONF_LOGITS, None)
         skip_probe_logits = router_metrics.pop(_SKIP_PROBE_LOGITS, None)
         entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
+        router_metrics.pop(_SKIP_ROUTER_SCORE, None)
         router_metrics.pop(_NITP_TARGET, None)
         attn_res_z = router_metrics.pop(_ATTN_RES_Z, None)
         router_metrics.pop(_MTP_EMBED, None)
