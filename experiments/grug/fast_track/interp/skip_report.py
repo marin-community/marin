@@ -192,15 +192,73 @@ def token_table(ids_tr, y_tr, ids_te, prior_weight: float = 20.0) -> np.ndarray:
     return table[ids_te]
 
 
+def depth_report(z: dict[str, np.ndarray]) -> dict:
+    """Per exit of a ``skip_depth`` file: benefit summary, concentration, and the scalar-signal skip frontier."""
+    w = z["weight"].astype(bool)
+    tokens, seg = z["tokens"], z["segment_ids"]
+    loss_full = z["loss_full"].astype(np.float32)[w]
+    ctx = doc_context(tokens, seg)
+    seq_id = np.broadcast_to(np.arange(tokens.shape[0])[:, None], tokens.shape)[w]
+    test = seq_id % 2 == 1
+    cur = tokens[w]
+    rates = np.linspace(0, 1, 51)
+    out = dict(
+        num_layers=int(z["num_layers"]), exits=z["exits"].tolist(), loss_full=float(loss_full.mean()), per_exit=[]
+    )
+    for k in range(len(z["exits"])):
+        benefit = z["exit_loss"][k].astype(np.float32)[w] - loss_full
+        need = benefit > NEED
+        ent = z["exit_entropy"][k].astype(np.float32)[w]
+        maxp = z["exit_maxp"][k].astype(np.float32)[w]
+        tt = np.zeros(len(cur), np.float32)
+        for half in (0, 1):
+            tr_m = (seq_id % 2) != half
+            tt[~tr_m] = token_table(cur[tr_m], benefit[tr_m], cur[~tr_m])
+        x = np.stack([ent, -maxp, tt, ctx["cur_seen"][w], np.log1p(ctx["pos"][w])], 1).astype(np.float32)
+        reg = ridge_probe(x[~test], benefit[~test], x[test])
+        logit = logistic_probe(x[~test], need[~test], x[test])
+        b_te = benefit[test]
+        out["per_exit"].append(
+            dict(
+                exit=int(z["exits"][k]),
+                lens_loss=float(z["exit_lens_loss"][k].astype(np.float32)[w].mean()),
+                head_loss=float(z["exit_loss"][k].astype(np.float32)[w].mean()),
+                summary=summary(benefit),
+                kl_mean=float(z["exit_kl"][k].astype(np.float32)[w].mean()),
+                agree=float(z["exit_agree"][k][w].mean()),
+                concentration=concentration(benefit),
+                auroc=dict(
+                    exit_entropy=auroc(ent[test], need[test]),
+                    token_id_table=auroc(tt[test], need[test]),
+                    scalars_logistic=auroc(logit, need[test]),
+                    scalars_ridge=auroc(reg, need[test]),
+                ),
+                frontier=dict(
+                    rates=rates.tolist(),
+                    oracle=skip_cost(b_te, b_te, rates),
+                    random=(rates * b_te.mean()).tolist(),
+                    scalars_ridge=skip_cost(reg, b_te, rates),
+                    exit_entropy=skip_cost(ent[test], b_te, rates),
+                ),
+            )
+        )
+    return out
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tokens", required=True)
-    parser.add_argument("--probe", required=True)
-    parser.add_argument("--vocab", required=True)
-    parser.add_argument("--ngram-units", required=True)
+    parser.add_argument("--tokens")
+    parser.add_argument("--probe")
+    parser.add_argument("--vocab")
+    parser.add_argument("--ngram-units")
     parser.add_argument("--out", required=True)
+    parser.add_argument("--depth", nargs="*", default=[], help="skip_depth files: only their depth reports")
     args = parser.parse_args()
+    if args.depth:
+        with open(args.out, "w") as f:
+            json.dump({path: depth_report(load(path)) for path in args.depth}, f, indent=1)
+        return
     z = load(args.tokens)
     pz = load(args.probe)
     with open(args.vocab) as f:
@@ -295,6 +353,7 @@ def main() -> None:
                 need=float((b > NEED).mean()),
                 loss_full=float(loss_full[w][m].mean()),
                 loss_exit=float(exit_loss[pi, ph][w][m].mean()),
+                stage_increments=inc[:, m].mean(1).tolist(),
             )
         )
     report["categories"] = rows

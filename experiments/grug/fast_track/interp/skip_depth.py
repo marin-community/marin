@@ -27,6 +27,7 @@ from levanter.grug.attention import AttentionMask
 
 from experiments.grug.fast_track.interp import common, forward, skip_tokens
 from experiments.grug.fast_track.model import LayerSkip
+from experiments.grug.fast_track.train import _to_dropless_local, dropless_moe_implementation
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,8 @@ def main() -> None:
     evals = list(common.train_batches(EVAL_BATCH, args.eval_sequences, seed=2))
     logger.info("%s: %d layers, exits %s; data loaded (%.0fs)", args.tag, layers, exits, time.time() - t0)
     with set_mesh(mesh):
-        model = common.compute_model(params)
+        # The run's eval path: dropless local MoE.
+        model = _to_dropless_local(common.compute_model(params), implementation=dropless_moe_implementation(cfg))
         d = cfg.hidden_dim
         w = jnp.asarray(model.output_proj, jnp.float32)
         n = len(exits)
