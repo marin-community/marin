@@ -5,8 +5,8 @@
 
 A container task names its image only as a digest-pinned registry reference
 (``EnvironmentRequirements.docker_image``); both the laptop Docker backend and the Iris gVisor
-backend pull it. A ``DockerBuild`` is Taskforge's own build input and never part of a
-TaskSpec: an ``ImageBuilder`` builds the context for linux/amd64, pushes it, and returns the
+backend pull it. ``DockerBuild`` reuses TaskCompendium's ``DockerBuildContext``.
+An ``ImageBuilder`` builds the context for linux/amd64, pushes it, and returns the
 reference pinned by manifest digest. ``image_builder.IrisImageBuilder`` implements the builder as Iris jobs.
 """
 
@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from rigging.filesystem.path_validation import validate_relative_file_paths
 from taskcompendium.models import DOCKER_IMAGE_PATTERN, TaskResource
+from taskcompendium.models import DockerBuildContext as DockerBuild
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
 # The verifier machine of a script grader on a task without its own image: the multi-platform index of
@@ -33,24 +33,6 @@ MANIFEST_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 # Repository path components per the OCI distribution spec.
 REPOSITORY = re.compile(r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*")
 DEFAULT_MODE = "644"
-
-
-@dataclass(frozen=True)
-class DockerBuild:
-    """A Dockerfile and its build context: the ImageBuilder's input, never part of a TaskSpec.
-
-    ``files`` paths are relative to the context root (``Dockerfile``, ``app/run.sh``) and must not
-    collide, as ``a`` and ``a/b`` would when the context is unpacked; ``dockerfile`` names one of them.
-    """
-
-    files: tuple[TaskResource, ...]
-    dockerfile: str = "Dockerfile"
-
-    def __post_init__(self) -> None:
-        paths = [resource.path for resource in self.files]
-        validate_relative_file_paths(paths)
-        if self.dockerfile not in paths:
-            raise ValueError(f"build context has no {self.dockerfile!r}")
 
 
 class BuildTooLarge(ValueError):
@@ -91,13 +73,33 @@ def docker_build_from_directory(directory: Path, limits: BuildLimits) -> DockerB
     Symlinks and other special files are refused: a context carries bytes and modes only.
     """
     root = directory.resolve()
-    files = []
-    for path in sorted(root.rglob("*")):
+    paths = []
+    total = 0
+    for path in root.rglob("*"):
         if path.is_symlink() or not (path.is_file() or path.is_dir()):
             raise ValueError(f"build context may hold only regular files and directories: {path}")
         if path.is_dir():
             continue
-        resource = inline_resource(path.relative_to(root).as_posix(), path.read_bytes())
+        paths.append(path)
+        if len(paths) > limits.max_files:
+            raise BuildTooLarge(f"build context exceeds the limit of {limits.max_files} files")
+        size = path.stat().st_size
+        if size > limits.max_file_bytes:
+            raise BuildTooLarge(f"{path} is {size} bytes; the limit is {limits.max_file_bytes}")
+        total += size
+        if total > limits.max_total_bytes:
+            raise BuildTooLarge(f"build context is {total} bytes; the limit is {limits.max_total_bytes}")
+    files = []
+    total = 0
+    for path in sorted(paths):
+        # Bound reads too: a file may grow after the preflight stat.
+        limit = min(limits.max_file_bytes, limits.max_total_bytes - total)
+        with path.open("rb") as stream:
+            content = stream.read(limit + 1)
+        if len(content) > limit:
+            raise BuildTooLarge(f"{path} exceeds the remaining build context limit of {limit} bytes")
+        total += len(content)
+        resource = inline_resource(path.relative_to(root).as_posix(), content)
         files.append(resource.model_copy(update={"mode": f"{path.stat().st_mode & 0o777:o}"}))
     build = DockerBuild(files=tuple(files))
     check_build_limits(build, limits)
@@ -111,7 +113,7 @@ def _ordered(build: DockerBuild) -> list[TaskResource]:
 def build_digest(build: DockerBuild) -> str:
     """sha256 over the Dockerfile path and every file's path, mode and bytes, in path order."""
     hasher = hashlib.sha256()
-    hasher.update(f"dockerfile\0{build.dockerfile}\0".encode())
+    hasher.update(b"dockerfile\0Dockerfile\0")
     for resource in _ordered(build):
         content = resource_bytes(resource)
         hasher.update(f"file\0{resource.path}\0{resource.mode or DEFAULT_MODE}\0{len(content)}\0".encode())

@@ -4,10 +4,13 @@
 """The registry credential's parsing and the environment of a publish's jobs, submitted through a recording fake."""
 
 import json
+import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
 from iris.client import IrisClient, Job
 from iris.client.client import IrisContext, iris_ctx_scope
@@ -15,17 +18,21 @@ from iris.client.workload import JobState
 from iris.cluster.client import ClusterClient, JobInfo, set_job_info
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import job_pb2
+from rigging.secrets import SECRETS_DIR_ENV
 
 from taskforge.sandbox.image_builder import (
     BLANKED_ENV,
+    BUILD_SCRIPT,
+    BUILD_SETUP_FAILED_EXIT,
     REGISTRY_CREDENTIAL_ENV,
     BuildFailed,
     ImageJobFailed,
     RegistryCredential,
+    manifest_readback,
     submit_job,
     wait_succeeded,
 )
-from taskforge.sandbox.image_push import REGISTRY_AUTH_ENV
+from taskforge.sandbox.image_push import ARCHIVE_URI_ENV, REGISTRY_AUTH_ENV, archive_request
 
 PASSWORD = "registry-password"
 CREDENTIAL_JSON = json.dumps({"registry": "registry.example", "user": "publisher", "password": PASSWORD})
@@ -38,6 +45,7 @@ class RecordingCluster:
 
     def __init__(self):
         self.env_vars: dict[str, dict[str, str]] = {}
+        self.secrets: dict[str, dict[str, str]] = {}
 
     def submit_job(
         self,
@@ -50,16 +58,17 @@ class RecordingCluster:
     ) -> JobName:
         assert environment is not None
         self.env_vars[job_id.name] = dict(environment.env_vars)
+        self.secrets[job_id.name] = dict(environment.secrets)
         return job_id
 
 
 @pytest.fixture
-def in_a_coordinator_task() -> Iterator[None]:
+def in_a_coordinator_task(request) -> Iterator[dict[str, str]]:
     """Run as task 0 of a job submitted with ``PARENT_ENV``, as a ladder host's build child does."""
-    info = JobInfo(task_id=JobName.from_wire("/alice/ladder/0"), env=PARENT_ENV)
+    info = JobInfo(task_id=JobName.from_wire("/alice/ladder/0"), env=request.param)
     set_job_info(info)
     with iris_ctx_scope(IrisContext.from_job_info(info)):
-        yield
+        yield request.param
     set_job_info(None)
 
 
@@ -97,16 +106,30 @@ def test_a_malformed_credential_fails_without_quoting_it(text):
     assert PASSWORD not in str(error.value)
 
 
-def test_jobs_submitted_from_a_coordinator_task_inherit_none_of_its_environment(in_a_coordinator_task):
+@pytest.mark.parametrize(
+    "in_a_coordinator_task",
+    [PARENT_ENV, {"GLM_HIGH_TOKEN": GLM_TOKEN}],
+    indirect=True,
+    ids=["env-and-mounted", "mounted-only"],
+)
+def test_image_jobs_only_receive_explicit_secrets_and_storage_credentials(in_a_coordinator_task, tmp_path, monkeypatch):
+    (tmp_path / "UNRELATED_SERVICE_TOKEN").write_text("private-parent-token")
+    (tmp_path / REGISTRY_CREDENTIAL_ENV).write_text(CREDENTIAL_JSON)
+    (tmp_path / "CW_KEY_ID").write_text("storage-id")
+    (tmp_path / "CW_KEY_SECRET").write_text("storage-secret")
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(tmp_path))
     cluster = RecordingCluster()
     build = submitted_env(cluster, "taskforge-image-build-x", {"DESTINATION": "registry.example/r:t"})
     push = submitted_env(cluster, "taskforge-image-push-x", {REGISTRY_AUTH_ENV: "push-auth"})
 
     for env in (build, push):
-        assert {name: env[name] for name in [*PARENT_ENV, *BLANKED_ENV]} == dict.fromkeys(
-            [*PARENT_ENV, *BLANKED_ENV], ""
+        assert {name: env[name] for name in [*in_a_coordinator_task, *BLANKED_ENV]} == dict.fromkeys(
+            [*in_a_coordinator_task, *BLANKED_ENV], ""
         )
         assert not any(PASSWORD in value or GLM_TOKEN in value for value in env.values())
+        assert env["CW_KEY_ID"] == "storage-id"
+        assert env["CW_KEY_SECRET"] == "storage-secret"
+    assert all(not secrets for secrets in cluster.secrets.values())
     assert build["DESTINATION"] == "registry.example/r:t"
     assert REGISTRY_AUTH_ENV not in build
     assert push[REGISTRY_AUTH_ENV] == "push-auth"
@@ -116,6 +139,7 @@ def test_jobs_submitted_from_a_coordinator_task_inherit_none_of_its_environment(
 class EndedStatus:
     state: JobState
     error_message: str
+    tasks: tuple[SimpleNamespace, ...]
 
 
 class EndedJob:
@@ -123,13 +147,14 @@ class EndedJob:
 
     job_id = "/alice/taskforge-image-build-x"
 
-    def __init__(self, state: JobState | None):
+    def __init__(self, state: JobState | None, exit_code: int = 1):
         self.state = state
+        self.exit_code = exit_code
 
     def wait(self, **kwargs: object) -> EndedStatus:
         if self.state is None:
             raise TimeoutError("still running")
-        return EndedStatus(self.state, "the job's log tail")
+        return EndedStatus(self.state, "the job's log tail", (SimpleNamespace(exit_code=self.exit_code),))
 
 
 @pytest.mark.parametrize("state", [JobState.UNSCHEDULABLE, JobState.WORKER_FAILED, JobState.KILLED, None])
@@ -143,3 +168,52 @@ def test_a_job_the_host_ended_is_an_image_job_failure_whichever_job_it_is(state,
 def test_a_job_that_ran_and_failed_raises_the_callers_failure(failed):
     with pytest.raises(failed, match="ended failed: the job's log tail"):
         wait_succeeded(cast(Job, EndedJob(JobState.FAILED)), failed)
+
+
+def test_build_bootstrap_failure_is_a_host_failure(tmp_path):
+    mkdir = tmp_path / "mkdir"
+    mkdir.write_text("#!/bin/sh\nexit 42\n")
+    mkdir.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", "-c", BUILD_SCRIPT],
+        env={
+            "PATH": str(tmp_path),
+            "IRIS_OUTPUT_DIR": str(tmp_path / "output"),
+            "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
+        },
+        capture_output=True,
+        check=False,
+    )
+    with pytest.raises(ImageJobFailed):
+        wait_succeeded(cast(Job, EndedJob(JobState.FAILED, result.returncode)), BuildFailed)
+
+
+@pytest.mark.parametrize("failure", [401, 404, 503, "transport", "malformed"])
+def test_registry_readback_failure_is_a_host_failure(monkeypatch, failure):
+    def respond(request):
+        if failure == "transport":
+            raise httpx.ConnectError("connection refused", request=request)
+        if failure == "malformed":
+            return httpx.Response(200, content=b"not a manifest")
+        return httpx.Response(failure)
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(ImageJobFailed):
+        manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag")
+
+
+def test_archive_request_uses_the_submitters_coreweave_credentials(monkeypatch):
+    monkeypatch.setenv(ARCHIVE_URI_ENV, "s3://task-bucket/build/output.tar.zst")
+    monkeypatch.setenv("CW_KEY_ID", "storage-id")
+    monkeypatch.setenv("CW_KEY_SECRET", "storage-secret")
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "AWS_REGION"):
+        monkeypatch.delenv(name, raising=False)
+
+    request = archive_request()
+
+    assert request.full_url == "https://task-bucket.cwobject.com/build/output.tar.zst"
+    authorization = request.get_header("Authorization")
+    assert authorization is not None
+    assert "Credential=storage-id/" in authorization
+    assert "/auto/s3/aws4_request" in authorization
