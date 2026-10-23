@@ -20,6 +20,9 @@ import numpy as np
 from haliax import NamedArray
 from haliax.jax_utils import is_jax_array_like
 from haliax.partitioning import ResourceMapping
+from jax.sharding import NamedSharding, PartitionSpec
+
+from levanter.kernels.pallas.autotune_utils import named_sharding_of
 
 import levanter.tracker
 from levanter.inference.jit_scheduler import (
@@ -386,6 +389,19 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     return sample_indices
 
 
+def _gather_logits(logits: NamedArray, indices: NamedArray) -> NamedArray:
+    """Gather only sampling rows, replicated for vocabulary-wide sampling."""
+    logits = logits.rearrange(("position", ...))
+    sharding = named_sharding_of(logits.array)
+    out_sharding = None
+    if sharding is not None and not sharding.mesh.empty:
+        # The sampler sorts across the vocabulary for nucleus sampling. Gather after
+        # selecting rows so prefill does not replicate every token's vocabulary logits.
+        out_sharding = NamedSharding(sharding.mesh, PartitionSpec())
+    values = logits.array.at[indices.array].get(out_sharding=out_sharding)
+    return hax.named(values, (*indices.axes, *logits.axes[1:]))
+
+
 def _prefill_kernel(
     gen_state: GenState,
     model: LmHeadModel,
@@ -413,7 +429,7 @@ def _prefill_kernel(
     #     lens=decode_state.seq_lens.array,
     # )
     logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-    logits_at_samples = logits["position", sample_indices]
+    logits_at_samples = _gather_logits(logits, sample_indices)
 
     num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
     # jax.debug.print(
@@ -595,7 +611,7 @@ def _handle_clones(
     tgt_ids = selected_safe
     src_pos = source_indices["seq", selected_safe]
     src_ids = slot_ids["position", src_pos]
-    logits_this_time = logits["position", src_pos]
+    logits_this_time = _gather_logits(logits, src_pos)
     pos_ids_this_time = pos_ids["position", src_pos]
 
     # Sample clones from the same boundary logits as their sources
@@ -693,7 +709,7 @@ def _run_generation_loop(
 
         # Decode logits and sample new tokens
         logits, cache = model.decode(tokens, gen_state.cache, binfo, pos_ids)
-        logits_at_samples = logits["position", sample_indices]
+        logits_at_samples = _gather_logits(logits, sample_indices)
 
         num_new_tokens = hax.sum(sample_indices != INVALID).scalar().astype(jnp.int32)
         new_slot_ids = slot_ids["position", sample_indices]
