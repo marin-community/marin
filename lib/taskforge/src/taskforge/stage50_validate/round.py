@@ -24,17 +24,18 @@ validate function closes over.
 
 Each unit is idempotent on its own file, so a relaunch redoes only the units whose files are missing:
 
-    <round_dir>/validation/<draft>/lowered.json                the lowering
+    <round_dir>/validation/<draft>/<limits>-lowered.json                the lowering
     <round_dir>/validation/<draft>/controls.json               the controls
     <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
     <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
     <round_dir>/validation/<draft>/<task>/adversary/<i>/attempt-<n>.json
     <round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 
-``<draft>`` is ``content_hash.digest`` of the draft's task, ``<task>`` the ``trials.task_digest`` of the
-lowered spec as its trials run, and ``<controls>`` ``content_hash.digest`` of the control set. A file covers
+``<draft>`` is ``content_hash.digest`` of the draft's task, ``<limits>`` the engine limits,
+``<task>`` the ``trials.task_digest`` of the lowered spec as its trials run, and ``<controls>``
+``content_hash.digest`` of the control set. A file covers
 what its path names, so the lowering or controls of another task, the trials of another lowered spec and the
-replay of another control set are never read as done. ``lowered.json`` also records the host and the
+replay of another control set are never read as done. The lowering also records the host and the
 factory backends it lowered for, and a lowering for another host is done again. An adversary attempt records its
 brief, which holds the mode, the budget and, white-box, the controls: an attempt under another brief is kept, and
 the trial runs again after it with its full retries. An adversary attempt is numbered after any submissions an
@@ -94,12 +95,11 @@ from taskforge.stage50_validate.adversary import (
 )
 from taskforge.stage50_validate.control_drafts import CONTROLS_FILE, CONTROLS_STEP, load_controls, write_controls
 from taskforge.stage50_validate.controls import ControlVerdict, check_replayable, control_outcome, replay_control
-from taskforge.stage50_validate.evidence import Evidence, Incomplete, RewardStats
+from taskforge.stage50_validate.evidence import Evidence, RewardStats
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind
 from taskforge.stage50_validate.preflight import BackendFallback, preflight
 from taskforge.stage50_validate.trials import (
     ATTEMPT_PREFIX,
-    Deadlines,
     EngineSettings,
     RetryBackoff,
     TrialModel,
@@ -151,7 +151,6 @@ class ValidationSettings:
     Attributes:
         host: Where the machine factories run.
         engine: The engine settings every trial and the preflight probe run under.
-        deadlines: The deadlines of every trial and of the probe.
         k: The number of solver trials.
         max_retries: The retries of a trial that fails for a retryable cause.
         retry_backoff: The wait between a trial's attempts.
@@ -162,7 +161,6 @@ class ValidationSettings:
 
     host: MachineHost
     engine: EngineSettings
-    deadlines: Deadlines
     k: int
     max_retries: int
     retry_backoff: RetryBackoff
@@ -287,7 +285,7 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class _Lowered:
-    """``lowered.json``: the host and backends the task was lowered for, the spec it lowered to (``None`` when
+    """The host and backends the task was lowered for, the spec it lowered to (``None`` when
     RolloutEngine rejected it, with the reason in ``detail``), and the preflight's refusals and fallback.
 
     It holds no task digest: the digest also covers the trials' deadlines and engine settings, which a relaunch
@@ -375,7 +373,7 @@ async def _inputs_ready(*inputs: asyncio.Task) -> bool:
 
 
 async def _lowering_unit(draft: TaskDraft, settings: ValidationSettings, directory: Path) -> _Lowered:
-    path = directory / LOWERED_FILE
+    path = directory / f"{digest(settings.engine.limits)}-{LOWERED_FILE}"
     backends = tuple(sorted(settings.engine.factories))
     if path.exists():
         done = _LOWERED.validate_json(path.read_bytes())
@@ -388,7 +386,7 @@ async def _lowering_unit(draft: TaskDraft, settings: ValidationSettings, directo
 async def _lower(draft: TaskDraft, settings: ValidationSettings, backends: tuple[str, ...]) -> _Lowered:
     engine = settings.engine
     try:
-        lowered = await preflight(draft.task, settings.host, engine.factories, engine, settings.deadlines)
+        lowered = await preflight(draft.task, settings.host, engine)
     except (ValueError, NotImplementedError) as error:
         return _Lowered(settings.host, backends, None, str(error), (), None)
     refusals = tuple(task_refusals(lowered.spec, engine.factories))
@@ -398,7 +396,7 @@ async def _lower(draft: TaskDraft, settings: ValidationSettings, backends: tuple
 def _trial_digest(settings: ValidationSettings, spec: TaskRolloutSpec) -> str:
     """The ``task_digest`` of ``spec`` as the round's trials run it."""
     engine = settings.engine
-    return task_digest(engine.apply(settings.deadlines.apply(spec)), engine.command_timeout)
+    return task_digest(spec, engine.command_timeout)
 
 
 def _trials_dir(directory: Path, settings: ValidationSettings, spec: TaskRolloutSpec) -> Path:
@@ -468,7 +466,7 @@ async def _replay_units(
     if lowered.spec is None:
         return
     spec, evidence_dir = lowered.spec, _replay_dir(_trials_dir(directory, settings, lowered.spec), control_set)
-    check_replayable(spec.task, control_set, settings.engine.max_turns)
+    check_replayable(spec.task, control_set, settings.engine.limits.max_turns)
     async with asyncio.TaskGroup() as group:
         for control in control_set:
             group.create_task(_control_unit(spec, control, context, settings, evidence_dir, closing))
@@ -556,9 +554,8 @@ def _resumed_plan(
         round=context.round,
         kind=kind,
         k=1,
-        deadlines=settings.deadlines,
         max_retries=min(settings.max_retries, allowed - spent - 1),
-        retry_backoff=settings.retry_backoff.schedule(),
+        retry_backoff=settings.retry_backoff,
         evidence_dir=evidence_dir,
         ledger=settings.ledger,
         first_attempt=max(floor, attempts[-1] + 1 if attempts else 0),
@@ -629,14 +626,13 @@ def _result(
 def _solver_evidence(context: ValidationContext, evidence_dir: Path, trials: list[str]) -> SolverEvidence:
     finals = [_final_attempt(evidence_dir, TrialKind.SOLVER, trial) for trial in trials]
     evidence = Evidence({TrialKind.SOLVER: tuple(outcome for _, outcome in finals)})
-    status = evidence.status
     return SolverEvidence(
         trials=tuple(
             _trial_result(trial, outcome, _relative(context, path))
             for trial, (path, outcome) in zip(trials, finals, strict=True)
         ),
         stats=evidence.reward_stats(TrialKind.SOLVER),
-        ungraded=dict(status.causes) if isinstance(status, Incomplete) else {},
+        ungraded=dict(evidence.ungraded),
     )
 
 

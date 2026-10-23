@@ -8,10 +8,9 @@
 1. Host. A lowering a machine factory refused (``LoweringStatus.REFUSED``) or RolloutEngine rejected
    (``LoweringStatus.REJECTED``) says this host cannot run the task: ``Reject(HOST)``.
 2. Violated control. The grader gave a control a grade outside its expectation, a defect the author
-   can fix: ``Modify`` with one finding per violated control while a MODIFY round remains, else
-   ``Reject(TASK)`` with the same findings.
-3. Incomplete evidence. A solver trial or a control replay has no grade: ``Retry`` with the cause
-   that left the most of them ungraded and their count.
+   can fix: ``Modify`` with one finding per violated control. The coordinator enforces its MODIFY budget.
+3. Incomplete evidence. A permanent ungraded cause rejects the task (or the host for
+   ``MACHINE_UNSUPPORTED``). Otherwise ``Retry`` names the most frequent retryable cause and its count.
 4. Band. The solve rate of the solver trials, placed against the caller's ``BandRules``:
    ``Accept(band)`` for a place the rules accept, else ``Reject(TASK)``.
 
@@ -27,7 +26,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from taskforge.stage50_validate.controls import ControlVerdict
-from taskforge.stage50_validate.outcome import Cause
+from taskforge.stage50_validate.outcome import RETRYABLE, Cause
 from taskforge.stage50_validate.round import ControlResult, LoweringStatus, ValidationResult
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, Reject, RejectKind, Retry
 
@@ -54,22 +53,7 @@ class BandRules:
         return BandOutcome.IN_BAND
 
 
-@dataclass(frozen=True)
-class ReviewContext:
-    """What review knows of the round besides its result.
-
-    Attributes:
-        round: The round the result validated.
-        modify_rounds_left: The ``Modify`` decisions the workpiece may still follow into a new round.
-        band: The band rules the caller chose.
-    """
-
-    round: int
-    modify_rounds_left: int
-    band: BandRules
-
-
-async def default_review(result: ValidationResult, context: ReviewContext) -> Decision:
+async def default_review(result: ValidationResult, *, band: BandRules) -> Decision:
     """Decide on ``result`` by the module's rule table.
 
     Raises:
@@ -83,10 +67,8 @@ async def default_review(result: ValidationResult, context: ReviewContext) -> De
     if lowering.status is LoweringStatus.REJECTED:
         return Reject(RejectKind.HOST, (f"RolloutEngine rejected the lowered task: {lowering.detail}",))
     findings = tuple(_finding(control) for control in result.controls if control.verdict is ControlVerdict.VIOLATED)
-    if findings and context.modify_rounds_left > 0:
-        return Modify(findings)
     if findings:
-        return Reject(RejectKind.TASK, findings)
+        return Modify(findings)
     if result.early is not None:
         raise ValueError(
             f"{result.workpiece_id} round {result.round} was decided early on control {result.early.control}, "
@@ -96,16 +78,21 @@ async def default_review(result: ValidationResult, context: ReviewContext) -> De
     assert solver is not None, "a lowered round has solver evidence"
     ungraded = Counter(solver.ungraded)
     ungraded.update(control.cause for control in result.controls if control.cause is not None)
+    permanent = {cause: count for cause, count in ungraded.items() if cause not in RETRYABLE}
+    if permanent:
+        kind = RejectKind.HOST if Cause.MACHINE_UNSUPPORTED in permanent else RejectKind.TASK
+        reasons = tuple(f"{count} ungraded trial(s): {cause}" for cause, count in sorted(permanent.items()))
+        return Reject(kind, reasons)
     if ungraded:
         cause, count = min(ungraded.items(), key=lambda item: (-item[1], list(Cause).index(item[0])))
         return Retry(cause, count)
     stats = solver.stats
     if stats.graded == 0:
         raise ValueError(f"{result.workpiece_id} round {result.round} graded no solver trial to place in the band")
-    band = context.band.place(stats.solved / stats.graded)
-    if band in context.band.accepted:
-        return Accept(band)
-    return Reject(RejectKind.TASK, (f"{stats.solved} of {stats.graded} solver trials solved the task: {band}",))
+    place = band.place(stats.solved / stats.graded)
+    if place in band.accepted:
+        return Accept(place)
+    return Reject(RejectKind.TASK, (f"{stats.solved} of {stats.graded} solver trials solved the task: {place}",))
 
 
 def _finding(control: ControlResult) -> str:

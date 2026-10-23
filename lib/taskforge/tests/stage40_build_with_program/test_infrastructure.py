@@ -24,26 +24,25 @@ from shellbox.machine import (
 from taskcompendium.models import AnswerType, PlainText, TaskSpec
 
 from taskforge.ledger.records import EntryKind
-from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT
 from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
-from taskforge.stage40_build_with_program import sandbox_effects
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause, machine_available
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, run_build
 from taskforge.stage40_build_with_program.sandbox_effects import (
-    GRADE_CANDIDATE_MACHINE,
-    GRADE_CANDIDATE_VERIFIER_TIMEOUT,
     build_machine,
     grade_candidate,
     publish_image,
 )
-from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
-from taskforge.stage50_validate.lowering import TASK_MACHINE, VERIFIER_TIMEOUT
-from tests.sandbox.fixture_images import PortlessShellSimFactory, ShellGraderImageFactory, shell_grader
+from tests.sandbox.fixture_images import (
+    PortlessShellSimFactory,
+    ShellGradedMachine,
+    ShellGraderImageFactory,
+    shell_grader,
+)
 from tests.stage40_build_with_program.conftest import FACTORIES, SAMPLING, WORKPIECE, RecordingImageBuilder, declaring
 
 SHELLSIM = draft.requirements(image=None)
@@ -346,29 +345,21 @@ async def test_an_image_or_spec_the_program_chose_stays_the_programs_failure(con
     assert interrupted.value.__cause__ is error
 
 
-def test_machine_and_verifier_deadlines_outlast_the_sandbox_scheduling_timeout():
-    """A verifier or startup deadline at or under the factory's scheduling timeout cancels the machine wait first.
-
-    The factory's ``TimeoutError`` is then never raised, the engine reports a bare deadline, and a
-    sandbox that never starts spends a program revision instead of failing as infrastructure. Both
-    verifier deadlines leave the factory its whole budget and the grader its own on top, and both
-    machine startup deadlines leave a sandbox scheduled late in that budget time to prepare.
-    """
-    assert GRADE_CANDIDATE_VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
-    assert VERIFIER_TIMEOUT >= SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
-    assert GRADE_CANDIDATE_MACHINE.startup_timeout is not None
-    assert GRADE_CANDIDATE_MACHINE.startup_timeout > SANDBOX_SCHEDULING_TIMEOUT
-    assert TASK_MACHINE.startup_timeout is not None
-    assert TASK_MACHINE.startup_timeout > SANDBOX_SCHEDULING_TIMEOUT
-
-
 @pytest.mark.parametrize("stalled", ["run", "upload"], ids=["command", "upload"])
 async def test_a_grading_deadline_on_a_stalled_verifier_is_infrastructure(context, monkeypatch, stalled):
     """The grader's own command has its own timeout, so a verifier deadline that expires is the sandbox's latency."""
-    monkeypatch.setattr(sandbox_effects, "GRADE_CANDIDATE_VERIFIER_TIMEOUT", DEADLINE)
+    monkeypatch.setattr(draft, "SANDBOX_SCHEDULING_TIMEOUT", DEADLINE)
     on_host = context(factories={**FACTORIES, Backend.DOCKER.value: StallingFactory(stalled)})
     with pytest.raises(BuildInfrastructureFailure) as failure:
-        await grade_candidate(on_host, None, GRADER, AnswerType.TEXT, PLAIN, "question", "42")
+        await grade_candidate(
+            on_host,
+            draft.NO_MACHINE,
+            dataclasses.replace(GRADER, grader=GRADER.grader.model_copy(update={"timeout": 0.01})),
+            AnswerType.TEXT,
+            PLAIN,
+            "question",
+            "42",
+        )
 
     assert failure.value.cause == InfrastructureCause.SANDBOX_DEADLINE
 
@@ -446,3 +437,18 @@ async def test_run_build_keeps_program_caused_machine_failures(proposal, service
 
     with pytest.raises(BuildFailure, match="task: the grader did not run"):
         await build_on(image_failure, True, proposal, services, glm_client, tmp_path)
+
+
+async def test_a_custom_grader_gets_its_own_timeout_before_the_host_deadline(context, monkeypatch):
+    monkeypatch.setattr(draft, "SANDBOX_SCHEDULING_TIMEOUT", 0.01)
+    monkeypatch.setattr(draft, "GRADER_TIMEOUT", 0.01)
+    run = ShellGradedMachine.run
+
+    async def slow_grader(self, command):
+        await asyncio.sleep(0.1)
+        return await run(self, command)
+
+    monkeypatch.setattr(ShellGradedMachine, "run", slow_grader)
+    grader = dataclasses.replace(GRADER, grader=GRADER.grader.model_copy(update={"timeout": 1.0}))
+    grade = await grade_candidate(context(), draft.NO_MACHINE, grader, AnswerType.TEXT, PLAIN, "question", "42")
+    assert grade.reward == 1.0

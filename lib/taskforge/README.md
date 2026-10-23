@@ -59,7 +59,7 @@ src/taskforge/
                                round.py: `validate_round`, one validation round as a graph of units;
                                adversary.py, adversary_prompts.py: adversary trials and their brief
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify);
-                               rules.py: BandRules, ReviewContext, `default_review`, the default rule table
+                               rules.py: BandRules, `default_review`, the default rule table
 ```
 
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
@@ -69,9 +69,7 @@ modules (`capability`, `child_process`, `content_hash`, `ledger`, `llm`, `sandbo
 the shared modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
 builds a task today goes through a build program, so the SDK, the standard template, the build
 services, the program runner and the agentic author (an agent session that writes and iterates
-that program) all live there. The name leaves room for a `stage40_build_with_agent` package in
-which an agent produces the task draft directly, with no build program at all; that is a future
-surface, not a home for anything that writes a program, however the writer runs. The coordinator
+that program) all live there. The coordinator
 package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
 and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
 with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
@@ -524,9 +522,9 @@ trials fresh attempts. It returns a `ValidationResult`, which the coordinator wr
 `validation.json`. The caller's function closes over what the coordinator does not own, the host's `ValidationSettings` and
 the trial models, as `validate_round(draft, context, settings, solver, controls, adversary)` takes them.
 The review stage reads the result back from `validation.json` (`load_validation`) and calls
-`StageFunctions.review(result, context)` with a `ReviewContext`: the round, the MODIFY rounds left, and
-the `BandRules` the `StageCoordinator` holds in `band`. `stage60_review.rules.default_review` is a
-`Review`; the rule table it applies is under Review.
+`StageFunctions.review(result)`. The caller binds its settings with
+`partial(default_review, band=band)`. The coordinator enforces the MODIFY budget for every review function;
+the default rule table is under Review.
 
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
 digest and research requirement. A relaunch of the workpiece with another proposal, budget, model
@@ -704,15 +702,16 @@ is a shortcut is review's judgement.
 
 ## Review
 
-`stage60_review.rules.default_review(result, context)` decides on a `ValidationResult` by the first
+`stage60_review.rules.default_review(result, band=band)` decides on a `ValidationResult` by the first
 row of this table that matches:
 
 | finding                                                                 | decision                                       |
 |-------------------------------------------------------------------------|------------------------------------------------|
 | the lowering was `refused` by a factory or `rejected` by RolloutEngine | `Reject(HOST)`                                 |
-| a control was `violated`                                                | `Modify(findings)` while a MODIFY round is left, else `Reject(TASK)` |
-| a solver trial or a control replay has no grade                         | `Retry(cause, count)`                          |
-| the solve rate falls in a place `context.band` accepts                  | `Accept(band)`, else `Reject(TASK)`            |
+| a control was `violated`                                                | `Modify(findings)`; the coordinator enforces the budget |
+| a solver trial or a control replay has a permanent ungraded cause | `Reject(TASK)` (`HOST` for `MACHINE_UNSUPPORTED`) |
+| all ungraded causes are retryable | `Retry(cause, count)` |
+| the solve rate falls in a place `band` accepts                  | `Accept(band)`, else `Reject(TASK)`            |
 
 A `Modify` carries one finding per violated control, naming its kind, id, reward and attempt file. A
 `Retry` names the cause that left the most solver trials and controls ungraded, with their count. The

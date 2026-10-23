@@ -39,13 +39,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import TypeAdapter, ValidationError
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.filesystem.storage_path import StoragePath
 
 from taskforge.content_hash import canonical_json, digest, sha256_hex
 from taskforge.ledger.records import FILE_SAFE, check_workpiece_id
 
-SDK_VERSION = "taskforge.builder/13"
+SDK_VERSION = "taskforge.builder/15"
 """Bump when a library change alters what an unchanged step would produce."""
 
 
@@ -179,7 +179,7 @@ class RLEnvBuildStepStore:
         output_digest = sha256_hex(content)
         blob = self.root / "blobs" / output_digest
         if not blob.exists():
-            _write(blob, content)
+            write_bytes_atomic(str(blob), content)
         memo = RLEnvBuildStepMemo(
             name=name,
             key=key.digest,
@@ -189,7 +189,7 @@ class RLEnvBuildStepStore:
             sdk_version=key.sdk_version,
             source_digest=key.source_digest,
         )
-        _write(self._memo_path(key, name), _MEMO.dump_json(memo, indent=2))
+        write_bytes_atomic(str(self._memo_path(key, name)), _MEMO.dump_json(memo, indent=2))
         return memo
 
     def _memo_path(self, key: RLEnvBuildStepKey, name: str) -> StoragePath:
@@ -245,12 +245,6 @@ async def _computed[T](
     computed = await compute()
     memo = store.store(key, name, computed)
     return memo, TypeAdapter(output_type).validate_json(canonical_json(computed))
-
-
-def _write(path: StoragePath, content: bytes) -> None:
-    path.parent.mkdirs()
-    with atomic_rename(str(path)) as temp:
-        StoragePath(temp).write_bytes(content)
 
 
 _MEMO: TypeAdapter[RLEnvBuildStepMemo] = TypeAdapter(RLEnvBuildStepMemo)

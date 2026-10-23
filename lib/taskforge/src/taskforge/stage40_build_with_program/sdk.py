@@ -44,7 +44,7 @@ from taskforge.llm.recording import CallLedger, recorded_structured
 from taskforge.llm.structured import CutReplyError, StructuredOutputError
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
-from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT
+from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT, GRADER_TIMEOUT
 from taskforge.spec.verdict import GRADER_VERDICT_PATH, VERDICT_REWARD
 from taskforge.stage10_proposal.model import ProposalHeader, SolverMachine, TaskProposal, render
 from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext, call_ledger
@@ -55,7 +55,6 @@ WORKDIR = "/workspace"
 WORKSPACE = "workspace"
 """Solver-visible files live under this directory, relative to the machine root."""
 GRADER_PROGRAM = "grade.py"
-GRADER_TIMEOUT = 300.0
 """Seconds a grader program may run on one candidate."""
 FULL_CREDIT = 0.99
 """The least reward a reference answer must receive."""

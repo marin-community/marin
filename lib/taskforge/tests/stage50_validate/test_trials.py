@@ -7,8 +7,7 @@ import asyncio
 import json
 from dataclasses import replace
 
-from rigging.timing import ExponentialBackoff
-from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON, TRACE_METRIC, Rollout, TraceMode
+from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON, TRACE_METRIC, Rollout, RolloutLimits, TraceMode
 from shellbox.machine import Backend
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import JsonAnswer, PlainText
@@ -20,10 +19,12 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.sandbox.factories import MachineHost
+from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
-    Deadlines,
     EngineSettings,
+    RetryBackoff,
     TrialPlan,
     outcome_json,
     run_trials,
@@ -32,7 +33,6 @@ from taskforge.stage50_validate.trials import (
 from tests.conftest import fake_source
 from tests.sandbox.fixture_images import FixtureImageFactory
 
-DEADLINES = Deadlines(total_turn_timeout=30, attempt_timeout=60)
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
 DOCKER_BACKEND = Backend.DOCKER.value
 
@@ -41,11 +41,17 @@ def settings(factory) -> EngineSettings:
     """Task machines from ``factory``; verifier machines from the fixture image factory."""
     return EngineSettings(
         factories={SHELLSIM_BACKEND: factory, DOCKER_BACKEND: FixtureImageFactory()},
-        max_turns=4,
         command_timeout=10,
-        tool_turn_timeout=20,
-        model_turn_timeout=30,
-        cleanup_timeout=10,
+        limits=RolloutLimits(
+            max_turns=4,
+            tool_turn_timeout=20,
+            model_turn_timeout=30,
+            cleanup_timeout=10,
+            total_turn_timeout=30,
+            attempt_timeout=60,
+            verifier_timeout=None,
+            max_total_tokens=None,
+        ),
     )
 
 
@@ -53,7 +59,6 @@ def plan(
     tmp_path,
     k: int = 3,
     max_retries: int = 2,
-    deadlines: Deadlines = DEADLINES,
     first_attempt: int = 0,
 ) -> TrialPlan:
     return TrialPlan(
@@ -61,9 +66,8 @@ def plan(
         round=1,
         kind=TrialKind.SOLVER,
         k=k,
-        deadlines=deadlines,
         max_retries=max_retries,
-        retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
+        retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=2.0, jitter=0.1),
         evidence_dir=tmp_path / "evidence",
         ledger=JsonlLedger(tmp_path / "ledger"),
         first_attempt=first_attempt,
@@ -180,16 +184,17 @@ async def test_each_trial_of_a_glm_model_records_and_routes_under_its_own_attemp
     assert sorted(calls) == ["solver/0/0", "solver/1/0"]
 
 
-async def test_validation_deadlines_replace_the_builders_turn_deadline(tmp_path, file_task, fakes):
-    # The builder allows an hour; validation's total-turn deadline ends the trial after the first shell turn.
+async def test_lowering_applies_the_validation_turn_deadline(tmp_path, file_task, fakes):
+    # Validation's total-turn deadline grades the state left after the first shell turn.
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
-    deadlines = Deadlines(total_turn_timeout=0.5, attempt_timeout=30)
-    builder = file_task.model_copy(update={"limits": file_task.limits.model_copy(update={"total_turn_timeout": 3600})})
+    engine = settings(fakes.flaky_factory(0, RuntimeError))
+    limits = engine.limits.model_copy(update={"total_turn_timeout": 0.5, "attempt_timeout": 30})
+    lowered = lower(file_task.task, MachineHost.LAPTOP, engine.factories, limits)
 
     outcomes = await run_trials(
-        builder,
-        plan(tmp_path, k=1, deadlines=deadlines),
-        settings(fakes.flaky_factory(0, RuntimeError)),
+        lowered,
+        plan(tmp_path, k=1),
+        engine,
         model,
     )
 
@@ -199,11 +204,11 @@ async def test_validation_deadlines_replace_the_builders_turn_deadline(tmp_path,
 
 async def test_validation_attempt_deadline_bounds_a_trial_without_builder_deadlines(tmp_path, file_task, fakes):
     factory = fakes.flaky_factory(failures=0, error=RuntimeError, delay=5)
-    deadlines = Deadlines(total_turn_timeout=0.1, attempt_timeout=0.2)
+    limits = file_task.limits.model_copy(update={"total_turn_timeout": 0.1, "attempt_timeout": 0.2})
 
     outcomes = await run_trials(
-        file_task,
-        plan(tmp_path, k=1, max_retries=0, deadlines=deadlines),
+        file_task.model_copy(update={"limits": limits}),
+        plan(tmp_path, k=1, max_retries=0),
         settings(factory),
         fakes.script_model([]),
     )
@@ -214,11 +219,11 @@ async def test_validation_attempt_deadline_bounds_a_trial_without_builder_deadli
 async def test_the_ledger_input_hash_covers_the_deadlines(tmp_path, math_task, fakes):
     model = fakes.script_model([fakes.text("395")])
     factory = fakes.flaky_factory(0, RuntimeError)
-    short = Deadlines(total_turn_timeout=30, attempt_timeout=60)
-    long = Deadlines(total_turn_timeout=60, attempt_timeout=120)
+    short = math_task.limits
+    long = short.model_copy(update={"total_turn_timeout": 60, "attempt_timeout": 120})
 
-    for deadlines in (short, short, long):
-        await run_trials(math_task, plan(tmp_path, k=1, deadlines=deadlines), settings(factory), model)
+    for limits in (short, short, long):
+        await run_trials(math_task.model_copy(update={"limits": limits}), plan(tmp_path, k=1), settings(factory), model)
 
     first, again, other = (entry.input_hash for entry in ledger(tmp_path))
     assert first == again != other
@@ -261,7 +266,7 @@ async def test_the_ledger_input_hash_is_the_digest_of_the_lowered_task_with_its_
     first, again, other = (entry.input_hash for entry in ledger(tmp_path))
     assert first == again != other
     engine_settings = settings(factory)
-    assert first == task_digest(engine_settings.apply(DEADLINES.apply(math_task)), engine_settings.command_timeout)
+    assert first == task_digest(math_task, engine_settings.command_timeout)
 
 
 async def test_the_ledger_input_hash_covers_the_shell_command_timeout(tmp_path, math_task, fakes):
@@ -310,14 +315,15 @@ async def test_the_evidence_counts_failed_cleanup_actions(tmp_path, file_task, f
     assert [entry.attrs["cleanup_errors"] for entry in ledger(tmp_path)] == ["1"]
 
 
-async def test_engine_settings_replace_the_builders_turn_budget(tmp_path, file_task, fakes):
-    # The builder allows one turn; validation's four let the agent write the file on its second.
+async def test_lowering_applies_the_validation_turn_budget(tmp_path, file_task, fakes):
+    # Validation's four turns let the agent write the file on its second.
     model = fakes.script_model(
         [fakes.shell("true", "c0"), fakes.shell("echo 60 > /workspace/sum.txt"), fakes.text("Done.")]
     )
-    builder = file_task.model_copy(update={"limits": file_task.limits.model_copy(update={"max_turns": 1})})
+    engine = settings(fakes.flaky_factory(0, RuntimeError))
+    lowered = lower(file_task.task, MachineHost.LAPTOP, engine.factories, engine.limits)
 
-    outcomes = await run_trials(builder, plan(tmp_path, k=1), settings(fakes.flaky_factory(0, RuntimeError)), model)
+    outcomes = await run_trials(lowered, plan(tmp_path, k=1), engine, model)
 
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
 
@@ -330,7 +336,7 @@ async def test_trials_run_under_the_messages_trace(tmp_path, file_task, fakes):
 
     outcomes = await run_trials(file_task, plan(tmp_path, k=1), engine_settings, model)
 
-    assert engine_settings.apply(file_task).trace is TraceMode.MESSAGES
+    assert file_task.trace is TraceMode.MESSAGES
     assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].reward == 1.0
     rollout = outcomes[0].rollout
     assert rollout.metrics[TRACE_METRIC] == TraceMode.MESSAGES.value
