@@ -12,9 +12,9 @@ serves with vLLM.
 Plan or run one arm::
 
     uv run python -m experiments.post_training.baby_rsi.skyrl_launch --version 2026.10.23 \\
-        --model qwen3-4b --arm control --feed-root s3://marin-us-east-02a/<prefix>/control/feed
+        --model qwen3-4b --arm control --feed-root s3://marin-us-east-02a/<prefix>/control/feed --export-every 120
     uv run python -m experiments.post_training.baby_rsi.skyrl_launch --version 2026.10.23 \\
-        --model qwen3-4b --arm rsi --feed-root s3://marin-us-east-02a/<prefix>/rsi/feed --run
+        --model qwen3-4b --arm rsi --feed-root s3://marin-us-east-02a/<prefix>/rsi/feed --export-every 120 --run
 """
 
 from __future__ import annotations
@@ -246,7 +246,7 @@ def training_config(
             "algorithm": {
                 "advantage_estimator": "grpo",
                 "loss_reduction": "token_mean",
-                # A clipped ratio against the vLLM sampling log probabilities, as the Baby RSI trainer does. It is
+                # A clipped ratio against the vLLM sampling log probabilities. It is
                 # anchored at the rollout, so a group sampled one step earlier needs no other correction.
                 "policy_loss_type": "behavior_clip",
                 "off_policy_correction": "none",

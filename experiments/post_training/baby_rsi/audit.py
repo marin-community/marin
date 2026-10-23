@@ -74,7 +74,7 @@ def task_view(task: TaskSpec) -> dict[str, object]:
 
 async def audit_all(root: str, client: GlmClient) -> list[dict[str, object]]:
     records = []
-    for task_path in sorted(StoragePath(f"{root}/ideas/*/tasks/*/task.json").glob(), key=str):
+    for task_path in sorted((StoragePath(root) / "ideas/*/tasks/*/task.json").glob(), key=str):
         directory = task_path.parent
         idea = json.loads((directory.parent.parent / "idea.json").read_text())
         task = TaskSpec.model_validate_json(task_path.read_text())
