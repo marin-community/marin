@@ -300,7 +300,9 @@ def training_config(
             "max_concurrent_tasks": ATTEMPTS_PER_WORKER,
             "rollout_workers": {"num_workers": ROLLOUT_WORKERS, "cpus_per_worker": CPUS_PER_ROLLOUT_WORKER},
         },
-        "extra_env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"},
+        # A privileged pod also sees the node's Ethernet RDMA functions; NCCL must use the InfiniBand HCAs only, or
+        # the first cross-node collective of a multi-node policy fails with IBV_WC_RETRY_EXC_ERR.
+        "extra_env": {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True", "NCCL_IB_HCA": "ibp"},
     }
     _materialize_role_plan_config(config, plan)
     return config
