@@ -40,6 +40,7 @@ from taskforge.stage40_build_with_program.context import (
     BuildInfrastructureFailure,
     ExpiredClock,
 )
+from taskforge.stage40_build_with_program.failure_text import BuildCrash
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build
@@ -226,13 +227,15 @@ async def test_a_step_clock_expiry_in_the_child_comes_back_with_its_clock_and_st
     assert str(expired.value) == "ran for more than 1800 seconds without returning"
 
 
-async def test_any_other_exception_in_the_child_comes_back_as_its_type_message_and_traceback(make_request):
-    with pytest.raises(RuntimeError) as failure:
-        await run_build_in_process(make_request(with_question("    return 1 / 0")), wall_timeout=WALL_TIMEOUT)
+async def test_any_other_exception_in_the_child_comes_back_led_by_the_program_line_that_raised_it(make_request):
+    source = with_question("    return 1 / 0")
+    with pytest.raises(BuildCrash) as crash:
+        await run_build_in_process(make_request(source), wall_timeout=WALL_TIMEOUT)
 
-    first, _, rest = str(failure.value).partition("\n\n")
-    assert first == "ZeroDivisionError: division by zero"
-    assert "Traceback (most recent call last)" in rest
+    line = source.splitlines().index("    return 1 / 0") + 1
+    assert crash.value.head == f"program.py:{line}, in step question: return 1 / 0\nZeroDivisionError: division by zero"
+    assert crash.value.traceback.startswith("Traceback (most recent call last)")
+    assert "return 1 / 0" in crash.value.traceback
 
 
 async def test_a_child_that_cannot_start_its_services_is_a_host_failure_carrying_its_log(make_request, monkeypatch):
@@ -253,7 +256,7 @@ def test_requests_and_results_round_trip_through_json(make_request, image_cluste
         Failed("the question is ambiguous", "question"),
         Expired(ExpiredClock.STEP, "question", "ran for more than 1800 seconds without returning"),
         HostFailed(InfrastructureCause.NO_FACTORY, "no docker"),
-        Crashed(Raised.OS_ERROR, "OSError: disk full\n\nTraceback"),
+        Crashed(Raised.OS_ERROR, "OSError: disk full", "Traceback"),
     )
 
     assert REQUEST.validate_json(REQUEST.dump_json(request)) == request

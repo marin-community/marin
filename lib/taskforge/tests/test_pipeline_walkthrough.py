@@ -11,6 +11,7 @@ restricted loader.
 import asyncio
 import base64
 import inspect
+import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -44,6 +45,7 @@ from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage20_triage.verdict import TriageDecision, Verdict
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
+    AuthorContext,
     AuthoredProgram,
     Revision,
     RevisionKind,
@@ -57,6 +59,7 @@ from taskforge.stage30_author.program import (
     rl_env_build_sink,
     rl_env_build_step,
 )
+from taskforge.stage40_build_with_program.agentic_author import AgenticAuthor, SessionBuild
 from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
@@ -66,6 +69,7 @@ from taskforge.stage40_build_with_program.context import (
 )
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.outputs import Grader
+from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import (
     DRAFT_DIR,
     TASK_FILE,
@@ -106,6 +110,8 @@ from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventSto
 from taskforge.stage_coordinator.run import InfrastructureRetry, run_workpieces
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import EXIT, Stage, Terminal, WorkpieceEvent, derive_state
+from tests.stage40_build_with_program.scripted_author import CONFIG, ScriptedModel, in_process_loader, turn
+from tests.stage40_build_with_program.scripted_author import PROGRAM as AGENTIC_SOURCE
 
 WORKPIECE = "toy-0"
 PROPOSAL = parse(
@@ -318,16 +324,22 @@ UNUSED_MODEL_DIGEST = build_model_digest(UnusedModel(), SAMPLING, SERVICES)
 
 
 class RecordingAuthor:
-    """Returns ``programs`` in turn, the last one from then on, and records each revision and author state."""
+    """Returns ``programs`` in turn, the last one from then on, and records each context, revision and author state."""
 
     def __init__(self, *programs: RLEnvBuildProgram):
         self.programs = list(programs)
+        self.contexts: list[AuthorContext] = []
         self.revisions: list[Revision | None] = []
         self.states: list[Mapping[str, JsonValue]] = []
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
+        self.contexts.append(context)
         self.revisions.append(revision)
         self.states.append(author_state)
         return AuthoredProgram(self.programs.pop(0) if len(self.programs) > 1 else self.programs[0], None, None)
@@ -341,7 +353,11 @@ class SourceAuthor:
         self.revisions: list[Revision | None] = []
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
         self.revisions.append(revision)
         return AuthoredProgram(load_toy_program(self.source), self.source, None)
@@ -569,27 +585,28 @@ async def test_a_build_failure_costs_a_revision_and_the_next_one_rejects_the_wor
     revision = author.revisions[-1]
     assert revision is not None
     assert revision.detail.startswith(
-        "BuildFailure: the numbers do not multiply to the answer at broken, program line "
-        + str(inspect.getsourcelines(broken.fn)[1] + 2)
-        + ': raise BuildFailure("the numbers do not multiply to the answer")\n'
+        f"program.py:{inspect.getsourcelines(broken.fn)[1] + 2}, in step broken: "
+        'raise BuildFailure("the numbers do not multiply to the answer")\n'
+        "BuildFailure: the numbers do not multiply to the answer\n\n"
     )
 
 
 NUMBERS_FILE = 'InlineFile(content_base64=base64.b64encode(b"6 7\\n").decode())'
 
 
-def program_line(source: str, text: str) -> str:
-    """The ``program line N: <line>`` part of a failure's first line, for the line of ``source`` holding ``text``."""
+def program_frame(source: str, text: str, step: str) -> str:
+    """The program frame that leads a failure's head, for the line of ``source`` holding ``text`` in ``step``."""
     lines = source.splitlines()
     number = next(number for number, line in enumerate(lines, start=1) if text in line)
-    return f"program line {number}: {lines[number - 1].strip()}"
+    return f"program.py:{number}, in step {step}: {lines[number - 1].strip()}"
 
 
-async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
-    """Run a workpiece authoring ``source`` to its rejection, and return the first line of its failure text.
+async def failure_heads(root: Path, source: str) -> tuple[str, str, str]:
+    """Run a workpiece authoring ``source`` to its rejection, and return the head of its failure text.
 
-    It returns the line from ``build-failures/1.txt``, from the revision detail the second author
-    call received, and from the ``failure`` attr of the first ``BUILD_FAILED`` event.
+    It returns the head, the text before the first blank line, from ``build-failures/1.txt`` and from
+    the revision detail the second author call received, and the ``failure`` attr of the first
+    ``BUILD_FAILED`` event.
     """
     author = SourceAuthor(source)
     log = InMemoryEventLog()
@@ -602,7 +619,7 @@ async def failure_first_lines(root: Path, source: str) -> tuple[str, str, str]:
     text = (root / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR / "1.txt").read_text()
     assert text == revision.detail
     built = next(event for event in log.events() if event.kind == "build_failed")
-    return text.splitlines()[0], revision.detail.splitlines()[0], built.attrs["failure"]
+    return text.partition("\n\n")[0], revision.detail.partition("\n\n")[0], built.attrs["failure"]
 
 
 async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp_path):
@@ -611,10 +628,11 @@ async def test_a_name_error_in_a_step_reports_its_program_line_to_the_author(tmp
     source = SOURCE.replace(NUMBERS_FILE, "InlineFile(content_base64=encoded_numbers)").replace(
         declared, declared + "    global encoded_numbers\n", 1
     )
-    expected = "NameError: name 'encoded_numbers' is not defined at numbers, " + program_line(
-        source, "content_base64=encoded_numbers"
+    expected = (
+        program_frame(source, "content_base64=encoded_numbers", "numbers")
+        + "\nNameError: name 'encoded_numbers' is not defined"
     )
-    assert await failure_first_lines(tmp_path, source) == (expected,) * 3
+    assert await failure_heads(tmp_path, source) == (expected,) * 3
 
 
 async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
@@ -622,19 +640,33 @@ async def test_an_os_error_raised_by_a_step_is_the_programs_failure(tmp_path):
     missing = '    raise FileNotFoundError(2, "No such file or directory", "/workspace/does-not-exist.txt")\n'
     source = SOURCE.replace("    return TaskResource(\n", missing + "    return TaskResource(\n", 1)
     expected = (
-        "FileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt' at numbers, "
-        + program_line(source, "does-not-exist")
+        program_frame(source, "does-not-exist", "numbers")
+        + "\nFileNotFoundError: [Errno 2] No such file or directory: '/workspace/does-not-exist.txt'"
     )
-    assert await failure_first_lines(tmp_path, source) == (expected,) * 3
+    assert await failure_heads(tmp_path, source) == (expected,) * 3
 
 
 async def test_a_library_error_called_from_a_step_still_reports_the_program_line(tmp_path):
     source = SOURCE.replace(NUMBERS_FILE, '"6 7"')
     assert source != SOURCE
-    first_line, detail_line, attr = await failure_first_lines(tmp_path, source)
-    assert first_line == detail_line == attr
-    assert first_line.startswith("ValidationError: 1 validation error for TaskResource in library code at pydantic/")
-    assert first_line.endswith(", called from numbers, " + program_line(source, "return TaskResource("))
+    head, detail_head, attr = await failure_heads(tmp_path, source)
+    assert head == detail_head == attr
+    frame, library, error = head.split("\n")
+    assert frame == program_frame(source, "return TaskResource(", "numbers")
+    assert library.startswith("raised in library code at pydantic/")
+    assert error == "ValidationError: 1 validation error for TaskResource"
+
+
+async def test_a_step_failing_under_two_dependents_reports_its_own_program_line(tmp_path):
+    """Both later steps await ``numbers``; its failure keeps the frame where the step raised it."""
+    raising = '    rows = {}["rows"]\n    return TaskResource(\n'
+    source = SOURCE.replace("    return TaskResource(\n", raising, 1).replace(
+        "async def grader(context: RLEnvBuildContext)",
+        "async def grader(context: RLEnvBuildContext, numbers: TaskResource)",
+    )
+    assert source.count('{}["rows"]') == 1 and "numbers: TaskResource) -> Grader" in source
+    head, detail_head, attr = await failure_heads(tmp_path, source)
+    assert head == detail_head == attr == program_frame(source, '{}["rows"]', "numbers") + "\nKeyError: 'rows'"
 
 
 CUT_REPLY = Completion(
@@ -662,7 +694,11 @@ class CutAuthor:
         self.revisions: list[Revision | None] = []
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
         self.revisions.append(revision)
         if len(self.revisions) <= self.cuts:
@@ -709,7 +745,10 @@ async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_bu
 
 
 async def unavailable_author(
-    proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+    context: AuthorContext,
+    proposal: TaskProposal,
+    revision: Revision | None,
+    author_state: Mapping[str, JsonValue],
 ) -> AuthoredProgram:
     raise ModelUnavailable("the hold ran out", ())
 
@@ -920,7 +959,7 @@ async def test_a_relaunch_of_a_workpiece_abandoned_on_its_retries_validates_the_
     assert exits(log)[len(abandoned.events()) :] == ACCEPTED_EXITS[4:]
 
 
-async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings(tmp_path):
+async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings_and_context(tmp_path):
     decisions: list[Decision] = [Modify(findings=("the file states the product",)), Accept(band=BandOutcome.IN_BAND)]
     author = RecordingAuthor(PROGRAM)
 
@@ -933,6 +972,9 @@ async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_
     assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert [(event.kind, event.round) for event in log.events()][5:8] == [("decided", 0), ("authored", 1), ("built", 1)]
     assert author.revisions[2:] == [Revision(kind=RevisionKind.MODIFY, detail="the file states the product")] * 2
+    # The author stage and the build stage's call again, as the author returns no source, in each round.
+    directory = tmp_path / "workpieces" / WORKPIECE
+    assert author.contexts == [AuthorContext(WORKPIECE, 0, directory)] * 2 + [AuthorContext(WORKPIECE, 1, directory)] * 2
     assert (tmp_path / "workpieces" / WORKPIECE / "rounds" / "1" / DRAFT_DIR / TASK_FILE).is_file()
 
 
@@ -947,7 +989,11 @@ class SwappingAuthor:
         self.calls: list[tuple[Verification, Revision | None]] = []
 
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
         self.calls.append((proposal.header.verification, revision))
         if revision is None:
@@ -1013,7 +1059,7 @@ async def test_an_authored_verification_change_reaches_every_later_build_and_aut
 
 async def test_an_author_swapping_the_kind_outside_a_modify_revision_fails_the_workpiece_at_the_author(tmp_path):
     async def swapping(
-        proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        context: AuthorContext, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
     ) -> AuthoredProgram:
         return AuthoredProgram(JUDGED, None, TO_JUDGE)
 
@@ -1385,3 +1431,98 @@ async def test_run_workpieces_refuses_a_repeated_workpiece_id_before_starting_it
     assert triage.proposals == [PROPOSAL]
     assert exits(stored_log(tmp_path, WORKPIECE)) == ACCEPTED_EXITS
     assert JsonEventStore(tmp_path).load("toy-1") is None
+
+
+def agentic_author(model: ScriptedModel, root: Path) -> AgenticAuthor:
+    """The agentic author driving ``model``, whose sessions build as the coordinator under ``root`` builds.
+
+    A session's builds run ``run_build`` in process on the coordinator's step store, with its model,
+    services, research requirement and model digest, and the session's proposal and verification change,
+    so the build stage serves the submitted program's steps from memo hits alone.
+    """
+    store = str(root / STORE_DIR)
+
+    def builds(context: AuthorContext, received: TaskProposal) -> SessionBuild:
+        async def builder(
+            source: str,
+            run_dir: Path,
+            *,
+            invalidate: frozenset[str],
+            proposal: TaskProposal,
+            verification_change: VerificationChange | None,
+        ) -> TaskDraft:
+            return await run_build(
+                load_program(source),
+                proposal,
+                context.workpiece_id,
+                run_dir,
+                store,
+                UnusedModel(),
+                SAMPLING,
+                SERVICES,
+                context.round,
+                research=ResearchRequirement.OFF,
+                invalidate=invalidate,
+                model_digest=UNUSED_MODEL_DIGEST,
+                verification_change=verification_change,
+            )
+
+        return SessionBuild(
+            builder, store, UnusedModel(), SAMPLING, SERVICES, root / "sessions.jsonl", in_process_loader
+        )
+
+    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.recording, builds)
+
+
+class RecordingValidate:
+    """Returns ``passing_result`` for every draft's context and keeps the drafts it validated."""
+
+    def __init__(self) -> None:
+        self.drafts: list[TaskDraft] = []
+
+    async def __call__(self, draft: TaskDraft, context: ValidationContext) -> ValidationResult:
+        self.drafts.append(draft)
+        return passing_result(context)
+
+
+async def test_the_coordinator_runs_the_agentic_author_as_its_author_stage_through_build_and_validation(tmp_path):
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": AGENTIC_SOURCE})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
+    )
+    validate_drafts = RecordingValidate()
+    stages = replace(STAGES, author=agentic_author(model, tmp_path), load_program=load_program, validate=validate_drafts)
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    assert exits(log) == ACCEPTED_EXITS and not model.replies
+    round_dir = tmp_path / "workpieces" / WORKPIECE / "rounds" / "0"
+    assert (round_dir / AUTHORED_DIR / "0" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE
+    assert (round_dir / "agentic" / "0" / "workspace" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE
+    built = next(event for event in log.events() if event.kind == "built")
+    assert built.attrs["hits"] == built.attrs["steps"] == "3", "the build stage reran no step the session built"
+    [draft] = validate_drafts.drafts
+    assert draft.task.id == WORKPIECE
+
+
+async def test_a_build_failure_returns_to_the_agentic_session_that_submitted_the_program(tmp_path):
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": AGENTIC_SOURCE})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("submit", {"path": "program.py", "notes": "the grader holds"})),
+    )
+    failure = BuildFailure("the reference reply does not parse", "grader")
+    stages = replace(STAGES, author=agentic_author(model, tmp_path), load_program=load_program, build=FailsOnce(failure))
+    log = InMemoryEventLog()
+
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    assert exits(log) == [*ACCEPTED_EXITS[:3], ("build_failed", "revise"), *ACCEPTED_EXITS[2:]]
+    revision_turn = str(model.requests[3].messages[-1]["content"])
+    assert "grader: the reference reply does not parse" in revision_turn
+    round_dir = tmp_path / "workpieces" / WORKPIECE / "rounds" / "0"
+    session = json.loads((round_dir / "agentic" / "1" / "session.json").read_text())
+    assert (session["mode"], session["continued_from"]) == ("same_session", "rounds/0/agentic/0")
+    assert (round_dir / AUTHORED_DIR / "1" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE

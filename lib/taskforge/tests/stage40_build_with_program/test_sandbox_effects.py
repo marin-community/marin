@@ -83,7 +83,9 @@ async def test_a_grader_timeout_is_graded_once_more_on_fresh_machines(context, t
     assert (slow.machines, slow.grader_runs) == (2, 2)
 
 
-@pytest.mark.parametrize("requirements", [SHELLSIM, None], ids=["shellsim", "no-machine"])
+@pytest.mark.parametrize(
+    "requirements", [SHELLSIM, draft.NO_MACHINE, None], ids=["shellsim", "no-machine", "no-requirements"]
+)
 @pytest.mark.parametrize(
     ("grader", "answer_type", "answer_format", "right", "wrong"),
     [
