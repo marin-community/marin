@@ -5,8 +5,6 @@
 
 import asyncio
 import dataclasses
-from contextlib import nullcontext
-from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -28,12 +26,11 @@ from taskcompendium.models import AnswerType, PlainText, TaskSpec
 
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.client import ModelUnavailable
-from taskforge.sandbox import image_builder
 from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
 from taskforge.stage10_proposal.model import SolverMachine
-from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
+from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause, machine_available
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, run_build
@@ -264,33 +261,6 @@ async def test_an_image_job_the_host_failed_is_infrastructure(context):
     assert "worker lost" in failure.value.message
 
 
-async def test_image_bootstrap_failure_reaches_the_build_as_infrastructure(context, monkeypatch):
-    status = SimpleNamespace(
-        state=image_builder.JobState.FAILED,
-        error_message="crane download failed",
-        tasks=(SimpleNamespace(exit_code=image_builder.BUILD_SETUP_FAILED_EXIT),),
-    )
-    job = SimpleNamespace(job_id="/alice/build", state=status.state, wait=lambda **kwargs: status)
-    client = SimpleNamespace(submit=lambda **kwargs: job, shutdown=lambda: None)
-    monkeypatch.setattr(image_builder.IrisClient, "remote", lambda *args, **kwargs: client)
-    monkeypatch.setattr(
-        image_builder,
-        "connect_controller",
-        lambda **kwargs: nullcontext(SimpleNamespace(url="http://controller.invalid", credentials=None)),
-    )
-    images = image_builder.IrisImageBuilder(
-        controller_url="http://controller.invalid",
-        target_cluster="test-cluster",
-        credential=image_builder.RegistryCredential("registry.example", "publisher", "password"),
-    )
-    build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\n"),))
-
-    with pytest.raises(BuildInfrastructureFailure) as failure:
-        await publish_image(context(images=images), build)
-
-    assert failure.value.cause == InfrastructureCause.IMAGE_JOB_FAILED
-
-
 async def test_an_image_that_fails_to_build_is_the_programs_failure(context):
     build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\nRUN false\n"),))
     images = FailingImageBuilder(BuildFailed("job /alice/build ended failed: RUN false returned 1"))
@@ -464,10 +434,10 @@ async def test_run_build_raises_host_failures_as_infrastructure(
     assert not (tmp_path / "round" / DRAFT_DIR).exists()
 
 
-async def test_run_build_keeps_program_caused_machine_failures(proposal, services, glm_client, tmp_path):
+async def test_an_untyped_machine_failure_holds_without_blaming_the_program(proposal, services, glm_client, tmp_path):
     image_failure = FailingFactory(RuntimeError("docker build failed: COPY failed"))
 
-    with pytest.raises(BuildFailure, match="task: the grader did not run"):
+    with pytest.raises(BuildInfrastructureFailure, match="unclassified_build_failure"):
         await build_on(image_failure, True, proposal, services, glm_client, tmp_path)
 
 
@@ -489,38 +459,38 @@ async def test_a_custom_grader_gets_its_own_timeout_before_the_host_deadline(con
 @pytest.mark.parametrize(
     "outage,cause",
     [
-        (ModelUnavailable("model unavailable", ()), InfrastructureCause.MODEL_UNAVAILABLE),
-        (httpx.ConnectError("web provider disconnected"), InfrastructureCause.HTTP_UNAVAILABLE),
+        (httpx.ConnectError("web provider disconnected"), "http_unavailable"),
+        (ModelUnavailable("model unavailable", ()), "model_request_unavailable"),
         (
             httpx.HTTPStatusError(
-                "service unavailable",
+                "missing response", request=httpx.Request("GET", "https://service.invalid"), response=httpx.Response(404)
+            ),
+            "http_unavailable",
+        ),
+        (
+            httpx.HTTPStatusError(
+                "unavailable response",
                 request=httpx.Request("GET", "https://service.invalid"),
                 response=httpx.Response(503),
             ),
-            InfrastructureCause.HTTP_UNAVAILABLE,
-        ),
-        (
-            httpx.HTTPStatusError(
-                "missing authored URL",
-                request=httpx.Request("GET", "https://service.invalid/missing"),
-                response=httpx.Response(404),
-            ),
-            None,
+            "http_unavailable",
         ),
     ],
-    ids=["model-outage", "transport-outage", "http-outage", "invalid-authored-url"],
 )
-async def test_wrapped_service_failures_preserve_their_classification(
-    proposal, services, glm_client, tmp_path, outage, cause
+@pytest.mark.parametrize("suppress_context", [False, True])
+async def test_authored_build_failure_wrapping_an_outage_still_holds(
+    proposal, services, glm_client, tmp_path, outage, cause, suppress_context
 ):
     @rl_env_build_sink
     async def task(context: RLEnvBuildContext) -> TaskSpec:
         try:
             raise outage
         except Exception as error:
+            if suppress_context:
+                raise BuildFailure("could not construct the task") from None
             raise BuildFailure("could not construct the task") from error
 
-    with pytest.raises(BuildInfrastructureFailure if cause is not None else BuildFailure) as failure:
+    with pytest.raises(BuildInfrastructureFailure) as failure:
         await run_build(
             rl_env_build_program(sink=task),
             proposal,
@@ -533,9 +503,53 @@ async def test_wrapped_service_failures_preserve_their_classification(
             0,
             research=ResearchRequirement.OFF,
         )
+    assert failure.value.cause == cause
+    assert not (tmp_path / "round" / DRAFT_DIR).exists()
 
-    if isinstance(failure.value, BuildInfrastructureFailure):
-        assert failure.value.cause == cause
-    else:
-        assert failure.value.step == "task"
+
+@pytest.mark.parametrize("nested", [False, True], ids=["concurrent-steps", "nested-group"])
+async def test_an_authored_failure_cannot_hide_a_simultaneous_host_failure(
+    proposal, services, glm_client, tmp_path, nested
+):
+    barrier = asyncio.Barrier(2)
+
+    @rl_env_build_step
+    async def unavailable(context: RLEnvBuildContext) -> int:
+        await barrier.wait()
+        raise BuildInfrastructureFailure("host_unavailable", "machine disappeared")
+
+    @rl_env_build_step
+    async def defect(context: RLEnvBuildContext) -> int:
+        await barrier.wait()
+        raise BuildFailure("authored contract violation")
+
+    @rl_env_build_sink
+    async def combined(context: RLEnvBuildContext, unavailable: int, defect: int) -> TaskSpec:
+        raise AssertionError("failed dependencies must prevent assembly")
+
+    @rl_env_build_sink
+    async def grouped(context: RLEnvBuildContext) -> TaskSpec:
+        raise ExceptionGroup(
+            "mixed",
+            [
+                BuildFailure("authored contract violation"),
+                ExceptionGroup("nested", [BuildInfrastructureFailure("host_unavailable", "machine disappeared")]),
+            ],
+        )
+
+    program = rl_env_build_program(sink=grouped) if nested else rl_env_build_program(unavailable, defect, sink=combined)
+    with pytest.raises(BuildInfrastructureFailure) as failure:
+        await run_build(
+            program,
+            proposal,
+            WORKPIECE,
+            tmp_path / "round",
+            str(tmp_path / "store"),
+            glm_client,
+            SAMPLING,
+            services,
+            0,
+            research=ResearchRequirement.OFF,
+        )
+    assert failure.value.cause == "host_unavailable"
     assert not (tmp_path / "round" / DRAFT_DIR).exists()

@@ -9,12 +9,14 @@ A build program uses the host through machines: ``sandbox_effects.build_machine`
 driving a machine becomes a ``BuildInfrastructureFailure``. ``run_program`` raises it instead of
 handing the program's author a traceback, because no revision of the program can fix the host.
 
-Only errors the program cannot have caused are infrastructure:
+Execution failures remain unavailable unless an explicit contract or recognized authored
+programming error establishes a repairable defect. Network failure alone cannot establish that
+a hostname is a typo rather than an unavailable service. The classified execution failures include:
 
 * ``NO_FACTORY``: the build needs a machine backend this host has no factory for (a laptop without
   Docker). Lowering raises it, since ``RolloutEngine.check`` checks each machine's environment with its
   factory before it acquires one. It is deterministic on the host (``HOST_REJECTIONS``): no retry here changes it, so the
-  loop abandons the workpiece at once without retrying the build.
+  loop leaves the workpiece for resume without retrying the build.
 * ``NO_IMAGE_BUILDER``: the build publishes a task image and this host has no ``ImageBuilder``.
   Also deterministic on the host.
 * ``IMAGE_JOB_FAILED``: a job publishing the task image failed for a host reason
@@ -36,15 +38,18 @@ Only errors the program cannot have caused are infrastructure:
   or the closed-machine messages ``sandbox.host_failures`` shares with validation).
 * ``HOST_UNREACHABLE``: a connection to the machine host failed, or the controller answered an RPC
   with a transport, capacity or credential error.
+* ``MODEL_UNAVAILABLE`` / ``model_request_unavailable``: a model call could not complete.
+* ``HTTP_UNAVAILABLE``: an HTTP transport or status failure, including causes wrapped by authored code.
+  These failures remain unavailable evidence; they do not establish a program defect.
+* ``BUDGET_EXHAUSTED``: an explicitly configured execution budget was spent.
 * ``BUILD_PROCESS``: the child process running the build (``build_process.py``) or loading the
   program (``stage30_author.load_process``) exited without writing its result, as when its
   services could not start or the kernel killed it for memory.
 
-Everything else is the program's: an image it built or named that fails to build, pull or start,
-a machine spec the backend refuses (``UnsupportedMachineSpec`` or ``ValueError``), an RPC the
-controller refuses for the request itself (a code outside ``HOST_RPC_CODES``), and setup or grader
-commands that fail. Shellbox raises a bare ``RuntimeError`` for both a failed Docker build and an
-unreachable Docker daemon, so those stay the program's too.
+Only explicit build contracts and recognized programming errors owned by authored code are sent back
+for repair. Unknown failures hold. In particular, a bare ``RuntimeError`` from Docker cannot distinguish
+a bad image from an unavailable daemon. Every child of an exception group is checked before selecting
+an authored error, so a simultaneous host outage takes precedence.
 
 An ``OSError`` raised outside the program's own frames (``storage_fault``) is the step store's: a
 storage fault, a missing blob or memo, or a corrupt one (``StoreCorruption``). It is not a
@@ -69,14 +74,15 @@ from pathlib import Path
 import httpx
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from pydantic import ValidationError
 from rolloutengine.models import RolloutInterrupted, RolloutOperation
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
 
-from taskforge.llm.client import RETRYABLE_STATUSES, ModelUnavailable
+from taskforge.llm.client import ModelRequestRejected, ModelUnavailable
 from taskforge.sandbox.factories import MachineHost, container_backend
 from taskforge.sandbox.host_failures import machine_create_failed, machine_lost
 from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
-from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
+from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 
 HOST_RPC_CODES = frozenset(
@@ -94,7 +100,9 @@ HOST_RPC_CODES = frozenset(
 
 
 class InfrastructureCause(StrEnum):
-    """Why the host, not the program, failed a build."""
+    """Why execution stopped without establishing a program defect."""
+
+    BUDGET_EXHAUSTED = "budget_exhausted"
 
     NO_FACTORY = "no_factory"
     NO_IMAGE_BUILDER = "no_image_builder"
@@ -114,7 +122,7 @@ class InfrastructureCause(StrEnum):
 
 
 HOST_REJECTIONS = frozenset({InfrastructureCause.NO_FACTORY, InfrastructureCause.NO_IMAGE_BUILDER})
-"""Causes that hold for as long as the host is unchanged: the workpiece is abandoned at once, not retried."""
+"""Causes that hold for as long as the host is unchanged: the workpiece is held at once."""
 DEADLINE_OPERATIONS = frozenset({RolloutOperation.START, RolloutOperation.GRADE})
 """The engine operations whose deadline only a slow sandbox can exhaust: machine start and grading."""
 
@@ -124,12 +132,18 @@ def machine_available(services: RLEnvBuildServices, proposal: TaskProposal) -> N
 
     Raises:
         BuildInfrastructureFailure: ``NO_IMAGE_BUILDER`` for a container proposal on a host without an
-            image builder, ``NO_FACTORY`` for a package machine on a host without the local backend.
+            image builder, or ``NO_FACTORY`` when its container or package machine backend is absent.
     """
     machine = proposal.header.solver_machine
     if machine is None and services.images is None:
         raise BuildInfrastructureFailure(
             InfrastructureCause.NO_IMAGE_BUILDER, "the proposal declares a container and this host cannot publish images"
+        )
+    backend = container_backend(services.host)
+    if machine is None and backend.value not in services.factories:
+        raise BuildInfrastructureFailure(
+            InfrastructureCause.NO_FACTORY,
+            f"the proposal declares a container and this host has no {backend} machine factory",
         )
     if machine is SolverMachine.PACKAGES and Backend.LOCAL.value not in services.factories:
         raise BuildInfrastructureFailure(
@@ -139,18 +153,62 @@ def machine_available(services: RLEnvBuildServices, proposal: TaskProposal) -> N
 
 
 def exception_chain(error: BaseException) -> list[BaseException]:
-    """List ``error`` and the exceptions it was raised from or during, outermost first."""
+    """Walk every grouped exception and cause, without losing concurrent infrastructure failures."""
     chain: list[BaseException] = []
-    link: BaseException | None = error
-    while link is not None and link not in chain:
+    pending = [error]
+    while pending:
+        link = pending.pop()
+        if any(link is prior for prior in chain):
+            continue
         chain.append(link)
+        if isinstance(link, BaseExceptionGroup):
+            pending.extend(reversed(link.exceptions))
         if link.__cause__ is not None:
-            link = link.__cause__
-        elif link.__suppress_context__:
-            link = None
-        else:
-            link = link.__context__
+            pending.append(link.__cause__)
+        if link.__context__ is not None and link.__context__ is not link.__cause__:
+            pending.append(link.__context__)
     return chain
+
+
+def authored_failure(error: BaseException, program_files: Collection[str]) -> bool:
+    """Require an explicit contract failure or a known programming error owned by authored code.
+
+    Unknown runtime/host errors hold. An authored wrapper cannot hide an unknown cause or a failed sibling.
+    """
+    contract_files = {str(Path(__file__).parents[1] / "stage30_author" / name) for name in ("loader.py", "program.py")}
+    for link in exception_chain(error):
+        if isinstance(link, BaseExceptionGroup) or link.__cause__ is not None:
+            continue
+        if not link.__suppress_context__ and link.__context__ is not None:
+            continue
+        if isinstance(link, BuildFailure):
+            continue
+        if not isinstance(
+            link,
+            (
+                SyntaxError,
+                TypeError,
+                ValueError,
+                NameError,
+                AttributeError,
+                LookupError,
+                ArithmeticError,
+                AssertionError,
+                FileNotFoundError,
+                ImportError,
+            ),
+        ):
+            return False
+        frames = traceback.extract_tb(link.__traceback__)
+        if isinstance(link, SyntaxError) and link.filename in program_files:
+            continue
+        if isinstance(link, ValidationError) and any(frame.filename in program_files for frame in frames):
+            continue
+        if any(frame.filename in contract_files for frame in frames):
+            continue
+        if not frames or frames[-1].filename not in program_files:
+            return False
+    return True
 
 
 def raised_in_program(error: BaseException, program_files: Collection[str]) -> bool:
@@ -177,12 +235,10 @@ def infrastructure_failure(error: BaseException) -> BuildInfrastructureFailure |
     for link in exception_chain(error):
         if isinstance(link, BuildInfrastructureFailure):
             return BuildInfrastructureFailure(link.cause, link.message)
-        if isinstance(link, ModelUnavailable):
-            return BuildInfrastructureFailure(InfrastructureCause.MODEL_UNAVAILABLE, str(link))
-        if isinstance(link, httpx.TransportError) or (
-            isinstance(link, httpx.HTTPStatusError) and link.response.status_code in RETRYABLE_STATUSES
-        ):
-            return BuildInfrastructureFailure(InfrastructureCause.HTTP_UNAVAILABLE, str(link))
+        if isinstance(link, (ModelRequestRejected, ModelUnavailable)):
+            return BuildInfrastructureFailure("model_request_unavailable", str(link))
+        if isinstance(link, httpx.HTTPError):
+            return BuildInfrastructureFailure("http_unavailable", str(link))
     return None
 
 

@@ -26,16 +26,15 @@ class AgentLimits:
     """The bounds of a step's model use.
 
     Attributes:
-        max_turns: Model replies one agent loop may take.
-        max_tokens: The output budget each turn sends. The client sends the whole budget with every
-            turn, so it leaves room in the context window for the conversation the loop builds.
+        max_turns: Model replies one agent loop may take, or None for no cap.
+        max_tokens: Output budget per turn, or None to omit the provider limit.
         max_calls: Model calls one step may make in all, counting every agent turn and every
-            structured request; a program's own retry loop ends here, as the program's failure.
+            structured request; None is unlimited. Exhaustion abandons the workpiece for resumption.
     """
 
-    max_turns: int
-    max_tokens: int
-    max_calls: int
+    max_turns: int | None
+    max_tokens: int | None
+    max_calls: int | None
 
 
 @dataclass(frozen=True)

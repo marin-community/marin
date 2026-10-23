@@ -137,9 +137,9 @@ def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:
         high=high,
         max_format_failures=f"{gate.max_format_failure_rate:.0%}",
         min_adversary_runs=gate.min_adversary_runs,
-        solver_rollouts=budget.solver_rollouts,
-        judge_calls=budget.judge_calls,
-        web_calls=budget.web_calls,
+        solver_rollouts="unlimited" if budget.solver_rollouts is None else budget.solver_rollouts,
+        judge_calls="unlimited" if budget.judge_calls is None else budget.judge_calls,
+        web_calls="unlimited" if budget.web_calls is None else budget.web_calls,
         max_empty_budget_calls=MAX_EMPTY_BUDGET_CALLS,
         shell_output_kib=SHELL_OUTPUT_BYTES // 1024,
     )

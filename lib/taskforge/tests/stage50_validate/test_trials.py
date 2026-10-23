@@ -7,7 +7,7 @@ import asyncio
 import json
 from dataclasses import replace
 
-from rolloutengine.models import TOTAL_TURN_TIMEOUT_STOP_REASON, TRACE_METRIC, Rollout, RolloutLimits, TraceMode
+from rolloutengine.models import TRACE_METRIC, Rollout, RolloutLimits, TraceMode
 from shellbox.machine import Backend
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import JsonAnswer, PlainText
@@ -198,8 +198,9 @@ async def test_lowering_applies_the_validation_turn_deadline(tmp_path, file_task
         model,
     )
 
-    assert len(outcomes) == 1 and isinstance(outcomes[0], Graded) and outcomes[0].timed_out
-    assert (outcomes[0].reward, outcomes[0].rollout.stop_reason) == (1.0, TOTAL_TURN_TIMEOUT_STOP_REASON)
+    assert len(outcomes) == 1 and isinstance(outcomes[0], Ungraded)
+    assert outcomes[0].cause is Cause.AGENT_TIMEOUT
+    assert outcomes[0].grade is not None and outcomes[0].grade.reward == 1.0
 
 
 async def test_validation_attempt_deadline_bounds_a_trial_without_builder_deadlines(tmp_path, file_task, fakes):

@@ -263,7 +263,7 @@ async def write_controls(
         directory: The draft round's directory.
 
     Raises:
-        BuildFailure: ``ATTEMPTS`` submissions all had a problem; ``step`` is ``CONTROLS_STEP``.
+        BuildFailure: A submitted control cannot be built; ``step`` is ``CONTROLS_STEP``.
     """
     request = (
         f"# Task conversation\n\n{format_conversation(task.context.events)}\n\n"

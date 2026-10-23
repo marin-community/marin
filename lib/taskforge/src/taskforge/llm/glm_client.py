@@ -25,8 +25,8 @@ After a failed attempt, the client handles the failure by kind:
   until the pool has workers again, for up to ``hold_timeout``, without spending an attempt. An
   unreachable ``/health``, or a report without the pool, leads to an ordinary counted retry instead.
 * A 400 saying the prompt plus ``max_tokens`` exceeds the context window raises ``ContextExhausted``
-  at once. The client always sends the whole prompt with the policy's full ``max_tokens``. A prompt
-  that long usually means its parts belong in files, for a model in an agentic environment to read.
+  at once. The client sends the whole prompt; an uncapped policy omits both output-limit fields.
+  The serving endpoint uses its remaining physical context.
   When a continuation overflows the window, the call returns the output gathered so far with
   ``finish_reason == "length"``.
 
@@ -176,6 +176,7 @@ class RelayEndpoint:
     relay_job: str
     token: str = field(repr=False)
     pool: Pool
+    endpoint_name: str = GLM_MODEL
 
     def current(self) -> GlmEndpoint:
         """Resolve the relay's first registered endpoint, with its base URL ending in ``/v1``.
@@ -186,7 +187,7 @@ class RelayEndpoint:
         client = iris_ctx().client
         if client is None:
             raise RuntimeError("Iris client is unavailable inside the task")
-        endpoints = client.resolver_for_job(JobName.from_string(self.relay_job)).resolve(GLM_MODEL).endpoints
+        endpoints = client.resolver_for_job(JobName.from_string(self.relay_job)).resolve(self.endpoint_name).endpoints
         if not endpoints:
             raise RuntimeError(f"The GLM relay {self.relay_job} has no registered endpoint")
         base_url = endpoints[0].url.rstrip("/")
@@ -260,7 +261,7 @@ def _status_failure(response: httpx.Response) -> _AttemptFailed:
 def request_kwargs(
     model: str,
     messages: Sequence[Message],
-    max_tokens: int,
+    max_tokens: int | None,
     policy: LLMPolicy,
     request_fields: Mapping[str, object],
 ) -> dict[str, Any]:
@@ -274,7 +275,7 @@ def request_kwargs(
     return {
         "model": model,
         "messages": list(messages),
-        "max_tokens": max_tokens,
+        **({} if max_tokens is None else {"max_tokens": max_tokens}),
         **policy.sampling_params(),
         "stream": True,
         "stream_options": {"include_usage": True},
@@ -462,7 +463,7 @@ class GlmClient:
             if (
                 result.finish_reason is not FinishReason.LENGTH
                 or result.tool_calls
-                or len(segments) > policy.max_continuations
+                or (policy.max_continuations is not None and len(segments) > policy.max_continuations)
             ):
                 break
             content = "".join(s.content for s in segments)
@@ -522,13 +523,19 @@ class GlmClient:
         attempts: list[Attempt],
     ) -> _Segment:
         """Stream a chat-completions request through ``_retrying``, appending each attempt to ``attempts``."""
-        kwargs = request_kwargs(self._provider.model, messages, policy.max_tokens, policy, request_fields)
+        max_tokens = policy.max_tokens
+        kwargs = request_kwargs(self._provider.model, messages, max_tokens, policy, request_fields)
 
         async def send(events: list[str]) -> _Segment:
             return await self._stream(kwargs, events)
 
-        result = await self._retrying(send, segment, policy.max_tokens, attempts)
-        if result.finish_reason is FinishReason.TOOL_CALLS and result.usage.completion_tokens >= policy.max_tokens:
+        result = await self._retrying(send, segment, max_tokens, attempts)
+        output_exhausted = max_tokens is not None and result.usage.completion_tokens >= max_tokens
+        context_exhausted = (
+            self._provider.context_window is not None
+            and result.usage.prompt_tokens + result.usage.completion_tokens >= self._provider.context_window
+        )
+        if result.finish_reason is FinishReason.TOOL_CALLS and (output_exhausted or context_exhausted):
             return replace(result, finish_reason=FinishReason.LENGTH)
         return result
 
@@ -536,7 +543,7 @@ class GlmClient:
         self,
         send: Callable[[list[str]], Awaitable[T]],
         segment: int,
-        max_tokens: int,
+        max_tokens: int | None,
         attempts: list[Attempt],
     ) -> T:
         """Call ``send`` until an attempt succeeds, retrying and holding as needed, and return its result.

@@ -39,7 +39,13 @@ from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage10_proposal.model import ResearchNeed, SolverMachine, TaskProposal
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink, rl_env_build_step
 from taskforge.stage40_build_with_program import run as run_module
-from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock, RLEnvBuildContext
+from taskforge.stage40_build_with_program.context import (
+    BuildExpired,
+    BuildFailure,
+    BuildInfrastructureFailure,
+    ExpiredClock,
+    RLEnvBuildContext,
+)
 from taskforge.stage40_build_with_program.outputs import ResearchFinding, Sources
 from taskforge.stage40_build_with_program.run import (
     DRAFT_DIR,
@@ -353,9 +359,7 @@ async def test_a_task_without_a_machine_builds_when_the_proposal_declares_none(t
     assert (tmp_path / "round" / DRAFT_DIR).exists()
 
 
-async def test_a_step_past_its_call_budget_fails_the_build_as_the_programs(
-    tmp_path, proposal, services, fake_glm, glm_client
-):
+async def test_a_legacy_step_call_cap_reports_budget_exhaustion(tmp_path, proposal, services, fake_glm, glm_client):
     for _ in range(3):
         fake_glm.stream(content='{"text": "again"}')
     two_calls = replace(services, agent_limits=replace(services.agent_limits, max_calls=2))
@@ -366,10 +370,10 @@ async def test_a_step_past_its_call_budget_fails_the_build_as_the_programs(
             await structured(context, [{"role": "user", "content": "A hint."}], Hint)
         raise AssertionError("unreachable")
 
-    with pytest.raises(BuildFailure) as failure:
+    with pytest.raises(BuildInfrastructureFailure) as failure:
         await build(tmp_path, proposal, two_calls, rl_env_build_program(numbers, sink=task), model=glm_client)
 
-    assert failure.value.step == "task"
+    assert failure.value.cause == "budget_exhausted"
     assert "more than 2 model calls" in str(failure.value)
     assert len(fake_glm.requests) == 2
 

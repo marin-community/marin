@@ -18,14 +18,13 @@ from verifyit.spec import ExactSpec
 from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
+from taskforge.llm.structured import IncompleteOutput
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
 from taskforge.spec.controls import Transcript
 from taskforge.stage10_proposal.model import parse
-from taskforge.stage40_build_with_program.context import BuildFailure
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
 from taskforge.stage50_validate.control_drafts import (
-    CONTROLS_FILE,
     ControlDraft,
     check_controls_not_graded,
     control_payload,
@@ -140,25 +139,21 @@ async def test_validation_writes_controls_the_grader_has_not_seen_and_replays_th
     assert {o.control.id: o.verdict for o in outcomes} == {c.id: ControlVerdict.MET for c in written}
 
 
-async def test_a_control_set_the_model_never_gets_right_fails_as_the_controls_step(
-    glm_client, fake_glm, ledger, tmp_path
-):
-    for _ in range(3):
+async def test_control_checks_continue_past_the_old_three_attempt_cap(glm_client, fake_glm, ledger, tmp_path):
+    for _ in range(4):
         fake_glm.stream(content=controls("40"))
-
-    with pytest.raises(BuildFailure) as failure:
-        await write_controls(
-            TASK,
-            GRADER,
-            parse(PROPOSAL),
-            glm_client,
-            LLMPolicy(),
-            CallLedger(ledger, "workpiece", 0, "controls"),
-            tmp_path,
-        )
-
-    assert failure.value.step == "controls"
-    assert not (tmp_path / CONTROLS_FILE).exists()
+    fake_glm.stream(content=controls("41"))
+    written = await write_controls(
+        TASK,
+        GRADER,
+        parse(PROPOSAL),
+        glm_client,
+        LLMPolicy(),
+        CallLedger(ledger, "workpiece", 0, "controls"),
+        tmp_path,
+    )
+    assert len(fake_glm.requests) == 5
+    assert len(written) == 4
 
 
 async def test_control_bounds_follow_the_graders_rejection_ceiling(glm_client, fake_glm, ledger, tmp_path):
@@ -183,26 +178,11 @@ async def test_control_bounds_follow_the_graders_rejection_ceiling(glm_client, f
     assert written[1].expect.reward_max == 0.4
 
 
-async def test_a_controls_reply_the_output_limit_cut_is_asked_again_shorter(glm_client, fake_glm, ledger, tmp_path):
-    """A cut reply is one failed submission, not an unhandled error ending the workpiece."""
-    fake_glm.stream(content='{"controls": [{"id": "P-reference", "kind": "positive"', finish="length")
+async def test_cut_controls_hold_with_the_partial_reply_preserved(glm_client, fake_glm, ledger, tmp_path):
+    partial = '{"controls": [{"id": "P-reference", "kind": "positive"'
+    fake_glm.stream(content=partial, finish="length")
     fake_glm.stream(content=controls("41"))
-
-    written = await write_controls(
-        TASK, GRADER, parse(PROPOSAL), glm_client, LLMPolicy(), CallLedger(ledger, "workpiece", 0, "controls"), tmp_path
-    )
-
-    retry = fake_glm.requests[1]["messages"]
-    assert retry[-3]["role"] == "assistant" and retry[-3]["content"].endswith("...[cut by the output limit]")
-    assert "the reply was cut off by the output limit" in retry[-2]["content"]
-    assert [c.id for c in written] == ["P-reference", "N1-shortcut", "N2-off-by-two", "N3"]
-
-
-async def test_controls_cut_at_every_attempt_fail_as_the_controls_step(glm_client, fake_glm, ledger, tmp_path):
-    for _ in range(3):
-        fake_glm.stream(content='{"controls": [', finish="length")
-
-    with pytest.raises(BuildFailure, match="cut off by the output limit") as failure:
+    with pytest.raises(IncompleteOutput) as failure:
         await write_controls(
             TASK,
             GRADER,
@@ -212,8 +192,8 @@ async def test_controls_cut_at_every_attempt_fail_as_the_controls_step(glm_clien
             CallLedger(ledger, "workpiece", 0, "controls"),
             tmp_path,
         )
-
-    assert failure.value.step == "controls"
+    assert len(fake_glm.requests) == 1
+    assert failure.value.completions[0].content == partial
 
 
 async def test_a_control_writing_files_outside_the_output_paths_goes_back_to_the_model(

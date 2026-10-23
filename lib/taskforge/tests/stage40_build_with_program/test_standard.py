@@ -22,12 +22,14 @@ from taskforge.spec import draft
 from taskforge.spec.draft import answer_grader, rollout_engine
 from taskforge.spec.verdict import VERDICT_REWARD
 from taskforge.stage10_proposal.model import SolverMachine
-from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, ExpiredClock
+from taskforge.stage40_build_with_program.context import (
+    BuildExpired,
+    ExpiredClock,
+)
 from taskforge.stage40_build_with_program.outputs import Fixtures, Grader, Sources
 from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import ResearchRequirement, run_build, step_output
 from taskforge.stage40_build_with_program.sdk import (
-    ATTEMPTS,
     WORKDIR,
     FileDraft,
     FixturesDraft,
@@ -177,18 +179,17 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
     assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
 
 
-async def test_a_grader_that_rejects_its_own_reference_answer_fails_the_build(
-    proposal, services, glm_client, fake_glm, tmp_path
-):
-    serve_until_the_grader(fake_glm)
-    for _ in range(ATTEMPTS):
+async def test_a_grader_can_be_repaired_past_the_old_three_attempt_cap(context, proposal, fake_glm):
+    for _ in range(4):
         fake_glm.stream(content=json.dumps(grader_call(WRONG_GRADER)))
-
-    with pytest.raises(BuildFailure, match=r"the reference answer was graded graded reward=0\.0") as failure:
-        await build(standard.PROGRAM, proposal, services, glm_client, tmp_path, [])
-
-    assert failure.value.step == "grader"
-    assert not (tmp_path / "round" / "draft").exists()
+    fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
+    grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
+    assert len(fake_glm.requests) == 5
+    assert grader.prototyped[-2].reward == 1.0
+    assert all(
+        "the reference answer was graded graded reward=0.0" in request["messages"][-2]["content"]
+        for request in fake_glm.requests[1:]
+    )
 
 
 FIXTURES = Fixtures(
@@ -229,7 +230,6 @@ async def test_the_grader_step_keeps_the_declared_rejection_ceiling(context, pro
     grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
 
     assert grader.rejection_ceiling == 0.3
-    assert "declare rejection_ceiling" in fake_glm.requests[0]["messages"][-2]["content"]
 
 
 async def test_a_grader_that_times_out_twice_expires_the_build_instead_of_going_back_to_the_model(
