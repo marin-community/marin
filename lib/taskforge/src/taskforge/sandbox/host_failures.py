@@ -5,8 +5,7 @@
 
 Shellbox raises a bare ``RuntimeError`` for several host faults, and the Iris controller refuses a
 sandbox under a terminated parent job with a ``ConnectError`` whose code also covers request
-errors, so both are told apart by their message text. The build (``stage40_build_with_program.infrastructure``)
-and validation (``stage50_validate.classify``) read the same table here, so the two cannot drift.
+errors, so both are told apart by their message text.
 """
 
 from connectrpc.code import Code

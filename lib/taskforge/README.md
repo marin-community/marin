@@ -22,7 +22,7 @@ src/taskforge/
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
-  sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
+  sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal document and its generation regex;
@@ -176,15 +176,10 @@ spec, so a move of either is a single-site change.
   category (`spec.controls.CONCERNS`). A task's control set needs a `reference`, an `acceptance`
   and a `shortcut` control, so its coverage never rests on extraction controls, which pin today's
   answer parser. `validate_controls(task, controls)` checks a set against its task.
-- `sandbox.factories.machine_factories(where, controller_url)` returns the factories for
-  `RolloutEngine`, keyed by shellbox `Backend` value: ShellSim plus Docker on a laptop,
-  ShellSim plus gVisor on Iris, plus the local backend for lock-only graders when bubblewrap works
-  in the Iris task. Before a trial starts, `task_refusals(spec, factories)` passes each machine of
-  a `TaskRolloutSpec` to its factory's `check_environment` and lists a typed refusal, with the factory's
-  message, for each machine without a factory or rejected by one. `warm_local_python(factories)`
-  builds the local backend's bare CPython environment in a background thread, so the run's driver
-  (the ladder that runs Taskforge on Iris), which calls it once at start, spares its first wave of
-  local machines the five-second build; the build children share the cache.
+- `sandbox.factories.machine_factories(backends, controller_url)` returns exactly the requested
+  factories, keyed by shellbox `Backend` value, and raises if one is unavailable. Before a trial
+  starts, `task_refusals(spec, factories)` asks each factory to check its machine requirements.
+  `warm_local_python(factories)` can warm the local backend's CPython cache in a background thread.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
 `ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
@@ -193,6 +188,16 @@ the task's image or, for a ShellSim task or a task without a machine, from the g
 and the extracted answer at `/app/answer.txt`. A grader program writes its verdict, the reward and
 one result per check, as `spec.verdict.verdict_json`. Generic modes that verifyit grades in
 process are preferred whenever a task fits one.
+
+## Machine backends
+
+Call `sandbox.factories.machine_factories(backends, controller_url)` with the exact shellbox
+`Backend` values the run uses. A requested backend that cannot start on the host raises during
+factory construction; the selection never silently shrinks. Supply a controller URL exactly when
+selecting `Backend.GVISOR`. A ShellSim-only run does not probe Docker or the local sandbox.
+
+Custom-image builds remain available through `sandbox.image_builder`; selecting a backend and
+choosing or building its image are separate caller decisions.
 
 ## Model calls
 

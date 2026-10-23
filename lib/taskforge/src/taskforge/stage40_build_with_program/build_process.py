@@ -64,6 +64,7 @@ import httpx
 from pydantic import Field, TypeAdapter
 from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.log_setup import configure_logging
+from shellbox.machine import Backend
 
 from taskforge.child_process import stop_process_group
 from taskforge.ledger.jsonl import JsonlLedger
@@ -119,9 +120,10 @@ class BuildServiceConfig:
     """What the child builds its ``RLEnvBuildServices`` from.
 
     Attributes:
-        host: Where the build runs, as ``machine_factories`` takes it.
-        controller_url: The Iris controller sandboxes are submitted to on ``MachineHost.IRIS``;
-            ``None`` on a laptop.
+        host: Where build machines run.
+        backends: The exact machine backends the child must construct; unavailable selections fail.
+        controller_url: The Iris controller for requested gVisor machines and image-build jobs;
+            ``None`` when neither is used.
         parallel_key_env: The environment variable holding the Parallel API key for the web
             tools, or ``None`` for a build without web tools.
         ledger_root: The ``JsonlLedger`` root, or ``None`` to record nothing.
@@ -138,6 +140,7 @@ class BuildServiceConfig:
     """
 
     host: MachineHost
+    backends: tuple[Backend, ...]
     controller_url: str | None
     parallel_key_env: str | None
     ledger_root: Path | None
@@ -316,7 +319,9 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
     async with GlmClient(FixedEndpoint(endpoint), model.provider) as client, httpx.AsyncClient() as http:
         yield client, RLEnvBuildServices(
             host=config.host,
-            factories=machine_factories(config.host, config.controller_url),
+            factories=machine_factories(
+                config.backends, config.controller_url if Backend.GVISOR in config.backends else None
+            ),
             images=image_builder(config),
             web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
             ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
