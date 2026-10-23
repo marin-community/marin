@@ -106,7 +106,7 @@ The best throughput-at-memory-budget point is often not the "maximum data parall
 When your model has deep repeated blocks, use a scanned stack container instead of Python-unrolling layer calls.
 
 - Use [`haliax.nn.Stacked`](https://github.com/marin-community/marin/blob/main/lib/haliax/docs/scan.md#stacked) when your stack uses named axes (`Axis` / `NamedArray`).
-- Use [`levanter.layers.stacked.ArrayStacked`](https://github.com/dlwh/marin/blob/codex/native-jax-layer-stacks/lib/levanter/docs/reference/Array-Stacked.md) when your stack is array-native (no named axes).
+- Use [`levanter.layers.stacked.ArrayStacked`](https://github.com/marin-community/marin/blob/main/lib/levanter/docs/reference/Array-Stacked.md) when your stack is array-native (no named axes).
 
 Observed advantages of staying on a scanned stack path:
 
