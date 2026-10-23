@@ -1,9 +1,14 @@
 # GRPO offline learning
 
 `levanter.grpo` implements the regular PPO surrogate used by the pinned
-MarinSkyRL GRPO recipe. `marin.rl.train_grpo` trains a model on an ordered list
-of completed captures; rollout generation and online policy publication are
-outside this entrypoint.
+MarinSkyRL GRPO recipe. The model and pipeline APIs consume in-memory
+`GrpoExample` batches.
+
+The companion [offline runner](https://github.com/marin-community/marin/pull/9048)
+provides `marin.rl.grpo_capture` and `marin.rl.train_grpo` for an ordered list of
+completed captures. It is optional for online or pipeline execution. The capture
+and offline-learner sections below describe that companion; rollout generation
+and online policy publication belong to the caller.
 
 ## Objective and captures
 
