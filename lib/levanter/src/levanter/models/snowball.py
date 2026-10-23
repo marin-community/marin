@@ -758,15 +758,15 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         key=None,
         pos_ids: NamedArray | None = None,
     ) -> NamedArray:
-        # attn_mask is ignored: the pinned recipe builds its own per-layer short/long causal masks
-        # inside the transformer core. Segmented/packed inputs are a follow-up (see plan).
+        # The transformer core builds its own per-layer short/long causal masks; only the packed
+        # segment ids carry over from ``attn_mask``, so packed documents never attend across.
         Pos = input_ids.resolve_axis(self.Pos.name)
         raw = input_ids.array
         lead = raw.shape[:-1]
         s = raw.shape[-1]
         b = int(np.prod(lead)) if lead else 1
         tokens = reshard(raw.reshape(b, s), P(_BATCH_AXES, _context_axis()))
-        hidden = self.transformer(tokens)  # [B, S, D]
+        hidden = self.transformer(tokens, _segment_mask(attn_mask, input_ids, b, s))  # [B, S, D]
         hidden = hidden.reshape(*lead, s, self.Embed.size) if lead else hidden.reshape(s, self.Embed.size)
         out_axes = (*input_ids.axes, self.Embed) if lead else (Pos, self.Embed)
         return hax.named(hidden, out_axes)
@@ -791,6 +791,36 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
     def from_state_dict(self, state_dict: StateDict, prefix: Optional[str] = None) -> "SnowballLMHeadModel":
         new_tf = snowball_from_state_dict(self.transformer, state_dict, prefix=prefix)
         return SnowballLMHeadModel(new_tf, self._config)
+
+
+def _segment_mask(
+    attn_mask: Optional[LmHeadAttentionMask | NamedArray], input_ids: NamedArray, b: int, s: int
+) -> AttentionMask | None:
+    """The causal grug mask carrying ``attn_mask``'s packed segment ids as ``[B, S]`` arrays.
+
+    Returns ``None`` (plain causal) when the mask has no segment ids. Dense or non-causal masks
+    are rejected: the core's per-layer windows define everything except document boundaries.
+    """
+    if attn_mask is None:
+        return None
+    if not isinstance(attn_mask, LmHeadAttentionMask):
+        raise NotImplementedError("Snowball accepts only a structured causal AttentionMask, not a dense mask.")
+    if not attn_mask.is_causal or attn_mask.explicit_mask is not None:
+        raise NotImplementedError("Snowball supports only causal attention masks, optionally with segment ids.")
+    if attn_mask.segment_ids is None:
+        return None
+    q_named, kv_named = attn_mask.segment_ids
+    input_names = {axis.name for axis in input_ids.axes}
+    pos_name = input_ids.axes[-1].name
+
+    def flat(segments: NamedArray) -> jax.Array:
+        # A kv segment array names its sequence axis after the key positions; align it to the query's.
+        segments = segments.rename({axis.name: pos_name for axis in segments.axes if axis.name not in input_names})
+        return hax.broadcast_to(segments, input_ids.axes).array.reshape(b, s).astype(jnp.int32)
+
+    q_segments = flat(q_named)
+    kv_segments = q_segments if kv_named is q_named else flat(kv_named)
+    return AttentionMask(is_causal=True, segment_ids=(q_segments, kv_segments))
 
 
 def _resize_axis(arr: jax.Array, axis: int, new_size: int, std: float, key) -> jax.Array:

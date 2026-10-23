@@ -225,6 +225,8 @@ def _levanter_train_config(
         pad_tokenizer_to_match_model=initialize_model_from_checkpoint_path is None,
         hf_save_steps=num_train_steps,  # one HF export at the end
         hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
+        # Train-equals-serve: the export's tokenizer carries the template the run trained on.
+        hf_save_chat_template=spec.chat_template,
         hf_generation_eos_token_ids=list(eos_token_ids),
         z_loss_weight=0.0,
     )

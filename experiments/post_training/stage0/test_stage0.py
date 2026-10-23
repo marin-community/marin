@@ -14,9 +14,9 @@ import inspect
 import json
 import os
 
-import jinja2
 import pytest
 from transformers import AutoTokenizer
+from transformers.utils.chat_template_utils import _compile_jinja_template
 
 import experiments.post_training.stage0.convert as convert_module
 from experiments.post_training.axolotl_sft.bases import AXOLOTL_BASES
@@ -54,6 +54,8 @@ from experiments.post_training.stage0.convert import (
 from experiments.post_training.stage0.snowball_stage0 import (
     BASE_HF_ID,
     BASE_REVISION,
+    SMOKE_ROWS_PER_SOURCE,
+    smoke_run,
     snowball_stage0,
     stage0_convert,
 )
@@ -87,8 +89,8 @@ class StubTokenizer:
 
 
 def _render(messages: list[dict], tokens: ChatTokens, **kwargs) -> str:
-    template = jinja2.Environment().from_string(shared_template(tokens))
-    return template.render(messages=messages, **kwargs)
+    # transformers' environment: the template's {% generation %} masking tag needs its extension.
+    return _compile_jinja_template(shared_template(tokens)).render(messages=messages, **kwargs)
 
 
 def test_every_token_map_validates_against_a_single_token_vocabulary():
@@ -246,6 +248,32 @@ def test_convert_source_filters_one_row_id_set_over_the_cap(tmp_path):
     ]
 
 
+def test_convert_source_drops_and_records_rows_with_an_unclosed_think_block(tmp_path):
+    rows = iter(
+        [
+            {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "<think>never closed"}]},
+            {"messages": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "<think>r</think>a"}]},
+        ]
+    )
+    spec = SourceSpec(
+        name="nemotron-science-reasoning",
+        repo="laion/llama-nemotron-science-reasoning-on-canonical-think-full",
+        revision="bae881d",
+        config=None,
+        adapt=adapt_nemotron_science,
+    )
+    entry = convert_source(
+        spec,
+        str(tmp_path),
+        load_dataset=lambda *args, **kwargs: rows,
+        render_lengths=lambda messages: {family: 10 for family in FAMILY_TOKEN_MAPS},
+    )
+    assert (entry["rows"], entry["seen"], entry["dropped_unclosed_think"]) == (1, 2, 1)
+    with gzip.open(tmp_path / "nemotron-science-reasoning.jsonl.gz", "rt") as handle:
+        (kept,) = [json.loads(line) for line in handle]
+    assert kept["messages"][1] == {"role": "assistant", "content": "a", "reasoning_content": "r"}
+
+
 def test_convert_source_raises_when_everything_is_dropped(tmp_path):
     def fake_load_dataset(repo, config, revision, split, streaming):
         return iter([{"messages": [{"role": "user", "content": "long"}, {"role": "assistant", "content": "x"}]}])
@@ -289,7 +317,10 @@ def test_manifest_records_hashes_template_hashes_and_stage_order(tmp_path):
     convert_module.STAGE0_SOURCES = tuple(specs[name] for name in STAGE_ORDER)
     try:
         manifest = build_manifest(
-            str(tmp_path), load_dataset=fake_load_dataset, render_lengths=lambda m: {f: 8 for f in FAMILY_TOKEN_MAPS}
+            str(tmp_path),
+            load_dataset=fake_load_dataset,
+            render_lengths=lambda m: {f: 8 for f in FAMILY_TOKEN_MAPS},
+            check_tokens=False,
         )
     finally:
         convert_module.STAGE0_SOURCES = original_sources
@@ -569,6 +600,9 @@ def test_snowball_stage0_chain_matches_the_budget_and_reads_the_converted_artifa
         assert spec.batch_size == GLOBAL_BATCH
         assert spec.seq_len == SEQUENCE_LEN
         assert spec.num_train_epochs == EPOCHS_PER_STAGE
+        # #8225's packed epoch: the step count counts packed sequences, so an unpacked
+        # run would see only a fraction of the rows.
+        assert spec.pack is True
         # The Grug instance of the shared template, and the one the length filter used.
         assert spec.chat_template == shared_template(GRUG_TOKENS)
         # #8225's optimizer, on every stage.
@@ -597,6 +631,20 @@ def test_snowball_stage0_chain_matches_the_budget_and_reads_the_converted_artifa
     assert not any(dep is graph.steps["s1-chat"] for dep in graph.steps["s1-chat"].deps)
 
 
+def test_snowball_smoke_runs_the_same_recipe_on_the_ladder_model_and_truncated_data():
+    full, smoke = snowball_stage0(), snowball_stage0(smoke_run())
+    assert smoke.convert.name == f"documents/stage0-cl12-first{SMOKE_ROWS_PER_SOURCE}"
+    assert smoke.convert.name != full.convert.name
+    for stage_name in full.specs:
+        full_spec, smoke_spec = full.specs[stage_name], smoke.specs[stage_name]
+        assert smoke_spec.name != full_spec.name
+        assert smoke_spec.datasets[0].artifact is smoke.convert
+        # Only the model, data size, batch and hardware differ.
+        for field in ("chat_template", "optimizer", "seq_len", "pack", "num_train_epochs"):
+            assert getattr(smoke_spec, field) == getattr(full_spec, field), field
+        assert smoke.steps[stage_name].runtime_args[_TRAIN_RESOURCES].replicas == 1
+
+
 def test_snowball_and_axolotl_budgets_agree():
     """The one cross-trainer control: every shared budget value is the same constant."""
 
@@ -616,3 +664,28 @@ def test_snowball_and_axolotl_budgets_agree():
     # single global batch.
     assert budget.PER_DEVICE_BATCH * budget.GPUS_PER_NODE * budget.GRADIENT_ACCUMULATION_STEPS == budget.GLOBAL_BATCH
     assert budget.TRAIN_NODES * budget.GPUS_PER_NODE == 64
+
+
+@pytest.mark.parametrize("family", list(FAMILY_TOKEN_MAPS))
+def test_completion_mask_covers_each_assistant_turn_through_its_end_of_turn(family):
+    """Levanter's completions-only mask: reasoning, answer and end-of-turn train; headers do not."""
+    if not _hf_reachable():
+        pytest.skip("HF hub unreachable")
+    tokens = FAMILY_TOKEN_MAPS[family]
+    repo, revision = _HF_REVISIONS[family]
+    tokenizer = AutoTokenizer.from_pretrained(repo, revision=revision)
+    messages = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "a1", "reasoning_content": "r1"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "a2"},
+    ]
+    rendered = tokenizer.apply_chat_template(
+        messages,
+        chat_template=shared_template(tokens),
+        tokenize=True,
+        return_dict=True,
+        return_assistant_tokens_mask=True,
+    )
+    trained = tokenizer.decode([i for i, m in zip(rendered["input_ids"], rendered["assistant_masks"], strict=True) if m])
+    assert trained == f"{tokens.think_open}r1{tokens.think_close}a1{tokens.turn_close}a2{tokens.turn_close}"

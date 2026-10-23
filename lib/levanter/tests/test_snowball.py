@@ -27,6 +27,7 @@ from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compati
 from safetensors.numpy import load_file
 
 from levanter.grug.sharding import compact_grug_mesh
+from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
@@ -298,6 +299,35 @@ def test_snowball_forward_shapes_and_finite():
         logits = hax.named_jit(lambda m, x: m(x))(model, ids)
     assert logits.axes[-1].name == "vocab" and logits.axes[-1].size == cfg.vocab_size
     assert bool(jnp.all(jnp.isfinite(logits.array)))
+
+
+def test_snowball_packed_documents_do_not_attend_across_segments():
+    """A packed second document's activations equal that document run alone.
+
+    Training packs conversations into one sequence; without the segment ids the later
+    conversation would attend to the earlier one.
+    """
+    cfg = _tiny_config()
+    first_len, second_len = 6, 5
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+        Batch = Axis("batch", jax.device_count())
+        first = jnp.arange(first_len, dtype=jnp.int32) * 7 % cfg.vocab_size
+        second = (jnp.arange(second_len, dtype=jnp.int32) * 5 + 3) % cfg.vocab_size
+        packed_pos = Axis("position", first_len + second_len)
+        packed = hax.named(
+            jnp.broadcast_to(jnp.concatenate([first, second]), (Batch.size, packed_pos.size)), (Batch, packed_pos)
+        )
+        segments = hax.named(jnp.array([0] * first_len + [1] * second_len, dtype=jnp.int32), (packed_pos,))
+        mask = LmHeadAttentionMask.causal().with_segment_ids(segments)
+        alone_pos = Axis("position", second_len)
+        alone = hax.named(jnp.broadcast_to(second, (Batch.size, second_len)), (Batch, alone_pos))
+
+        activations = eqx.filter_jit(lambda m, x, mask: m.activations(x, mask).array)
+        packed_out = activations(model, packed, mask)
+        alone_out = activations(model, alone, None)
+
+    np.testing.assert_allclose(np.asarray(packed_out[:, first_len:]), np.asarray(alone_out), rtol=1e-4, atol=1e-5)
 
 
 @pytest.mark.parametrize(
