@@ -237,10 +237,12 @@ class FeedbackOptions:
     agent_turns: int
 
 
-def _remember_stratum(stream, strata: dict[str, str]):
+def _remember_stratum(stream, strata: dict[str, str], *, written: Collection[str] = ()):
+    """The tasks of ``stream`` that are not in ``written``; records the stratum of every task, also a written one."""
     for task in stream:
         strata[task.task.id] = task.stratum
-        yield task.task
+        if task.task.id not in written:
+            yield task.task
 
 
 async def _feedback_boxes(
@@ -366,11 +368,11 @@ def skyrl_rsi(**arguments) -> None:
 async def _skyrl_run(options: SkyrlOptions, *, feedback: FeedbackOptions | None) -> None:
     output = StoragePath(options.output_dir)
     feed = options.feed()
-    # A restarted loop does not write the pool tasks of its feed again.
     written = {task.id for task in (await asyncio.to_thread(written_tasks, feed.root)).values()}
     pool = TaskPool.read(f"{POOL_URL}/{TRAIN_FILE}")
     strata: dict[str, str] = {}
-    seed_tasks = from_iterable(_remember_stratum(pool.stream(options.seed, exclude=frozenset(written)), strata))
+    # A restarted loop does not write the pool tasks of its feed again, but labels their groups with their stratum.
+    seed_tasks = from_iterable(_remember_stratum(pool.stream(options.seed), strata, written=written))
     trainer = partial(skyrl_train, config=feed)
     async with AsyncExitStack() as stack:
         if feedback is None:
