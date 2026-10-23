@@ -137,7 +137,7 @@ def test_json_header_contract_rejects_unknown_fields_and_wrong_types(proposal, k
 def test_duplicate_json_keys_cannot_replace_identity(proposal, key):
     raw = render(proposal)
     raw = raw.replace(f'"{key}":', f'"{key}": "forged", "{key}":', 1)
-    with pytest.raises(ProposalFormatError, match="duplicate key"):
+    with pytest.raises(ProposalFormatError, match=r"duplicate.*key"):
         parse(raw)
 
 

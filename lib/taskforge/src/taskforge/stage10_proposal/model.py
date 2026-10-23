@@ -17,7 +17,8 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Annotated, Any
 
-from pydantic import ConfigDict, StringConstraints, TypeAdapter, ValidationError, with_config
+from pydantic import ConfigDict, StringConstraints, TypeAdapter, with_config
+from verifyit.json_objects import unique_object
 
 from taskforge.content_hash import pretty_json, sha256_hex
 
@@ -111,15 +112,6 @@ class ProposalFormatError(ValueError):
     """The document does not match the proposal format; the message names the field."""
 
 
-def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ProposalFormatError(f"duplicate key {key!r}")
-        result[key] = value
-    return result
-
-
 @with_config(ConfigDict(extra="forbid"))
 @dataclass(frozen=True)
 class SourceRef:
@@ -192,8 +184,8 @@ def _canonical_body(body: str) -> str:
 def parse(text: str) -> TaskProposal:
     """Parse and validate a proposal document; raise ``ProposalFormatError`` naming the bad field."""
     try:
-        proposal = _PROPOSAL.validate_python(json.loads(text, object_pairs_hook=_unique_object))
-    except (json.JSONDecodeError, ValidationError) as error:
+        proposal = _PROPOSAL.validate_python(json.loads(text, object_pairs_hook=unique_object))
+    except ValueError as error:
         raise ProposalFormatError(str(error)) from error
     header, body = proposal.header, proposal.body
     violation = solver_machine_violation(header.environment, header.solver_machine)
