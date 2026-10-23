@@ -182,7 +182,8 @@ Resume retains the same source, recipes and evaluation settings.
 
 Measure model-wide relative distance `||donor - Instruct|| / ||Instruct||` with
 FP64 reductions before the grid. The helper also reports how many FP32 update
-entries disappear when the donor is rounded to BF16:
+entries disappear when the donor is rounded to BF16, and final BF16 cast survival
+and error at task-vector coefficients 0.1, 0.25, 0.5 and 1.0:
 
 ```bash
 host-test-budget uv run --extra pipeline python \
@@ -236,6 +237,12 @@ source tensors are upcast to FP32 before arithmetic. FP32-trained donors keep
 their saved precision; only the merged serving tensor is cast to BF16 by vLLM.
 The paired TIES control rounds donor weights to BF16 before upcasting and
 computing deltas. Existing public BF16 checkpoints already contain that rounding.
+
+For a serving-precision control, register the same source manifest in a separate
+run and pass `sweep --dtype float32` with the same candidates, panel, cap and
+context limit as the BF16 run. Include Instruct itself as a control: FP32 serving
+changes activation arithmetic as well as preserving small merged weight updates.
+This comparison does not isolate weight rounding from activation precision.
 
 ### Evaluation and artifacts
 

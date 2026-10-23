@@ -141,7 +141,7 @@ def engine(paths: dict[str, Path], source: str, rope_theta: float, args):
     return LLM(
         model=str(paths[source]),
         tokenizer=str(paths["instruct"]),
-        dtype="bfloat16",
+        dtype=args.dtype,
         max_model_len=args.max_model_len,
         max_num_seqs=args.max_num_seqs,
         gpu_memory_utilization=0.8,
@@ -183,6 +183,7 @@ def main() -> None:
     parser.add_argument("--max-model-len", type=int, default=8192)
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--only", nargs="+")
+    parser.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--reload-check-every", type=int, default=16)
     args = parser.parse_args()
@@ -213,6 +214,7 @@ def main() -> None:
         "gpu": torch.cuda.get_device_name(),
         "vllm": vllm.__version__,
         "max_num_seqs": args.max_num_seqs,
+        "dtype": args.dtype,
         "max_new_tokens": args.max_new_tokens,
         "max_model_len": args.max_model_len,
         "decode_seeds": DECODE_SEEDS,
@@ -234,6 +236,7 @@ def main() -> None:
             "transformers",
             "vllm",
             "max_num_seqs",
+            "dtype",
             "max_new_tokens",
             "max_model_len",
             "source_sha256",
