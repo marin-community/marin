@@ -25,18 +25,22 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
     is_acp_registry_shorthand,
     parse_registry_spec,
 )
+from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
+from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
 from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
 from harbor_config.models.agent.name import AgentName  # pyrefly: ignore[missing-import]
+from harbor_config.models.environment_type import EnvironmentType  # pyrefly: ignore[missing-import]
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.filesystem.storage_path import StoragePath
+from shellbox.backends.iris.environment import validate_iris_task  # pyrefly: ignore[missing-import]
 
 from marin.evaluation.harbor.agent_context import (
     MAX_INPUT_TOKENS_KEY,
@@ -61,6 +65,8 @@ _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
 _HF_DATASET_PREFIX = "hf://"
+_IRIS_ENVIRONMENT_IMPORT = "shellbox.backends.iris.environment:IrisEnvironment"
+_IRIS_ENVIRONMENT_KWARGS = frozenset({"cluster", "controller_url", "scheduling_timeout", "job_ttl"})
 
 
 class RuntimeOverlay(BaseModel):
@@ -171,12 +177,64 @@ def _validate_agent(agent: AgentConfig) -> str:
 def _validate_environment(config: JobConfig) -> str:
     environment = config.environment
     if environment.import_path is not None:
-        _resolve_import_path(environment.import_path, "environment")
+        environment_class = _resolve_import_path(environment.import_path, "environment")
+        if not isinstance(environment_class, type) or not issubclass(environment_class, BaseEnvironment):
+            raise ValueError("Harbor environment import must identify an environment class")
+        if environment_class.type() == EnvironmentType.DOCKER:
+            raise ValueError("Marin does not run Harbor Docker environments; use the Shellbox Iris adapter or Daytona")
+        if environment.import_path == _IRIS_ENVIRONMENT_IMPORT:
+            _validate_iris_policy(config)
         return environment.import_path
     if environment.type is None:
         raise ValueError("Harbor config environment must have a type or import_path")
+    if environment.type == EnvironmentType.DOCKER:
+        raise ValueError("Marin does not run Harbor Docker environments; use the Shellbox Iris adapter or Daytona")
     _load_environment_class(environment.type)
     return environment.type.value
+
+
+def _validate_iris_policy(config: JobConfig) -> None:
+    """Keep model transport and credentials in the trusted harness for offline tasks."""
+    environment = config.environment
+    if environment.force_build or environment.extra_docker_compose or environment.mounts or environment.env:
+        raise ValueError("Shellbox Iris does not accept builds, Compose, mounts, or forwarded environment variables")
+    unknown_kwargs = environment.kwargs.keys() - _IRIS_ENVIRONMENT_KWARGS
+    if unknown_kwargs:
+        raise ValueError(f"Unsupported Shellbox Iris environment kwargs: {sorted(unknown_kwargs)}")
+    if config.user_agent is not None:
+        raise ValueError("Shellbox Iris does not support simulated-user agents")
+    for agent in config.agents:
+        if agent.name not in {"terminus-2", "oracle"} or agent.import_path is not None or agent.mode != "container":
+            raise ValueError("Shellbox Iris requires the host-side terminus-2 or oracle agent")
+        if agent.env or agent.mcp_servers or agent.skills:
+            raise ValueError("Shellbox Iris does not accept agent environment forwarding, MCP servers, or skills")
+        if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & agent.kwargs.keys():
+            raise ValueError("Shellbox Iris does not accept alternate agent environment, MCP, skill, or callback inputs")
+    if config.verifier.env or config.verifier.import_path is not None:
+        raise ValueError("Shellbox Iris requires a sandboxed verifier without hosted credentials or a custom import")
+
+
+def _validate_iris_job_tasks(job: Job) -> None:
+    if job.config.environment.import_path != _IRIS_ENVIRONMENT_IMPORT:
+        return
+    # Harbor has no public iterator over its resolved task selection. Inspect the
+    # already-downloaded tasks so preflight and execution enforce the same policy.
+    for task_config in job._task_configs:
+        task_path = (
+            job._task_download_results[task_config.get_task_id()].path
+            if task_config.is_git_task() or task_config.is_package_task()
+            else task_config.path
+        )
+        task = Task(task_path, disable_verification=job.config.verifier.disable)
+        validate_iris_task(task.config.environment, task.paths.environment_dir)
+        if task.config.environment.mcp_servers:
+            raise ValueError("Shellbox Iris does not support task MCP servers")
+        if task.config.steps:
+            raise ValueError("Shellbox Iris does not yet support multi-step tasks")
+        if task.config.verifier.env or task.config.solution.env:
+            raise ValueError("Shellbox Iris does not accept verifier or solution environment forwarding")
+        if task.config.verifier.environment is not None or task.config.verifier.environment_mode == "separate":
+            raise ValueError("Shellbox Iris currently requires a shared verifier environment")
 
 
 def _raw_dataset_path(document: Mapping[str, object]) -> object:
@@ -346,6 +404,18 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
         dataset_path=overlay.dataset_path,
         task_limit=overlay.task_limit,
     )
+    environment = config.environment
+    if environment.import_path == _IRIS_ENVIRONMENT_IMPORT and os.environ.get("IRIS_TASK_ID"):
+        controller_url = os.environ.get("IRIS_CONTROLLER_ADDRESS") or os.environ.get("IRIS_CONTROLLER_URL")
+        if not controller_url:
+            raise ValueError("An in-job Shellbox Iris driver requires its enclosing controller address")
+        kwargs = dict(environment.kwargs)
+        requested_url = kwargs.get("controller_url")
+        if requested_url is not None and requested_url != controller_url:
+            raise ValueError("An in-job Shellbox Iris driver must use its enclosing controller")
+        kwargs.pop("cluster", None)
+        kwargs["controller_url"] = controller_url
+        environment = environment.model_copy(update={"kwargs": kwargs})
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
@@ -353,6 +423,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "agents": [agent],
             "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
             "datasets": [dataset],
+            "environment": environment,
             "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),
             "archive": ArchiveConfig(
                 root=overlay.archive_root,
@@ -360,6 +431,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             ),
         }
     )
+    _validate_environment(effective)
     return effective
 
 
@@ -464,6 +536,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                     "hosted Pi requires an explicit thinking_format."
                 ) from exc
         job = asyncio.run(Job.create(effective))
+        _validate_iris_job_tasks(job)
     if len(job.benchmark_metadata) != 1:
         raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")
     infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
@@ -516,6 +589,7 @@ def _preflight(request_path: Path) -> None:
 
 async def _run(config: JobConfig) -> None:
     job = await Job.create(config)
+    _validate_iris_job_tasks(job)
     await job.run()
 
 

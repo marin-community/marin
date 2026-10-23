@@ -21,6 +21,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
 from iris.client import IrisClient, Job, Task
+from iris.cluster.client.job_info import get_job_info
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
 from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
@@ -347,7 +348,23 @@ class IrisMachineFactory:
         return await asyncio.to_thread(self._create_sync, spec, self._check_spec(spec))
 
     def _create_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
-        endpoint = connect_controller(cluster_name=self.cluster, controller_url=self.controller_url)
+        info = get_job_info()
+        if info is not None:
+            if (
+                self.cluster is not None
+                or self.controller_url is None
+                or info.controller_address is None
+                or self.controller_url.rstrip("/") != info.controller_address.rstrip("/")
+            ):
+                raise UnsupportedMachineSpec("An Iris task must create sandboxes on its own controller URL")
+            credentials = info.credentials
+            if credentials is None:
+                raise UnsupportedMachineSpec("An Iris task needs its task token to create sandboxes")
+            # A task token scopes this driver to its existing identity. Do not
+            # consult the host's broader cluster credentials from inside a job.
+            endpoint = ControllerEndpoint(url=self.controller_url, credentials=credentials, config=None)
+        else:
+            endpoint = connect_controller(cluster_name=self.cluster, controller_url=self.controller_url)
         url, credentials = endpoint.url, endpoint.credentials
         client = None
         job = None

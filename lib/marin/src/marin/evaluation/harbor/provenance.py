@@ -15,6 +15,11 @@ _RUNTIME_SOURCE_DIRECTORIES = (
     "vendor/harbor/src",
     "lib/rigging/src",
     "lib/finestore/src",
+    "lib/shellbox/src",
+    "lib/iris/src",
+    "lib/iris/config",
+    "lib/finelog/src",
+    "lib/finelog/config",
     "lib/marin/src/marin/evaluation/harbor",
 )
 _RUNTIME_MANIFESTS = (
@@ -22,6 +27,10 @@ _RUNTIME_MANIFESTS = (
     "vendor/harbor/pyproject.toml",
     "lib/rigging/pyproject.toml",
     "lib/finestore/pyproject.toml",
+    "lib/shellbox/pyproject.toml",
+    "lib/iris/pyproject.toml",
+    "lib/iris/hatch_build.py",
+    "lib/finelog/pyproject.toml",
 )
 
 

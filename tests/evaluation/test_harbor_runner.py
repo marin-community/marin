@@ -430,14 +430,20 @@ def vendored_runtime_workspace(tmp_path):
         "vendor/harbor/src/harbor",
         "lib/rigging/src/rigging",
         "lib/finestore/src/finestore",
+        "lib/shellbox/src/shellbox",
+        "lib/iris/src/iris",
+        "lib/iris/config",
+        "lib/finelog/src/finelog",
+        "lib/finelog/config",
         "lib/marin/src/marin/evaluation/harbor",
     ):
         directory = tmp_path / relative
         directory.mkdir(parents=True)
         (directory / "__init__.py").write_text("runtime = 1\n")
     (tmp_path / "lib/marin/src/marin/evaluation/harbor/trial_driver.py").write_text("runtime = 1\n")
-    for relative in ("vendor/harbor", "lib/rigging", "lib/finestore"):
+    for relative in ("vendor/harbor", "lib/rigging", "lib/finestore", "lib/shellbox", "lib/iris", "lib/finelog"):
         (tmp_path / relative / "pyproject.toml").write_text('[project]\nname = "example"\n')
+    (tmp_path / "lib/iris/hatch_build.py").write_text("runtime = 1\n")
     (tmp_path / "vendor/harbor/UPSTREAM.toml").write_text(
         'repository = "https://example.org/harbor"\n'
         f'commit = "{driver_config.HARBOR_SOURCE.commit}"\n'
@@ -455,6 +461,13 @@ def vendored_runtime_workspace(tmp_path):
         "vendor/harbor/uv.lock",
         "lib/rigging/src/rigging/__init__.py",
         "lib/finestore/src/finestore/__init__.py",
+        "lib/shellbox/src/shellbox/__init__.py",
+        "lib/shellbox/pyproject.toml",
+        "lib/iris/src/iris/__init__.py",
+        "lib/iris/config/__init__.py",
+        "lib/iris/hatch_build.py",
+        "lib/finelog/src/finelog/__init__.py",
+        "lib/finelog/config/__init__.py",
         "lib/marin/src/marin/evaluation/harbor/trial_driver.py",
     ],
 )

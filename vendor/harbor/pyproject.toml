@@ -37,7 +37,7 @@ hr = "harbor.cli.main:app"
 hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
-runtime = ["harbor[archive,telemetry,daytona]", "gcsfs", "s3fs", "pydantic-settings"]
+runtime = ["harbor[archive,telemetry,daytona]", "marin-shellbox[iris]", "gcsfs", "s3fs", "pydantic-settings"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
 telemetry = ["marin-rigging"]
@@ -85,6 +85,9 @@ module-name = ["harbor", "harbor_config"]
 [tool.uv.sources]
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-rigging = { path = "../../lib/rigging", editable = true }
+marin-shellbox = { path = "../../lib/shellbox", editable = true }
+marin-iris = { path = "../../lib/iris", editable = true }
+marin-finelog = { path = "../../lib/finelog", editable = true }
 
 [tool.pytest.ini_options]
 timeout = 60

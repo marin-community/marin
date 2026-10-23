@@ -28,6 +28,13 @@ _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _OWNER_ONLY_MODE = 0o600
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
+_IRIS_ENVIRONMENT_IMPORT = "shellbox.backends.iris.environment:IrisEnvironment"
+_DRIVER_IRIS_ENV_KEYS = (
+    "IRIS_CONTROLLER_ADDRESS",
+    "IRIS_CONTROLLER_URL",
+    "IRIS_TASK_ID",
+    "IRIS_TASK_TOKEN",
+)
 _DRIVER_SYSTEM_ENV_KEYS = (
     "CURL_CA_BUNDLE",
     # Harbor downloads gated Hugging Face datasets in preflight and on workers.
@@ -427,4 +434,7 @@ def run_harbor_driver(
         overlay_path.chmod(_OWNER_ONLY_MODE)
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
-        _stream_driver(command, driver_env, backend_state)
+        runtime_env = dict(driver_env)
+        if config.environment == _IRIS_ENVIRONMENT_IMPORT:
+            runtime_env.update(env_vars_from_keys(_DRIVER_IRIS_ENV_KEYS))
+        _stream_driver(command, runtime_env, backend_state)

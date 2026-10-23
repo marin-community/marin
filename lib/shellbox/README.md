@@ -49,6 +49,15 @@ finally:
 
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")` with `MachineSpec(..., network=NetworkPolicy.ALLOW)` for an Iris job with internet access, or `NetworkPolicy.DENY` on any Iris cluster. These backends provide one-shot commands and shared files. The current Harbor `BashAgent` needs a persistent `ShellSession`; it cannot use these backends directly until a session adapter is implemented.
 
+Harbor's host-side Terminus-2 and oracle agents can use
+`shellbox.backends.iris.environment:IrisEnvironment`. The adapter accepts prebuilt,
+digest-pinned offline tasks and delegates commands, transfers and cleanup to
+`IrisMachineFactory`. It rejects Dockerfiles, Compose, host environment interpolation
+and isolation overrides. See [offline Harbor execution](../../docs/harbor-integration.md#offline-execution-through-shellbox-and-iris)
+for policy and image requirements. Inside an Iris job, the factory submits to that
+job's own controller with its scoped task token; local callers select a cluster
+or controller explicitly.
+
 For a trusted private grader, `IrisMachineFactory(secret_env={"JUDGE_API_KEY":
 ("env:JUDGE_API_KEY",)})` resolves existing Rigging secret references at submission
 and injects them into the Iris job environment. Keep credentials out of

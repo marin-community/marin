@@ -21,6 +21,7 @@ pytest.importorskip("iris")
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.client.workload_codec import task_status_from_proto
+from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2
@@ -392,6 +393,32 @@ def test_factory_returns_a_running_machine(monkeypatch, tmp_path):
             await machine.close()
 
     asyncio.run(scenario())
+
+
+def test_nested_factory_uses_task_identity_instead_of_host_credentials(monkeypatch):
+    info = JobInfo(
+        task_id=JobName.from_wire("/user/driver/0"),
+        controller_address="http://controller",
+        task_token="task-scoped-token",
+    )
+    client = RecordingClient()
+    attached_headers: dict[str, str] = {}
+
+    def remote(*args, credentials, **kwargs):
+        attached_headers.update(credentials.headers())
+        return client
+
+    monkeypatch.setattr(iris_backend, "get_job_info", lambda: info)
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: pytest.fail("Read host cluster credentials"))
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", remote)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+
+    with pytest.raises(SubmissionRecorded):
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
+
+    assert attached_headers == {"authorization": "Bearer task-scoped-token"}
+    assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
 
 
 def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):

@@ -116,9 +116,77 @@ Daytona-backed definitions in `experiments/evaluation/evals.py` own their creden
 They use `DAYTONA_API_KEY` from the launch environment when present, then fall back to the approved
 Google Secret Manager version. `DAYTONA_API_KEY` is the only supported environment override.
 
-The generic launcher resolves declared references immediately before Iris submission. The isolated
-Harbor subprocess receives the Daytona key without inheriting the orchestrator's other credentials.
-Do not put resolved credentials in model YAMLs, runner configs, or evaluation artifacts.
+The generic launcher resolves declared references immediately before Iris submission. The Harbor
+subprocess receives the selected backend's credentials, Hugging Face access, and storage credentials
+needed for remote trial results and FineStore archives. It remains a trusted process: `uv --isolated`
+isolates dependencies, not its user identity, filesystem or network access. Task containers must not
+inherit that authority. Do not put resolved credentials in model YAMLs, runner configs, or evaluation
+artifacts.
+
+## Offline execution through Shellbox and Iris
+
+For prepared single-container tasks, select Marin's Shellbox adapter:
+
+```yaml
+n_concurrent_trials: 4
+environment:
+  import_path: shellbox.backends.iris.environment:IrisEnvironment
+agents:
+  - name: terminus-2
+datasets:
+  - path: prepared-tasks
+```
+
+Place this policy beside `prepared-tasks` inside the Marin workspace, then use the shared launcher:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-8b --harbor-config path/to/policy.yaml --limit 1 --dry-run
+```
+
+Remove `--dry-run` to submit. Each task must name a prebuilt `docker_image` with an immutable
+`@sha256:` digest, set `allow_internet = false`, specify an absolute `workdir`, and have no
+Dockerfile or Compose definition. Preparation must preserve the original image's working directory
+in the task manifest; the adapter does not guess it.
+Build images separately with the task's dependencies, verifier dependencies and terminal utilities
+already installed. Terminus needs Bash and tmux; runtime downloads cannot succeed on this path.
+The image must run as root inside the sandbox because Harbor setup and verification request that
+user, and Iris exec cannot switch the image's user.
+Iris replaces the image's entrypoint with its idle process. Complete required initialization during
+image preparation or explicit task setup; an image entrypoint cannot be relied on to start services.
+The adapter does not build images or install a nested container runtime.
+The shared launcher binds sandboxes to the enclosing Iris job's controller and uses that job's
+scoped task token. For a direct local Harbor invocation, pass an explicit environment `cluster`
+or `controller_url` instead.
+
+The agent makes model calls in the trusted Harbor process. Shellbox creates a separate Iris
+`SANDBOX` job for task commands and verification, with `EGRESS_POLICY_NONE`. Kubernetes still
+permits platform DNS; Docker workers permit only loopback. No controller token, storage credential,
+workspace bundle, shared host cache or service-account token is supplied to the task by this adapter.
+Only explicit literal task environment variables are accepted; host-variable interpolation fails.
+Image contents and explicit task inputs must themselves be free of production credentials.
+
+The shared launcher rejects Docker execution. The offline Iris path also rejects installed agents,
+custom agent imports, hosted judges, MCP services and custom mounts. Unsupported task requirements
+fail without falling back to Docker, public networking or a privileged profile. Existing remote
+backend policies remain explicit choices; this adapter does not migrate their tasks automatically.
+
+This boundary protects the trusted driver from task code. Harbor and its dependencies still execute
+in the trusted driver and retain its storage authority. Moving orchestration to TaskCompendium, or
+isolating that driver behind model and artifact brokers, is separate work.
+
+To inventory a local task snapshot without executing it:
+
+```bash
+uv run python -m experiments.evaluation.audit_harbor_tasks path/to/tasks \
+  --source organization/dataset --revision SNAPSHOT_COMMIT > inventory.json
+```
+
+The report counts task manifests and Compose services, lists fields requiring review, and records
+locations of Docker command references. Source and revision are supplied by the caller. A Compose
+file can be a single-container wrapper; a command reference can be an unused helper. Neither
+establishes a requirement for nested Docker. The inventory does not certify image contents,
+external-access requirements or compatibility with offline execution.
 
 ## Sandbox environment isolation
 

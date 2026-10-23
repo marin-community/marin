@@ -4,8 +4,6 @@
 """Behavior of the vendored Harbor policy boundary."""
 
 import json
-import os
-import subprocess
 import tempfile
 import textwrap
 from pathlib import Path
@@ -13,13 +11,15 @@ from pathlib import Path
 import pytest
 import yaml
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
-from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, _driver_environment, preflight_harbor_configs
+from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, preflight_harbor_configs
+
+from tests.evaluation.harbor_runtime import external_python as _external_python
+from tests.evaluation.harbor_runtime import preflight as _preflight
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(180)]
 
 _ROOT = Path(__file__).parents[2]
 _DRIVER = _ROOT / "lib/marin/src/marin/evaluation/harbor/trial_driver.py"
-_RUNTIME_PROJECT = _ROOT / "vendor/harbor"
 _POLICIES = _ROOT / "experiments/evaluation/configs/harbor"
 _INVALID_SOURCE_DOCUMENTS = {
     "hf-uri-in-path": {
@@ -44,40 +44,6 @@ _INVALID_SOURCE_DOCUMENTS = {
         "datasets": [{"name": "aime"}],
     },
 }
-
-
-def _external_python(
-    *args: str,
-    hash_seed: str = "0",
-    check: bool = True,
-    extra_python_path: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    environment = _driver_environment()
-    environment["PYTHONHASHSEED"] = hash_seed
-    if extra_python_path is not None:
-        environment["PYTHONPATH"] = os.pathsep.join((str(extra_python_path), environment["PYTHONPATH"]))
-    completed = subprocess.run(
-        [
-            "uv",
-            "run",
-            "--isolated",
-            "--project",
-            str(_RUNTIME_PROJECT),
-            "--extra",
-            "runtime",
-            "--no-default-groups",
-            "--frozen",
-            "python",
-            *args,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-    if check:
-        completed.check_returncode()
-    return completed
 
 
 def test_selected_runtime_imports_vendored_harbor_and_local_marin_packages():
@@ -157,31 +123,6 @@ def test_external_driver_retries_spurious_path_style_response():
     )
 
     assert result.returncode == 0
-
-
-def _preflight(
-    tmp_path: Path,
-    requests: list[tuple[Path, dict[str, object]]],
-    *,
-    hash_seed: str = "0",
-    check: bool = True,
-    extra_python_path: Path | None = None,
-) -> subprocess.CompletedProcess[str]:
-    request_path = tmp_path / f"requests-{hash_seed}.json"
-    request_path.write_text(
-        json.dumps(
-            [{"path": str(path), "model_agent_kwargs": kwargs} for path, kwargs in requests],
-            separators=(",", ":"),
-        )
-    )
-    return _external_python(
-        str(_DRIVER),
-        "preflight",
-        str(request_path),
-        hash_seed=hash_seed,
-        check=check,
-        extra_python_path=extra_python_path,
-    )
 
 
 def _run_single_turn_aime_agent(
@@ -753,7 +694,7 @@ def test_agent_version_survives_preflight_and_runtime_overlay(
     source.write_text(
         json.dumps(
             {
-                "environment": {"type": "docker"},
+                "environment": {"type": "daytona"},
                 "agents": [{"name": agent_name, "kwargs": policy_kwargs}],
                 "datasets": [{"path": "dataset"}],
                 "user_agent": user_agent,
