@@ -14,6 +14,8 @@ import pyarrow.parquet as pq
 import pytest
 from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
+from rolloutengine.validation import validate_spec
+from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from taskcompendium.models import (
     CommandSemantics,
     ConversationInput,
@@ -25,7 +27,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.inventory._data import FAMILIES, LOCAL_VERIFIER, prepare
+from experiments.post_training.inventory._data import FAMILIES, IMAGE_VERIFIER, LOCAL_VERIFIER, prepare
 
 
 def source_task(identifier: str) -> dict:
@@ -143,7 +145,7 @@ def test_persisted_inventory_preserves_tasks_and_repeats_the_same_stratified_spl
     original = json.loads(inputs.training_rows[0]["task_json"])
     restored = tasks[0].task.model_dump(mode="json")
     assert restored == {**original, "schema_version": "0.28"}
-    assert tasks[0].verifier_machine == LOCAL_VERIFIER
+    assert tasks[0].verifier_machine == IMAGE_VERIFIER
     native_original = json.loads(inputs.training_rows[1]["lowered_task_spec"])["task"]
     assert tasks[1].harness == "assistant_prefix"
     assert tasks[1].task.context.events[-1] == TextMessage(role="assistant", content='{"a":[1')
@@ -151,7 +153,7 @@ def test_persisted_inventory_preserves_tasks_and_repeats_the_same_stratified_spl
     assert tasks[1].task.grader.mode == "structure_closure"
     full = read_tasks(first / "full_validation.parquet")
     fixed = read_tasks(first / "validation.parquet")
-    assert full[0].verifier_machine == LOCAL_VERIFIER
+    assert full[0].verifier_machine == IMAGE_VERIFIER
     assert (
         full[0].task.grader.model_dump(mode="json")
         == json.loads(inputs.validation_rows[0]["lowered_task_spec"])["task"]["grader"]
@@ -183,3 +185,14 @@ def test_changed_training_identity_cannot_hide_a_heldout_prompt(tmp_path):
     with pytest.raises(ValueError, match="overlaps the original heldout set"):
         produce(inputs.training, inputs.validation, output)
     assert not output.exists()
+
+
+def test_persisted_image_graders_are_admitted_by_the_image_backend(tmp_path):
+    inputs = sources(tmp_path)
+    output = tmp_path / "output"
+    produce(inputs.training, inputs.validation, output)
+    factories = {"daytona": DaytonaMachineFactory(client_factory=lambda: pytest.fail("No sandbox may be created"))}
+    # This is the worker's real admission boundary. The former local selection rejected
+    # RegistryImage before any rollout could begin, despite preserving the correct grader image.
+    for spec in read_tasks(output / "train.parquet") + read_tasks(output / "full_validation.parquet"):
+        validate_spec(spec, factories)
