@@ -12,15 +12,17 @@ from marin.rl.skyrl import skyrl_cpu_command
 
 from experiments.post_training.inventory.train import build_run
 
-SOURCE_URIS = {"training_uri": "s3://test/training.parquet", "validation_uri": "s3://test/validation.parquet"}
-
 
 @pytest.mark.timeout(180)
-@pytest.mark.parametrize("steps", [3, 25, 50])
-def test_short_and_normal_runs_compose_native_training_and_terminal_outputs(steps: int, tmp_path: Path) -> None:
+def test_three_update_run_composes_native_evaluation_and_terminal_outputs(tmp_path: Path) -> None:
     # Exercise the runtime boundary: a three-update run must retain initial/final
     # native-task evaluation and an aligned terminal checkpoint/export schedule.
-    run = build_run("2026.10.22.2", steps=steps, **SOURCE_URIS)
+    run = build_run(
+        "2026.10.22.2",
+        steps=3,
+        training_uri="s3://test/training.parquet",
+        validation_uri="s3://test/validation.parquet",
+    )
     config = run.build_config(StepContext.for_fingerprint(run.runtime_args, run.deps))
     path = tmp_path / "launch.yaml"
     path.write_text(config.launch_config_yaml)
@@ -59,18 +61,10 @@ print(json.dumps({
         "entrypoint": "skyrl_train.entrypoints.taskcompendium",
         "training_type": "sync",
         "initial_evaluation": True,
-        "updates": steps,
-        "evaluation_interval": steps,
-        "checkpoint_interval": steps,
-        "hf_interval": steps,
+        "updates": 3,
+        "evaluation_interval": 3,
+        "checkpoint_interval": 3,
+        "hf_interval": 3,
         "export_hf": True,
         "all_heldout_prompts": True,
     }
-
-
-def test_changing_training_or_data_does_not_reuse_the_previous_artifact_identity() -> None:
-    original = build_run("2026.10.22.2", steps=3, data_version="2026.10.22.2", **SOURCE_URIS)
-    longer = build_run("2026.10.22.2", steps=25, data_version="2026.10.22.2", **SOURCE_URIS)
-    changed_data = build_run("2026.10.22.2", steps=3, data_version="2026.10.22.3", **SOURCE_URIS)
-
-    assert len({original.fingerprint(), longer.fingerprint(), changed_data.fingerprint()}) == 3

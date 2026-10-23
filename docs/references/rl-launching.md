@@ -227,8 +227,6 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 
 `experiments.post_training.inventory.train` starts RL from Datakit SFT revision
 `fe666478454e79fe6027a0bab0388d9abd68f51a`, using its tokenizer at the same revision.
-The regional model's `.marinskyrl-model-manifest.json` identity is
-`sha256:ecfcd3dd667d4f2cd0829552f6ca52b2daf186c65a2a17b7b4336dbbdc9b221a`.
 The data dependency prepares all 100,000 training tasks and a fixed heldout panel of
 100 tasks, with 20 per family. Its separate `full_validation.parquet` retains all 910
 heldout source tasks.
