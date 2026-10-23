@@ -40,7 +40,6 @@ logger = logging.getLogger(__name__)
 
 CLEF_REPO = "Cloudflare/clef"
 CLEF_REVISION = "0b331204bb13fbd2ca93a64df1956f5b55478ce5"
-FALLBACK_REPO = "Qwen/Qwen3-8B"
 MAX_LENGTH = 131072  # the Clef service maximum (Mark, 2026-10-15); pass 16384 to target a 16k engine
 
 # Verbatim from joint_schema_model.py at CLEF_REVISION.
@@ -62,7 +61,7 @@ class ClefTokenizer:
     """Clef's ``tokenizer.json`` through ``tokenizers``: what the server and the reference count with."""
 
     tokenizer: Tokenizer
-    source: str  # repo@revision actually loaded; differs from Clef's when the fallback was used
+    source: str  # repo@revision actually loaded
 
     def encode(self, text: str) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=False).ids
@@ -75,15 +74,9 @@ class ClefTokenizer:
 
 
 def load_tokenizer() -> ClefTokenizer:
-    """Clef's tokenizer.json at the pinned revision; Qwen3-8B's (same family, NOT identical: Clef's
-    vocabulary is 248k, Qwen3's 151k) only if the HF hub is unreachable, with a warning."""
-    try:
-        path = hf_hub_download(CLEF_REPO, "tokenizer.json", revision=CLEF_REVISION)
-        return ClefTokenizer(Tokenizer.from_file(path), f"{CLEF_REPO}@{CLEF_REVISION[:12]}")
-    except OSError as e:
-        logger.warning("Clef tokenizer unavailable (%s); counting with %s, counts are approximate", e, FALLBACK_REPO)
-        path = hf_hub_download(FALLBACK_REPO, "tokenizer.json")
-        return ClefTokenizer(Tokenizer.from_file(path), f"{FALLBACK_REPO} (fallback)")
+    """Load Clef's pinned tokenizer; propagate download failures so budgets use the server's vocabulary."""
+    path = hf_hub_download(CLEF_REPO, "tokenizer.json", revision=CLEF_REVISION)
+    return ClefTokenizer(Tokenizer.from_file(path), f"{CLEF_REPO}@{CLEF_REVISION[:12]}")
 
 
 def render(value: JsonValue) -> str:
