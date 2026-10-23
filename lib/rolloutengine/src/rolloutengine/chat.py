@@ -29,8 +29,9 @@ class ChatModel:
 
     client: openai.AsyncOpenAI
     model: str
-    max_tokens: int
+    max_tokens: int | None
     extra_body: Mapping[str, Any] = field(default_factory=dict)
+    context_window: int | None = None
 
     async def __call__(self, request: ModelRequest) -> ModelTurn:
         if request.continuation is not None or request.prompt_token_ids is not None:
@@ -41,7 +42,7 @@ class ChatModel:
         if reserved:
             raise ValueError(f"The chat model sets these request fields itself: {reserved}")
         arguments: dict[str, Any] = {
-            "max_tokens": self.max_tokens,
+            **({} if self.max_tokens is None else {"max_tokens": self.max_tokens}),
             **options,
             "model": self.model,
             "messages": list(request.messages),
@@ -65,12 +66,19 @@ class ChatModel:
             metadata["reasoning"] = served["reasoning"]
         if served.get("refusal"):
             metadata["refusal"] = served["refusal"]
+        stop_reason = choice.finish_reason
+        if (
+            stop_reason == "tool_calls"
+            and self.context_window is not None
+            and usage.prompt_tokens + usage.completion_tokens >= self.context_window
+        ):
+            stop_reason = "length"
         return ModelTurn(
             message,
             prompt_token_ids=(),
             response_token_ids=(),
             logprobs=None,
-            stop_reason=choice.finish_reason,
+            stop_reason=stop_reason,
             text=message["content"],
             metadata=metadata,
             usage=TokenUsage(usage.prompt_tokens, usage.completion_tokens),

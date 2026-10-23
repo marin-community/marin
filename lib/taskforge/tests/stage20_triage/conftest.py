@@ -9,6 +9,7 @@ from dataclasses import replace
 import pytest
 
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
+from tests.proposals import proposal_document
 
 FILLER = "The builder writes this section in full detail with concrete inputs, outputs, and checks. " * 6
 
@@ -23,24 +24,16 @@ SECTIONS = {
 
 def document(verification: str = "code", resources: str = '["grader/check.py", "fixtures/*.json"]') -> str:
     body = "\n".join(f"## {h}\n{SECTIONS.get(h, FILLER)}\n" for h in REQUIRED_HEADINGS)
-    return json.dumps(
-        {
-            "header": {
-                "id": "d01.cap/1",
-                "source": {"kind": "capability", "ref": "d01.cap", "hash": "abc"},
-                "grounding": "unverified",
-                "null_reason": None,
-                "environment": "reasoning",
-                "solver_machine": "shellsim",
-                "verification": verification,
-                "research_need": "needed",
-                "research_reason": "the deliverable is modeled on real lab handouts",
-                "research": [{"kind": "web", "purpose": "two real lab handouts to model the deliverable on"}],
-                "build": [{"name": "grader", "description": "the private checker and its tests"}],
-                "resources": json.loads(resources),
-            },
-            "body": body,
-        }
+    return proposal_document(
+        proposal_id="d01.cap/1",
+        source={"kind": "capability", "ref": "d01.cap", "hash": "abc"},
+        verification=verification,
+        research_need="needed",
+        research_reason="the deliverable is modeled on real lab handouts",
+        research=[{"kind": "web", "purpose": "two real lab handouts to model the deliverable on"}],
+        build=[{"name": "grader", "description": "the private checker and its tests"}],
+        resources=json.loads(resources),
+        body=body,
     )
 
 

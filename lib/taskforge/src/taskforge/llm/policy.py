@@ -7,10 +7,8 @@
 provider: the model, the retries and their backoff, the infrastructure hold, the stall timeout and
 the connection pool.
 
-``max_tokens`` defaults to the model's output limit. The client sends it unchanged with the whole
-prompt, so a prompt too long for that budget to fit the context window raises ``ContextExhausted``.
-A prompt that long usually means its parts belong in files, for a model in an agentic environment
-to read.
+``max_tokens=None`` omits the output limit, letting the serving endpoint use the remaining physical
+context. Explicit finite values are sent unchanged. Context overflow is a resumable infrastructure hold.
 
 When a reply stops with ``finish_reason == "length"``, the client saves the partial output and
 continues, up to ``max_continuations`` times. The continuation depends on where the cut fell, as
@@ -29,8 +27,6 @@ measured live on GLM-5.3:
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-
-GLM_MAX_OUTPUT_TOKENS = 131_072
 
 CONTINUE_PROMPT = (
     "Your previous reply was cut off by the output limit. Continue exactly where it stopped, "
@@ -56,18 +52,18 @@ class LLMPolicy:
     (temperature 1.0, top_p 0.95, no top_k), so an unset policy samples as the model publishes.
 
     Attributes:
-        max_tokens: Output budget per request. Defaults to the model maximum.
+        max_tokens: Output budget per request; None omits the field and uses remaining physical context.
         reasoning_effort: Passed to the chat template as ``reasoning_effort``.
         temperature: Sampling temperature.
         top_p: Nucleus-sampling probability mass.
-        max_continuations: Continuation rounds after ``finish_reason == "length"``; 0 disables.
+        max_continuations: Continuation rounds after ``finish_reason == "length"``; None is unlimited, 0 disables.
     """
 
-    max_tokens: int = GLM_MAX_OUTPUT_TOKENS
+    max_tokens: int | None = None
     reasoning_effort: ReasoningEffort = ReasoningEffort.HIGH
     temperature: float = 1.0
     top_p: float = 0.95
-    max_continuations: int = 4
+    max_continuations: int | None = None
 
     def template_kwargs(self) -> dict[str, object]:
         """The ``chat_template_kwargs`` this policy sends."""
@@ -104,7 +100,9 @@ class LLMProviderConfig:
     backoff_factor: float
     stall_timeout: float
     max_connections: int
-    structured_repairs: int
+    structured_repairs: int | None
+    context_window: int | None = None
+    """Physical serving window used to recognize tool-call truncation at the context boundary."""
 
 
 def continuation_messages(messages: Sequence[Message], partial: str) -> list[Message]:

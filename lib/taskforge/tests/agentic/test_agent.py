@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import BaseModel
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import PackageSpec
 from taskcompendium.models import VerifyitGrader
 
 from taskforge.agentic import example_build
@@ -29,7 +30,15 @@ from taskforge.llm.policy import LLMPolicy, Message
 
 TASK_ID = "ledger--00"
 TASK = f"tasks/{TASK_ID}.json"
-TASK_JSON = example_build.task_spec(TASK_ID).model_dump_json()
+EXAMPLE_TASK = example_build.task_spec(TASK_ID)
+SHELL_TASK = EXAMPLE_TASK.model_copy(
+    update={
+        "environment_requirements": EXAMPLE_TASK.environment_requirements.model_copy(
+            update={"capabilities": ("shell", "filesystem"), "package_spec": PackageSpec()}
+        )
+    }
+)
+TASK_JSON = SHELL_TASK.model_dump_json()
 CHANGED = "tasks/changed.json"
 GRADER = example_build.task_spec(TASK_ID).grader
 assert isinstance(GRADER, VerifyitGrader)
@@ -117,21 +126,6 @@ class Solver:
         else:
             answer = EXPECTED if next(self.attempts) % 2 == 0 else self.wrong
         return ModelTurn({"role": "assistant", "content": answer}, (), (), None, "stop", usage=TokenUsage(5, 1))
-
-
-@dataclass
-class PythonSolver:
-    """Runs python3 in its shell, then answers with what the shell returned."""
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        last = request.messages[-1]
-        if last.get("role") == "tool":
-            message = {"role": "assistant", "content": str(last.get("content"))}
-            return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(5, 1))
-        arguments = json.dumps({"command": "python3 -c 'print(6 * 7)'"})
-        tool_call = {"id": "call-1", "type": "function", "function": {"name": "shell", "arguments": arguments}}
-        message = {"role": "assistant", "content": "", "tool_calls": [tool_call]}
-        return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(5, 1))
 
 
 @dataclass
@@ -224,7 +218,7 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     assert replies["call-7"]["results"][TASK]["next"] == "This version has its evidence: submit it now."
     assert replies["call-9"]["missing"] == ["controls", "solver band", "adversary"]
     [accepted] = result.tasks
-    assert accepted.task == example_build.task_spec(TASK_ID)
+    assert accepted.task == SHELL_TASK
     assert (accepted.evidence.solver_runs, accepted.evidence.solver_passes) == (8, 4)
     assert (accepted.evidence.adversary_runs, accepted.evidence.adversary_passes) == (4, 0)
     assert accepted.evidence.controls == [(True, False), (True, True), (False, False)]
@@ -242,19 +236,18 @@ class OverflowJudge(AcceptingJudge):
         raise ContextExhausted("prompt too long", ())
 
 
-async def test_a_task_too_long_for_the_reviewer_is_refused_and_the_session_continues():
+async def test_a_task_too_long_for_the_reviewer_holds_without_repair_feedback():
     script = (*SCRIPT, call("finish", report="done"))
     async with ParallelWeb("unused") as web:
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, dataclasses.replace(config, judge=OverflowJudge()))
-
-    [submit] = tool_replies(result, "call-10")
-    assert "too long" in submit["error"]
-    assert (result.failure, result.report) == (None, "done")
+    assert result.tasks == ()
+    assert result.failure is not None and "ContextExhausted" in result.failure
 
 
 async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
     # An agent that ignores its empty budget and asks for a web search on every turn.
+    assert LIMITS.max_turns is not None
     agent = ScriptedAgent(tuple(call("web_search", objective="any", queries=["any"]) for _ in range(LIMITS.max_turns)))
     async with ParallelWeb("unused") as web:
         config = agentic_config(agent, ToolBudget(solver_rollouts=0, judge_calls=0, web_calls=0), web)
@@ -266,6 +259,7 @@ async def test_the_tools_stop_a_session_that_loops_on_an_empty_budget():
 
 
 async def test_a_session_at_its_turn_limit_gets_a_report_of_the_tools():
+    assert LIMITS.max_turns is not None
     script = tuple(call("shell", command="echo still working") for _ in range(LIMITS.max_turns))
     async with ParallelWeb("unused") as web:
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=0, web_calls=0), web)
@@ -320,21 +314,6 @@ async def test_a_control_that_the_answer_format_rejects_is_no_control():
     assert "controls" in submit["missing"]
 
 
-async def test_the_solver_of_the_example_task_has_python():
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
-        call("rollout", paths=[TASK], n=1, role="solver"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=PythonSolver()))
-
-    [rollout] = tool_replies(result, "call-2")
-    [answer] = rollout["results"][TASK]["answers"]
-    assert "42" in answer["answer"] and "not found" not in answer["answer"]
-
-
 async def test_the_tools_refuse_environment_variables_and_setup_commands():
     requirements = example_build.task_spec(TASK_ID).environment_requirements
     tasks = {
@@ -361,7 +340,7 @@ async def test_the_tools_refuse_environment_variables_and_setup_commands():
     assert result.spend.solver_rollouts == 0
 
 
-async def test_a_solver_that_runs_out_of_turns_fails_its_run():
+async def test_a_solver_that_runs_out_of_turns_holds_without_scoring_the_task():
     script = (
         call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > {TASK}"),
         call("rollout", paths=[TASK], n=1, role="solver"),
@@ -374,9 +353,9 @@ async def test_a_solver_that_runs_out_of_turns_fails_its_run():
             IDEA, 1, dataclasses.replace(config, solver_model=LoopingSolver(), solver_limits=solver_limits)
         )
 
-    [rollout] = tool_replies(result, "call-2")
-    evidence = rollout["results"][TASK]["evidence"]
-    assert (evidence["solver_runs"], evidence["solver_passes"], evidence["solver_format_failures"]) == (1, 0, 0)
+    assert result.tasks == ()
+    assert result.failure is not None and "validation_incomplete" in result.failure
+    assert tool_replies(result, "call-2") == []
 
 
 async def test_the_pass_rate_of_a_rollout_counts_only_graded_answers():
@@ -447,9 +426,9 @@ async def test_a_solver_tool_call_with_no_function_is_saved():
         config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
         result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=NullCallSolver()))
 
-    [rollout] = tool_replies(result, "call-2")
-    assert result.failure is None
-    assert "results" in rollout
+    assert result.tasks == ()
+    assert result.failure is not None and "validation_incomplete" in result.failure
+    assert tool_replies(result, "call-2") == []
 
 
 async def test_finish_refuses_once_while_most_of_the_budget_is_left():
@@ -461,3 +440,12 @@ async def test_finish_refuses_once_while_most_of_the_budget_is_left():
     [refusal] = tool_replies(result, "call-1")
     assert "20 of 20 solver rollouts are left" in refusal["error"]
     assert result.report == "too easy"
+
+
+async def test_unlimited_validation_budgets_can_complete_a_task():
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(), ToolBudget(None, None, None), web)
+        result = await generate_tasks(IDEA, 1, config)
+    assert len(result.tasks) == 1
+    assert result.spend.solver_rollouts == 12 and result.spend.judge_calls == 2
+    assert result.failure is None

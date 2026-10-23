@@ -11,24 +11,42 @@ pytest.importorskip("taskforge")
 from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend
 from taskcompendium.models import TaskSpec
-from taskforge.capability import capability_idea_record
+from taskforge.ledger.records import DiscardingLedger
+from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.stage20_triage.verdict import accept
+from taskforge.sandbox.factories import MachineHost
+from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
+from taskforge.stage20_triage.preflight import preflight
+from taskforge.stage20_triage.verdict import Verdict
 from taskforge.stage30_author.author import static_author
-from taskforge.stage30_author.loader import SdkExports, load_program_source
-from taskforge.stage30_author.program import RLEnvBuildProgram, rl_env_build_program, rl_env_build_sink
+from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
-from taskforge.stage40_build_with_program.run import DRAFT_DIR, TaskDraft, load_draft, run_build
-from taskforge.stage40_build_with_program.step_store import model_digest
+from taskforge.stage40_build_with_program.program_sdk import load_program
+from taskforge.stage40_build_with_program.run import (
+    DRAFT_DIR,
+    ResearchRequirement,
+    TaskDraft,
+    build_model_digest,
+    load_draft,
+    run_build,
+)
+from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 from taskforge.stage60_review.decision import Accept, BandOutcome, Decision
 from taskforge.stage_coordinator.coordinator import StageCoordinator, WorkpieceBudget, run_workpiece
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import Terminal
+from tests.proposals import proposal_document
 
-from experiments.post_training.capability_driven_envs.catalog import example_catalog_path, load_capability_ideas
+from experiments.post_training.capability_driven_envs.catalog import (
+    CapabilityIdea,
+    example_catalog_path,
+    load_capability_ideas,
+)
 from experiments.post_training.capability_driven_envs.example_program import task_spec
 
 CAPABILITY = "d43.culinary.scaling"
@@ -49,12 +67,32 @@ class UnusedModel:
         raise AssertionError("the example program calls no model")
 
 
-def load_program(source: str) -> RLEnvBuildProgram:
-    return load_program_source(source, SdkExports(defining_modules={}))
+SECTION = (
+    "The example program builds this task from its own recipe and calls no model, so this section only "
+    "states that the coordinator carries the proposal through triage, author, build, validation and review "
+    "unchanged, and that the preflight finds every required section with enough content to accept it."
+)
+
+
+def catalog_proposal(idea: CapabilityIdea) -> TaskProposal:
+    """A shellsim proposal for ``idea``, sourced from its catalog record, with the capability's outcome as the task."""
+    sections = {heading: SECTION for heading in REQUIRED_HEADINGS}
+    sections["Task"] = f"{idea.capability['outcome']} {SECTION}"
+    body = "\n\n".join(f"## {heading}\n{text}" for heading, text in sections.items())
+    return parse(
+        proposal_document(
+            proposal_id=f"{idea.capability_id}/0",
+            source={"kind": "capability", "ref": idea.capability_id, "hash": idea.capability_hash},
+            environment="shellsim",
+            verification="simple",
+            research_reason="the example program draws its own recipe",
+            body=f"{body}\n",
+        )
+    )
 
 
 @rl_env_build_sink
-async def task(context: RLEnvBuildContext, proposal: dict[str, object]) -> TaskSpec:
+async def task(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
     return task_spec(context.workpiece_id)
 
 
@@ -66,10 +104,15 @@ async def review(summary: object) -> Decision:
     return Accept(band=BandOutcome.IN_BAND)
 
 
+async def no_repair(proposal: TaskProposal, verdict: Verdict) -> TaskProposal:
+    raise AssertionError("the preflight never asks for a repair")
+
+
 async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_workpiece_id(tmp_path):
-    proposal = capability_idea_record(load_capability_ideas(example_catalog_path())[CAPABILITY])
+    proposal = catalog_proposal(load_capability_ideas(example_catalog_path())[CAPABILITY])
     stages = StageFunctions(
-        triage=accept,
+        triage=preflight,
+        repair=no_repair,
         author=static_author(rl_env_build_program(sink=task)),
         load_program=load_program,
         build=run_build,
@@ -78,14 +121,27 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
     )
     model = UnusedModel()
     sampling = LLMPolicy()
+    services = RLEnvBuildServices(
+        host=MachineHost.LAPTOP,
+        factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
+        images=None,
+        web_tools=(),
+        ledger=DiscardingLedger(),
+        reasoning_replay=ReasoningReplay.KEEP,
+        agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
+    )
     coordinator = StageCoordinator(
         stages=stages,
-        budget=WorkpieceBudget(max_build_revisions=0, max_validation_retries=0),
+        budget=WorkpieceBudget(
+            max_triage_repairs=0, max_build_revisions=0, max_validation_retries=0, max_modify_rounds=0
+        ),
         root=tmp_path,
         event_store=JsonEventStore(tmp_path),
         model=model,
         sampling=sampling,
-        model_digest=model_digest(model, sampling),
+        services=services,
+        research=ResearchRequirement.OFF,
+        model_digest=build_model_digest(model, sampling, services),
     )
 
     assert await run_workpiece(coordinator, WORKPIECE, proposal, InMemoryEventLog()) is Terminal.ACCEPTED

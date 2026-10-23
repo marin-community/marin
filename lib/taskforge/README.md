@@ -12,6 +12,7 @@ src/taskforge/
                                JsonEventStore;
                                stage_functions.py: the stage Protocols and `StageFunctions`;
                                coordinator.py: WorkpieceBudget, StageCoordinator, `run_workpiece`
+                               run.py: InfrastructureRetry, `run_workpieces`
   agentic/                     agent.py: `generate_tasks`, one managed agent that makes tasks for an idea;
                                tools.py: the agent's Taskforge tools; gate.py: the acceptance rule;
                                config.py, prompts.py, parallel.py (web search), example_build.py
@@ -28,14 +29,29 @@ src/taskforge/
                                source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
                                protocol, `proposal_batch`, `propose_all`
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
-                               verdict.py: Verdict, TriageDecision and `accept`
+                               verdict.py: Verdict and TriageDecision
   stage30_author/              program.py: build steps and the DAG they form;
-                               author.py: Revision, AuthoredProgram, AuthorContext, the Author protocol,
-                               `static_author`, the program manifest;
+                               author.py: Revision, AuthoredProgram, AuthorContext, AuthorFailure, the
+                               Author protocol, `static_author`, the program manifest;
                                loader.py: `load_program_source`, the restricted loader of authored programs
-  stage40_build_with_program/  context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure;
+  stage40_build_with_program/  agentic_author.py: `AgenticAuthor`, the author whose agent sessions write,
+                               load, build and grade a build program;
+                               context.py: RLEnvBuildContext, BuildFailure, BuildInfrastructureFailure,
+                               BuildExpired;
+                               services.py: RLEnvBuildServices, AgentLimits;
+                               outputs.py: the step outputs (Sources, Fixtures, Grader, Instructions, ...);
+                               sandbox_effects.py: `build_machine`, `grade_candidate`, `publish_image`;
+                               sdk.py: the functions, schemas and constants steps call;
+                               program_sdk.py: `sdk_exports`, the SDK's names for the loader, and
+                               `load_program`;
+                               infrastructure.py: host failures told apart from program failures;
+                               failure_text.py: the failure text an author reads, led by the program's
+                               frame that raised it, and `BuildCrash`;
+                               template/standard.py: the standard six-step program;
+                               glm_author.py: GlmAuthor and its prompts;
                                step_store.py: step keys, memos, the memo store and `memoized`;
-                               run.py: `run_program`, `run_build`, the draft and `WorkpieceBuildProvenance`
+                               run.py: `run_program`, `run_build`, `build_model_digest`, the draft and
+                               `WorkpieceBuildProvenance`
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify)
 ```
 
@@ -43,13 +59,16 @@ Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pip
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
 modules (`capability`, `child_process`, `content_hash`, `ledger`, `llm`, `sandbox`, `spec`), and
-the shared modules import no stage. The coordinator package, `stage_coordinator`, runs the stages in order and
-is unnumbered. It may import any stage and shared module, and `tests/test_imports.py` refuses an
-import of it from any other package, along with the other wrong-way imports.
-`scripts/ledger_summary.py` totals wall time and tokens per kind and step over JSONL ledgers.
-`scripts/build_image_job.py` runs on Iris and documents its submit command in its docstring: it
-builds a directory's `DockerBuild` context with `taskforge.sandbox.image_builder` and prints the
-pinned registry digest.
+the shared modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
+builds a task today goes through a build program, so the SDK, the standard template, the build
+services, the program runner and the agentic author (an agent session that writes and iterates
+that program) all live there. The coordinator
+package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
+and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
+with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
+and step over JSONL ledgers. `scripts/build_image_job.py` runs on Iris and documents its submit
+command in its docstring: it builds a directory's `DockerBuild` context with
+`taskforge.sandbox.image_builder` and prints the pinned registry digest.
 
 ## Proposals
 
@@ -97,19 +116,25 @@ the declared verification, every research item states a purpose, and the build p
 declared resource. A fatal failure rejects the proposal with the failing check as the reason, and a
 null proposal is rejected with its `null_reason`. Anything else is accepted and goes to build.
 Advisory failures are recorded on the verdict and decide nothing. Whether the host can provide the
-declared machine is checked by the build before any model call, and a host that cannot ends the
-workpiece as the host's failure.
+declared machine is checked by the build (`infrastructure.machine_available`) before any model
+call, and a host that cannot ends the workpiece as the host's failure.
 
 A consumer could add a model review to triage in one of two designs:
 
 - A panel with repair: several independent model reviews of the proposal, a majority vote that
-  accepts, rejects or asks for repair, one model rewrite of a repair proposal within a budget, and
-  a repair exit on the stage coordinator that sends the rewrite back to triage.
+  accepts, rejects or asks for repair, and one model rewrite of a repair proposal, sent back to
+  triage through the stage coordinator's repair edge.
 - A bounded review with obligations: one model review that accepts the proposal and attaches
-  obligations its author must honour, carried to build as state on the accept event.
+  obligations its author must honour, carried to the author as the verdict's `author_state`.
 
 Neither is implemented by default, because experiments found them not to be meaningful predictors
-of downstream quality.
+of downstream quality. The coordinator keeps both surfaces. Its repair edge is a surface the
+preflight or a consumer may use within `max_triage_repairs`: a REPAIR verdict has
+`StageFunctions.repair` rewrite the proposal, such as a deterministic rewrite of a fixable proposal
+header, and triage judges the rewrite. The edge may later retry a proposal on the findings of the
+preflight; the preflight returns only accept or reject today. A verdict's `author_state` reaches
+every author call of the workpiece; the preflight attaches none, and nothing in the package writes
+one (see the stage machine).
 
 ## Task specs
 
@@ -199,10 +224,10 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
 own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
 `reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
-`Machine`, and `llm.web` adds Parallel search and extract. The client sends the policy's whole
-`max_tokens` with every turn, so a prompt plus that budget beyond the context window raises
-`ContextExhausted`, which ends the loop with `AgentStop.CONTEXT`; long loops set a smaller
-`max_tokens`.
+`Machine`, and `llm.web` adds Parallel search and extract. The policy defaults to no application output cap: `max_tokens=None` omits both
+provider output-limit fields. Explicit caps remain available. A physical context or output
+boundary interrupts the attempt and preserves its partial trace. Agent turn, continuation and
+structured-repair limits are optional; `None` leaves them unbounded.
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
 the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
@@ -236,10 +261,11 @@ returning a value of its annotated type. The final step returns a `TaskSpec` and
 `@rl_env_build_sink` in place of `@rl_env_build_step`. The author passes the steps, and the sink as
 the keyword `sink`, to `rl_env_build_program`. That call orders the steps so each runs after its
 inputs, puts the sink last, and refuses a step whose output reaches neither another step nor the
-sink. A step receives an `RLEnvBuildContext` (workpiece id, model, sampling policy) as its first
-parameter. The decorator reads the step's inputs from the parameters after it, and the runner
-passes each one by name: another step's output, or the caller's proposal for a parameter called
-`proposal`. `tests/stage40_build_with_program/test_run.py` builds this toy program, abridged here:
+sink. A step receives an `RLEnvBuildContext` (workpiece id, round, model, sampling policy, services,
+and the running step's name) as its first parameter. The decorator reads the step's inputs from
+the parameters after it, and the runner passes each one by name: another step's output, or the
+caller's proposal for a parameter called `proposal`. `tests/stage40_build_with_program/test_run.py`
+builds this toy program, abridged here:
 
 ```python
 @rl_env_build_step
@@ -253,8 +279,8 @@ async def grader(context: RLEnvBuildContext) -> GraderPackage:
 
 
 @rl_env_build_sink
-async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, proposal: dict) -> TaskSpec:
-    return TaskSpec(...)  # the prompt from proposal["task"], numbers as a worker resource, grader.grader
+async def task(context: RLEnvBuildContext, numbers: TaskResource, grader: GraderPackage, proposal: TaskProposal) -> TaskSpec:
+    return TaskSpec(...)  # the proposal's prompt, numbers as a worker resource, grader.grader
 
 
 PROGRAM = rl_env_build_program(numbers, grader, sink=task)
@@ -262,17 +288,155 @@ PROGRAM = rl_env_build_program(numbers, grader, sink=task)
 
 `run_build` runs the program and writes `draft/task.json` and `draft/provenance.json`. The second
 file lists every step, the sink last, with the stored memo of its output and whether this build hit
-or missed the cache for it. The memo files in the store carry no status, because the store writes
-a memo only on a miss.
+or missed the cache for it, or reran it because the caller named it in `invalidate`. The memo files
+in the store carry no status, because the store writes a memo only on a miss or a rerun.
+`step_output(draft, store_root, name, output_type)` reads a step's output back.
 
 Each step's output is memoized under a key built from `SDK_VERSION`, a source digest, the content
-digest of each input, and a digest of the model and its sampling policy. The decorator computes the
-source digest over the step's own source text and everything the step reaches in its own module:
-the helpers it calls, the constants it reads, the classes in its return annotation at any depth,
-and what those classes reach in turn. Names bound by imports stay out; a library type such as
-`TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
+digest of each input, and `build_model_digest(model, sampling, services)`. The decorator computes
+the source digest over the step's own source text and everything the step reaches in its own
+module: the helpers it calls, the constants it reads, the classes in its return annotation at any
+depth, and what those classes reach in turn. Names bound by imports stay out; a library type such
+as `TaskSpec` falls under `SDK_VERSION`, so a library change comes with an `SDK_VERSION` bump.
+The model digest covers the model id, the sampling policy, the agent loops' reasoning replay and
+their limits (`AgentLimits`), so a build that drops reasoning, or bounds its agents differently,
+reruns every step; `run_build(model_digest=...)` overrides it. The machines, images, web tools and
+ledger in `RLEnvBuildServices` stay out of every key and out of every output.
 Because inputs enter the key by content, a step that reruns and returns the same output leaves its
-consumers cached.
+consumers cached. The runner memoizes each step through `step_store.memoized`, and a driver
+memoizing a helper calls it the same way with a key of its own. Every step records a `STEP` span
+with its key digest and cache status, and its model and tool calls carry its name as `step`; a
+build without a ledger records nothing.
+
+A step uses the host through `sandbox_effects`: `build_machine` prepares a machine as a task attempt
+would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run_task`, and
+`publish_image` pushes a task image. `grade_candidate` takes the task's requirements as the
+`requirements` step returns them and starts a task machine exactly when they have the shell
+capability, as validation's lowering does, so `draft.NO_MACHINE` grades without one. The SDK
+reference the authors read (`glm_author.sdk_reference`) describes the `GradeResult` it returns.
+`infrastructure.host_checked_factories` wraps the factories first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
+cause chain, even one the program wrapped, so the caller retries or abandons the workpiece instead of
+asking the author for a revision. A host fault is a machine the host could not create or lost
+(classified by the message table in `sandbox.host_failures`, which validation's classifier reads too),
+an unreachable controller, or a startup or verifier deadline that expired while a sandbox started,
+received files or ran a command (`SANDBOX_DEADLINE`): the grader's own command has its own timeout,
+so the deadline is the sandbox's latency. A task image publish fails as the host's
+(`IMAGE_JOB_FAILED`) when a build or push job did not schedule, was lost or killed, or the push
+failed (`image_builder.ImageJobFailed`), and as the program's `BuildFailure` when the build job ran
+and kaniko failed on the Dockerfile (`image_builder.BuildFailed`). `grade_candidate` grades once
+more on fresh machines when the grader command timed out, and returns the second grade. A step-store
+memo or blob that reads back unreadable or altered raises `step_store.StoreCorruption`, an `OSError`,
+which the build child reports as a storage fault.
+
+A build that runs past a clock raises `BuildExpired`, a third outcome beside `BuildFailure` (the
+program's) and `BuildInfrastructureFailure` (the host's), carrying the `ExpiredClock` it ran past and
+the step: `WALL` when `build_process.run_build_in_process` kills the build at its wall clock, `STEP`
+when a step runs past `run.STEP_TIMEOUT`, and `GRADER` when the standard grader step's reference
+timed out on both of `grade_candidate`'s gradings. Until someone reads the record nobody knows whether
+Taskforge or the program was slow, so the library does not presume: the driver holds the workpiece as
+abandoned, spends no revision, does not rebuild it on its own and asks the author for no rewrite.
+
+`stage40_build_with_program/template/standard.py` is the standard program: five steps and the sink `assemble`.
+
+```
+sources(proposal) -> fixtures(proposal, sources) -> requirements(proposal, fixtures)
+    -> grader(proposal, fixtures, requirements) -> instructions(proposal, fixtures, requirements, grader)
+    -> assemble(proposal, fixtures, requirements, grader, instructions) -> TaskSpec
+```
+
+`sources` researches each research item of the proposal on the web, and
+`run_build(research=ResearchRequirement.ENFORCED)` fails a build whose `Sources` lacks a finding for one of them.
+`fixtures` writes the files for the solver machine the proposal declares, listing PyPI packages only for
+a package machine and no files for `none`, and `requirements` builds that machine (`draft.NO_MACHINE`
+for `none`). `run_build` refuses a task whose machine is not the declared one (`check_solver_machine`)
+as a `BuildFailure`, the program's, so no revision can move the solver between no machine, ShellSim,
+CPython and a container. Nor can the host: before anything runs,
+`run_build` and every call of the agentic author call `infrastructure.machine_available`, which
+raises `NO_IMAGE_BUILDER` for a container proposal on a host without an image builder and `NO_FACTORY`
+for a package machine on a host without the local backend, so the workpiece ends as the host's, with no
+revision spent and no author adapting the task to the host.
+`grader` grades its own reference answer and the empty answer with `grade_candidate` before it returns,
+sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fails the build, so a
+grader that rejects its own reference, returns a reward outside its score range, or credits the
+empty answer above its declared `rejection_ceiling` is a build failure. A reference whose grader
+timed out on both of `grade_candidate`'s gradings raises `BuildExpired` (`GRADER`) at once instead of
+going back to the model, and the driver preserves the workpiece for resume. The `Grader` it returns
+holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
+its partial-credit scheme) and every candidate it graded. The agentic author's `run_build` tool
+grades the empty answer in the library after every build, whatever the program did, and fails the
+build in the grader step when it is graded above the ceiling; its digest reports that grade. `sdk.checked_structured` treats a reply
+the output limit cut off as one failed submission and asks for a shorter one.
+
+`stage40_build_with_program.glm_author.GlmAuthor` asks GLM for a program with the template as its example, and
+returns an `AuthoredProgram` holding the program and its source, which
+`stage30_author.loader.load_program_source` loads. The build stage comes after the loader's, so the
+loader imports none of the SDK's modules: its callers here pass `program_sdk.sdk_exports()`, the
+names the SDK modules define, which the loader's refusals suggest from. The loader refuses a module whose top level
+holds anything but imports, classes, steps, the sink and a final
+`PROGRAM = rl_env_build_program(..., sink=...)`, because a step's key covers its own source and its
+output type alone, so an edit to a helper beside the steps would leave every key unchanged. It also
+refuses an import outside `ALLOWED_IMPORTS`, a missing `grader` step returning `Grader`, and a
+program without a sink made by `@rl_env_build_sink`. Each refusal is a `ValueError` whose message
+the author receives.
+
+`stage40_build_with_program.agentic_author.AgenticAuthor` is the agentic author, an `Author` the
+coordinator calls as its author stage. Each call runs agent sessions (`run_agent`, reasoning replay
+KEEP) in the context's round until one submits, and returns the submitted file as the program's
+source. `AgenticAuthor.builds` gives the sessions of a call their `SessionBuild` for the call's
+workpiece, round and proposal. A session works in a workspace that starts with the template as
+`program.py`, the proposal, the SDK reference and the template under the read-only `reference/`, and
+an empty `notes.md`. Its tools read, write and edit workspace files (`read_file`, `read_reference`,
+`write_file`, `edit_file`, `list_files`), run the loader (`run_loader`), build the program with the
+caller's `ProgramBuilder` (`run_build`, which must build as the caller's build stage does, on the same
+step store, so a program that built in the session rebuilds there from memo hits alone), grade a
+candidate against the last draft the session built (`run_grade_candidate`), and search and fetch the
+web when the proposal lists research. Every load of a program (`run_loader`, `run_build`, `submit`)
+goes through the session's `ProgramLoader`, by default `stage30_author.load_process` in a child process
+bounded by `LOAD_TIMEOUT`, so a module body that never returns is refused rather than holding the
+caller's event loop. Every tool result is cut to 6,000 characters, head and tail. A build whose step
+raised reaches the model as `failure_text`'s text: the program file, line, step and source line that
+raised it, the error, then its traceback's tail, the same from a build in a child process, whose
+`BuildCrash` carries the head the child wrote. A host failure never
+reaches the model: `run_build` and `run_grade_candidate` retry a `BuildInfrastructureFailure` up to
+`HOST_RETRIES` times with a doubling backoff (at once re-raising a cause in `HOST_REJECTIONS`), then
+re-raise it like `ModelUnavailable`, so the round ends without a record and spends no revision; a
+loader child the host killed raises it with cause `BUILD_PROCESS`. A `BuildExpired` from `run_build`
+never reaches the model either: the tool writes `run.json` with `status: "expired"`, the `clock`, the
+`step` and the message as `text`, and re-raises it at once, so the round ends the same way and the
+driver preserves the workpiece for resume. An `OSError` raised outside the program's frames, a storage
+fault, is written with `status: "storage"` and re-raised at once, as the coordinator's build stage
+re-raises it.
+`submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
+program that never built in the session is refused once and handed in untested when submitted again;
+an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
+when a turn's prompt and output plus `turn_max_tokens` exceed `session_token_cap`, at the turn budget,
+or after a third reply without a tool call (a reply cut at the output limit is nudged to take a
+smaller step instead). Each session writes, under the workpiece's directory, with `k` counting the
+round's sessions across its author calls:
+
+```
+rounds/<n>/agentic/<k>/
+  author.json        author_kind, status (accepted, handed_off, author_failed), revision, mode,
+                     stop_reason, wall; accepted adds program_digest and tested
+  session.json       turns, tool calls by tool, tokens, cached share, prompts, stop reason, nudges,
+                     submissions, in-session builds
+  transcript.json    the opening and user turns, then each assistant turn with its tool calls and results
+  submit.json        accepted and every submit call with its outcome
+  record.json        accepted only: GlmAuthor's record fields, with author_kind and turns
+  conversation.json  the messages as sent, read by a same-session revision
+  workspace/         program.py, proposal.json, notes.md, reference/
+  runs/<j>/          one per in-session build: draft/ and run.json (status built, build_failure,
+                     crash, infrastructure, storage, or expired with its clock)
+```
+
+The coordinator writes the submitted program to `authored/<k>/`. A call reads the last session of its
+round, or of the round before when its own has none. With no session yet, it starts a fresh one. After
+a build failure, the session that submitted the program continues with the failure as its next user
+turn when it ended by `submit` within `revision_same_session` (its last prompt and its turns used); any
+other revision starts a fresh session from a copy of its workspace. A last session that ended without
+a submission hands its workspace to a fresh session. A session that ends without a submission saves its workspace and conversation, then reports
+an execution failure. A later explicit resume starts a handoff session. There is no automatic
+handoff-count cap. A relaunch starts from the saved workspace instead of resuming mid-tool.
 
 ## The stage machine
 
@@ -283,6 +447,7 @@ consumers cached.
 | stage    | event           | exit      | next     |
 |----------|-----------------|-----------|----------|
 | triage   | `TRIAGED`       | accept    | author   |
+| triage   | `TRIAGED`       | repair    | triage   |
 | triage   | `TRIAGED`       | reject    | done     |
 | author   | `AUTHORED`      | authored  | build    |
 | author   | `AUTHOR_FAILED` | revise    | author   |
@@ -298,19 +463,40 @@ consumers cached.
 | review   | `DECIDED`       | modify    | author   |
 
 From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
-raising an exception closes it as failed. `WorkpieceBudget` bounds the build and author failures a
-workpiece may revise after and the review retries it may follow. The coordinator spends the budget
-when it records the event, choosing revise or reject, retry or abandon. A build error costs a
-revision, except `BuildInfrastructureFailure`, `ModelUnavailable` and `OSError`, which fail the
-workpiece at the build stage. An author call raising `StructuredOutputError` costs a revision from
-the same budget. Its structured reply stayed invalid through the repair turns, as when the output
-limit cut it, and the next author call samples again with `Revision(AUTHOR_FAILURE, ...)`. Any other
-author error fails the workpiece at the author stage.
+raising an exception closes it as failed. `WorkpieceBudget` bounds the triage rewrites a workpiece
+may take, the build and author failures it may revise after, the review retries it may follow,
+and the review `Modify` decisions it may follow into a new round. The coordinator spends the
+budget when it records the event, choosing repair or reject, revise or reject, retry or abandon,
+modify or reject. A `Modify` past `max_modify_rounds` exits reject with kind `budget`, so a budget
+of zero never takes the modify edge; the round number counts the `Modify` decisions followed.
+
+Triage returns a `Verdict`. The preflight's exits accept or reject, and a reject records the
+verdict's reasons. REPAIR is the surface described under Triage, and a `max_triage_repairs` of zero
+sends any REPAIR verdict to reject. On a REPAIR verdict within the budget, the coordinator calls
+`StageFunctions.repair`, writes the rewrite to `repaired/<k>.json`, and records `TRIAGED` exiting
+repair with the rewrite's digest, the triaged proposal's digest, the file and the rewrites spent.
+Triage judges the rewrite, and every later stage runs it, read back from its file. A REPAIR verdict
+past the budget exits reject, and so does a rewrite that is not a valid proposal; the workpiece
+closes as rejected with the reason.
+
+An accept records the verdict's `author_state` on its `TRIAGED` event: a JSON mapping, empty
+unless the triage attached state such as findings or obligations for the author. The workpiece
+state folds it from the event, so a relaunch reads the same state, and the coordinator passes it
+to every author call as the `Author`'s last argument. The preflight attaches none, and the
+package's authors ignore it.
+
+A build error costs a revision, except `BuildInfrastructureFailure`, `BuildExpired`,
+`ModelUnavailable` and `OSError`, which fail the workpiece at the build stage. An author call
+raising `StructuredOutputError` or `AuthorFailure` costs a revision from the same budget. Its
+structured reply stayed invalid through the repair turns, as when the output limit cut it, or it ended
+without a program to hand in, as when the agentic author's sessions did not submit, and the next author
+call tries again with `Revision(AUTHOR_FAILURE, ...)`. Any other author error fails the workpiece at the
+author stage.
 
 The coordinator calls the author with an `AuthorContext` (the workpiece id, the round and the
-workpiece's directory), the proposal and the revision. An author keeps its own files in the
-workpiece's directory, under names the coordinator does not use (the layout below). The author
-returns an `AuthoredProgram`, the program with the Python source it came from. The
+workpiece's directory), the proposal, the revision and the author state. An author keeps its own
+files in the workpiece's directory, under names the coordinator does not use (the layout below).
+The author returns an `AuthoredProgram`, the program with the Python source it came from. The
 coordinator writes the source to `authored/<k>/program.py` in the round directory, with `k` the
 workpiece's build and author failures so far, and the build stage loads the program from that file
 with `StageFunctions.load_program`, so the author runs once per revision. Each author call writes a
@@ -318,19 +504,24 @@ new `authored/<k>/`, so a relaunch resuming at build finds the program its `AUTH
 even when a killed process re-authored the workpiece after the last save. A program defined in
 Python, as `static_author` returns, has no source, and the build stage asks the author for it again.
 
+`StageCoordinator` holds the build host's `RLEnvBuildServices` and the `ResearchRequirement`, and
+passes them to every build with its model, sampling policy and model digest.
+
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
-digest. A relaunch of the workpiece with another proposal, budget or model digest raises
-`ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
+digest and research requirement. A relaunch of the workpiece with another proposal, budget, model
+digest or research requirement raises `ValueError`, and so does a build whose program has another digest than the `AUTHORED` event.
 
 A run root holds:
 
 ```
 workpieces/<workpiece_id>/events.json
+workpieces/<workpiece_id>/repaired/<k>.json   the k-th rewrite answering a REPAIR verdict
 workpieces/<workpiece_id>/rounds/<n>/
     authored/<k>/program.json      the manifest of the program authored after k build and author failures
     authored/<k>/program.py        its source, when the author returned it
     draft/                         task.json, provenance.json
-    build-failures/<k>.txt         the k-th build or author failure: its step and program line, then its traceback
+    build-failures/<k>.txt         the k-th build or author failure: where the program raised it (file, line,
+                                   step, source line) and the error, then its traceback's tail
     validation.json                the summary returned by validate
     decision.json                  the decision returned by review
 store/                             the step store: blobs/, workpieces/<workpiece_id>/steps/
@@ -349,6 +540,8 @@ so does an author call whose structured reply stays invalid after its repairs
 
 - the build host fails (`BuildInfrastructureFailure`), and the relaunch builds the same program
   again;
+- the build, a step or the grader runs past its clock (`BuildExpired`), which holds the workpiece
+  until someone reads the record;
 - the model is unavailable (`ModelUnavailable`), at the author or the build stage;
 - storage fails, or a blob or memo is missing or corrupt (`OSError`, with `StoreCorruption` for a
   corrupt one).
@@ -359,6 +552,27 @@ A process killed mid-workpiece leaves `events.json` as the workpiece's last term
 leaves none, so the next run starts again from that terminal or from triage, and the step store
 serves the build steps already run. A file-backed `WorkpieceEventLog` saving each event on append is
 planned with the ledger.
+
+## Running many workpieces
+
+`run_workpieces` in `stage_coordinator/run.py` runs every proposal of an async iterable of
+`(workpiece_id, proposal)` pairs through `run_workpiece`, starting each as the iterable yields it,
+so a proposal still being written holds back no workpiece. It sets no width: the stages' resource
+pools bound how much runs at once. Each workpiece runs in a wrapper that records its terminal and
+never raises, so a failed workpiece cancels none of its siblings.
+
+A workpiece stopped by a transient infrastructure failure runs again in-process after a backoff,
+resuming at the stage that raised, up to `InfrastructureRetry.max_attempts` attempts; each failed attempt
+leaves a `TERMINAL` failed event in its log. Only two failures qualify
+(`transient_infrastructure_failure`): `ModelUnavailable`, and a `BuildInfrastructureFailure` whose
+cause is not one of `HOST_REJECTIONS` (no factory or no image builder on this host). A
+`BuildExpired`, a storage fault, and every task or program failure leave the workpiece failed in
+place after one attempt, as `run_workpiece` leaves it.
+
+`run_workpieces` returns each started workpiece's terminal once the iterable is exhausted and every
+workpiece has one. A workpiece id yielded a second time raises `ValueError`, and an error reading the
+iterable is raised as it is; either way no later proposal starts, and the workpieces already started
+first run to their terminals.
 
 ## Testing
 

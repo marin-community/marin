@@ -3,12 +3,15 @@
 
 """Memoized step outputs, keyed by the step's source, its inputs' content, and the model.
 
-``run_program`` loads each step's memo under the step's ``RLEnvBuildStepKey``. When the store holds
-one, it decodes the stored output and the step does not run; otherwise it awaits the step and
-stores its output. The key covers the step's source digest (its own source and everything it
-reaches in its module, see ``RLEnvBuildStep``), the content of each input, and the model, so what a
-step relies on from the library has to change with ``SDK_VERSION``: an output type imported from a
-library, such as ``TaskSpec``, falls under it.
+The runner calls ``memoized`` for each step with the step's ``RLEnvBuildStepKey``. When the store
+holds a memo under that key, ``memoized`` decodes the stored output and the step does not run.
+Otherwise ``memoized`` awaits the step and stores its output. The key covers the step's own
+source, the source of an output type defined in the step's module, the content of each input, and
+the model, so anything else a step relies on has to change with ``SDK_VERSION``. An output type
+imported from a library, such as ``TaskSpec``, falls under ``SDK_VERSION`` too. When a step body
+reads a helper or a constant defined elsewhere, editing that helper leaves the key as it was.
+``stage30_author.loader`` therefore refuses an authored program with helpers or constants beside
+its steps and output types, and a library change of that kind bumps ``SDK_VERSION``.
 
 ``RLEnvBuildStepStore`` reads and writes through rigging's ``StoragePath``, so ``root`` may be a
 local path or an object-store URL. Under it the store keeps:
@@ -16,10 +19,12 @@ local path or an object-store URL. Under it the store keeps:
 * ``blobs/<sha256>``: each output as canonical JSON, written once and shared by all workpieces;
 * ``workpieces/<workpiece_id>/steps/<name>/<key digest>.json``: the memo of each key a workpiece stored.
 
-A memo holds a step's stored output under one key; the ledger calls its own rows entries.
+A memo holds a step's stored output under one key; ledger entries record the execution.
 
 The store writes the blob before the memo, so every memo points at a complete blob, and it
-writes each file to a temporary sibling before renaming it into place. On an object store the
+writes each file to a temporary sibling before renaming it into place. A memo or blob that reads back
+unreadable or altered raises ``StoreCorruption``, an ``OSError``, so a build reports it as the
+storage fault it is rather than as the program's. On an object store the
 rename is a copy and a delete, so a memo costs three requests and appears whole or not at all;
 CI exercises a ``file://`` root, and ``tests/stage40_build_with_program/test_step_store_live.py`` (marker
 ``manual``) runs the same round trip against a bucket. A step's output has to come
@@ -28,39 +33,19 @@ Dataclasses, pydantic output types, tuples, strings and numbers come back intact
 garbled, because canonical JSON encodes them as base64 and pydantic decodes a JSON string as UTF-8.
 """
 
-import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import TypeAdapter, ValidationError
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.filesystem.storage_path import StoragePath
 
 from taskforge.content_hash import canonical_json, digest, sha256_hex
-from taskforge.llm.client import ModelClient
-from taskforge.llm.policy import LLMPolicy
+from taskforge.ledger.records import FILE_SAFE, check_workpiece_id
 
-SDK_VERSION = "taskforge.builder/8"
+SDK_VERSION = "taskforge.builder/15"
 """Bump when a library change alters what an unchanged step would produce."""
-
-FILE_SAFE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
-
-
-def check_workpiece_id(workpiece_id: str) -> None:
-    """Raise ``ValueError`` unless ``workpiece_id`` is safe to use as a directory name."""
-    if not FILE_SAFE.fullmatch(workpiece_id):
-        raise ValueError(f"Workpiece id {workpiece_id!r} must match {FILE_SAFE.pattern}")
-
-
-def model_digest(model: ModelClient, sampling: LLMPolicy) -> str:
-    """Return ``content_hash.digest({"model": model.model, "sampling": sampling})``.
-
-    The runner puts this digest in every step's key, so changing the model or any sampling field
-    reruns every step. A client whose replies also depend on another setting, such as a replay
-    switch or an agent-loop limit, needs a digest that folds that setting in; its caller computes
-    one and passes it to ``run_build`` in place of this one.
-    """
-    return digest({"model": model.model, "sampling": sampling})
 
 
 class StoreCorruption(OSError):
@@ -73,6 +58,8 @@ class StoreCorruption(OSError):
 class CacheStatus(StrEnum):
     HIT = "hit"
     MISS = "miss"
+    INVALIDATED = "invalidated"
+    """The caller named the step in ``invalidate``, so the build reran it and replaced any stored memo."""
 
 
 @dataclass(frozen=True)
@@ -81,12 +68,13 @@ class RLEnvBuildStepKey:
 
     Attributes:
         sdk_version: ``SDK_VERSION`` when the output was computed.
-        source_digest: The step's ``RLEnvBuildStep.source_digest``: the sha256 of its source text
-            and of everything it reaches in its module.
+        source_digest: The step's ``RLEnvBuildStep.source_digest``, including the module-local
+            helpers, constants and classes its implementation references.
         inputs: For each declared input, the sha256 of that input's canonical JSON: the upstream
             step's output, or the proposal. An upstream step that reruns and returns identical
             content leaves this map unchanged.
-        model_digest: ``model_digest(model, sampling)``, or a caller's extension of it.
+        model_digest: ``run.build_model_digest`` of the model, its sampling policy and the services
+            settings that change what a step returns, or a caller's override.
     """
 
     sdk_version: str
@@ -105,9 +93,9 @@ class RLEnvBuildStepMemo:
     """The stored memo of a step's output under a key, written by ``RLEnvBuildStepStore.store``.
 
     ``RLEnvBuildStepStore.load`` reads it back. The memo repeats the key's fields except
-    ``model_digest``. That digest, defined by ``model_digest``, enters every key, and
-    ``WorkpieceBuildProvenance.model_digest`` keeps a copy for the build. A build pairs each memo with
-    the ``CacheStatus`` it observed in an ``RLEnvBuildStepOutcome``, defined in ``run.py``.
+    ``model_digest``. That digest enters every key, and ``WorkpieceBuildProvenance.model_digest`` keeps
+    a copy for the build. A build pairs each memo with the ``CacheStatus`` it observed in an
+    ``RLEnvBuildStepOutcome``, defined in ``run.py``.
 
     Attributes:
         name: The step name.
@@ -135,8 +123,12 @@ class RLEnvBuildStepStore:
     key each run the step once, while the blob they write is shared. A hit therefore says that this
     workpiece stored that key in an earlier build.
 
-    A step receives no store, so a program written by the language model cannot memoize anything
-    of its own; ``run_program`` is the store's one caller.
+    A driver can also memoize a helper that a step body calls. It builds an ``RLEnvBuildStepKey``
+    from the helper's source digest and its arguments' digests, then calls ``memoized`` with a name
+    of the form ``<step>.<helper>``, the same call ``run_program`` makes for each step. The dot
+    keeps helper memos apart from program steps, which appear in ``WorkpieceBuildProvenance.steps``,
+    when a reader lists ``workpieces/<workpiece_id>/steps/``. A step receives no store, so a program written by the
+    language model cannot memoize its own helpers.
     """
 
     def __init__(self, root: str, workpiece_id: str):
@@ -160,15 +152,24 @@ class RLEnvBuildStepStore:
         try:
             memo = _MEMO.validate_json(path.read_bytes())
         except ValidationError as error:
-            raise StoreCorruption(f"Memo {path} of step {name} does not validate") from error
+            raise StoreCorruption(f"Memo {path} of step {name} does not validate: {error}") from error
+        return memo, self.read_output(memo, output_type)
+
+    def read_output[T](self, memo: RLEnvBuildStepMemo, output_type: type[T]) -> T:
+        """Decode the blob ``memo`` points at as ``output_type``.
+
+        Raises:
+            StoreCorruption: the blob's content does not match the digest in the memo, or the blob
+                does not decode as ``output_type``.
+        """
         content = (self.root / "blobs" / memo.output_digest).read_bytes()
         if sha256_hex(content) != memo.output_digest:
-            raise StoreCorruption(f"Blob {memo.output_digest} of step {name} does not match its digest")
+            raise StoreCorruption(f"Blob {memo.output_digest} of step {memo.name} does not match its digest")
         try:
-            return memo, TypeAdapter(output_type).validate_json(content)
+            return TypeAdapter(output_type).validate_json(content)
         except ValidationError as error:
             raise StoreCorruption(
-                f"Blob {memo.output_digest} of step {name} does not decode as {output_type}"
+                f"Blob {memo.output_digest} of step {memo.name} does not decode as {output_type}: {error}"
             ) from error
 
     def store(self, key: RLEnvBuildStepKey, name: str, output: object) -> RLEnvBuildStepMemo:
@@ -177,7 +178,7 @@ class RLEnvBuildStepStore:
         output_digest = sha256_hex(content)
         blob = self.root / "blobs" / output_digest
         if not blob.exists():
-            _write(blob, content)
+            write_bytes_atomic(str(blob), content)
         memo = RLEnvBuildStepMemo(
             name=name,
             key=key.digest,
@@ -187,7 +188,7 @@ class RLEnvBuildStepStore:
             sdk_version=key.sdk_version,
             source_digest=key.source_digest,
         )
-        _write(self._memo_path(key, name), _MEMO.dump_json(memo, indent=2))
+        write_bytes_atomic(str(self._memo_path(key, name)), _MEMO.dump_json(memo, indent=2))
         return memo
 
     def _memo_path(self, key: RLEnvBuildStepKey, name: str) -> StoragePath:
@@ -196,10 +197,53 @@ class RLEnvBuildStepStore:
         return self.root / "workpieces" / self.workpiece_id / "steps" / name / f"{key.digest}.json"
 
 
-def _write(path: StoragePath, content: bytes) -> None:
-    path.parent.mkdirs()
-    with atomic_rename(str(path)) as temp:
-        StoragePath(temp).write_bytes(content)
+async def memoized[T](
+    store: RLEnvBuildStepStore,
+    name: str,
+    key: RLEnvBuildStepKey,
+    output_type: type[T],
+    compute: Callable[[], Awaitable[T]],
+) -> tuple[CacheStatus, RLEnvBuildStepMemo, T]:
+    """Load ``name``'s output under ``key`` from ``store``, or compute and store it on a miss.
+
+    ``memoized`` calls ``store.load`` first. When a memo exists, it returns ``HIT`` with the
+    memo and the decoded output, leaving ``compute`` uncalled. Otherwise it awaits ``compute()``,
+    stores the result, and returns ``MISS`` with the new memo and the result decoded from its
+    stored form, so a consumer receives the same value on a miss as on a later hit.
+    """
+    loaded = store.load(key, name, output_type)
+    if loaded is not None:
+        memo, output = loaded
+        return CacheStatus.HIT, memo, output
+    memo, output = await _computed(store, name, key, output_type, compute)
+    return CacheStatus.MISS, memo, output
+
+
+async def recomputed[T](
+    store: RLEnvBuildStepStore,
+    name: str,
+    key: RLEnvBuildStepKey,
+    output_type: type[T],
+    compute: Callable[[], Awaitable[T]],
+) -> tuple[CacheStatus, RLEnvBuildStepMemo, T]:
+    """Compute ``name``'s output, store it under ``key`` over any memo there, and return ``INVALIDATED``.
+
+    The output comes back decoded from its stored form, as ``memoized`` returns it on a miss.
+    """
+    memo, output = await _computed(store, name, key, output_type, compute)
+    return CacheStatus.INVALIDATED, memo, output
+
+
+async def _computed[T](
+    store: RLEnvBuildStepStore,
+    name: str,
+    key: RLEnvBuildStepKey,
+    output_type: type[T],
+    compute: Callable[[], Awaitable[T]],
+) -> tuple[RLEnvBuildStepMemo, T]:
+    computed = await compute()
+    memo = store.store(key, name, computed)
+    return memo, TypeAdapter(output_type).validate_json(canonical_json(computed))
 
 
 _MEMO: TypeAdapter[RLEnvBuildStepMemo] = TypeAdapter(RLEnvBuildStepMemo)

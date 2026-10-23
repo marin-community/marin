@@ -14,6 +14,11 @@ build. Advisory failures ride on the verdict's ``structural`` results and decide
 
 Whether the host can provide the declared machine is the build's question, not triage's: the build
 stage checks it before any model call and ends such a workpiece as the host's.
+
+The preflight returns only ACCEPT or REJECT, and attaches no ``author_state``. The stage
+coordinator's repair edge, which answers a REPAIR verdict with ``StageFunctions.repair`` within
+``max_triage_repairs``, may later retry a proposal on the preflight's findings, as a deterministic
+rewrite of a fixable header; nothing routes the findings there today.
 """
 
 from taskforge.stage10_proposal.model import TaskProposal
