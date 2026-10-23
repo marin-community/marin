@@ -558,7 +558,10 @@ class MegatronStrategy(DistributedStrategy):
         unwrapped = modules[0].module if hasattr(modules[0], "module") else modules[0]
         parameters = {parameter.data_ptr(): parameter for parameter in unwrapped.parameters()}
         model_sharded_state_dict = unwrapped.sharded_state_dict()
-        with remote_checkpoint_metadata(ckpt_dir) as read_dir:
+        remote = io.is_cloud_path(ckpt_dir)
+        # A local checkpoint is read in place; a remote one stages its control files
+        # and reads rank tensors directly from object storage.
+        with remote_checkpoint_metadata(ckpt_dir) if remote else nullcontext(ckpt_dir) as read_dir:
             master_keys = {}
             for key in FileSystemReader(read_dir).read_metadata().state_dict_metadata:
                 model_key = model_key_for_master(key)
@@ -585,7 +588,7 @@ class MegatronStrategy(DistributedStrategy):
             masters = dist_checkpointing.load(
                 sharded_state_dict=masters_sharded_state_dict,
                 checkpoint_dir=read_dir,
-                sharded_strategy=DirectS3TorchDistLoadShardedStrategy(ckpt_dir) if io.is_cloud_path(ckpt_dir) else None,
+                sharded_strategy=DirectS3TorchDistLoadShardedStrategy(ckpt_dir) if remote else None,
             )
         with _parameters_replaced(owners, masters):
             self.save_hf_model(bridge, model, output_dir, tokenizer, weight_dtype=torch.float32)
