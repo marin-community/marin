@@ -43,8 +43,10 @@ skyrl:
         tokens_per_response: 32
 ```
 
-A positive interval spaces capture requests by published policy steps. `0`
-disables probes. `topk` and `tokens_per_response` accept positive integers;
+A policy step numbers one learner batch; the trainer publishes rollout policy
+for that batch. It does not count optimizer microbatches. A positive interval
+spaces capture requests by these policy steps. `0` disables probes.
+`topk` and `tokens_per_response` accept positive integers;
 the qualified settings are K128 and 32 positions. Changing K changes the
 approximation and payload size; the measurements here do not qualify other K.
 The scheduler selects at most one eligible prompt group at startup and after
@@ -54,7 +56,7 @@ optimizer update. This sampling does not change the ordinary TIS objective.
 There is no automatic cadence controller.
 
 Interval 10 is a starting cadence based on the
-[Snowball cost and coverage check](../reports/score-centering-tim.md). Six
+[Snowball cost and coverage check][snowball-report]. Six
 matched repetitions with a probe every cycle showed no resolved added latency;
 a separate interval-10 sequence consumed three probes over 22 cycles. This
 does not establish a general 1% overhead ceiling. Increase the interval when
@@ -181,7 +183,9 @@ probabilities. Megatron scores those same IDs at the same causal positions
 before the update and during optimization. SC already integrates TIS; applying
 the sampled action's TIS weight again changes its gradient. Outside the head,
 old and behavior probabilities are modeled as proportional to the current
-policy, preserving measured omitted mass. See the
+policy, preserving measured omitted mass. SC subtracts the sampler's expected
+clipped, TIS-weighted policy-gradient contribution. The head and modeled tail
+approximate that expectation. See the
 [paper](https://arxiv.org/html/2609.20807v1) and
 [design note](https://marina.oa.dev/echo/wiki/608).
 
@@ -201,28 +205,18 @@ floor. Abort continuations preserve exact token alignment and policy stamps.
 Dense response alignment reuses contiguous arrays; masked positions retain
 explicit padding.
 
-The [retained qualification](https://github.com/yonromai/marin/tree/3b9f0183badb2c20d4c9bd4468489a442f9222e2/experiments/post_training/score_centering_integration)
-preserves earlier configurations, precision checks and costs. Its Qwen check
-matched numeric and chat captures at temperatures 1.0/0.7 and lengths 128/4096;
-independent causal references differed by less than 2e-6. Those references apply
-to the unchanged SC calculation and numeric representation.
-
-The [Snowball report](../reports/score-centering-tim.md) measures SC cycle wall
+The [Snowball report][snowball-report] measures SC cycle wall
 time 8.61% above ordinary TIS, with a within-allocation 95% interval of
 7.92–9.39% across six matched repetitions. Trainer-only overhead was 30.37%.
-The windows have different scopes; stage timers can overlap. Earlier controls
-reported 9.27% with only two repetitions. Separate asynchronous trajectories
-had different response lengths and do not isolate overhead.
+The windows have different scopes; stage timers can overlap. Natural probes
+missed long responses, although controlled long-response checks passed.
+No Snowball learning benefit is established.
 
-The earlier [Countdown reference](https://github.com/yonromai/marin/blob/a745f814811e84481301bd61db965c1fdc4e87e3/experiments/post_training/score_centering_overnight/results/reference_results.json)
-and [SkyRL reproduction](https://github.com/yonromai/marin/blob/a745f814811e84481301bd61db965c1fdc4e87e3/experiments/post_training/score_centering_overnight/results/skyrl_faithful_v4/skyrl_faithful_results.json)
-completed three noisy seed pairs and one no-noise pair per implementation.
-Their mean SC differences were positive, with wide paired intervals crossing
-zero. Evaluation used the first 64 shuffled training prompts after 299 updates;
-each run completed 300 updates. The learning campaign is stopped. Unfinished
-Qwen 8,192-token training-window and Snowball learning comparisons remain
-incomplete. [SkyRL #996](https://github.com/marin-community/MarinSkyRL/pull/996)
-remains research. No Snowball learning benefit is established.
+Full reports, resolved configurations and numeric results remain on the
+[research branch](https://github.com/yonromai/marin/tree/research/score-centering-tim-20261022-01a0bb6f).
+The [earlier qualification](https://github.com/yonromai/marin/tree/3b9f0183badb2c20d4c9bd4468489a442f9222e2/experiments/post_training/score_centering_integration)
+and stopped [Countdown study](https://github.com/yonromai/marin/tree/a745f814811e84481301bd61db965c1fdc4e87e3/experiments/post_training/score_centering_overnight)
+retain their experimental records separately.
 
 ## Grader dependency
 
@@ -236,3 +230,5 @@ present in the bundled checkout. A package release or dependency-floor update
 is unnecessary. The Qwen and Snowball checks verified the guard in installed
 worker source using an explicit overlay of #10394. That overlay is separate
 from this feature; deployment still needs the repair in its checkout.
+
+[snowball-report]: https://github.com/yonromai/marin/blob/14dae4c5e21179fd1b664e97ae6104b21837d6cd/docs/reports/score-centering-tim.md
