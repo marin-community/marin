@@ -5,6 +5,8 @@
 
 import asyncio
 import dataclasses
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 from connectrpc.code import Code
@@ -24,6 +26,7 @@ from shellbox.machine import (
 from taskcompendium.models import AnswerType, PlainText, TaskSpec
 
 from taskforge.ledger.records import EntryKind
+from taskforge.sandbox import image_builder
 from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
@@ -257,6 +260,33 @@ async def test_an_image_job_the_host_failed_is_infrastructure(context):
 
     assert failure.value.cause == InfrastructureCause.IMAGE_JOB_FAILED
     assert "worker lost" in failure.value.message
+
+
+async def test_image_bootstrap_failure_reaches_the_build_as_infrastructure(context, monkeypatch):
+    status = SimpleNamespace(
+        state=image_builder.JobState.FAILED,
+        error_message="crane download failed",
+        tasks=(SimpleNamespace(exit_code=image_builder.BUILD_SETUP_FAILED_EXIT),),
+    )
+    job = SimpleNamespace(job_id="/alice/build", state=status.state, wait=lambda **kwargs: status)
+    client = SimpleNamespace(submit=lambda **kwargs: job, shutdown=lambda: None)
+    monkeypatch.setattr(image_builder.IrisClient, "remote", lambda *args, **kwargs: client)
+    monkeypatch.setattr(
+        image_builder,
+        "connect_controller",
+        lambda **kwargs: nullcontext(SimpleNamespace(url="http://controller.invalid", credentials=None)),
+    )
+    images = image_builder.IrisImageBuilder(
+        controller_url="http://controller.invalid",
+        target_cluster="test-cluster",
+        credential=image_builder.RegistryCredential("registry.example", "publisher", "password"),
+    )
+    build = DockerBuild(files=(draft.file("Dockerfile", "FROM busybox\n"),))
+
+    with pytest.raises(BuildInfrastructureFailure) as failure:
+        await publish_image(context(images=images), build)
+
+    assert failure.value.cause == InfrastructureCause.IMAGE_JOB_FAILED
 
 
 async def test_an_image_that_fails_to_build_is_the_programs_failure(context):
