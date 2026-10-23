@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass, replace
 
 from shellbox.machine import DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES, Machine, MachineFactory
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.reasoning_spans import MalformedReasoning
+from taskcompendium.reasoning_spans import ReasoningSpanRule
 from taskcompendium.runtime.output_capture import captured_output_files
 
 from rolloutengine.cleanup import _Cleanup
@@ -76,7 +76,7 @@ class RolloutEngine:
     ``machine_factories`` is keyed by ``MachineRuntimeSpec.backend`` and ``harnesses`` by
     ``TaskRolloutSpec.harness``; each run supplies the model under rollout. The harness runs the turns, and
     the engine grades the rollout with the task's grader. An optional observer receives progress events
-    while each attempt runs. ``malformed_reasoning`` says how grading treats a turn with a malformed
+    while each attempt runs. ``reasoning_span_rule`` says how grading treats a turn with a malformed
     reasoning span; a task without a grader keeps its ``UNAVAILABLE`` grade either way.
     """
 
@@ -86,12 +86,12 @@ class RolloutEngine:
         harnesses: Mapping[str, Harness],
         *,
         observer: RolloutObserver | None = None,
-        malformed_reasoning: MalformedReasoning = MalformedReasoning.GRADE,
+        reasoning_span_rule: ReasoningSpanRule = ReasoningSpanRule.GRADE,
     ):
         self.machine_factories = machine_factories
         self.harnesses = harnesses
         self.observer = observer
-        self.malformed_reasoning = malformed_reasoning
+        self.reasoning_span_rule = reasoning_span_rule
 
     def check(self, spec: TaskRolloutSpec) -> None:
         """Reject a spec before any machine starts: unknown factories or harness, or unsupported requirements."""
@@ -217,7 +217,7 @@ class RolloutEngine:
                     resources,
                     stop_reason=recorder.stop_reason,
                     rejected_violations=(
-                        recorder.reasoning_violations() if self.malformed_reasoning == MalformedReasoning.REJECT else ()
+                        recorder.reasoning_violations() if self.reasoning_span_rule == ReasoningSpanRule.REJECT else ()
                     ),
                 )
         except TimeoutError as error:

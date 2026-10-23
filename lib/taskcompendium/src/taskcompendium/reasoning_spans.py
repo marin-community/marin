@@ -34,8 +34,8 @@ class ReasoningViolation(StrEnum):
     STRAY_END = "stray_end"
 
 
-class MalformedReasoning(StrEnum):
-    """How grading treats an attempt with a malformed reasoning span.
+class ReasoningSpanRule(StrEnum):
+    """The grading rule for an attempt with a malformed reasoning span.
 
     GRADE scores the final answer as usual. REJECT grades the attempt as a submission failure
     without running its grader.
