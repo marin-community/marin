@@ -11,7 +11,6 @@ from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import MappingProxyType
 from typing import Any
 
 import pyarrow.parquet as pq
@@ -39,14 +38,12 @@ SOURCE_GRADER_LOCK = (
 DERIVED_GRADER_LOCK = (
     "s3://marin-us-east-02a/marin/rl-data/environments/snowball-inventory-grader/2026.10.20.1/requirements.lock"
 )
-DERIVED_GRADER_FILES_SHA256 = MappingProxyType(
-    {
-        "environment.json": "f6f0eab7f90c26885055fda7c2299589b2ea49fb61d3c417b6c996773b3fb704",
-        "files.tar": "1be88375408d32ef739f183a8db63ea50c4dec16413467a612e76e96986c78e9",
-        "provenance.json": "27d51b9c3482bee6e5278bdbb793f195e4ccf7b802b6a25dc90cbd9294041751",
-        "requirements.lock": "10d9d138afef895dd28cae2885fab99651c7e962b09ce9e961de9a1d0b2e84a4",
-    }
-)
+DERIVED_GRADER_FILES_SHA256 = {
+    "environment.json": "f6f0eab7f90c26885055fda7c2299589b2ea49fb61d3c417b6c996773b3fb704",
+    "files.tar": "1be88375408d32ef739f183a8db63ea50c4dec16413467a612e76e96986c78e9",
+    "provenance.json": "27d51b9c3482bee6e5278bdbb793f195e4ccf7b802b6a25dc90cbd9294041751",
+    "requirements.lock": "10d9d138afef895dd28cae2885fab99651c7e962b09ce9e961de9a1d0b2e84a4",
+}
 
 SOURCE_SCHEMA_VERSION = "0.27"
 FAMILIES = ("calendar", "competitive_coding", "reasoning_gym", "stem", "structural")
@@ -263,7 +260,7 @@ def prepare(
                 "kind": "derived-deployment-environment",
                 "source_packages_lock": SOURCE_GRADER_LOCK,
                 "replacement_packages_lock": DERIVED_GRADER_LOCK,
-                "expected_replacement_files_sha256": dict(DERIVED_GRADER_FILES_SHA256),
+                "expected_replacement_files_sha256": DERIVED_GRADER_FILES_SHA256,
                 "replacement_source_commit": "af479a4deec470dda976b6f91e6e4369981619be",
                 "ingestion_source_commit": launch_provenance().base_commit,
                 "affected_rows": len(environment_digests),

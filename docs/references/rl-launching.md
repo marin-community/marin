@@ -250,8 +250,8 @@ lowering remain unchanged.
 
 Every run uses 40 H100s, 128 prompt groups per update and four samples per group.
 It uses synchronous RLOO-N, a 24,576-token request window and an 8,192-token response
-limit. Native task evaluation scores the fixed 100 tasks before training and after
-the final update. The final update commits a resumable checkpoint and produces a
+limit. Native task evaluation attempts the fixed 100 tasks before training and after
+the final update. The final update commits a checkpoint and produces a
 durable HF export. The launch document and saved evaluation results retain the
 standard artifact and source provenance. Local grader execution requires the
 privileged container profile. Image-backed heldout graders require the dedicated
