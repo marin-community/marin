@@ -11,3 +11,7 @@
 - 2026-10-23 15:22:38 phase B (HLO no-op residue: x*1.0, +0/-0, ones-multiplied head gate + zero head_skip_frac metric, leaky_relu(0)->relu, size-1 pass stack/reduce, unused entropy-scan carries): 2-step tiny losses AND full train state bitwise identical; op diff in phaseB_opdiff.txt; tests 46 passed
 - 2026-10-23 15:23:21 smoke submitted: /larry/lc1-clean-smoke-d512-coord (cw-us-east-02a, interactive, --stop-after-steps 5 --temporary-checkpoints-only) at 72cc4e61d9
 - 2026-10-23 15:29:23 smoke 1 failed: StateCallbackRunner needs eval_model_getter (dropped with the EMA getter); fixed
+- 2026-10-23 15:34:42 reference worktree /Users/larry/marin_wt_clean_ref (detached: w2026-10-19 + CW forwarding) for an A/B smoke
+- 2026-10-23 15:45 smoke 2/3 (clean) and ref (w2026-10-19 + CW forwarding) on cw-us-east-02a, d512 Ckpt 1, 5 steps + final eval + TTL checkpoint, all succeeded.
+  train/loss steps 0-4: clean2 9.8450861 9.8372431 9.8392935 9.8392620 9.8240891; clean3 9.8450861 9.8372431 9.8393068 9.8392725 9.8240862;
+  ref 9.8450871 9.8372450 9.8393021 9.8392744 9.8240919 (spread = run-to-run GPU nondeterminism). Paloma macro 9.80804 / 9.80804 / 9.80805.

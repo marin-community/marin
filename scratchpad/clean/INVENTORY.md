@@ -350,3 +350,18 @@ only the GB200 recipe or MFU probes reach it.
 - delete (dead): 62
 - keep: 136
 - keep (research): 21
+
+## Outcome (marin_belay_v1_clean)
+
+GB200/MFU machinery was removed from the research branch rather than split into a `PerfConfig`: the MXFP8 sites, the
+scanned layer stack (offloaded partials, saved routed outputs, fused source grads, two-phase AttnRes), the
+shared-expert overlap placement and value-embed FSDP thread through `_proj`, the MoE dispatch, the KDA projections and
+the AttnRes loop, so a split would have left a hook at every site. The launcher/trainer side (autotune caches and
+seeding, shared executables, library-kernel preload, first-step timeout, pinned-host master params, offloaded optimizer
+state, PGLE, the pipelined loop, the device ragged transport, the GB200 rung and target config) went with it. All of
+it stays on `marin_belay_v1_ckpt1` (the accepted Ckpt 1 code, incl. `belay_ckpt1 --size gb200-d6144`) and the
+`marin_belay_v1_mfuladder_*` branches.
+
+Deleted modules: `attention_rows_probe.py`, `router_soft_select.py`, `trace_capture.py`, `attn_res_source_grads.py`,
+`gating.py`, `sparse_attention.py`, `library_kernels.py`, `gb200_target_config.txtpb`; tests `test_scan_layers.py`,
+`test_latent_out_tail.py`, `test_collective_overlap_limit.py`. `key_offset.py` keeps only the partial key offset.
