@@ -66,7 +66,7 @@ def test_tensorstore_s3_reads_with_mounted_credentials(tmp_path, monkeypatch):
             self.send_response(404)
             self.end_headers()
 
-        def log_message(self, format, *args):
+        def log_message(self, _format, *_args):
             pass
 
     with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
@@ -77,8 +77,8 @@ def test_tensorstore_s3_reads_with_mounted_credentials(tmp_path, monkeypatch):
             spec = build_kvstore_spec("s3://bucket/cache")
             # The local server has no bucket subdomain; only credential delivery is under test.
             spec["endpoint"] = f"http://127.0.0.1:{server.server_port}"
-            store = ts.KvStore.open(spec).result(timeout=5)
-            assert store.read("missing").result(timeout=5).state == "missing"
+            store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
+            assert store.read("missing").result(timeout=_ASYNC_TEST_TIMEOUT).state == "missing"
             assert authorized_request.is_set()
         finally:
             server.shutdown()
