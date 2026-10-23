@@ -17,8 +17,8 @@ from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.stage20_triage.verdict import accept
 from taskforge.stage30_author.author import static_author
-from taskforge.stage30_author.loader import load_program_source
-from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
+from taskforge.stage30_author.loader import SdkExports, load_program_source
+from taskforge.stage30_author.program import RLEnvBuildProgram, rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program.context import RLEnvBuildContext
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, TaskDraft, load_draft, run_build
 from taskforge.stage40_build_with_program.step_store import model_digest
@@ -49,6 +49,10 @@ class UnusedModel:
         raise AssertionError("the example program calls no model")
 
 
+def load_program(source: str) -> RLEnvBuildProgram:
+    return load_program_source(source, SdkExports(defining_modules={}))
+
+
 @rl_env_build_sink
 async def task(context: RLEnvBuildContext, proposal: dict[str, object]) -> TaskSpec:
     return task_spec(context.workpiece_id)
@@ -67,7 +71,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
     stages = StageFunctions(
         triage=accept,
         author=static_author(rl_env_build_program(sink=task)),
-        load_program=load_program_source,
+        load_program=load_program,
         build=run_build,
         validate=validate,
         review=review,
