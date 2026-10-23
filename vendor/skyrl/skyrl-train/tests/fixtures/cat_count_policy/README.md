@@ -33,3 +33,22 @@ Review regenerated weights and rerun both CI selections before replacing them.
 
 Weights SHA256: `5f1774fdaf2faa6f7b53cb932df09ffc31ff6cd7a7358eabac0939e67a51474d`.
 The immutable S3 manifest records byte counts and SHA256 for every file.
+
+## On-policy distillation
+
+`tests/cpu/test_cat_count_cpu_opd.py` trains the same policy with single-teacher OPD
+instead of RL. The teacher is `examples/cat_count/synthetic_teacher.py`, a program
+served as an `openai_compatible` teacher. It knows the answer and gives each student
+token log 0.95 if the answer is still on track; a wrong token gets the remaining 0.05
+spread over the rest of the vocabulary (about 0.0014 here), plus Gaussian
+noise. Training uses only the teacher signal (`reward_mode=replace`); the CatCount
+reward is only evaluated. PR CI runs 20 steps and requires a greedy train and held-out
+score of at least 0.9, one teacher, and teacher-scored tokens on every step. Nightly
+checks that a flipped teacher makes both scores fall on seeds 0 and 1.
+
+Run it by hand on a local policy directory, with any teacher noise:
+
+```bash
+PYTHONPATH=skyrl-train:skyrl-gym uv run --frozen --no-sync python -m tests.cpu.tiny_training.cat_count_opd \
+  --model /tmp/cat-count-policy --root /tmp/cat-count-opd --steps 20 --jitter 0.5 --error-rate 0.1
+```
