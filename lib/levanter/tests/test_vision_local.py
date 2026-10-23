@@ -10,8 +10,7 @@ import pytest
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 from levanter.data.dataset import ListAsyncDataset
 from levanter.data.image import RepeatedImageDataset
-from levanter.models.siglip import SiglipVisionConfig, SiglipVisionModel
-from levanter.models.vision_model import VisionAttention
+from levanter.models.siglip import SiglipAttention, SiglipVisionConfig, SiglipVisionModel
 from levanter.models.siglip2 import Siglip2VisionConfig, Siglip2VisionModel, Siglip2VisionEmbeddings
 from levanter.layers.attention import AttentionMask
 from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
@@ -33,7 +32,13 @@ def test_vision_checkpoint_roundtrip_preserves_jitted_predictions(encoder: str) 
     model = model_class.init(hax.Axis("vocab", 1), config, key=jax.random.PRNGKey(0))
     other = model_class.init(hax.Axis("vocab", 1), config, key=jax.random.PRNGKey(1))
     pixels = hax.random.normal(jax.random.PRNGKey(2), axes)
-    forward = eqx.filter_jit(lambda network: network(pixels).last_hidden_state.array)
+
+    def forward(network: SiglipVisionModel | Siglip2VisionModel) -> jax.Array:
+        output = network(pixels)
+        assert output.pooler_output is not None
+        return jnp.concatenate([output.last_hidden_state.array.reshape(-1), output.pooler_output.array.reshape(-1)])
+
+    forward = eqx.filter_jit(forward)
     expected = forward(model)
     assert not np.allclose(expected, forward(other))
     restored = from_torch_compatible_state_dict(other, to_torch_compatible_state_dict(model))
@@ -116,15 +121,19 @@ def test_siglip2_jitted_mixed_shapes_match_hf_embeddings():
 
 
 @pytest.mark.parametrize("config_class", [SiglipVisionConfig, Siglip2VisionConfig])
-def test_vision_attention_pads_explicit_mask(config_class):
+def test_siglip_attention_respects_explicit_mask(config_class):
     config = config_class(
         hidden_size=8, intermediate_size=16, num_hidden_layers=1, num_attention_heads=2, patch_size=2
     )
-    attention = VisionAttention.init(config, key=jax.random.PRNGKey(0))
+    attention = SiglipAttention.init(config, key=jax.random.PRNGKey(0))
     sequence = hax.Axis("num_patches", 5)
     pixels = hax.random.normal(jax.random.PRNGKey(1), (hax.Axis("batch", 1), sequence, config.Embed))
     mask = AttentionMask.explicit(hax.named(jnp.eye(5, dtype=bool), (sequence, hax.Axis("key_position", 5))))
     actual = eqx.filter_jit(lambda x: attention(x, mask=mask))(pixels)
     # With diagonal attention, each query receives exactly its own projected value.
-    expected = attention.out_proj(attention.v_proj(pixels))
+    position = hax.Axis("position", sequence.size)
+    values = attention.v_proj(pixels.rename({sequence: position}))
+    values = values.broadcast_axis(config.attention_config().QHeadsPerGroup)
+    values = values.flatten_axes(("kv_head", "q_heads_per_group"), "heads")
+    expected = attention.o_proj(values).rename({position: sequence})
     np.testing.assert_allclose(actual.array, expected.array, rtol=1e-5, atol=1e-5)

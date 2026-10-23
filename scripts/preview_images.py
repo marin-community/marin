@@ -1,13 +1,13 @@
-# Copyright The Levanter Authors
+# Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
 """Preview a bounded sample of a Hugging Face image dataset.
 
 Defaults to LLaVA-558K metadata and images hosted on Hugging Face:
-    uv run python lib/levanter/examples/preview_images.py --count 4
+    uv run python scripts/preview_images.py --count 4
 
 Select another dataset's native image/caption columns and default data files:
-    uv run python lib/levanter/examples/preview_images.py --dataset ORG/DATASET \\
+    uv run python scripts/preview_images.py --dataset ORG/DATASET \\
         --data-files --image-column image --caption-column caption
 
 For extracted LLaVA images, use --image-column image --image-root /path/to/images.
@@ -24,10 +24,8 @@ from zipfile import ZipFile
 import datasets
 import fsspec
 import matplotlib.pyplot as plt
-from PIL import Image
-
 from levanter.data.image import load_image
-
+from PIL import Image
 
 DEFAULT_DATASET = "liuhaotian/LLaVA-Pretrain"
 DEFAULT_DATA_FILES = ["blip_laion_cc_sbu_558k_meta.json"]
@@ -51,7 +49,7 @@ def show_images(
     figure, axes = plt.subplots(rows, columns, squeeze=False, figsize=(4 * columns, 4 * rows))
     for axis in axes.flat:
         axis.axis("off")
-    for axis, record in zip(axes.flat, records):
+    for axis, record in zip(axes.flat, records, strict=False):
         reference = record[image_column]
         if image_root is not None:
             reference = str(image_root / reference)

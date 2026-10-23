@@ -140,6 +140,7 @@ def test_siglip_vision_model_vs_hf() -> None:
     with torch.no_grad():
         hf_output = hf_model(pixel_values_torch, output_hidden_states=True)
         hf_last_hidden_np = hf_output.last_hidden_state.detach().cpu().numpy()
+        hf_pooler_np = hf_output.pooler_output.detach().cpu().numpy()
 
     lev_config = SiglipVisionConfig.from_hf_config(hf_config)
     single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
@@ -163,12 +164,15 @@ def test_siglip_vision_model_vs_hf() -> None:
             jnp.array(pixel_values_torch.numpy(), dtype=jnp.float32), (Batch, Channels, Height, Width)
         )
 
-        lev_output = lev_model(pixel_values_jax, output_hidden_states=True, key=jax.random.PRNGKey(1))
+        lev_output = lev_model(pixel_values_jax, key=jax.random.PRNGKey(1))
 
     lev_last_hidden_np = np.array(lev_output.last_hidden_state.array)
+    assert lev_output.pooler_output is not None
+    lev_pooler_np = np.array(lev_output.pooler_output.array)
 
     # 4-layer model: use 1e-3 tolerance
-    assert np.allclose(hf_last_hidden_np, lev_last_hidden_np, rtol=1e-3, atol=1e-3)
+    np.testing.assert_allclose(hf_last_hidden_np, lev_last_hidden_np, rtol=1e-3, atol=1e-3)
+    np.testing.assert_allclose(hf_pooler_np, lev_pooler_np, rtol=1e-3, atol=1e-3)
 
 
 @pytest.mark.slow
@@ -198,6 +202,7 @@ def test_siglip_vision_pretrained_random_pixels() -> None:
     with torch.no_grad():
         vision_outputs = torch_model(pixel_values_torch, output_hidden_states=True)
         torch_output = vision_outputs.last_hidden_state.detach().cpu().numpy()
+        torch_pooler = vision_outputs.pooler_output.detach().cpu().numpy()
 
     lev_config = SiglipVisionConfig.from_hf_config(torch_model.config)
     single_device_mesh = Mesh(np.array([[jax.devices()[0]]]), (ResourceAxis.DATA, ResourceAxis.MODEL))
@@ -222,16 +227,19 @@ def test_siglip_vision_pretrained_random_pixels() -> None:
 
         pixel_values_jax = hax.named(jnp.array(pixel_values_np, dtype=jnp.float32), (Batch, Channels, Height, Width))
 
-        lev_output = lev_model(pixel_values_jax, output_hidden_states=True, key=jax.random.PRNGKey(1))
+        lev_output = lev_model(pixel_values_jax, key=jax.random.PRNGKey(1))
 
     lev_output_np = np.array(lev_output.last_hidden_state.array)
+    assert lev_output.pooler_output is not None
+    lev_pooler_np = np.array(lev_output.pooler_output.array)
 
     assert torch_output.shape == lev_output_np.shape
     assert not np.any(np.isnan(lev_output_np))
     assert not np.any(np.isinf(lev_output_np))
 
     # 12-layer full model: numerical differences compound, use looser tolerance
-    assert np.allclose(torch_output, lev_output_np, rtol=1e-3, atol=1e-2)
+    np.testing.assert_allclose(torch_output, lev_output_np, rtol=1e-3, atol=1e-2)
+    np.testing.assert_allclose(torch_pooler, lev_pooler_np, rtol=1e-3, atol=1e-2)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         save_path = f"{tmpdir}/converted_model"
@@ -246,6 +254,8 @@ def test_siglip_vision_pretrained_random_pixels() -> None:
         with torch.no_grad():
             converted_outputs = converted_hf_model(pixel_values_torch)
             converted_output_np = converted_outputs.last_hidden_state.detach().cpu().numpy()
+            converted_pooler_np = converted_outputs.pooler_output.detach().cpu().numpy()
 
         assert not np.any(np.isnan(converted_output_np))
-        assert np.allclose(lev_output_np, converted_output_np, rtol=1e-3, atol=1e-2)
+        np.testing.assert_allclose(lev_output_np, converted_output_np, rtol=1e-3, atol=1e-2)
+        np.testing.assert_allclose(lev_pooler_np, converted_pooler_np, rtol=1e-3, atol=1e-2)
