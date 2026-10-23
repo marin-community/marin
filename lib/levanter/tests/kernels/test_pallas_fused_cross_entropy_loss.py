@@ -1706,6 +1706,8 @@ def test_distributed_fused_ce_rejects_rank_local_selection_before_sweep(
         return inferred, different_setting == "tuned_match" and context.rank == 0
 
     monkeypatch.setattr(jax, "process_count", lambda: 2)
+    # The plan check runs only with peers to agree with: a distributed client.
+    monkeypatch.setattr(fused_api.jax_distributed.global_state, "client", object())
     monkeypatch.setattr(fused_api, "multihost_allgather_sync", allgather)
     monkeypatch.setattr(fused_api, "infer_block_sizes_with_tuned_match", infer_for_rank)
     monkeypatch.setattr(
