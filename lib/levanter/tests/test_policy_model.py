@@ -12,10 +12,10 @@ import pytest
 
 from levanter.policy import ClippedPolicyConfig, KlGradient, clipped_policy_loss
 from levanter.policy_model import PolicyBatch, policy_model_loss, pack_policy_batch, response_logprobs
-from levanter.layers.attention import AttentionBackend, AttentionMask
+from levanter.layers.attention import AttentionBackend
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import QwenConfig
-from levanter.utils.tree_utils import inference_mode
+from levanter.testing.policy_reference import full_softmax_response_logprobs
 
 
 @pytest.fixture(params=[LlamaConfig, QwenConfig])
@@ -51,30 +51,11 @@ def model_batch(request):
         yield model, batch
 
 
-def full_softmax_scores(model, batch):
-    model = inference_mode(model, True)
-    segments = batch.segment_ids if batch.segment_ids is not None else batch.attention_mask.astype(jnp.int32)
-    mask = AttentionMask.causal().with_segment_ids(segments)
-    logits = model(batch.tokens, mask, pos_ids=batch.position_ids).rearrange(("batch", "position", "vocab"))
-    tokens = batch.tokens.rearrange(("batch", "position"))
-    width = batch.response_mask.axis_size("response")
-    # Explicit shifted full-vocabulary reference, independent of fused CE slicing.
-    logits = logits.array.astype(jnp.float32)[:, :-1]
-    shifted = logits - jax.lax.stop_gradient(jnp.max(logits, axis=-1, keepdims=True))
-    # TPU's default log approximation is not a full-precision reference.
-    accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
-    logprobs = shifted - jax.lax.log(
-        jnp.sum(jax.lax.exp(shifted, accuracy=accuracy), axis=-1, keepdims=True), accuracy=accuracy
-    )
-    selected = jnp.take_along_axis(logprobs, tokens.array[:, 1:, None], axis=-1)[..., 0]
-    return hax.named(selected[:, -width:], batch.response_mask.axes)
-
-
 @pytest.mark.parametrize("block_size", [8, 64])
 def test_response_scores_match_full_softmax_and_unpadded_context(model_batch, block_size):
     model, batch = model_batch
     actual = eqx.filter_jit(response_logprobs)(model, batch, block_size=block_size)
-    np.testing.assert_allclose(actual.array, full_softmax_scores(model, batch).array, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(actual.array, full_softmax_response_logprobs(model, batch).array, atol=1e-5, rtol=1e-5)
     # Remove left padding from the second trajectory. Its response stays at
     # the end and real tokens keep the same explicit rotary positions.
     row = jax.tree_util.tree_map(
@@ -105,7 +86,7 @@ def test_policy_model_value_and_gradients_match_full_softmax(model_batch):
 
     def reference_loss(model):
         return clipped_policy_loss(
-            full_softmax_scores(model, batch),
+            full_softmax_response_logprobs(model, batch),
             batch.old_logprobs,
             None,
             batch.advantages,
@@ -143,7 +124,9 @@ def test_packed_response_scores_preserve_context_positions_and_objectives(model_
     np.testing.assert_allclose(
         packed_scores.array[packed_active], original_scores.array[source_active], atol=1e-5, rtol=1e-5
     )
-    np.testing.assert_allclose(packed_scores.array, full_softmax_scores(model, packed).array, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(
+        packed_scores.array, full_softmax_response_logprobs(model, packed).array, atol=1e-5, rtol=1e-5
+    )
     response_names = ("response_mask", "advantages", "policy_weights", "kl_weights", "old_logprobs")
     if with_reference:
         response_names += ("reference_logprobs",)
@@ -176,7 +159,7 @@ def test_packed_response_scores_preserve_context_positions_and_objectives(model_
 @pytest.mark.parametrize("with_reference", [False, True])
 def test_packed_policy_value_and_gradients_match_unpacked_full_softmax(model_batch, with_reference):
     model, batch = model_batch
-    old = full_softmax_scores(model, batch)
+    old = full_softmax_response_logprobs(model, batch)
     Batch = batch.tokens.resolve_axis("batch")
     signs = hax.named(jnp.where(jnp.arange(Batch.size) % 2 == 0, 0.7, -1.2), Batch)
     batch = dataclasses.replace(
@@ -193,7 +176,7 @@ def test_packed_policy_value_and_gradients_match_unpacked_full_softmax(model_bat
 
     def reference_loss(model):
         return clipped_policy_loss(
-            full_softmax_scores(model, batch),
+            full_softmax_response_logprobs(model, batch),
             batch.old_logprobs,
             batch.reference_logprobs,
             batch.advantages,

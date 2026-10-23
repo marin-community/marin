@@ -6,7 +6,6 @@ from functools import partial
 import equinox as eqx
 import haliax as hax
 import jax
-import jax.numpy as jnp
 import jmp
 import numpy as np
 import optax
@@ -15,12 +14,12 @@ import pytest
 from levanter.policy import ClippedPolicyConfig, KlGradient
 from levanter.policy_learner import PolicyLearner, SpmdPolicyLearner
 from levanter.policy_model import PolicyBatch, policy_model_loss
-from levanter.layers.attention import AttentionBackend, AttentionMask
+from levanter.layers.attention import AttentionBackend
 from levanter.models.llama import LlamaConfig
 from levanter.tracker.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.trainer_state import TrainerState
-from levanter.utils.tree_utils import inference_mode
+from levanter.testing.policy_reference import full_softmax_response_logprobs
 
 
 def _batch():
@@ -63,26 +62,10 @@ def _model():
     ).build(hax.Axis("vocab", 16), key=jax.random.PRNGKey(7))
 
 
-@eqx.filter_jit
-def _full_response_logprobs(model, batch):
-    model = inference_mode(model, True)
-    mask = AttentionMask.causal().with_segment_ids(batch.attention_mask.astype(jnp.int32))
-    logits = model(batch.tokens, mask, pos_ids=batch.position_ids).rearrange(("batch", "position", "vocab"))
-    predictions = logits.array[:, :-1].astype(jnp.float32)
-    shifted = predictions - jax.lax.stop_gradient(jnp.max(predictions, axis=-1, keepdims=True))
-    # The fused loss uses full-accuracy TPU transcendentals too.
-    accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
-    logprobs = shifted - jax.lax.log(
-        jnp.sum(jax.lax.exp(shifted, accuracy=accuracy), axis=-1, keepdims=True), accuracy=accuracy
-    )
-    targets = batch.tokens.rearrange(("batch", "position")).array[:, 1:]
-    selected = jnp.take_along_axis(logprobs, targets[..., None], axis=-1)[..., 0]
-    return selected[:, -batch.response_mask.axis_size("response") :]
-
-
 @pytest.mark.timeout(180)
 def test_spmd_policy_updates_preserve_frozen_scores_and_objective_across_microbatches(tmp_path):
     batch = _batch()
+    full_scores = eqx.filter_jit(full_softmax_response_logprobs)
     initial = _arrays(_model())
     outcomes = []
     for per_device_parallelism in (4, 2, 1):
@@ -116,7 +99,7 @@ def test_spmd_policy_updates_preserve_frozen_scores_and_objective_across_microba
             for step in (1, 2):
                 # Full-vocabulary scoring plus NumPy's clipped-surrogate equation
                 # is independent of the learner's blocked projection and loss.
-                current = np.asarray(_full_response_logprobs(state.model, scored))
+                current = np.asarray(full_scores(state.model, scored).array)
                 ratio = np.exp(np.clip(current - frozen, -20, 20))
                 expected = -np.sum(np.minimum(ratio * advantages, np.clip(ratio, 0.8, 1.2) * advantages) * weights)
                 if step == 2:
