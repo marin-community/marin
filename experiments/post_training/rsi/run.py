@@ -59,7 +59,7 @@ from experiments.post_training.rsi.resume import (
     untrained_instances,
 )
 from experiments.post_training.rsi.rollouts import TaskRollouts, group_record
-from experiments.post_training.rsi.seed import POOL_URL, TRAIN_FILE, TaskPool
+from experiments.post_training.rsi.seed import CURRICULUM_URL, TaskPool
 from experiments.post_training.rsi.skyrl_box import FeedConfig, skyrl_train, written_tasks
 from experiments.post_training.rsi.streams import Source, from_iterable, mix
 
@@ -264,7 +264,7 @@ async def _skyrl_run(options: SkyrlOptions, *, feedback: FeedbackOptions | None)
     output = StoragePath(options.output_dir)
     feed = options.feed()
     written = {task.id for task in (await asyncio.to_thread(written_tasks, feed.root)).values()}
-    pool = TaskPool.read(f"{POOL_URL}/{TRAIN_FILE}")
+    pool = TaskPool.read(CURRICULUM_URL)
     strata: dict[str, str] = {}
     # A restarted loop does not write the pool tasks of its feed again, but labels their groups with their stratum.
     seed_tasks = from_iterable(_remember_stratum(pool.stream(options.seed), strata, written=written))

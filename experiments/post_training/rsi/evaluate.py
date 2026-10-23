@@ -56,7 +56,7 @@ from experiments.post_training.rsi.rollouts import (
     rollout_engine,
     write_jsonl,
 )
-from experiments.post_training.rsi.seed import POOL_URL, TRAIN_FILE, VALIDATION_FILE, TaskPool
+from experiments.post_training.rsi.seed import CURRICULUM_URL, HELDOUT_URL, TaskPool
 
 logger = logging.getLogger(__name__)
 
@@ -206,20 +206,20 @@ def serve(options: PolicyOptions, weights: str | None = None) -> AbstractContext
 @policy_options
 @click.option("--output-dir", required=True)
 @click.option(
-    "--pool-file", type=click.Choice([TRAIN_FILE, VALIDATION_FILE]), default=VALIDATION_FILE, show_default=True
+    "--pool", "pool_url", type=click.Choice([HELDOUT_URL, CURRICULUM_URL]), default=HELDOUT_URL, show_default=True
 )
 @click.option("--tasks", type=int, default=200, show_default=True, help="Pool tasks, with the pool's strata weights.")
 @click.option("--samples", type=int, default=4, show_default=True)
 @click.option("--seed", type=int, default=0, show_default=True)
-def baseline(output_dir: str, pool_file: str, tasks: int, samples: int, seed: int, **options) -> None:
-    """Pass rates of a base policy on a stratified sample of a pool file."""
-    asyncio.run(_baseline(PolicyOptions(**options), StoragePath(output_dir), pool_file, tasks, samples, seed))
+def baseline(output_dir: str, pool_url: str, tasks: int, samples: int, seed: int, **options) -> None:
+    """Pass rates of a base policy on a stratified sample of the held-out tasks or the curriculum."""
+    asyncio.run(_baseline(PolicyOptions(**options), StoragePath(output_dir), pool_url, tasks, samples, seed))
 
 
 async def _baseline(
-    options: PolicyOptions, output: StoragePath, pool_file: str, tasks: int, samples: int, seed: int
+    options: PolicyOptions, output: StoragePath, pool_url: str, tasks: int, samples: int, seed: int
 ) -> None:
-    pool = TaskPool.read(f"{POOL_URL}/{pool_file}")
+    pool = TaskPool.read(pool_url)
     logger.info("Pool strata weights: %s", pool.weights)
     sample = pool.sample(tasks, seed)
     logger.info("Sampled strata: %s", Counter(task.stratum for task in sample))
@@ -296,7 +296,7 @@ async def _evaluate(
     samples: int,
     seed: int,
 ) -> None:
-    validation = TaskPool.read(f"{POOL_URL}/{VALIDATION_FILE}").sample(pool_tasks, seed)
+    validation = TaskPool.read(HELDOUT_URL).sample(pool_tasks, seed)
     tasks = [task.task for task in validation]
     labels = {task.task.id: f"pool:{task.stratum}" for task in validation}
     for probe, unseen in await read_probes(probe_roots, instances_per_task):
