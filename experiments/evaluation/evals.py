@@ -301,10 +301,14 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
 EvaluationDefinition = EvalchemyDefinition | HarborDefinition
 
 
-_STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
+LAB_BENCH_EVALS: tuple[str, ...] = (
     "lab-bench-protocolqa",
     "lab-bench-seqqa",
     "lab-bench-cloning",
+)
+
+_STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
+    *LAB_BENCH_EVALS,
     "mmlu",
     "arc-challenge",
     "hellaswag",
@@ -429,7 +433,7 @@ AGENTIC_EVALS: tuple[str, ...] = (
 # separate groups (two serves) rather than one ~19-eval serial serve: the serve backstop grows
 # 2h + 2h x n_evals, and a single long serve is more exposed to preemption.
 SUITES: dict[str, tuple[str, ...]] = {
-    "lab-bench-no-tools": ("lab-bench-protocolqa", "lab-bench-seqqa", "lab-bench-cloning"),
+    "lab-bench-no-tools": LAB_BENCH_EVALS,
     "smoke": SMOKE_EVALS,
     "core": CORE_EVALS,
     "nlp": NLP_EVALS,
