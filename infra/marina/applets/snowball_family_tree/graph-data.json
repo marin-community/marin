@@ -5149,9 +5149,457 @@
       "lane": "10T",
       "edge_kind": "retained checkpoint",
       "timeline": {"date": "2026-10-17", "basis": "Run identity date; intermediate checkpoint exported later", "source": "https://huggingface.co/open-athena/Snowball-Smartie-RL-2026.10.17.49-step12/blob/b159204442ef156bd06303afcc8b7e07385a8216/README.md"}
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-CruxEval-Expert-E-Step272",
+      "title": "CruxEval expert E · SFT on GLM 5.3 traces · step 272",
+      "short": "CruxEval expert E",
+      "model": "open-athena/Snowball-67B-A2B-CruxEval-Expert-E-Step272",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "full SFT",
+        "teacher-trace distillation"
+      ],
+      "summary": "Expert E is the sync Step92 student B after full SFT on 1,454 execution-correct GLM 5.3 CruxEval traces (LR 1e-5, 3 epochs, 272 updates, frozen router biases). It raised CruxEval input/output from B's 55.4/57.8 to 79.4/71.4 without a GSM8K or MATH500 drop, and served as the teacher and transfer target for the single-expert and two-expert transfer experiments. CruxEval scores are two-pass means on the 1,600 training prompts (training-is-test), Evalchemy ae362881 on H100, thinking on, unseeded sampling at temperature 1.0.",
+      "source": "https://github.com/marin-community/marin/issues/9920",
+      "flops": "FLOPs unknown · 35.9 H100-hours of training",
+      "notes": "HF weight revision fb4f8051a344fec59f902bdd2ca876ac1b2f3296; later Hub commits change only the model card. Trained on 32 H100 with a fresh optimizer; keeps B's tokenizer and chat template.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-CruxEval-Expert-E-Step272/tree/fb4f8051a344fec59f902bdd2ca876ac1b2f3296",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9920#issuecomment-6076348127",
+          "text": "Final results, ledger and recipe"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9920",
+          "text": "Timeline date 2026-10-07: training run identity date (dated run name in the experiment record)"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "SFT",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-07",
+        "basis": "Training run identity date (dated run name in the experiment record)",
+        "source": "https://github.com/marin-community/marin/issues/9920"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-CruxEval-Plain-SFT-Step399",
+      "title": "CruxEval transfer · plain SFT on E demos · step 399",
+      "short": "CruxEval plain SFT",
+      "model": "open-athena/Snowball-67B-A2B-CruxEval-Plain-SFT-Step399",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "plain SFT",
+        "self-distillation from expert demos"
+      ],
+      "summary": "Plain-SFT arm of the single-expert transfer: B trained on expert E's first sample per prompt, correct or not (1,600 rows, LR 1e-6, 4 epochs, final checkpoint at 400 updates). CruxEval input/output 73.9/72.0 against E's 79.4/71.4 and B's 55.4/57.8; GSM8K 94.0 and MATH500 92.6. CruxEval scores are two-pass means on the 1,600 training prompts (training-is-test), Evalchemy ae362881 on H100, thinking on, unseeded sampling at temperature 1.0.",
+      "source": "https://github.com/marin-community/marin/issues/9920",
+      "flops": "FLOPs unknown · 61.6 H100-hours of training",
+      "notes": "HF weight revision 3e34be3f884ff737f85354b060ea831ce0c90636; later Hub commits change only the model card. Levanter on 32 H100. Measures transfer on seen prompts, not generalization.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-CruxEval-Plain-SFT-Step399/tree/3e34be3f884ff737f85354b060ea831ce0c90636",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9920#issuecomment-6076348127",
+          "text": "Final results, ledger and arm definitions"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9920",
+          "text": "Timeline date 2026-10-08: training run identity date (dated run name in the experiment record)"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "SFT",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-08",
+        "basis": "Training run identity date (dated run name in the experiment record)",
+        "source": "https://github.com/marin-community/marin/issues/9920"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-CruxEval-RS-SFT-Step282",
+      "title": "CruxEval transfer · rejection-sampled SFT · step 282",
+      "short": "CruxEval RS-SFT",
+      "model": "open-athena/Snowball-67B-A2B-CruxEval-RS-SFT-Step282",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "rejection-sampled SFT",
+        "execution-verified demos"
+      ],
+      "summary": "Rejection-sampled SFT arm of the single-expert transfer: B trained on E's first execution-correct sample per prompt (1,503 rows, LR 1e-6). The epoch-3 checkpoint (283 of 376 updates) was selected after the final dropped on one direction. CruxEval input/output 80.8/77.9, above E's 79.4/71.4; GSM8K 93.5, MATH500 93.6. This arm used ground-truth execution results that the other arms did not. CruxEval scores are two-pass means on the 1,600 training prompts (training-is-test), Evalchemy ae362881 on H100, thinking on, unseeded sampling at temperature 1.0.",
+      "source": "https://github.com/marin-community/marin/issues/9920",
+      "flops": "FLOPs unknown · 57.4 H100-hours for the full run",
+      "notes": "HF weight revision 073d128cb1e53652126cce37a7cc2c96625d3c80; later Hub commits change only the model card. Levanter on 32 H100. One run per arm; the ordering against OPD is unresolved.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-CruxEval-RS-SFT-Step282/tree/073d128cb1e53652126cce37a7cc2c96625d3c80",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9920#issuecomment-6076348127",
+          "text": "Final results, ledger and selection rule"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9920",
+          "text": "Timeline date 2026-10-08: training run identity date (dated run name in the experiment record)"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "SFT",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-08",
+        "basis": "Training run identity date (dated run name in the experiment record)",
+        "source": "https://github.com/marin-community/marin/issues/9920"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-CruxEval-OPD-Step75",
+      "title": "CruxEval transfer · on-policy distillation from E · step 75",
+      "short": "CruxEval OPD",
+      "model": "open-athena/Snowball-67B-A2B-CruxEval-OPD-Step75",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "on-policy distillation",
+        "sampled reverse KL"
+      ],
+      "summary": "On-policy distillation arm of the single-expert transfer: B's own rollouts (4 per prompt) scored by teacher E with sampled reverse KL and no verifier, in MarinSkyRL. E is the teacher, not a weight parent. The epoch-3 checkpoint (75 of 100 updates) scored CruxEval input/output 79.6/75.2; GSM8K 92.5, MATH500 90.4. CruxEval scores are two-pass means on the 1,600 training prompts (training-is-test), Evalchemy ae362881 on H100, thinking on, unseeded sampling at temperature 1.0.",
+      "source": "https://github.com/marin-community/marin/issues/9920",
+      "flops": "FLOPs unknown · 286.9 H100-hours to this checkpoint (376.4 full run)",
+      "notes": "HF weight revision 9d1893207226cf72f701187e1d5260d9fc3c931d; later Hub commits change only the model card. 4 learner, 1 rollout and 1 teacher H100x8 nodes (Megatron); 64 prompts per update.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-CruxEval-OPD-Step75/tree/9d1893207226cf72f701187e1d5260d9fc3c931d",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9920#issuecomment-6076348127",
+          "text": "Final results, ledger and selection rule"
+        },
+        {
+          "url": "https://wandb.ai/marin-community/skyrl/runs/p3ie2bg7",
+          "text": "OPD training run"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9920",
+          "text": "Timeline date 2026-10-09: final results date in the experiment record"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "RL",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-09",
+        "basis": "Final results date in the experiment record",
+        "source": "https://github.com/marin-community/marin/issues/9920"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-MMLUPro-Expert-E2-Step254",
+      "title": "MMLU-Pro expert E₂ · SFT on GLM 5.3 traces · step 254",
+      "short": "MMLU-Pro expert E₂",
+      "model": "open-athena/Snowball-67B-A2B-MMLUPro-Expert-E2-Step254",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "full SFT",
+        "teacher-trace distillation"
+      ],
+      "summary": "Expert E₂ is B fine-tuned with expert E's recipe (full SFT, LR 1e-5, 3 epochs, frozen router bias) on 1,359 correct GLM 5.3 traces over a seeded 1,606-question MMLU-Pro subset. MMLU-Pro rose from B's 44.5/44.1 (training subset/held-out 10,426 questions) to 66.4/64.0. It is the second expert of the two-expert transfer.",
+      "source": "https://github.com/marin-community/marin/issues/9984",
+      "flops": "FLOPs unknown · 60.6 H100-hours of training",
+      "notes": "HF weight revision acb97183af633533df4f4f63d83adc1e0a7a9748; later Hub commits change only the model card. 32 H100. The held-out questions were never trained on and serve as a probe.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-MMLUPro-Expert-E2-Step254/tree/acb97183af633533df4f4f63d83adc1e0a7a9748",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984#issuecomment-6144923850",
+          "text": "Full report, record manifest and cost ledger"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984",
+          "text": "Timeline date 2026-10-09: training run identity date (dated run name in the experiment record)"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "SFT",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-09",
+        "basis": "Training run identity date (dated run name in the experiment record)",
+        "source": "https://github.com/marin-community/marin/issues/9984"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-MixedPlain-SFT-Step803",
+      "title": "Two-expert transfer · mixed plain SFT · step 803",
+      "short": "Mixed plain SFT",
+      "model": "open-athena/Snowball-67B-A2B-MixedPlain-SFT-Step803",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "plain SFT",
+        "mixed-domain demos"
+      ],
+      "summary": "Mixed plain-SFT arm of the two-expert transfer: B trained on sample 0 of every prompt from E's and E₂'s demo pools (3,206 demos, LR 1e-6, 4 epochs). CruxEval input/output 75.4/71.5; MMLU-Pro subset/held-out 62.4/62.9; GSM8K 93.4. It recovered less than the RS-SFT and MOPD arms.",
+      "source": "https://github.com/marin-community/marin/issues/9984",
+      "flops": "FLOPs unknown · 122.0 H100-hours of training",
+      "notes": "HF weight revision 1a0bcf70fa4b599701d5e0c9f0864452d531a9dc; later Hub commits change only the model card. Selected over step 603 on two evaluation passes each.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-MixedPlain-SFT-Step803/tree/1a0bcf70fa4b599701d5e0c9f0864452d531a9dc",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984#issuecomment-6144923850",
+          "text": "Full report, record manifest and cost ledger"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984",
+          "text": "Timeline date 2026-10-10: training run identity date (dated run name in the experiment record)"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "SFT",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-10",
+        "basis": "Training run identity date (dated run name in the experiment record)",
+        "source": "https://github.com/marin-community/marin/issues/9984"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-MixedRS-SFT-Step727",
+      "title": "Two-expert transfer · mixed rejection-sampled SFT · step 727",
+      "short": "Mixed RS-SFT",
+      "model": "open-athena/Snowball-67B-A2B-MixedRS-SFT-Step727",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "rejection-sampled SFT",
+        "mixed-domain demos"
+      ],
+      "summary": "Mixed RS-SFT arm of the two-expert transfer: B trained on the first verifier-correct E or E₂ sample per prompt (2,903 demos, LR 1e-6, 4 epochs). CruxEval input/output 77.3/77.3; MMLU-Pro subset/held-out 68.2/64.8; GSM8K 94.1, MATH500 92.4, GPQA-D 57.6, IFEval instruction-strict 78.3 (B 81.1). It used verifiers the other arms did not have.",
+      "source": "https://github.com/marin-community/marin/issues/9984",
+      "flops": "FLOPs unknown · 93.6 H100-hours of training",
+      "notes": "HF weight revision 95dd3f4ab7487a67907b5a22748a2c2bc77770cc; later Hub commits change only the model card. The demo selector used an older MMLU-Pro answer-extraction rule than the evaluator; reported as trained.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-MixedRS-SFT-Step727/tree/95dd3f4ab7487a67907b5a22748a2c2bc77770cc",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984#issuecomment-6144923850",
+          "text": "Full report, record manifest and cost ledger"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984",
+          "text": "Timeline date 2026-10-10: training run identity date (dated run name in the experiment record)"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "SFT",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-10",
+        "basis": "Training run identity date (dated run name in the experiment record)",
+        "source": "https://github.com/marin-community/marin/issues/9984"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-MOPD-Step100",
+      "title": "Two-expert transfer · multi-teacher on-policy distillation · step 100",
+      "short": "MOPD",
+      "model": "open-athena/Snowball-67B-A2B-MOPD-Step100",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "multi-teacher on-policy distillation",
+        "sampled reverse KL"
+      ],
+      "summary": "Multi-teacher on-policy distillation arm of the two-expert transfer: B's rollouts scored by E on CruxEval prompts and by E₂ on MMLU-Pro prompts (MarinSkyRL, 2 epochs, 100 updates). The teachers are not weight parents. CruxEval input/output 82.1/76.4; MMLU-Pro subset/held-out 64.2/64.4; GSM8K 92.8, MATH500 90.0.",
+      "source": "https://github.com/marin-community/marin/issues/9984",
+      "flops": "FLOPs unknown · 557.9 H100-hours of training plus 28.3 for exports",
+      "notes": "HF weight revision 4bb972592c0094d51d29321f9af2a6defa2ccea1; later Hub commits change only the model card. 7 H100x8 nodes.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-MOPD-Step100/tree/4bb972592c0094d51d29321f9af2a6defa2ccea1",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984#issuecomment-6144923850",
+          "text": "Full report, record manifest and cost ledger"
+        },
+        {
+          "url": "https://github.com/marin-community/MarinSkyRL/blob/76fc4be980aff1b14a42bfa549b5fe7479744701/cloud/iris/configs/snowball_mopd2_cruxeval_mmlupro.yaml",
+          "text": "Pinned MOPD configuration"
+        },
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-MOPD-Step100/commits/main",
+          "text": "Timeline date 2026-10-13: hub repository creation"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "RL",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-13",
+        "basis": "Hub repository creation",
+        "source": "https://huggingface.co/open-athena/Snowball-67B-A2B-MOPD-Step100/commits/main"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-Merge-TA0.5",
+      "title": "Two-expert transfer · task-arithmetic merge a = b = 0.5",
+      "short": "Merge TA 0.5",
+      "model": "open-athena/Snowball-67B-A2B-Merge-TA0.5",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+        "open-athena/Snowball-67B-A2B-CruxEval-Expert-E-Step272",
+        "open-athena/Snowball-67B-A2B-MMLUPro-Expert-E2-Step254"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "task arithmetic"
+      ],
+      "summary": "Merge arm of the two-expert transfer: B + 0.5·(E − B) + 0.5·(E₂ − B), built on CPU with the #9974 merge tools and no training. CruxEval input/output 76.5/67.6; MMLU-Pro subset/held-out 63.2/61.6; GSM8K 93.9, MATH500 92.0. It beats B in both domains but stays 8–10 points below the trained arms on CruxEval output. The full-strength merge (a = b = 1.0) regressed badly and was not published.",
+      "source": "https://github.com/marin-community/marin/issues/9984",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
+      "notes": "HF weight revision 07001c3333337bdea61647c74bcb227f60310fa6; later Hub commits change only the model card. Merge tools from marin PR #9974.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-Merge-TA0.5/tree/07001c3333337bdea61647c74bcb227f60310fa6",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984#issuecomment-6144923850",
+          "text": "Full report, record manifest and cost ledger"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/pull/9974",
+          "text": "Merge implementation"
+        },
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-Merge-TA0.5/commits/main",
+          "text": "Timeline date 2026-10-13: hub repository creation"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "Merge",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-13",
+        "basis": "Hub repository creation",
+        "source": "https://huggingface.co/open-athena/Snowball-67B-A2B-Merge-TA0.5/commits/main"
+      }
+    },
+    {
+      "id": "open-athena/Snowball-67B-A2B-Merge-TIES-d0.5",
+      "title": "Two-expert transfer · TIES merge d = 0.5",
+      "short": "Merge TIES 0.5",
+      "model": "open-athena/Snowball-67B-A2B-Merge-TIES-d0.5",
+      "parents": [
+        "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92",
+        "open-athena/Snowball-67B-A2B-CruxEval-Expert-E-Step272",
+        "open-athena/Snowball-67B-A2B-MMLUPro-Expert-E2-Step254"
+      ],
+      "org": "open-athena",
+      "algorithms": [
+        "TIES"
+      ],
+      "summary": "TIES merge of E and E₂ onto B at density 0.5, built on CPU with the #9974 merge tools and no training. CruxEval input/output 72.8/68.1; MMLU-Pro subset/held-out 61.4/60.8; GSM8K 92.3, MATH500 90.0.",
+      "source": "https://github.com/marin-community/marin/issues/9984",
+      "flops": "FLOPs unknown · no training compute (weight construction)",
+      "notes": "HF weight revision ffb5b68590fdf7c5fe01351a332e7915d574bc61; later Hub commits change only the model card. Merge tools from marin PR #9974.",
+      "evidence": [
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-Merge-TIES-d0.5/tree/ffb5b68590fdf7c5fe01351a332e7915d574bc61",
+          "text": "Pinned Hugging Face weights"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/issues/9984#issuecomment-6144923850",
+          "text": "Full report, record manifest and cost ledger"
+        },
+        {
+          "url": "https://github.com/marin-community/marin/pull/9974",
+          "text": "Merge implementation"
+        },
+        {
+          "url": "https://huggingface.co/open-athena/Snowball-67B-A2B-Merge-TIES-d0.5/commits/main",
+          "text": "Timeline date 2026-10-14: hub repository creation"
+        }
+      ],
+      "retained": [],
+      "confidence": "documented",
+      "status": "public checkpoint",
+      "stage": "Merge",
+      "lane": "10T",
+      "edge_kind": "initialization",
+      "timeline": {
+        "date": "2026-10-14",
+        "basis": "Hub repository creation",
+        "source": "https://huggingface.co/open-athena/Snowball-67B-A2B-Merge-TIES-d0.5/commits/main"
+      }
     }
   ],
   "unplaced": [],
-  "snapshot": "2026-10-19",
+  "snapshot": "2026-10-23",
   "methodology": "Source-estimated analytic FLOPs or explicitly scoped 6ND parameter proxies; unknown RL totals remain unknown."
 }
