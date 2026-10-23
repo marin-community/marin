@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """validate_round: the unit graph, resuming from the unit files, files keyed by what they cover, cancellation, and
-the adversary trials."""
+the adversary trials, on decision-model tasks too."""
 
 import asyncio
 import json
@@ -33,6 +33,8 @@ from taskforge.llm.client import (
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
 from taskforge.spec import draft
+from taskforge.spec.decision import QUESTION
+from taskforge.spec.rubric import Rubric, RubricItem
 from taskforge.stage10_proposal.model import Verification, parse
 from taskforge.stage30_author.loader import GRADER_STEP
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
@@ -43,10 +45,19 @@ from taskforge.stage40_build_with_program.step_store import (
     RLEnvBuildStepKey,
     RLEnvBuildStepStore,
 )
-from taskforge.stage50_validate.adversary import AdversaryMode, AdversaryPolicy, Claim, ClaimKind
+from taskforge.stage50_validate.adversary import (
+    SUBMISSIONS_DIR,
+    AdversaryMode,
+    AdversaryPolicy,
+    Claim,
+    ClaimKind,
+    adversary_brief,
+    adversary_record,
+    run_adversary_trial,
+)
 from taskforge.stage50_validate.control_drafts import CONTROLS_STEP
 from taskforge.stage50_validate.controls import ControlVerdict
-from taskforge.stage50_validate.outcome import Cause
+from taskforge.stage50_validate.outcome import Cause, Graded, TrialKind
 from taskforge.stage50_validate.round import (
     EarlyDecision,
     LoweringStatus,
@@ -58,8 +69,9 @@ from taskforge.stage50_validate.round import (
     validate_round,
     write_validation,
 )
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings, RetryBackoff
+from taskforge.stage50_validate.trials import Deadlines, EngineSettings, RetryBackoff, TrialPlan
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
+from tests.spec.fake_decision import FakeDecisionClient
 from tests.stage40_build_with_program.conftest import PROPOSAL
 
 WORKPIECE = "workpiece"
@@ -767,3 +779,112 @@ async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cau
     assert relaunched.steps == ["solver/0/4", "solver/0/5"]
     assert third.solver is not None and third.solver.trials[1:] == first.solver.trials[1:]
     assert sorted(path.name for path in trial_dir.iterdir()) == [f"attempt-{n}.json" for n in range(6)]
+
+
+DECISION_REFERENCE = "Approved total: 1234.56 USD."
+DECISION_REPLY = "The approved total is 1,234.56 USD."
+DECISION_CRITERION = "The approved total is 1234.56 USD, within 0.01."
+DECISION_RUBRIC = Rubric(
+    deliverable="The approved total of the ledger.",
+    items=[
+        RubricItem(
+            id="total",
+            intent="The answer states the approved total.",
+            pass_criterion=DECISION_CRITERION,
+            equivalences=["$1,234.56"],
+            negation_handling="",
+            weight=1.0,
+            role="scored",
+            cap_value=None,
+        )
+    ],
+)
+
+
+FOOLING_KIND = "keyword_stuffing"
+"""The fooling answer the calibrated decision grader read, which no brief shows."""
+
+
+def decision_task(relower):
+    """A task graded by a calibrated decision grader, as a build leaves one."""
+    grader = draft.decision_grader(DECISION_RUBRIC, DECISION_REFERENCE).model_copy(
+        update={"acceptance_level": 2.0, "calibration": {"reference": 3.6}, "fooling": {FOOLING_KIND: 0.4}}
+    )
+    task = draft.assemble(
+        "ledger",
+        "What is the approved total?",
+        AnswerType.TEXT,
+        PlainText(),
+        grader,
+        Source(dataset="test", revision="r", row="0", importer_revision="test"),
+        environment=None,
+    )
+    return relower(task)
+
+
+def adversary_plan(tmp_path: Path, settings: ValidationSettings) -> TrialPlan:
+    return TrialPlan(
+        workpiece_id=WORKPIECE,
+        round=0,
+        kind=TrialKind.ADVERSARY,
+        k=1,
+        deadlines=settings.deadlines,
+        max_retries=0,
+        retry_backoff=settings.retry_backoff.schedule(),
+        evidence_dir=tmp_path / "evidence",
+        ledger=settings.ledger,
+        first_attempt=0,
+    )
+
+
+async def run_decision_adversary(
+    tmp_path: Path, ledger, relower, policy: AdversaryPolicy, adversary: AdversaryScript, decision
+):
+    """One adversary trial on the decision task, on a host whose decision client is ``decision``."""
+    settings = round_settings(ledger, adversary=policy)
+    engine = replace(settings.engine, decision=decision)
+    spec = decision_task(relower)
+    brief = adversary_brief(spec, (), policy)
+    return await run_adversary_trial(spec, brief, policy, adversary_plan(tmp_path, settings), engine, adversary, "0", 0)
+
+
+async def test_a_whitebox_adversary_on_a_decision_task_is_shown_the_rubric_and_reference(ledger, relower, tmp_path):
+    systems = {}
+    for mode in AdversaryMode:
+        adversary = AdversaryScript(("NO_SHORTCUT",))
+        policy = adversary_policy(k=1, mode=mode)
+        await run_decision_adversary(tmp_path / mode, ledger, relower, policy, adversary, FakeDecisionClient({}))
+        systems[mode] = str(adversary.requests[0][0]["content"])
+
+    whitebox, blackbox = systems[AdversaryMode.WHITEBOX], systems[AdversaryMode.BLACKBOX]
+    assert DECISION_CRITERION in whitebox and DECISION_REFERENCE in whitebox and QUESTION in whitebox
+    assert FOOLING_KIND not in whitebox
+    assert DECISION_CRITERION not in blackbox and DECISION_REFERENCE not in blackbox
+
+
+async def test_a_host_without_a_decision_client_refuses_a_decision_adversary_before_its_first_attempt(
+    ledger, relower, tmp_path
+):
+    adversary = AdversaryScript((Submit(DECISION_REPLY), "NO_SHORTCUT"))
+
+    with pytest.raises(ValueError, match="no decision client"):
+        await run_decision_adversary(tmp_path, ledger, relower, adversary_policy(k=1), adversary, None)
+
+    assert adversary.requests == []
+    assert not (tmp_path / "evidence").exists()
+    assert ledger.entries == []
+
+
+async def test_a_decision_adversarys_submissions_are_graded_on_the_host_with_their_rewards(ledger, relower, tmp_path):
+    client = FakeDecisionClient({DECISION_REPLY: 3.4})
+    adversary = AdversaryScript((Submit("1000 USD"), Submit(DECISION_REPLY), "NO_SHORTCUT"))
+
+    outcome = await run_decision_adversary(tmp_path, ledger, relower, adversary_policy(k=1), adversary, client)
+
+    assert isinstance(outcome, Graded) and outcome.reward == 1.0
+    assert [request[0]["z_candidate_answer"] for request in client.requests] == ["1000 USD", DECISION_REPLY]
+    trial_dir = tmp_path / "evidence" / str(TrialKind.ADVERSARY) / "0"
+    record = adversary_record((trial_dir / "attempt-0.json").read_bytes())
+    assert [(s.grade.reward, s.passed) for s in record.submissions] == [(0.0, False), (1.0, True)]
+    grading = trial_dir / SUBMISSIONS_DIR / "0" / str(TrialKind.CONTROL) / "s2" / "attempt-0.json"
+    assert json.loads(grading.read_bytes())["grade"]["detail"] == {"level": 3.4, "bar": 2.0, "accepted": True}

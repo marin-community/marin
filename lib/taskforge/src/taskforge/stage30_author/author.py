@@ -3,16 +3,19 @@
 
 """Authors of build programs, the revisions they receive, and the program manifest.
 
-A caller awaits an author for a program in round 0 with the proposal and ``None``. In each later
-round the caller passes the ``Revision`` describing what went wrong in the previous one. Every call
-also passes the author state triage's accept attached to the workpiece, a JSON mapping that is
+A caller awaits an author for a program with an ``AuthorContext``, the proposal, and ``None`` on
+the workpiece's first call. The context names the workpiece, its round and its directory. In each
+later call the caller passes the ``Revision`` describing what went wrong in the previous one. Every
+call also passes the author state triage's accept attached to the workpiece, a JSON mapping that is
 empty unless a consumer's triage attached findings or obligations; the package's authors ignore it.
 The author returns an ``AuthoredProgram``: the ``RLEnvBuildProgram`` to build next, with the Python
 source it loaded the program from. The coordinator writes that source to ``PROGRAM_FILE``, beside
 ``PROGRAM_MANIFEST_FILE``, in a directory of the author call, and the build stage loads the program
 back from the file through ``loader.load_program_source``. A revision carries no program source:
 an author that revises its own program reads the ``PROGRAM_FILE`` it wrote. ``static_author``
-turns a program written by hand into an author returning no source.
+turns a program written by hand into an author returning no source. An author call that ends
+without a program it can hand in raises ``AuthorFailure``, and the coordinator asks again with
+the failure as an ``AUTHOR_FAILURE`` revision.
 
 An author answering a ``MODIFY`` revision may swap the task's verifier kind, and returns the swap as
 ``AuthoredProgram.verification_change``. Such a call receives the proposal as declared, with the change
@@ -26,6 +29,7 @@ builds that round and every later one with ``change.revise(proposal)`` and the c
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from pathlib import Path
 from typing import Protocol
 
 from pydantic import JsonValue
@@ -120,9 +124,40 @@ class AuthoredProgram:
     verification_change: VerificationChange | None
 
 
+class AuthorFailure(Exception):
+    """The author call ended without a program to hand in; the next call revises with this failure.
+
+    The coordinator records ``AUTHOR_FAILED`` and spends a build revision on it, as on a
+    ``StructuredOutputError``, so an author raises it for a failure another call may repair, as
+    when its sessions ran out without a submission.
+    """
+
+
+@dataclass(frozen=True)
+class AuthorContext:
+    """The workpiece an author call writes a program for.
+
+    Attributes:
+        workpiece_id: The workpiece's id.
+        round: The workpiece's round, which counts the review ``Modify`` decisions it followed.
+        workpiece_dir: The workpiece's directory. The coordinator's files in it are ``events.json``,
+            ``repaired/`` and, in ``rounds/<n>/``, ``authored/``, ``draft/``, ``build-failures/``,
+            ``validation.json`` and ``decision.json``. An author keeps its own files in this
+            directory under any other name.
+    """
+
+    workpiece_id: str
+    round: int
+    workpiece_dir: Path
+
+
 class Author(Protocol):
     async def __call__(
-        self, proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        self,
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram: ...
 
 
@@ -144,13 +179,16 @@ def program_manifest(program: RLEnvBuildProgram) -> dict[str, object]:
 
 
 def static_author(program: RLEnvBuildProgram) -> Author:
-    """Return an author that hands back ``program``, with no source, for every proposal, revision and state.
+    """Return an author that hands back ``program``, with no source, for every call.
 
     It keeps the revision's verification change unchanged and never chooses one.
     """
 
     async def author(
-        proposal: TaskProposal, revision: Revision | None, author_state: Mapping[str, JsonValue]
+        context: AuthorContext,
+        proposal: TaskProposal,
+        revision: Revision | None,
+        author_state: Mapping[str, JsonValue],
     ) -> AuthoredProgram:
         return AuthoredProgram(program, None, None if revision is None else revision.verification_change)
 

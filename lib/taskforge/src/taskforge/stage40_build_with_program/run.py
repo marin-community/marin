@@ -32,6 +32,7 @@ from dataclasses import dataclass, replace
 from enum import StrEnum
 from functools import partial
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 
 from pydantic import BaseModel, TypeAdapter
@@ -212,7 +213,8 @@ async def run_program(
     under it, the step is a ``HIT`` and the runner passes the decoded output on. Otherwise
     ``memoized`` calls the step with its context and inputs and stores the output, and the step is
     a ``MISS``. A step named in ``invalidate`` runs either way and is ``INVALIDATED``. The first
-    step to fail ends the build: the steps still running are cancelled and its failure is raised.
+    step to fail ends the build: the steps still running are cancelled and its failure is raised
+    with the traceback it left its step with, so the frames of the program that raised it stay in it.
 
     Raises:
         BuildFailure: a step raised one. When the step left ``step`` unset, the runner sets it to
@@ -230,6 +232,7 @@ async def run_program(
     outputs: dict[str, Any] = {PROPOSAL_INPUT: proposal}
     digests: dict[str, str] = {PROPOSAL_INPUT: digest(proposal)}
     outcomes: dict[str, RLEnvBuildStepOutcome] = {}
+    raised: dict[BaseException, TracebackType | None] = {}
 
     async def run[T](step: RLEnvBuildStep | RLEnvBuildSink, output_type: type[T]) -> T:
         name = step.name
@@ -261,6 +264,7 @@ async def run_program(
                     f"ran for more than {STEP_TIMEOUT:.0f} seconds without returning", ExpiredClock.STEP, name
                 ) from error
             except Exception as error:
+                raised[error] = error.__traceback__
                 infrastructure = infrastructure_failure(error)
                 if infrastructure is not None:
                     fields.attrs["infrastructure"] = infrastructure.cause
@@ -295,9 +299,11 @@ async def run_program(
             sink = group.create_task(after_inputs(program.sink, TaskSpec))
     except ExceptionGroup as failures:
         # One step failed and the group cancelled the rest. Raise that failure as a serial run
-        # would, with its own cause chain and without the group as context.
+        # would, with its own cause chain and without the group as context. Each step awaiting the
+        # failed one re-raised the same exception object, which can leave its traceback holding only
+        # that await, so it is raised with the traceback its own step left it with.
         failure = failures.exceptions[0]
-        raise failure from failure.__cause__
+        raise failure.with_traceback(raised.get(failure, failure.__traceback__)) from failure.__cause__
     return sink.result(), tuple(outcomes[name] for name in program.order)
 
 

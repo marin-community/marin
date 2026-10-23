@@ -6,10 +6,9 @@ import json
 import pytest
 
 from taskforge.ledger.records import EntryKind
-from taskforge.llm.recording import CallLedger
 from taskforge.llm.structured import StructuredOutputError, schema_instruction
 from taskforge.stage10_proposal.model import Verification
-from taskforge.stage30_author.author import PROGRAM_FILE, Revision, RevisionKind, VerificationChange
+from taskforge.stage30_author.author import PROGRAM_FILE, AuthorContext, Revision, RevisionKind, VerificationChange
 from taskforge.stage40_build_with_program.glm_author import (
     AUTHOR_DIR,
     COMPLETIONS_FILE,
@@ -33,6 +32,29 @@ def test_the_sdk_reference_lists_the_fields_of_the_task_types_steps_read():
     assert "resource_bytes(resource: taskcompendium.models.TaskResource) -> bytes" in reference
 
 
+def test_the_sdk_reference_lists_what_grade_candidate_returns():
+    reference = sdk_reference()
+
+    assert "class GradeResult(status: taskcompendium.grading_result.Outcome, reward: float | None" in reference
+    assert "score_min: float = 0.0, score_max: float = 1.0" in reference
+    assert "enum Outcome: GRADED = 'graded', SUBMISSION_FAILURE = 'submission_failure'" in reference
+    assert "enum AnswerType: TEXT = 'text'" in reference
+    assert "reward_in_range(grade: taskcompendium.grading_result.GradeResult) -> bool" in reference
+    assert "grader_checks(grade: taskcompendium.grading_result.GradeResult)" in reference
+
+
+def test_the_sdk_reference_says_how_a_decision_model_grader_scores():
+    reference = sdk_reference()
+
+    assert "for a decision-model grader it is the read's `level`, the grader's `bar`" in reference
+    assert "`grade_candidate` grades it with the host's decision model" in reference
+    assert "A reply whose level reaches the bar is `accepted` and earns 1.0" in reference
+    assert "One below it earns at most `REJECTED_REWARD_MAX` (0.5)" in reference
+    assert "calibrate_decision_grader(context: taskforge.stage40_build_with_program.context.RLEnvBuildContext" in (
+        reference
+    )
+
+
 def test_each_name_appears_in_one_section_of_the_sdk_reference():
     names = [name for _, _, section in REFERENCE_SECTIONS for name in section]
 
@@ -52,8 +74,8 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     fake_glm.stream(content=submission(PROGRAM))
     workpiece_dir = tmp_path / "workpiece"
 
-    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(
-        proposal, None, {}
+    authored = await GlmAuthor(glm_client, SAMPLING, ledger)(
+        AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {}
     )
 
     assert authored.source == PROGRAM
@@ -79,8 +101,8 @@ async def test_a_revision_continues_from_the_program_the_workpiece_holds(
     fake_glm.stream(content=submission(fixed))
     revision = Revision(RevisionKind.BUILD_FAILURE, "grader: the reference scored 0.0")
 
-    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 2, "author"))(
-        proposal, revision, {}
+    authored = await GlmAuthor(glm_client, SAMPLING, ledger)(
+        AuthorContext(WORKPIECE, 2, workpiece_dir), proposal, revision, {}
     )
 
     assert authored.source == fixed
@@ -102,8 +124,8 @@ async def test_a_revisions_verification_change_reaches_the_prompt_and_comes_back
     change = VerificationChange(Verification.ANSWER_IN_BOX, Verification.DECISION_MODEL, "the reply is prose")
     revision = Revision(RevisionKind.MODIFY, "the grader accepted a hedged reply", change)
 
-    authored = await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 1, "author"))(
-        proposal, revision, {}
+    authored = await GlmAuthor(glm_client, SAMPLING, ledger)(
+        AuthorContext(WORKPIECE, 1, workpiece_dir), proposal, revision, {}
     )
 
     messages = fake_glm.requests[0]["messages"]
@@ -120,9 +142,7 @@ async def test_an_author_call_that_never_loads_keeps_its_completions(proposal, g
     workpiece_dir = tmp_path / "workpiece"
 
     with pytest.raises(StructuredOutputError):
-        await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(
-            proposal, None, {}
-        )
+        await GlmAuthor(glm_client, SAMPLING, ledger)(AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {})
 
     completions = json.loads((workpiece_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
     assert [json.loads(c["content"])["source"] for c in completions] == [refused, refused]
@@ -137,9 +157,7 @@ async def test_an_author_reply_cut_off_by_the_output_limit_fails_without_a_repai
     workpiece_dir = tmp_path / "workpiece"
 
     with pytest.raises(StructuredOutputError):
-        await GlmAuthor(glm_client, SAMPLING, workpiece_dir, CallLedger(ledger, WORKPIECE, 0, "author"))(
-            proposal, None, {}
-        )
+        await GlmAuthor(glm_client, SAMPLING, ledger)(AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {})
 
     assert len(fake_glm.requests) == 1
     completions = json.loads((workpiece_dir / AUTHOR_DIR / "00" / COMPLETIONS_FILE).read_text())
