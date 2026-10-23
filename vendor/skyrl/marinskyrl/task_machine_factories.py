@@ -41,17 +41,42 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
 def host_python_mounts() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     """The read-only directories and the ``bin`` directory of the Python environment that runs this process.
 
-    The directories are the environment, the ``lib`` directory beside it (the editable sources of a workspace),
-    and the base interpreter. Every sandbox sees the system directories already, and mounts inside them fail.
+    The directories are the environment, the source directories of its editable installs, and the base
+    interpreter. The editable sources of SkyRL's own environment are Marin's ``lib`` packages outside the
+    environment, for example ``verifyit``, which the script graders import. Every sandbox sees the system
+    directories already, and mounts inside them fail; a directory inside another mount is not mounted again.
     """
     environment = Path(sys.prefix)
-    candidates = (environment, environment.parent / "lib", Path(sys.base_prefix))
-    mounts = tuple(
+    candidates = (environment, *editable_sources(environment), Path(sys.base_prefix))
+    usable = [
         path
         for path in dict.fromkeys(candidates)
         if path.is_dir() and not any(path.is_relative_to(system) for system in SYSTEM_DIRECTORIES)
-    )
+    ]
+    mounts = tuple(path for path in usable if not any(path != other and path.is_relative_to(other) for other in usable))
     return mounts, (environment / "bin",)
+
+
+def editable_sources(environment: Path) -> tuple[Path, ...]:
+    """The absolute directories that the ``.pth`` files of ``environment`` put on ``sys.path``: its editable installs,
+    and the site-packages of a layered environment (``uv run --with``) with the ``.pth`` files of their own."""
+    directories: list[Path] = []
+    pending = sorted(environment.glob("lib/python*/site-packages"))
+    seen: set[Path] = set()
+    while pending:
+        site_packages = pending.pop()
+        if site_packages in seen:
+            continue
+        seen.add(site_packages)
+        for pth in sorted(site_packages.glob("*.pth")):
+            for line in pth.read_text().splitlines():
+                path = Path(line.strip())
+                if not path.is_absolute() or not path.is_dir():
+                    continue
+                directories.append(path)
+                if path.name == "site-packages":
+                    pending.append(path)
+    return tuple(directories)
 
 
 def local_machine_factory(settings: Mapping[str, Any]) -> MachineFactory:
