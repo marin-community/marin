@@ -3,7 +3,6 @@
 
 """The stage coordinator runs the catalog entry ``d43.culinary.scaling`` to an accepted task."""
 
-import json
 from functools import partial
 
 import pytest
@@ -52,6 +51,7 @@ from taskforge.stage_coordinator.coordinator import StageCoordinator, WorkpieceB
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import Terminal
+from tests.proposals import proposal_document
 
 from experiments.post_training.capability_driven_envs.catalog import (
     CapabilityIdea,
@@ -91,24 +91,13 @@ def catalog_proposal(idea: CapabilityIdea) -> TaskProposal:
     sections["Task"] = f"{idea.capability['outcome']} {SECTION}"
     body = "\n\n".join(f"## {heading}\n{text}" for heading, text in sections.items())
     return parse(
-        json.dumps(
-            {
-                "header": {
-                    "id": f"{idea.capability_id}/0",
-                    "source": {"kind": "capability", "ref": idea.capability_id, "hash": idea.capability_hash},
-                    "grounding": "unverified",
-                    "null_reason": None,
-                    "environment": "shellsim",
-                    "solver_machine": "shellsim",
-                    "verification": "simple",
-                    "research_need": "not_needed",
-                    "research_reason": "the example program draws its own recipe",
-                    "research": [],
-                    "build": [],
-                    "resources": [],
-                },
-                "body": f"{body}\n",
-            }
+        proposal_document(
+            proposal_id=f"{idea.capability_id}/0",
+            source={"kind": "capability", "ref": idea.capability_id, "hash": idea.capability_hash},
+            environment="shellsim",
+            verification="simple",
+            research_reason="the example program draws its own recipe",
+            body=f"{body}\n",
         )
     )
 

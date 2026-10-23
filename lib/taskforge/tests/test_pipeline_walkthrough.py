@@ -109,32 +109,24 @@ from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventSto
 from taskforge.stage_coordinator.run import InfrastructureRetry, run_workpieces
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import EXIT, Stage, Terminal, WorkpieceEvent, derive_state
+from tests.proposals import proposal_document
 from tests.stage40_build_with_program.scripted_author import CONFIG, ScriptedModel, in_process_loader, turn
 from tests.stage40_build_with_program.scripted_author import PROGRAM as AGENTIC_SOURCE
 
 WORKPIECE = "toy-0"
 PROPOSAL = parse(
-    json.dumps(
-        {
-            "header": {
-                "id": "toy/0",
-                "source": {"kind": "capability", "ref": "toy", "hash": "0"},
-                "grounding": "unverified",
-                "null_reason": None,
-                "environment": "shellsim",
-                "solver_machine": "shellsim",
-                "verification": "simple",
-                "research_need": "not_needed",
-                "research_reason": "the numbers are in the task's own file",
-                "research": [],
-                "build": [
-                    {"name": "numbers", "description": "the file holding the two numbers"},
-                    {"name": "grader", "description": "checks the product"},
-                ],
-                "resources": ["workspace/numbers.txt"],
-            },
-            "body": (
-                """## Task
+    proposal_document(
+        proposal_id="toy/0",
+        source={"kind": "capability", "ref": "toy", "hash": "0"},
+        environment="shellsim",
+        verification="simple",
+        research_reason="the numbers are in the task's own file",
+        build=[
+            {"name": "numbers", "description": "the file holding the two numbers"},
+            {"name": "grader", "description": "checks the product"},
+        ],
+        resources=["workspace/numbers.txt"],
+        body="""## Task
 Multiply the two numbers in /workspace/numbers.txt. The file holds two positive integers on one
 line, separated by a space. Read them, multiply them, and reply with the product alone inside the
 answer box, written as a plain integer with no units, no separators and no explanation around it.
@@ -163,9 +155,7 @@ control replies 13, the sum of the numbers, and earns nothing; an empty reply ea
 None. The numbers are small and fixed, so the product cannot overflow and the answer format is
 unambiguous. A solver that guesses cannot reach the product by chance often, and the file holds
 no hint of the answer. No condition makes this task impossible to build in ShellSim.
-"""
-            ),
-        }
+""",
     )
 )
 BUDGET = WorkpieceBudget(max_triage_repairs=0, max_build_revisions=1, max_validation_retries=1, max_modify_rounds=1)

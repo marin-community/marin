@@ -319,9 +319,7 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
     async with GlmClient(FixedEndpoint(endpoint), model.provider) as client, httpx.AsyncClient() as http:
         yield client, RLEnvBuildServices(
             host=config.host,
-            factories=machine_factories(
-                config.backends, config.controller_url if Backend.GVISOR in config.backends else None
-            ),
+            factories=machine_factories(config.backends, config.controller_url),
             images=image_builder(config),
             web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
             ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
