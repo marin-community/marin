@@ -66,7 +66,6 @@ DEEPSEEK_MODEL = "deepseek-v4.1-flash"
 SUMMARY_FILE = "summary.json"
 NO_REASONING = "none"
 """The solver reasoning effort that switches the thinking of DeepSeek off."""
-MAX_OUTPUT_TOKENS = 32768
 GATE = Gate(min_solver_runs=8, solver_band=(0.1, 0.8), max_format_failure_rate=0.25, min_adversary_runs=4)
 COMMAND_TIMEOUT = 30.0
 JUDGE_TEMPERATURE = 0.7
@@ -74,7 +73,7 @@ JUDGE_TEMPERATURE = 0.7
 MAX_CONCURRENT_ROLLOUTS = 8
 """Solver rollouts of one session at a time."""
 SOLVER_LIMITS = RolloutLimits(
-    max_turns=30,
+    max_turns=None,
     max_total_tokens=None,
     model_turn_timeout=900,
     tool_turn_timeout=120,
@@ -85,17 +84,12 @@ SOLVER_LIMITS = RolloutLimits(
 )
 
 
-def tool_budget(tasks: int) -> ToolBudget:
-    """A budget that permits about five rounds of evidence for each task, and research for the idea."""
-    return ToolBudget(
-        solver_rollouts=64 * tasks,
-        # Each review is two judge calls: a blind solve and the review.
-        judge_calls=8 * tasks + 4,
-        web_calls=10 + 2 * tasks,
-    )
+def tool_budget() -> ToolBudget:
+    """Validation and research have no independent call caps."""
+    return ToolBudget(solver_rollouts=None, judge_calls=None, web_calls=None)
 
 
-def agent_limits(turns: int) -> RolloutLimits:
+def agent_limits(turns: int | None) -> RolloutLimits:
     return RolloutLimits(
         max_turns=turns,
         max_total_tokens=None,
@@ -132,7 +126,9 @@ def chat_model(endpoint: GlmEndpoint, *, model: str, reasoning_effort: str, cach
     extra_body: dict[str, object] = {"chat_template_kwargs": template}
     if cache_key is not None:
         extra_body["prompt_cache_key"] = cache_key
-    return ChatModel(client, model, MAX_OUTPUT_TOKENS, extra_body=extra_body)
+    return ChatModel(
+        client, model, None, extra_body=extra_body, context_window=614400 if model == DEEPSEEK_MODEL else 262144
+    )
 
 
 @dataclass
@@ -165,7 +161,7 @@ async def generate_all(
     ideas: Sequence[CapabilityIdea],
     *,
     tasks: int,
-    turns: int,
+    turns: int | None,
     agent_reasoning_effort: str,
     solver_model: str,
     solver_reasoning_effort: str,
@@ -192,7 +188,7 @@ async def generate_all(
             agent_limits=agent_limits(turns),
             solver_limits=SOLVER_LIMITS,
             gate=GATE,
-            budget=tool_budget(tasks),
+            budget=tool_budget(),
             command_timeout=COMMAND_TIMEOUT,
             max_concurrent_rollouts=MAX_CONCURRENT_ROLLOUTS,
         )
@@ -261,7 +257,7 @@ def _write(path: StoragePath, text: str) -> None:
 @click.option("--base-url", help="The GLM router's OpenAI-compatible base URL, ending in /v1.")
 @click.option("--relay-job", help=f"The Iris GLM relay job, e.g. {DEFAULT_GLM_RELAY_JOB} (inside Iris only).")
 @click.option("--pool", type=click.Choice([pool.value for pool in Pool]), default=Pool.BULK.value, show_default=True)
-@click.option("--turns", type=click.IntRange(min=1), default=200, show_default=True, help="Agent turns per idea.")
+@click.option("--turns", type=click.IntRange(min=1), default=None, help="Optional explicit author turn budget.")
 # A GLM agent turn at medium effort can spend the whole output budget on reasoning, and a turn cut at the limit ends
 # the session, so the agent reasons at low effort by default.
 @click.option("--agent-reasoning-effort", default="low", show_default=True, help="GLM reasoning effort of the agent.")
@@ -288,7 +284,7 @@ def main(
     base_url: str | None,
     relay_job: str | None,
     pool: str,
-    turns: int,
+    turns: int | None,
     agent_reasoning_effort: str,
     solver_model: str,
     solver_reasoning_effort: str,

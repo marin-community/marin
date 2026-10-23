@@ -210,7 +210,9 @@ class _Recorder:
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()
         current = self.conversation
-        if current is not None and (self.budget_reached or self.turns >= self.limits.max_turns):
+        if current is not None and (
+            self.budget_reached or (self.limits.max_turns is not None and self.turns >= self.limits.max_turns)
+        ):
             # The turn and token limits end the attempt before a new conversation. A length stop does not.
             self._stop_at_limit(self.step_observations, None)
         deadlines = self.deadlines
@@ -230,7 +232,11 @@ class _Recorder:
             raise RuntimeError("A harness replies only after a model turn")
         if self.step_observations:
             raise RuntimeError("A turn has recorded final observations, so the harness cannot reply to it")
-        if self.stop_reason == LENGTH_STOP_REASON or self.budget_reached or self.turns >= self.limits.max_turns:
+        if (
+            self.stop_reason == LENGTH_STOP_REASON
+            or self.budget_reached
+            or (self.limits.max_turns is not None and self.turns >= self.limits.max_turns)
+        ):
             self._stop_at_limit(observations, token_ids)
         served = conversation.trace.prefix
         if token_ids is not None and self.mode == TraceMode.EXACT_TOKENS and token_ids[: len(served)] != served:

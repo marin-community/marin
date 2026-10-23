@@ -8,7 +8,7 @@ unchanged step returns comes with an ``SDK_VERSION`` bump.
 
 Model calls go through ``structured``, ``structured_until`` and ``agent``, which record each call
 under the running step (``context.call_ledger``). ``structured_until`` feeds a failed check back to
-the model and asks again, up to ``ATTEMPTS`` requests, then raises ``BuildFailure``.
+the model and asks again until the check passes or an infrastructure failure interrupts it.
 ``research`` runs a web-research agent for one research item of the proposal.
 """
 
@@ -39,13 +39,18 @@ from taskforge.llm.agent import AgentRun, AgentStop, AgentTool, AgentTurn, ToolO
 from taskforge.llm.client import ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
-from taskforge.llm.structured import CutReplyError, StructuredOutputError
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
 from taskforge.spec.draft import ANSWER_PATH, GRADER_RESOURCE_ROOT, GRADER_TIMEOUT
 from taskforge.spec.verdict import GRADER_VERDICT_PATH, VERDICT_REWARD
 from taskforge.stage10_proposal.model import ProposalHeader, SolverMachine, TaskProposal, render
-from taskforge.stage40_build_with_program.context import BuildFailure, RLEnvBuildContext, call_ledger
+from taskforge.stage40_build_with_program.context import (
+    BuildFailure,
+    BuildInfrastructureFailure,
+    RLEnvBuildContext,
+    call_ledger,
+)
+from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage40_build_with_program.outputs import Fixtures, GradedCandidate, Grader, ResearchFinding, WebCall
 
 WORKDIR = "/workspace"
@@ -56,10 +61,6 @@ GRADER_PROGRAM = "grade.py"
 """Seconds a grader program may run on one candidate."""
 FULL_CREDIT = 0.99
 """The least reward a reference answer must receive."""
-ATTEMPTS = 3
-"""Requests ``structured_until`` sends before it fails the build."""
-CUT_REPLY_CHARS = 2000
-"""How much of a reply the output limit cut off goes back to the model as its own turn."""
 INSTRUCTION_WORD_LIMIT = 500
 """Words an instruction may hold outside the verbatim answer contract."""
 INLINED_LINE_CHARS = 40
@@ -384,7 +385,7 @@ async def structured[T: BaseModel](context: RLEnvBuildContext, messages: Sequenc
 
     The client repairs a reply that fails ``output_type``'s validation, so checks the model can fix
     belong in its validators. A reply cut off by the output limit is not repaired: the call raises
-    ``StructuredOutputError``.
+    ``IncompleteOutput`` and preserves the completion for resumption.
     """
     result = await recorded_structured(
         context.model, messages, output_type, context.sampling, call_ledger(context), {"output": output_type.__name__}
@@ -437,46 +438,23 @@ async def checked_structured[T: BaseModel](
     accept(value)`` does, is awaited rather than read as a problem. ``structured_until`` calls this
     with a step's context; validation calls it directly.
 
-    A reply the output limit cut off counts as a failed submission too: its first
-    ``CUT_REPLY_CHARS`` go back as the assistant turn with the cut named as the problem, so the model
-    sends a shorter submission rather than the workpiece failing on an unhandled error. Any other
-    ``StructuredOutputError`` propagates.
-
-    Raises:
-        BuildFailure: ``ATTEMPTS`` submissions all had a problem; the message ends with the last one.
+    Physical context/output exhaustion propagates as ``IncompleteOutput`` so the coordinator holds.
+    There is no per-step attempt cap; the coordinator owns the workpiece's revision budget.
     """
     conversation = list(messages)
-    issue = "no submission"
     name = output_type.__name__
-    for _ in range(ATTEMPTS):
-        try:
-            result = await recorded_structured(model, conversation, output_type, sampling, record, {"output": name})
-        except StructuredOutputError as error:
-            if not isinstance(error.__cause__, CutReplyError):
-                raise
-            cut = error.completions[-1]
-            issue = (
-                f"the reply was cut off by the output limit after {cut.usage.completion_tokens} tokens, before "
-                f"the {name} was complete. Send a shorter submission: fewer or smaller parts, no repetition."
-            )
-            cut_feedback: list[Message] = [
-                {"role": "assistant", "content": f"{cut.content[:CUT_REPLY_CHARS]} ...[cut by the output limit]"},
-                {"role": "user", "content": FEEDBACK_PROMPT.format(problem=issue)},
-            ]
-            conversation += cut_feedback
-            continue
+    while True:
+        result = await recorded_structured(model, conversation, output_type, sampling, record, {"output": name})
         found = await problem(result.value)
         if inspect.isawaitable(found):
             found = await found
         if found is None:
             return result.value
-        issue = found
         feedback: list[Message] = [
             {"role": "assistant", "content": result.value.model_dump_json()},
-            {"role": "user", "content": FEEDBACK_PROMPT.format(problem=issue)},
+            {"role": "user", "content": FEEDBACK_PROMPT.format(problem=found)},
         ]
         conversation += feedback
-    raise BuildFailure(f"{name}: no acceptable submission after {ATTEMPTS} requests; last problem: {issue}")
 
 
 async def structured_until[T: BaseModel](
@@ -531,22 +509,31 @@ async def research(context: RLEnvBuildContext, proposal: TaskProposal, index: in
     failure propagate.
 
     Raises:
-        BuildFailure: ``index`` is out of range, the build has no web tools, the run did not end
-            with an answer, or no web tool call executed and returned content.
+        BuildFailure: ``index`` is out of range, or the model did not call a web tool.
+        BuildInfrastructureFailure: Web research is unavailable or the agent did not complete.
     """
     items = proposal.header.research
     if not 0 <= index < len(items):
         raise BuildFailure(f"research[{index}]: the proposal lists {len(items)} research items")
     tools = context.services.web_tools
     if not tools:
-        raise BuildFailure("web research is not configured for this build")
+        raise BuildInfrastructureFailure("web_unavailable", "web research is not configured for this build")
     item = items[index]
     prompt = RESEARCH_PROMPT.format(proposal=render(proposal), index=index, kind=item.kind, purpose=item.purpose)
     run = await agent(context, [{"role": "user", "content": prompt}], tools)
     if run.stop is not AgentStop.ANSWERED:
-        raise BuildFailure(f"research[{index}]: the run ended {run.stop} after {len(run.turns)} turns")
+        raise BuildInfrastructureFailure(
+            InfrastructureCause.BUDGET_EXHAUSTED if run.stop is AgentStop.MAX_TURNS else "research_incomplete",
+            f"research[{index}]: the run ended {run.stop} after {len(run.turns)} turns",
+        )
     calls = web_calls(run.turns)
     if not calls:
+        if any(
+            result.outcome is ToolOutcome.EXECUTED and result.call.name in WEB_TOOL_NAMES
+            for turn in run.turns
+            for result in turn.tool_results
+        ):
+            raise BuildInfrastructureFailure("web_unavailable", f"research[{index}]: every executed web request failed")
         raise BuildFailure(f"research[{index}]: no web_search or web_fetch call executed and returned content")
     return ResearchFinding(
         index=index,

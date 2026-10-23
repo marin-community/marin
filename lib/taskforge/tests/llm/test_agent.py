@@ -15,6 +15,7 @@ from taskcompendium.runtime.shell import ShellToolConfig, resolve_shell_tool
 from taskforge.ledger.records import EntryKind
 from taskforge.llm.agent import (
     INVALID_ARGUMENTS_KEY,
+    AgentInterrupted,
     AgentRun,
     AgentStop,
     AgentTool,
@@ -50,11 +51,13 @@ def echo_tool(calls: list[Mapping[str, object]]) -> AgentTool:
 def run(fake_glm, fast_provider: LLMProviderConfig, ledger):
     """Run ``run_agent`` on ``MESSAGES`` against ``fake_glm``, recording into ``ledger``."""
 
-    def go(tools, max_turns=8, policy=LLMPolicy(), replay=ReasoningReplay.KEEP, stop=None) -> AgentRun:
+    def go(
+        tools, max_turns=8, policy=LLMPolicy(), replay=ReasoningReplay.KEEP, stop=None, messages=MESSAGES
+    ) -> AgentRun:
         async def call() -> AgentRun:
             record = CallLedger(ledger=ledger, workpiece_id="workpiece-1", round=0, step="author")
             async with GlmClient(fake_source(fake_glm), fast_provider) as client:
-                return await run_agent(client, policy, MESSAGES, tools, max_turns, record, replay, stop)
+                return await run_agent(client, policy, messages, tools, max_turns, record, replay, stop)
 
         return asyncio.run(call())
 
@@ -311,3 +314,31 @@ def test_drop_keeps_reasoning_in_the_recorded_turns(fake_glm, ledger, run):
 
     assert [turn.completion.reasoning for turn in result.turns] == ["I should echo.", "echoed"]
     assert all("reasoning_content" not in m for m in result.messages if m["role"] == "assistant")
+
+
+def test_unlimited_agent_runs_past_the_former_turn_budget(fake_glm, run):
+    for index in range(12):
+        fake_glm.stream(tool_calls=(("echo", json.dumps({"text": str(index)})),), finish="tool_calls")
+    fake_glm.stream(content="done")
+    calls = []
+    result = run([echo_tool(calls)], max_turns=None)
+    assert result.stop is AgentStop.ANSWERED
+    assert len(calls) == 12 and len(result.turns) == 13
+
+
+def test_model_failure_keeps_completed_tool_turns_for_exact_resumption(fake_glm, run):
+    fake_glm.stream(tool_calls=(("echo", '{"text":"saved"}'),), finish="tool_calls")
+    fake_glm.status(403, "model temporarily unavailable to this identity")
+    calls = []
+    with pytest.raises(AgentInterrupted) as failure:
+        run([echo_tool(calls)], max_turns=None)
+    partial = failure.value.run
+    assert partial.stop is AgentStop.INTERRUPTED
+    assert len(partial.turns) == 1
+    assert partial.messages[-1]["role"] == "tool"
+    assert partial.messages[-1]["content"] == "echo: saved"
+    fake_glm.stream(content="resumed")
+    result = run([echo_tool(calls)], max_turns=None, messages=partial.messages)
+    assert result.stop is AgentStop.ANSWERED
+    assert calls == [{"text": "saved"}]
+    assert fake_glm.requests[-1]["messages"] == list(partial.messages)

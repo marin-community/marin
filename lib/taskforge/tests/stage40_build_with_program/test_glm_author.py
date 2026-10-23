@@ -6,7 +6,7 @@ import json
 import pytest
 
 from taskforge.ledger.records import EntryKind
-from taskforge.llm.structured import StructuredOutputError, schema_instruction
+from taskforge.llm.structured import IncompleteOutput, StructuredOutputError, schema_instruction
 from taskforge.stage30_author.author import PROGRAM_FILE, AuthorContext, Revision, RevisionKind
 from taskforge.stage40_build_with_program.glm_author import (
     AUTHOR_DIR,
@@ -102,7 +102,7 @@ async def test_an_author_reply_cut_off_by_the_output_limit_fails_without_a_repai
     fake_glm.stream(content=submission(PROGRAM))
     workpiece_dir = tmp_path / "workpiece"
 
-    with pytest.raises(StructuredOutputError):
+    with pytest.raises(IncompleteOutput):
         await GlmAuthor(glm_client, SAMPLING, ledger)(AuthorContext(WORKPIECE, 0, workpiece_dir), proposal, None, {})
 
     assert len(fake_glm.requests) == 1

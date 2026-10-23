@@ -21,7 +21,7 @@ credential. The child calls ``run_build``, which writes the draft under
 and exits 0. Its log goes to ``<round_dir>/build-process.log``.
 
 Two deadlines bound a build, and neither presumes whose fault an expiry is: each raises
-``BuildExpired``, which a driver holds as abandoned for someone to read. ``STEP_TIMEOUT`` is the
+``BuildExpired``, which a driver holds for further evaluation. ``STEP_TIMEOUT`` is the
 first, inside the child: a step that awaits past it expires with clock ``STEP``, naming the step.
 The wall clock of ``run_build_in_process`` is the last, and it holds against a step that never
 yields. When it expires, the child's process group receives SIGTERM and, ``TERMINATE_GRACE`` seconds
@@ -71,7 +71,7 @@ from taskforge.ledger.jsonl import JsonlLedger
 from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import ModelClient, ModelUnavailable
-from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
+from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool, RelayEndpoint
 from taskforge.llm.policy import LLMPolicy, LLMProviderConfig
 from taskforge.llm.web import web_tools
 from taskforge.sandbox.factories import MachineHost, machine_factories
@@ -85,7 +85,11 @@ from taskforge.stage40_build_with_program.context import (
     ExpiredClock,
 )
 from taskforge.stage40_build_with_program.failure_text import BuildCrash, failure_head
-from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
+from taskforge.stage40_build_with_program.infrastructure import (
+    InfrastructureCause,
+    authored_failure,
+    infrastructure_failure,
+)
 from taskforge.stage40_build_with_program.program_sdk import load_program
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, TaskDraft, load_draft, run_build
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
@@ -113,6 +117,8 @@ class BuildModelConfig:
     pool: Pool
     token_env: str
     provider: LLMProviderConfig
+    relay_job: str | None = None
+    """Iris relay discovery used throughout the child, including recovery after endpoint rotation."""
 
 
 @dataclass(frozen=True)
@@ -315,8 +321,16 @@ def image_builder(config: BuildServiceConfig) -> IrisImageBuilder | None:
 async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, RLEnvBuildServices]]:
     """The model client and services of ``request``, open for the build."""
     model, config = request.model, request.services
-    endpoint = GlmEndpoint(model.base_url, _secret(model.token_env), model.pool)
-    async with GlmClient(FixedEndpoint(endpoint), model.provider) as client, httpx.AsyncClient() as http:
+    token = _secret(model.token_env)
+    endpoint = (
+        FixedEndpoint(GlmEndpoint(model.base_url, token, model.pool))
+        if model.relay_job is None
+        else RelayEndpoint(model.relay_job, token, model.pool, model.provider.model)
+    )
+    async with (
+        GlmClient(endpoint, model.provider) as client,
+        httpx.AsyncClient() as http,
+    ):
         yield client, RLEnvBuildServices(
             host=config.host,
             factories=machine_factories(config.backends, config.controller_url),
@@ -364,6 +378,11 @@ async def build_result(request: BuildRequest) -> BuildResult:
         except OSError as error:
             return _crashed(Raised.OS_ERROR, f"{type(error).__name__}: {error}", error)
         except Exception as error:
+            infrastructure = infrastructure_failure(error)
+            if infrastructure is not None:
+                return HostFailed(infrastructure.cause, infrastructure.message)
+            if not authored_failure(error, {program_file(request.program_source)}):
+                return HostFailed("unclassified_build_failure", str(error))
             head = failure_head(error, {program_file(request.program_source)}, steps)
             return _crashed(Raised.OTHER, head, error)
     return Built()

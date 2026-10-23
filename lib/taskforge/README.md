@@ -231,10 +231,10 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
 own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
 `reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
-`Machine`, and `llm.web` adds Parallel search and extract. The client sends the policy's whole
-`max_tokens` with every turn, so a prompt plus that budget beyond the context window raises
-`ContextExhausted`, which ends the loop with `AgentStop.CONTEXT`; long loops set a smaller
-`max_tokens`.
+`Machine`, and `llm.web` adds Parallel search and extract. The policy defaults to no application output cap: `max_tokens=None` omits both
+provider output-limit fields. Explicit caps remain available. A physical context or output
+boundary interrupts the attempt and preserves its partial trace. Agent turn, continuation and
+structured-repair limits are optional; `None` leaves them unbounded.
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
 the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
@@ -367,7 +367,7 @@ sends a failing grader back to the model, and after `sdk.ATTEMPTS` requests fail
 grader that rejects its own reference, returns a reward outside its score range, or credits the
 empty answer above its declared `rejection_ceiling` is a build failure. A reference whose grader
 timed out on both of `grade_candidate`'s gradings raises `BuildExpired` (`GRADER`) at once instead of
-going back to the model, and the driver holds the workpiece as abandoned. The `Grader` it returns
+going back to the model, and the driver preserves the workpiece for resume. The `Grader` it returns
 holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
 its partial-credit scheme) and every candidate it graded. The agentic author's `run_build` tool
 grades the empty answer in the library after every build, whatever the program did, and fails the
@@ -410,7 +410,7 @@ re-raise it like `ModelUnavailable`, so the round ends without a record and spen
 loader child the host killed raises it with cause `BUILD_PROCESS`. A `BuildExpired` from `run_build`
 never reaches the model either: the tool writes `run.json` with `status: "expired"`, the `clock`, the
 `step` and the message as `text`, and re-raises it at once, so the round ends the same way and the
-driver holds the workpiece as abandoned. An `OSError` raised outside the program's frames, a storage
+driver preserves the workpiece for resume. An `OSError` raised outside the program's frames, a storage
 fault, is written with `status: "storage"` and re-raised at once, as the coordinator's build stage
 re-raises it.
 `submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
@@ -441,11 +441,9 @@ round, or of the round before when its own has none. With no session yet, it sta
 a build failure, the session that submitted the program continues with the failure as its next user
 turn when it ended by `submit` within `revision_same_session` (its last prompt and its turns used); any
 other revision starts a fresh session from a copy of its workspace. A last session that ended without
-a submission hands its workspace to a fresh session. Within one call, a session that ends without a
-submission hands off once (`handed_off`), and the next unsubmitted one (`author_failed`) makes the call
-raise `AuthorFailure`, which spends a revision; a session stopped by the context guard hands off up to
-four sessions per call. A relaunch never resumes a session mid-way: a session directory without an
-`author.json` starts a handoff.
+a submission hands its workspace to a fresh session. A session that ends without a submission saves its workspace and conversation, then reports
+an execution failure. A later explicit resume starts a handoff session. There is no automatic
+handoff-count cap. A relaunch starts from the saved workspace instead of resuming mid-tool.
 
 ## The stage machine
 
