@@ -215,6 +215,7 @@
     }
   },
   "unmeasured": {
+    "GraphWalks": "Context-selected pinned dataset; prompt tokens and gold-dependent output budgets are computed per example with the served model tokenizer.",
     "LiveBench": "IndexError: list index out of range",
     "MRCR": "MissingContextLengthError: MRCR requires an explicit max_length so unsupported examples can be excluded",
     "MTBench": "FileNotFoundError: [Errno 2] No such file or directory: 'eval/chat_benchmarks/MTBench/fastchat/llm_judge/data/mt_bench/model_answer/Qwen/Qwen3-8B.jsonl'",

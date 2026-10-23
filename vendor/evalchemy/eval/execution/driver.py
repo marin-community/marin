@@ -23,7 +23,7 @@ from eval.contracts.task_outcome import (
     TaskStatus,
     classify_task_exception,
 )
-from eval.execution.backend import LMBackend, prompt_encoder
+from eval.execution.backend import LMBackend, prompt_encoder, prompt_token_counter
 from eval.execution.engine import CollectSamples, Evaluator, ItemFailure, ItemResult
 from eval.execution.grading import Grader, Graders
 from eval.execution.judge import JudgeBackend
@@ -33,6 +33,7 @@ from eval.graders.answer_equivalence import JudgeConfig
 from eval.graders.specs import GRADERS
 from eval.robust_api import completion_response_text_unavailable
 from eval.sources.common import SourceOptions
+from eval.task import BaseBenchmark
 from eval.sources.lm_eval import LMEvalMetrics, LMEvalSource
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,7 @@ class SourcePlan:
     errors: list[Exception] = field(default_factory=list)
     judge_config: JudgeConfig | None = None
     expected_examples: int | None = None
+    benchmark: BaseBenchmark | None = None
 
 
 def _interleave(plans: list[SourcePlan]) -> Iterator[EvalSpec]:
@@ -98,6 +100,8 @@ def source_plans(tasks, routes, custom, native, run: RunSpec, model) -> list[Sou
                 run.generation, run.seeds[0], run.num_samples, run.system_instruction,
                 prompt_encoder(model), model_name=run.model_name,
                 tokenizer_encode=prompt_encoder(model, tokenizer_defaults=True),
+                prompt_token_count=prompt_token_counter(model),
+                chat_template=getattr(model, "_evalchemy_chat_template_kwargs", None) or {},
             )
             reducer = SourceMetrics(
                 repeated=False,
@@ -110,7 +114,7 @@ def source_plans(tasks, routes, custom, native, run: RunSpec, model) -> list[Sou
                 task, route, (_source_specs(benchmark, options),), (task,), reducer,
                 judge_config=JudgeConfig.resolve(judge_model=run.judge_model or benchmark.judge_model)
                 if benchmark.REQUIRES_JUDGE and not run.predict_only else None,
-                expected_examples=description.n_attempted,
+                expected_examples=description.n_attempted, benchmark=benchmark,
             ))
             continue
         loaded = native.load([task])
@@ -218,6 +222,8 @@ async def run_evaluations(
         expected = sum(manifest.expected_sample_count for manifest in manifests)
         generated = sum(manifest.generated_sample_count for manifest in manifests)
         score_count = sum(len(scored[task]) for task in plan.task_names)
+        if plan.benchmark is not None:
+            plan.expected_examples = plan.benchmark.describe(plan.name).n_attempted
         if plan.expected_examples is not None and expected != plan.expected_examples:
             plan.errors.append(
                 SampleCoverageError(f"source declared {plan.expected_examples} examples but yielded {expected}")
@@ -294,6 +300,10 @@ async def run_evaluations(
             generated_sample_count=sum(manifest.generated_unit_count for manifest in manifests),
             scored_sample_count=None if predict_only else sum(scored_samples[task] for task in plan.task_names),
         )
+        if plan.benchmark is not None:
+            metadata = plan.benchmark.evaluation_metadata()
+            if metadata:
+                result["results"].setdefault(plan.name, {}).update(metadata)
         result["task_outcomes"][plan.name] = outcome.to_dict()
     if sink is None:
         result["samples"] = samples.samples
