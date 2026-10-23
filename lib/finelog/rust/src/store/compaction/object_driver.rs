@@ -26,7 +26,7 @@ use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
     run_job_with_partition_policy, run_merge_thread, CompactionExecution, OutputPolicy,
-    READ_BATCH_ROWS,
+    PlannedSwap, READ_BATCH_ROWS,
 };
 use crate::store::compaction::planner::{plan, plan_forced_l0, UnpartitionedRunPolicy};
 use crate::store::compaction::staging::StagingDir;
@@ -61,6 +61,12 @@ struct LeasedCompaction<'context, 'resources> {
     lease: MaintenanceLease,
     table_spec_version: u64,
     migration_backfill: bool,
+}
+
+struct MergeResult {
+    swap: PlannedSwap,
+    cached_inputs: usize,
+    remote_inputs: usize,
 }
 
 /// Result of one object-compaction attempt.
@@ -202,7 +208,11 @@ async fn run(
     // unusable. nice(10) yields to busy serving threads but still finishes
     // (nice(19) would starve outright on a saturated box).
     let merge_started = Instant::now();
-    let (swap, cached_inputs, remote_inputs) = run_merge_thread("finelog-compact", 10, move || {
+    let MergeResult {
+        swap,
+        cached_inputs,
+        remote_inputs,
+    } = run_merge_thread("finelog-compact", 10, move || {
         let mut cached_inputs = 0;
         let mut remote_inputs = 0;
         let swap = run_job_with_partition_policy(
@@ -247,7 +257,11 @@ async fn run(
                 })
             },
         )?;
-        Ok::<_, StatsError>((swap, cached_inputs, remote_inputs))
+        Ok::<_, StatsError>(MergeResult {
+            swap,
+            cached_inputs,
+            remote_inputs,
+        })
     })
     .await??;
     let merge_ms = merge_started.elapsed().as_millis() as u64;
