@@ -81,3 +81,51 @@ cross-segment targets, and padding have zero objective weight. Set
 `batch_size_multiple` and `minimum_rows` for the desired execution shape before
 configuring the learner. Packing preserves the prepared advantage and objective
 weighting; it does not recompute either from packed rows.
+
+## Pipeline execution
+
+`levanter.policy_pipeline` implements the same `PolicyLearner` operations with
+JaxPP. A model implements `PipelineStage` for embeddings, blocks, final
+normalization, output weights, trainable selection, and routing counters. Install
+the root `pipeline` extra for execution. The schedule is standard 1F1B;
+in multihost execution, all devices belonging to a given stage must be owned
+by the same process.
+Expert and replica axes must divide the device count evenly.
+
+Initialize stage-owned `PipelineState`, then construct the learner once for the
+prepared execution shape:
+
+```python
+from levanter.policy_pipeline import make_pipeline_policy_learner
+
+learner = make_pipeline_policy_learner(
+    optimizer,
+    mp_policy,
+    state,
+    batch,
+    config=pipeline_config,
+    objective=objective,
+    mpmd_mesh=mpmd_mesh,
+)
+scored_batch = learner.score(state, batch)
+for _ in range(update_epochs):
+    result = learner.update(state, scored_batch)
+    state = result.state
+```
+
+Both learner implementations accept `PolicyBatch`, including the shared packed
+layout. `pipeline_batch` lowers named arrays into execution microbatches;
+`packed_pipeline_batch` combines shared packing with that conversion.
+
+The pipeline learner retains stage-local weights and optimizer moments. It
+averages gradients after temporal accumulation and clips using the global norm
+across stages before optimizer updates. FP32 and BF16 temporal gradient
+accumulation are explicit choices. Trainable weights use the selected compute
+precision; frozen tensors retain their dtype. The scorer preserves the training
+cast boundary with an optimization barrier.
+
+Scoring verifies exact repeatability on the first microbatch. Routing drops are
+rejected by default; `RoutingDropPolicy.REPORT` permits explicit capacity
+experiments and reports counts including padding. Rollout router replay remains
+separate integration work. Pipeline checkpoint integration and distributed
+model acceptance require validation with the chosen model and parallelism.
