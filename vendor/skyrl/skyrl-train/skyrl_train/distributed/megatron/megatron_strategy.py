@@ -585,7 +585,7 @@ class MegatronStrategy(DistributedStrategy):
             masters = dist_checkpointing.load(
                 sharded_state_dict=masters_sharded_state_dict,
                 checkpoint_dir=read_dir,
-                sharded_strategy=DirectS3TorchDistLoadShardedStrategy(ckpt_dir),
+                sharded_strategy=DirectS3TorchDistLoadShardedStrategy(ckpt_dir) if io.is_cloud_path(ckpt_dir) else None,
             )
         with _parameters_replaced(owners, masters):
             self.save_hf_model(bridge, model, output_dir, tokenizer, weight_dtype=torch.float32)
