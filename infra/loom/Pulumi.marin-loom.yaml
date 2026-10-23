@@ -273,7 +273,7 @@ config:
       mcpAccess: *builtinMcpAccess
     prose-cleanup:
       agent: codex
-      description: Rewrite agent-authored issue and PR descriptions in house style
+      description: Fix egregious prose and remove agent attribution from issue and PR descriptions
       model: *codexModel
       effort: low
       protocol: acp
