@@ -10,7 +10,6 @@ from collections.abc import Sequence
 from datetime import datetime
 from functools import partial
 
-import rigging.filesystem.factory as factory
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import retry_with_backoff
 
@@ -89,9 +88,7 @@ def available_cache_snapshot(root: str) -> ArchiveSnapshot:
     for table in snapshot.manifest.tables.values():
         for shard in table.shards:
             try:
-                fs, path = factory.url_to_fs(shard.path)
-                fs.invalidate_cache(path)
-                fs.info(path)
+                StoragePath(shard.path).refresh_lifetime(before=None)
             except FileNotFoundError:
                 missing.add(shard.path)
     return _discard_cache_history(snapshot, missing)
