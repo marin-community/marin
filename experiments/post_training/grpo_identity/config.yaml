@@ -31,6 +31,7 @@ skyrl:
       off_policy_correction: tis
     epochs: 1
     max_steps: 1
+    dump_data_batch: true
     update_epochs_per_batch: 1
     train_batch_size: 20
     policy_mini_batch_size: 20

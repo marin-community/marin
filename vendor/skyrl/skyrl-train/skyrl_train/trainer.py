@@ -5,6 +5,7 @@ import io as stdlib_io
 import json
 import math
 import os
+import pickle
 import re
 import shutil
 import threading
@@ -2795,9 +2796,13 @@ class RayPPOTrainer:
         """
         Dump data to pickle file
         """
-        data_save_dir = Path(self.cfg.trainer.export_path) / "dumped_data"
-        data_save_dir.mkdir(parents=True, exist_ok=True)
-        data.save(data_save_dir / f"{file_name}.pkl")
+        data_save_dir = join_resource_path(str(self.cfg.trainer.export_path), "dumped_data")
+        io.makedirs(data_save_dir, exist_ok=True)
+        cpu_data = TrainingInputBatch({key: None if value is None else value.detach().cpu()
+                                      for key, value in data.items()})
+        cpu_data.metadata = data.metadata
+        with io.open_file(join_resource_path(data_save_dir, f"{file_name}.pkl"), "wb") as destination:
+            pickle.dump(cpu_data, destination)
 
     def pad_batch(self, training_input: TrainingInputBatch) -> TrainingInputBatch:
         """Pad the batch to be divisible by dp size"""

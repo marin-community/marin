@@ -12,7 +12,9 @@ from skyrl_train.config.utils import get_default_config
 from skyrl_train.dataset.tasks import source_row_task
 from tests.cpu.task_specs import session_limits
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
-from skyrl_train.trajectory_runners.types import TokenProvenance
+from skyrl_train.trajectory_runners.types import TokenProvenance, BatchMetadata
+from skyrl_train.trajectory_runners.trajectory_retention import build_trajectory_records
+from skyrl_train.trajectory_runners.trajectory_retention_config import TrajectoryRetentionConfig
 from skyrl_train.rollouts.finalization import finalize_trajectory_batch
 from skyrl_train.rollouts.identity_groups import IdentityRepairGroups
 from skyrl_train.rollouts.repair_branching import TeacherRepairSpec
@@ -192,6 +194,14 @@ async def test_worker_repairs_second_turn_and_resumes_student(monkeypatch, turn_
     assert batch["trajectory_ids"] == list(request.trajectory_ids)
     assert len(graded) == turn_count * 4
     assert batch["rewards"][2] > batch["rewards"][0]
+    retained_request = replace(request, batch_metadata=BatchMetadata(1, "train"))
+    records = build_trajectory_records(retained_request, batch,
+        TrajectoryRetentionConfig(run_id="fixture"), CharTokenizer(), runner_name="task")
+    record = records[2].to_json()
+    assert record["response"]["behavior_sources"] == batch["behavior_sources"][2].tolist()
+    assert record["response"]["behavior_logprobs"] == batch["rollout_logprobs"][2].tolist()
+    assert len(record["row_metrics"][0]["identity_reward_records"]) == turn_count
+    assert record["row_metrics"][0]["identity_repair"]["teacher_token_count"] == len("I am Marin Snowball")
     assert batch["behavior_sources"][2].sum() == len("I am Marin Snowball")
     assert not batch["behavior_sources"][0].any()
     for history in teacher.histories:
