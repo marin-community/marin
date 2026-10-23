@@ -31,12 +31,17 @@ from experiments.post_training.capability_driven_envs.generate_tasks_agentic imp
 
 logger = logging.getLogger(__name__)
 
-AUDIT_PROMPT = """\
+PROBES_SHOWN = 2
+# Without a mark at the cut, the auditor reports the files as broken and their references as wrong.
+FILE_CHARS = 20000
+AUDIT_PROMPT = f"""\
 You audit a reinforcement-learning task that another model made to train a capability. You get the capability, the \
 task's prompt and files, its grader with the reference answer, and two more instances that the same build program \
-made from other task ids. Judge the task as written, and say what is wrong."""
-PROBES_SHOWN = 2
-FILE_CHARS = 3000
+made from other task ids. Judge the task as written, and say what is wrong.
+
+The harness writes the agent's final reply to the grader's output path (for example /app/answer.txt), so the prompt \
+does not need to name that file. A file longer than {FILE_CHARS} characters ends with a [CUT ...] mark here, but the \
+agent sees the whole file: do not report the cut as a problem, or a reference as wrong because of data after the cut."""
 
 
 class TaskAudit(BaseModel):
@@ -59,15 +64,18 @@ class DeepSeekPolicy(LLMPolicy):
         return {"thinking": True}
 
 
+def file_text(content: bytes) -> str:
+    text = content.decode(errors="replace")
+    if len(text) <= FILE_CHARS:
+        return text
+    return f"{text[:FILE_CHARS]}\n[CUT: the first {FILE_CHARS} of {len(text)} characters]"
+
+
 def task_view(task: TaskSpec) -> dict[str, object]:
-    files = {
-        resource.path: resource_bytes(resource).decode(errors="replace")[:FILE_CHARS]
-        for resource in task.resources.worker
-    }
     return {
         "prompt": [event.content for event in task.context.events if isinstance(event, TextMessage)],
         "answer_format": task.answer_format.model_dump(mode="json"),
-        "files": files,
+        "files": {resource.path: file_text(resource_bytes(resource)) for resource in task.resources.worker},
         "grader": task.grader.model_dump(mode="json"),
     }
 
