@@ -75,7 +75,7 @@ def main():
     parser.add_argument("--item", type=Path)
     parser.add_argument("--oracle", type=Path, help="Pinned item303 oracle artifact for hash/token validation")
     parser.add_argument("--max-seq-len", type=int, default=6144)
-    parser.add_argument("--max-seqs", type=int, choices=(1, 4, 8), default=1)
+    parser.add_argument("--max-seqs", type=int, choices=(1, 2, 4, 8), default=1)
     parser.add_argument("--runtime-minutes", type=int, default=90)
     parser.add_argument("--name", default="levanter267-v4-32-tiny")
     args = parser.parse_args()

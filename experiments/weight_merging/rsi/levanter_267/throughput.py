@@ -124,6 +124,8 @@ def main():
     specs = json.loads(args.requests.read_text())
     if len(specs) != 32 or len({spec["id"] for spec in specs}) != len(specs):
         parser.error("Use the frozen32-request set with unique IDs")
+    if any(not spec.get("payload", {}).get("model") for spec in specs):
+        parser.error("Every frozen API payload must name the served model")
     if not args.output.startswith("gs://marin-us-central2/"):
         parser.error("Place throughput artifacts alongside the central2 serving slice")
     print(

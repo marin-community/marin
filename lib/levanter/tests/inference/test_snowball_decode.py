@@ -40,7 +40,7 @@ def test_stacked_cache_copy_and_reset_preserve_layer_and_head_order():
     np.testing.assert_array_equal(reset.dropped_assignments, [0, 0])
 
 
-@pytest.mark.parametrize("batch_size", [4, 8])
+@pytest.mark.parametrize("batch_size", [2, 4, 8])
 @pytest.mark.slow
 @pytest.mark.timeout(240)
 def test_batched_chunked_prefill_preserves_sequences_and_page_budget_across_reuse(batch_size):
@@ -79,7 +79,7 @@ def test_batched_chunked_prefill_preserves_sequences_and_page_budget_across_reus
             max_stop_tokens=1,
         )
         engine = MultiHostInferenceEngine.from_model_with_config(model, None, config, axis_resources={})
-        lengths = [3, 17, 2047, 2050, 8, 259, 2049, 33][:batch_size]
+        lengths = [3, 2050] if batch_size == 2 else [3, 17, 2047, 2050, 8, 259, 2049, 33][:batch_size]
         prompts = [(1 + (np.arange(n) + idx * 3) % 31).tolist() for idx, n in enumerate(lengths)]
         expected = []
         for prompt in prompts:
@@ -114,9 +114,10 @@ def test_batched_chunked_prefill_preserves_sequences_and_page_budget_across_reus
         )
         # Fewer requests than available slots exercises invalid padding after a
         # prior full batch, with a different input order on the same engine.
-        repeated = engine.generate([request(batch_size - 1), request(1)])
-        assert repeated.tokens == [expected[-1], expected[1]]
-        repeated_pages = sum((lengths[idx] + 1 + 15) // 16 for idx in (batch_size - 1, 1))
+        reuse = [batch_size - 1] if batch_size == 2 else [batch_size - 1, 1]
+        repeated = engine.generate([request(idx) for idx in reuse])
+        assert repeated.tokens == [expected[idx] for idx in reuse]
+        repeated_pages = sum((lengths[idx] + 1 + 15) // 16 for idx in reuse)
         assert (
             np.count_nonzero(np.asarray(engine.gen_state.decode_state.page_table.page_ref_counts.array))
             == repeated_pages
