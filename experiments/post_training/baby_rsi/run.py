@@ -47,7 +47,7 @@ from experiments.post_training.baby_rsi.feedback import (
     training_ids,
 )
 from experiments.post_training.baby_rsi.loop import Boxes, LoopConfig, rsi_loop
-from experiments.post_training.baby_rsi.policy import BASE_MODEL_NAME, Sampling, VllmPolicy, VllmServer
+from experiments.post_training.baby_rsi.policy import BASE_MODEL_NAME, LivePolicy, Sampling, VllmPolicy, VllmServer
 from experiments.post_training.baby_rsi.resume import (
     accepted_tasks,
     known_ideas,
@@ -55,7 +55,7 @@ from experiments.post_training.baby_rsi.resume import (
 )
 from experiments.post_training.baby_rsi.rollouts import PolicyRunner, TaskRollouts, rollout_engine
 from experiments.post_training.baby_rsi.seed import POOL_URL, TRAIN_FILE, VALIDATION_FILE, TaskPool
-from experiments.post_training.baby_rsi.skyrl_box import FeedConfig, LivePolicy, skyrl_train, written_tasks
+from experiments.post_training.baby_rsi.skyrl_box import FeedConfig, skyrl_train, written_tasks
 from experiments.post_training.baby_rsi.streams import Source, from_iterable, mix
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 from experiments.post_training.capability_driven_envs.generate_tasks_agentic import (
