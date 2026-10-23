@@ -8,6 +8,7 @@ import dataclasses
 from contextlib import nullcontext
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
@@ -26,10 +27,12 @@ from shellbox.machine import (
 from taskcompendium.models import AnswerType, PlainText, TaskSpec
 
 from taskforge.ledger.records import EntryKind
+from taskforge.llm.client import ModelUnavailable
 from taskforge.sandbox import image_builder
 from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import DockerBuild
 from taskforge.spec import draft
+from taskforge.spec.decision import DecisionUnavailable
 from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage30_author.program import rl_env_build_program, rl_env_build_sink
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
@@ -482,3 +485,59 @@ async def test_a_custom_grader_gets_its_own_timeout_before_the_host_deadline(con
     grader = dataclasses.replace(GRADER, grader=GRADER.grader.model_copy(update={"timeout": 1.0}))
     grade = await grade_candidate(context(), draft.NO_MACHINE, grader, AnswerType.TEXT, PLAIN, "question", "42")
     assert grade.reward == 1.0
+
+
+@pytest.mark.parametrize(
+    "outage,cause",
+    [
+        (ModelUnavailable("model unavailable", ()), InfrastructureCause.MODEL_UNAVAILABLE),
+        (DecisionUnavailable("decision model unavailable"), InfrastructureCause.DECISION_UNAVAILABLE),
+        (httpx.ConnectError("web provider disconnected"), InfrastructureCause.HTTP_UNAVAILABLE),
+        (
+            httpx.HTTPStatusError(
+                "service unavailable",
+                request=httpx.Request("GET", "https://service.invalid"),
+                response=httpx.Response(503),
+            ),
+            InfrastructureCause.HTTP_UNAVAILABLE,
+        ),
+        (
+            httpx.HTTPStatusError(
+                "missing authored URL",
+                request=httpx.Request("GET", "https://service.invalid/missing"),
+                response=httpx.Response(404),
+            ),
+            None,
+        ),
+    ],
+    ids=["model-outage", "decision-outage", "transport-outage", "http-outage", "invalid-authored-url"],
+)
+async def test_wrapped_service_failures_preserve_their_classification(
+    proposal, services, glm_client, tmp_path, outage, cause
+):
+    @rl_env_build_sink
+    async def task(context: RLEnvBuildContext) -> TaskSpec:
+        try:
+            raise outage
+        except Exception as error:
+            raise BuildFailure("could not construct the task") from error
+
+    with pytest.raises(BuildInfrastructureFailure if cause is not None else BuildFailure) as failure:
+        await run_build(
+            rl_env_build_program(sink=task),
+            proposal,
+            WORKPIECE,
+            tmp_path / "round",
+            str(tmp_path / "store"),
+            glm_client,
+            SAMPLING,
+            services,
+            0,
+            research=ResearchRequirement.OFF,
+        )
+
+    if isinstance(failure.value, BuildInfrastructureFailure):
+        assert failure.value.cause == cause
+    else:
+        assert failure.value.step == "task"
+    assert not (tmp_path / "round" / DRAFT_DIR).exists()
