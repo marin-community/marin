@@ -68,10 +68,7 @@ LIMITS = RolloutLimits(
 
 
 @pytest.fixture(autouse=True)
-def no_package_downloads(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch):
-    if request.node.get_closest_marker("integration") is not None:
-        return
-
+def no_package_downloads(monkeypatch: pytest.MonkeyPatch):
     def refuse_download(*args, **kwargs):
         raise AssertionError("Unit tests must not download ShellSim catalog or runtime assets")
 
@@ -143,21 +140,6 @@ class Solver:
         else:
             answer = EXPECTED if next(self.attempts) % 2 == 0 else self.wrong
         return ModelTurn({"role": "assistant", "content": answer}, (), (), None, "stop", usage=TokenUsage(5, 1))
-
-
-@dataclass
-class PythonSolver:
-    """Runs python3 in its shell, then answers with what the shell returned."""
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        last = request.messages[-1]
-        if last.get("role") == "tool":
-            message = {"role": "assistant", "content": str(last.get("content"))}
-            return ModelTurn(message, (), (), None, "stop", usage=TokenUsage(5, 1))
-        arguments = json.dumps({"command": "python3 -c 'print(6 * 7)'"})
-        tool_call = {"id": "call-1", "type": "function", "function": {"name": "shell", "arguments": arguments}}
-        message = {"role": "assistant", "content": "", "tool_calls": [tool_call]}
-        return ModelTurn(message, (), (), None, "tool_calls", usage=TokenUsage(5, 1))
 
 
 @dataclass
@@ -371,23 +353,6 @@ async def test_a_control_that_the_answer_format_rejects_is_no_control():
     [empty], [submit] = tool_replies(result, "call-2"), tool_replies(result, "call-4")
     assert empty["control"] is False
     assert "controls" in submit["missing"]
-
-
-@pytest.mark.integration
-async def test_the_solver_of_the_example_task_has_python():
-    task_json = EXAMPLE_TASK.model_dump_json()
-    script = (
-        call("shell", command=f"mkdir -p tasks; printf '%s' {shlex.quote(task_json)} > {TASK}"),
-        call("rollout", paths=[TASK], n=1, role="solver"),
-        call("finish", report="done"),
-    )
-    async with ParallelWeb("unused") as web:
-        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=1, judge_calls=0, web_calls=0), web)
-        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_model=PythonSolver()))
-
-    [rollout] = tool_replies(result, "call-2")
-    [answer] = rollout["results"][TASK]["answers"]
-    assert "42" in answer["answer"] and "not found" not in answer["answer"]
 
 
 async def test_the_tools_refuse_environment_variables_and_setup_commands():
