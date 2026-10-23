@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
@@ -8,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from marin.execution.lazy import StepContext
 
-from experiments.post_training.agentic_sweep.arms import PARENTS, ArmEpoch, pipeline
+from experiments.post_training.agentic_sweep.arms import PARENTS, ArmEpoch, pipeline, verify_production_source
 from experiments.post_training.agentic_sweep.train import MODEL, REVISION, TOKENIZER
 
 
@@ -41,6 +42,18 @@ def graph(
         context_length=context_length,
         hf_export_schedule=hf_export_schedule,
     )
+
+
+def test_subset_production_manifest_without_test_inputs_is_launchable(tmp_path):
+    rows = manifest("v0.1", "plain") | {"dry_run": False, "subset": {"variant": "lowshared"}}
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(rows))
+    (tmp_path / "_SUCCESS").touch()
+    verify_production_source(str(tmp_path), "v0.1")
+    for flag in ("dry_run", "test_inputs"):
+        path.write_text(json.dumps(rows | {flag: True}))
+        with pytest.raises(ValueError, match="dry-run or test rows"):
+            verify_production_source(str(tmp_path), "v0.1")
 
 
 @pytest.mark.parametrize("plateau", (False, True))

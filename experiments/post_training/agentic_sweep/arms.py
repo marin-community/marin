@@ -152,6 +152,17 @@ def epoch_file(epoch: int) -> str:
     return f"train-epoch-{epoch}-prebuilt.jsonl.gz"
 
 
+def verify_production_source(prefix: str, parent_name: str) -> None:
+    """Check production markers and parent, allowing subsets without the test-input flag."""
+    root = StoragePath(prefix)
+    if not (root / "_SUCCESS").exists():
+        raise ValueError(f"Production rows require _SUCCESS: {prefix}")
+    manifest = json.loads((root / "manifest.json").read_text())
+    if manifest["dry_run"] or manifest.get("test_inputs", False):
+        raise ValueError(f"Refusing dry-run or test rows: {prefix}")
+    manifest_parent(manifest, parent_name)
+
+
 def arm_epochs(manifest: dict, epochs: int) -> list[ArmEpoch]:
     """The first ``epochs`` epoch files of the arm, with their padded rows, updates and token totals."""
     if manifest["arm"] not in ARMS:
@@ -600,13 +611,7 @@ def main() -> None:
         print(json.dumps({"arm": manifest["arm"], "epochs": [asdict(epoch) for epoch in epochs]}, indent=1))
         return
     for prefix in (args.arm_data, args.plain_data):
-        root = StoragePath(prefix)
-        if not (root / "_SUCCESS").exists():
-            raise ValueError(f"Production rows require _SUCCESS: {prefix}")
-        source_manifest = json.loads((root / "manifest.json").read_text())
-        if source_manifest["dry_run"] or source_manifest["test_inputs"]:
-            raise ValueError(f"Refusing dry-run or test rows: {prefix}")
-        manifest_parent(source_manifest, args.parent)
+        verify_production_source(prefix, args.parent)
     keys = verify_arm(args.arm_data, args.plain_data, manifest, args.epochs)
     artifacts = pipeline(
         manifest,
