@@ -23,14 +23,15 @@ from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
-from rolloutengine.models import GradedRollout
+from rolloutengine.models import GradedRollout, ModelRequest, ModelTurn
 from taskcompendium.models import TaskSpec
-from transformers import AutoTokenizer
+from transformers import PreTrainedTokenizerBase
 
 from experiments.post_training.baby_rsi.policy import Sampling, VllmPolicy
 from experiments.post_training.baby_rsi.rollouts import TaskRollouts
@@ -85,8 +86,8 @@ def written_tasks(root: StoragePath) -> dict[str, TaskSpec]:
     return tasks
 
 
-def returned_uids(root: StoragePath) -> set[str]:
-    return {_uid(path) for path in _listing(root / GRADED) + _listing(root / SKIPPED)}
+def _uids(directory: StoragePath) -> set[str]:
+    return {_uid(path) for path in _listing(directory)}
 
 
 class FeedWriter:
@@ -119,29 +120,37 @@ class FeedWriter:
 async def skyrl_train(tasks: AsyncIterable[TaskSpec], config: FeedConfig) -> AsyncIterator[TaskRollouts]:
     """Write ``tasks`` into the feed of a SkyRL job and yield the job's graded groups as they come."""
     written = await asyncio.to_thread(written_tasks, config.root)
-    returned = await asyncio.to_thread(returned_uids, config.root)
+    graded = await asyncio.to_thread(_uids, config.root / GRADED)
+    returned = graded | await asyncio.to_thread(_uids, config.root / SKIPPED)
     pending = {uid: task for uid, task in written.items() if uid not in returned}
     feed = FeedWriter(config.root, config.chunk_rows, next_seq=max(map(int, written), default=-1) + 1)
-    room = asyncio.Semaphore(max(config.lookahead - len(pending), 0))
-    logger.info("The feed has %d tasks, %d of them pending", len(written), len(pending))
+    # The free places in the feed. The writer fills them a chunk at a time, so the feed is not one object per task.
+    free = config.lookahead - len(pending)
+    room = asyncio.Condition()
+    logger.info("The feed has %d tasks: %d graded and %d pending", len(written), len(graded), len(pending))
 
     async def write() -> None:
+        nonlocal free
         async for task in tasks:
-            if room.locked():
-                # The job must see the written tasks before the box waits for one to come back.
-                await asyncio.to_thread(feed.flush)
-            await room.acquire()
+            async with room:
+                if free <= 0:
+                    await asyncio.to_thread(feed.flush)
+                    await room.wait_for(lambda: free >= min(config.chunk_rows, config.lookahead))
+                free -= 1
             pending[feed.append(task)] = task
         await asyncio.to_thread(feed.flush)
 
     writer = asyncio.create_task(write())
-    count = 0
+    # A restarted box counts the groups that the job graded before the restart.
+    count = len(graded)
     try:
         async for record in _returned(config.root, config.poll_seconds, seen=returned, writer=writer):
             task = pending.pop(record.uid, None)
             if task is None:
                 continue
-            room.release()
+            async with room:
+                free += 1
+                room.notify_all()
             if isinstance(record, Skipped):
                 logger.warning("The job skipped %s (%s): %s", record.uid, task.id, record.reason)
                 continue
@@ -185,17 +194,43 @@ def _listing(directory: StoragePath) -> list[StoragePath]:
     return [directory / name for name in names]
 
 
-async def live_policy(
-    root: StoragePath, tokenizer: str, sampling: Sampling, max_model_len: int, **kwargs: Any
-) -> VllmPolicy:
-    """The live policy of the SkyRL job of ``root``, for the Taskforge gate; waits until the job serves it."""
-    path = root / ENDPOINT
-    while not await asyncio.to_thread(path.exists):
-        logger.info("Waiting for %s", path)
-        await asyncio.sleep(30)
-    endpoint = json.loads(await asyncio.to_thread(path.read_text))
-    logger.info("The live policy is %s at %s", endpoint["model"], endpoint["base_url"])
-    base_url = endpoint["base_url"].removesuffix("/").removesuffix("/v1")
-    return VllmPolicy(
-        base_url, AutoTokenizer.from_pretrained(tokenizer), sampling, max_model_len, model=endpoint["model"], **kwargs
-    )
+@dataclass
+class LivePolicy:
+    """The live policy of the SkyRL job of ``root``, for the Taskforge gate.
+
+    It reads ``policy_endpoint.json`` at its first request, so the loop can write the feed before the job serves the
+    policy, and again after a connection error: a retried or preempted job serves at a new address.
+    """
+
+    root: StoragePath
+    tokenizer: PreTrainedTokenizerBase
+    sampling: Sampling
+    max_model_len: int
+    chat_template_kwargs: dict[str, Any]
+    _policy: VllmPolicy | None = None
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        policy = self._policy or await self._connect()
+        try:
+            return await policy(request)
+        except httpx.ConnectError:
+            logger.warning("The live policy at %s does not answer; reading its endpoint again", policy.base_url)
+            return await (await self._connect()).__call__(request)
+
+    async def _connect(self) -> VllmPolicy:
+        path = self.root / ENDPOINT
+        while not await asyncio.to_thread(path.exists):
+            logger.info("Waiting for %s", path)
+            await asyncio.sleep(30)
+        endpoint = json.loads(await asyncio.to_thread(path.read_text))
+        logger.info("The live policy is %s at %s", endpoint["model"], endpoint["base_url"])
+        base_url = endpoint["base_url"].removesuffix("/").removesuffix("/v1")
+        self._policy = VllmPolicy(
+            base_url,
+            self.tokenizer,
+            self.sampling,
+            self.max_model_len,
+            chat_template_kwargs=self.chat_template_kwargs,
+            model=endpoint["model"],
+        )
+        return self._policy
