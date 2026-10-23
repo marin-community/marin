@@ -4,7 +4,6 @@
 """Bounded full-architecture GPU forward check; no training or data download."""
 
 import argparse
-import hashlib
 import json
 import os
 import time
@@ -23,9 +22,22 @@ from experiments.grug.fast_track.model import (
     SHARED_PRE_KEY,
     Transformer,
 )
-from experiments.grug.noise_belay.candidate11 import ROOT, load_model_config
+from experiments.grug.noise_belay.candidate11 import load_model_config, load_probe_manifest
 from experiments.grug.noise_belay.candidate11_boost import measure_boost_hubs
 from experiments.grug.noise_belay.candidate11_forward import capture_forward
+
+PROBE_Z_LOSS_WEIGHT = 0.0001
+
+
+def steady_calls(executable, arguments, repeats):
+    """Time repeated synchronized calls after compilation and warmup."""
+    durations = []
+    for _ in range(repeats):
+        began = time.perf_counter()
+        output = executable(*arguments)
+        jax.block_until_ready(output)
+        durations.append(time.perf_counter() - began)
+    return output, durations
 
 
 def native_forward(model, tokens, mask):
@@ -48,7 +60,7 @@ def native_training_loss(model, tokens, mask, weights):
         weights,
         mask=mask,
         reduction="mean",
-        logsumexp_weight=0.0001,
+        logsumexp_weight=PROBE_Z_LOSS_WEIGHT,
         train_terms=True,
     )
 
@@ -62,11 +74,9 @@ def main():
     parser.add_argument("--measure-backward", action="store_true")
     parser.add_argument("--measure-boost", action="store_true")
     args = parser.parse_args()
-    manifest = json.loads((ROOT / "gpu-probe-manifest.json").read_text())
-    for name, digest in manifest["experiment_files"].items():
-        actual = hashlib.sha256((ROOT / name).read_bytes()).hexdigest()
-        if actual != digest:
-            raise ValueError(f"Experiment source mismatch: {name}")
+    if args.repeats < 1:
+        raise ValueError("At least one synchronized timing repeat is required")
+    manifest = load_probe_manifest()
     cfg = load_model_config(source_sha256=manifest["model_source_sha256"])
     devices = jax.devices()
     if len(devices) != 8 or any(device.platform != "gpu" for device in devices):
@@ -126,12 +136,7 @@ def main():
             result[f"{name}_first_call_seconds"] = time.perf_counter() - begin
             if name in ("native", "capture"):
                 (args.output.parent / f"{name}-optimized-hlo.txt").write_text(executable.compiled.as_text())
-            times = []
-            for _ in range(args.repeats):
-                begin = time.perf_counter()
-                output = executable(model, tokens, mask)
-                jax.block_until_ready(output)
-                times.append(time.perf_counter() - begin)
+            output, times = steady_calls(executable, (model, tokens, mask), args.repeats)
             result[f"{name}_steady_seconds"] = times
             result["last_completed_stage"] = name
             args.output.write_text(json.dumps(result, indent=2) + "\n")
@@ -201,12 +206,7 @@ def main():
                 output = executable(master_model, tokens, mask, weights)
                 jax.block_until_ready(output)
                 result[f"{name}_first_call_seconds"] = time.perf_counter() - begin
-                times = []
-                for _ in range(args.repeats):
-                    begin = time.perf_counter()
-                    output = executable(master_model, tokens, mask, weights)
-                    jax.block_until_ready(output)
-                    times.append(time.perf_counter() - begin)
+                output, times = steady_calls(executable, (master_model, tokens, mask, weights), args.repeats)
                 result[f"{name}_steady_seconds"] = times
                 result["last_completed_stage"] = name
                 args.output.write_text(json.dumps(result, indent=2) + "\n")
@@ -261,7 +261,7 @@ def main():
                     relative_step=0.005,
                     token_chunk=64,
                     direction_chunk=16,
-                    z_loss_weight=0.0001,
+                    z_loss_weight=PROBE_Z_LOSS_WEIGHT,
                 )
 
             begin = time.perf_counter()
@@ -269,12 +269,7 @@ def main():
             hub_credits = executable(capture, model, tokens, weights)
             jax.block_until_ready(hub_credits)
             result["boost_hubs_first_call_seconds"] = time.perf_counter() - begin
-            times = []
-            for _ in range(args.repeats):
-                begin = time.perf_counter()
-                hub_credits = executable(capture, model, tokens, weights)
-                jax.block_until_ready(hub_credits)
-                times.append(time.perf_counter() - begin)
+            hub_credits, times = steady_calls(executable, (capture, model, tokens, weights), args.repeats)
             result["boost_hubs_steady_seconds"] = times
             result["boost_hub_max_absolute_credit"] = [float(jax.numpy.max(jax.numpy.abs(x))) for x in hub_credits]
             if not all(np.isfinite(x) and x > 0 for x in result["boost_hub_max_absolute_credit"]):

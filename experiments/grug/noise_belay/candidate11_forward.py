@@ -49,11 +49,12 @@ def capture_forward(
     *,
     interventions: tuple[jax.Array, ...] = (),
 ) -> tuple[jax.Array, ForwardCapture]:
-    """Return final normalized hidden states and the clean forward history.
+    """Return final normalized hidden states and the executed forward history.
 
     Interventions, when supplied, add to each attention/MLP branch output in
-    execution order. Downstream computation is replayed in full. This replay
-    is an intervention oracle; it is not yet Cut's frozen-context carrier.
+    execution order and are included in the captured history. Downstream
+    computation is replayed in full. This replay is an intervention oracle;
+    it is not yet Cut's frozen-context carrier.
     """
     cfg = model.config
     layers = model.layers()

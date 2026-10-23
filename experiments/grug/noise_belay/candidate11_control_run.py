@@ -31,7 +31,7 @@ from experiments.grug.fast_track.train import (
     build_tagged_evaluator,
     build_train_loader,
 )
-from experiments.grug.noise_belay.candidate11 import REFERENCE, ROOT, load_model_config
+from experiments.grug.noise_belay.candidate11 import REFERENCE, ROOT, load_model_config, load_probe_manifest
 from experiments.grug.noise_belay.candidate11_control_probe import native_control
 from experiments.grug.noise_belay.candidate11_data import native_train_dataset
 from experiments.grug.noise_belay.candidate11_forward import capture_forward
@@ -52,10 +52,7 @@ def main():
     logging.basicConfig(level=logging.INFO)
     configure_coreweave_s3()
     args.output.mkdir(parents=True, exist_ok=True)
-    manifest = json.loads((ROOT / "gpu-probe-manifest.json").read_text())
-    for name, digest in manifest["experiment_files"].items():
-        if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != digest:
-            raise ValueError(f"Source fingerprint mismatch: {name}")
+    manifest = load_probe_manifest()
     record = json.loads(REFERENCE.read_text())["config"]
     for key, value in record["trainer"]["trainer"]["jax_config"].items():
         jax.config.update(key, value)

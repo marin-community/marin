@@ -1,3 +1,3 @@
 Packaged experiment, freshly prepared pinned runtime 8983bec6fd.
 JAX_PLATFORMS=cpu PYTHONPATH=. uv run --all-packages --no-default-groups --group test python -m pytest -n 2 -m manual experiments/grug/noise_belay/test_candidate11_forward.py experiments/grug/noise_belay/test_forward_credit.py experiments/grug/noise_belay/test_routed_expert_credit.py -q
-24 passed in 64.79s.
+24 passed in 31.57s after advisory-review cleanup.

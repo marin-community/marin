@@ -4,7 +4,7 @@
   "component_checks": {
     "passed": 24,
     "failed": 0,
-    "seconds": 64.79,
+    "seconds": 31.57,
     "workers": 2,
     "hardware": "local CPU",
     "marker": "manual",
@@ -23,5 +23,26 @@
     1280,
     390
   ],
-  "broken_local_anchors": 0
+  "broken_local_anchors": 0,
+  "advisory_review": {
+    "lanes": [
+      "complexity",
+      "interfaces",
+      "robustness",
+      "cruft",
+      "prose",
+      "meta"
+    ],
+    "fixed": [
+      "Centralize staged-source manifest checks across four entrypoints",
+      "Centralize repeated probe RMS floor and benchmark z-loss weight",
+      "Correct intervention-history docstring",
+      "Share synchronized steady-call timing loops"
+    ],
+    "answered": {
+      "ml-tuple-return-shape": "Retain historical internal tuple schemas in this measurement archive; callers unpack them explicitly. Named records are deferred to a future full implementation to avoid changing JAX result tree schemas in the archived entrypoints.",
+      "ml-overloaded-function": "Retain the historical timing entrypoints and their explicit compilation, training, checkpoint and evaluation boundaries. Shared repetition logic is extracted; a larger orchestration refactor is outside this incomplete experiment record.",
+      "ml-raw-fsspec-io": "The writer uses rigging.filesystem.buckets.filesystem_for, the repository-approved bucket resolver, not raw fsspec construction. Preserve its bucket-specific endpoint/credential routing in the pinned runtime."
+    }
+  }
 }

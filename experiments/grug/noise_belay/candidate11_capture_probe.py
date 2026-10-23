@@ -4,7 +4,6 @@
 """Isolate output-dependent capture differences on one GPU without optimizer state."""
 
 import argparse
-import hashlib
 import json
 import os
 import time
@@ -20,7 +19,7 @@ from jax.sharding import PartitionSpec as P
 from levanter.grug.attention import AttentionMask
 
 from experiments.grug.fast_track.model import Transformer
-from experiments.grug.noise_belay.candidate11 import ROOT, load_model_config
+from experiments.grug.noise_belay.candidate11 import load_model_config, load_probe_manifest
 from experiments.grug.noise_belay.candidate11_forward import capture_forward
 from experiments.grug.noise_belay.candidate11_gpu_probe import native_forward
 
@@ -67,10 +66,7 @@ def main():
     parser.add_argument("--query-scale", type=float, required=True)
     parser.add_argument("--groups", nargs="+", choices=[label for label, _ in GROUPS])
     args = parser.parse_args()
-    manifest = json.loads((ROOT / "gpu-probe-manifest.json").read_text())
-    for name, digest in manifest["experiment_files"].items():
-        if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != digest:
-            raise ValueError(f"Experiment source mismatch: {name}")
+    manifest = load_probe_manifest()
     cfg = load_model_config(source_sha256=manifest["model_source_sha256"])
     devices = jax.devices()
     if len(devices) != 1 or devices[0].platform != "gpu":

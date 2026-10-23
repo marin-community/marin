@@ -33,7 +33,7 @@ from experiments.grug.fast_track.train import (
     _make_train_step,
     initial_state,
 )
-from experiments.grug.noise_belay.candidate11 import REFERENCE, ROOT, load_model_config
+from experiments.grug.noise_belay.candidate11 import REFERENCE, ROOT, load_model_config, load_probe_manifest
 from experiments.grug.noise_belay.candidate11_capture_probe import GROUPS, capture_subset
 from experiments.grug.noise_belay.candidate11_forward import capture_forward
 from experiments.grug.noise_belay.candidate11_gpu_probe import (
@@ -81,10 +81,7 @@ def main():
         raise ValueError("At least two steps are required to measure steady cost")
     if os.environ.get("GRUG_SKIP_OPTIMIZER"):
         raise ValueError("Optimizer updates must be enabled")
-    manifest = json.loads((ROOT / "gpu-probe-manifest.json").read_text())
-    for name, digest in manifest["experiment_files"].items():
-        if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != digest:
-            raise ValueError(f"Experiment source mismatch: {name}")
+    manifest = load_probe_manifest()
     record = json.loads(REFERENCE.read_text())["config"]
     cfg = load_model_config(source_sha256=manifest["model_source_sha256"])
     devices = jax.devices()

@@ -24,6 +24,15 @@ ROOT = Path(__file__).resolve().parent
 REFERENCE = ROOT / "candidate11-reference.json"
 
 
+def load_probe_manifest() -> dict:
+    """Verify every staged experiment file before running a measurement."""
+    manifest = json.loads((ROOT / "gpu-probe-manifest.json").read_text())
+    for name, digest in manifest["experiment_files"].items():
+        if hashlib.sha256((ROOT / name).read_bytes()).hexdigest() != digest:
+            raise ValueError(f"Experiment source mismatch: {name}")
+    return manifest
+
+
 def load_model_config(*, source_sha256: str | None = None) -> reference_model.GrugModelConfig:
     """Decode recorded fields after checking checkout revision or shipped source hash.
 

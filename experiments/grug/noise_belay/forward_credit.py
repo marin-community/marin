@@ -15,6 +15,8 @@ import jax.numpy as jnp
 import numpy as np
 from scipy.linalg import hadamard
 
+PROBE_RMS_FLOOR = 1e-6
+
 
 def direction_frame(width: int, key: jax.Array) -> jax.Array:
     """Return a signed frame H with H.T @ H = order * I.
@@ -44,7 +46,7 @@ def token_readout_credit(
     """
     point = point.astype(jnp.float32)
     count = directions.shape[0]
-    step = relative_step * jnp.maximum(jnp.sqrt(jnp.mean(point**2, axis=-1)), 1e-6)
+    step = relative_step * jnp.maximum(jnp.sqrt(jnp.mean(point**2, axis=-1)), PROBE_RMS_FLOOR)
     padding = (-count) % chunk_size
     chunks = jnp.pad(directions, ((0, padding), (0, 0))).reshape(-1, chunk_size, point.shape[-1])
 
@@ -140,7 +142,7 @@ def attnres_readout_credit(
     clean_capped = soft_cap * clean_tanh
     clean_partition = jax.scipy.special.logsumexp(clean_capped, axis=-1)
     clean_probability = jax.nn.softmax(clean_capped, axis=-1)
-    step = relative_step * jnp.maximum(jnp.sqrt(partial_square / width), 1e-6)
+    step = relative_step * jnp.maximum(jnp.sqrt(partial_square / width), PROBE_RMS_FLOOR)
     count = directions.shape[0]
     padding = (-count) % chunk_size
     chunks = jnp.pad(directions, ((0, padding), (0, 0))).reshape(-1, chunk_size, width)
@@ -332,7 +334,7 @@ def relu2_parameter_credit(
     point = preactivation.astype(jnp.float32)
     weight = output_weight.astype(jnp.float32)
     credit = output_credit.astype(jnp.float32)
-    step = relative_step * jnp.maximum(jnp.sqrt(jnp.mean(point**2, axis=-1, keepdims=True)), 1e-6)
+    step = relative_step * jnp.maximum(jnp.sqrt(jnp.mean(point**2, axis=-1, keepdims=True)), PROBE_RMS_FLOOR)
     upper = jax.nn.relu(point + step)
     # Exact piecewise central difference: avoid subtracting nearby positive
     # preactivations, which loses precision at small finite probe steps.
