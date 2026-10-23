@@ -365,7 +365,8 @@ def test_synthetic_training_data_builds_a_reusable_global_batch():
 def test_balance_attention_rows_spreads_long_documents_across_shards(context_size):
     # Two whole-row documents land on the last shard as loaded; balancing gives them separate shards,
     # moves every row's tokens, loss weights, and segment ids together, and keeps loaded order within a shard.
-    # Context ranks share rows, so a context axis must not change the placement.
+    # Context ranks share rows, so a context axis must not change the placement. With one row per shard,
+    # placement cannot change any shard's work, so the rows stay where they were loaded.
     script = f"""
         import jax
         import jax.numpy as jnp
@@ -389,16 +390,22 @@ def test_balance_attention_rows_spreads_long_documents_across_shards(context_siz
         tokens = np.arange(rows)[:, None] * 100 + np.arange(seq_len)[None, :]
         loss_weight = np.repeat(np.arange(rows, dtype=np.float32)[:, None], seq_len, axis=1)
         sharding = NamedSharding(mesh, P(train._BATCH_AXES, None))
-        batch = jax.device_put(
-            GrugLmExample(
-                tokens=jnp.asarray(tokens, dtype=jnp.int32),
-                loss_weight=jnp.asarray(loss_weight),
-                attn_mask=AttentionMask.causal().with_segment_ids(jnp.asarray(segment_ids, dtype=jnp.int32)),
-            ),
-            sharding,
-        )
-        with jax.set_mesh(mesh):
-            out = jax.jit(train.balance_attention_rows)(batch)
+
+        def balance(select):
+            batch = jax.device_put(
+                GrugLmExample(
+                    tokens=jnp.asarray(tokens[select], dtype=jnp.int32),
+                    loss_weight=jnp.asarray(loss_weight[select]),
+                    attn_mask=AttentionMask.causal().with_segment_ids(
+                        jnp.asarray(segment_ids[select], dtype=jnp.int32)
+                    ),
+                ),
+                sharding,
+            )
+            with jax.set_mesh(mesh):
+                return jax.jit(train.balance_attention_rows)(batch)
+
+        out = balance(slice(None))
 
         assert out.tokens.sharding == sharding
         source = np.asarray(out.tokens)[:, 0] // 100
@@ -413,6 +420,10 @@ def test_balance_attention_rows_spreads_long_documents_across_shards(context_siz
         assert sorted(source[: rows // shards].tolist()) == [0, rows - 2], source
         # Expert capacity drops a shard's later tokens first, so a shard keeps its rows in loaded order.
         assert (np.diff(source.reshape(shards, rows // shards), axis=1) > 0).all(), source
+
+        # The last rows hold both long documents, so a deal would move them.
+        one_per_shard = balance(slice(rows - shards, None))
+        np.testing.assert_array_equal(np.asarray(one_per_shard.tokens), tokens[rows - shards :])
     """
 
     run_on_cpu_devices(script, device_count=4 * context_size)

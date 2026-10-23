@@ -825,7 +825,7 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
     objective; only which assignments exceed expert capacity can change. Expert capacity drops a shard's
     later tokens first, so rows keep their loaded order within a shard rather than a cost order. This
     spreads drops over rows of all costs only because the loader shuffles rows within a batch.
-    Batches without segment ids are returned as is.
+    Batches without segment ids, or with one row per shard, are returned as is.
     """
     segment_ids = batch.attn_mask.segment_ids
     if segment_ids is None:
@@ -835,6 +835,9 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
     rows, seq_len = batch.tokens.shape
     if rows % shards:
         raise ValueError(f"{rows} batch rows do not divide over {shards} batch shards")
+    # A shard's work is then its one row's, wherever that row goes.
+    if rows == shards:
+        return batch
     q_segment_ids = segment_ids[0]
     document_start, valid = fa4_cute_segment_bounds(
         AttentionMask(is_causal=True, segment_ids=(q_segment_ids, q_segment_ids)),
