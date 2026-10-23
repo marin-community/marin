@@ -3,6 +3,8 @@
 
 """The prompts of the agent, of the adversary role of its rollouts, and of the reviewer of ``submit``."""
 
+from shellbox.machine import Backend
+
 AGENT_PROMPT = """\
 You make reinforcement-learning tasks for a language-model agent. The file /workspace/idea.json holds a capability: \
 a skill from a catalog. Make {n} different tasks that train and test this skill.
@@ -11,16 +13,7 @@ a skill from a catalog. Make {n} different tasks that train and test this skill.
 
 A task is a TaskSpec: a prompt, optional files for the solver, an answer format, and a grader with the reference \
 answer.
-- A solver model gets the prompt. If the task declares the capabilities "shell" and "filesystem", the solver also \
-gets a shell and the task's files in /workspace on a ShellSim machine: a simulated shell with ls, cat, grep, sed, \
-awk, jq, sort, wc, find and similar tools, and no network.
-- The solver has python3 with the standard library only when the task sets environment_requirements.package_spec \
-to a PackageSpec with pypi_packages, and declares the capability "python", as /workspace/example_build.py does. \
-List a PyPI package, for example "numpy", in pypi_packages to install it. Without Python, the solver's arithmetic is \
-limited: awk has log but no exp, sqrt or ^, and bc has no -l math library. Do not make a task hard only because the \
-solver must compute such functions by hand. ShellSim awk reads a field separator of one regular-expression \
-character, for example | or ., as a regular expression, with no error: separate the fields of the solver's files \
-with commas, tabs or spaces.
+{solver_machine}
 - The solver answers with its final message. The answer type is "text", "number" or "json". The grader is a \
 verifyit spec that grades the answer in process, for example a NumericSpec or an ExactSpec, made with \
 taskcompendium.grader.verifyit_package. The solver never sees the grader or its reference answer.
@@ -102,6 +95,34 @@ have evidence, and a changed task loses its evidence.
 web calls. When you cannot make more good tasks, call finish with a report \
 that says why. After {max_empty_budget_calls} calls on an empty budget, the tools stop the session.
 """
+
+
+SOLVER_MACHINES = {
+    Backend.SHELLSIM: (
+        """\
+- A solver model gets the prompt. If the task declares the capabilities "shell" and "filesystem", the solver also \
+gets a shell and the task's files in /workspace on a ShellSim machine: a simulated shell with ls, cat, grep, sed, \
+awk, jq, sort, wc, find and similar tools, and no network.
+- The solver has python3 with the standard library only when the task sets environment_requirements.package_spec \
+to a PackageSpec with pypi_packages, and declares the capability "python", as /workspace/example_build.py does. \
+List a PyPI package, for example "numpy", in pypi_packages to install it. Without Python, the solver's arithmetic is \
+limited: awk has log but no exp, sqrt or ^, and bc has no -l math library. Do not make a task hard only because the \
+solver must compute such functions by hand. ShellSim awk reads a field separator of one regular-expression \
+character, for example | or ., as a regular expression, with no error: separate the fields of the solver's files \
+with commas, tabs or spaces."""
+    ),
+    Backend.LOCAL: (
+        """\
+- A solver model gets the prompt. If the task declares the capabilities "shell" and "filesystem", the solver also \
+gets a shell and the task's files in /workspace on a Linux machine: a bubblewrap sandbox with bash, coreutils, grep, \
+sed, awk, find and similar tools, and no network. Such a task sets environment_requirements.command_semantics to \
+"linux_process".
+- The solver has python3 only when the task sets environment_requirements.package_spec to a PackageSpec with \
+pypi_packages, and declares the capability "python", as /workspace/example_build.py does. An empty pypi_packages \
+gives the standard library. List each PyPI package with its version, for example "numpy==2.3.4", to install it."""
+    ),
+}
+"""The description of the solver's machine in the agent prompt, for each solver backend."""
 
 USER_PROMPT = "Make {n} tasks for the capability {capability_id} in /workspace/idea.json."
 

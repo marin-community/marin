@@ -11,10 +11,13 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+import pytest
 from pydantic import BaseModel
 from rolloutengine.models import ModelRequest, ModelTurn, RolloutLimits, TokenUsage
+from shellbox.backends.local.machine import LocalMachineFactory, SandboxUnavailable
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
-from taskcompendium.models import TextMessage, VerifyitGrader
+from shellbox.machine import PackageSpec
+from taskcompendium.models import CommandSemantics, TextMessage, VerifyitGrader
 
 from taskforge.agentic import example_build
 from taskforge.agentic.agent import AgentResult, generate_tasks
@@ -211,6 +214,7 @@ def agentic_config(agent_model: Callable[[ModelRequest], Awaitable[ModelTurn]], 
         agent_model=agent_model,
         workspace_factory=ShellSimMachineFactory(),
         solver_model=Solver(),
+        solver_factory=ShellSimMachineFactory(),
         judge=AcceptingJudge(),
         judge_policy=LLMPolicy(),
         web=web,
@@ -254,6 +258,35 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     prompt, grader = instance.context.events[0], instance.grader
     assert isinstance(prompt, TextMessage) and prompt.content.endswith("Reply with the number alone, please.")
     assert isinstance(grader, VerifyitGrader) and grader.parameters["expected"] == f"{EXPECTED}07"
+
+
+async def test_bubblewrap_solvers_accept_a_linux_process_task():
+    try:
+        solvers = LocalMachineFactory()
+    except SandboxUnavailable as error:
+        pytest.skip(str(error))
+    example = example_build.task_spec(TASK_ID)
+    # Without Python the machine needs no environment build, and the scripted solver runs no command.
+    requirements = example.environment_requirements.model_copy(
+        update={
+            "capabilities": ("shell", "filesystem"),
+            "command_semantics": CommandSemantics.LINUX_PROCESS,
+            "package_spec": PackageSpec(),
+        }
+    )
+    task_json = example.model_copy(update={"environment_requirements": requirements}).model_dump_json()
+    write = f"mkdir -p tasks; printf '%s' {shlex.quote(task_json)} > task.json; cp task.json {TASK}; "
+    script = (
+        call("shell", command=write + f"printf '%s\\n' {shlex.quote(BUILD)} > build.sh"),
+        *SCRIPT[2:7],  # The controls and the solver and adversary rollouts.
+        call("submit", path=TASK, program="build.sh"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, dataclasses.replace(config, solver_factory=solvers))
+
+    [accepted] = result.tasks
+    assert accepted.task.environment_requirements.command_semantics == CommandSemantics.LINUX_PROCESS
 
 
 async def test_submit_refuses_a_task_whose_answer_selects_an_option():

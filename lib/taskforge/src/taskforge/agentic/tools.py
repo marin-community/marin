@@ -5,7 +5,7 @@
 
 One ``TaskforgeTools`` serves one agent session, for one idea. The agent works in its workspace with the shell; the
 tools do only what the shell cannot. They read and write files in the workspace, and they run a candidate task's
-grader and rollouts on new ShellSim machines that the agent cannot see.
+grader and rollouts on new solver machines that the agent cannot see, of ``AgenticConfig.solver_factory``.
 They record the evidence of each version of a task under the digest of its ``TaskSpec``, and ``submit`` accepts a
 task only when ``missing_evidence`` finds nothing missing. The session keeps the accepted tasks and the spend of the
 tools for the caller.
@@ -48,7 +48,6 @@ from rolloutengine.models import (
     TokenUsage,
     TraceMode,
 )
-from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, Machine, NetworkPolicy
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import (
@@ -103,7 +102,8 @@ def machine_runtime(backend: str) -> MachineRuntimeSpec:
     )
 
 
-SHELLSIM_MACHINE = machine_runtime(Backend.SHELLSIM)
+COMMAND_SEMANTICS = {Backend.LOCAL: CommandSemantics.LINUX_PROCESS, Backend.SHELLSIM: CommandSemantics.SHELL_SIMULATOR}
+"""The command semantics of the machines of each backend that the agent and the solver can use."""
 ANSWER_TYPES = frozenset({AnswerType.TEXT, AnswerType.NUMBER, AnswerType.JSON})
 """The answer types of a final message: native actions need tools that the solver does not have."""
 PLAIN_DECIMAL = re.compile(r"[+-]?\d+(\.\d+)?")
@@ -299,7 +299,7 @@ class TaskforgeTools:
         self.n = n
         self.config = config
         self.solver_engine = RolloutEngine(
-            {Backend.SHELLSIM: ShellSimMachineFactory()},
+            {config.solver_factory.backend: config.solver_factory},
             {SOLVER_HARNESS: ShellHarness(command_timeout=config.command_timeout)},
         )
         self.evidence: defaultdict[str, Evidence] = defaultdict(Evidence)
@@ -871,7 +871,7 @@ def _solver_spec(task: TaskSpec, config: AgenticConfig) -> TaskRolloutSpec:
     return TaskRolloutSpec(
         task=task,
         harness=SOLVER_HARNESS,
-        task_machine=SHELLSIM_MACHINE if needs_machine(task) else None,
+        task_machine=machine_runtime(config.solver_factory.backend) if needs_machine(task) else None,
         verifier_machine=None,
         limits=config.solver_limits,
         trace=TraceMode.MESSAGES,
@@ -898,8 +898,9 @@ def _unsupported(task: TaskSpec, engine: RolloutEngine, config: AgenticConfig) -
         except (TypeError, ValueError) as error:
             problems.append(f"The grader is invalid: {error}")
     requirements = task.environment_requirements
-    if needs_machine(task) and requirements.command_semantics != CommandSemantics.SHELL_SIMULATOR:
-        problems.append("A task with a shell or files must use command_semantics shell_simulator")
+    semantics = COMMAND_SEMANTICS[config.solver_factory.backend]
+    if needs_machine(task) and requirements.command_semantics != semantics:
+        problems.append(f"A task with a shell or files must use command_semantics {semantics}")
     if task.resources.all:
         problems.append(
             "Put the solver's files in resources.worker and the grader's files in resources.verifier, not in "
