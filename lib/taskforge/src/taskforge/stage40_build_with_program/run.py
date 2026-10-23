@@ -34,7 +34,7 @@ from types import TracebackType
 from typing import Any
 
 from pydantic import BaseModel, TypeAdapter
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from taskcompendium.models import TaskSpec
 
 from taskforge.content_hash import digest
@@ -234,7 +234,7 @@ async def run_program(
         )
         cached = recomputed if name in invalidate else memoized
         with span(
-            context.services.recording,
+            context.services.ledger,
             EntryKind.STEP,
             workpiece_id=context.workpiece_id,
             round=context.round,
@@ -386,7 +386,7 @@ async def run_build(
     context = RLEnvBuildContext(
         workpiece_id=workpiece_id, round=round, model=model, sampling=sampling, services=services, step=BUILD_STAGE
     )
-    with span(services.recording, EntryKind.STAGE, workpiece_id=workpiece_id, round=round, step=BUILD_STAGE) as fields:
+    with span(services.ledger, EntryKind.STAGE, workpiece_id=workpiece_id, round=round, step=BUILD_STAGE) as fields:
         fields.attrs["program"] = program.digest
         task, outcomes = await run_program(program, context, proposal, store, keyed_model, invalidate)
         fields.attrs["hits"] = str(sum(outcome.status is CacheStatus.HIT for outcome in outcomes))
@@ -416,7 +416,7 @@ def step_output[T](draft: TaskDraft, store_root: str, name: str, output_type: ty
 
     Raises:
         KeyError: the draft's program has no step ``name``.
-        ValueError: the stored blob does not match the digest in its memo.
+        StoreCorruption: the stored blob does not match the digest in its memo.
     """
     memos = {outcome.memo.name: outcome.memo for outcome in draft.provenance.steps}
     if name not in memos:
@@ -431,8 +431,7 @@ def _write_draft(directory: Path, draft: TaskDraft) -> None:
         PROVENANCE_FILE: _PROVENANCE.dump_json(draft.provenance, indent=2),
     }
     for name, content in files.items():
-        with atomic_rename(str(directory / name)) as temp:
-            Path(temp).write_bytes(content)
+        write_bytes_atomic(str(directory / name), content)
 
 
 def load_draft(directory: Path) -> TaskDraft:

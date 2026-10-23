@@ -10,7 +10,7 @@ the path and set its mode, run by the shell tool as the task machine's ``Machine
 after the setup commands), then a final reply (``WORKSPACE_REPLY``). The task's own grader then runs on that
 machine state. Grading is the engine's, unchanged.
 
-A control replays under the engine's messages trace, as every trial does (``EngineSettings.apply``):
+A control replays under the engine's messages trace, as every trial does (``lowering.lower``):
 a scripted turn carries no token ids, the engine skips its prefix, evidence and log-probability
 checks, and the attempt records no token evidence, which a control never needs.
 """
@@ -20,46 +20,25 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Self
+from typing import Any
 
-from rigging.timing import ExponentialBackoff
-from rolloutengine.models import ModelRequest, ModelTurn, TaskRolloutSpec
-from taskcompendium.models import AssistantToolCalls, TaskSpec, TextMessage
+from rolloutengine.models import TaskRolloutSpec
+from taskcompendium.models import TaskSpec
 
 from taskforge.ledger.records import Ledger
-from taskforge.spec.controls import Control, Workspace, candidate_turns, validate_controls, wire_message
+from taskforge.spec.controls import (
+    Control,
+    ScriptedModel,
+    Workspace,
+    candidate_turns,
+    context_assistant_turns,
+    validate_controls,
+    wire_message,
+)
 from taskforge.stage50_validate.outcome import Graded, Outcome, TrialKind
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, run_trial
+from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff, TrialPlan, run_trial
 
 WORKSPACE_REPLY = "The workspace is ready for grading."
-
-
-@dataclass(frozen=True)
-class ScriptedModel:
-    """A RolloutEngine model that replays fixed assistant turns.
-
-    The turn served is the number of assistant messages the engine has already appended, so the
-    model is stateless and a retried attempt replays from the start.
-    """
-
-    turns: tuple[dict[str, Any], ...]
-    context_assistant_turns: int
-
-    def for_step(self, step: str) -> Self:
-        """This model: a scripted turn makes no server call, so the attempt's step changes nothing."""
-        return self
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        served = sum(message["role"] == "assistant" for message in request.messages) - self.context_assistant_turns
-        message = self.turns[served]
-        return ModelTurn(
-            message=message,
-            prompt_token_ids=(),
-            response_token_ids=(),
-            logprobs=None,
-            stop_reason="tool_calls" if "tool_calls" in message else "stop",
-            text=message["content"],
-        )
 
 
 class ControlVerdict(StrEnum):
@@ -88,9 +67,8 @@ class ControlPlan:
 
     workpiece_id: str
     round: int
-    deadlines: Deadlines
     max_retries: int
-    retry_backoff: ExponentialBackoff
+    retry_backoff: RetryBackoff
     evidence_dir: Path
     ledger: Ledger
     first_attempts: Mapping[str, int]
@@ -106,7 +84,6 @@ class ControlPlan:
             round=self.round,
             kind=TrialKind.CONTROL,
             k=1,
-            deadlines=self.deadlines,
             max_retries=self.max_retries,
             retry_backoff=self.retry_backoff,
             evidence_dir=self.evidence_dir,
@@ -135,14 +112,6 @@ def check_replayable(task: TaskSpec, controls: Sequence[Control], max_turns: int
         raise ValueError(f"Controls {too_long} need more than max_turns={max_turns} turns")
 
 
-def context_assistant_turns(task: TaskSpec) -> int:
-    """The assistant turns in ``task``'s context, which a ``ScriptedModel`` skips before its script."""
-    return sum(
-        isinstance(event, AssistantToolCalls) or (isinstance(event, TextMessage) and event.role == "assistant")
-        for event in task.context.events
-    )
-
-
 async def replay(
     spec: TaskRolloutSpec,
     controls: Sequence[Control],
@@ -156,7 +125,7 @@ async def replay(
             in ``controls``.
     """
     task = spec.task
-    check_replayable(task, controls, settings.max_turns)
+    check_replayable(task, controls, settings.limits.max_turns)
     unknown = sorted(set(plan.first_attempts) - {control.id for control in controls})
     if unknown:
         raise ValueError(f"First attempts name controls {unknown} that are not replayed")

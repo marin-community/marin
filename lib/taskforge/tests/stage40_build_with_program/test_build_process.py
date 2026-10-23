@@ -9,6 +9,7 @@ import time
 from dataclasses import asdict, replace
 
 import pytest
+from shellbox.machine import Backend
 
 from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind
@@ -96,6 +97,7 @@ def make_request(tmp_path, proposal, fake_glm, fast_provider):
             model_digest=None,
             services=BuildServiceConfig(
                 host=MachineHost.LAPTOP,
+                backends=(Backend.SHELLSIM,),
                 controller_url=None,
                 parallel_key_env=None,
                 ledger_root=tmp_path / "child" / "ledger",
@@ -114,6 +116,7 @@ def on_iris(request: BuildRequest, image_cluster: str | None) -> BuildRequest:
     services = replace(
         request.services,
         host=MachineHost.IRIS,
+        backends=(Backend.SHELLSIM, Backend.GVISOR),
         controller_url=CONTROLLER_URL,
         image_cluster=image_cluster,
         registry_credential_env=None if image_cluster is None else REGISTRY_ENV,

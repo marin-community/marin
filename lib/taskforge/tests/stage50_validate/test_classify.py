@@ -335,7 +335,7 @@ async def test_model_failure_after_a_turn_is_ungraded_even_though_the_engine_gra
     script = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")])
 
     async def model(request: ModelRequest) -> ModelTurn:
-        if request.continuation is not None:
+        if request.messages[-1]["role"] == "tool":
             raise ModelUnavailable("pool drained", ())
         return await script(request)
 

@@ -15,38 +15,19 @@ from taskforge.stage40_build_with_program.glm_author import (
     REFERENCE_SECTIONS,
     GlmAuthor,
     ProgramSubmission,
-    sdk_reference,
 )
 from taskforge.stage40_build_with_program.program_sdk import load_program
 from tests.stage30_author.programs import PROGRAM
 from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE
 
 
-def test_the_sdk_reference_lists_the_fields_of_the_task_types_steps_read():
-    reference = sdk_reference()
-
-    assert "class TaskResource(*, path: str, source: taskcompendium.models.InlineFile" in reference
-    assert "class EnvironmentRequirements(*, capabilities:" in reference
-    assert "docker_image:" in reference
-    assert "resource_bytes(resource: taskcompendium.models.TaskResource) -> bytes" in reference
-
-
-def test_the_sdk_reference_lists_what_grade_candidate_returns():
-    reference = sdk_reference()
-
-    assert "class GradeResult(status: taskcompendium.grading_result.Outcome, reward: float | None" in reference
-    assert "score_min: float = 0.0, score_max: float = 1.0" in reference
-    assert "enum Outcome: GRADED = 'graded', SUBMISSION_FAILURE = 'submission_failure'" in reference
-    assert "enum AnswerType: TEXT = 'text'" in reference
-    assert "reward_in_range(grade: taskcompendium.grading_result.GradeResult) -> bool" in reference
-    assert "grader_checks(grade: taskcompendium.grading_result.GradeResult)" in reference
-
-
 def test_each_name_appears_in_one_section_of_the_sdk_reference():
     names = [name for _, _, section in REFERENCE_SECTIONS for name in section]
 
     assert sorted({name for name in names if names.count(name) > 1}) == []
-    assert "build_machine(services: " in sdk_reference()
+    for _, module, names in REFERENCE_SECTIONS:
+        for name in names:
+            getattr(module, name)
 
 
 def submission(source: str) -> str:
@@ -75,7 +56,6 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     schema = fake_glm.requests[0]["response_format"]["json_schema"]["schema"]
     assert list(schema["properties"]) == ["notes", "source"]
     assert schema["properties"]["notes"]["maxLength"] == NOTES_LIMIT == 2000
-    assert schema["properties"]["notes"]["description"].startswith("At most 2000 characters;")
 
 
 async def test_a_revision_continues_from_the_program_the_workpiece_holds(

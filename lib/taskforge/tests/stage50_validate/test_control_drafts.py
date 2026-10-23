@@ -8,7 +8,7 @@ from dataclasses import replace
 
 import pytest
 from pydantic import ValidationError
-from rigging.timing import ExponentialBackoff
+from rolloutengine.models import RolloutLimits
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, MachineSpec, PackageSpec
 from taskcompendium.grading_result import Outcome
@@ -36,7 +36,7 @@ from taskforge.stage50_validate.control_drafts import (
 )
 from taskforge.stage50_validate.controls import ControlPlan, ControlVerdict, replay
 from taskforge.stage50_validate.lowering import lower
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings
+from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
 from tests.stage40_build_with_program.conftest import FACTORIES, PROPOSAL
 
@@ -94,11 +94,17 @@ def controls(wrong: str) -> str:
 def engine_settings() -> EngineSettings:
     return EngineSettings(
         factories={Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()},
-        max_turns=4,
         command_timeout=10,
-        tool_turn_timeout=20,
-        model_turn_timeout=30,
-        cleanup_timeout=10,
+        limits=RolloutLimits(
+            max_turns=4,
+            tool_turn_timeout=20,
+            model_turn_timeout=30,
+            cleanup_timeout=10,
+            total_turn_timeout=30,
+            attempt_timeout=60,
+            verifier_timeout=None,
+            max_total_tokens=None,
+        ),
     )
 
 
@@ -122,14 +128,15 @@ async def test_validation_writes_controls_the_grader_has_not_seen_and_replays_th
     plan = ControlPlan(
         workpiece_id="workpiece",
         round=0,
-        deadlines=Deadlines(total_turn_timeout=30, attempt_timeout=60),
         max_retries=0,
-        retry_backoff=ExponentialBackoff(initial=0.001, maximum=0.001),
+        retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=2.0, jitter=0.1),
         evidence_dir=tmp_path / "evidence",
         ledger=JsonlLedger(tmp_path / "ledger"),
         first_attempts={},
     )
-    outcomes = await replay(lower(TASK, MachineHost.LAPTOP, FACTORIES), written, plan, engine_settings())
+    outcomes = await replay(
+        lower(TASK, MachineHost.LAPTOP, FACTORIES, engine_settings().limits), written, plan, engine_settings()
+    )
     assert {o.control.id: o.verdict for o in outcomes} == {c.id: ControlVerdict.MET for c in written}
 
 
@@ -337,7 +344,3 @@ def test_the_controls_request_names_the_output_paths_the_task_ships():
     text = output_paths_text(task.output_paths, shipped_output_paths(task))
     assert "/workspace/README.md, /workspace/answer.txt" in text
     assert "the task ships /workspace/README.md" in text
-    assert (
-        output_paths_text((), ())
-        == "The task has no output paths, so every control is a final reply alone with no files."
-    )

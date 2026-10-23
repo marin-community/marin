@@ -22,7 +22,7 @@ src/taskforge/
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
-  sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
+  sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
   stage10_proposal/            model.py: the TaskProposal document and its generation regex;
@@ -59,7 +59,7 @@ src/taskforge/
                                round.py: `validate_round`, one validation round as a graph of units;
                                adversary.py, adversary_prompts.py: adversary trials and their brief
   stage60_review/              decision.py: the Decision types (Accept, Reject, Retry, Modify);
-                               rules.py: BandRules, ReviewContext, `default_review`, the default rule table
+                               rules.py: BandRules, `default_review`, the default rule table
 ```
 
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
@@ -69,9 +69,7 @@ modules (`capability`, `child_process`, `content_hash`, `ledger`, `llm`, `sandbo
 the shared modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
 builds a task today goes through a build program, so the SDK, the standard template, the build
 services, the program runner and the agentic author (an agent session that writes and iterates
-that program) all live there. The name leaves room for a `stage40_build_with_agent` package in
-which an agent produces the task draft directly, with no build program at all; that is a future
-surface, not a home for anything that writes a program, however the writer runs. The coordinator
+that program) all live there. The coordinator
 package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
 and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
 with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
@@ -197,15 +195,10 @@ spec, so a move of either is a single-site change.
   category (`spec.controls.CONCERNS`). A task's control set needs a `reference`, an `acceptance`
   and a `shortcut` control, so its coverage never rests on extraction controls, which pin today's
   answer parser. `validate_controls(task, controls)` checks a set against its task.
-- `sandbox.factories.machine_factories(where, controller_url)` returns the factories for
-  `RolloutEngine`, keyed by shellbox `Backend` value: ShellSim plus Docker on a laptop,
-  ShellSim plus gVisor on Iris, plus the local backend for lock-only graders when bubblewrap works
-  in the Iris task. Before a trial starts, `task_refusals(spec, factories)` passes each machine of
-  a `TaskRolloutSpec` to its factory's `check_environment` and lists a typed refusal, with the factory's
-  message, for each machine without a factory or rejected by one. `warm_local_python(factories)`
-  builds the local backend's bare CPython environment in a background thread, so the run's driver
-  (the ladder that runs Taskforge on Iris), which calls it once at start, spares its first wave of
-  local machines the five-second build; the build children share the cache.
+- `sandbox.factories.machine_factories(backends, controller_url)` returns exactly the requested
+  factories, keyed by shellbox `Backend` value, and raises if one is unavailable. Before a trial
+  starts, `task_refusals(spec, factories)` asks each factory to check its machine requirements.
+  `warm_local_python(factories)` can warm the local backend's CPython cache in a background thread.
 
 Task-specific grading is the task's own code, private in `resources.verifier`, run by a
 `ScriptGrader` in a separate verifier machine after the attempt. The verifier machine starts from
@@ -214,6 +207,16 @@ the task's image or, for a ShellSim task or a task without a machine, from the g
 and the extracted answer at `/app/answer.txt`. A grader program writes its verdict, the reward and
 one result per check, as `spec.verdict.verdict_json`. Generic modes that verifyit grades in
 process are preferred whenever a task fits one.
+
+## Machine backends
+
+Call `sandbox.factories.machine_factories(backends, controller_url)` with the exact shellbox
+`Backend` values the run uses. A requested backend that cannot start on the host raises during
+factory construction; the selection never silently shrinks. Supply a controller URL exactly when
+selecting `Backend.GVISOR`. A ShellSim-only run does not probe Docker or the local sandbox.
+
+Custom-image builds remain available through `sandbox.image_builder`; selecting a backend and
+choosing or building its image are separate caller decisions.
 
 ## Model calls
 
@@ -536,9 +539,9 @@ trials fresh attempts. It returns a `ValidationResult`, which the coordinator wr
 `validation.json`. The caller's function closes over what the coordinator does not own, the host's `ValidationSettings` and
 the trial models, as `validate_round(draft, context, settings, solver, controls, adversary)` takes them.
 The review stage reads the result back from `validation.json` (`load_validation`) and calls
-`StageFunctions.review(result, context)` with a `ReviewContext`: the round, the MODIFY rounds left, and
-the `BandRules` the `StageCoordinator` holds in `band`. `stage60_review.rules.default_review` is a
-`Review`; the rule table it applies is under Review.
+`StageFunctions.review(result)`. The caller binds its settings with
+`partial(default_review, band=band)`. The coordinator enforces the MODIFY budget for every review function;
+the default rule table is under Review.
 
 The `OPENED` event records the digests of the proposal and the budget, and the coordinator's model
 digest and research requirement. A relaunch of the workpiece with another proposal, budget, model
@@ -633,8 +636,8 @@ ever moves the grader-base CPython between the two backends that run it, never t
 `stage50_validate.trials.run_trials(spec, plan, settings, model)` runs k trials of a
 `TaskRolloutSpec` through `EngineSettings.engine()`, the `RolloutEngine` whose shell harness has
 `EngineSettings.command_timeout`. Each attempt runs on `model.for_step("<kind>/<trial>/<attempt>")`, so
-a `GlmRolloutModel` records and routes every trial attempt under its own step. `TrialPlan.deadlines`
-and `EngineSettings` replace the builder's limits. The `TRIAL` span's `input_hash` is
+a `GlmRolloutModel` records and routes every trial attempt under its own step. Lowering applies
+`EngineSettings.limits` once, with the grading deadline derived from the grader's own timeout. The `TRIAL` span's `input_hash` is
 `task_digest(spec, command_timeout)`, the sha256 of Taskforge's own record of what the trial ran
 (`trial_record`): a JSON object of the task (answer format included), the task and verifier machine
 selections, the effective `RolloutLimits` and the command timeout, so it does not follow the shape of
@@ -642,7 +645,7 @@ the engine's spec. Each trial is `Graded` or `Ungraded` with one typed `Cause`, 
 `stage50_validate.classify.classify` is the only failure classifier: an interruption maps by its
 operation (`start`, `prepare`, `model`, `advance`, `grade`) unless its original error names a cause, and
 an `attempt` interruption, the attempt deadline, is `ATTEMPT_TIMEOUT` even when the harness ended after
-the deadline. Every trial runs under the engine's messages trace (`EngineSettings.apply`) with no token
+the deadline. Every trial runs under the engine's messages trace (`TraceMode.MESSAGES`, selected during lowering) with no token
 budget: a trial is graded, never trained on, so the engine does not hold its turns to exact tokens, and
 an attempt's `TRIAL` span counts its tokens from each turn's `usage` across the rollout's conversations.
 The attempt file holds the outcome, its grade and the whole `Rollout`. A trial is attempted again for a
@@ -657,7 +660,7 @@ adversary_model)` runs one validation round from these parts as a graph of units
 `ValidationContext`, is what the stage coordinator knows of the round: the workpiece id, the round, its
 directory, the proposal it built, the step store, the MODIFY rounds the workpiece has left and the pass of
 the round this validation is (`validation_pass`, from 1).
-`settings`, a `ValidationSettings`, is the validating host's: engine, deadlines, the solver trials `k`,
+`settings`, a `ValidationSettings`, is the validating host's: engine and its limits, the solver trials `k`,
 retries and backoff, the control writer's sampling, the adversary policy and the ledger. Lowering
 (`preflight`) and control writing start together; each of the `settings.k` solver trials starts once the
 lowering is done, without waiting for the controls; each control's replay and each of the
@@ -670,10 +673,10 @@ that has not ended, and the round returns once the other control replays end. It
 result's `solver` and `adversary` leave out. A cancelled attempt writes no attempt file, so a later round
 on the same files runs those trials again. With no MODIFY round left the round waits for every trial,
 since the workpiece's final record needs complete evidence. Every unit is idempotent on its own file, so
-a relaunch runs only the units whose files are missing:
+a relaunch resumes missing units and trials eligible for another attempt:
 
 ```
-<round_dir>/validation/<draft>/lowered.json                  the lowering, for one host and set of backends
+<round_dir>/validation/<draft>/<limits>-lowered.json                  the lowering, for one host and set of backends
 <round_dir>/validation/<draft>/controls.json                 the written controls
 <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
 <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
@@ -681,7 +684,8 @@ a relaunch runs only the units whose files are missing:
 <round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 ```
 
-`<draft>` is `content_hash.digest` of the draft's task, `<task>` the `trials.task_digest` of the
+`<draft>` is `content_hash.digest` of the draft's task, `<limits>` the engine limits,
+`<task>` the `trials.task_digest` of the
 lowered spec as the round's trials run it, and `<controls>` `content_hash.digest` of the control set,
 so no file of another task, lowered spec or control set counts as done. A trial is done when its
 last attempt is graded, failed for a cause that is not retryable, or used its retries: it holds
@@ -709,22 +713,24 @@ apply. A `blackbox` adversary sees the task as the solver does; a `whitebox` one
 grader's specification and verifier files, the round's controls with their expected rewards and the
 task's example answers. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
 candidates and a final `NO_SHORTCUT` or `SHORTCUT:` line, recorded as the trial's claim. An attempt is
-graded with its last passing submission's grade, else its last submission's. Its attempt file holds the
+reported with its last passing submission, else its last submission. A verifier failure stays
+ungraded with its original cause and retryability. Its attempt file holds the
 agent's whole rollout, the brief and every submission; an attempt under another brief, such as another
 mode or control set, does not count as done. The round records facts only: whether a passing submission
 is a shortcut is review's judgement.
 
 ## Review
 
-`stage60_review.rules.default_review(result, context)` decides on a `ValidationResult` by the first
+`stage60_review.rules.default_review(result, band=band)` decides on a `ValidationResult` by the first
 row of this table that matches:
 
 | finding                                                                 | decision                                       |
 |-------------------------------------------------------------------------|------------------------------------------------|
 | the lowering was `refused` by a factory or `rejected` by RolloutEngine | `Reject(HOST)`                                 |
-| a control was `violated`                                                | `Modify(findings)` while a MODIFY round is left, else `Reject(TASK)` |
-| a solver trial or a control replay has no grade                         | `Retry(cause, count)`                          |
-| the solve rate falls in a place `context.band` accepts                  | `Accept(band)`, else `Reject(TASK)`            |
+| a control was `violated`                                                | `Modify(findings)`; the coordinator enforces the budget |
+| a solver trial or a control replay has a permanent ungraded cause | `Reject(TASK)` (`HOST` for `MACHINE_UNSUPPORTED`) |
+| all ungraded causes are retryable | `Retry(cause, count)` |
+| the solve rate falls in a place `band` accepts                  | `Accept(band)`, else `Reject(TASK)`            |
 
 A `Modify` carries one finding per violated control, naming its kind, id, reward and attempt file. A
 `Retry` names the cause that left the most solver trials and controls ungraded, with their count. The

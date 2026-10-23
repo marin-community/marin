@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 from pydantic import BaseModel
-from rolloutengine.models import Model, ModelRequest, ModelTurn
-from shellbox.machine import Backend
+from rolloutengine.models import Model, ModelRequest, ModelTurn, RolloutLimits
+from shellbox.machine import Backend, MachineSpec, MachineTerminated
 from taskcompendium.grading_result import Outcome
 from taskcompendium.grading_result import Outcome as GradeStatus
 from taskcompendium.models import AnswerType, PlainText, Source
@@ -58,8 +58,8 @@ from taskforge.stage50_validate.round import (
     validate_round,
     write_validation,
 )
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings, RetryBackoff
-from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
+from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff
+from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory, shell_grader
 from tests.stage40_build_with_program.conftest import PROPOSAL
 
 WORKPIECE = "workpiece"
@@ -156,20 +156,26 @@ def round_context(tmp_path: Path, modify_rounds_left: int = 0, validation_pass: 
 def round_settings(
     ledger,
     k: int = 2,
-    deadlines: Deadlines | None = None,
+    limits: RolloutLimits | None = None,
     adversary: AdversaryPolicy | None = None,
 ) -> ValidationSettings:
     return ValidationSettings(
         host=MachineHost.LAPTOP,
         engine=EngineSettings(
             factories={Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()},
-            max_turns=4,
             command_timeout=10,
-            tool_turn_timeout=20,
-            model_turn_timeout=30,
-            cleanup_timeout=10,
+            limits=limits
+            or RolloutLimits(
+                max_turns=4,
+                tool_turn_timeout=20,
+                model_turn_timeout=30,
+                cleanup_timeout=10,
+                total_turn_timeout=30,
+                attempt_timeout=60,
+                verifier_timeout=None,
+                max_total_tokens=None,
+            ),
         ),
-        deadlines=deadlines or Deadlines(total_turn_timeout=30, attempt_timeout=60),
         k=k,
         max_retries=1,
         retry_backoff=RetryBackoff(initial=0.001, maximum=0.001, factor=2.0, jitter=0.0),
@@ -423,9 +429,9 @@ async def test_the_trials_of_another_lowered_spec_are_not_read_as_done(glm_clien
     before = files_under(trials_dir)
 
     solver = SolverModel()
-    longer = Deadlines(total_turn_timeout=40, attempt_timeout=80)
+    longer = round_settings(ledger).engine.limits.model_copy(update={"total_turn_timeout": 40, "attempt_timeout": 80})
     other = await validate_round(
-        draft_of_round, context, round_settings(ledger, deadlines=longer), solver, UncalledClient(), UncalledClient()
+        draft_of_round, context, round_settings(ledger, limits=longer), solver, UncalledClient(), UncalledClient()
     )
 
     assert other.lowering.task_digest != first.lowering.task_digest
@@ -764,3 +770,43 @@ async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cau
     assert relaunched.steps == ["solver/0/4", "solver/0/5"]
     assert third.solver is not None and third.solver.trials[1:] == first.solver.trials[1:]
     assert sorted(path.name for path in trial_dir.iterdir()) == [f"attempt-{n}.json" for n in range(6)]
+
+
+class FailedVerifierFactory(FixtureImageFactory):
+    async def create(self, spec: MachineSpec):
+        raise MachineTerminated("verifier worker disappeared")
+
+
+async def test_an_adversary_verifier_outage_remains_ungraded_and_retries(glm_client, fake_glm, ledger, tmp_path):
+    fake_glm.stream(content=controls_reply("41"))
+    context = round_context(tmp_path)
+    settings = round_settings(ledger, k=1, adversary=adversary_policy(k=1))
+    settings = replace(
+        settings,
+        engine=replace(
+            settings.engine,
+            factories={
+                **settings.engine.factories,
+                Backend.DOCKER.value: FailedVerifierFactory(),
+            },
+        ),
+    )
+    package = shell_grader(
+        "exit 0",
+        {},
+        environment=draft.grader_environment("registry.example/verifier@sha256:" + "0" * 64),
+        answer_path=draft.ANSWER_PATH,
+        timeout=30,
+    )
+    built = built_draft(tmp_path / "store")
+    built = replace(built, task=built.task.model_copy(update={"grader": package.grader}))
+    adversary = AdversaryScript((Submit("42"), "NO_SHORTCUT"))
+
+    result = await validate_round(built, context, settings, SolverModel(), glm_client, adversary)
+
+    (trial,) = result.adversary
+    assert (trial.status, trial.cause) == (TrialStatus.UNGRADED, Cause.MACHINE_TERMINATED)
+    assert trial.attempt_file.endswith("adversary/0/attempt-1.json")
+    assert all(s.status == GradeStatus.UNAVAILABLE for s in trial.submissions)
+    first = json.loads((context.round_dir / Path(trial.attempt_file).with_name("attempt-0.json")).read_bytes())
+    assert first["cause"] == Cause.MACHINE_TERMINATED

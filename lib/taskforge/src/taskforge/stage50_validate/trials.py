@@ -19,7 +19,7 @@ its own model, ``model.for_step(<kind>/<trial>/<attempt>)``: a ``GlmRolloutModel
 share one prefix-cache key.
 
 Every trial runs under the engine's messages trace (``TaskRolloutSpec.trace = MESSAGES``, set by
-``EngineSettings.apply``): a trial is graded and never trained on, so the engine records the token
+``lowering.lower``): a trial is graded and never trained on, so the engine records the token
 ids a model reports without checking them, with an all-zero loss mask, and a model's next prompt
 need not extend the ids of its last turn. No trial has a token budget (``RolloutLimits.max_total_tokens``
 is ``None``). The attempt span's ``tokens_in`` and ``tokens_out`` sum the ``usage`` of the turns of
@@ -28,13 +28,10 @@ every conversation of the attempt; a scripted turn reports none and counts nothi
 A graded attempt's record says whether the candidate's own code did not load
 (``candidate_code_error``); the span carries ``candidate_code_error="true"`` when it did.
 
-Validation owns its trials' deadlines and engine limits: ``TrialPlan.deadlines`` replaces the
-total-turn and attempt deadlines of the builder's ``RolloutLimits`` (``Deadlines.apply``) and
-``EngineSettings.apply`` its trace and its turn, tool-turn, model-turn and cleanup limits, while the
-engine ``EngineSettings.engine`` builds registers the shell harness with its command timeout, so every
-trial is bounded whatever the builder set. The ledger's ``input_hash`` is ``task_digest``, over
-Taskforge's own record of what the trial ran (``trial_record``): the task, the machine selections, the
-effective limits and the command timeout. The builder's verifier deadline and machine settings stand.
+Validation supplies ``EngineSettings.limits`` when lowering the task. The lowered spec is the
+single source of effective limits for probes, solver trials and controls. The engine's shell harness
+uses ``command_timeout``. ``task_digest`` covers the task, machine selections, effective limits and
+command timeout so changed validation settings do not reuse earlier evidence.
 
 The attempt file holds the whole ``Rollout``, every conversation and its steps included: a validation
 round is reviewed from its files alone, and the final reply, the tool calls and the per-turn usage are
@@ -54,20 +51,19 @@ of its trials is one ``MACHINE_UNSUPPORTED`` attempt carrying the refusals.
 
 import asyncio
 import base64
-import copy
 import dataclasses
 import json
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import JsonValue, TypeAdapter
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.models import GradedRollout, Model, Rollout, RolloutStep, TaskRolloutSpec, TraceMode
+from rolloutengine.models import GradedRollout, Model, Rollout, RolloutLimits, RolloutStep, TaskRolloutSpec
 from shellbox.machine import MachineFactory
 from taskcompendium.grading_result import GradeResult
 from taskcompendium.models import CONVERSATION_ANSWERS, TaskSpec
@@ -95,45 +91,19 @@ CLEANUP_ERROR_COUNT = "cleanup_error_count"
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """The machine factories ``RolloutEngine`` runs on, the shell command timeout its shell harness has, and
-    the trace and limits validation imposes on every trial.
-
-    ``factories`` is keyed by shellbox ``Backend`` value, as ``machine_factories`` returns it.
-    ``command_timeout`` bounds one shell command and ``tool_turn_timeout`` one tool turn, so the first
-    must be shorter. ``model_turn_timeout`` bounds one model call. ``cleanup_timeout`` bounds each
-    cleanup action (closing a tool session or machine); the engine records a cleanup that fails or overruns
-    in ``grade.diagnostics``.
-    """
+    """Factories, shell-command timeout and the limits supplied when lowering validation tasks."""
 
     factories: Mapping[str, MachineFactory]
-    max_turns: int
     command_timeout: float
-    tool_turn_timeout: float
-    model_turn_timeout: float
-    cleanup_timeout: float
+    limits: RolloutLimits
 
     def __post_init__(self) -> None:
-        if self.max_turns < 1:
-            raise ValueError("EngineSettings needs max_turns >= 1")
-        if not 0 < self.command_timeout < self.tool_turn_timeout:
-            raise ValueError("EngineSettings needs 0 < command_timeout < tool_turn_timeout")
-        if self.model_turn_timeout <= 0 or self.cleanup_timeout <= 0:
-            raise ValueError("EngineSettings needs positive model_turn_timeout and cleanup_timeout")
-
-    def apply(self, spec: TaskRolloutSpec) -> TaskRolloutSpec:
-        """``spec`` under the messages trace, with these limits in place of the builder's."""
-        limits = spec.limits.model_copy(
-            update={
-                "max_turns": self.max_turns,
-                "tool_turn_timeout": self.tool_turn_timeout,
-                "model_turn_timeout": self.model_turn_timeout,
-                "cleanup_timeout": self.cleanup_timeout,
-            }
-        )
-        return spec.model_copy(update={"limits": limits, "trace": TraceMode.MESSAGES})
+        tool_timeout = self.limits.tool_turn_timeout
+        if self.command_timeout <= 0 or (tool_timeout is not None and self.command_timeout >= tool_timeout):
+            raise ValueError("The command timeout must be positive and shorter than the tool-turn timeout")
 
     def engine(self) -> RolloutEngine:
-        """The engine every trial runs on: ``factories``, and the shell harness with ``command_timeout``."""
+        """The engine every trial runs on, with the configured shell-command timeout."""
         return draft.rollout_engine(self.factories, command_timeout=self.command_timeout)
 
 
@@ -146,32 +116,6 @@ def submission_refusal(task: TaskSpec) -> str | None:
         return None
     compatibility = submission_compatibility(task)
     return None if compatibility.compatible else "; ".join(compatibility.reasons)
-
-
-@dataclass(frozen=True)
-class Deadlines:
-    """The total-turn and attempt deadlines, in seconds, that validation imposes on every trial.
-
-    ``total_turn_timeout`` bounds the model's turns together: when it expires the engine grades the
-    state the agent left (stop reason ``total_turn_timeout``), or reports no grade when no turn had
-    completed (``Cause.AGENT_TIMEOUT``). ``attempt_timeout`` bounds the whole attempt, machine start
-    and grading included. They are a property of the validation run, not of the task, so they
-    replace the builder's ``RolloutLimits`` values rather than living in the ``TaskSpec``.
-    """
-
-    total_turn_timeout: float
-    attempt_timeout: float
-
-    def __post_init__(self) -> None:
-        if not 0 < self.total_turn_timeout < self.attempt_timeout:
-            raise ValueError("Deadlines need 0 < total_turn_timeout < attempt_timeout")
-
-    def apply(self, spec: TaskRolloutSpec) -> TaskRolloutSpec:
-        """``spec`` with these deadlines in place of its own."""
-        limits = spec.limits.model_copy(
-            update={"total_turn_timeout": self.total_turn_timeout, "attempt_timeout": self.attempt_timeout}
-        )
-        return spec.model_copy(update={"limits": limits})
 
 
 @dataclass(frozen=True)
@@ -191,11 +135,10 @@ class RetryBackoff:
 
 @dataclass(frozen=True)
 class TrialPlan:
-    """Which workpiece the trials belong to, how many run, their deadlines, how they retry, and where they
+    """Which workpiece the trials belong to, how many run, how they retry, and where they
     are recorded.
 
-    ``max_retries`` bounds retries of ``RETRYABLE`` causes. ``retry_backoff`` is a template: each
-    trial waits on its own copy.
+    ``max_retries`` bounds retries of ``RETRYABLE`` causes. Each trial starts a fresh schedule from ``retry_backoff``.
     ``first_attempt`` numbers each trial's first attempt file and ledger step; later attempts follow it.
     """
 
@@ -203,9 +146,8 @@ class TrialPlan:
     round: int
     kind: TrialKind
     k: int
-    deadlines: Deadlines
     max_retries: int
-    retry_backoff: ExponentialBackoff
+    retry_backoff: RetryBackoff
     evidence_dir: Path
     ledger: Ledger
     first_attempt: int
@@ -218,7 +160,7 @@ class TrialPlan:
 async def run_trials(
     spec: TaskRolloutSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel
 ) -> list[Outcome]:
-    """Run ``plan.k`` trials of ``spec`` under ``plan.deadlines`` and ``settings`` concurrently;
+    """Run ``plan.k`` trials of ``spec`` under the lowered spec's limits and ``settings`` concurrently;
     return one final outcome per trial, in order."""
     async with asyncio.TaskGroup() as group:
         trials = [group.create_task(run_trial(spec, plan, settings, model, str(index))) for index in range(plan.k)]
@@ -228,30 +170,41 @@ async def run_trials(
 async def run_trial(
     spec: TaskRolloutSpec, plan: TrialPlan, settings: EngineSettings, model: TrialModel, trial: str
 ) -> Outcome:
-    """Run one trial of ``spec`` under ``plan.deadlines`` and ``settings``, attempting it again
+    """Run one trial of ``spec`` under the lowered spec's limits and ``settings``, attempting it again
     after a backoff while it fails for a retryable cause, up to ``plan.max_retries`` times."""
-    spec = settings.apply(plan.deadlines.apply(spec))
     digest = task_digest(spec, settings.command_timeout)
+    refused = refusal(spec, settings.factories)
+    if refused is not None:
+        return _refuse(digest, plan, trial, refused)
+    engine = settings.engine()
+
+    async def attempt(number: int, step: str) -> Outcome:
+        return await _attempt(engine, spec, model.for_step(step), digest, plan, trial, number)
+
+    return await run_attempts(plan, trial, attempt)
+
+
+async def run_attempts(plan: TrialPlan, trial: str, attempt: Callable[[int, str], Awaitable[Outcome]]) -> Outcome:
+    """Run and record attempts until graded, permanently failed, or out of retries."""
+    backoff = plan.retry_backoff.schedule()
+    for retry in range(plan.max_retries + 1):
+        number = plan.first_attempt + retry
+        outcome = await attempt(number, attempt_step(plan, trial, number))
+        if isinstance(outcome, Graded) or not outcome.retryable or retry == plan.max_retries:
+            return outcome
+        await asyncio.sleep(backoff.next_interval())
+    raise AssertionError("a nonnegative retry budget always runs an attempt")
+
+
+def refusal(spec: TaskRolloutSpec, factories: Mapping[str, MachineFactory]) -> Ungraded | None:
+    """Why a trial cannot start on these factories, or ``None`` when it can."""
     unsupported = submission_refusal(spec.task)
     if unsupported is not None:
-        return _refuse(digest, plan, trial, Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None, None))
-    refusals = task_refusals(spec, settings.factories)
+        return Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None, None)
+    refusals = task_refusals(spec, factories)
     if refusals:
-        return _refuse(digest, plan, trial, Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None))
-    engine = settings.engine()
-    backoff = copy.copy(plan.retry_backoff)
-    retries = 0
-    attempt = plan.first_attempt
-    while True:
-        model_of_attempt = model.for_step(attempt_step(plan, trial, attempt))
-        outcome = await _attempt(engine, spec, model_of_attempt, digest, plan, trial, attempt)
-        if isinstance(outcome, Graded):
-            return outcome
-        if not outcome.retryable or retries >= plan.max_retries:
-            return outcome
-        retries += 1
-        await asyncio.sleep(backoff.next_interval())
-        attempt += 1
+        return Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None)
+    return None
 
 
 def refusal_detail(refusals: Sequence[Refusal]) -> str:
@@ -261,7 +214,7 @@ def refusal_detail(refusals: Sequence[Refusal]) -> str:
 def trial_record(spec: TaskRolloutSpec, command_timeout: float) -> dict[str, JsonValue]:
     """What a trial of ``spec`` runs, as Taskforge records it: the input of ``task_digest``.
 
-    ``spec`` is the spec as it runs (after ``Deadlines.apply`` and ``EngineSettings.apply``), and
+    ``spec`` is the spec as it runs (after lowering), and
     ``command_timeout`` the shell harness's. The record is a JSON object of exactly these keys:
 
     - ``task``: the ``TaskSpec``, its answer format included;
@@ -428,6 +381,4 @@ _ROLLOUT: TypeAdapter[Rollout] = TypeAdapter(Rollout)
 
 def write_evidence(path: Path, payload: bytes) -> None:
     """Write ``payload`` to ``path`` through a temporary sibling, so the file is whole or absent."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_rename(str(path)) as temp:
-        Path(temp).write_bytes(payload)
+    write_bytes_atomic(str(path), payload)

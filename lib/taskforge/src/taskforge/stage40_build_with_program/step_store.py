@@ -19,8 +19,7 @@ local path or an object-store URL. Under it the store keeps:
 * ``blobs/<sha256>``: each output as canonical JSON, written once and shared by all workpieces;
 * ``workpieces/<workpiece_id>/steps/<name>/<key digest>.json``: the memo of each key a workpiece stored.
 
-A memo holds a step's stored output under one key. The ledger in a later PR calls its own rows
-entries.
+A memo holds a step's stored output under one key; ledger entries record the execution.
 
 The store writes the blob before the memo, so every memo points at a complete blob, and it
 writes each file to a temporary sibling before renaming it into place. A memo or blob that reads back
@@ -39,13 +38,13 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from pydantic import TypeAdapter, ValidationError
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.filesystem.storage_path import StoragePath
 
 from taskforge.content_hash import canonical_json, digest, sha256_hex
 from taskforge.ledger.records import FILE_SAFE, check_workpiece_id
 
-SDK_VERSION = "taskforge.builder/13"
+SDK_VERSION = "taskforge.builder/15"
 """Bump when a library change alters what an unchanged step would produce."""
 
 
@@ -69,8 +68,8 @@ class RLEnvBuildStepKey:
 
     Attributes:
         sdk_version: ``SDK_VERSION`` when the output was computed.
-        source_digest: The step's ``RLEnvBuildStep.source_digest``: the sha256 of its source text,
-            followed by the source of its output type when the step's module defines that class.
+        source_digest: The step's ``RLEnvBuildStep.source_digest``, including the module-local
+            helpers, constants and classes its implementation references.
         inputs: For each declared input, the sha256 of that input's canonical JSON: the upstream
             step's output, or the proposal. An upstream step that reruns and returns identical
             content leaves this map unchanged.
@@ -179,7 +178,7 @@ class RLEnvBuildStepStore:
         output_digest = sha256_hex(content)
         blob = self.root / "blobs" / output_digest
         if not blob.exists():
-            _write(blob, content)
+            write_bytes_atomic(str(blob), content)
         memo = RLEnvBuildStepMemo(
             name=name,
             key=key.digest,
@@ -189,7 +188,7 @@ class RLEnvBuildStepStore:
             sdk_version=key.sdk_version,
             source_digest=key.source_digest,
         )
-        _write(self._memo_path(key, name), _MEMO.dump_json(memo, indent=2))
+        write_bytes_atomic(str(self._memo_path(key, name)), _MEMO.dump_json(memo, indent=2))
         return memo
 
     def _memo_path(self, key: RLEnvBuildStepKey, name: str) -> StoragePath:
@@ -245,12 +244,6 @@ async def _computed[T](
     computed = await compute()
     memo = store.store(key, name, computed)
     return memo, TypeAdapter(output_type).validate_json(canonical_json(computed))
-
-
-def _write(path: StoragePath, content: bytes) -> None:
-    path.parent.mkdirs()
-    with atomic_rename(str(path)) as temp:
-        StoragePath(temp).write_bytes(content)
 
 
 _MEMO: TypeAdapter[RLEnvBuildStepMemo] = TypeAdapter(RLEnvBuildStepMemo)

@@ -6,6 +6,7 @@
 from dataclasses import dataclass, field
 
 import pytest
+from rolloutengine.models import RolloutLimits
 from shellbox.backends.shellsim.machine import ShellSimMachine
 from shellbox.machine import (
     Backend,
@@ -29,11 +30,10 @@ from taskforge.stage40_build_with_program.context import BuildInfrastructureFail
 from taskforge.stage40_build_with_program.infrastructure import InfrastructureCause
 from taskforge.stage50_validate.outcome import Cause
 from taskforge.stage50_validate.preflight import preflight
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings
+from taskforge.stage50_validate.trials import EngineSettings
 from tests.sandbox.fixture_images import FixtureImageFactory, PortlessShellSimFactory
 
 READ_ONLY = b"mkdir: cannot create directory '/opt/gen': Read-only file system\n"
-DEADLINES = Deadlines(total_turn_timeout=20, attempt_timeout=60)
 
 
 class ReadOnlyOptMachine:
@@ -140,20 +140,24 @@ def settings(local: MachineFactory | None, container: MachineFactory | None = No
         factories[Backend.LOCAL.value] = local
     return EngineSettings(
         factories=factories,
-        max_turns=2,
         command_timeout=10,
-        tool_turn_timeout=20,
-        model_turn_timeout=30,
-        cleanup_timeout=10,
+        limits=RolloutLimits(
+            max_turns=2,
+            tool_turn_timeout=20,
+            model_turn_timeout=30,
+            cleanup_timeout=10,
+            total_turn_timeout=20,
+            attempt_timeout=60,
+            verifier_timeout=None,
+            max_total_tokens=None,
+        ),
     )
 
 
 async def test_a_setup_command_writing_under_a_read_only_root_moves_the_task_machine_to_a_container():
     engine = settings(ReadOnlyLocalFactory())
 
-    result = await preflight(
-        cpython_task(("mkdir -p /workspace /opt/gen",)), MachineHost.LAPTOP, engine.factories, engine, DEADLINES
-    )
+    result = await preflight(cpython_task(("mkdir -p /workspace /opt/gen",)), MachineHost.LAPTOP, engine)
 
     assert result.spec.task_machine is not None
     assert result.spec.task_machine.backend == Backend.DOCKER.value
@@ -168,7 +172,7 @@ async def test_the_fallback_moves_the_task_machine_alone_and_keeps_the_verifier_
     engine = settings(ReadOnlyLocalFactory())
     task = cpython_task(("mkdir -p /workspace /opt/gen",), grader=file_grader())
 
-    result = await preflight(task, MachineHost.LAPTOP, engine.factories, engine, DEADLINES)
+    result = await preflight(task, MachineHost.LAPTOP, engine)
 
     assert result.fallback is not None and result.fallback.to_backend == Backend.DOCKER.value
     spec = result.spec
@@ -185,9 +189,7 @@ async def test_a_local_machine_the_host_failed_twice_is_the_hosts_failure_and_is
     engine = settings(local, container)
 
     with pytest.raises(BuildInfrastructureFailure) as failure:
-        await preflight(
-            cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine.factories, engine, DEADLINES
-        )
+        await preflight(cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine)
 
     assert failure.value.cause == InfrastructureCause.MACHINE_CREATE_FAILED
     assert (local.creates, container.creates) == (2, 0)
@@ -197,9 +199,7 @@ async def test_a_local_machine_the_host_failed_once_keeps_the_local_backend():
     local = UnreachableIndexLocalFactory(failures=1)
     engine = settings(local)
 
-    result = await preflight(
-        cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine.factories, engine, DEADLINES
-    )
+    result = await preflight(cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine)
 
     assert result.fallback is None and local.creates == 2
     assert result.spec.task_machine is not None
@@ -209,9 +209,7 @@ async def test_a_local_machine_the_host_failed_once_keeps_the_local_backend():
 async def test_a_task_whose_setup_runs_locally_keeps_the_local_backend():
     engine = settings(ReadOnlyLocalFactory())
 
-    result = await preflight(
-        cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine.factories, engine, DEADLINES
-    )
+    result = await preflight(cpython_task(("mkdir -p /workspace/out",)), MachineHost.LAPTOP, engine)
 
     assert result.fallback is None
     assert result.spec.task_machine is not None
@@ -221,9 +219,7 @@ async def test_a_task_whose_setup_runs_locally_keeps_the_local_backend():
 async def test_a_host_without_the_local_backend_is_not_probed():
     engine = settings(None)
 
-    result = await preflight(
-        cpython_task(("mkdir -p /opt/gen",)), MachineHost.LAPTOP, engine.factories, engine, DEADLINES
-    )
+    result = await preflight(cpython_task(("mkdir -p /opt/gen",)), MachineHost.LAPTOP, engine)
 
     assert result.fallback is None
     assert result.spec.task_machine is not None
@@ -237,7 +233,7 @@ async def test_a_package_machine_is_neither_probed_nor_moved_off_the_local_backe
     environment = draft.requirements(image=None, packages=("numpy",), setup=("mkdir -p /opt/gen",), workdir="/workspace")
     task = cpython_task(()).model_copy(update={"environment_requirements": environment})
 
-    result = await preflight(task, MachineHost.LAPTOP, engine.factories, engine, DEADLINES)
+    result = await preflight(task, MachineHost.LAPTOP, engine)
 
     assert result.fallback is None and local.creates == 0
     assert result.spec.task_machine is not None

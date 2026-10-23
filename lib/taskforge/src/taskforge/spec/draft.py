@@ -47,6 +47,7 @@ from taskcompendium.models import (
     ExitCodeReward,
     FileReward,
     FunctionDefinition,
+    Grader,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -65,7 +66,7 @@ from taskcompendium.submission import require_submission_compatibility
 from verifyit.candidate import IN_PROCESS_MODES
 from verifyit.spec import Spec, mode_of
 
-from taskforge.sandbox.factories import MachineHost, container_backend, grading_environment
+from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, MachineHost, container_backend, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec.verdict import VERDICT_REWARD
 
@@ -83,7 +84,7 @@ LOCAL_CPYTHON = PackageSpec(pypi_packages=())
 LOCAL_READ_ONLY = "read_only"
 """shellbox's ``SystemDirectories.READ_ONLY``, the local factory's default mode for system directories."""
 LOCAL_COPY_ON_WRITE = "copy_on_write"
-"""shellbox's ``SystemDirectories.COPY_ON_WRITE``, the mode ``sandbox.factories.local_sandbox`` sets."""
+"""shellbox's ``SystemDirectories.COPY_ON_WRITE``, the mode ``sandbox.factories.local_factory`` sets."""
 LOCAL_UNWRITABLE_ROOTS: Mapping[str, tuple[str, ...]] = {
     LOCAL_READ_ONLY: ("/bin", "/etc", "/lib", "/lib32", "/lib64", "/libx32", "/sbin", "/sys", "/usr"),
     LOCAL_COPY_ON_WRITE: ("/sys",),
@@ -217,6 +218,18 @@ def machine(
         startup_timeout=startup_timeout,
         cleanup_timeout=cleanup_timeout,
     )
+
+
+GRADER_TIMEOUT = 300.0
+"""Default command timeout for generated script graders, and budget for in-process grading."""
+MACHINE_PREPARATION_TIMEOUT = 300.0
+GRADING_MACHINE = machine(startup_timeout=SANDBOX_SCHEDULING_TIMEOUT + MACHINE_PREPARATION_TIMEOUT)
+"""Machine settings allowing scheduling plus resource installation and setup."""
+
+
+def verifier_timeout(grader: Grader) -> float:
+    """Allow the verifier's scheduling budget and its own command timeout before ending grading."""
+    return SANDBOX_SCHEDULING_TIMEOUT + (grader.timeout if isinstance(grader, ScriptGrader) else GRADER_TIMEOUT)
 
 
 def rollout_limits(
@@ -485,7 +498,7 @@ def lower(
     requirements and each machine's ``MachineRuntimeSpec.backend`` names its backend. A grader with an
     environment (a script grader, or a verifyit grader that is neither in process nor a judge) takes a
     verifier machine; no other grader does. The spec keeps the engine's default exact-token trace; a
-    validation trial replaces it (``stage50_validate.trials.EngineSettings.apply``).
+    caller can select ``TraceMode.MESSAGES`` when token evidence is unnecessary.
 
     Raises:
         ValueError: A machine is given where the task has none or missing where it has one, or
@@ -518,9 +531,7 @@ def machine_runtime(
 ) -> MachineRuntimeSpec:
     """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
 
-    ``requirements`` are the machine's ``host_requirements``. ``lower`` builds every task and verifier
-    machine with it; a builder prototyping a machine outside a task rollout spec uses it too, so the
-    backend choice stays in one place.
+    Pass requirements already resolved for the available factories with ``host_requirements``.
     """
     return MachineRuntimeSpec(
         backend=machine_backend(requirements, host).value,

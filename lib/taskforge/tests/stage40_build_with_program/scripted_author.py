@@ -10,8 +10,8 @@
 ``ProgramLoader`` that loads in the test's process.
 """
 
-import itertools
 import json
+import uuid
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -28,6 +28,7 @@ from taskforge.stage40_build_with_program.program_sdk import load_program
 
 PROGRAM = '''"""Grades 6 * 7 in process."""
 
+from dataclasses import replace
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
 from verifyit.spec import ExactSpec
@@ -49,7 +50,9 @@ async def sources(context: RLEnvBuildContext, proposal: TaskProposal) -> Sources
 @rl_env_build_step
 async def grader(context: RLEnvBuildContext, sources: Sources) -> Grader:
     package = draft.answer_grader(ExactSpec(expected=("42",)))
-    reference = await grade_candidate(context, None, package, AnswerType.TEXT, ANSWER_FORMAT, "(instruction)", "42")
+    reference = await grade_candidate(
+        context, draft.NO_MACHINE, package, AnswerType.TEXT, ANSWER_FORMAT, "(instruction)", "42"
+    )
     if reference.status != Outcome.GRADED:
         raise BuildFailure(f"the reference was graded {reference.status}")
     return Grader(
@@ -66,7 +69,9 @@ async def assemble(context: RLEnvBuildContext, grader: Grader) -> TaskSpec:
         ANSWER_FORMAT,
         grader.package,
         Source(dataset="test", revision="r", row="0", importer_revision="test"),
-        environment=draft.requirements(image=None),
+        environment=draft.requirements(image=None).model_copy(
+            update={"package_spec": replace(draft.SHELLSIM_CPYTHON, pypi_packages=None)}
+        ),
     )
 
 
@@ -79,7 +84,6 @@ CONFIG = AgenticAuthorConfig(
     revision_same_session=SameSessionBounds(150_000, 36),
     max_continuations=0,
 )
-CALL_IDS = itertools.count()
 STRUCTURED_REPAIRS = 1
 
 
@@ -121,7 +125,7 @@ def turn(*calls: tuple[str, Mapping[str, object]], prompt: int = 30_000, out: in
     return Completion(
         content="",
         reasoning="thinking",
-        tool_calls=tuple(ToolCall(f"call-{next(CALL_IDS)}", name, json.dumps(args)) for name, args in calls),
+        tool_calls=tuple(ToolCall(f"call-{uuid.uuid4().hex}", name, json.dumps(args)) for name, args in calls),
         finish_reason=FinishReason.TOOL_CALLS,
         usage=Usage(prompt_tokens=prompt, completion_tokens=out, reasoning_tokens=out // 2, cached_tokens=prompt - 1000),
         wall_time=2.0,

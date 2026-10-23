@@ -5,6 +5,7 @@
 
 import contextlib
 import os
+import posixpath
 import uuid
 from collections.abc import Generator
 from typing import Protocol
@@ -51,6 +52,15 @@ def atomic_rename(output_path: str, filesystem: _AtomicFileSystem | None = None)
         with contextlib.suppress(Exception):
             filesystem.rm(temp_path)
         raise
+
+
+def write_bytes_atomic(path: str, content: bytes) -> None:
+    """Replace a local or object-store file with complete bytes, creating its parent directory."""
+    filesystem, key = factory.url_to_fs(path)
+    filesystem.makedirs(posixpath.dirname(key), exist_ok=True)
+    with atomic_rename(path, filesystem=filesystem) as temporary:
+        with filesystem.open(temporary, "wb") as output:
+            output.write(content)
 
 
 def fetch_file_atomic(source_url: str, destination_path: str) -> bool:
