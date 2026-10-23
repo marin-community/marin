@@ -32,9 +32,9 @@ from taskcompendium.models import (
 from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import JudgeSpec
 
+from experiments.post_training.inventory import FAMILIES
 from experiments.post_training.inventory._data import (
     DERIVED_GRADER_LOCK,
-    FAMILIES,
     IMAGE_VERIFIER,
     SOURCE_GRADER_LOCK,
     prepare,
@@ -203,8 +203,6 @@ def test_persisted_image_graders_are_admitted_by_the_image_backend(tmp_path):
     output = tmp_path / "output"
     produce(inputs.training, inputs.validation, output)
     factories = {"daytona": DaytonaMachineFactory(client_factory=lambda: pytest.fail("No sandbox may be created"))}
-    # This is the worker's real admission boundary. The former local selection rejected
-    # RegistryImage before any rollout could begin, despite preserving the correct grader image.
     for spec in read_tasks(output / "train.parquet") + read_tasks(output / "full_validation.parquet"):
         validate_spec(spec, factories)
 
@@ -234,8 +232,6 @@ def test_persisted_package_graders_pass_local_allocation_admission(tmp_path, sof
     produce(inputs.training, inputs.validation, output)
     spec = read_tasks(output / "train.parquet")[0]
     assert spec.task.model_dump(mode="json") == {**task, "schema_version": "0.28"}
-    # Use the real local capability check without probing or starting bubblewrap.
-    # The old per-machine CPU/storage requests fail here before any lock read or grading.
     validate_spec(spec, {"local": LocalAdmissionFactory()})
 
 

@@ -26,14 +26,15 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
-from experiments.post_training.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
-from experiments.post_training.inventory.data import VALIDATION_ROWS, data_step
+from experiments.post_training.inventory import TRAIN_FILENAME, VALIDATION_FILENAME, VALIDATION_ROWS
+from experiments.post_training.inventory.data import data_step
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 DATA_VERSION = "2026.10.22.4"
+DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
@@ -104,7 +105,7 @@ def build_run(
     *,
     training_uri: str,
     validation_uri: str,
-    steps: int = 25,
+    steps: int = DEFAULT_STEPS,
     data_version: str = DATA_VERSION,
 ) -> ArtifactStep[SkyRLRun]:
     """Bind the frozen data, pinned SFT model and terminal checkpoint/export."""
@@ -161,7 +162,7 @@ def build_run(
 @click.command(help=__doc__)
 @click.option("--train-source", required=True)
 @click.option("--validation-source", required=True)
-@click.option("--steps", type=click.IntRange(min=1), default=25, show_default=True)
+@click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
 @click.option("--data-version", default=DATA_VERSION, show_default=True)
 @rl_build_options
 def main(train_source: str, validation_source: str, steps: int, data_version: str) -> ArtifactStep[SkyRLRun]:

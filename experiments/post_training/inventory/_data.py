@@ -29,7 +29,13 @@ from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.pipeline.sampling import seeded_order
 from verifyit.json_objects import unique_object
 
-from experiments.post_training.inventory import FULL_VALIDATION_FILENAME, TRAIN_FILENAME, VALIDATION_FILENAME
+from experiments.post_training.inventory import (
+    FAMILIES,
+    FULL_VALIDATION_FILENAME,
+    TASKS_PER_FAMILY,
+    TRAIN_FILENAME,
+    VALIDATION_FILENAME,
+)
 
 SOURCE_GRADER_LOCK = (
     "gs://marin-us-central2/tmp/ttl=7d/rl-data-curation-validation/rl-curation-full-20261011/"
@@ -46,8 +52,6 @@ DERIVED_GRADER_FILES_SHA256 = {
 }
 
 SOURCE_SCHEMA_VERSION = "0.27"
-FAMILIES = ("calendar", "competitive_coding", "reasoning_gym", "stem", "structural")
-TASKS_PER_FAMILY = 20
 SPLIT_SEED = 20261023
 LIMITS = RolloutLimits(
     max_turns=1,

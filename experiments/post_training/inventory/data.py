@@ -15,8 +15,6 @@ from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import skyrl_cpu_command
 
-VALIDATION_ROWS = 100
-
 
 @dataclass(frozen=True)
 class Source:
@@ -39,7 +37,7 @@ class IngestConfig:
 
 
 def prepare_data(config: IngestConfig) -> None:
-    """Write the pinned training pool and held-out task Parquet files."""
+    """Run the producer in SkyRL's CPU environment without host Python paths."""
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
