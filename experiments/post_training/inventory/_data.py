@@ -28,6 +28,8 @@ from taskcompendium.pipeline.models import NormalizedTask, RawRow
 from taskcompendium.pipeline.sampling import seeded_order
 from verifyit.json_objects import unique_object
 
+from experiments.post_training.inventory import FULL_VALIDATION_FILENAME, TRAIN_FILENAME, VALIDATION_FILENAME
+
 FAMILIES = ("calendar", "competitive_coding", "reasoning_gym", "stem", "structural")
 TASKS_PER_FAMILY = 20
 SPLIT_SEED = 20261023
@@ -179,7 +181,7 @@ def prepare(
                     train_ids.add(spec.task.id)
                     yield spec
 
-        outputs = {"train.parquet": training_specs(), "validation.parquet": fixed, "full_validation.parquet": full}
+        outputs = {TRAIN_FILENAME: training_specs(), VALIDATION_FILENAME: fixed, FULL_VALIDATION_FILENAME: full}
         for name, specs in outputs.items():
             write_tasks(directory / name, specs)
         if len(train_ids) != training_rows:
