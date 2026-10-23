@@ -4,12 +4,18 @@ from typing import cast
 import pytest
 import torch
 import yaml
+from omegaconf import OmegaConf
+from skyrl_train import teacher_runtime
+from skyrl_train.config.utils import get_default_config
+from skyrl_train.distillation_adapters import build_routed_teacher_scoring_work, build_teacher_scoring_work
+from skyrl_train.teacher_oracle import TeacherCapabilities, validate_teacher_request_against_capabilities
+from skyrl_train.teacher_routing import PlanTeacherRouter, route_trajectory_batch
+from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryID
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import GPT2Config, PreTrainedTokenizerFast
 
 from marinskyrl.distillation import TeacherEvidenceKind, TeacherPromptInsertion, compile_distillation_plan
-from skyrl_train.distillation_adapters import build_teacher_scoring_work, build_routed_teacher_scoring_work
-from skyrl_train.teacher_routing import PlanTeacherRouter, route_trajectory_batch
-from skyrl_train.teacher_oracle import TeacherCapabilities, validate_teacher_request_against_capabilities
-from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryID
 
 
 def test_teacher_conditioning_preserves_student_tokens_and_response_alignment():
@@ -118,3 +124,78 @@ def test_yaml_conditioning_routes_only_selected_teacher_and_matches_modes():
     assert requests["conditioned"].response_token_ids.tolist() == [[20], [21]]
     assert requests["plain"].response_token_ids.tolist() == [[22]]
     assert batch == original
+
+
+class LocalScoringEngine:
+    def __init__(self, max_model_len):
+        self.max_model_len = max_model_len
+
+    def get_model_max_len(self):
+        return self.max_model_len
+
+    async def generate(self, request):
+        rows = request["prompt_token_ids"]
+        assert all(len(row) + 1 <= self.max_model_len for row in rows)
+        return {"prompt_logprobs": [[None, *[{token: -1.0} for token in row[1:]]] for row in rows]}
+
+
+@pytest.mark.asyncio
+async def test_local_teacher_scores_full_student_window_with_inserted_context(tmp_path, monkeypatch):
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "end": 1, "x": 2, "y": 3}, unk_token="[UNK]")),
+        eos_token="end",
+        pad_token="end",
+    )
+    tokenizer.save_pretrained(tmp_path)
+    GPT2Config(n_positions=9).save_pretrained(tmp_path)
+    config = get_default_config()
+    OmegaConf.set_struct(config, False)
+    config.generator.engine_init_kwargs = {"max_model_len": 6}
+    config.trainer.algorithm.distillation = {
+        "objective": "sampled_reverse_kl",
+        "routing_plan": "one",
+        "coefficient": 1.0,
+        "reward_mode": "add",
+    }
+    config.teachers = {
+        "teacher": {
+            "source": "local_inference",
+            "backend": "vllm",
+            "evidence": "chosen_token",
+            "model": {"path": str(tmp_path), "revision": "r1"},
+            "resources": {"num_nodes": 1, "gpus_per_node": 1, "tensor_parallel_size": 1, "colocation_group": "teacher"},
+            "prompt_insertions": [{"after_prefix": [1], "tokens": [2, 3]}],
+        }
+    }
+    config.teacher_routing = {"one": {"revision": "r1", "routes": {"all": {"teacher": "teacher", "weight": 1.0}}}}
+    prepared = teacher_runtime.prepare_distillation_runtime(config, tokenizer)
+    monkeypatch.setattr(
+        teacher_runtime,
+        "create_ray_wrapped_inference_engines",
+        lambda **kwargs: [LocalScoringEngine(kwargs["engine_init_kwargs"]["max_model_len"])],
+    )
+    pool = await teacher_runtime._start_local_teacher_pool(config, prepared.local_teachers[0])
+    batch = cast(
+        TrajectoryBatch,
+        {
+            "trajectory_ids": [TrajectoryID("full", 0)],
+            "prompt_token_ids": [[1, 2, 3]],
+            "response_ids": [[2, 3, 1]],
+        },
+    )
+    work = build_teacher_scoring_work(
+        batch,
+        route_ids=("all",),
+        teacher_id="teacher",
+        tokenizer_fingerprint=prepared.student_fingerprint,
+        plan_version="r1",
+        coefficient=1.0,
+        route_weights=(1.0,),
+        prompt_insertions=prepared.local_teachers[0].spec.prompt_insertions,
+    )
+    scores = await pool.score(work.request)
+    torch.testing.assert_close(scores.chosen_logprobs, torch.tensor([[-1.0, -1.0, -1.0]]))
+    # This model can accommodate the student plus one scoring token, but not conditioning.
+    GPT2Config(n_positions=7).save_pretrained(tmp_path)
+    with pytest.raises(ValueError, match="conditioning tokens"):
+        teacher_runtime.prepare_distillation_runtime(config, tokenizer)
