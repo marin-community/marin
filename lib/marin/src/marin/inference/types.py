@@ -11,7 +11,7 @@ from typing import Protocol
 # Keep logs readable when a poll returns many request IDs.
 _REQUEST_ID_LOG_LIMIT = 4
 STREAM_BUFFER_BYTES = 4 * 1024 * 1024
-METADATA_REQUEST_SLOTS = 4
+AUXILIARY_REQUEST_SLOTS = 4
 WORKER_HEARTBEAT_SECONDS = 5.0
 WORKER_LEASE_SECONDS = 3 * WORKER_HEARTBEAT_SECONDS
 
@@ -23,7 +23,7 @@ class InferenceBackendState(StrEnum):
 
 
 class InferenceRequestKind(StrEnum):
-    METADATA = "metadata"
+    AUXILIARY = "auxiliary"
     GENERATION = "generation"
 
 
@@ -75,7 +75,7 @@ class InferenceRequest:
     def kind(self) -> InferenceRequestKind:
         match self.method, self.path:
             case ("GET", "/v1/models" | "/metrics") | ("POST", "/tokenize" | "/detokenize"):
-                return InferenceRequestKind.METADATA
+                return InferenceRequestKind.AUXILIARY
             case _:
                 return InferenceRequestKind.GENERATION
 

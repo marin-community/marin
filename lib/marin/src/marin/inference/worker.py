@@ -15,7 +15,7 @@ from rigging.timing import ExponentialBackoff, Timer
 
 from marin.inference.http_proxy import forwardable_response_headers
 from marin.inference.types import (
-    METADATA_REQUEST_SLOTS,
+    AUXILIARY_REQUEST_SLOTS,
     WORKER_HEARTBEAT_SECONDS,
     InferenceRequest,
     InferenceRequestKind,
@@ -63,7 +63,11 @@ class InferenceWorker:
             stop_event = threading.Event()
         backoff = ExponentialBackoff() if backoff is None else backoff.copy()
         in_flight: dict[Future[LeasedInferenceResponse | None], InferenceRequestKind] = {}
-        limits = {InferenceRequestKind.METADATA: METADATA_REQUEST_SLOTS, InferenceRequestKind.GENERATION: max_in_flight}
+        # max_in_flight counts generation HTTP requests; vLLM does its own continuous batching.
+        limits = {
+            InferenceRequestKind.AUXILIARY: AUXILIARY_REQUEST_SLOTS,
+            InferenceRequestKind.GENERATION: max_in_flight,
+        }
         total_slots = sum(limits.values())
         heartbeat = Timer()
         heartbeat_at = -WORKER_HEARTBEAT_SECONDS
@@ -91,7 +95,6 @@ class InferenceWorker:
                         available_slots = limit - counts[kind]
                         if not available_slots:
                             continue
-                        # `max_in_flight` counts individual HTTP requests; vLLM does its own continuous batching.
                         leased_requests = self._broker.fetch_requests(max_items=available_slots, kind=kind)
                         in_flight.update(
                             (pool.submit(self._forward_one, client, request), kind) for request in leased_requests

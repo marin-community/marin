@@ -26,7 +26,7 @@ from starlette.types import Receive, Scope, Send
 
 from marin.inference.http_proxy import forwardable_request_headers
 from marin.inference.types import (
-    METADATA_REQUEST_SLOTS,
+    AUXILIARY_REQUEST_SLOTS,
     STREAM_BUFFER_BYTES,
     InferenceBackendState,
     InferenceRequest,
@@ -337,7 +337,7 @@ class InferenceProxy:
             headers=tuple((headers or {}).items()),
         )
         pending_limit = self._max_pending_requests + (
-            METADATA_REQUEST_SLOTS if broker_request.kind is InferenceRequestKind.METADATA else 0
+            AUXILIARY_REQUEST_SLOTS if broker_request.kind is InferenceRequestKind.AUXILIARY else 0
         )
         with self._lock:
             if len(self._pending) + len(self._streams) >= pending_limit:

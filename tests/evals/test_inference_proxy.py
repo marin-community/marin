@@ -1174,7 +1174,7 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
     ("method", "path", "expected_status"),
     [("GET", "/v1/models", 200), ("GET", "/metrics", 404), ("POST", "/tokenize", 200)],
 )
-async def test_metadata_bypasses_full_generation_queue(method, path, expected_status) -> None:
+async def test_auxiliary_requests_bypass_full_generation_queue(method, path, expected_status) -> None:
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     release = threading.Event()
     with serve_deterministic_openai_stub(prompt_pauses={"slow": release}) as upstream_stub:
@@ -1199,7 +1199,7 @@ async def test_metadata_bypasses_full_generation_queue(method, path, expected_st
                     async with asyncio.timeout(5):
                         while not upstream_stub.requests_for("/v1/completions"):
                             await asyncio.sleep(0.01)
-                    # Also put a generation ahead of metadata in the broker's FIFO.
+                    # Also put a generation ahead of the auxiliary request in the broker's FIFO.
                     broker.submit_request(_completion_inference_request(request_id="queued", prompt="queued"))
                     response = await client.request(
                         method, path, content=_json_bytes({"model": upstream_stub.model, "prompt": "hello"})
