@@ -21,7 +21,7 @@ src/taskforge/
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
-  sandbox/                     MachineFactory selection per host, up-front task refusals, image builds,
+  sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   stage20_triage/              verdict.py: TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
@@ -44,6 +44,16 @@ other package, along with the other wrong-way imports. `scripts/ledger_summary.p
 and tokens per kind and step over JSONL ledgers. `scripts/build_image_job.py` runs on Iris and
 documents its submit command in its docstring: it builds a directory's `DockerBuild` context with
 `taskforge.sandbox.image_builder` and prints the pinned registry digest.
+
+## Machine backends
+
+Call `sandbox.factories.machine_factories(backends, controller_url)` with the exact shellbox
+`Backend` values the run uses. A requested backend that cannot start on the host raises during
+factory construction; the selection never silently shrinks. Supply a controller URL exactly when
+selecting `Backend.GVISOR`. A ShellSim-only run does not probe Docker or the local sandbox.
+
+Custom-image builds remain available through `sandbox.image_builder`; selecting a backend and
+choosing or building its image are separate caller decisions.
 
 ## Model calls
 

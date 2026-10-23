@@ -3,7 +3,7 @@
 
 """Machine factories for RolloutEngine, and the task rollout specs they refuse.
 
-``machine_factories`` resolves the factories for the host Taskforge runs on, once, and keys them by
+``machine_factories`` constructs the explicitly selected backends and keys them by
 shellbox ``Backend`` value as ``MachineRuntimeSpec.backend`` refers to them. ``container_backend`` gives
 the backend for image-backed machines on that host. Before a trial starts, ``task_refusals`` asks each
 factory about the machines a ``TaskRolloutSpec`` selects on its backend through
@@ -16,10 +16,9 @@ import shutil
 import subprocess
 import threading
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from functools import cache
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
@@ -83,9 +82,8 @@ class Refusal:
     detail: str
 
 
-@cache
 def docker_unavailable_reason() -> str | None:
-    """Probe the laptop once for a reachable Docker daemon; return why Docker machines are unavailable, or None."""
+    """Check the requested Docker backend for a reachable daemon; return why Docker machines are unavailable, or None."""
     docker = shutil.which("docker")
     if docker is None:
         return "docker CLI not found on PATH"
@@ -103,41 +101,12 @@ def docker_unavailable_reason() -> str | None:
     return None
 
 
-@dataclass(frozen=True)
-class LocalSandbox:
-    """The Iris task's bubblewrap probe: a local factory for lock-only machines, solver and verifier alike, or
-    why there is none.
+def local_factory() -> MachineFactory:
+    """Construct the explicitly requested local backend, raising if this host cannot sandbox it."""
+    # This optional backend imports bubblewrap_bin, which is installed only on Linux.
+    from shellbox.backends.local.machine import LocalMachineFactory, SystemDirectories  # noqa: PLC0415
 
-    Exactly one of ``factory`` and ``unavailable`` is set.
-    """
-
-    factory: MachineFactory | None
-    unavailable: str | None
-
-
-@cache
-def local_sandbox() -> LocalSandbox:
-    """Probe once whether bubblewrap can sandbox commands here (it needs root or user namespaces on Linux).
-
-    The factory overlays the host's system directories copy-on-write in each machine, so a generated task
-    that writes under ``/opt`` or another system directory, through a file it ships or a setup command,
-    runs on bubblewrap instead of falling back to a container. The overlay needs overlayfs and a temporary
-    directory off overlayfs; a host without them has no local factory. Writes keep file permissions, so a
-    write into a root-owned directory needs a root task, as on Iris under the PRIVILEGED profile.
-    """
-    # The local backend needs bubblewrap_bin, which installs only on Linux.
-    from shellbox.backends.local.machine import (  # noqa: PLC0415
-        LocalMachineFactory,
-        SandboxUnavailable,
-        SystemDirectories,
-    )
-
-    try:
-        return LocalSandbox(
-            factory=LocalMachineFactory(system_directories=SystemDirectories.COPY_ON_WRITE), unavailable=None
-        )
-    except SandboxUnavailable as error:
-        return LocalSandbox(factory=None, unavailable=str(error))
+    return LocalMachineFactory(system_directories=SystemDirectories.COPY_ON_WRITE)
 
 
 def container_backend(where: MachineHost) -> Backend:
@@ -147,36 +116,36 @@ def container_backend(where: MachineHost) -> Backend:
     return Backend.DOCKER
 
 
-def machine_factories(where: MachineHost, controller_url: str | None) -> Mapping[str, MachineFactory]:
-    """The factories ``RolloutEngine`` takes, keyed by ``factory.backend.value``.
+def machine_factories(backends: Sequence[Backend], controller_url: str | None) -> Mapping[str, MachineFactory]:
+    """Construct exactly the requested backends, failing when a selected backend is unavailable.
 
-    On Iris the gVisor factory submits sandboxes to ``controller_url``, the controller of the task
-    Taskforge runs in; the local factory, which runs grader-base and package machines for solvers and
-    graders alike, is present when bubblewrap can sandbox commands in the Iris task. On a laptop
-    ``controller_url`` must be
-    ``None``; the Docker factory, which pulls registry images through the Docker daemon, is absent
-    when the laptop has no reachable daemon. Each absent factory is logged with the probe's reason.
-
-    The ShellSim factory's context reads ``SHELLSIM_CATALOG`` when its first machine asks for CPython
-    and prepares that installation once, for every later machine the factories create.
+    ``controller_url`` is required only when ``GVISOR`` is selected. Docker availability is checked
+    only when Docker is requested; local sandbox construction propagates its availability error.
+    ShellSim reads ``SHELLSIM_CATALOG`` when a machine first requests catalog packages.
     """
-    if (where is MachineHost.IRIS) != (controller_url is not None):
-        raise ValueError(f"{where} factories take a controller URL only on Iris, got {controller_url!r}")
-    factories: list[MachineFactory] = [ShellSimMachineFactory(context=shellsim.Context(pypi_catalog=SHELLSIM_CATALOG))]
-    if controller_url is not None:
-        factories.append(
-            IrisMachineFactory(controller_url=controller_url, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT)
-        )
-        sandbox = local_sandbox()
-        if sandbox.factory is not None:
-            factories.append(sandbox.factory)
-        else:
-            logger.warning("No %s machine factory: %s", Backend.LOCAL, sandbox.unavailable)
-    elif (docker := docker_unavailable_reason()) is None:
-        factories.append(DockerMachineFactory())
-    else:
-        logger.warning("No %s machine factory: %s", Backend.DOCKER, docker)
-    return {factory.backend.value: factory for factory in factories}
+    if (Backend.GVISOR in backends) != (controller_url is not None):
+        raise ValueError("A controller URL is required exactly when the gvisor backend is selected")
+    factories: dict[str, MachineFactory] = {}
+    for backend in backends:
+        match backend:
+            case Backend.SHELLSIM:
+                factory = ShellSimMachineFactory(context=shellsim.Context(pypi_catalog=SHELLSIM_CATALOG))
+            case Backend.LOCAL:
+                factory = local_factory()
+            case Backend.GVISOR:
+                assert controller_url is not None
+                factory = IrisMachineFactory(
+                    controller_url=controller_url, scheduling_timeout=SANDBOX_SCHEDULING_TIMEOUT
+                )
+            case Backend.DOCKER:
+                unavailable = docker_unavailable_reason()
+                if unavailable is not None:
+                    raise RuntimeError(f"Requested docker backend unavailable: {unavailable}")
+                factory = DockerMachineFactory()
+            case _:
+                raise ValueError(f"Unsupported Taskforge backend: {backend}")
+        factories[backend.value] = factory
+    return factories
 
 
 @runtime_checkable

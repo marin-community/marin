@@ -39,7 +39,6 @@ from verifyit.spec import JudgeSpec, NumericSpec
 
 from taskforge.sandbox import factories
 from taskforge.sandbox.factories import (
-    LocalSandbox,
     MachineHost,
     MachineRole,
     RefusalReason,
@@ -219,65 +218,50 @@ def test_a_judge_takes_no_verifier_machine_whatever_environment_its_grader_names
     assert grading_environment(lowered(None, grader=numeric).task) == environment
 
 
-def test_laptop_without_docker_omits_its_factory_and_logs_why(monkeypatch, caplog):
+def test_requested_docker_fails_if_the_host_has_no_docker(monkeypatch):
     monkeypatch.setattr(factories.shutil, "which", lambda name: None)
-    factories.docker_unavailable_reason.cache_clear()
-    try:
-        with caplog.at_level(logging.WARNING, logger=factories.__name__):
-            built = machine_factories(MachineHost.LAPTOP, controller_url=None)
-    finally:
-        factories.docker_unavailable_reason.cache_clear()
+
+    with pytest.raises(RuntimeError, match="Requested docker backend unavailable: docker CLI not found"):
+        machine_factories((Backend.SHELLSIM, Backend.DOCKER), controller_url=None)
+    # The same host can explicitly request ShellSim without silently changing its selection.
+    built = machine_factories((Backend.SHELLSIM,), controller_url=None)
     assert set(built) == {Backend.SHELLSIM.value}
-    assert "docker CLI not found" in caplog.text
-    assert reasons(lowered(selection(Backend.DOCKER), image=IMAGE), built) == {
-        (RefusalReason.NO_FACTORY, MachineRole.TASK)
-    }
 
 
-def test_laptop_whose_docker_daemon_hangs_omits_its_factory(monkeypatch, caplog):
+def test_requested_docker_fails_if_its_daemon_hangs(monkeypatch):
     def hang(*args, **kwargs):
         raise subprocess.TimeoutExpired(args[0], factories.DOCKER_PROBE_TIMEOUT)
 
     monkeypatch.setattr(factories.shutil, "which", lambda name: "/usr/bin/docker")
     monkeypatch.setattr(factories.subprocess, "run", hang)
-    factories.docker_unavailable_reason.cache_clear()
-    try:
-        with caplog.at_level(logging.WARNING, logger=factories.__name__):
-            built = machine_factories(MachineHost.LAPTOP, controller_url=None)
-    finally:
-        factories.docker_unavailable_reason.cache_clear()
-    assert set(built) == {Backend.SHELLSIM.value}
-    assert "docker daemon did not answer" in caplog.text
+    with pytest.raises(RuntimeError, match="docker daemon did not answer"):
+        machine_factories((Backend.DOCKER,), controller_url=None)
 
 
-def test_a_lock_only_grader_needs_the_local_factory_of_an_iris_task(monkeypatch, caplog):
-    graded = lowered(None, grader=script_grader(LOCKED), verifier_machine=selection(Backend.LOCAL))
+def test_requested_local_backend_propagates_its_availability_failure(monkeypatch):
+    def unavailable():
+        raise RuntimeError("no bwrap here")
 
-    assert reasons(graded, IRIS) == set()
-    assert reasons(graded, LAPTOP) == {(RefusalReason.NO_FACTORY, MachineRole.VERIFIER)}
-    monkeypatch.setattr(factories, "local_sandbox", lambda: LocalSandbox(factory=None, unavailable="no bwrap here"))
-    with caplog.at_level(logging.WARNING, logger=factories.__name__):
-        built = machine_factories(MachineHost.IRIS, controller_url="http://controller.example:10000")
-    assert "no bwrap here" in caplog.text
-    assert reasons(graded, built) == {(RefusalReason.NO_FACTORY, MachineRole.VERIFIER)}
+    monkeypatch.setattr(factories, "local_factory", unavailable)
+    with pytest.raises(RuntimeError, match="no bwrap here"):
+        machine_factories((Backend.LOCAL,), controller_url=None)
+    built = machine_factories((Backend.GVISOR,), controller_url="http://controller.example:10000")
+    assert set(built) == {Backend.GVISOR.value}
 
 
-@pytest.mark.parametrize("host", list(MachineHost))
-def test_factories_cover_the_hosts_backends(monkeypatch, host):
-    local = FakeFactory(Backend.LOCAL)
+@pytest.mark.parametrize("backends", [(Backend.SHELLSIM,), (Backend.LOCAL, Backend.GVISOR), (Backend.DOCKER,)])
+def test_factories_construct_exactly_the_selected_backends(monkeypatch, backends):
     monkeypatch.setattr(factories, "docker_unavailable_reason", lambda: None)
-    monkeypatch.setattr(factories, "local_sandbox", lambda: LocalSandbox(factory=local, unavailable=None))
-    is_iris = host is MachineHost.IRIS
-    built = machine_factories(host, controller_url="http://controller.example:10000" if is_iris else None)
-    expected = {Backend.SHELLSIM.value, container_backend(host).value} | ({Backend.LOCAL.value} if is_iris else set())
-    assert set(built) == expected
+    monkeypatch.setattr(factories, "local_factory", lambda: FakeFactory(Backend.LOCAL))
+    controller = "http://controller.example:10000" if Backend.GVISOR in backends else None
+    built = machine_factories(backends, controller_url=controller)
+
+    assert set(built) == {backend.value for backend in backends}
     assert all(factory.backend.value == key for key, factory in built.items())
-    container = built[container_backend(host).value]
-    if is_iris:
-        assert isinstance(container, IrisMachineFactory)
-        assert container.controller_url == "http://controller.example:10000"
-    else:
-        assert isinstance(container, DockerMachineFactory)
+    if Backend.GVISOR in backends:
+        iris = built[Backend.GVISOR.value]
+        assert isinstance(iris, IrisMachineFactory)
+        assert iris.controller_url == controller
 
 
 @dataclass(frozen=True)
@@ -332,8 +316,8 @@ def test_without_a_local_factory_there_is_nothing_to_warm(monkeypatch):
     assert warm_local_python(IRIS) is None
 
 
-def test_factory_arguments_must_match_the_host():
+def test_factory_arguments_must_match_the_selected_backends():
     with pytest.raises(ValueError, match="controller URL"):
-        machine_factories(MachineHost.LAPTOP, controller_url="http://c:1")
+        machine_factories((Backend.SHELLSIM,), controller_url="http://c:1")
     with pytest.raises(ValueError, match="controller URL"):
-        machine_factories(MachineHost.IRIS, controller_url=None)
+        machine_factories((Backend.GVISOR,), controller_url=None)
