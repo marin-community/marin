@@ -11,7 +11,7 @@ position, ``probe_score_forward``) on synthetic token ids at increasing lengths,
 recording memory, wall time, and the largest length that succeeds.
 
     python -m experiments.post_training.mismatch_probe.long_context \
-        --model-path s3://marin-rno2a/.../models/b-step92 --lengths 32768 65536
+        --model-path s3://marin-rno2a/.../models/b-step92 --lengths 32768 65536 --long-rows 8
 
 An out-of-memory at one length is a recorded outcome: the run stops there and the
 report names the largest length that scored. Run inside a SkyRL GPU job, whose
@@ -70,34 +70,36 @@ def scoring_config(model_path: str, *, num_gpus: int) -> object:
     return cfg
 
 
-def synthetic_batch(length: int, vocabulary_size: int, seed: int, *, rows: int) -> TrainingInputBatch:
-    """``rows`` synthetic sequences of ``length`` in-vocabulary token ids.
+SHORT_ROW_TOKENS = 1_024
 
-    The mesh dispatch splits the batch over the data-parallel ranks, so one row per
-    rank puts exactly one ``length``-token sequence on each GPU.
+
+def synthetic_batch(length: int, vocabulary_size: int, seed: int, *, rows: int, long_rows: int) -> TrainingInputBatch:
+    """``rows`` synthetic sequences of in-vocabulary token ids, the first ``long_rows`` of ``length``.
+
+    The mesh dispatch splits the batch over the data-parallel ranks, one row per
+    rank. The remaining rows hold ``SHORT_ROW_TOKENS`` real tokens, left-padded:
+    every rank's tokens meet in the expert all-to-all, so the number of long rows
+    per forward, not only their length, sets each rank's expert load.
     """
     generator = np.random.default_rng(seed)
     token_ids = generator.integers(10, vocabulary_size, size=(rows, length))
-    batch = TrainingInputBatch(
-        {
-            "sequences": torch.from_numpy(token_ids),
-            "attention_mask": torch.ones(rows, length, dtype=torch.int64),
-        }
-    )
+    attention_mask = torch.ones(rows, length, dtype=torch.int64)
+    attention_mask[long_rows:, : length - SHORT_ROW_TOKENS] = 0
+    batch = TrainingInputBatch({"sequences": torch.from_numpy(token_ids), "attention_mask": attention_mask})
     batch.metadata = {"response_length": length}
     return batch
 
 
-def score_length(policy, length: int, vocabulary_size: int, seed: int, *, num_gpus: int) -> dict:
+def score_length(policy, length: int, vocabulary_size: int, seed: int, *, num_gpus: int, long_rows: int) -> dict:
     """One reference score pass of one ``length``-token sequence per GPU; returns the timing and memory record."""
-    batch = synthetic_batch(length, vocabulary_size, seed, rows=num_gpus)
+    batch = synthetic_batch(length, vocabulary_size, seed, rows=num_gpus, long_rows=long_rows)
     batch.metadata["probe_micro_batch_size"] = 1
     batch.metadata["probe_score_top_k"] = TOP_K
     started = time.monotonic()
     ray.get(policy.async_run_ray_method("mesh", "probe_score_forward", data=batch))
     duration = time.monotonic() - started
     memory = ray.get(policy.async_run_ray_method("pass_through", "get_cuda_memory"))
-    return {"length": length, "seconds": duration, "memory": memory[0]}
+    return {"length": length, "long_rows": long_rows, "seconds": duration, "memory": memory}
 
 
 def vocabulary_size_of(model_path: str) -> int:
@@ -150,15 +152,19 @@ def scan_lengths(policy, args) -> dict:
     largest = None
     for length in sorted(args.lengths):
         try:
-            record = score_length(policy, length, vocabulary_size, args.seed, num_gpus=args.num_gpus)
+            record = score_length(
+                policy, length, vocabulary_size, args.seed, num_gpus=args.num_gpus, long_rows=args.long_rows
+            )
         except Exception as error:
-            records.append({"length": length, "failed": type(error).__name__, "detail": str(error)[:500]})
-            print(f"length {length}: FAILED {type(error).__name__}")
+            # The worker's own message (e.g. CUDA's "Tried to allocate") ends the Ray error text.
+            records.append({"length": length, "failed": type(error).__name__, "detail": str(error)[-3000:]})
+            print(f"length {length}: FAILED {type(error).__name__}: {str(error)[-3000:]}")
             break
         largest = length
         records.append(record)
-        print(f"length {length}: {record['seconds']:.0f} s, memory {json.dumps(record['memory'])[:300]}")
-    return {"model_path": args.model_path, "largest_scored": largest, "lengths": records}
+        peak = max(rank["peak_allocated"] for rank in record["memory"])
+        print(f"length {length}: {record['seconds']:.0f} s, max peak allocated {peak / 2**30:.1f} GiB over ranks")
+    return {"model_path": args.model_path, "long_rows": args.long_rows, "largest_scored": largest, "lengths": records}
 
 
 def main() -> None:
@@ -167,6 +173,7 @@ def main() -> None:
     parser.add_argument("--lengths", type=int, nargs="+", required=True)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--num-gpus", type=int, default=8)
+    parser.add_argument("--long-rows", type=int, required=True, help="rows (one per GPU) at full length")
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
 
