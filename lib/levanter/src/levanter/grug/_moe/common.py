@@ -67,6 +67,16 @@ def _interleave_gate_up(moe_w13: jax.Array, moe_dim: int) -> jax.Array:
     return _interleave_halves(gate, up)
 
 
+def _deinterleave_gate_up(moe_w13_interleaved: jax.Array) -> jax.Array:
+    """Undo ``_interleave_gate_up``: interleaved [g0,u0,g1,u1,...] -> grug w13 gate=[:I], up=[I:]."""
+    if moe_w13_interleaved.dtype.itemsize == 2:
+        gate, up = _unpack_pairs_u32(moe_w13_interleaved)
+    else:
+        pairs = moe_w13_interleaved.reshape(*moe_w13_interleaved.shape[:-1], -1, 2)
+        gate, up = pairs[..., 0], pairs[..., 1]
+    return jnp.concatenate([gate, up], axis=-1)
+
+
 def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
     """Cotangent of the interleaved gate/up pre-activations, given the SwiGLU output's."""
     if gu.dtype.itemsize == 2:
@@ -86,6 +96,8 @@ PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
+    "ring_gather_combine",  # `ring` moving activations only by gather; the default on GPUs.
+    "ring_filtered",  # Expert-parallel all-to-all sending each token only to shards that own its experts.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.
     "fixed_all_to_all",  # Expert-parallel all-to-all with fixed sender/expert cells.
     "fixed_pooled_wave_all_to_all",  # Destination-pooled static waves with fixed receiver buffers.
@@ -97,11 +109,14 @@ MoeImplementation: TypeAlias = Literal[
 _VALID_MOE_IMPLEMENTATIONS = get_args(MoeImplementation)
 _EP_MOE_IMPLEMENTATIONS = (
     "ring",
+    "ring_gather_combine",
+    "ring_filtered",
     "ragged_all_to_all",
     "fixed_all_to_all",
     "fixed_pooled_wave_all_to_all",
     "deepep",
 )
+_TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS = ("ring_filtered", "fixed_pooled_wave_all_to_all")
 # Local means no collectives over an expert axis. These backends can still run
 # under ordinary data/model sharding through the no-EP shard_map path.
 _LOCAL_MOE_IMPLEMENTATIONS = (
@@ -172,12 +187,23 @@ class MoEExpertMlpPspecs:
         return P(self.expert, self.intermediate, self.hidden)
 
 
-def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
-    if implementation is None:
-        return "ring"
-    if implementation not in _VALID_MOE_IMPLEMENTATIONS:
+def validate_moe_implementation(implementation: MoeImplementation | str | None) -> None:
+    """Raise unless `implementation` is None or a known implementation, without initializing JAX."""
+    if implementation is not None and implementation not in _VALID_MOE_IMPLEMENTATIONS:
         valid = ", ".join(repr(choice) for choice in _VALID_MOE_IMPLEMENTATIONS)
         raise ValueError(f"implementation must be one of {valid} or None, got {implementation!r}")
+
+
+def resolve_moe_implementation(implementation: MoeImplementation | str | None) -> MoeImplementation:
+    """Validate `implementation`, mapping None to `ring_gather_combine` on GPUs and to `ring` on other backends.
+
+    Mapping None reads JAX's default backend, which initializes JAX.
+    """
+    if implementation is None:
+        # XLA's GPU scatter-adds are slow, and become sorts under deterministic ops. On TPU the gather combine made
+        # steps 9% slower (#9860).
+        return "ring_gather_combine" if jax.default_backend() == "gpu" else "ring"
+    validate_moe_implementation(implementation)
     return cast(MoeImplementation, implementation)
 
 

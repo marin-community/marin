@@ -1345,18 +1345,18 @@ impl Store {
         self.tables.query_visibility()
     }
 
-    /// Snapshot every live namespace into a `RegisteredProvider` over its sealed
+    /// Snapshot requested live namespaces into `RegisteredProvider`s over their sealed
     /// segments — the registration set for a `Query`.
     ///
-    /// Snapshot the live registry, then for each namespace capture its arrow
+    /// Snapshot the live registry, then for each requested namespace capture its arrow
     /// schema + sealed-segment paths (under the engine's insertion lock).
-    /// Visibility = sealed segments ONLY (the RAM buffer is not exposed). Every
-    /// live namespace is registered so cross-namespace SQL and the reserved `log`
+    /// Visibility = sealed segments ONLY (the RAM buffer is not exposed). Requested
+    /// live namespaces are registered so cross-namespace SQL and the reserved `log`
     /// namespace both resolve.
-    pub fn query_providers(&self) -> Result<Vec<RegisteredProvider>, StatsError> {
+    pub fn query_providers(&self, names: &[String]) -> Result<Vec<RegisteredProvider>, StatsError> {
         let mut out = Vec::new();
         for ns in self.catalog.snapshot_live() {
-            if self.tables.get(&ns.name).is_none() {
+            if !names.contains(&ns.name) || self.tables.get(&ns.name).is_none() {
                 // A registry entry with no runtime is a transient state during
                 // (re)build; skip it rather than fail the whole query.
                 continue;
@@ -2136,7 +2136,6 @@ mod tests {
         let source = store.catalog.object_segments("iris.worker").unwrap()[0]
             .source
             .clone();
-
         let runtime = store.tables.require("iris.worker").unwrap();
         let lease = runtime.controller().begin_compaction().unwrap();
         runtime
@@ -2153,19 +2152,15 @@ mod tests {
             .unwrap()
             .key_bounds
             .is_empty());
-        let localized = runtime.controller().localize(&source).await.unwrap();
-        let footer = crate::store::segment::read_segment_footer_at(
-            &localized,
-            0,
-            1,
-            Some(runtime.key_column()),
-        )
-        .unwrap();
-        assert_eq!(footer.min_key_value.as_deref(), Some("w-a"));
+        std::fs::remove_file(&path).unwrap();
 
         maintenance::run(&runtime, TableWork::KeyBounds)
             .await
             .unwrap();
+        assert!(
+            !Path::new(&path).exists(),
+            "footer recovery must not populate the cache"
+        );
         let repaired_row = store
             .catalog
             .list_segments("iris.worker")
@@ -2191,7 +2186,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn cold_index_backfill_localizes_its_object_source() {
+    async fn cold_index_backfill_reads_remotely_without_caching_or_rebuilding_again() {
         let data_dir = crate::test_support::unique_dir("cold_index_backfill_data");
         let remote_dir = crate::test_support::unique_dir("cold_index_backfill_remote");
         let store = Store::new(
@@ -2261,7 +2256,30 @@ mod tests {
             .unwrap()
             .remove(0);
         assert!(!rebuilt.artifacts.is_empty());
-        assert!(Path::new(&rebuilt.path).exists());
+        assert!(!Path::new(&rebuilt.path).exists());
+        let bundle = runtime
+            .query_snapshot()
+            .unwrap()
+            .artifacts
+            .get(&rebuilt.path)
+            .unwrap()
+            .bundle
+            .clone()
+            .unwrap();
+        assert!(crate::indices::format::read_header(&bundle).is_some());
+        maintenance::run(&runtime, TableWork::IndexArtifacts)
+            .await
+            .unwrap();
+        let again = restarted
+            .catalog
+            .object_segments("iris.worker")
+            .unwrap()
+            .remove(0);
+        assert_eq!(
+            again.artifacts, rebuilt.artifacts,
+            "source eviction must not trigger another index build"
+        );
+        assert!(!Path::new(&again.path).exists());
 
         restarted.shutdown(Duration::from_secs(1)).await;
         std::fs::remove_dir_all(data_dir).ok();
@@ -2272,7 +2290,7 @@ mod tests {
     /// pinned state and then localizes exactly the objects it selected. Returns
     /// the row count.
     async fn scan_table(store: &Store, table: &str) -> i64 {
-        let providers = store.query_providers().unwrap();
+        let providers = store.query_providers(&[table.to_owned()]).unwrap();
         let sql = format!("SELECT * FROM \"{table}\"");
         let result = crate::query::run_query_over(&crate::query::make_ctx(), providers, &sql)
             .await

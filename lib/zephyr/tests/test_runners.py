@@ -16,13 +16,21 @@ from finelog.client import LogClient
 from finelog.embedded import EmbeddedServer
 from fray.types import ResourceConfig
 from fsspec.implementations.local import LocalFileSystem
+from iris.client.client import IrisClient, IrisContext, iris_ctx_scope
+from iris.cluster.client.job_info import JobInfo, set_job_info
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.types import JobName
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration, ExponentialBackoff
 from zephyr import counters, runners, worker
 from zephyr.context import ZephyrContext
+from zephyr.coordinator import ZEPHYR_HISTORY_ENDPOINT_NAME
 from zephyr.dataset import Dataset
+from zephyr.plan import compute_plan
 from zephyr.runners import InlineRunner, SubprocessRunner
-from zephyr.stage_io import ZephyrWorkerError
+from zephyr.shuffle import ListShard, MemChunk
+from zephyr.stage_io import ShardTask, ZephyrWorkerError
 from zephyr.stats import (
     ZEPHYR_EXECUTION_STATS_NAMESPACE,
     ZEPHYR_STAGE_STATS_NAMESPACE,
@@ -30,6 +38,8 @@ from zephyr.stats import (
     StatsConfig,
     StatsWriter,
 )
+from zephyr.testing.coordinator import TEST_EXECUTION_ID, TEST_TASK_COST, make_test_coordinator, start_test_stage
+from zephyr.worker_context import CounterEntry, CounterSnapshot, InputProgress
 
 
 def _ctx(local_client, tmp_path, *, stage_runner_factory) -> ZephyrContext:
@@ -105,6 +115,52 @@ def test_user_counters_propagate(local_client, tmp_path, runner_factory):
     assert sorted(outcome.results) == [1, 2, 3, 4, 5]
     assert outcome.counters.get("docs") == 5
     assert outcome.counters.get("doubled_sum") == 30
+
+
+def test_file_record_totals_exclude_shuffle_reads(local_client, tmp_path, runner_factory):
+    records = [{"id": index} for index in range(3)]
+    parquet_path = tmp_path / "input.parquet"
+    jsonl_path = tmp_path / "input.jsonl"
+    pl.DataFrame(records).write_parquet(parquet_path)
+    jsonl_path.write_text("\n".join(json.dumps(record) for record in records))
+    ctx = _ctx(local_client, tmp_path, stage_runner_factory=runner_factory)
+    try:
+        dataset = (
+            Dataset.from_list([str(parquet_path), str(jsonl_path)])
+            .load_file()
+            .group_by(key=lambda row: row["id"], reducer=lambda key, rows: rows, num_output_shards=2)
+        )
+        outcome = ctx.execute(dataset)
+    finally:
+        ctx.shutdown()
+    assert sorted(row["id"] for row in outcome.results) == [0, 0, 1, 1, 2, 2]
+    assert outcome.counters[counters.RECORDS_IN] == 6
+    assert outcome.counters[counters.SHUFFLE_INPUT_ROWS] == 6
+
+
+def test_runner_snapshots_keep_input_progress_separate_and_reset_between_tasks(tmp_path, runner_factory):
+    runner = runner_factory()
+    for extension, count, total in (("parquet", 3, 3), ("jsonl", 2, None)):
+        records = [{"id": index} for index in range(count)]
+        path = tmp_path / f"input.{extension}"
+        if extension == "parquet":
+            pl.DataFrame(records).write_parquet(path)
+        else:
+            path.write_text("\n".join(json.dumps(record) for record in records))
+        plan = compute_plan(Dataset.from_list([str(path)]).load_file())
+        task = ShardTask(
+            shard_idx=0,
+            total_shards=1,
+            shard=ListShard(refs=[MemChunk(items=[plan.source_items[0].data])]),
+            operations=plan.stages[0].operations,
+            cost=TEST_TASK_COST,
+            stage_name="read",
+        )
+        result, final_counters = runner.execute(task, str(tmp_path / "chunks"), f"read-{extension}")
+        snapshot = runner.live_snapshot()
+        assert list(result.shard) == records
+        assert snapshot.input_progress == InputProgress(completed=count, total=total)
+        assert snapshot.counters[counters.RECORDS_IN].value == final_counters[counters.RECORDS_IN].value == count
 
 
 def test_exception_preserves_user_frame(local_client, tmp_path, runner_factory):
@@ -202,6 +258,77 @@ def finelog_server(tmp_path):
     server = EmbeddedServer(log_dir=str(tmp_path / "finelog"))
     yield f"http://127.0.0.1:{server.port}"
     server.stop()
+
+
+@pytest.mark.parametrize("explicit_config", [False, True])
+def test_iris_coordinator_exports_live_counters(actor_context, tmp_path, finelog_server, explicit_config):
+    class EndpointRegistry:
+        def resolve_endpoint(self, name):
+            if name == ZEPHYR_HISTORY_ENDPOINT_NAME:
+                raise ConnectionError("optional history endpoint unavailable")
+            assert name == LOG_SERVER_ENDPOINT_NAME
+            return "http://127.0.0.1:1" if explicit_config else finelog_server
+
+    info = JobInfo(task_id=JobName.from_wire("/test/review/coordinator/0"), attempt_id=2)
+    client = IrisClient(EndpointRegistry())
+    telemetry.shutdown()
+    set_job_info(info)
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(info, client=client)):
+            config = StatsConfig(finelog_server) if explicit_config else None
+            coordinator = make_test_coordinator(tmp_path, stats_config=config)
+            try:
+                start_test_stage(coordinator, [], stage_name="review")
+                coordinator.heartbeat(
+                    "worker-0",
+                    {TEST_EXECUTION_ID: CounterSnapshot({"review/completed": CounterEntry(7)}, generation=1)},
+                )
+                coordinator._publish_telemetry()
+                assert telemetry.flush()
+                with closing(LogClient.connect(finelog_server)) as query:
+                    rows = []
+
+                    def exported():
+                        rows[:] = query.query(
+                            'SELECT service, name, value, resource_attributes_json FROM "telemetry_v1.zephyr" '
+                            "WHERE name = 'review_completed'"
+                        ).to_pylist()
+                        return bool(rows)
+
+                    assert ExponentialBackoff().wait_until(exported, timeout=Duration.from_seconds(10))
+                assert rows and all(row["value"] == 7 for row in rows)
+                assert rows[0]["service"] == "zephyr"
+                attributes = json.loads(rows[0]["resource_attributes_json"])
+                assert attributes["task_id"] == "/test/review/coordinator/0"
+                assert attributes["attempt"] == "2"
+            finally:
+                coordinator.shutdown()
+    finally:
+        set_job_info(None)
+        telemetry.shutdown()
+
+
+def test_coordinator_runs_when_finelog_discovery_fails(actor_context, tmp_path):
+    class EndpointRegistry:
+        def resolve_endpoint(self, name):
+            if name == ZEPHYR_HISTORY_ENDPOINT_NAME:
+                raise ConnectionError("optional history endpoint unavailable")
+            assert name == LOG_SERVER_ENDPOINT_NAME
+            raise OSError("endpoint registry unavailable")
+
+    info = JobInfo(task_id=JobName.from_wire("/test/review/coordinator/0"), attempt_id=2)
+    set_job_info(info)
+    try:
+        with iris_ctx_scope(IrisContext.from_job_info(info, client=IrisClient(EndpointRegistry()))):
+            coordinator = make_test_coordinator(tmp_path)
+            try:
+                coordinator.run_pipeline(
+                    compute_plan(Dataset.from_list([])), TEST_EXECUTION_ID, "review", TEST_TASK_COST, TEST_TASK_COST
+                )
+            finally:
+                coordinator.shutdown()
+    finally:
+        set_job_info(None)
 
 
 def test_finelog_stats_emitted(local_client, tmp_path, finelog_server, monkeypatch):

@@ -28,7 +28,9 @@ from typing import ClassVar
 from finelog.client import LogClient, Table
 from iris.client.client import get_iris_ctx
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME
+from iris.cluster.endpoints import LOG_SERVER_ENDPOINT_NAME, TELEMETRY_ENDPOINT_PATH
+from iris.runtime import telemetry as runtime_telemetry
+from rigging import telemetry
 from rigging.timing import RateLimiter
 
 logger = logging.getLogger(__name__)
@@ -166,6 +168,22 @@ class StatsConfig:
     """Configuration for Zephyr metrics reporting."""
 
     finelog_url: str
+
+
+def configure_coordinator_telemetry(config: StatsConfig | None) -> None:
+    """Export coordinator counters with Iris identity; leave local processes inert."""
+    try:
+        runtime = runtime_telemetry.resolve(attributes={"role": telemetry.TelemetryRole.COORDINATOR.value})
+        if runtime is None:
+            return
+        url = config.finelog_url if config is not None else runtime.resolver(runtime.endpoint)
+        telemetry.configure(
+            endpoint=url.rstrip("/") + TELEMETRY_ENDPOINT_PATH,
+            service="zephyr",
+            attributes=runtime.attributes,
+        )
+    except Exception:
+        logger.warning("Could not configure coordinator telemetry", exc_info=True)
 
 
 @dataclass

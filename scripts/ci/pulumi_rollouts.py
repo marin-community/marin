@@ -16,6 +16,7 @@ class Rollout:
     work_dir: str
     service_account: str
     source_roots: tuple[str, ...] = ()
+    deploy_excluded_roots: tuple[str, ...] = ()
     timeout_minutes: int = 60
     deploy_generation_key: str = ""
     test_path: str = ""
@@ -60,6 +61,8 @@ ROLLOUTS = (
             "lib/marin/src/marin/evaluation",
             "lib/rigging",
         ),
+        # Uploaded packages have their own per-applet release lifecycle.
+        deploy_excluded_roots=("infra/marina/apps", "infra/marina/applets", "infra/marina/examples", "infra/marina/web"),
         test_path="infra/marina",
         timeout_minutes=90,
     ),
@@ -99,6 +102,7 @@ def rollout_for_service(name: str) -> Rollout:
 def rollout_item(rollout: Rollout, deploy_generation: str = "") -> dict[str, object]:
     item = asdict(rollout)
     item.pop("source_roots")
+    item.pop("deploy_excluded_roots")
     item.pop("work_dir")
     deploy_generation_key = item.pop("deploy_generation_key")
     if deploy_generation and not deploy_generation_key:
@@ -115,6 +119,22 @@ def workflow_payload(rollouts: Iterable[Rollout], deploy_generation: str = "") -
     }
 
 
+def deploys(rollout: Rollout, paths: tuple[str, ...]) -> bool:
+    return any(
+        any(path_is_under(path, root) for root in (rollout.work_dir, *rollout.source_roots))
+        and not any(path_is_under(path, root) for root in rollout.deploy_excluded_roots)
+        for path in paths
+    )
+
+
+def workflow_payload_for_paths(paths: Iterable[str]) -> dict[str, object]:
+    changed_paths = tuple(paths)
+    selected = rollouts_for_paths(changed_paths)
+    payload = workflow_payload(selected)
+    payload["deploy"] = {"include": [rollout_item(rollout) for rollout in selected if deploys(rollout, changed_paths)]}
+    return payload
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--service", help="select one rollout instead of reading changed paths from stdin")
@@ -124,11 +144,12 @@ def main() -> None:
     try:
         if args.service:
             selected = (rollout_for_service(args.service),)
+            payload = workflow_payload(selected, args.deploy_generation)
         else:
             if args.deploy_generation:
                 raise ValueError("--deploy-generation requires --service")
-            selected = rollouts_for_paths(line.strip() for line in sys.stdin if line.strip())
-        print(json.dumps(workflow_payload(selected, args.deploy_generation), separators=(",", ":")))
+            payload = workflow_payload_for_paths(line.strip() for line in sys.stdin if line.strip())
+        print(json.dumps(payload, separators=(",", ":")))
     except ValueError as error:
         parser.error(str(error))
 

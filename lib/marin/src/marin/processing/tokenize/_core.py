@@ -23,6 +23,7 @@ import braceexpand
 import fsspec
 import pyarrow.parquet as pq
 from levanter.data._preprocessor import BatchProcessor
+from levanter.data.text._batch_tokenizer import BatchTokenizer
 from levanter.data.text.formats import LmDatasetFormatBase, preprocessor_for_format
 from levanter.tokenizers import MarinTokenizer, load_tokenizer
 from rigging.filesystem.factory import url_to_fs
@@ -243,6 +244,23 @@ def split_oversized_token_record(
         yield {**chunk, CHUNK_INDEX_FIELD: chunk_index}
 
 
+def text_preprocessor(data_format: LmDatasetFormatBase, tokenizer: MarinTokenizer) -> BatchProcessor:
+    """The per-record encoder the tokenize stage uses for text formats.
+
+    Any other consumer encoding text must call this to get identical ids.
+    """
+    inner = preprocessor_for_format(data_format, tokenizer)
+    # Levanter's BatchTokenizer ships ``long_string_workaround`` opt-in but the
+    # behavior is desirable always: per-record texts above ``_workaround_len``
+    # (10K chars) get split at safe whitespace boundaries before the underlying
+    # ``encode_batch`` is called, then merged back. No-op for short records.
+    # Without this, a single multi-MB outlier passes one giant string to the
+    # Rust tokenizer and OOMs the worker.
+    if isinstance(inner, BatchTokenizer):
+        inner._long_string_workaround = True
+    return inner
+
+
 def tokenize_batches_with_id(
     *,
     data_format: LmDatasetFormatBase,
@@ -267,16 +285,7 @@ def tokenize_batches_with_id(
     backend = ctx.get_shared("tokenizer_backend")
     # load_tokenizer is @lru_cache, so this only loads once per worker process.
     tokenizer: MarinTokenizer = load_tokenizer(name, backend=backend)
-    inner = preprocessor_for_format(data_format, tokenizer)
-    # Levanter's BatchTokenizer ships ``long_string_workaround`` opt-in but the
-    # behavior is desirable always: per-record texts above ``_workaround_len``
-    # (10K chars) get split at safe whitespace boundaries before the underlying
-    # ``encode_batch`` is called, then merged back. No-op for short records.
-    # Without this, a single multi-MB outlier passes one giant string to the
-    # Rust tokenizer and OOMs the worker.
-    if hasattr(inner, "_long_string_workaround"):
-        inner._long_string_workaround = True
-    processor = IdPreservingPreprocessor(inner)
+    processor = IdPreservingPreprocessor(text_preprocessor(data_format, tokenizer))
     token_data_key = data_format.token_data_key
     counters.pipeline.update_counter("tokenize/initialization_seconds", time.monotonic() - initialization_start)
 

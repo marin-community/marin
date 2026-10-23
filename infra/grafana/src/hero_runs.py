@@ -4,9 +4,9 @@
 """Hero-run enrollment shared by the training alert projections.
 
 A root job is a hero run while its latest `iris.task_state` row is fresh and
-reports a running task. Its last path component is `<run-id>-coord` or
-`<run-id>-coord-<retry>`, and `<run-id>` begins with `hero-`. This naming
-contract also gives the exact `run_id` in its Levanter telemetry. See
+reports a running task. It belongs to `/marin` and its last path component is
+`<run-id>-coord` or `<run-id>-coord-<retry>`, where `<run-id>` begins with
+`hero-`. This naming contract also gives the exact `run_id` in its Levanter telemetry. See
 docs/ops/training-stall-alert-contract.md.
 
 Recent Levanter `phase` telemetry is the second path. The run-health projections
@@ -38,10 +38,11 @@ TELEMETRY_GONE_AGE = timedelta(minutes=10)
 LEVANTER_METRICS_TABLE = '"levanter.metrics"'
 
 HERO_RUN_PREFIX = "hero-"
+HERO_ROOT_NAMESPACE = "/marin"
 _COORDINATOR_MARKER = "-coord"
 HERO_ROOT_PATTERNS = (
-    f"%/{HERO_RUN_PREFIX}%{_COORDINATOR_MARKER}",
-    f"%/{HERO_RUN_PREFIX}%{_COORDINATOR_MARKER}-%",
+    f"{HERO_ROOT_NAMESPACE}/{HERO_RUN_PREFIX}%{_COORDINATOR_MARKER}",
+    f"{HERO_ROOT_NAMESPACE}/{HERO_RUN_PREFIX}%{_COORDINATOR_MARKER}-%",
 )
 # Levanter's tracker phase, republished every minute.
 PHASE_METRIC = "phase"
@@ -176,7 +177,9 @@ def phase_execution_query(now: datetime, runs: Sequence[RunIdentity]) -> str:
 
 def hero_run_id(root_job: str) -> str | None:
     """Return the run ID a hero coordinator root job names, or None."""
-    root_name = root_job.rsplit("/", 1)[-1]
+    namespace, _, root_name = root_job.rpartition("/")
+    if namespace != HERO_ROOT_NAMESPACE:
+        return None
     run_id, marker, retry = root_name.rpartition(_COORDINATOR_MARKER)
     if not marker or not run_id.startswith(HERO_RUN_PREFIX):
         return None

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       submission:
-        description: Submit the next checkpoint or all unfinished checkpoints
+        description: Keep two checkpoint jobs active, or submit all unfinished checkpoints
         type: choice
         default: next
         options:

@@ -41,7 +41,7 @@ from marin.experiment.namespacing import user_owned_name
 from marin.inference.iris import remote_inference
 from marin.inference.types import OpenAIEndpoint
 from rigging.filesystem.storage_path import StoragePath
-from tasktrove_verify.modes.extract import extract_boxed
+from verifyit.modes.extract import extract_boxed
 from zephyr.readers import load_parquet
 
 from experiments.post_training.curriculum_sft.code_tasks import EXECUTION_TIMEOUT, literals_equal, run_tests

@@ -40,6 +40,7 @@ from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -134,6 +135,8 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 
 
 _GATED_NORM_RANK = 128
+# June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
+_LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
 _EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
@@ -164,10 +167,6 @@ def _reshard_sequence(x: jax.Array, axis: str | None) -> jax.Array:
         return x
     spec = sharding.spec
     return reshard(x, P(spec[0], axis, *spec[2:]))
-
-
-def _activation_reshard(x: jax.Array) -> jax.Array:
-    return reshard(x, _activation_spec())
 
 
 def _hf_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
@@ -238,6 +237,11 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
+        if self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
+            raise ValueError(
+                f"snowball cannot use moe_implementation={self.moe_implementation!r}: it requires "
+                "pooled_transport_capacity_factor, which SnowballConfig does not set"
+            )
         _ = self.inferred_head_dim
 
     @property
@@ -523,11 +527,11 @@ class DenseMLP(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, self.w_down, out_sharding=_token_spec())
-        return _activation_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+        return jnp.reshape(out_flat, (b, s, out_flat.shape[-1]), out_sharding=_activation_spec())
 
 
 class SnowballMoEMLP(eqx.Module):
@@ -570,7 +574,7 @@ class SnowballMoEMLP(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
@@ -593,8 +597,7 @@ class SnowballMoEMLP(eqx.Module):
             mesh=get_abstract_mesh(),
             report_capacity_overflow=False,
         )
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        return _activation_reshard(routed)
+        return jnp.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
 
 
 class SnowballBlock(eqx.Module):
@@ -643,6 +646,21 @@ class SnowballBlock(eqx.Module):
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
         mlp_out = self.mlp(mlp_in) + self.shared(mlp_in)
         return x + mlp_out
+
+
+def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
+    """Bool[num_layers], True where a layer runs full-causal attention instead of the sliding window."""
+    idx = jnp.arange(num_layers)
+    return ((idx % _LONG_ATTENTION_INTERVAL) == _LONG_ATTENTION_INTERVAL - 1) | (idx == num_layers - 1)
+
+
+def num_long_attention_layers(num_layers: int) -> int:
+    """Number of layers that run full-causal attention, counted without JAX for FLOP estimates."""
+    return sum(
+        1
+        for i in range(num_layers)
+        if i % _LONG_ATTENTION_INTERVAL == _LONG_ATTENTION_INTERVAL - 1 or i == num_layers - 1
+    )
 
 
 class SnowballTransformer(eqx.Module):
@@ -695,8 +713,7 @@ class SnowballTransformer(eqx.Module):
         # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
         num_blocks = len(self.blocks)
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
-        idx = jnp.arange(num_blocks)
-        long_schedule = ((idx % 4) == 3) | (idx == num_blocks - 1)
+        long_schedule = long_attention_layer_mask(num_blocks)
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
             layer, use_long = layer_and_flag

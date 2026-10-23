@@ -15,7 +15,7 @@ from rigging.timing import Timestamp
 from sqlalchemy import Row, bindparam, case, select
 
 from iris.cluster.controller import ops, reads, tasks
-from iris.cluster.controller.auth import ControllerAuth
+from iris.cluster.controller.auth import ControllerAuth, mint_worker_token
 from iris.cluster.controller.backend import BackendCapability, TaskBackend
 from iris.cluster.controller.codec import decode_attribute_value, resource_spec_from_scalars, worker_metadata_to_proto
 from iris.cluster.controller.db import ControllerDB
@@ -152,6 +152,17 @@ def _worker_health_status(
         backend_id=backend_id,
         scale_group=str(worker.scale_group or ""),
     )
+
+
+def renew_worker_token(
+    dependencies: WorkerDependencies,
+) -> controller_pb2.Controller.RenewWorkerTokenResponse:
+    """Issue a fresh worker credential to an authenticated worker or admin."""
+    authorize(AuthzAction.ACT_AS_WORKER)
+    manager = dependencies.auth.jwt_manager
+    if manager is None:
+        raise ConnectError(Code.FAILED_PRECONDITION, "Controller has no token issuer")
+    return controller_pb2.Controller.RenewWorkerTokenResponse(token=mint_worker_token(manager))
 
 
 def register(

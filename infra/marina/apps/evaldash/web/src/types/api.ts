@@ -25,6 +25,7 @@ export interface RunRow {
   accelerator: string | null
   region: string | null
   status: string
+  step_status: string | null
   results_path: string | null
   git_sha: string | null
   image_digest: string | null
@@ -197,6 +198,7 @@ export interface EvalFamily {
 }
 
 export interface Meta {
+  run_facets: Record<string, string[]>
   models: string[]
   default_cohort: string
   verified_cohorts: string[]
@@ -285,6 +287,7 @@ export interface EvalRecord {
   eval: { name: string; mechanism: string; tasks: EvalTask[] }
   hardware: { platform: string; accelerator: string; region_or_cluster: string }
   status: string
+  step_status?: string | null
   error: string | null
   results_path: string
   metrics: Record<string, Record<string, number>>
@@ -412,8 +415,9 @@ export interface SampleGrading {
 // One evaluated question: the prompt, the model's answer, the gold answer, and its scores.
 // `prompt_text` and `prompt_messages` are mutually exclusive; `choices`/`model_choice`/
 // `target_choice` are set for `multiple_choice` samples, `output`/`extracted` for `generation`
-// samples, and `trajectory_uri` for `agentic` samples. The one unbounded payload, the agentic
-// trajectory, is referenced by URI and lazy-loaded on demand.
+// samples, and `trajectory_uri` for `agentic` samples. The unbounded agentic artifact is referenced
+// by URI and lazy-loaded on demand. SOTOPIA-hard runs can have a separate `summary_uri` when Harbor
+// archived no ATIF trajectory.
 export interface SampleRow {
   task: string
   doc_id: string
@@ -427,13 +431,14 @@ export interface SampleRow {
   extracted: string | null
   target_text: string | null
   trajectory_uri: string | null
+  summary_uri: string | null
   grading: SampleGrading | null
   metrics: Record<string, number>
   correct: boolean | null
   doc: string
 }
 
-// One sample-referenced artifact (a trajectory) resolved to text by the server's
+// One sample-referenced artifact resolved to text by the server's
 // artifact endpoint. `available` is false with a `reason` when the object is out of tree,
 // missing, unreadable, or over the size cap — mirroring the logs endpoint's degradation.
 export interface ArtifactResponse {
@@ -558,6 +563,7 @@ export interface ModelRun {
   run_id: string
   eval_name: string
   status: string
+  step_status: string | null
   created_at: string | null
   version: string | null
   headline: PanelCell | null
@@ -610,6 +616,7 @@ export interface GroupMember {
   run_id: string
   eval_name: string
   status: string
+  step_status: string | null
   created_at: string
   headline: PanelCell | null
 }
@@ -623,7 +630,7 @@ export interface LaunchGroup {
   user_name: string
   accelerator: string | null
   created_at: string
-  status: RunStatus | 'mixed'
+  status: RunStatus | 'mixed' | 'running' | 'step_failed'
   n_evals: number
   n_succeeded: number
   evals: GroupMember[]

@@ -37,6 +37,7 @@ from iris.cluster.constraints import ConstraintOp
 from iris.cluster.types import Entrypoint as IrisEntrypoint
 from iris.cluster.types import JobName, ResourceSpec, gpu_device
 from iris.resources.state import JobState as IrisJobState
+from iris.rpc import job_pb2
 from rigging.timing import Duration
 
 
@@ -214,11 +215,12 @@ def test_actor_startup_after_task_termination_stops_server_without_error(monkeyp
     registry = SimpleNamespace(register=reject_registration)
     ctx = SimpleNamespace(job_id=JobName.from_wire("/user/job"), registry=registry, get_port=lambda _name: 1234)
     job_info = SimpleNamespace(task_index=0, advertise_host="worker")
+
     monkeypatch.setattr(iris_backend, "ActorServer", lambda **_kwargs: server)
     monkeypatch.setattr(iris_backend, "iris_ctx", lambda: ctx)
     monkeypatch.setattr(iris_backend, "get_job_info", lambda: job_info)
 
-    iris_backend._host_actor(object, (), {}, "actor")
+    iris_backend._host_actor(object, (), {}, "actor", 17)
 
     assert stopped
     assert any(record.levelno == logging.ERROR for record in caplog.records)
@@ -289,6 +291,22 @@ class TestImagePlumbing:
         kwargs = fake_iris.submit.call_args.kwargs
         assert kwargs["task_image"] == "custom/swetrace:dev"
         assert kwargs["replicas"] == 2
+
+    def test_create_actor_group_passes_the_container_profile_to_iris(self):
+        fake_iris = MagicMock()
+        fake_iris.submit.return_value = MagicMock(job_id="job-123")
+        client = FrayIrisClient.from_iris_client(fake_iris)
+
+        class _DummyActor:
+            pass
+
+        client.create_actor_group(
+            _DummyActor,
+            name="dummy",
+            count=1,
+            resources=ResourceConfig(cpu=2, ram="4g", container_profile="CONTAINER_PROFILE_PRIVILEGED"),
+        )
+        assert fake_iris.submit.call_args.kwargs["container_profile"] == job_pb2.CONTAINER_PROFILE_PRIVILEGED
 
     def test_create_actor_group_default_image_is_none(self):
         """When ResourceConfig.image is unset, task_image flows through as None."""

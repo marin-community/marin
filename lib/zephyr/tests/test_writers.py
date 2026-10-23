@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 import pytest
 import vortex
 from pyarrow import fs as pa_fs
+from zephyr.readers import load_jsonl
 from zephyr.writers import (
     ThreadedBatchWriter,
     _pyarrow_filesystem,
@@ -106,6 +107,16 @@ def test_write_jsonl_file_zstd_compresses(tmp_path, ext):
     assert result["count"] == 5
     with open(output_path, "rb") as f:
         assert f.read(4) == _ZSTD_MAGIC
+
+
+def test_write_jsonl_file_xz_round_trips(tmp_path):
+    output_path = str(tmp_path / "data.jsonl.xz")
+    records = [{"id": 1, "text": "hello"}, {"id": 2, "text": "world"}]
+
+    result = write_jsonl_file(records, output_path)
+
+    assert result == {"path": output_path, "count": len(records)}
+    assert list(load_jsonl(output_path)) == records
 
 
 def test_write_parquet_file_basic():
@@ -201,17 +212,15 @@ def test_write_parquet_file_widens_null_to_concrete_type():
         assert xs[8] == "hello"
 
 
-def test_write_parquet_file_captures_fields_appearing_in_later_batches():
-    """A field absent from the first batch but present later must not be silently dropped."""
-    records = [{"x": "a"}] * 8 + [{"x": "b", "z": 42}]
-    with tempfile.TemporaryDirectory() as tmpdir:
-        output_path = str(Path(tmpdir) / "test.parquet")
-        result = write_parquet_file(records, output_path)
-        assert result["count"] == 9
+@pytest.mark.parametrize("intro_index", [1, 8, 9])
+def test_write_parquet_file_captures_fields_appearing_after_first_row(tmp_path, intro_index):
+    records = [{"x": "a"}] * intro_index + [{"x": "b", "z": 42}]
+    output_path = str(tmp_path / "test.parquet")
+    result = write_parquet_file(records, output_path)
+    assert result["count"] == len(records)
 
-        table = pq.read_table(output_path)
-        assert "z" in table.schema.names, "field `z` must survive to disk, not be dropped"
-        assert table.column("z").to_pylist() == [None] * 8 + [42]
+    table = pq.read_table(output_path)
+    assert table.to_pylist() == [{"x": "a", "z": None}] * intro_index + [{"x": "b", "z": 42}]
 
 
 def test_write_parquet_file_raises_on_incompatible_type_conflict():
@@ -394,3 +403,15 @@ def test_threaded_batch_writer_close_raises_when_writer_fails_with_full_queue():
 
     with pytest.raises(ValueError, match="writer failed"):
         writer.close()
+
+
+def test_threaded_batch_writer_discards_partial_output_when_producer_fails(tmp_path):
+    output_path = str(tmp_path / "out.parquet")
+
+    with pytest.raises(RuntimeError, match="producer failed"):
+        with ThreadedBatchWriter(lambda items: write_parquet_file(items, output_path)) as writer:
+            writer.submit({"id": 1})
+            writer.submit({"id": 2})
+            raise RuntimeError("producer failed")
+
+    assert list(tmp_path.iterdir()) == []

@@ -7,6 +7,7 @@ import threading
 
 import pytest
 from fray.actor import ActorHandle, ActorUnavailableError, current_actor
+from fray.current_client import current_client, set_current_client
 from fray.local_backend import LocalClient
 
 
@@ -25,6 +26,11 @@ class Counter:
 class Adder:
     def add(self, a: int, b: int) -> int:
         return a + b
+
+
+class ClientActor:
+    def active_client(self):
+        return current_client()
 
 
 class _ActorConstructionError(RuntimeError):
@@ -55,6 +61,12 @@ def test_create_actor_and_call_remote(client: LocalClient):
     result = actor.increment.remote(5).result()
     assert result == 5
     assert actor.get.remote().result() == 5
+
+
+def test_remote_actor_keeps_explicit_client(client: LocalClient):
+    with set_current_client(client):
+        actor = client.create_actor(ClientActor, name="client-context")
+        assert actor.active_client.remote().result() is client
 
 
 def test_create_actor_synchronous_call(client: LocalClient):

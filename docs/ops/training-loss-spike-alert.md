@@ -4,7 +4,7 @@
 
 It pages because a hero run diverging unwatched costs more than a false page does, and a silence answers a false page. Expect benign firings at mixture stage boundaries; silence the run for that window rather than widening the band for every run.
 
-Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract. A root matches `%/hero-%-coord` or `%/hero-%-coord-%`. The two rules share one `iris.task_state` query in each bridge cache interval.
+Enrollment uses the [`TrainingProgressStalled`](training-stall-alert-contract.md) contract. A root matches `/marin/hero-%-coord` or `/marin/hero-%-coord-%`. The two rules share one `iris.task_state` query in each bridge cache interval.
 
 ## What fires it
 
@@ -21,7 +21,7 @@ Reducing the recent window to its floor is the load-bearing choice. A single exc
 
 The baseline is the run's own trailing history, so the band moves with training. Early in a run, loss falls quickly and its trailing standard deviation is wide, which is when a lone excursion means least. Late in a run the band tightens and a smaller persistent rise clears it.
 
-A run reports `warming_up` with fewer than 20 baseline or 5 recent samples, and `healthy` otherwise. Both are zero-valued rows, which resolves a firing instance. With no eligible roots the bridge returns an explicit zero-valued `fleet` row; `noDataState: Alerting` is reserved for a malformed or unavailable response.
+A run reports `warming_up` with fewer than 20 baseline or 5 recent samples, and `healthy` when enough samples show no spike. Both are zero-valued rows, which resolves a firing instance. With no eligible roots the bridge returns an explicit zero-valued `fleet` row. A retryable Finelog query failure also returns a non-firing row; `FinelogFleetUnhealthy` reports the shared query-path failure. Grafana's `noDataState: Alerting` and `execErrState: Alerting` cover empty and invalid bridge responses.
 
 `spiking` and `not_finite` are separate alert instances. The route groups by logical run. Thus, retries and reason changes use one notification group.
 

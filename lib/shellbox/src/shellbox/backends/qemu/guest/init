@@ -4,6 +4,11 @@ $busybox mkdir -p /dev /dev/pts /proc /sys /tmp /workspace /logs/agent /logs/ver
 $busybox mount -t proc proc /proc
 $busybox mount -t sysfs sysfs /sys
 $busybox mount -t devtmpfs devtmpfs /dev
+# devtmpfs hides the image's fd links, which Bash process substitution requires.
+$busybox ln -s /proc/self/fd /dev/fd
+$busybox ln -s /proc/self/fd/0 /dev/stdin
+$busybox ln -s /proc/self/fd/1 /dev/stdout
+$busybox ln -s /proc/self/fd/2 /dev/stderr
 $busybox mkdir -p /dev/pts
 $busybox mount -t devpts devpts /dev/pts
 $busybox stty -F /dev/ttyS0 -echo

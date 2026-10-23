@@ -17,10 +17,10 @@ import jax.numpy as jnp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
-from haliax.nn import ArrayStacked
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
+from levanter.layers.stacked import ArrayStacked
 
 try:
     from jax.shard_map import shard_map
@@ -48,7 +48,7 @@ from levanter.grug.grug_moe import (
     MoEExpertMlp,
     MoeImplementation,
     QBRoutedMoE,
-    resolve_moe_implementation,
+    validate_moe_implementation,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import _mesh_axis_size, unshard
@@ -216,7 +216,7 @@ class GrugModelConfig:
             raise ValueError("expert_chunks must be positive")
         if self.num_shared_experts <= 0:
             raise ValueError("num_shared_experts must be positive")
-        resolve_moe_implementation(self.moe_implementation)
+        validate_moe_implementation(self.moe_implementation)
 
     @property
     def Embed(self) -> Axis:

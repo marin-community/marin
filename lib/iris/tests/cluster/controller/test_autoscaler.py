@@ -17,9 +17,11 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import cast
 
+import jwt
 import pytest
 from iris.cluster.config import AutoscalerConfig, ScaleGroupConfig, WorkerConfig, WorkerSettings
 from iris.cluster.constraints import DeviceType, WellKnownAttribute
+from iris.cluster.controller.auth import create_controller_auth
 from iris.cluster.controller.autoscaler import DEFAULT_UNRESOLVABLE_TIMEOUT, Autoscaler
 from iris.cluster.controller.autoscaler.backoff_detector import GroupHealth
 from iris.cluster.controller.autoscaler.models import ScalingAction, ScalingDecision
@@ -52,6 +54,7 @@ from iris.testing.controller import (
 from iris.testing.controller import (
     mark_discovered_ready as _mark_discovered_ready,
 )
+from rigging.auth import RefreshingTokenProvider
 from rigging.timing import Duration, Timestamp
 
 
@@ -1930,3 +1933,31 @@ class TestAutoscalerHealthProbe:
 
         assert sorted(requested_urls) == ["http://10.0.0.1:10001/health", "http://127.0.0.1:54321/health"]
         autoscaler.shutdown()
+
+
+def test_new_worker_bootstrap_refreshes_credentials_after_controller_ages():
+    now = [1000.0]
+    auth = create_controller_auth(None, cluster_name="test")
+    manager = auth.jwt_manager
+    initial = manager.create_token("system:worker", "worker", "initial", ttl_seconds=3600)
+    expires = jwt.decode(initial, options={"verify_signature": False})["exp"]
+    now[0] = expires - 1000
+    renewed = manager.create_token("system:worker", "worker", "renewed", ttl_seconds=86400)
+    provider = RefreshingTokenProvider(initial, lambda token: renewed, now=lambda: now[0])
+    platform = make_mock_platform()
+    group = ScalingGroup(make_scale_group_config(name="renewal", max_slices=5), platform)
+    autoscaler = Autoscaler(
+        {"renewal": group},
+        evaluation_interval=Duration.from_seconds(1),
+        platform=platform,
+        base_worker_config=WorkerConfig(docker_image="test:latest", auth_token=initial),
+        worker_token_provider=provider,
+    )
+    now[0] = expires + 1
+    autoscaler.execute(
+        [ScalingDecision(scale_group="renewal", action=ScalingAction.SCALE_UP, reason="new demand")],
+        timestamp=Timestamp.from_ms(1000),
+    )
+    launched_config = platform.create_slice.call_args.kwargs["worker_config"]
+    assert launched_config.auth_token == renewed
+    assert manager.verify(launched_config.auth_token).role == "worker"

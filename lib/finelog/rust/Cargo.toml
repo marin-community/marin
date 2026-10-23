@@ -1,6 +1,6 @@
 # finelog's own Cargo workspace (no top-level rust/ tree). The root package
 # `finelog` is an implicit member; `pyext` is the PyO3 cdylib that ships in the
-# marin-finelog wheel. dupekit lives in its own workspace under lib/dupekit/rust
+# marin-finelog-server wheel. dupekit lives in its own workspace under lib/dupekit/rust
 # and shares nothing here.
 [workspace]
 members = ["pyext"]
@@ -9,8 +9,7 @@ resolver = "2"
 # Optimized production profile with parallel codegen and no LTO. Finelog's
 # DataFusion/Arrow dependency graph makes even thin LTO add several minutes to
 # small server changes, while ordinary opt-level 3 remains representative for
-# deployment. Applies to every workspace member: the finelog-server binary and
-# the finelog/pyext cdylib.
+# deployment. The Python wheel selects its own size-oriented profile below.
 [profile.release]
 lto = false
 codegen-units = 16
@@ -23,6 +22,15 @@ strip = "symbols"
 [profile.fast]
 inherits = "release"
 opt-level = 2
+
+# Iris's embedded fallback prioritizes install size over standalone throughput.
+[profile.wheel]
+inherits = "release"
+opt-level = "z"
+lto = "thin"
+codegen-units = 1
+debug = false
+strip = "symbols"
 
 [package]
 name = "finelog"
@@ -46,6 +54,7 @@ path = "src/lib.rs"
 
 [dependencies]
 connectrpc = { version = "0.6", features = ["axum", "gzip", "zstd"] }
+zstd = "0.13"
 buffa = { version = "0.6", features = ["json"] }
 buffa-types = { version = "0.6", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
@@ -126,7 +135,7 @@ datafusion = "53"
 datafusion-datasource = "53"
 datafusion-datasource-parquet = "53"
 object_store = { version = "0.13", features = ["gcp", "aws"] }
-async-trait = "0.1"
+async-trait = "0.1.92"
 url = "2"
 # Rust-owned catalog sidecar; `bundled` keeps the build hermetic (no system
 # sqlite). Distinct file from Python's DuckDB registry — never aliased.

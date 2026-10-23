@@ -5,36 +5,176 @@
 
 from __future__ import annotations
 
-import heapq
+import functools
 import io
 import itertools
-from collections import defaultdict
-from collections.abc import Generator, Iterator, Mapping, Sequence
-from dataclasses import dataclass
-from typing import BinaryIO, ClassVar, Protocol
+import threading
+import time
+from collections import OrderedDict, defaultdict
+from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, closing
+from dataclasses import dataclass, replace
+from typing import BinaryIO, ClassVar, Protocol, TypeVar, cast
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as pds
 import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
-from pyarrow.fs import FSSpecHandler, PyFileSystem
+from fsspec.spec import AbstractBufferedFile, AbstractFileSystem
+from pyarrow.fs import FileInfo, FileType, FSSpecHandler, PyFileSystem
+from rigging import telemetry
 from rigging.filesystem.storage_path import StoragePath
 
-from finestore.commit import ArchiveSnapshot, read_snapshot, validate_archive
+from finestore.commit import ArchiveSnapshot, read_snapshot
 from finestore.layout import (
     BlobColumns,
     BlobTables,
     CommitToken,
     FineStoreLayout,
+    KeyRange,
     SealMarker,
     Shard,
     SystemColumns,
     TableMetadata,
     parse_uri,
 )
+from finestore.merge import merge_sorted_runs, newest_indices, sorted_by_key
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
+MAX_DESCRIPTOR_READS = 4
+_READ_CACHE_BYTES = 64 * 1024 * 1024
+
+
+@dataclass
+class BlobReadDiagnostics:
+    """Cumulative batch-read work; returned bytes exclude storage read amplification."""
+
+    read_calls: int = 0
+    requested_names: int = 0
+    found_names: int = 0
+    descriptor_seconds: float = 0.0
+    payload_seconds: float = 0.0
+    descriptor_lookups: int = 0
+    selected_shards: int = 0
+    bytes_returned: int = 0
+
+    def add(self, other: BlobReadDiagnostics) -> None:
+        self.read_calls += other.read_calls
+        self.requested_names += other.requested_names
+        self.found_names += other.found_names
+        self.descriptor_seconds += other.descriptor_seconds
+        self.payload_seconds += other.payload_seconds
+        self.descriptor_lookups += other.descriptor_lookups
+        self.selected_shards += other.selected_shards
+        self.bytes_returned += other.bytes_returned
+
+
+_BLOB_READ_CALLS = telemetry.counter("finestore_blob_read_calls", unit="{call}")
+_BLOB_REQUESTED_NAMES = telemetry.counter("finestore_blob_requested_names", unit="{name}")
+_BLOB_FOUND_NAMES = telemetry.counter("finestore_blob_found_names", unit="{name}")
+_BLOB_RETURNED_BYTES = telemetry.counter("finestore_blob_returned_bytes", unit="By")
+_BLOB_DESCRIPTOR_LOOKUPS = telemetry.counter("finestore_blob_descriptor_lookups", unit="{lookup}")
+_BLOB_DESCRIPTOR_SECONDS = telemetry.histogram("finestore_blob_descriptor_seconds", unit="s")
+_BLOB_PAYLOAD_SECONDS = telemetry.histogram("finestore_blob_payload_seconds", unit="s")
+_BLOB_SELECTED_SHARDS = telemetry.histogram("finestore_blob_selected_shards", unit="{shard}")
+
+
+class _ShardHandler(FSSpecHandler):
+    """Open manifest shards without the existence check Arrow's handler issues first.
+
+    Every shard in a snapshot is immutable and already published, so the HEAD request
+    Arrow would send before each open is wasted on object storage.
+    """
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(self.fs.open(path, mode="rb"), mode="r")
+
+
+class _NoReadAheadHandler(FSSpecHandler):
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        # Arrow's pre_buffer=False does not disable fsspec's independent 50 MiB
+        # read-ahead, which can fetch unrelated inline blobs after a small read.
+        return pa.PythonFile(self.fs.open(path, mode="rb", cache_type="none"), mode="r")
+
+
+class _BoundedReadAheadHandler(FSSpecHandler):
+    def __init__(self, fs: AbstractFileSystem, block_size: int) -> None:
+        super().__init__(fs)
+        self._block_size = block_size
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(
+            self.fs.open(path, mode="rb", cache_type="readahead", block_size=self._block_size), mode="r"
+        )
+
+
+class _ReadRangeCache:
+    """A byte-bounded LRU shared by all shard handles in one snapshot."""
+
+    def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard], capacity: int) -> None:
+        self._filesystem = filesystem
+        self._capacity = capacity
+        self._bytes = 0
+        self._ranges: dict[str, dict[tuple[int, int], bytes]] = {shard.path: {} for shard in shards}
+        self._entries: OrderedDict[tuple[str, int, int], bytes] = OrderedDict()
+        self._file_locks = {path: threading.Lock() for path in self._ranges}
+        self._lock = threading.Lock()
+
+    def read(self, path: str, start: int, end: int) -> bytes:
+        # Serialize misses for the same file while allowing different shards to load concurrently.
+        with self._file_locks[path]:
+            with self._lock:
+                for (cached_start, cached_end), data in self._ranges[path].items():
+                    if cached_start <= start and end <= cached_end:
+                        self._entries.move_to_end((path, cached_start, cached_end))
+                        return data[start - cached_start : end - cached_start]
+            data = cast(bytes, self._filesystem.cat_file(path, start=start, end=end))
+            if len(data) != end - start:
+                raise ValueError(f"shard {path!r}: read {len(data)} of {end - start} bytes at {start}")
+            # Oversized caller reads remain transient and do not evict the working set.
+            if len(data) > self._capacity:
+                return data
+            with self._lock:
+                while self._bytes + len(data) > self._capacity:
+                    (old_path, old_start, old_end), old = self._entries.popitem(last=False)
+                    del self._ranges[old_path][old_start, old_end]
+                    self._bytes -= len(old)
+                self._entries[path, start, end] = data
+                self._ranges[path][start, end] = data
+                self._bytes += len(data)
+            return data
+
+
+class _CachedReadFile(AbstractBufferedFile):
+    def __init__(self, filesystem: AbstractFileSystem, path: str, size: int, cache: _ReadRangeCache) -> None:
+        super().__init__(filesystem, path, mode="rb", size=size, cache_type="none")
+        self._range_cache = cache
+
+    def _fetch_range(self, start: int, end: int) -> bytes:
+        return self._range_cache.read(self.path, start, min(end, self.size))
+
+
+class _CachedReadHandler(FSSpecHandler):
+    def __init__(self, filesystem: AbstractFileSystem, shards: Sequence[Shard], capacity: int) -> None:
+        super().__init__(filesystem)
+        self._sizes = {shard.path: shard.size_bytes for shard in shards}
+        self._cache = _ReadRangeCache(filesystem, shards, capacity)
+
+    def prefetch(self, path: str) -> None:
+        """Cache a complete immutable shard for later schema and row reads."""
+        self._cache.read(path, 0, self._sizes[path])
+
+    def get_file_info(self, paths: list[str]) -> list[FileInfo]:
+        # The pinned manifest already identifies these immutable files and their sizes.
+        return [FileInfo(path, FileType.File, size=self._sizes[path]) for path in paths]
+
+    def open_input_file(self, path: str) -> pa.PythonFile:
+        return pa.PythonFile(_CachedReadFile(self.fs, path, self._sizes[path], self._cache), mode="r")
+
+    def open_input_stream(self, path: str) -> pa.PythonFile:
+        return self.open_input_file(path)
 
 
 @dataclass(frozen=True)
@@ -42,29 +182,13 @@ class _ScanProfile:
     batch_rows: int
     batch_readahead: int
     fragment_readahead: int
+    pre_buffer: bool = True
 
 
 _TABLE_SCAN_PROFILE = _ScanProfile(batch_rows=16_384, batch_readahead=16, fragment_readahead=4)
-_BLOB_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1)
-
-
-@dataclass(frozen=True)
-class VersionedRow:
-    """One row tagged with its key and manifest ordering coordinates."""
-
-    key: tuple
-    commit_sequence: int
-    sequence: int
-    generation: int
-    row: dict
-
-
-@dataclass(frozen=True)
-class MergedRow:
-    """The winning row for one key and the number of older rows it replaced."""
-
-    row: dict
-    superseded: int
+_BLOB_DESCRIPTOR_SCAN_PROFILE = _ScanProfile(batch_rows=64, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+_BLOB_PART_SCAN_PROFILE = _ScanProfile(batch_rows=1, batch_readahead=1, fragment_readahead=1, pre_buffer=False)
+_ArrowRows = TypeVar("_ArrowRows", pa.Table, pa.RecordBatch)
 
 
 class BlobCorruptionError(ValueError):
@@ -108,6 +232,42 @@ class BlobDescriptor:
         if part_count is not None and not isinstance(part_count, int):
             raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
         return cls(name=name, size=size, metadata_json=metadata_json, data=data, part_count=part_count)
+
+
+def _validated_blob_parts(descriptor: BlobDescriptor, rows: Iterable[Mapping[str, object]]) -> Iterator[bytes]:
+    """Yield a descriptor's bytes while checking its committed part and size metadata."""
+    name = descriptor.name
+    part_count = descriptor.part_count
+    if part_count is None:
+        data = descriptor.data
+        if data is None:
+            raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
+        if descriptor.size is not None and len(data) != descriptor.size:
+            raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {len(data)}")
+        yield data
+        return
+    if part_count <= 0:
+        raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
+    expected_part = 0
+    total_bytes = 0
+    for row in rows:
+        part = row.get(BlobColumns.PART)
+        if not isinstance(part, int):
+            raise BlobCorruptionError(f"blob {name!r} has invalid part number {part!r}")
+        if part >= part_count:
+            break
+        if part != expected_part:
+            raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
+        data = row.get(BlobColumns.DATA)
+        if not isinstance(data, bytes):
+            raise BlobCorruptionError(f"blob {name!r} part {part} has invalid data")
+        total_bytes += len(data)
+        expected_part += 1
+        yield data
+    if expected_part != part_count:
+        raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
+    if descriptor.size is not None and total_bytes != descriptor.size:
+        raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {total_bytes}")
 
 
 class _BlobReader(io.RawIOBase):
@@ -161,110 +321,185 @@ class _ReadableShard(Protocol):
     @property
     def primary_key_sorted(self) -> bool: ...
 
+    @property
+    def key_range(self) -> KeyRange | None: ...
+
+
+_SCHEMA_CACHE_SIZE = 8192
+
+
+# Shard paths are unique and their contents immutable, so one process-wide cache keyed by path
+# alone serves every view and compaction without invalidation; the size bound only limits memory.
+# A miss reads the footer through the caller's filesystem so its range cache and transfer
+# metering apply.
+_schema_cache: OrderedDict[str, pa.Schema] = OrderedDict()
+_schema_cache_lock = threading.Lock()
+
+
+def shard_schema(path: str, filesystem: PyFileSystem) -> pa.Schema:
+    """Return the Arrow schema of an immutable shard, served from the process cache when present."""
+    with _schema_cache_lock:
+        cached = _schema_cache.get(path)
+        if cached is not None:
+            _schema_cache.move_to_end(path)
+            return cached
+    schema = pq.read_schema(path, filesystem=filesystem)
+    with _schema_cache_lock:
+        _schema_cache[path] = schema
+        while len(_schema_cache) > _SCHEMA_CACHE_SIZE:
+            _schema_cache.popitem(last=False)
+    return schema
+
+
+@dataclass(frozen=True)
+class FilterClause:
+    """One ``where`` clause, ``column <operator> value``, with ``==``, ``!=``, or ``in``."""
+
+    column: str
+    operator: str
+    value: object
+
+    @classmethod
+    def parse(cls, clause: tuple[str, str, object]) -> FilterClause:
+        column, operator, value = clause
+        if operator not in _SUPPORTED_OPS:
+            raise ValueError(f"unsupported filter op {operator!r}; expected one of {sorted(_SUPPORTED_OPS)}")
+        return cls(column, operator, value)
+
+    def expression(self) -> pds.Expression:
+        field = pds.field(self.column)
+        if self.operator == "in":
+            return field.isin(self.value)
+        return field == self.value if self.operator == "==" else field != self.value
+
+
+def shard_may_contain(shard: _ReadableShard, primary_key: tuple[str, ...], clauses: Sequence[FilterClause]) -> bool:
+    """Whether ``clauses`` can match a row inside the shard's recorded primary-key range.
+
+    Equality clauses on a prefix of the primary key are compared as a tuple against the
+    range, and a membership clause on the first key column is checked value by value. An
+    unbounded shard always matches.
+    """
+    key_range = shard.key_range
+    if key_range is None:
+        return True
+    equalities = {clause.column: clause.value for clause in clauses if clause.operator == "=="}
+    prefix = tuple(equalities[column] for column in itertools.takewhile(equalities.__contains__, primary_key))
+    if prefix:
+        return key_range.may_contain_prefix(prefix)
+    for clause in clauses:
+        if clause.column == primary_key[0] and clause.operator == "in":
+            return key_range.may_contain_first(cast(Iterable[object], clause.value))
+    return True
+
 
 @dataclass(frozen=True)
 class _ReadPlan:
     shards: tuple[_ReadableShard, ...]
     primary_key: tuple[str, ...]
-    pushdown_where: list[tuple[str, str, object]]
-    post_dedup_where: list[tuple[str, str, object]]
+    pushdown_where: list[FilterClause]
+    post_dedup_where: list[FilterClause]
     filesystem: PyFileSystem
     schema: pa.Schema
     columns: list[str] | None
 
 
-def _build_filter(where: list[tuple[str, str, object]] | None) -> pds.Expression | None:
-    if not where:
+def _build_filter(clauses: Sequence[FilterClause] | None) -> pds.Expression | None:
+    if not clauses:
         return None
-    expr: pds.Expression | None = None
-    for column, operator, value in where:
-        if operator not in _SUPPORTED_OPS:
-            raise ValueError(f"unsupported filter op {operator!r}; expected one of {sorted(_SUPPORTED_OPS)}")
-        field = pds.field(column)
-        clause = field.isin(value) if operator == "in" else (field == value if operator == "==" else field != value)
-        expr = clause if expr is None else expr & clause
-    return expr
+    return functools.reduce(lambda expr, clause: expr & clause.expression(), clauses[1:], clauses[0].expression())
 
 
 def _partition_filter(
     where: list[tuple[str, str, object]] | None, primary_key: tuple[str, ...]
-) -> tuple[list[tuple[str, str, object]], list[tuple[str, str, object]]]:
+) -> tuple[list[FilterClause], list[FilterClause]]:
+    """Split ``where`` into clauses pushed down to shard scans and clauses applied after deduplication."""
     primary_key_columns = set(primary_key)
     pushdown = []
     after_deduplication = []
-    for clause in where or []:
-        if clause[1] not in _SUPPORTED_OPS:
-            raise ValueError(f"unsupported filter op {clause[1]!r}; expected one of {sorted(_SUPPORTED_OPS)}")
-        target = pushdown if clause[0] in primary_key_columns else after_deduplication
+    for clause in map(FilterClause.parse, where or []):
+        target = pushdown if clause.column in primary_key_columns else after_deduplication
         target.append(clause)
     return pushdown, after_deduplication
 
 
-def _matches_filter(row: dict, where: list[tuple[str, str, object]]) -> bool:
-    for column, operator, value in where:
-        candidate = row.get(column)
-        if candidate is None:
-            return False
-        if operator == "==" and candidate != value:
-            return False
-        if operator == "!=" and candidate == value:
-            return False
-        if operator == "in" and candidate not in value:
-            return False
-    return True
-
-
-def iter_shard_rows(
+def iter_shard_batches(
     shard: _ReadableShard,
     unified: pa.Schema,
-    primary_key: tuple[str, ...],
     pa_fs: PyFileSystem,
     columns: list[str] | None = None,
-    where: list[tuple[str, str, object]] | None = None,
+    where: Sequence[FilterClause] | None = None,
     scan_profile: _ScanProfile = _TABLE_SCAN_PROFILE,
-) -> Iterator[VersionedRow]:
-    """Yield rows from one shard in primary-key order with version coordinates."""
+) -> Generator[pa.RecordBatch, None, None]:
+    """Yield shard batches with resolved commit and generation coordinates."""
     dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
-    if shard.primary_key_sorted:
-        batches = dataset.scanner(
-            columns=columns,
-            filter=_build_filter(where),
+    with dataset.scanner(
+        columns=columns,
+        filter=_build_filter(where),
+        use_threads=False,
+        batch_size=scan_profile.batch_rows,
+        batch_readahead=scan_profile.batch_readahead,
+        fragment_readahead=scan_profile.fragment_readahead,
+        fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
+    ).to_reader() as batches:
+        for batch in batches:
+            yield _resolved_version_columns(batch, shard.commit_sequence, shard.generation)
+
+
+def iter_shard_row_groups(
+    shard: _ReadableShard,
+    unified: pa.Schema,
+    pa_fs: PyFileSystem,
+) -> Generator[pa.Table, None, None]:
+    """Yield one resolved Arrow table per Parquet row group."""
+    dataset = pds.dataset([shard.path], filesystem=pa_fs, format="parquet", schema=unified)
+    fragment = next(dataset.get_fragments())
+    assert isinstance(fragment, pds.ParquetFileFragment)
+    fragment.ensure_complete_metadata()
+    assert fragment.metadata is not None
+    for index in range(fragment.metadata.num_row_groups):
+        row_group = fragment.subset(row_group_ids=[index])
+        group = row_group.scanner(
+            schema=unified,
             use_threads=False,
-            batch_size=scan_profile.batch_rows,
-            batch_readahead=scan_profile.batch_readahead,
-            fragment_readahead=scan_profile.fragment_readahead,
-        ).to_batches()
-    else:
-        source = dataset.to_table(columns=columns, filter=_build_filter(where))
-        sort_columns = [(name, "ascending") for name in primary_key if name in source.column_names]
-        batches = source.sort_by(sort_columns).to_batches(max_chunksize=scan_profile.batch_rows)
-    for batch in batches:
-        for row in batch.to_pylist():
-            commit_sequence = row.get(SystemColumns.COMMIT)
-            if commit_sequence is None:
-                commit_sequence = shard.commit_sequence
-            row[SystemColumns.COMMIT] = commit_sequence
-            key = tuple((row.get(name) is None, row.get(name)) for name in primary_key)
-            yield VersionedRow(
-                key=key,
-                commit_sequence=commit_sequence,
-                sequence=row.get(SystemColumns.SEQUENCE) or 0,
-                generation=shard.generation,
-                row=row,
-            )
+            batch_readahead=1,
+            fragment_readahead=1,
+            fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=False),
+        ).to_table()
+        if group.num_rows:
+            yield _resolved_version_columns(group, shard.commit_sequence, shard.generation)
 
 
-def merge_deduplicated_rows(streams: list[Iterator[VersionedRow]]) -> Iterator[MergedRow]:
-    """Merge sorted shard streams and retain the newest row for each key."""
-    merged = heapq.merge(*streams, key=lambda item: item.key)
-    for _key, group in itertools.groupby(merged, key=lambda item: item.key):
-        items = list(group)
-        winner = max(items, key=lambda item: (item.commit_sequence, item.sequence, item.generation))
-        yield MergedRow(row=winner.row, superseded=len(items) - 1)
+def _resolved_version_columns(rows: _ArrowRows, commit_sequence: int, generation: int) -> _ArrowRows:
+    """Fill missing version coordinates without changing the Arrow row container type."""
+    result: pa.Table | pa.RecordBatch = rows
+    for name, value, data_type in (
+        (SystemColumns.GENERATION, generation, pa.int32()),
+        (SystemColumns.COMMIT, commit_sequence, pa.int64()),
+    ):
+        index = result.schema.get_field_index(name)
+        if index < 0:
+            result = result.append_column(name, pa.array([value] * result.num_rows, type=data_type))
+        elif result.column(index).null_count:
+            result = result.set_column(index, name, pc.fill_null(result.column(index), value))
+    return cast(_ArrowRows, result)
+
+
+def _sorted_shard_run(
+    shard: _ReadableShard,
+    plan: _ReadPlan,
+    scan_profile: _ScanProfile,
+) -> Generator[pa.Table, None, None]:
+    """Yield one shard's matching rows in primary-key order, a batch at a time when the shard is sorted."""
+    with closing(
+        iter_shard_batches(shard, plan.schema, plan.filesystem, plan.columns, plan.pushdown_where, scan_profile)
+    ) as batches:
+        tables = (pa.Table.from_batches([batch]) for batch in batches)
+        yield from tables if shard.primary_key_sorted else sorted_by_key(tables, plan.primary_key)
 
 
 def _read_plan(
-    root: str,
+    filesystem: PyFileSystem,
     shards: tuple[_ReadableShard, ...],
     primary_key: tuple[str, ...],
     columns: Sequence[str] | None,
@@ -273,15 +508,17 @@ def _read_plan(
     if not shards:
         return None
     pushdown_where, post_dedup_where = _partition_filter(where, primary_key)
-    fs, _ = factory.url_to_fs(root)
-    filesystem = PyFileSystem(FSSpecHandler(fs))
+    if pushdown_where:
+        shards = tuple(shard for shard in shards if shard_may_contain(shard, primary_key, pushdown_where))
+        if not shards:
+            return None
     schema = pa.unify_schemas(
-        [pq.read_schema(shard.path, filesystem=filesystem) for shard in shards],
+        [shard_schema(shard.path, filesystem) for shard in shards],
         promote_options="permissive",
     )
     read_columns = None
     if columns is not None:
-        filter_columns = {name for name, _operator, _value in post_dedup_where}
+        filter_columns = {clause.column for clause in post_dedup_where}
         needed = (
             set(columns)
             | set(primary_key)
@@ -289,6 +526,7 @@ def _read_plan(
             | {
                 SystemColumns.SEQUENCE,
                 SystemColumns.COMMIT,
+                SystemColumns.GENERATION,
             }
         )
         read_columns = [name for name in schema.names if name in needed]
@@ -303,7 +541,7 @@ def _read_plan(
     )
 
 
-def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
+def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: _ScanProfile | None = None) -> pa.Table:
     by_version: dict[tuple[int, int], list[str]] = defaultdict(list)
     for shard in plan.shards:
         by_version[(shard.commit_sequence, shard.generation)].append(shard.path)
@@ -311,26 +549,24 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
     parts: list[pa.Table] = []
     for (commit_sequence, generation), paths in sorted(by_version.items()):
         dataset = pds.dataset(paths, filesystem=plan.filesystem, format="parquet", schema=plan.schema)
-        part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
-        part = part.append_column(
-            SystemColumns.GENERATION,
-            pa.array([generation] * part.num_rows, pa.int32()),
-        )
-        commit_values = pa.array([commit_sequence] * part.num_rows, pa.int64())
-        if SystemColumns.COMMIT in part.column_names:
-            commit_index = part.schema.get_field_index(SystemColumns.COMMIT)
-            part = part.set_column(
-                commit_index,
-                SystemColumns.COMMIT,
-                pc.coalesce(part[SystemColumns.COMMIT], commit_values),
-            )
+        if scan_profile is None:
+            part = dataset.to_table(columns=plan.columns, filter=_build_filter(plan.pushdown_where))
         else:
-            part = part.append_column(SystemColumns.COMMIT, commit_values)
-        parts.append(part)
+            # Inline blob values can make a compacted shard gigabytes larger than the
+            # requested results. Bound decoding and disable whole-fragment prefetch.
+            part = dataset.scanner(
+                columns=plan.columns,
+                filter=_build_filter(plan.pushdown_where),
+                batch_size=scan_profile.batch_rows,
+                batch_readahead=scan_profile.batch_readahead,
+                fragment_readahead=scan_profile.fragment_readahead,
+                fragment_scan_options=pds.ParquetFragmentScanOptions(pre_buffer=scan_profile.pre_buffer),
+                use_threads=False,
+            ).to_table()
+        parts.append(_resolved_version_columns(part, commit_sequence, generation))
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
-    if all(name in combined.column_names for name in plan.primary_key):
-        combined = _deduplicate(combined, plan.primary_key)
+    combined = _deduplicate(combined, plan.primary_key)
     if plan.post_dedup_where:
         combined = pds.dataset(combined).to_table(filter=_build_filter(plan.post_dedup_where))
     if columns is not None:
@@ -338,8 +574,37 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None) -> pa.Table:
     return combined
 
 
+def _blob_shard_descriptors(
+    filesystem: PyFileSystem, primary_key: tuple[str, ...], names: Sequence[str], shard: _ReadableShard
+) -> pa.Table:
+    plan = _read_plan(filesystem, (shard,), primary_key, None, [(BlobColumns.NAME, "in", list(names))])
+    assert plan is not None
+    return _scan_plan(plan, None, scan_profile=_BLOB_DESCRIPTOR_SCAN_PROFILE)
+
+
 class _ReadOperations:
     """Read operations shared by manifest and legacy listing snapshots."""
+
+    def __init__(self) -> None:
+        self._read_diagnostics = BlobReadDiagnostics()
+        self._read_diagnostics_lock = threading.Lock()
+
+    def read_diagnostics(self) -> BlobReadDiagnostics:
+        """Return a snapshot of cumulative ``read_blobs`` work on this view."""
+        with self._read_diagnostics_lock:
+            return replace(self._read_diagnostics)
+
+    def _record_blob_read(self, diagnostics: BlobReadDiagnostics) -> None:
+        with self._read_diagnostics_lock:
+            self._read_diagnostics.add(diagnostics)
+        _BLOB_READ_CALLS.add(diagnostics.read_calls)
+        _BLOB_REQUESTED_NAMES.add(diagnostics.requested_names)
+        _BLOB_FOUND_NAMES.add(diagnostics.found_names)
+        _BLOB_RETURNED_BYTES.add(diagnostics.bytes_returned)
+        _BLOB_DESCRIPTOR_LOOKUPS.add(diagnostics.descriptor_lookups)
+        _BLOB_DESCRIPTOR_SECONDS.record(diagnostics.descriptor_seconds)
+        _BLOB_PAYLOAD_SECONDS.record(diagnostics.payload_seconds)
+        _BLOB_SELECTED_SHARDS.record(diagnostics.selected_shards)
 
     root: str
 
@@ -348,6 +613,11 @@ class _ReadOperations:
 
     def list_shards(self, table: str) -> Sequence[_ReadableShard]:
         raise NotImplementedError
+
+    def _filesystem(self, table: str) -> PyFileSystem:
+        fs, _ = factory.url_to_fs(self.root)
+        handler = _NoReadAheadHandler(fs) if table in (BlobTables.DESCRIPTORS, BlobTables.PARTS) else _ShardHandler(fs)
+        return PyFileSystem(handler)
 
     def _read_plan(
         self,
@@ -358,7 +628,7 @@ class _ReadOperations:
         shards = tuple(self.list_shards(table))
         if not shards:
             return None
-        return _read_plan(self.root, shards, self.primary_key(table), columns, where)
+        return _read_plan(self._filesystem(table), shards, self.primary_key(table), columns, where)
 
     def scan(
         self,
@@ -395,29 +665,20 @@ class _ReadOperations:
         columns: Sequence[str] | None,
         where: list[tuple[str, str, object]] | None,
         scan_profile: _ScanProfile,
-    ) -> Iterator[dict]:
+    ) -> Generator[dict, None, None]:
         plan = self._read_plan(table, columns, where)
         if plan is None:
             return
-        streams = [
-            iter_shard_rows(
-                shard,
-                plan.schema,
-                plan.primary_key,
-                plan.filesystem,
-                plan.columns,
-                plan.pushdown_where,
-                scan_profile,
-            )
-            for shard in plan.shards
-        ]
-        for merged in merge_deduplicated_rows(streams):
-            row = merged.row
-            if not _matches_filter(row, plan.post_dedup_where):
-                continue
-            if columns is not None:
-                row = {name: row[name] for name in columns if name in row}
-            yield row
+        with ExitStack() as stack:
+            runs = [stack.enter_context(closing(_sorted_shard_run(shard, plan, scan_profile))) for shard in plan.shards]
+            for rows in merge_sorted_runs(runs, plan.primary_key):
+                if plan.post_dedup_where:
+                    rows = rows.filter(_build_filter(plan.post_dedup_where))
+                if columns is None:
+                    rows = rows.drop_columns([SystemColumns.GENERATION])
+                else:
+                    rows = rows.select([name for name in columns if name in rows.column_names])
+                yield from rows.to_pylist()
 
     def point(self, table: str, **keys) -> dict | None:
         result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
@@ -437,60 +698,106 @@ class _ReadOperations:
 
     def read_blob(self, name: str) -> bytes | None:
         """Return a named blob, or ``None`` when it is absent."""
-        stream = self.open_blob(name)
-        if stream is None:
-            return None
-        with stream:
-            return stream.read()
+        return self.read_blobs((name,)).get(name)
+
+    def read_blobs(self, names: Sequence[str]) -> dict[str, bytes]:
+        """Read named blobs, omitting absent names."""
+        diagnostics = BlobReadDiagnostics(read_calls=1, requested_names=len(set(names)))
+        values: dict[str, bytes] = {}
+        try:
+            if not names:
+                return {}
+            rows = self._blob_descriptors(names, diagnostics=diagnostics)
+            if rows is None:
+                return {}
+            started = time.monotonic()
+            chunked: dict[str, BlobDescriptor] = {}
+            try:
+                for row in rows.to_pylist():
+                    descriptor = BlobDescriptor.from_row(row)
+                    if descriptor.part_count is None:
+                        values[descriptor.name] = b"".join(_validated_blob_parts(descriptor, ()))
+                    else:
+                        chunked[descriptor.name] = descriptor
+                if chunked:
+                    with closing(
+                        self._iter_rows(
+                            BlobTables.PARTS,
+                            columns=[BlobColumns.NAME, BlobColumns.PART, BlobColumns.DATA],
+                            where=[(BlobColumns.NAME, "in", list(chunked))],
+                            scan_profile=_BLOB_PART_SCAN_PROFILE,
+                        )
+                    ) as part_rows:
+                        for name, group in itertools.groupby(part_rows, key=lambda row: row[BlobColumns.NAME]):
+                            values[name] = b"".join(_validated_blob_parts(chunked[name], group))
+                    for name, descriptor in chunked.items():
+                        if name not in values:
+                            values[name] = b"".join(_validated_blob_parts(descriptor, ()))
+            finally:
+                diagnostics.payload_seconds += time.monotonic() - started
+            diagnostics.found_names = len(values)
+            diagnostics.bytes_returned = sum(len(value) for value in values.values())
+            return values
+        finally:
+            self._record_blob_read(diagnostics)
+
+    def _blob_descriptors(
+        self, names: Sequence[str], *, diagnostics: BlobReadDiagnostics | None = None
+    ) -> pa.Table | None:
+        started = time.monotonic()
+        if diagnostics is not None:
+            diagnostics.descriptor_lookups += 1
+        try:
+            if not self.list_shards(BlobTables.DESCRIPTORS):
+                return None
+            primary_key = self.primary_key(BlobTables.DESCRIPTORS)
+            membership = [FilterClause(BlobColumns.NAME, "in", list(names))]
+            shards = tuple(
+                shard
+                for shard in self.list_shards(BlobTables.DESCRIPTORS)
+                if shard_may_contain(shard, primary_key, membership)
+            )
+            if not shards:
+                return None
+            if diagnostics is not None:
+                diagnostics.selected_shards += len(shards)
+            filesystem = self._filesystem(BlobTables.DESCRIPTORS)
+            # Read footers and matching rows together, with bounded concurrent decoding.
+            # Version resolution spans every shard whose key bounds can hold a requested name.
+            with ThreadPoolExecutor(max_workers=min(MAX_DESCRIPTOR_READS, len(shards))) as executor:
+                parts = list(
+                    executor.map(lambda shard: _blob_shard_descriptors(filesystem, primary_key, names, shard), shards)
+                )
+            return _deduplicate(pa.concat_tables(parts, promote_options="permissive"), primary_key)
+        finally:
+            if diagnostics is not None:
+                diagnostics.descriptor_seconds += time.monotonic() - started
 
     def open_blob(self, name: str) -> BinaryIO | None:
         """Open a named blob as a forward-only stream, or return ``None`` when absent.
 
         Chunk and size validation completes when the caller reads through EOF.
         """
-        row = self.point(BlobTables.DESCRIPTORS, **{BlobColumns.NAME: name})
-        if row is None:
+        rows = self._blob_descriptors((name,))
+        if rows is None or rows.num_rows == 0:
             return None
+        row = rows.slice(0, 1).to_pylist()[0]
         return io.BufferedReader(_BlobReader(self.blob_parts(BlobDescriptor.from_row(row))))
 
     def blob_parts(self, descriptor: BlobDescriptor) -> Generator[bytes, None, None]:
         """Yield a pinned descriptor's inline value or ordered chunked parts."""
-        name = descriptor.name
-        part_count = descriptor.part_count
-        if part_count is None:
-            data = descriptor.data
-            if data is None:
-                raise BlobCorruptionError(f"blob {name!r} has neither inline data nor parts")
-            if descriptor.size is not None and len(data) != descriptor.size:
-                raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {len(data)}")
-            yield data
+        if descriptor.part_count is None:
+            yield from _validated_blob_parts(descriptor, ())
             return
-        if part_count <= 0:
-            raise BlobCorruptionError(f"blob {name!r} has invalid part count {part_count!r}")
-        expected_part = 0
-        total_bytes = 0
-        for row in self._iter_rows(
-            BlobTables.PARTS,
-            columns=[BlobColumns.PART, BlobColumns.DATA],
-            where=[(BlobColumns.NAME, "==", name)],
-            scan_profile=_BLOB_SCAN_PROFILE,
-        ):
-            part = row.get(BlobColumns.PART)
-            if part is not None and part >= part_count:
-                break
-            if part != expected_part:
-                raise BlobCorruptionError(f"blob {name!r} is missing part {expected_part}")
-            data = row.get(BlobColumns.DATA)
-            if data is None:
-                raise BlobCorruptionError(f"blob {name!r} part {part} has no data")
-            value = bytes(data)
-            total_bytes += len(value)
-            expected_part += 1
-            yield value
-        if expected_part != part_count:
-            raise BlobCorruptionError(f"blob {name!r} has {expected_part} of {part_count} parts")
-        if descriptor.size is not None and total_bytes != descriptor.size:
-            raise BlobCorruptionError(f"blob {name!r} declares {descriptor.size} bytes but stores {total_bytes}")
+        with closing(
+            self._iter_rows(
+                BlobTables.PARTS,
+                columns=[BlobColumns.PART, BlobColumns.DATA],
+                where=[(BlobColumns.NAME, "==", descriptor.name)],
+                scan_profile=_BLOB_PART_SCAN_PROFILE,
+            )
+        ) as part_rows:
+            yield from _validated_blob_parts(descriptor, part_rows)
 
     def resolve(self, uri: str) -> bytes | None:
         """Resolve a blob URI, returning ``None`` when absent and rejecting unsupported references."""
@@ -505,16 +812,29 @@ class _ReadOperations:
 class ReadView(_ReadOperations):
     """A read-only archive view pinned to one commit token."""
 
-    def __init__(self, root: str, snapshot: ArchiveSnapshot | None = None) -> None:
+    def __init__(
+        self, root: str, snapshot: ArchiveSnapshot | None = None, *, cache_bytes: int = _READ_CACHE_BYTES
+    ) -> None:
+        super().__init__()
+        if cache_bytes < 0:
+            raise ValueError("cache_bytes must be nonnegative")
         self.root = root
         self._layout = FineStoreLayout(self.root)
-        # The marker only distinguishes a v1 archive from an empty root: v1 archives have no
-        # HEAD, and read_snapshot validates the format version HEAD carries. A missing marker
-        # is expected under a lifecycle rule that expires write-once objects, and the next
-        # writer open recreates it.
-        validate_archive(self._layout)
         self._snapshot = snapshot or read_snapshot(self._layout)
         self._meta_cache: dict[str, TableMetadata] = {}
+        self._read_filesystem: PyFileSystem | None = None
+        self._cache_bytes = cache_bytes
+        self._filesystem_lock = threading.Lock()
+
+    def _filesystem(self, table: str) -> PyFileSystem:
+        if not self._cache_bytes:
+            return super()._filesystem(table)
+        with self._filesystem_lock:
+            if self._read_filesystem is None:
+                fs, _ = factory.url_to_fs(self.root)
+                shards = [shard for state in self._snapshot.manifest.tables.values() for shard in state.shards]
+                self._read_filesystem = PyFileSystem(_CachedReadHandler(fs, shards, self._cache_bytes))
+            return self._read_filesystem
 
     @property
     def token(self) -> CommitToken | None:
@@ -573,20 +893,6 @@ class ReadView(_ReadOperations):
 
 
 def _deduplicate(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:
-    """Keep the latest committed row per primary key."""
-    if table.num_rows == 0:
-        return table
-    key_columns = [table.column(name).to_pylist() for name in primary_key]
-    commits = table.column(SystemColumns.COMMIT).to_pylist()
-    generations = table.column(SystemColumns.GENERATION).to_pylist()
-    sequences = (
-        table.column(SystemColumns.SEQUENCE).to_pylist()
-        if SystemColumns.SEQUENCE in table.column_names
-        else [0] * table.num_rows
-    )
-    order = sorted(range(table.num_rows), key=lambda index: (commits[index], sequences[index], generations[index]))
-    winners: dict[tuple, int] = {}
-    for index in order:
-        winners[tuple(column[index] for column in key_columns)] = index
-    keep = sorted(winners.values())
-    return table if len(keep) == table.num_rows else table.take(pa.array(keep, pa.int64()))
+    """Keep the latest committed row per primary key, in the table's existing row order."""
+    winners = newest_indices(table, primary_key)
+    return table if len(winners) == table.num_rows else table.take(winners.sort())

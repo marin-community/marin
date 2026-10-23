@@ -18,6 +18,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from itertools import batched
 
 import sqlalchemy
 from marin.evaluation.records import EvalRunRecord
@@ -42,9 +43,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import Connection, Engine
 
-from .db_migrations import apply_migrations
-
 logger = logging.getLogger(__name__)
+
+_CATALOG_BATCH_SIZE = 128
 
 metadata = MetaData()
 json_type = JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
@@ -229,12 +230,6 @@ class _CatalogSource:
     missing_since: datetime | None
 
 
-def migrate_schema(engine: Engine) -> None:
-    """Upgrade the schema to what this EvalDash build requires, then check the result."""
-    apply_migrations(engine)
-    verify_schema(engine)
-
-
 def _own_schema(engine: Engine) -> str | None:
     """The schema this engine's connections search first, which is where the app's tables are.
 
@@ -299,7 +294,41 @@ def _upsert(conn: Connection, table: Table, rows: list[dict], key: str) -> None:
         return
     insert = _dialect_insert(conn, table)
     update = {column.name: insert.excluded[column.name] for column in table.columns if column.name != key}
-    conn.execute(insert.on_conflict_do_update(index_elements=[table.c[key]], set_=update), rows)
+    for batch in batched(rows, _CATALOG_BATCH_SIZE):
+        conn.execute(insert.values(list(batch)).on_conflict_do_update(index_elements=[table.c[key]], set_=update))
+
+
+def _update_sources(conn: Connection, rows: list[dict]) -> None:
+    if not rows:
+        return
+    columns = tuple(rows[0])
+    if conn.dialect.name == "postgresql":
+        # pg8000's executemany sends one UPDATE per row. Typed arrays keep each batch one statement.
+        observed = (
+            sqlalchemy.func.unnest(
+                *(
+                    sqlalchemy.bindparam(f"observed_{name}", type_=sqlalchemy.ARRAY(record_sources.c[name].type))
+                    for name in columns
+                )
+            )
+            .table_valued(*columns)
+            .render_derived(name="observed_sources")
+        )
+        stmt = (
+            record_sources.update()
+            .where(record_sources.c.path == observed.c.path)
+            .values({name: observed.c[name] for name in columns if name != "path"})
+        )
+        for batch in batched(rows, _CATALOG_BATCH_SIZE):
+            conn.execute(stmt, {f"observed_{name}": [row[name] for row in batch] for name in columns})
+        return
+    for batch in batched(rows, _CATALOG_BATCH_SIZE):
+        conn.execute(
+            record_sources.update()
+            .where(record_sources.c.path == sqlalchemy.bindparam("observed_path"))
+            .values({name: sqlalchemy.bindparam(f"observed_{name}") for name in columns if name != "path"}),
+            [{f"observed_{name}": row[name] for name in columns} for row in batch],
+        )
 
 
 def fetch_archived_models(engine: Engine) -> set[str]:
@@ -365,9 +394,10 @@ def upsert_legacy_record(engine: Engine, record: EvalRunRecord) -> None:
 def fetch_snapshot(engine: Engine) -> CatalogSnapshot:
     """Load one committed serving generation from PostgreSQL."""
     with engine.begin() as conn:
-        state_stmt = sqlalchemy.select(catalog_state.c.generation, catalog_state.c.updated_at)
         if conn.dialect.name == "postgresql":
-            state_stmt = state_stmt.with_for_update(read=True)
+            # Keep the commit token and records in one MVCC snapshot without blocking ingestion.
+            conn.exec_driver_sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        state_stmt = sqlalchemy.select(catalog_state.c.generation, catalog_state.c.updated_at)
         generation, updated_at = conn.execute(state_stmt).one()
         rows = conn.execute(sqlalchemy.select(catalog_runs.c.record).order_by(catalog_runs.c.created_at)).scalars().all()
     return CatalogSnapshot(
@@ -530,6 +560,13 @@ def _catalog_run_ids(conn: Connection, run_ids: set[str]) -> set[str]:
 
 
 def _materialize_runs(conn: Connection, run_ids: set[str]) -> bool:
+    changed = False
+    for run_batch in batched(run_ids, _CATALOG_BATCH_SIZE):
+        changed = _materialize_run_batch(conn, set(run_batch)) or changed
+    return changed
+
+
+def _materialize_run_batch(conn: Connection, run_ids: set[str]) -> bool:
     if not run_ids:
         return False
     active_sources = record_sources.join(record_prefixes, record_sources.c.prefix == record_prefixes.c.prefix)
@@ -623,43 +660,33 @@ def reconcile_prefix(
             conn.execute(
                 record_sources.update().where(record_sources.c.path.in_(newly_missing)).values(missing_since=probe_at)
             )
-        for observation in observations:
-            if observation.kind is not ObservationKind.MISSING:
-                continue
-            path = observation.path
-            if path not in existing or path in deleted:
-                continue
-            conn.execute(
-                record_sources.update()
-                .where(record_sources.c.path == path)
-                .values(
-                    last_verified_at=observation.verified_at,
-                    next_verify_at=observation.next_verify_at,
-                    error=observation.error,
-                )
-            )
+        _update_sources(
+            conn,
+            [
+                {
+                    "path": observation.path,
+                    "last_verified_at": observation.verified_at,
+                    "next_verify_at": observation.next_verify_at,
+                    "error": observation.error,
+                }
+                for observation in observations
+                if observation.kind is ObservationKind.MISSING
+                and observation.path in existing
+                and observation.path not in deleted
+            ],
+        )
         unchanged = [observation for observation in observations if observation.kind is ObservationKind.UNCHANGED]
         if unchanged:
-            stmt = (
-                record_sources.update()
-                .where(record_sources.c.path == sqlalchemy.bindparam("observed_path"))
-                .values(
-                    object_version=sqlalchemy.bindparam("observed_version"),
-                    last_verified_at=sqlalchemy.bindparam("verified_at"),
-                    next_verify_at=sqlalchemy.bindparam("next_verify_at"),
-                    missing_since=None,
-                    error=sqlalchemy.bindparam("observed_error"),
-                )
-            )
-            conn.execute(
-                stmt,
+            _update_sources(
+                conn,
                 [
                     {
-                        "observed_path": observation.path,
-                        "observed_version": observation.object_version,
-                        "verified_at": observation.verified_at,
+                        "path": observation.path,
+                        "object_version": observation.object_version,
+                        "last_verified_at": observation.verified_at,
                         "next_verify_at": observation.next_verify_at,
-                        "observed_error": observation.error,
+                        "missing_since": None,
+                        "error": observation.error,
                     }
                     for observation in unchanged
                 ],
@@ -702,6 +729,8 @@ def reconcile_prefix(
             for observation in observations
             if observation.kind is ObservationKind.CHANGED and observation.record is None
         ]
+        invalid_updates = []
+        invalid_inserts = []
         for observation in invalid:
             values = {
                 "object_version": observation.object_version,
@@ -711,17 +740,20 @@ def reconcile_prefix(
                 "error": observation.error,
             }
             if observation.path in existing:
-                conn.execute(record_sources.update().where(record_sources.c.path == observation.path).values(**values))
+                invalid_updates.append({"path": observation.path, **values})
                 continue
-            conn.execute(
-                record_sources.insert().values(
-                    path=observation.path,
-                    prefix=prefix,
-                    run_id=observation.run_id,
-                    record=None,
+            invalid_inserts.append(
+                {
+                    "path": observation.path,
+                    "prefix": prefix,
+                    "run_id": observation.run_id,
+                    "record": None,
                     **values,
-                )
+                }
             )
+        _update_sources(conn, invalid_updates)
+        for batch in batched(invalid_inserts, _CATALOG_BATCH_SIZE):
+            conn.execute(record_sources.insert().values(list(batch)))
 
         conn.execute(
             record_prefixes.update()

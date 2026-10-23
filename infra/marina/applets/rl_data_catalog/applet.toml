@@ -1,3 +1,5 @@
+applet_id = "fb11c931-5861-4878-8bb5-a964d652b45f"
+
 title = "RL Data Atlas"
-description = "Live source inventory from MarinSkyRL and Task Trove, with release provenance and task counts."
+description = "Explore RL sources, curriculum coverage, curation assessments and sampled grades. Inspect executed controls and archived review evidence."
 python_entrypoint = "server.app:create_api"

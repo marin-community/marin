@@ -11,6 +11,7 @@
 
 pub mod app;
 pub mod auth;
+mod compression;
 pub mod debug;
 pub mod diagnostics;
 pub mod forwarded_prefix;

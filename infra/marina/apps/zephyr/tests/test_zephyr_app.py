@@ -6,8 +6,8 @@
 The fixture dataclasses carry only the columns the app queries.
 """
 
-import importlib
 import json
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,9 +21,12 @@ from connectrpc.errors import ConnectError
 from fastapi.testclient import TestClient
 from finelog.client import LogClient, StatsError
 from finelog.embedded import require_embedded_server
-from marina.apps import Services, create_api
-from marina.manifest import load_manifest
+from marina.db import UrlDatabase
+from marina.preview import install_preview_sources
 from marina.server import MarinaConfig, create_app
+from marina.testing import SourceServices, isolated_database
+
+from infra.marina.apps.zephyr.backend import app as backend
 
 APP = Path(__file__).resolve().parents[1]
 EXECUTION = "20260910-195311-32c9cebb"
@@ -165,7 +168,7 @@ def finelog(tmp_path_factory):
 def api(finelog, monkeypatch):
     monkeypatch.setenv("ZEPHYR_FINELOG_URL", finelog)
     monkeypatch.delenv("ZEPHYR_IAP_CLUSTER", raising=False)
-    app = create_api(load_manifest(APP), Services(name="zephyr", data_url="file:///tmp/zephyr", database=None))
+    app = backend.create_api(SourceServices(name="zephyr", data_url="file:///tmp/zephyr", database=None))
     assert Path(zephyr.__file__).resolve() == APP.parents[3] / "lib/zephyr/src/zephyr/__init__.py"
     # Pin "now" one hour after the seeded rows so the listing window is stable.
     executions = next(route for route in app.app.routes if getattr(route, "path", None) == "/executions")
@@ -185,8 +188,6 @@ def test_health_reports_source_and_namespaces(api, finelog):
 
 
 def test_finelog_read_retries_after_log_client_invalidates_its_transport():
-    create_api(load_manifest(APP), Services(name="zephyr", data_url="file:///tmp/zephyr", database=None))
-    backend = importlib.import_module("_marina_app_zephyr.app")
     finelog = backend._Finelog(url="http://finelog.invalid", iap_cluster=None)
     attempts = 0
 
@@ -205,16 +206,21 @@ def test_finelog_read_retries_after_log_client_invalidates_its_transport():
         finelog._client.close()
 
 
-def test_marina_mount_serves_zephyr_api(finelog, monkeypatch, tmp_path):
+def test_marina_mount_serves_zephyr_api(finelog, monkeypatch, tmp_path, database_url):
     monkeypatch.setenv("ZEPHYR_FINELOG_URL", finelog)
     apps_dir = tmp_path / "apps"
     apps_dir.mkdir()
-    (apps_dir / "zephyr").symlink_to(APP, target_is_directory=True)
-    config = MarinaConfig(apps_dir=apps_dir, data_root=str(tmp_path / "data"), iap_audience=None)
-
-    with TestClient(create_app(config), client=("127.0.0.1", 40000)) as client:
-        assert client.get("/zephyr/api/health").json()["plan_records"] is True
-        assert client.get("/api/marina/apps").json()["apps"][0]["path"] == "/zephyr/"
+    source = apps_dir / "zephyr"
+    shutil.copytree(APP, source, ignore=shutil.ignore_patterns("web", "dist", "tests", "node_modules", "__pycache__"))
+    (source / "dist").mkdir()
+    (source / "dist/index.html").write_text("<h1>Zephyr</h1>")
+    with isolated_database(database_url) as local_url:
+        database = UrlDatabase(local_url)
+        install_preview_sources(apps_dir, database)
+        config = MarinaConfig(data_root=str(tmp_path / "data"), iap_audience=None, database=database)
+        with TestClient(create_app(config), client=("127.0.0.1", 40000)) as client:
+            assert client.get("/zephyr/api/health").json()["plan_records"] is True
+            assert client.get("/api/marina/apps").json()["apps"][0]["path"] == "/zephyr/"
 
 
 def test_executions_dedupe_by_execution_and_filter_by_root_job(api):

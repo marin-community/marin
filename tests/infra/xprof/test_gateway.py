@@ -4,6 +4,7 @@
 import gzip
 import json
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlencode
 from wsgiref.util import setup_testing_defaults
@@ -16,6 +17,7 @@ from infra.xprof.gateway import (
     ProfileStageManager,
     XprofGateway,
 )
+from infra.xprof.rust_proxy import RustProxy
 
 
 def _request(app, path: str, query: str = "", method: str = "GET"):
@@ -176,3 +178,42 @@ def test_gateway_rewrites_compressed_xprof_assets(tmp_path):
         assert frontend["headers"]["Content-Length"] == str(len(frontend["body"]))
     finally:
         app.shutdown()
+
+
+def test_gateway_does_not_expose_capture_routes(tmp_path):
+    app = XprofGateway(_xprof_app, ProfileStageManager(_BlockingStager(tmp_path)), "/proxy/xprof")
+    try:
+        for path in ("/capture_profile", "/data/plugin/profile/capture_profile"):
+            assert _request(app, path, "service_addr=127.0.0.1:50051")["status"] == "404 Not Found"
+    finally:
+        app.shutdown()
+
+
+def test_rust_proxy_preserves_compressed_viewer_asset(tmp_path):
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            body = gzip.compress(b"const api = '/data/plugin/profile/runs';")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/javascript")
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as backend:
+        thread = threading.Thread(target=backend.serve_forever)
+        thread.start()
+        app = XprofGateway(
+            RustProxy(backend.server_port), ProfileStageManager(_BlockingStager(tmp_path)), "/proxy/xprof"
+        )
+        try:
+            frontend = _request(app, "/bundle.js")
+            assert frontend["status"] == "200 OK"
+            assert gzip.decompress(frontend["body"]) == b"const api = '/proxy/xprof/data/plugin/profile/runs';"
+        finally:
+            app.shutdown()
+            backend.shutdown()
+            thread.join()

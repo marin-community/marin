@@ -1,18 +1,19 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""MCP tools generated from checked-in Marina application APIs."""
+"""MCP tools generated from released Marina application APIs."""
 
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
 from typing import Any
 
 import httpx2
 from fastapi import FastAPI
 from fastmcp import FastMCP
+from fastmcp.server.providers import Provider
 from fastmcp.server.providers.openapi import (
     MCPType,
     OpenAPIResource,
@@ -121,11 +122,12 @@ def mcp_for_api(
     )
 
 
-def marina_mcp(servers: Mapping[str, FastMCP]) -> FastMCP:
+def marina_mcp(servers: Mapping[str, FastMCP], *, providers: Sequence[Provider] = ()) -> FastMCP:
     """Compose application MCP servers behind on-demand tool discovery."""
     result = FastMCP(
         "Marina",
         instructions="Use find_tool to discover Marina application operations, then call_tool to execute one.",
+        providers=list(providers),
     )
     for namespace, server in sorted(servers.items()):
         result.mount(server, namespace=namespace)

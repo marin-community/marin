@@ -278,7 +278,7 @@ def dot_product_attention(
     if attention_out is not None:
         return attention_out
     else:
-        from levanter.models.flash_attention import (  # noqa: PLC0415  # circular import: attention -> flash_attention -> attention
+        from levanter.layers.flash_attention import (  # noqa: PLC0415  # circular import: attention -> flash_attention -> attention
             flash_attention,
         )
 

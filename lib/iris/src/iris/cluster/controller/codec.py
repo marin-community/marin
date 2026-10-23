@@ -177,6 +177,7 @@ def reconstruct_launch_job_request(
         priority_band=job.priority_band,
         task_image=job.task_image,
         container_profile=job.container_profile,
+        egress_policy=job.egress_policy,
         fail_if_exists=job.fail_if_exists,
     )
     req.entrypoint.CopyFrom(proto_from_json(job.entrypoint_json, job_pb2.RuntimeEntrypoint))

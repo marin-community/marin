@@ -1,334 +1,262 @@
 # RL Data Atlas
 
-[Open RL Data Atlas](https://public.applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
-to browse the latest saved [MarinSkyRL](https://github.com/marin-community/MarinSkyRL) sources and the [Task Trove release](https://huggingface.co/datasets/open-athena/task-trove) manifest without signing in.
-Task Trove packages converted datasets as tasks for the Harbor execution
-environment. The two catalogs are independent and can share original datasets.
-Its UUID is `fb11c931-5861-4878-8bb5-a964d652b45f`; the stable link always opens the current release.
+[RL Data Atlas](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/)
+reads a Postgres copy of the published [curation catalog](task-curation.md#run-catalog).
+Curation owns source declarations, admission decisions, executed controls and
+sampled GLM judgments. Atlas displays those records and their task packets.
 
-Search and filter the table, including its Environment column, click column
-headings to sort, and use the information button beside a source name to inspect
-counts, classifications, and pinned evidence links. Names use full repository IDs
-and distinguish selected subsets; registry aliases remain searchable.
-**Show deprecated / excluded** reveals Task Trove sources with
-no released tasks. They are hidden by default. Export view downloads the filtered
-rows as CSV.
+The checked-in app also reads immutable curriculum-matching releases. The
+curriculum pane shows task coverage by subject, group, capability and source.
+Its loader and selected release are independent of the sampled grading catalog.
 
-Source rows are identified by catalog and registry or manifest source key. Each
-non-mixed registered dataset or generator appears once in the source inventory. Gym entries
-bound to already-listed sources are merged into those source rows. Their counts
-are the selected dataset split or configuration counts. An environment used by
-several sources remains a filterable attribute of each source; it does not add an
-aggregate row. The Environment column and verifier dates follow the environment
-selected by that registry source. Distinct configurations, blends, and converted Task Trove releases
-remain separate source populations.
+The 95% control pass threshold permits curation to skip validation of unsampled
+tasks. Below that threshold, curation validates each task and retains individual
+passes. The 80% Good threshold below grades a sample of the retained output.
+Curation supplies the tasks and evidence; the grade does not change admission.
 
-The **Canonical source** column identifies the registered source population. For
-sources that previously had Mixed interaction, each component has its own row
-with the shared parent in Canonical source. Other rows name themselves as their
-canonical source. Kind is omitted from the table, filters, details, and CSV.
-
-HH-RLHF expands into four train collections: harmless-base, helpful-base,
-helpful-online, and helpful-rejection-sampled. Their counts are corroborated by
-[tasksource's per-collection metadata](https://huggingface.co/datasets/tasksource/hh-rlhf).
-All support conversational Multi-turn interaction. KTO Mix expands into its
-Capybara, Intel Orca, and UltraFeedback components. Counts use the original
-[Argilla DPO mix's source frequencies](https://datasets-server.huggingface.co/statistics?dataset=argilla/dpo-mix-7k&config=default&split=train)
-with two KTO records per preference pair. Capybara supports Multi-turn; Orca and
-UltraFeedback use Single-turn prompts. These are contributions to the selected
-canonical population, not the full original component datasets.
-
-The three registered Nemotron Ultra blends expand into component populations.
-Each child row names its parent blend in Canonical source. RLVR1, RLVR2, and MOPD counts come from scanning every record of the complete
-original JSONL files in [nvidia/Nemotron-RL-Ultra-Training-Blends](https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/tree/79f8eda15ea12e1adf7bb14dcb338a29d391b80e)
-at revision `79f8eda15ea12e1adf7bb14dcb338a29d391b80e`:
-98,424, 99,116, and 85,980 records respectively.
-The counted file SHA-256 and record dataset selector are exposed in details.
-Counts distinguish ordinary and tool-assisted math, ARC variants, and structured
-output variants. Tool-assisted math and Lean refinement use Agentic/Multi-turn.
-The component counts within each blend sum exactly to that parent blend's total.
-
-Both RLVR blends contain 13,898 SWE records. Exactly 2,838 match the 366 SWE-Gym
-instance IDs present in the blend; the remaining 11,060 are attributed to
-SWE-rebench-V2 using [the blend card](https://huggingface.co/datasets/nvidia/Nemotron-RL-Ultra-Training-Blends/blob/79f8eda15ea12e1adf7bb14dcb338a29d391b80e/README.md)'s exhaustive two-source SWE composition. Membership
-was checked against [SWE-Gym/SWE-Gym at revision
-`bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb`](https://huggingface.co/datasets/SWE-Gym/SWE-Gym/tree/bb94ed9e39bbeb96a7fcbfb533b80f25a7fd59cb). This counts blend records, including
-multiple trajectory steps for a shared instance; it is not a count of unique SWE
-issues.
-
-MOPD has 13,132 SWE records: 2,990 SWE-Gym and 10,142 rebench records. Its
-three SWE dataset selectors remain separate, as do GenRM's `hs3_en`, `hs3_multi`,
-`hs3_multiturn`, and `safety_en` populations and newer instruction-formatting
-variants. The 7,191 SWE records lacking a dataset field are identified by their
-explicit SWE agent reference and instance metadata; they form one of the three
-selector populations. The same membership rule assigns 1,884 of these records
-to SWE-Gym and the remaining 5,307 to rebench. These contributions are included
-in the 2,990/10,142 totals; none are omitted.
-`hs3_multiturn` uses Alignment/Multi-turn. The indirect prompt-injection component
-uses Agentic/Multi-turn and has 2,000 records. All current Nemotron component
-counts are exact and included in filtered totals.
-
-No aggregate parent rows remain in the table. A changed upstream revision
-invalidates bundled exact counts and uses card estimates until that revision is
-audited. The rounded card percentages do not establish exact individual counts.
-If a card combines two sources without individual counts, the fallback leaves
-those counts unknown and omits them from the tally. Refreshes retire old rows
-atomically; a failed composition lookup preserves the previous snapshot.
-
-To rebuild counts from complete local files, run the audit module with an
-snapshot directory named by the HF revision SHA. It must contain complete
-`rlvr1.jsonl`, `rlvr2.jsonl`, and/or `mopd.jsonl`; other filenames are ignored.
-The identifier JSON must contain `revision` (the SWE-Gym repository SHA) and
-`rows` (objects with `instance_id`). Use the complete upstream identifier list,
-not a sample: 2,438 entries at the pinned SWE-Gym revision. Its shape is
-`{"revision": "SWE_GYM_SHA", "rows": [{"instance_id": "INSTANCE_ID"}]}`. The audit is an offline maintenance step; page loads
-consume the bundled counts and fetch metadata, rather than scanning task files.
-
-```bash
-uv run python -m infra.marina.applets.rl_data_catalog.audit_nemotron \
-  --snapshot /path/to/snapshots/HF_REVISION_SHA \
-  --swe-gym-identifiers /path/to/swe-gym-identifiers.json \
-  --output infra/marina/applets/rl_data_catalog/server/nemotron_counts.py
+```mermaid
+flowchart LR
+  C[Curated TaskSpec parquet and stage evidence] --> P[Zephyr: sample and prepare packets]
+  P --> G[GLM: one judgment per packet]
+  G --> K[Typed FineStore catalog and archived packets]
+  K --> L[Explicit loader: stage and check]
+  L --> D[Select Postgres load]
+  D --> A[Atlas: SQL reads]
+  T[Public TaskSpec instructions and contracts] --> E[Zephyr: bounded public text and cached CPU Harrier embeddings]
+  H[Curriculum anchor embeddings] --> M[Zephyr: exact matches and scores]
+  E --> M
+  M --> R[Count source outcomes and publish release manifest]
+  R --> CS[Zephyr: coverage statistics and review samples]
+  CS --> CL[Compact curriculum loader]
+  CL --> CA[Postgres: compact statistics, curriculum and samples]
+  CA --> A
 ```
 
-The top line shows one data-source count, the filtered task tally, and upstream
-status. The source count counts displayed source/component rows across both
-catalogs, excluding deprecated/excluded rows; an expanded parent contributes
-one count for each component and has no separate aggregate entry. It stays global when search
-filters change. Gym aliases such as `gym/aime` remain searchable, and source details
-include the gym entrypoint and registration link. Adapters without a registered
-input source are omitted. Generators display **Generated** and have no fixed count.
+## Reading grades
 
-The task tally above the table sums known finite dataset counts in the currently filtered rows,
-including deprecated sources only when they are shown. Task Trove counts released
-Harbor tasks. MarinSkyRL counts the selected split, configuration, or source
-filter before rollout preparation and deduplication. The details panel and CSV
-distinguish exact HF metadata counts, upstream-reported counts, and estimates.
-An estimated row and any filtered total containing it display `≈`.
-Merging gym rows removes duplicate inventory contributions. Source populations
-can still share task records; the tally is not a count of unique tasks. Missing
-finite dataset counts are omitted from the sum and listed separately. Generators display **Generated** and contribute no fixed count to the tally.
+FULL campaigns grade automatically; SAMPLE opts in with `--assess`.
+The default sample covers 100 retained tasks and up to 20 excluded rows.
+"Admitted" in the catalog means a task retained in the final TaskSpec parquet
+after curation. Excluded rows are sampled separately to inspect filtering decisions.
+Admitted opinions, excluded diagnostics and executed grader controls remain
+separate. Grading does not change admission. Input populations may overlap.
 
-Counts unavailable in HF's viewer are resolved from the current dataset
-card: APPS uses its 5,000-row train split; Eurus uses its 25,276 coding train
-problems; Nemotron instruction following uses its 56,339-row RL population;
-Nemotron Ultra uses the card's separate blend counts before component expansion. GPQA uses the 198-row
-`gpqa_diamond/train` configuration. ASDiv's GitHub README reports 2,305 problems;
-ASDiv and Reasoning Gym link to their GitHub repositories rather than nonexistent
-HF repositories. Count evidence links record the revision used for the latest
-refresh and advance when upstream revisions change.
+SQL computes each cohort's verdict counts and label over the entire selected sample:
 
-OpenScience has four configurations and a partial HF viewer. Its displayed count
-is the sum of complete configuration counts and HF's estimates for incomplete
-configurations: approximately 4,476,918 rows at the September 28 audit. The dataset
-card reports approximately six million. The applet exposes this discrepancy in
-the count basis and does not treat the 1,200,238 preview rows as the full dataset.
-This is a repository-wide count across all four configurations. OpenScience's
-native loader requires an explicit `parameters.subset`; task inputs and reviews
-retain that selection.
+- Good: at least 80% have usable task evidence and a Good judgment.
+- Bad: more than 20% have usable task evidence and a Bad judgment.
+- Unknown: neither threshold is met and fewer than 80% have conclusive judgments.
+- Some issues: the remaining samples.
 
-All Agentic sources use Multi-turn interaction, including excluded Task Trove
-sources. Task Trove sources use Harbor and Agentic. Other interaction labels
-describe the supported conversation structure; a Multi-turn collection can
-contain one-turn examples. MarinSkyRL families were audited against upstream
-cards/schema and selected loaders on September 28, 2026; each links to its pinned
-evidence. These audited family assignments remain fixed until reviewed again.
-Type distinguishes verifiable-reward tasks (RLVR), preference alignment, and
-agent interaction. Family describes the task domain, such as math-answer or
-competitive-programming; interaction labels describe single-turn or multi-turn
-conversations. Task Trove families come from its release manifest. Benchmark flags
-include explicit card designations such as AIME 1983–2024, APPS, and GPQA as well
-as HF's official benchmark tag. A false flag means no designation was found.
-Quality links to a sample-based review: green Good, yellow Some issues, red Bad,
-or gray Unreviewed/Unrated. Review date records the latest actual judgment time.
-Good means the sampled review found no qualifying defects; it does not prove
-the verifier correct for every task. Confirmation requires actual native inputs
-and a reproducible mismatch between expected and observed behavior, such as
-rejecting valid tasks, grading correct answers incorrectly, or supplying judge
-examples that violate the parser contract. Suspicions alone do not confirm a
-defect. A subsequently reproduced verifier,
-task-import, or judge-output defect must receive a GitHub issue and an
-evidence-backed supplemental review in the source's review pool. Record the
-defect in `catalog_verifier_issues` and demote Good to Some issues. Preserve Bad
-ratings, previous judgments, execution traces, and difficulty reports.
+A completed or gated pipeline that processes inputs and retains zero tasks is Bad.
+An incomplete pipeline without retained tasks remains Unknown. Missing packets
+and unavailable judgments count against coverage; they are never dropped from
+the denominator. Atlas displays the Good fraction and the reason for the label.
+These opinions describe the inspected sample, not an estimate of the whole source.
 
-An open confirmed defect prevents publishers and refreshes from restoring Good
-or displaying a current difficulty estimate. Difficulty collection selects only
-Good sources. Clearing the defect requires a validated fix and a new source
-review on the applicable dataset and verifier revisions; closing a GitHub issue
-or merging a fix alone is insufficient. In that source's `catalog_verifier_issues`
-row, set `status` to `resolved` and set `resolution_review_id` to the new
-`catalog_reviews.id`, which identifies a whole review collection rather than an
-individual judgment. All open confirmed defects must be resolved before Good
-can return. Then publish the new source rating.
+Large packets retain the task and answer contract, with bounded previews of long
+text, collections and stage audits. Previews record original sizes and selected
+indices or text prefixes and suffixes; full evidence remains in curation outputs.
+The model names any missing fact that prevents a judgment. Omitted private fixture
+text alone does not force Unknown.
 
-The resolution collection must include a verified native runtime observation
-and a review with `attributes.resolved_verifier_issues` entries recording
-`issue_url`, the current `dataset_revision` and `verifier_revision`, and
-`fix_validated: true`. Link the actual validation evidence in that review.
-The runtime observation uses `method: runtime_execution`, `tests_executed: true`,
-and `attributes.verification.status: verified`, produced by actual native
-execution rather than a manually assigned score. Validate the repaired behavior
-against the saved failing inputs and appropriate incorrect-answer controls.
-The historical finding remains in the review pool.
+Assessment keys use ordinary artifact dependencies and explicit versions.
+Changing only the rubric or grading model reuses curation. A failed new key has
+no current grade; archived evidence remains available. Inventory-only sources
+carry a skip reason. Source details show the latest curation outcome; the
+assessment page shows the curation associated with its selected grade.
 
-Reuse existing source and task reviews before scheduling fresh quality judgments.
-An imported audit with no Atlas rating needs a source synthesis that cites its
-findings, preserves disagreements, and states applicability to the current release.
-Missing ratings alone do not warrant another solver run or three-judge panel.
-Reserve additional judgments and native checks for specific evidence gaps,
-changed tasks/verifiers, consequential disagreements, or suspected defects.
-Keep unknown historical dates and revisions unknown. Record the inspected
-MarinSkyRL reference commit separately from native execution provenance.
-The review page displays the reference commit for reused evidence, and marks
-superseded opinions while keeping their original content available.
+## Browsing sources
 
-Demotion sets `catalog_sources.difficulty` to null. Existing `difficulty.json`
-reports and traces remain in `review_artifacts`; the review page labels them as
-historical while a defect is open. Collect and publish a current difficulty
-estimate only after the source qualifies as Good again.
+**By source** lists individual sources with their catalog, converted example
+count, training/evaluation use, current sampled quality and the curriculum domain
+with the most mapped examples. Search names, datasets or tags; filter by catalog,
+use or quality; select a column heading to sort. Filters and sorting are included in the URL. CSV export
+includes the filtered rows in the displayed order.
 
-The review page shows native outcomes, three independent model judgments per task,
-task/source syntheses, the MarinSkyRL commit, and linked evidence. Difficulty shows
-model solve rates; its report includes task counts,
-sampling scope, checkpoint revisions, and uncertainty. These curated columns are
-stored separately and survive refreshes. Changed source data or verifier revisions
-hide stale Quality and Difficulty values while retaining the historical review link.
-Nemotron component identities and exact counts survive repository metadata changes
-when the selected blend file still matches the complete-file audit's SHA-256.
-The audit is bundled in `server/nemotron_counts.py` under the applet directory.
-Reusing a historical review at a later repository revision requires separate
-evidence that its data bytes, component selection, and verifier still apply.
-The review page links that evidence and preserves the actual judgment date and
-executed revision; the catalog still reports the latest repository revision date.
+Example counts describe successfully converted tasks before curation admission.
+A dash means no processed examples from that source are in the currently
+published curriculum release.
+**Not assessed** means there is no current sampled assessment; **Unknown** is a
+completed assessment without enough conclusive judgments. Open a source for
+pipeline details and links to its original dataset, assessment and curriculum
+coverage. The leading curriculum domain links directly to that source's coverage
+within the domain. On small screens, the table keeps name, count and quality
+visible; source details contain the remaining fields.
 
-For sources rated Good, the page shows the quality solver's initial solve
-count and the saved [issue #8942](https://github.com/marin-community/marin/issues/8942)
-evidence above the difficulty comparison. The quality sample can be smaller
-and drawn differently. Three judges assess each attempt; their opinions are not
-additional solver attempts. Historical dataset releases and rollout settings remain
-separate from current measurements.
+## Updating Atlas
 
-The catalog's Difficulty column shows each measured model's solve rate as a bar
-with solved/verified counts. Longer bars mean more tasks solved. Current comparisons
-use the same task sample for three fixed models:
-
-| Role | Model | Reasoning setting |
-| --- | --- | --- |
-| Small | Qwen/Qwen3-Coder-30B-A3B-Instruct | Non-thinking checkpoint |
-| Large | Qwen/Qwen3.5-122B-A10B | Thinking enabled |
-| Hosted | zai-org/GLM-5.3 on Together | Low reasoning effort |
-
-The `atlas-difficulty-v2-65k16k` protocol gives each model 65,536 total context
-tokens, at most 49,152 input tokens, and at most 16,384 output tokens including
-reasoning. All three use temperature 0.7, top-p 0.95, top-k 20, min-p 0,
-repetition penalty 1, and presence and frequency penalties 0. These explicit
-settings prevent checkpoint generation defaults from changing the comparison.
-Models retain their native reasoning controls; the shared token budget does not
-make those controls equivalent. Nemotron's learned verifiers use Hosted GLM-5.3
-with Low reasoning effort across all three arms. Their native output budgets
-and saved critic requests and responses appear with the run evidence.
-
-Earlier comparisons display their actual model names and Historical status.
-Historical GLM AWQ runs are separate from the current Large Qwen model, and
-historical Qwen3.5-9B runs are separate from the current Small model. Filters and
-sorting use only current Qwen3.5-122B-A10B solve rates; sources without a current
-measurement sort last. Archived reports retain their original settings and traces.
-Click the bars to open the source's Difficulty section.
-Each model has collapsible run settings and task attempts, including saved model
-requests, responses, and native verifier results and logs. These saved artifacts
-load when their sections open. Missing artifacts are identified explicitly.
-Changed data/verifier revisions or unresolved verifier defects prevent a current
-difficulty comparison.
-
-Generation-setting follow-ups show their solve rates and changed settings beside
-their earlier comparisons, with links to both reports and traces. The output budget
-includes thinking tokens. When a model exhausts it before submitting a final
-answer, the report records that failure so the solve rate can be interpreted for
-the stated generation setting.
-Hosted model follow-ups also record changed checkpoints, generation settings,
-and configured LLM verifier judges. They do not isolate the effect of reasoning
-effort. Providers may expose a model identifier without an immutable checkpoint
-revision. Changes to quality-review code alter the recorded `make_review.py`
-file hash even when difficulty execution is unchanged. A saved
-`publication-execution-implementation-attestation.json` compares the parsed
-Python definitions used by the difficulty task loader, worker launcher, and
-MarinSkyRL code identity check, including their referenced definitions and imports.
-The original and executed script's whole-file hashes remain recorded.
-
-The review tooling, example configuration, and JSON schema are checked in under
-`experiments/rl_data_reviews/`. Copy `review-config.example.json` to a local file,
-then set the model endpoint and the solver checkpoint commit in `model.revision`, native checkout and
-Python paths, source identity, and local task path. Gym execution requires the
-MarinSkyRL runtime dependencies; Harbor execution also requires Harbor and its
-configured environment provider, such as local Docker. API keys belong in the
-environment variable named by `model.api_key_env`.
-
-From the repository root, create and publish a review with:
-
-```bash
-uv run experiments/rl_data_reviews/make_review.py \
-  --config /path/to/review-config.json --n 3 --seed 42 --output /path/to/review
-uv run experiments/rl_data_reviews/publish_review.py \
-  --run-dir /path/to/review --atlas-id 'MarinSkyRL:svamp'
-```
-
-Set `source.source_id` to the Atlas population named by `--atlas-id` and
-`source.revision` to that dataset's HF commit. `source.tasks_path` points to the
-local inputs. Use `source.format: skyrl_prepared` for Parquet or JSON rows with
-MarinSkyRL's `prompt`, `env_class`, and verifier arguments; use `harbor_directory`
-for native Harbor task directories. `task_manifest` accepts JSON or JSONL records
-matching the `Task` dataclass in `make_review.py`, including the source ID and
-dataset revision for each record. Preserve the native verifier arguments and
-selected subset when preparing these inputs.
-The script samples local tasks, runs native Gym or Harbor verifiers, saves solver
-and verifier traces, obtains three fresh review sessions from the solver model, each without the other judges' opinions,
-and synthesizes the opinions. Each Harbor attempt uses a distinct session name.
-Add `--resume` to the first command to reuse completed task outcomes, judge outputs, and syntheses with matching inputs,
-configuration, and native code. The publisher validates the collection and
-uploads its cited evidence into the applet schema using Marina authentication.
-Imported Task Trove dashboard notes and task audits remain separate historical collections; this publisher creates new collections from actual task attempts.
-
-Opening the [authenticated page](https://applets.marina.oa.dev/a/fb11c931-5861-4878-8bb5-a964d652b45f/) checks the MarinSkyRL registry repository and Task Trove release
-repository heads and always refreshes MarinSkyRL upstream dataset metadata, including
-when the MarinSkyRL head is unchanged. The public page reads the latest saved
-catalog and shows its last upstream check time; it does not refresh upstream sources.
-When the MarinSkyRL repository head
-changes, the applet reloads verifier commit history; **Refresh sources** also
-refetches metadata when heads have not changed. The applet downloads no task archives.
-Counts previously verified for a gated viewer are retained when access fails only
-if the dataset revision still matches. A changed revision invalidates that evidence.
-Each successful upstream snapshot
-replaces that catalog's active rows atomically. A failed refresh preserves its
-previous snapshot and shows an error. Concurrent visitors share a refresh lock.
-For MarinSkyRL, Last revision is the newer of the HF or GitHub source update and the latest
-commit touching its verifier implementation directory. Both dates, their commits,
-and the registry date are available in the details panel. Task Trove dates refer
-to its release repository, not each original dataset.
-A source selects a gym environment whose verifier scores answers or actions.
-Verifier edits can change training rewards even when the dataset files are unchanged.
-
-Source code lives in `infra/marina/applets/rl_data_catalog/`. Persistent data lives
-in `catalog_sources`, `catalog_refreshes`, `catalog_reviews`, and `review_artifacts` within the applet's Postgres schema.
-Validate and update the same applet from the repository root:
+Source code lives in `infra/marina/applets/rl_data_catalog/`. Its migration
+creates the SQL tables; it does not read object storage or run curation.
+Publish code when the schema or UI changes, then load data explicitly:
 
 ```bash
 uv run marina validate infra/marina/applets/rl_data_catalog
-atlas_revision=$(uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json |
-  python -c 'import json, sys; print(json.load(sys.stdin)["current_version"])')
-uv run marina publish infra/marina/applets/rl_data_catalog \
-  --update fb11c931-5861-4878-8bb5-a964d652b45f --base-version "$atlas_revision"
+uv run marina release-status infra/marina/applets/rl_data_catalog --json
+uv run marina applets versions fb11c931-5861-4878-8bb5-a964d652b45f --json
+uv run marina release infra/marina/applets/rl_data_catalog --base-version CURRENT_VERSION
+
+uv run python infra/marina/applets/rl_data_catalog/load.py \
+  --applet-id fb11c931-5861-4878-8bb5-a964d652b45f
 ```
 
-Use the actual current revision reported by `versions` as `--base-version`.
-For local testing, use `uv run marina publish infra/marina/applets/rl_data_catalog --local`.
+`applet.toml` declares the existing applet's UUID. Any authenticated internal
+Marina user can release an update. By default, source must be a clean
+checkout at the current remote main. A Marina image deployment does not publish Atlas. A
+default release records its source commit and subtree hash in the immutable package;
+`release-status` reports whether that tree matches this checkout.
+Use `--allow-dirty` to explicitly release branch or uncommitted source without
+verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
 
-On HF rate limits, the backend attempts to read
-`projects/hai-gcp-models/secrets/HF_TOKEN_READONLY/versions/1` using Marina's Google identity.
-The runtime service account has access scoped to this secret through the grant in
-[PR #9501](https://github.com/marin-community/marin/pull/9501). A Marina-authenticated
-maintenance refresh can instead send the token in `X-HuggingFace-Token` with its
-POST to `api/refresh?force=true`. To verify runtime access, send a Marina-authenticated
-POST to `api/refresh?force=true&hf_auth=runtime` without a caller-supplied HF token;
-the response reports `hf_authentication: runtime_secret`. The token is used only for HF requests and is
-never stored in the applet tables or sent to the frontend. Normal page loads reuse Task Trove snapshots when its release head is unchanged.
+The loader defaults to the published catalog in CoreWeave's `us-east-02a` bucket at
+`s3://marin-us-east-02a/marin/rl-data/catalog/production`.
+Use `--catalog-root` to explicitly select another catalog, such as a local preview.
+The default keeps production updates independent of an operator's local curation cache.
+
+Production FULL campaigns add `--publish-catalog
+s3://marin-us-east-02a/marin/rl-data/catalog/production` to the
+[campaign command](task-curation.md#run-a-campaign) with assessment enabled.
+`--cache-dir` selects local execution and a local artifact root, so production
+publication rejects it. Production uses the shared artifact cache under
+`--artifact-root` (default `s3://marin-us-east-02a/marin`) and an explicit
+`--review-cache` for model requests. Reuse the existing cache locations, pinned
+inputs, recipe versions, rubric and model revisions to reuse completed work.
+Assessment can use cached results; enabling it does not force regrading.
+A new report directory does not invalidate the caches. Switching a local or GCP
+artifact root to S3 does not move its cached work. Verify retained artifacts and
+model-request caches are available before running a campaign from the new root.
+The publication destination is independent: a GCP campaign can keep its existing
+`--artifact-root` and `--review-cache` while publishing to the S3 catalog. Run
+beside those caches. The default S3 artifact root will not reuse work present
+only at a different GCP root.
+Run history, assessments and evidence accumulate in the shared catalog.
+Without this option, SAMPLE/FULL publish beside their report. QUICK does not publish
+a grading snapshot. Adding a dataset declaration alone does not execute its pipeline.
+
+Publication updates selected sources and preserves all other production entries,
+including their pinned declarations. Use `--source` to grade only new or changed
+sources; the other sources' assessments carry forward without executing their
+pipelines. Metadata-only edits to names, tags or URLs
+therefore reach production when that source is selected. Removing a declaration
+from code does not retire its production entry. Older attempts are ignored per
+source, so an out-of-order campaign can still publish its other sources. Failed
+attempts under a changed assessment key clear the old grade; exact-key retries
+can reuse completed evidence. The key includes rubric, model and pipeline identity.
+
+After the campaign publishes, run the loader above to refresh Postgres. The shared
+catalog updates during production runs; Atlas refresh remains an explicit operation
+and can be retried without inference or a Marina restart. Curriculum publication
+and import are separate; grading a new source does not generate its heatmap coverage.
+
+Coordinate the code release and data load: the new API returns 503 until a
+catalog has been selected. The loader reads through `CurationCatalog`, sends byte-bounded
+SQL batches, checks sample and packet coverage, then selects the load with one
+conditional UPDATE. An unchanged snapshot skips loading. If the catalog or serving
+selection changes during an import, that import fails and can be retried. Cleanup
+after successful selection removes only older loads observed before staging; it
+preserves imports that started later. Schema changes may require downtime. FineStore's snapshot reader caches
+requested Parquet byte ranges under a shared memory budget. The loader needs no
+separate metadata cache and keeps evidence packet reads batched. A bounded import
+can run from a workstation; prefer the catalog's storage region for large transfers.
+
+The production catalog was seeded from the relocated October 12 snapshot. Its initial
+manifest retains immutable shards in
+`s3://marin-us-east-02a/marin/rl-data/migrations/2026-10-15/`.
+That verified archive remains part of production storage and must be retained.
+Schemas were copied into the production root so writers can extend the catalog.
+New writes use that root. The legacy catalog remains historical evidence.
+This catalog bootstrap preserves published grades and evidence; it does not
+relocate the original GCP execution artifacts or model-request cache.
+
+Packets are stored separately as JSON text, preserving escaped null characters.
+Inventory queries scan structured metadata and verdict rows. Atlas performs no
+cloud reads, background refresh or inference. Request/response traces remain
+archival references in the assessment record.
+
+For a local preview, start disposable Marina and Postgres, then run the same
+loader against a local curation cache using the printed applet ID and origin:
+
+```bash
+uv run marina release infra/marina/applets/rl_data_catalog --local --json
+uv run python infra/marina/applets/rl_data_catalog/load.py \
+  --catalog-root ~/.cache/marin/rl-curation/campaigns/catalog \
+  --applet-id PRINTED_ID --url PRINTED_ORIGIN
+```
+
+Inspect the inventory, an assessment and its task evidence. Stop the local stack
+with Ctrl-C when finished; its database is disposable.
+
+## Curriculum coverage
+
+**By curriculum** opens a heatmap of all curriculum domains and their topics.
+Choose a domain from the picker or open an area to see its topics and skills.
+Breadcrumbs return to parent areas or all domains. Search names and descriptions
+across the curriculum, and filter counts by source or training/evaluation use.
+The URL preserves the selected area and filters. Select a count to read sampled
+examples, then open an example for its public instruction preview, embedding
+text, cosine similarity to curriculum anchors and alternative matches.
+Long instruction previews record the original character count and truncation.
+
+Displayed cosine scores are similarities; distance is `1 - similarity`.
+The export uses fixed maximum distances of 0.45 for subjects and 0.25 for
+capabilities. A task can have a capability match, a subject-only match, no
+match within the cutoff, insufficient context, or a skipped embedding.
+Alternative subject and capability matches remain available in sampled task details.
+
+Counts shade each area on a logarithmic scale; zeros stay visible to expose gaps.
+Domain counts include tasks that match the subject but fall outside the
+capability cutoff. Topic and skill counts require a capability match. Opening an
+area loads its sampled examples below the map;
+**Read sampled examples** jumps to that list. Empty areas explain when no
+examples are available.
+
+Heatmap counts and outcome totals describe every task
+instance in the exported population. A Zephyr pass computes these counts by
+source and curriculum node, including hierarchy rollups. Postgres sums these
+small statistics for dataset and train/eval filters. Overview requests do
+not scan task or match tables.
+
+Examples combine two independent deterministic samples: up to 100 tasks per
+source and 10 per curriculum node, including subjects, groups and capabilities.
+The combined sample removes repeated source/task identities. The task list
+and details show this bounded review sample; their size does not change the
+full-population counts. Curriculum entries, statistics and samples form the
+compact serving dataset. The complete task and embedding outputs stay in
+object storage.
+
+Converted populations contain successfully converted TaskSpecs before admission.
+They retain training/evaluation intent. Selecting a source shows its full
+conversion ledger in **About counts and matching** when available. Sources
+outside the release remain in the source inventory, where **Not processed**
+filters them for inspection.
+
+Run the embedding graph through `--embed coverage`. The `publication` stage
+counts assignment outcomes by source, reconciles complete converted populations
+against source manifests, and writes `release.json` referencing the assignment Parquet. The subsequent `coverage` stage writes aggregated
+statistics, bounded example Parquet and `coverage.json` without rerunning
+embeddings or matching. Load both manifests:
+
+```bash
+uv run python -m infra.marina.applets.rl_data_catalog.load_curriculum \
+  --release IMMUTABLE_RELEASE_ROOT/release.json \
+  --coverage IMMUTABLE_COVERAGE_ROOT/coverage.json \
+  --applet-id APPLET_ID --url MARINA_ORIGIN
+```
+
+The loader reads statistics and sampled task files. It checks sample lineage,
+training/evaluation use, curriculum references and sample counts. It reconciles
+statistics against complete-population totals in the task release manifest before atomically selecting
+the release. Byte-bounded SQL requests keep import work proportional to the
+compact export. Failed loads preserve the selected release; the current and
+previous releases are retained. Run one curriculum loader per applet at a time.
+APIs read Postgres without cloud scans.
+
+Start the local stack as shown in [Updating Atlas](#updating-atlas), then use the
+same curriculum-loader command with its printed ID and origin. Stop the stack
+with Ctrl-C when finished.
+
+## Historical reviews
+
+Historical reviews and raw artifacts remain in their original Postgres tables.
+They do not affect current grades. Atlas retains an archive reader; the previous
+manual review, source-verification and difficulty workflows are removed.

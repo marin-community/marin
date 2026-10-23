@@ -101,5 +101,6 @@
       ],
       "filterExpression": "metric == 'tpot' && stat == 'mean_over_time'"
     }
-  ]
+  ],
+  "maxDataPoints": 360
 }

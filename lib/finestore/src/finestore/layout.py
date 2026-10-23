@@ -10,6 +10,7 @@ commit token for every table and object in a transaction.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlsplit
@@ -19,6 +20,7 @@ from rigging.filesystem.storage_path import prefix_join
 
 ARCHIVE_FILE = "_archive.json"
 HEAD_FILE = "HEAD"
+MAINTENANCE_LEASE_FILE = "_maintenance"
 FORMAT_VERSION = 2
 DATA_DIR = "data"
 MANIFESTS_DIR = "manifests"
@@ -106,8 +108,65 @@ class SealMarker(_FormatModel):
     superseded: dict[str, int] = Field(default_factory=dict)
 
 
+KeyBound = tuple[str | int, ...]
+# Key value types with one total order shared by the writer's bounds and the reader's lookups.
+BOUNDED_KEY_TYPES = (str, int)
+
+
+def _comparable(value: object, bound: object) -> bool:
+    return type(value) is type(bound) and type(value) in BOUNDED_KEY_TYPES
+
+
+@dataclass(frozen=True)
+class KeyRange:
+    """Inclusive bounds on the primary keys a shard holds.
+
+    Bounds exist only for keys made of strings and integers, so a lookup value compares
+    against them without ambiguity. A lookup value of another type than the bound at its
+    position is treated as unbounded at that position.
+    """
+
+    lowest: KeyBound
+    highest: KeyBound
+
+    @classmethod
+    def of(cls, keys: Iterable[tuple]) -> KeyRange | None:
+        """Return the range spanning ``keys``, or ``None`` for no keys or an unbounded key type."""
+        lowest: tuple | None = None
+        highest: tuple | None = None
+        for key in keys:
+            if not all(type(value) in BOUNDED_KEY_TYPES for value in key):
+                return None
+            if lowest is None or key < lowest:
+                lowest = key
+            if highest is None or key > highest:
+                highest = key
+        if lowest is None or highest is None:
+            return None
+        return cls(lowest, highest)
+
+    def may_contain_prefix(self, prefix: tuple) -> bool:
+        """Whether a key starting with ``prefix`` can lie within the range."""
+        width = 0
+        for value, low, high in zip(prefix, self.lowest, self.highest, strict=False):
+            if not _comparable(value, low) or not _comparable(value, high):
+                break
+            width += 1
+        if width == 0:
+            return True
+        return self.lowest[:width] <= prefix[:width] <= self.highest[:width]
+
+    def may_contain_first(self, values: Iterable[object]) -> bool:
+        """Whether any of ``values`` can be the first key column of a key within the range."""
+        return any(self.may_contain_prefix((value,)) for value in values)
+
+
 class Shard(_FormatModel):
-    """One immutable Parquet segment referenced by a manifest."""
+    """One immutable Parquet segment referenced by a manifest.
+
+    ``min_key`` and ``max_key`` bound the primary keys stored in the shard when they are
+    strings and integers; a reader skips the shard for lookups outside ``key_range``.
+    """
 
     path: str
     writer: str
@@ -119,6 +178,14 @@ class Shard(_FormatModel):
     content_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     commit_sequence: int = 0
     primary_key_sorted: bool = False
+    min_key: KeyBound | None = None
+    max_key: KeyBound | None = None
+
+    @property
+    def key_range(self) -> KeyRange | None:
+        if self.min_key is None or self.max_key is None:
+            return None
+        return KeyRange(self.min_key, self.max_key)
 
 
 class ManifestTable(_FormatModel):
@@ -138,6 +205,9 @@ class Manifest(_FormatModel):
     required_features: tuple[str, ...] = ()
     tables: dict[str, ManifestTable] = Field(default_factory=dict)
     sealed: SealMarker | None = None
+    # Advanced by each writer that acquires the maintenance lease. A compaction prepared under
+    # an older epoch cannot be published after a takeover.
+    maintainer_epoch: int = 0
 
 
 class HeadMetadata(_FormatModel):
@@ -181,6 +251,10 @@ class FineStoreLayout:
 
     def table_dir(self, table: str) -> str:
         return prefix_join(self.root, f"{DATA_DIR}/{table}")
+
+    @property
+    def maintenance_lease_path(self) -> str:
+        return prefix_join(self.root, MAINTENANCE_LEASE_FILE)
 
     def shard_path(self, table: str, writer: str, generation: int, seq: int, uid: str) -> str:
         return prefix_join(self.table_dir(table), f"w={writer}/g={generation}/{seq:016d}-{uid}.parquet")

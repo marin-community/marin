@@ -32,6 +32,7 @@ from pathlib import Path
 
 from iris.cluster.bundle import BundleStore
 from iris.cluster.log_keys import STDERR_SOURCE, STDOUT_SOURCE
+from iris.cluster.procfs import stat_fields_after_comm
 from iris.cluster.runtime.env import cache_host_dirname, write_workdir_files
 from iris.cluster.runtime.profile import (
     LocalProfileDispatch,
@@ -289,8 +290,8 @@ def _read_proc_cpu_millicores(
         return (0, prev_total, prev_utime)
     try:
         with open(f"/proc/{pid}/stat") as f:
-            fields = f.read().split()
-        utime = int(fields[13]) + int(fields[14])
+            fields = stat_fields_after_comm(f.read())
+        utime = int(fields[11]) + int(fields[12])
 
         with open("/proc/stat") as f:
             cpu_line = f.readline()
@@ -359,6 +360,7 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
 
     WORKDIR mounts resolve to config.workdir_host_path (set by task_attempt).
     OUTPUT mounts resolve to config.output_host_path.
+    SECRET mounts resolve to config.secret_host_path.
     CACHE mounts resolve to shared subdirectories under cache_dir.
     TMPFS mounts resolve to per-task temp directories under cache_dir for isolation.
     """
@@ -371,6 +373,9 @@ def _resolve_mount_map(config: ContainerConfig, cache_dir: Path | None = None) -
             if config.output_host_path:
                 config.output_host_path.mkdir(parents=True, exist_ok=True)
                 result[mount.container_path] = str(config.output_host_path)
+        elif mount.kind == MountKind.SECRET:
+            if config.secret_host_path:
+                result[mount.container_path] = str(config.secret_host_path)
         elif mount.kind == MountKind.CACHE:
             if cache_dir:
                 host_dir = cache_dir / cache_host_dirname(mount.container_path)

@@ -256,6 +256,7 @@ def measurement_from_record(record: EvalRunRecord) -> Measurement | None:
 
     The benchmark is the registry eval name (the leaderboard column); a record's task entries roll up
     to it exactly as the dashboard has always rolled them up, with the group-aggregate rule preserved.
+    Readers decide whether the record's observed StepSpec state makes its score publishable.
     """
     task_scores, missing_declared_metric = _task_scores(record)
     scores = _rollup_scores(task_scores)

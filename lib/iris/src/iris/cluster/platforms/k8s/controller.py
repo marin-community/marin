@@ -10,6 +10,8 @@ Worker pods and node scaling are handled by K8sTaskProvider.
 """
 
 import base64
+import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -17,10 +19,18 @@ import threading
 import time
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
+from pathlib import Path
 
 from rigging.filesystem.cluster_config import StoreType, store_config
 from rigging.filesystem.s3_compat import configure_fsspec_s3, fsspec_s3_conf, s3_credentials
-from rigging.secrets import ENV_SCHEME, as_secret_spec, resolve_secret_spec
+from rigging.secrets import (
+    FILE_SCHEME,
+    SECRETS_DIR_ENV,
+    as_secret_spec,
+    get_secret,
+    resolve_secret_spec,
+    secret_file_contents,
+)
 from rigging.timing import Deadline, Duration
 
 from iris.cluster.config import (
@@ -29,20 +39,29 @@ from iris.cluster.config import (
     IrisClusterConfig,
     assert_no_inlined_secrets,
     config_to_dict,
+    resolve_principal_references,
 )
-from iris.cluster.inject_env import TASK_ENV_SECRET_NAME, collect_inject_env, projects_task_env_secret
 from iris.cluster.node_agent import SERVICE_NAME as _NODE_AGENT_NAME
 from iris.cluster.platforms.k8s.constants import (
+    CONTROLLER_SECRET_NAME,
+    CONTROLLER_SECRETS_DIR,
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
+    EGRESS_LABEL,
+    EGRESS_NETWORK_POLICY_PREFIX,
     NVIDIA_GPU_TOLERATION,
+    SECRET_FILE_MODE,
+    SECRET_GROUP,
+    STORAGE_CREDENTIALS_FILE,
+    STORAGE_SECRET_NAME,
+    STORAGE_SECRETS_DIR,
 )
 from iris.cluster.platforms.k8s.kueue_manifests import (
     IRIS_WORKLOAD_PRIORITY_CLASSES,
     build_workload_priority_class,
 )
 from iris.cluster.platforms.k8s.nodepool_manifests import nodepool_name
-from iris.cluster.platforms.k8s.rbac_manifests import cluster_role_name
+from iris.cluster.platforms.k8s.rbac_manifests import TASK_SECRET_ROLE_NAME, cluster_role_name
 from iris.cluster.platforms.k8s.service import CloudK8sService, K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_PRIORITY_CLASS_SYSTEM,
@@ -53,6 +72,7 @@ from iris.cluster.platforms.k8s.types import (
 )
 from iris.cluster.platforms.types import InfraError, Labels, local_queue_name
 from iris.cluster.runtime.env import IRIS_NAMESPACE_ENV, IRIS_NODE_NAME_ENV
+from iris.cluster.runtime.sandbox import EGRESS_BLOCKED_CIDRS, TaskNetwork
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +112,13 @@ _CONTROLLER_PROBE_FAILURE_THRESHOLD = 6
 # a time while bounding the number of nodes without fresh telemetry.
 _NODE_AGENT_MAX_UNAVAILABLE = "10%"
 # Secret holding the controller's own credentials, projected into the controller
-# container alone. Held apart from iris-task-env, which every task pod also mounts:
-# a task must never be able to mint its cluster's tokens.
-CONTROLLER_ENV_SECRET_NAME = "iris-controller-env"
+# container alone. Application tasks must never be able to mint cluster tokens.
 SIGNING_KEY_ENV_VAR = "IRIS_SIGNING_KEY"
+PRINCIPAL_DIRECTORY_ENV_VAR = "IRIS_PRINCIPAL_DIRECTORY"
+_CONTROLLER_SECRET_FIELDS = (
+    ("signing_key", SIGNING_KEY_ENV_VAR),
+    ("principal_directory", PRINCIPAL_DIRECTORY_ENV_VAR),
+)
 
 _CONTROLLER_STATE_PVC_NAME = "iris-controller-state"
 # Must match main.py's LOCAL_STATE_DIR_DEFAULT — the path the controller
@@ -151,41 +174,30 @@ def _ingress_class_from_provisioning(config: IrisClusterConfig) -> str | None:
 
 
 def _projects_controller_env_secret(config: IrisClusterConfig) -> bool:
-    """Whether the cluster populates the iris-controller-env Secret.
-
-    True exactly when the cluster carries its own signing key. Creation, the Deployment's
-    ``envFrom`` reference, and teardown share this one predicate, so an ``envFrom`` can
-    never dereference a Secret that was not created.
-    """
-    return bool(config.auth and config.auth.signing_key)
+    """Whether controller-only credentials need a Secret volume."""
+    return bool(config.auth and (config.auth.signing_key or config.auth.principal_directory))
 
 
-def _controller_env(config: IrisClusterConfig) -> dict[str, str]:
-    """Resolve the controller's own secrets against the operator's shell.
-
-    A Kubernetes controller pod holds no cloud credentials, so a ``gcp-secret://``
-    reference can only be read here, at deploy time; the value reaches the controller
-    as ``IRIS_SIGNING_KEY`` through the iris-controller-env Secret. The cluster config
-    must therefore name ``env:IRIS_SIGNING_KEY`` among its references, so the pod reads
-    the projected value instead of re-resolving a source it cannot reach.
-    """
+def resolve_controller_secrets(config: IrisClusterConfig) -> dict[str, str]:
+    """Resolve configured controller credentials into their Kubernetes Secret keys."""
     if not _projects_controller_env_secret(config):
         return {}
     assert config.auth is not None
-    refs = as_secret_spec(config.auth.signing_key)
-    env_ref = f"{ENV_SCHEME}{SIGNING_KEY_ENV_VAR}"
-    if env_ref not in refs:
-        raise ValueError(
-            f"auth.signing_key must list {env_ref!r} for a Kubernetes cluster: the controller pod reads "
-            f"its key from the {CONTROLLER_ENV_SECRET_NAME} Secret, which this deploy populates by "
-            f"resolving the remaining references in the operator's shell. Got {list(refs)}."
-        )
-    # The env: reference addresses the pod, not this deploy, and resolve_secret_spec takes the
-    # first source that is present: an IRIS_SIGNING_KEY in the operator's shell must never
-    # outrank the pinned reference and become the cluster's identity. A spec that names no
-    # persistent source falls back to it, which is how an operator supplies the key directly.
-    persistent = tuple(ref for ref in refs if ref != env_ref)
-    return {SIGNING_KEY_ENV_VAR: resolve_secret_spec(persistent or refs).value}
+    env = {}
+    for field, variable in _CONTROLLER_SECRET_FIELDS:
+        spec = getattr(config.auth, field)
+        if not spec:
+            continue
+        env[variable] = resolve_secret_spec(spec).value
+    return env
+
+
+def _controller_secret_specs(config: IrisClusterConfig) -> tuple[tuple[str, ...], ...]:
+    return (
+        tuple(as_secret_spec(getattr(config.auth, field)) for field, _ in _CONTROLLER_SECRET_FIELDS)
+        if config.auth
+        else ()
+    )
 
 
 def _build_controller_deployment(
@@ -194,7 +206,8 @@ def _build_controller_deployment(
     image: str,
     port: int,
     node_selector: dict[str, str],
-    env_from_secrets: Sequence[str] = (),
+    secret_names: Sequence[str] = (),
+    environment: dict[str, str] | None = None,
     fresh: bool = False,
     state_mount_path: str = _DEFAULT_STATE_MOUNT_PATH,
     local_state_hostpath: bool = False,
@@ -202,14 +215,16 @@ def _build_controller_deployment(
 ) -> dict:
     """Build the controller Deployment manifest as a dict.
 
-    ``env_from_secrets`` names the Secrets the controller container sources its
-    environment from, in order.
+    Controller credentials are mounted separately from task credentials.
     """
-    # The cluster default env (S3 storage auth + operator-injected vars) arrives via
-    # the iris-task-env Secret, which task pods mount too; the controller's own
-    # credentials arrive via iris-controller-env, which they do not. optional=true so
-    # a controller-only restart that predates either Secret does not crash-loop.
-    env_from = [{"secretRef": {"name": secret, "optional": True}} for secret in env_from_secrets]
+    mounts = [
+        {
+            "name": name,
+            "mountPath": CONTROLLER_SECRETS_DIR if name == CONTROLLER_SECRET_NAME else STORAGE_SECRETS_DIR,
+            "readOnly": True,
+        }
+        for name in secret_names
+    ]
     # Reserve controller CPU/memory so Kubernetes doesn't classify this Pod as
     # BestEffort. Only memory has a limit, so the Pod is Burstable (not
     # Guaranteed): the controller can burst onto spare node CPU during reconcile
@@ -232,6 +247,7 @@ def _build_controller_deployment(
             "metadata": {"labels": {"app": "iris-controller"}},
             "spec": {
                 "serviceAccountName": "iris-controller",
+                **({"securityContext": {"fsGroup": SECRET_GROUP}} if secret_names else {}),
                 # Keep the controller at SYSTEM so lower-band pods cannot preempt
                 # it off the shared control node (see IRIS_PRIORITY_CLASSES).
                 "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
@@ -264,10 +280,11 @@ def _build_controller_deployment(
                             ),
                         ],
                         "ports": [{"containerPort": port}],
-                        **({"envFrom": env_from} if env_from else {}),
+                        "env": [{"name": name, "value": value} for name, value in (environment or {}).items()],
                         "securityContext": {"capabilities": {"add": ["SYS_PTRACE"]}},
                         "resources": controller_resources,
                         "volumeMounts": [
+                            *mounts,
                             {"name": "config", "mountPath": "/etc/iris", "readOnly": True},
                             {"name": "local-state", "mountPath": state_mount_path},
                         ],
@@ -288,6 +305,10 @@ def _build_controller_deployment(
                     },
                 ],
                 "volumes": [
+                    *[
+                        {"name": name, "secret": {"secretName": name, "defaultMode": SECRET_FILE_MODE}}
+                        for name in secret_names
+                    ],
                     {"name": "config", "configMap": {"name": "iris-cluster-config"}},
                     (
                         {"name": "local-state", "hostPath": {"path": state_mount_path, "type": "DirectoryOrCreate"}}
@@ -319,6 +340,8 @@ def _build_node_agent_daemonset(
     image: str,
     cache_dir: str,
     cache_max_age: Duration | None = None,
+    storage_health_env: dict[str, str] | None = None,
+    storage_health_config: str = "disabled",
 ) -> dict:
     """Run the Iris physical-node collector once on every Kubernetes node."""
     volume_mounts = [
@@ -329,6 +352,11 @@ def _build_node_agent_daemonset(
         {"name": "config", "configMap": {"name": "iris-cluster-config"}},
         {"name": "task-cache", "hostPath": {"path": cache_dir, "type": "DirectoryOrCreate"}},
     ]
+    if storage_health_env is not None:
+        volume_mounts.append({"name": STORAGE_SECRET_NAME, "mountPath": STORAGE_SECRETS_DIR, "readOnly": True})
+        volumes.append(
+            {"name": STORAGE_SECRET_NAME, "secret": {"secretName": STORAGE_SECRET_NAME, "defaultMode": SECRET_FILE_MODE}}
+        )
     return {
         "apiVersion": "apps/v1",
         "kind": "DaemonSet",
@@ -343,13 +371,19 @@ def _build_node_agent_daemonset(
                 "metadata": {
                     "labels": {"app": _NODE_AGENT_NAME},
                     "annotations": {
+                        **(
+                            {"iris.marin.community/storage-health-config": storage_health_config}
+                            if storage_health_env is not None
+                            else {}
+                        ),
                         "iris.marin.community/cache-max-age-ms": (
                             str(cache_max_age.to_ms()) if cache_max_age is not None else "disabled"
-                        )
+                        ),
                     },
                 },
                 "spec": {
                     "serviceAccountName": "iris-controller",
+                    **({"securityContext": {"fsGroup": SECRET_GROUP}} if storage_health_env is not None else {}),
                     "priorityClassName": IRIS_PRIORITY_CLASS_SYSTEM,
                     "hostNetwork": True,
                     "dnsPolicy": "ClusterFirstWithHostNet",
@@ -368,6 +402,7 @@ def _build_node_agent_daemonset(
                                 "--config=/etc/iris/config.json",
                             ],
                             "env": [
+                                *[{"name": key, "value": value} for key, value in (storage_health_env or {}).items()],
                                 {
                                     "name": IRIS_NODE_NAME_ENV,
                                     "valueFrom": {"fieldRef": {"fieldPath": "spec.nodeName"}},
@@ -406,6 +441,91 @@ def _build_controller_state_pvc(*, namespace: str) -> dict:
             "resources": {"requests": {"storage": _CONTROLLER_STATE_PVC_SIZE}},
         },
     }
+
+
+# Namespace label the API server sets on every namespace (Kubernetes >= 1.21).
+_NAMESPACE_NAME_LABEL = "kubernetes.io/metadata.name"
+_DNS_NAMESPACE = "kube-system"
+_DNS_PORT = 53
+
+
+def _namespace_pods(namespace: str) -> dict:
+    return {"namespaceSelector": {"matchLabels": {_NAMESPACE_NAME_LABEL: namespace}}}
+
+
+def _internet_except(service_cidr: str) -> list[str]:
+    blocked = [ipaddress.ip_network(cidr) for cidr in EGRESS_BLOCKED_CIDRS]
+    if service_cidr:
+        services = ipaddress.ip_network(service_cidr)
+        if not any(services.subnet_of(network) for network in blocked if network.version == services.version):
+            blocked.append(services)
+    return [str(network) for network in blocked]
+
+
+def build_egress_network_policy(namespace: str, network: TaskNetwork, service_cidr: str = "") -> dict:
+    """Build the NetworkPolicy for pods whose egress label is ``network``.
+
+    Both policies deny all ingress and allow egress to DNS in kube-system.
+    INTERNET adds every IPv4 address outside ``EGRESS_BLOCKED_CIDRS`` and
+    ``service_cidr``. Neither mode reaches the controller, finelog, worker RPC
+    ports, other pods, or the metadata server. ``kubectl exec`` goes through
+    the kubelet and is unaffected.
+    """
+    if network is TaskNetwork.CLUSTER:
+        raise ValueError("cluster-network pods carry no egress NetworkPolicy")
+    egress: list[dict] = [
+        {
+            "to": [_namespace_pods(_DNS_NAMESPACE)],
+            "ports": [{"protocol": "UDP", "port": _DNS_PORT}, {"protocol": "TCP", "port": _DNS_PORT}],
+        }
+    ]
+    if network is TaskNetwork.INTERNET:
+        egress.append({"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": _internet_except(service_cidr)}}]})
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {"name": f"{EGRESS_NETWORK_POLICY_PREFIX}{network.value}", "namespace": namespace},
+        "spec": {
+            "podSelector": {"matchLabels": {EGRESS_LABEL: network.value}},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [],
+            "egress": egress,
+        },
+    }
+
+
+def _resolve_s3_credentials() -> dict[str, str]:
+    """Resolve operator storage keys for controller checkpoints and node probes."""
+    store = store_config(StoreType.COREWEAVE)
+    key_id = get_secret(store.key_id_env)
+    key_secret = get_secret(store.key_secret_env)
+    if not key_id or not key_secret:
+        raise InfraError(
+            f"{store.key_id_env} and {store.key_secret_env} secrets are required " "for S3-compatible object storage"
+        )
+    return secret_file_contents(
+        {
+            "AWS_ACCESS_KEY_ID": key_id,
+            "AWS_SECRET_ACCESS_KEY": key_secret,
+            store.key_id_env: key_id,
+            store.key_secret_env: key_secret,
+        }
+    )
+
+
+def _build_s3_task_env(endpoint: str) -> dict[str, str]:
+    """Build the endpoint settings shared by infrastructure and task Pods."""
+    store = store_config(StoreType.COREWEAVE)
+    env: dict[str, str] = {}
+    if endpoint:
+        env["AWS_ENDPOINT_URL"] = endpoint
+        env["AWS_REGION"] = "auto"
+        env["AWS_DEFAULT_REGION"] = "auto"
+        env["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
+        # The pod's node-local endpoint, under the name the CoreWeave store config reads,
+        # so a bucket-routed filesystem in a task uses LOTA rather than the public VIP.
+        env[store.endpoint_env] = endpoint
+    return env
 
 
 # ============================================================================
@@ -447,7 +567,7 @@ class K8sControllerProvider:
         self._poll_interval = poll_interval
         self._shutdown_event = threading.Event()
         self._s3_enabled = False
-        self.signing_key_spec: tuple[str, ...] = ()
+        self._controller_secret_specs: tuple[tuple[str, ...], ...] = ()
         self._prepared_controller_env: dict[str, str] | None = None
 
     @property
@@ -472,8 +592,15 @@ class K8sControllerProvider:
 
     def preflight_controller(self, config: IrisClusterConfig) -> None:
         """Resolve controller-only secrets without changing Kubernetes resources."""
-        self.signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
-        self._prepared_controller_env = _controller_env(config)
+        env = resolve_controller_secrets(config)
+        auth = (
+            config.auth.model_copy(update={"principal_directory": env.get(PRINCIPAL_DIRECTORY_ENV_VAR, "")})
+            if config.auth
+            else None
+        )
+        resolve_principal_references(config.model_copy(update={"auth": auth}))
+        self._controller_secret_specs = _controller_secret_specs(config)
+        self._prepared_controller_env = env
 
     def start_controller(self, config: IrisClusterConfig, *, fresh: bool = False) -> str:
         """Start the controller, reconciling all resources. Returns address (host:port).
@@ -493,6 +620,10 @@ class K8sControllerProvider:
                 f"{list(config.scale_groups.keys())}"
             )
 
+        if self._prepared_controller_env is None or self._controller_secret_specs != _controller_secret_specs(config):
+            self.preflight_controller(config)
+        assert self._prepared_controller_env is not None
+
         # storage.local_state_dir set => mount it from node-local hostPath rather
         # than the default network-attached PVC.
         local_state_hostpath = bool(config.storage.local_state_dir)
@@ -500,24 +631,43 @@ class K8sControllerProvider:
 
         self.verify_prerequisites(config)
 
-        # Build the cluster default env and project it into the controller and
-        # every task via the iris-task-env Secret + envFrom. Resolution happens
-        # here, in the operator's shell -- the controller never has these secrets.
-        # S3 storage auth and operator-injected vars share one flow.
+        # Resolve values only in the deploy process; rendered config carries paths.
+        assert_no_inlined_secrets(config)
         self._s3_enabled = self.uses_s3_storage(config)
-        default_env: dict[str, str] = {}
-        if self._s3_enabled:
-            default_env.update(self._s3_task_env())
-        default_env.update(collect_inject_env(config.defaults.inject_env))
-        if default_env:
-            self.ensure_task_env_secret(default_env)
+        default_env = _build_s3_task_env(self._config.object_storage_endpoint) if self._s3_enabled else {}
+        storage_health = config.kubernetes_provider.node_health and config.kubernetes_provider.node_health.storage
+        if self._s3_enabled or storage_health is not None:
+            self.ensure_secret(STORAGE_SECRET_NAME, _resolve_s3_credentials())
+        storage_environment = {
+            **default_env,
+            **config.defaults.task_env,
+            SECRETS_DIR_ENV: STORAGE_SECRETS_DIR,
+            "AWS_SHARED_CREDENTIALS_FILE": STORAGE_CREDENTIALS_FILE,
+        }
+        config = config.model_copy(deep=True)
+        config.defaults.task_env = {**default_env, **config.defaults.task_env}
+        self.ensure_egress_network_policies(config)
 
-        signing_key_spec = tuple(as_secret_spec(config.auth.signing_key)) if config.auth else ()
-        if self._prepared_controller_env is None or self.signing_key_spec != signing_key_spec:
-            self.preflight_controller(config)
-        assert self._prepared_controller_env is not None
+        if storage_health is not None:
+            # A Secret revision rolls agents and fences reports from old clients.
+            secret = self._kubectl.get_json(K8sResource.SECRETS, STORAGE_SECRET_NAME)
+            assert secret is not None
+            environment_revision = hashlib.sha256(
+                json.dumps(
+                    [secret["metadata"]["uid"], secret["metadata"]["resourceVersion"], config.defaults.task_env],
+                    sort_keys=True,
+                ).encode()
+            ).hexdigest()
+            storage_health = storage_health.model_copy(update={"environment_revision": environment_revision})
+            node_health = config.kubernetes_provider.node_health.model_copy(update={"storage": storage_health})
+            config = config.model_copy(
+                update={
+                    "kubernetes_provider": config.kubernetes_provider.model_copy(update={"node_health": node_health})
+                }
+            )
+
         if self._prepared_controller_env:
-            self.ensure_controller_env_secret(self._prepared_controller_env)
+            self.ensure_secret(CONTROLLER_SECRET_NAME, self._prepared_controller_env)
 
         config_json = self._config_json_for_configmap(config)
         configmap_manifest = {
@@ -538,6 +688,8 @@ class K8sControllerProvider:
                 image=config.controller.image,
                 cache_dir=cache_dir,
                 cache_max_age=config.kubernetes_provider.cache_max_age,
+                storage_health_env=(storage_environment if storage_health is not None else None),
+                storage_health_config=(storage_health.model_dump_json() if storage_health is not None else "disabled"),
             )
         )
         logger.info("DaemonSet %s applied", _NODE_AGENT_NAME)
@@ -547,11 +699,11 @@ class K8sControllerProvider:
             self._kubectl.apply_json(_build_controller_state_pvc(namespace=self._namespace))
             logger.info("PersistentVolumeClaim %s applied", _CONTROLLER_STATE_PVC_NAME)
 
-        env_from_secrets = [
+        secret_names = [
             secret
             for secret, projected in (
-                (TASK_ENV_SECRET_NAME, projects_task_env_secret(config)),
-                (CONTROLLER_ENV_SECRET_NAME, _projects_controller_env_secret(config)),
+                (STORAGE_SECRET_NAME, self.uses_s3_storage(config)),
+                (CONTROLLER_SECRET_NAME, _projects_controller_env_secret(config)),
             )
             if projected
         ]
@@ -562,8 +714,10 @@ class K8sControllerProvider:
             node_selector={
                 _KUBERNETES_ARCH_LABEL: _CONTROLLER_ARCH,
                 self._iris_labels.iris_scale_group: cw.scale_group,
+                **({"kubernetes.io/hostname": cw.hostname} if cw.hostname else {}),
             },
-            env_from_secrets=env_from_secrets,
+            secret_names=secret_names,
+            environment={**config.defaults.task_env, **storage_environment},
             state_mount_path=state_mount_path,
             local_state_hostpath=local_state_hostpath,
             checkpoint_interval_seconds=config.controller.checkpoint_interval_seconds,
@@ -661,10 +815,10 @@ class K8sControllerProvider:
         self._kubectl.delete(K8sResource.PDBS, "iris-controller-pdb")
         self._kubectl.delete(K8sResource.CONFIGMAPS, "iris-cluster-config")
         self._kubectl.delete(K8sResource.PERSISTENT_VOLUME_CLAIMS, _CONTROLLER_STATE_PVC_NAME)
-        if self.uses_s3_storage(config) or config.defaults.inject_env:
-            self._kubectl.delete(K8sResource.SECRETS, TASK_ENV_SECRET_NAME)
+        if self.uses_s3_storage(config):
+            self._kubectl.delete(K8sResource.SECRETS, STORAGE_SECRET_NAME)
         if _projects_controller_env_secret(config):
-            self._kubectl.delete(K8sResource.SECRETS, CONTROLLER_ENV_SECRET_NAME)
+            self._kubectl.delete(K8sResource.SECRETS, CONTROLLER_SECRET_NAME)
 
         # RBAC (ClusterRole/ClusterRoleBinding) is IaC-provisioned (spec.md §4), not deleted
         # here: verify_prerequisites hard-fails the next start_controller if it's missing, so
@@ -761,6 +915,10 @@ class K8sControllerProvider:
             missing.append(f"ClusterRole/{role_name}")
         if self._kubectl.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, role_name) is None:
             missing.append(f"ClusterRoleBinding/{role_name}")
+        if self._kubectl.get_json(K8sResource.ROLES, TASK_SECRET_ROLE_NAME) is None:
+            missing.append(f"Role/{self._namespace}/{TASK_SECRET_ROLE_NAME}")
+        if self._kubectl.get_json(K8sResource.ROLE_BINDINGS, TASK_SECRET_ROLE_NAME) is None:
+            missing.append(f"RoleBinding/{self._namespace}/{TASK_SECRET_ROLE_NAME}")
 
         label_prefix = config.platform.label_prefix
         for name, sg in config.scale_groups.items():
@@ -861,73 +1019,29 @@ class K8sControllerProvider:
         """Check if any storage URI uses S3."""
         return config.storage.remote_state_dir.startswith("s3://")
 
-    # -- Cluster default env (S3 storage auth + operator-injected vars) -------
+    # -- Storage credential delivery ----------------------------------------
 
-    def _s3_task_env(self) -> dict[str, str]:
-        """Compute S3 storage env (creds + endpoint + FSSPEC) from the operator's shell.
-
-        Maps the operator's CoreWeave object-storage credentials to the AWS
-        names boto3/s3fs expect and derives endpoint/region/FSSPEC_S3 from the
-        configured object-storage endpoint. Folded into the iris-task-env
-        Secret so the controller and every task authenticate to s3:// without
-        per-call-site configuration.
-        """
-        store = store_config(StoreType.COREWEAVE)
-        key_id = os.environ.get(store.key_id_env)
-        key_secret = os.environ.get(store.key_secret_env)
-        if not key_id or not key_secret:
-            raise InfraError(
-                f"{store.key_id_env} and {store.key_secret_env} environment variables are required "
-                "for S3-compatible object storage"
-            )
-        env = {
-            "AWS_ACCESS_KEY_ID": key_id,
-            "AWS_SECRET_ACCESS_KEY": key_secret,
-            store.key_id_env: key_id,
-            store.key_secret_env: key_secret,
-        }
-        endpoint = self._config.object_storage_endpoint
-        if endpoint:
-            env["AWS_ENDPOINT_URL"] = endpoint
-            env["AWS_REGION"] = "auto"
-            env["AWS_DEFAULT_REGION"] = "auto"
-            env["FSSPEC_S3"] = json.dumps(fsspec_s3_conf(endpoint))
-            # The pod's node-local endpoint, under the name the CoreWeave store config reads,
-            # so a bucket-routed filesystem in a task uses LOTA rather than the public VIP.
-            env[store.endpoint_env] = endpoint
-        return env
-
-    def ensure_task_env_secret(self, env: dict[str, str]) -> None:
-        """Create the iris-task-env Secret holding the cluster default env.
-
-        The controller and task pods reference this Secret via envFrom, so the
-        values reach containers without ever passing through the ConfigMap.
-        """
+    def ensure_secret(self, name: str, values: dict[str, str]) -> None:
+        """Create file-mounted credentials separately from rendered configuration."""
         self._kubectl.apply_json(
             {
                 "apiVersion": "v1",
                 "kind": "Secret",
-                "metadata": {"name": TASK_ENV_SECRET_NAME, "namespace": self._namespace},
+                "metadata": {"name": name, "namespace": self._namespace},
                 "type": "Opaque",
-                "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
+                "data": {k: base64.b64encode(v.encode()).decode() for k, v in values.items()},
             }
         )
 
-    def ensure_controller_env_secret(self, env: dict[str, str]) -> None:
-        """Create the iris-controller-env Secret holding the controller's own credentials.
+    def ensure_egress_network_policies(self, config: IrisClusterConfig) -> None:
+        """Create the NetworkPolicies for pods off the cluster network, one per egress policy.
 
-        Only the controller Deployment references it, so a task pod cannot read the
-        cluster's signing key.
+        Never deleted on stop: they select only labeled pods, and removing one
+        while such a pod runs would reconnect it to the controller.
         """
-        self._kubectl.apply_json(
-            {
-                "apiVersion": "v1",
-                "kind": "Secret",
-                "metadata": {"name": CONTROLLER_ENV_SECRET_NAME, "namespace": self._namespace},
-                "type": "Opaque",
-                "data": {k: base64.b64encode(v.encode()).decode() for k, v in env.items()},
-            }
-        )
+        service_cidr = config.kubernetes_provider.service_cidr
+        for network in (TaskNetwork.NONE, TaskNetwork.INTERNET):
+            self._kubectl.apply_json(build_egress_network_policy(self._namespace, network, service_cidr))
 
     # -- Deployment readiness --------------------------------------------------
 
@@ -1094,11 +1208,14 @@ class K8sControllerProvider:
 
     def _config_json_for_configmap(self, config: IrisClusterConfig) -> str:
         """Serialize cluster config to JSON for the in-cluster ConfigMap."""
-        # #6873 render guard: a raw inlined secret must never reach the
-        # broadly-readable ConfigMap. References render verbatim (resolved at the
-        # controller runtime); a literal fails the deploy here.
+        # Reject literal secrets before rendering the broadly readable ConfigMap.
+        # Controller auth references point to the controller-only Secret mount.
         assert_no_inlined_secrets(config)
         config_dict = config_to_dict(config)
+        if config.auth:
+            for field, name in _CONTROLLER_SECRET_FIELDS:
+                if getattr(config.auth, field):
+                    config_dict["auth"][field] = f"{FILE_SCHEME}{Path(CONTROLLER_SECRETS_DIR) / name}"
         cw_dict = config_dict.get("platform", {}).get("coreweave", {})
         cw_dict.pop("kubeconfig_path", None)
         cw_dict.pop("kube_context", None)

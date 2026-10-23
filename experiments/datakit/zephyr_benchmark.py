@@ -77,17 +77,6 @@ def _steps_between(
     return [step for stage in _STAGE_ORDER[first_index : last_index + 1] for step in stage_steps[stage]]
 
 
-def _route_outputs(steps: ZephyrDatakitSteps, output_prefix: str) -> ZephyrDatakitSteps:
-    tokenize = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.tokenize.items()}
-    minhash = {name: replace(step, output_path_prefix=output_prefix) for name, step in steps.minhash.items()}
-    return ZephyrDatakitSteps(
-        exact_dedup=replace(steps.exact_dedup, output_path_prefix=output_prefix),
-        tokenize=tokenize,
-        minhash=minhash,
-        fuzzy_dedup=replace(steps.fuzzy_dedup, output_path_prefix=output_prefix, deps=list(minhash.values())),
-    )
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -121,7 +110,7 @@ def main() -> None:
         prefix=prefix_join(prefix_join(BENCHMARK_OUTPUT_PREFIX, args.run_tag), "outputs"),
         source_prefix=args.sample_prefix,
     )
-    steps = _route_outputs(zephyr_datakit_steps(sources, scale), output_prefix)
+    steps = zephyr_datakit_steps(sources, scale, output_prefix=output_prefix)
     StepRunner().run(
         _steps_between(steps, args.first_stage, args.last_stage),
         max_concurrent=args.max_concurrent,

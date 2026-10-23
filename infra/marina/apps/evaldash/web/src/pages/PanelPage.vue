@@ -2,7 +2,7 @@
 /**
  * The panel: models by benchmark, every cell a score with the 95% interval behind it.
  *
- * There is no headline cross-benchmark mean. A mean over benchmarks has no interpretation without a
+ * There is no headline cross-benchmark score mean. A score mean over benchmarks has no interpretation without a
  * declared panel, a per-benchmark metric, and a rule for the benchmarks a model never ran, so it is
  * opt-in and renders those three things with it. Per-benchmark comparison is the primary surface.
  * A benchmark column sorts on the score, and the fleet-best marker and delta-best pick the leader
@@ -14,7 +14,8 @@ import { apiPost, useApi } from '@/composables/useApi'
 import { onViewRefresh } from '@/composables/useRefresh'
 import { formatCoverage, formatDelta, formatInterval, formatScore, formatTimestamp } from '@/utils/formatting'
 import { scoreTint } from '@/utils/score'
-import { cellsByModel, cohortWarning, compareCells, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { cellsByModel, cohortWarning, fleetBest, isPartialCoverage, withVariant } from '@/utils/panel'
+import { compareCells, meanReciprocalRanks } from '@/utils/ranking'
 import { MAX_COMPARE, isSmokeEval } from '@/constants'
 import {
   FLAG_NOTES,
@@ -39,7 +40,15 @@ const route = useRoute()
 const showArchived = ref(false)
 const showFlagged = ref(false)
 const completeOnly = ref(false)
-const cohort = ref('')
+const cohort = computed({
+  get: () => {
+    const raw = route.query.cohort
+    return (Array.isArray(raw) ? raw[0] : raw) || meta.value?.default_cohort || ''
+  },
+  set: (value: string) => {
+    void router.replace({ query: { ...route.query, cohort: value || meta.value?.default_cohort } })
+  },
+})
 const modelQuery = ref('')
 const facetValues = reactive<Record<string, string>>({})
 const aggregatePolicy = ref('')
@@ -75,6 +84,13 @@ const query = computed(() => {
 
 const { data, loading, error, refresh } = useApi<Panel>(() => query.value)
 const { data: meta, refresh: refreshMeta } = useApi<Meta>(() => 'api/meta')
+// Pin the resolved default so shared URLs retain their cohort after the default changes.
+watch(
+  () => meta.value?.default_cohort,
+  (value) => {
+    if (value && !route.query.cohort) cohort.value = value
+  },
+)
 const comparabilityWarning = computed(() =>
   meta.value ? cohortWarning(cohort.value || meta.value.default_cohort, meta.value) : null,
 )
@@ -125,14 +141,18 @@ function clearFilters() {
 const selected = ref<string[]>([])
 
 function toggleModel(model: string) {
+  if (cohort.value === 'all') return
   const at = selected.value.indexOf(model)
   if (at >= 0) selected.value.splice(at, 1)
   else if (selected.value.length < MAX_COMPARE) selected.value.push(model)
 }
 function canSelect(model: string): boolean {
-  return selected.value.includes(model) || selected.value.length < MAX_COMPARE
+  return cohort.value !== 'all' && (selected.value.includes(model) || selected.value.length < MAX_COMPARE)
 }
-const comparing = computed(() => selected.value.length >= 2)
+const comparing = computed(() => cohort.value !== 'all' && selected.value.length >= 2)
+watch(selection, () => {
+  selected.value = []
+})
 
 // Benchmarks every selected model has a cell on — what Compare will actually score.
 const sharedTasks = computed<string[]>(() => {
@@ -179,7 +199,7 @@ function persistSelection(present: string[], updateRoute = true) {
   if (!updateRoute) return
   const selected = [...selectedEvals]
   const benchmarks = selected.length > 0 && selected.length !== present.length ? selected.join(',') : undefined
-  void router.replace({ query: { ...route.query, benchmarks } })
+  void router.replace({ query: { ...route.query, cohort: cohort.value, benchmarks } })
 }
 function syncSelection(present: string[]) {
   const fromRoute = routeBenchmarks()
@@ -253,12 +273,14 @@ const best = computed(() => fleetBest(data.value?.rows ?? [], visibleTasks.value
 
 // --- Ordering. Benchmark columns use compareCells: the score, then the lower bound. ---
 const MODEL_SORT = 'model'
+const MRR_SORT = 'mrr'
 const COVERAGE_SORT = 'coverage'
 const UPDATED_SORT = 'last_updated'
 type SortDirection = 'asc' | 'desc'
 
-const sortKey = ref<string>(COVERAGE_SORT)
+const sortKey = ref<string>(MRR_SORT)
 const sortDirection = ref<SortDirection>('desc')
+const meanRanks = computed(() => meanReciprocalRanks(data.value?.rows ?? [], visibleTasks.value))
 
 function defaultDirection(key: string): SortDirection {
   return key === MODEL_SORT ? 'asc' : 'desc'
@@ -280,9 +302,15 @@ function headerClass(key: string): string {
 }
 
 // A benchmark column orders its cells by compareCells, the rule the fleet-best marker uses. The model,
-// coverage and last-updated keys order on that field alone. Missing values sort last in both directions.
+// MRR, coverage and last-updated keys order on that field alone. Missing values sort last in both directions.
 function compareRows(a: PanelRow, b: PanelRow, direction: number): number {
   if (sortKey.value === MODEL_SORT) return a.model.localeCompare(b.model) * direction
+  if (sortKey.value === MRR_SORT) {
+    const rankA = meanRanks.value.get(a.model)
+    const rankB = meanRanks.value.get(b.model)
+    if (rankA === undefined || rankB === undefined) return Number(rankA === undefined) - Number(rankB === undefined)
+    return (rankA - rankB) * direction
+  }
   if (sortKey.value === COVERAGE_SORT) return (a.covered - b.covered) * direction
   if (sortKey.value === UPDATED_SORT) {
     if (a.last_updated === null || b.last_updated === null) {
@@ -439,13 +467,15 @@ function goToModel(model: string) {
       <p class="text-xs text-text-muted mt-0.5">
         One row per model, one column per benchmark, each cell the newest valid result. A score is the rate over the
         items a run graded; its 95% interval covers sampling error and widens by whatever share of the attempted items
-        the run never graded. A benchmark column sorts on the score; Compare ranks on the interval.
+        the run never graded. Models start sorted by mean reciprocal rank (MRR) across their completed, selected
+        benchmarks. A benchmark column sorts on the score; Compare ranks on the interval.
       </p>
       <p v-if="comparabilityWarning" class="text-xs text-status-warning mt-2">* {{ comparabilityWarning }}</p>
+      <p v-if="cohort === 'all'" class="text-xs text-status-warning mt-2">Choose one cohort to compare models.</p>
     </div>
 
     <!-- Fleet readout -->
-    <div v-if="data" class="flex rounded-lg border border-surface-border bg-surface overflow-hidden mb-5">
+    <div v-if="data && !loading && !error" class="flex rounded-lg border border-surface-border bg-surface overflow-hidden mb-5">
       <div class="px-5 py-3 border-r border-surface-border-subtle">
         <div class="font-mono text-[10px] uppercase tracking-widest text-text-muted">Models</div>
         <div class="font-mono text-2xl font-semibold tabular-nums">{{ readout.models }}</div>
@@ -580,13 +610,13 @@ function goToModel(model: string) {
       {{ error }}
     </div>
 
-    <PolicyRejections v-if="data" :rejections="data.policy_rejections" scope="this cohort" class="mb-4" />
+    <PolicyRejections v-if="data && !loading && !error" :rejections="data.policy_rejections" scope="this cohort" class="mb-4" />
 
-    <div v-if="loading && !data" class="text-sm text-text-muted py-12 text-center">Loading…</div>
+    <div v-if="loading" class="text-sm text-text-muted py-12 text-center">Loading…</div>
 
     <EmptyState v-else-if="data && data.rows.length === 0" icon="🏁" message="No models match these filters." />
 
-    <div v-else-if="data" class="space-y-6">
+    <div v-else-if="data && !error" class="space-y-6">
       <!-- Models: the eval rail as each row's measurement profile, plus the opt-in aggregate -->
       <div>
         <div class="flex items-baseline justify-between mb-2">
@@ -610,6 +640,14 @@ function goToModel(model: string) {
                   @click="sortBy(MODEL_SORT)"
                 >
                   Model {{ sortGlyph(MODEL_SORT) }}
+                </th>
+                <th
+                  class="px-3 py-2 text-right cursor-pointer whitespace-nowrap"
+                  :class="headerClass(MRR_SORT)"
+                  title="Mean reciprocal rank across completed results on the selected benchmarks; missing results are omitted"
+                  @click="sortBy(MRR_SORT)"
+                >
+                  MRR {{ sortGlyph(MRR_SORT) }}
                 </th>
                 <th
                   class="px-3 py-2 text-left cursor-pointer"
@@ -643,6 +681,9 @@ function goToModel(model: string) {
                 </td>
                 <td class="px-3 py-2 whitespace-nowrap">
                   <span class="font-mono font-semibold text-[13px] text-accent">{{ row.model }}</span>
+                </td>
+                <td class="px-3 py-2 text-right font-mono text-xs tabular-nums" :title="`${row.covered} completed selected benchmarks`">
+                  {{ meanRanks.get(row.model)?.toFixed(3) ?? '—' }}
                 </td>
                 <td class="px-3 py-2">
                   <div class="flex items-center gap-2">
@@ -710,7 +751,7 @@ function goToModel(model: string) {
           makes no simultaneous claim across the table.
         </p>
         <p v-else class="text-xs text-text-muted mt-2 leading-relaxed">
-          No cross-benchmark mean is shown by default: it has no interpretation without a fixed benchmark panel, the
+          No cross-benchmark score mean is shown by default: it has no interpretation without a fixed benchmark panel, the
           metric each benchmark contributes, and a rule for the benchmarks a model never ran. Pick an Aggregate policy
           to choose that rule and see all three alongside the number.
         </p>
@@ -738,6 +779,14 @@ function goToModel(model: string) {
                   @click="sortBy(MODEL_SORT)"
                 >
                   Model {{ sortGlyph(MODEL_SORT) }}
+                </th>
+                <th
+                  class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider whitespace-nowrap cursor-pointer"
+                  :class="headerClass(MRR_SORT)"
+                  title="Mean reciprocal rank across completed results on the selected benchmarks; missing results are omitted"
+                  @click="sortBy(MRR_SORT)"
+                >
+                  MRR {{ sortGlyph(MRR_SORT) }}
                 </th>
                 <th
                   v-for="column in columns"
@@ -788,6 +837,9 @@ function goToModel(model: string) {
                   <button class="font-mono text-[13px] text-accent hover:underline" @click="goToModel(row.model)">
                     {{ row.model }}
                   </button>
+                </td>
+                <td class="px-3 py-2 text-right font-mono text-xs tabular-nums" :title="`${row.covered} completed selected benchmarks`">
+                  {{ meanRanks.get(row.model)?.toFixed(3) ?? '—' }}
                 </td>
                 <td v-for="{ task } in columns" :key="task" class="p-1 text-center align-middle">
                   <button

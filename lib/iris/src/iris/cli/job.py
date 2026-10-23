@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import click
@@ -22,6 +23,7 @@ import yaml
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
+from rigging.secrets import SecretBehavior, resolve_secret_spec
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
@@ -60,6 +62,7 @@ from iris.rpc import job_pb2
 from iris.rpc.errors import format_connect_error
 from iris.rpc.proto_display import (
     CONTAINER_PROFILE_NAMES,
+    EGRESS_POLICY_NAMES,
     PRIORITY_BAND_NAMES,
     priority_band_value,
 )
@@ -131,10 +134,6 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
         if isinstance(cfg.get("env"), dict):
             for k, v in cfg["env"].items():
                 env_vars[str(k)] = "" if v is None else str(v)
-
-    for key in ("HF_TOKEN", "WANDB_API_KEY"):
-        if key not in env_vars and os.environ.get(key):
-            env_vars[key] = os.environ[key]
 
     if env_flags:
         for item in env_flags:
@@ -586,11 +585,15 @@ def run_iris_job(
     preemptible: bool | None = None,
     task_image: str | None = None,
     container_profile: str | None = None,
+    egress_policy: str | None = None,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     target_cluster: str | None = None,
     bundle_exclude: re.Pattern[str] | None = None,
+    extra_bundle_includes: Sequence[str] = (),
+    secrets: dict[str, str] | None = None,
+    secret_behavior: SecretBehavior = SecretBehavior.INHERIT,
 ) -> int:
     """Core job submission logic.
 
@@ -614,6 +617,7 @@ def run_iris_job(
         bundle_exclude: Regex matched against each candidate bundle path (POSIX,
             relative to the workspace); matching paths are dropped from the bundle
             so a job can trim otherwise-tracked files it does not need.
+        extra_bundle_includes: Globs for required files excluded by default, such as tests.
 
     Returns:
         Exit code: 0 for success, 1 for failure
@@ -684,6 +688,10 @@ def run_iris_job(
     if container_profile is not None:
         profile = job_pb2.ContainerProfile.Value(container_profile)
         logger.info(f"Container profile: {container_profile}")
+    egress = job_pb2.EGRESS_POLICY_UNSPECIFIED
+    if egress_policy is not None:
+        egress = job_pb2.EgressPolicy.Value(egress_policy)
+        logger.info(f"Egress policy: {egress_policy}")
 
     return _submit_and_wait_job(
         controller_url=controller_url,
@@ -691,6 +699,8 @@ def run_iris_job(
         command=command,
         resources=resources,
         env_vars=env_vars,
+        secrets=secrets,
+        secret_behavior=secret_behavior,
         replicas=replicas,
         max_retries=max_retries,
         timeout=timeout,
@@ -704,11 +714,13 @@ def run_iris_job(
         user=user,
         priority_band=priority_band,
         container_profile=profile,
+        egress_policy=egress,
         credentials=credentials,
         submit_argv=submit_argv,
         dashboard_url=dashboard_url,
         task_image=task_image,
         bundle_exclude=bundle_exclude,
+        extra_bundle_includes=extra_bundle_includes,
     )
 
 
@@ -731,11 +743,15 @@ def _submit_and_wait_job(
     user: str | None = None,
     priority_band: job_pb2.PriorityBand = job_pb2.PRIORITY_BAND_INHERIT,
     container_profile: job_pb2.ContainerProfile = job_pb2.CONTAINER_PROFILE_UNSPECIFIED,
+    egress_policy: job_pb2.EgressPolicy = job_pb2.EGRESS_POLICY_UNSPECIFIED,
     credentials: ClientCredentials | None = None,
     submit_argv: list[str] | None = None,
     dashboard_url: str | None = None,
     task_image: str | None = None,
     bundle_exclude: re.Pattern[str] | None = None,
+    extra_bundle_includes: Sequence[str] = (),
+    secrets: dict[str, str] | None = None,
+    secret_behavior: SecretBehavior = SecretBehavior.INHERIT,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -743,7 +759,11 @@ def _submit_and_wait_job(
     are logged and re-raised without killing the job.
     """
     client = IrisClient.remote(
-        controller_url, workspace=Path.cwd(), credentials=credentials, bundle_exclude=bundle_exclude
+        controller_url,
+        workspace=Path.cwd(),
+        credentials=credentials,
+        bundle_exclude=bundle_exclude,
+        extra_bundle_includes=extra_bundle_includes,
     )
     entrypoint = Entrypoint.from_command(*command)
 
@@ -753,6 +773,8 @@ def _submit_and_wait_job(
         resources=resources,
         environment=EnvironmentSpec(
             env_vars=env_vars,
+            secrets=dict(secrets or {}),
+            secret_behavior=secret_behavior,
             extras=extras or [],
             setup_scripts=setup_scripts,
             sync_packages=sync_packages or [],
@@ -766,6 +788,7 @@ def _submit_and_wait_job(
         user=user,
         priority_band=priority_band,
         container_profile=container_profile,
+        egress_policy=egress_policy,
         submit_argv=submit_argv,
         task_image=task_image,
     )
@@ -850,7 +873,23 @@ Examples:
     "env_vars",
     multiple=True,
     type=(str, str),
-    help="Set environment variables for the job (KEY VALUE). Can be repeated.",
+    help=(
+        "Set environment variables for the job (KEY VALUE). Can be repeated. " "Use --secret for secret file delivery."
+    ),
+)
+@click.option(
+    "--secret",
+    "secret_sources",
+    multiple=True,
+    type=(str, str),
+    help="Deliver a named secret as a file (NAME SOURCE), e.g. --secret SERVICE_KEY env:SERVICE_KEY. Can be repeated.",
+)
+@click.option(
+    "--secret-behavior",
+    type=click.Choice([behavior.name.lower() for behavior in SecretBehavior]),
+    default="inherit",
+    show_default=True,
+    help="Forward the current secrets bundle or use only explicit secrets. Sandboxes always isolate.",
 )
 @click.option(
     "--tpu",
@@ -965,13 +1004,33 @@ Examples:
     default=None,
     help=(
         "Container security profile (default: CONTAINER_PROFILE_DEFAULT). RESTRICTED hardens "
-        "the container; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
+        "the container; SANDBOX runs under gVisor with only the job's -e variables and no "
+        "workspace bundle; DOCKER_ACCESS and PRIVILEGED are elevated and require admin."
+    ),
+)
+@click.option(
+    "--egress-policy",
+    type=click.Choice(EGRESS_POLICY_NAMES, case_sensitive=False),
+    default=None,
+    help=(
+        "What the job's network reaches (default: EGRESS_POLICY_INTERNET for SANDBOX, "
+        "EGRESS_POLICY_CLUSTER otherwise). INTERNET reaches public addresses only and NONE "
+        "nothing; neither reaches the controller, so the task cannot launch child jobs."
     ),
 )
 @click.option(
     "--cancel-on-exit/--no-cancel-on-exit",
     default=True,
     help="Cancel the Job on Ctrl+C. Tunnel failures leave it running.",
+)
+@click.option(
+    "--include",
+    multiple=True,
+    help=(
+        "Glob relative to the workspace for required files excluded by default, "
+        "such as tests. Repeat to add globs. Explicit --exclude patterns and "
+        "exclusions for credentials, caches, and local builds still apply."
+    ),
 )
 @click.option(
     "--exclude",
@@ -988,6 +1047,8 @@ Examples:
 def run(
     ctx,
     env_vars: tuple[tuple[str, str], ...],
+    secret_sources: tuple[tuple[str, str], ...],
+    secret_behavior: str,
     tpu: str | None,
     gpu: str | None,
     cpu: float,
@@ -1012,7 +1073,9 @@ def run(
     preemptible: bool | None,
     task_image: str | None,
     container_profile: str | None,
+    egress_policy: str | None,
     cancel_on_exit: bool,
+    include: tuple[str, ...],
     exclude: tuple[str, ...],
     cmd: tuple[str, ...],
 ):
@@ -1044,12 +1107,15 @@ def run(
         )
 
     env_vars_dict = load_env_vars(env_vars)
+    secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources}
     bundle_exclude = re.compile("|".join(f"(?:{pattern})" for pattern in exclude)) if exclude else None
 
     try:
         exit_code = run_iris_job(
             command=command,
             env_vars=env_vars_dict,
+            secrets=secrets,
+            secret_behavior=SecretBehavior[secret_behavior.upper()],
             controller_url=controller_url,
             tpu=tpu,
             gpu=gpu,
@@ -1074,10 +1140,12 @@ def run(
             preemptible=preemptible,
             task_image=task_image,
             container_profile=container_profile,
+            egress_policy=egress_policy,
             credentials=ctx.obj.get("credentials"),
             submit_argv=submit_argv,
             dashboard_url=dashboard_url or None,
             bundle_exclude=bundle_exclude,
+            extra_bundle_includes=include,
         )
     except Exception:
         bundle = ctx.obj.get("provider_bundle")

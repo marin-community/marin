@@ -17,6 +17,9 @@ const rendered = computed(() =>
 const thinkingActive = computed(
   () => props.message.role === 'assistant' && props.streaming && !props.message.content,
 )
+const maxTokensReached = computed(
+  () => props.message.role === 'assistant' && props.message.finishReason === 'length',
+)
 const empty = computed(
   () =>
     props.message.role === 'assistant' &&
@@ -24,7 +27,8 @@ const empty = computed(
     !props.message.content &&
     !props.message.thinking &&
     !props.message.toolCalls?.length &&
-    !props.message.error,
+    !props.message.error &&
+    !maxTokensReached.value,
 )
 
 const copied = ref(false)
@@ -70,6 +74,13 @@ async function copy() {
         :active="thinkingActive"
         :seconds="message.thinkingSeconds"
       />
+      <p
+        v-if="maxTokensReached"
+        role="status"
+        class="mb-2 rounded-lg border border-status-danger/40 bg-status-danger/10 px-3 py-2 text-sm text-status-danger"
+      >
+        The response hit the Max tokens limit and may be incomplete. Increase Max tokens and try again.
+      </p>
       <details v-if="showVllmDebug && message.requestDebug" class="mb-2 rounded-lg border border-surface-border bg-surface-sunken px-3 py-2 text-xs text-text-secondary">
         <summary class="cursor-pointer font-medium text-text-muted">Request stats</summary>
         <p v-if="!message.requestDebug.metrics" class="mt-2 text-text-muted">

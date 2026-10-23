@@ -133,5 +133,6 @@
       ],
       "filterExpression": "metric == 'num_requests_running' || metric == 'num_requests_waiting' || metric == 'num_requests_in_flight'"
     }
-  ]
+  ],
+  "maxDataPoints": 360
 }

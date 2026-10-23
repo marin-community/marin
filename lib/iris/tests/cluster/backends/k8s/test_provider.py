@@ -3,6 +3,9 @@
 
 """Tests for K8sTaskProvider: sync lifecycle, capacity, scheduling, profiling."""
 
+import base64
+import json
+from configparser import ConfigParser
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -66,6 +69,77 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
     assert result == []
+
+
+@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_SANDBOX])
+def test_submitted_credentials_use_attempt_secret_and_are_collected(k8s, profile):
+    provider = K8sTaskProvider(
+        descriptor=k8s_backend_descriptor(),
+        kubectl=k8s,
+        pods=pod_config(require_coreweave_credentials=True, task_outputs=TaskOutputPolicy()),
+        cluster_scan_interval=0.0,
+    )
+    req = make_run_req("/test-user/job/0", attempt_uid="abcdef0123456789")
+    req.container_profile = profile
+    req.egress_policy = (
+        job_pb2.EGRESS_POLICY_NONE if profile == job_pb2.CONTAINER_PROFILE_SANDBOX else job_pb2.EGRESS_POLICY_UNSPECIFIED
+    )
+    req.environment.secrets.update({"custom": "submitted-hf-value", "another": "submitted-api-value"})
+    req.environment.secrets.update({"CW_KEY_ID": "personal-key", "CW_KEY_SECRET": "personal-secret"})
+    req.environment.env_vars.update({"FLAG": "keep", "HF_TOKEN": "explicit-env"})
+    try:
+        assert provider.sync(make_batch(tasks_to_run=[req])) == []
+        pod = k8s.list_json(K8sResource.PODS)[0]
+        assert "submitted-hf-value" not in json.dumps(pod)
+        assert "submitted-api-value" not in json.dumps(pod)
+        container = pod["spec"]["containers"][0]
+        env = {entry["name"]: entry.get("value") for entry in container["env"]}
+        assert env["FLAG"] == "keep"
+        assert env["RIGGING_SECRETS_DIR"] == "/run/rigging/secrets"
+        assert env["HF_TOKEN"] == "explicit-env"
+        volume = next(v for v in pod["spec"]["volumes"] if v["name"] == "job-secrets")
+        secret_name = volume["secret"]["secretName"]
+        assert not any(v.get("secret", {}).get("secretName") == "iris-storage-secrets" for v in pod["spec"]["volumes"])
+        secret = k8s.get_json(K8sResource.SECRETS, secret_name)
+        assert base64.b64decode(secret["data"]["custom"]).decode() == "submitted-hf-value"
+        assert secret["metadata"]["ownerReferences"][0]["uid"] == pod["metadata"]["uid"]
+        if profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
+            uploader = next(c for c in pod["spec"]["containers"] if c["name"] == "output-uploader")
+            mount = next(m for m in uploader["volumeMounts"] if m["name"] == "job-storage-secrets")
+            projection = next(v["secret"] for v in pod["spec"]["volumes"] if v["name"] == mount["name"])
+            assert projection["items"] == [{"key": ".aws-credentials", "path": ".aws-credentials"}]
+            assert projection["secretName"] == secret_name
+            credentials = ConfigParser(interpolation=None)
+            credentials.read_string(base64.b64decode(secret["data"][".aws-credentials"]).decode())
+            assert credentials["default"]["aws_access_key_id"] == "personal-key"
+            assert credentials["default"]["aws_secret_access_key"] == "personal-secret"
+            assert "personal-secret" not in json.dumps(pod)
+        assert not any(
+            mount["name"] == "job-secrets"
+            for sidecar in pod["spec"]["containers"][1:]
+            for mount in sidecar.get("volumeMounts", [])
+        )
+        provider.sync(make_batch())
+        provider.collect_garbage()
+        assert k8s.get_json(K8sResource.SECRETS, secret_name) is None
+    finally:
+        provider.close()
+
+
+def test_redispatch_finishes_credential_delivery_after_pod_creation(provider, k8s):
+    req = make_run_req("/test-user/job/0", attempt_uid="abcdef0123456789")
+    req.environment.secrets["custom"] = "submitted-token"
+    k8s.inject_failure("get_json", KubectlError("interrupted after Pod creation"))
+    result = provider.sync(make_batch(tasks_to_run=[req]))
+    assert result[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert len(k8s.list_json(K8sResource.PODS)) == 1
+    assert k8s.list_json(K8sResource.SECRETS) == []
+
+    assert provider.sync(make_batch(tasks_to_run=[req])) == []
+    assert len(k8s.list_json(K8sResource.PODS)) == 1
+    assert len(k8s.list_json(K8sResource.SECRETS)) == 1
+    secret = k8s.list_json(K8sResource.SECRETS)[0]
+    assert base64.b64decode(secret["data"]["custom"]).decode() == "submitted-token"
 
 
 def test_sync_releases_output_uploader_after_task_container_exits(k8s):
@@ -1344,6 +1418,38 @@ def test_gc_deletes_old_terminal_pods_and_configmaps(provider, k8s):
     assert k8s.get_json(K8sResource.CONFIGMAPS, "recent-succeeded-pod-wf") is not None
 
 
+def test_gc_retains_old_pod_until_after_output_uploader_finishes(provider, k8s):
+    now = datetime.now(UTC)
+    task_id = JobName.from_wire("/completed-after-long-run/0")
+    entry = RunningTaskEntry(task_id=task_id, attempt_id=0)
+    pod_name = _pod_name(task_id, 0)
+    populate_pod(k8s, pod_name, "Running", labels={_LABEL_TASK_HASH: _task_hash(task_id.to_wire())})
+    pod = k8s.get_json(K8sResource.PODS, pod_name)
+    pod["metadata"]["creationTimestamp"] = (now - timedelta(hours=11)).isoformat()
+    pod["status"]["containerStatuses"] = [
+        {
+            "name": "task",
+            "state": {"terminated": {"exitCode": 0, "finishedAt": (now - timedelta(hours=2)).isoformat()}},
+        },
+        {"name": "output-uploader", "state": {"running": {}}},
+    ]
+    batch = make_batch(running_tasks=[entry])
+
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_RUNNING
+    pod["status"]["phase"] = "Succeeded"
+    pod["status"]["containerStatuses"][1]["state"] = {
+        "terminated": {"exitCode": 0, "finishedAt": (now - timedelta(seconds=30)).isoformat()}
+    }
+
+    provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+    assert provider.sync(batch)[0].new_state == job_pb2.TASK_STATE_SUCCEEDED
+    pod["status"]["containerStatuses"][1]["state"]["terminated"]["finishedAt"] = (now - timedelta(hours=2)).isoformat()
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, pod_name) is None
+
+
 def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     """GC deletes configmaps after the control loop tears down a stray pod."""
     task_id = "/deferred-job/0"
@@ -1362,49 +1468,55 @@ def test_gc_cleans_up_deferred_configmaps(provider, k8s):
     )
     cm = {
         "kind": "ConfigMap",
-        "metadata": {"name": "deferred-cm", "labels": labels},
+        "metadata": {"name": "deferred-pod-wf", "labels": labels},
     }
-    k8s.seed_resource(K8sResource.CONFIGMAPS, "deferred-cm", cm)
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "deferred-pod-wf", cm)
 
     provider.sync(make_batch())
     assert k8s.get_json(K8sResource.PODS, "deferred-pod") is None
 
     provider.collect_garbage()
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "deferred-cm") is None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "deferred-pod-wf") is None
 
 
-def test_gc_retains_pending_hash_when_pod_still_in_snapshot(provider, k8s):
-    """Deferred cleanup waits while a retry with the same task hash is active."""
-    task_id = "/kill-me/0"
-    task_hash = _task_hash(task_id)
-    labels = {_LABEL_MANAGED: "true", _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE, _LABEL_TASK_HASH: task_hash}
-
-    # Seed the pod and its configmap.
-    populate_pod(k8s, "iris-kill-me-0-0", "Running", labels={_LABEL_TASK_HASH: task_hash, _LABEL_ATTEMPT_ID: "0"})
-    cm = {"kind": "ConfigMap", "metadata": {"name": "iris-kill-me-0-0-wf", "labels": labels}}
-    k8s.seed_resource(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf", cm)
-
+@pytest.mark.parametrize("retry_attempt", [0, 1])
+def test_gc_preserves_retry_resources_during_dispatch(provider, k8s, monkeypatch, retry_attempt):
+    task_id = "/retry-job/0"
+    old = make_run_req(task_id, num_tasks=1, attempt_uid="1111111111111111")
+    old.entrypoint.workdir_files["config.json"] = b"old"
+    provider.sync(make_batch(tasks_to_run=[old]))
+    old_pod_name = k8s.list_json(K8sResource.PODS)[0]["metadata"]["name"]
     provider.sync(make_batch())
-    assert k8s.get_json(K8sResource.PODS, "iris-kill-me-0-0") is None
 
-    retry = make_run_req(task_id, attempt_id=1)
+    retry = make_run_req(task_id, attempt_id=retry_attempt, num_tasks=1, attempt_uid="2222222222222222")
+    retry.priority = job_pb2.PRIORITY_BAND_PRODUCTION
+    retry.entrypoint.workdir_files["config.json"] = b"retry"
+    apply_json = k8s.apply_json
+
+    def apply_with_gc(manifest):
+        apply_json(manifest)
+        if manifest["kind"] in {"ConfigMap", "Pod"}:
+            # GC can run before the retry pod exists or immediately after it appears.
+            provider.collect_garbage()
+        if manifest["kind"] == "Pod":
+            pdb = k8s.get_json(K8sResource.PDBS, f"{manifest['metadata']['name']}-pdb")
+            assert pdb is not None
+            assert pdb["spec"]["minAvailable"] == 1
+
+    monkeypatch.setattr(k8s, "apply_json", apply_with_gc)
     provider.sync(make_batch(tasks_to_run=[retry]))
     provider.collect_garbage()
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf") is not None
 
-    provider.sync(make_batch())
-    provider.collect_garbage()
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "iris-kill-me-0-0-wf") is None
+    retry_pod = k8s.list_json(K8sResource.PODS)[0]
+    retry_name = retry_pod["metadata"]["name"]
+    configmap = next(v["configMap"]["name"] for v in retry_pod["spec"]["volumes"] if "configMap" in v)
+    assert k8s.get_json(K8sResource.CONFIGMAPS, configmap) is not None
+    assert k8s.get_json(K8sResource.PDBS, f"{retry_name}-pdb") is not None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, f"{old_pod_name}-wf") is None
+    assert k8s.get_json(K8sResource.PDBS, f"{old_pod_name}-pdb") is None
 
 
-def test_gc_skips_hashes_with_active_pods(provider, k8s):
-    """GC must not delete configmaps/PDBs for task hashes that have active retry pods.
-
-    task_hash is shared across all attempts of the same task_id. If attempt 0 is
-    terminal (old) and attempt 1 is still Running, deleting by task_hash would
-    remove the active attempt's configmap and PDB protection.
-    """
-
+def test_gc_cleans_old_attempt_resources_while_retry_is_active(provider, k8s):
     now = datetime.now(UTC)
     old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1412,6 +1524,7 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
 
     # Old terminal pod for attempt 0.
     _seed_terminal_pod(k8s, "old-attempt-0", "Succeeded", shared_hash, old_ts)
+    _seed_configmap(k8s, "old-attempt-0-wf", shared_hash, old_ts)
 
     # Configmap and PDB for the active retry (attempt 1).
     active_labels = {
@@ -1419,52 +1532,52 @@ def test_gc_skips_hashes_with_active_pods(provider, k8s):
         _LABEL_RUNTIME: _RUNTIME_LABEL_VALUE,
         _LABEL_TASK_HASH: shared_hash,
     }
-    cm = {"kind": "ConfigMap", "metadata": {"name": "active-retry-cm", "labels": active_labels}}
-    k8s.seed_resource(K8sResource.CONFIGMAPS, "active-retry-cm", cm)
+    cm = {"kind": "ConfigMap", "metadata": {"name": "active-attempt-1-wf", "labels": active_labels}}
+    k8s.seed_resource(K8sResource.CONFIGMAPS, "active-attempt-1-wf", cm)
     pdb = {
         "kind": "PodDisruptionBudget",
-        "metadata": {"name": "active-retry-pdb", "labels": active_labels},
+        "metadata": {"name": "active-attempt-1-pdb", "labels": active_labels},
         "spec": {"minAvailable": 1},
     }
-    k8s.seed_resource(K8sResource.PDBS, "active-retry-pdb", pdb)
+    k8s.seed_resource(K8sResource.PDBS, "active-attempt-1-pdb", pdb)
 
     # The active retry's pod, seeded so the passes below read it as active.
     populate_pod(k8s, "active-attempt-1", "Running", labels={_LABEL_TASK_HASH: shared_hash})
 
-    # Two passes: the first sweeps the terminal pod and enqueues its hash, the second
-    # is the one that would delete the CM/PDB if the active attempt did not hold them.
+    # Sweep the old pod, then its resources, while the retry stays active.
     provider.collect_garbage()
     provider.collect_garbage()
 
     # Terminal pod is deleted (by name, not by hash).
     assert k8s.get_json(K8sResource.PODS, "old-attempt-0") is None
-    # But configmap and PDB are preserved because the hash is still active.
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "active-retry-cm") is not None
-    assert k8s.get_json(K8sResource.PDBS, "active-retry-pdb") is not None
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "old-attempt-0-wf") is None
+    # The retry keeps its mount and disruption protection.
+    assert k8s.get_json(K8sResource.CONFIGMAPS, "active-attempt-1-wf") is not None
+    assert k8s.get_json(K8sResource.PDBS, "active-attempt-1-pdb") is not None
 
 
-def test_gc_defers_configmap_cleanup_for_age_swept_pods(provider, k8s):
-    """An age-swept task's CM/PDB cleanup is enqueued, never done in the same pass.
+def test_gc_retries_resource_cleanup_after_delete_failure(provider, k8s, monkeypatch):
+    req = make_run_req("/cleanup-job/0", num_tasks=1, attempt_uid="1111111111111111")
+    req.entrypoint.workdir_files["config.json"] = b"config"
+    provider.sync(make_batch(tasks_to_run=[req]))
+    pod_name = k8s.list_json(K8sResource.PODS)[0]["metadata"]["name"]
+    provider.sync(make_batch())
 
-    The hashes come from the pods the pass just deleted, so they exist nowhere else:
-    cleaning up inline means anything that raises in between orphans those configmaps
-    and PDBs permanently, with no later pass able to rediscover them. Enqueuing puts
-    them in state that survives the pass and is retried.
-    """
-    now = datetime.now(UTC)
-    old_ts = (now - timedelta(seconds=_GC_MAX_AGE_SECONDS + 600)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    task_hash = "sweptaabbccdd1122"
+    delete = k8s.delete
 
-    _seed_terminal_pod(k8s, "swept-pod", "Succeeded", task_hash, old_ts)
-    _seed_configmap(k8s, "swept-pod-wf", task_hash, old_ts)
+    def fail_pdb_delete(resource, name, **kwargs):
+        if resource == K8sResource.PDBS:
+            raise KubectlError("API unavailable")
+        delete(resource, name, **kwargs)
 
+    with monkeypatch.context() as patch:
+        patch.setattr(k8s, "delete", fail_pdb_delete)
+        provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.CONFIGMAPS, f"{pod_name}-wf") is None
+    assert k8s.get_json(K8sResource.PDBS, f"{pod_name}-pdb") is not None
     provider.collect_garbage()
-
-    assert k8s.get_json(K8sResource.PODS, "swept-pod") is None
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is not None, "cleanup must be deferred, not inline"
-
-    provider.collect_garbage()
-    assert k8s.get_json(K8sResource.CONFIGMAPS, "swept-pod-wf") is None
+    assert k8s.get_json(K8sResource.PDBS, f"{pod_name}-pdb") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1641,6 +1754,64 @@ def test_gc_sweeps_crashed_gang_pods_on_short_retention(provider, k8s):
     assert k8s.get_json(K8sResource.PODS, "crashed-gang-pod") is None
     assert k8s.get_json(K8sResource.WORKLOADS, group) is None
     assert k8s.get_json(K8sResource.PODS, "plain-failed-pod") is not None, "1h retention for plain pods must hold"
+
+
+def test_gc_gang_retention_starts_after_container_finishes(provider, k8s):
+    now = datetime.now(UTC)
+    created = (now - timedelta(hours=2)).isoformat()
+    name = "recently-finished-gang-pod"
+    group = "recently-finished-gang"
+    _seed_gang_pod(k8s, name, group, created)
+    pod = k8s.get_json(K8sResource.PODS, name)
+    pod["status"]["containerStatuses"] = [
+        {"name": "task", "state": {"terminated": {"finishedAt": (now - timedelta(seconds=30)).isoformat()}}}
+    ]
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, name) is not None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is not None
+
+    pod["status"]["containerStatuses"][0]["state"]["terminated"]["finishedAt"] = (now - timedelta(minutes=2)).isoformat()
+    provider.collect_garbage()
+    assert k8s.get_json(K8sResource.PODS, name) is None
+    assert k8s.get_json(K8sResource.WORKLOADS, group) is None
+
+
+def test_gc_retains_old_gang_pod_after_recent_init_failure(provider, k8s):
+    now = datetime.now(UTC)
+    task_id = JobName.from_wire("/failed-during-staging/0")
+    pod_name = _pod_name(task_id, 0)
+    group = "failed-during-staging"
+    populate_pod(
+        k8s,
+        pod_name,
+        "Failed",
+        labels={_LABEL_TASK_HASH: _task_hash(task_id.to_wire()), _KUEUE_POD_GROUP_NAME: group},
+    )
+    pod = k8s.get_json(K8sResource.PODS, pod_name)
+    pod["metadata"]["creationTimestamp"] = (now - timedelta(hours=2)).isoformat()
+    pod["status"]["initContainerStatuses"] = [
+        {
+            "name": "stage-workdir",
+            "state": {
+                "terminated": {
+                    "exitCode": 1,
+                    "reason": "Error",
+                    "message": "download failed",
+                    "finishedAt": (now - timedelta(seconds=30)).isoformat(),
+                }
+            },
+        }
+    ]
+    k8s.seed_resource(K8sResource.WORKLOADS, group, {"kind": "Workload", "metadata": {"name": group}})
+
+    provider.collect_garbage()
+
+    assert k8s.get_json(K8sResource.PODS, pod_name) is not None
+    update = provider.sync(make_batch(running_tasks=[RunningTaskEntry(task_id=task_id, attempt_id=0)]))[0]
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
+    assert update.terminal_reason == "Init:Error stage-workdir: download failed"
 
 
 def test_gc_skips_gang_with_active_sibling(provider, k8s):

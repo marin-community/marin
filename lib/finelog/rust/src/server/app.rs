@@ -43,6 +43,7 @@ use crate::server::interceptors::{
 use crate::server::{debug, forwarded_prefix, introspection, legacy_path, spa, telemetry};
 use crate::store::Store;
 
+use super::compression::compression_registry;
 use super::log_service::{LogServiceImpl, LogTailCache};
 use super::stats_service::StatsServiceImpl;
 use super::MAX_MESSAGE_BYTES;
@@ -127,6 +128,7 @@ fn build_connect_service(
     };
 
     ConnectRpcService::new(connect_router)
+        .with_compression(compression_registry())
         .with_limits(
             Limits::default()
                 .max_message_size(MAX_MESSAGE_BYTES)
@@ -143,8 +145,6 @@ fn build_connect_service(
             config.max_concurrent_fetch_logs,
             config.max_concurrent_query,
         ))
-    // gzip + zstd are already active via the default CompressionRegistry the
-    // crate's `gzip`/`zstd` features install in ConnectRpcService::new.
 }
 
 /// Build the full axum app for `store` with `config`. See the module doc for

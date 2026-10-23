@@ -4,12 +4,17 @@
 from __future__ import annotations
 
 import dataclasses
+from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import MagicMock
 
+import click
 import pytest
+from click.testing import CliRunner
+from iris.client.client import IrisClient
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
-from marin.rl.cli import _coordinator_request
+from marin.rl.cli import _coordinator_request, rl_build_options
 from marin.rl.skyrl import IrisSkyRLExecution
 from rigging.timing import Duration
 
@@ -74,6 +79,54 @@ def test_coordinator_request_replays_the_experiment_main() -> None:
 def test_coordinator_request_requires_a_skyrl_step() -> None:
     with pytest.raises(ValueError, match="did not construct a SkyRL artifact step"):
         _coordinator_request([_step()], "experiments.test_rl", ("--run",), 8, Path("/workspace/marin"), {})
+
+
+@pytest.mark.parametrize("missing_name", [None, "JUDGE_KEY", "EVAL_KEY"])
+def test_rl_launch_requires_and_forwards_credentials_before_submission(
+    monkeypatch: pytest.MonkeyPatch, missing_name: str | None
+) -> None:
+    client = MagicMock(spec=IrisClient)
+    monkeypatch.setattr("marin.rl.cli.open_iris_client", lambda **_kwargs: nullcontext(client))
+    monkeypatch.delenv("IRIS_TASK_ID", raising=False)
+    expected_env = {
+        "DAYTONA_RL_API_KEY": "test-rl-key",
+        "DAYTONA_EVAL_API_KEY": "test-eval-key",
+        "DAYTONA_API_KEY": "test-other-key",
+        "TOGETHER_API_KEY": "test-together-key",
+        "JUDGE_KEY": "test-judge-key",
+        "EVAL_KEY": "test-custom-eval-key",
+    }
+    for name, value in expected_env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("HF_TOKEN", "test-hf-token")
+    monkeypatch.setenv("WANDB_API_KEY", "test-wandb-key")
+    if missing_name is not None:
+        monkeypatch.delenv(missing_name)
+    monkeypatch.setenv("UNRELATED_SECRET", "must-not-forward")
+
+    @click.command()
+    @rl_build_options
+    def main() -> list[ArtifactStep[Artifact]]:
+        train = _step(dataclasses.replace(_execution(), required_env_vars=("JUDGE_KEY",)))
+        evaluate = dataclasses.replace(
+            _step(dataclasses.replace(_execution(), required_env_vars=("EVAL_KEY",))),
+            name="checkpoints/test-eval",
+        )
+        return [train, evaluate]
+
+    result = CliRunner().invoke(main, ["--version", "2026.10.07", "--run"])
+
+    if missing_name is not None:
+        assert result.exit_code != 0
+        assert isinstance(result.exception, KeyError)
+        assert result.exception.args == (missing_name,)
+        client.submit.assert_not_called()
+        return
+
+    assert result.exit_code == 0, result.output
+    environment = client.submit.call_args.kwargs["environment"]
+    assert expected_env.items() <= environment.env_vars.items()
+    assert {"HF_TOKEN", "WANDB_API_KEY", "UNRELATED_SECRET"}.isdisjoint(environment.env_vars)
 
 
 def test_execution_requires_a_complete_federated_route() -> None:

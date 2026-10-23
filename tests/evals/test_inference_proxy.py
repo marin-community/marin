@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import gzip
 import json
 import socket
 import threading
@@ -15,6 +16,7 @@ from typing import cast
 import httpx
 import marin.inference.iris as iris_module
 import pytest
+from fray.client import JobHandle
 from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
@@ -38,6 +40,8 @@ from marin.inference.iris import (
 )
 from marin.inference.proxy import InferenceProxy, serve_inference_proxy
 from marin.inference.types import (
+    STREAM_BUFFER_BYTES,
+    WORKER_LEASE_SECONDS,
     InferenceRequest,
     InferenceResponse,
     InferenceWorkerMetadata,
@@ -45,6 +49,10 @@ from marin.inference.types import (
     LeasedInferenceResponse,
     OpenAIEndpoint,
     RunningModel,
+    StreamChunk,
+    StreamEnd,
+    StreamError,
+    StreamStart,
 )
 from marin.inference.worker import InferenceWorker, run_inference_worker
 from rigging.timing import ExponentialBackoff
@@ -272,8 +280,11 @@ def test_direct_inference_session_reports_backend_state(
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                job_status=lambda _job_id: SimpleNamespace(state=JobState.RUNNING),
-                list_tasks=lambda job_id: [SimpleNamespace(task_id=f"{job_id}/0", state=task_state)],
+                job_status=lambda _job_id: SimpleNamespace(
+                    state=JobState.RUNNING,
+                    task_count=1,
+                    task_state_counts={task_state: 1},
+                ),
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()] * endpoint_count,
             )
         ),
@@ -281,6 +292,162 @@ def test_direct_inference_session_reports_backend_state(
     session = _remote_session()
 
     assert session.backend_state() is expected
+
+
+@pytest.mark.parametrize(
+    ("task_state", "display_worker", "attempt_worker", "node_name", "placed"),
+    [
+        (TaskState.PENDING, "peer-label", "", "node-1", False),
+        (TaskState.BUILDING, "", "", "", False),
+        (TaskState.BUILDING, "peer-label", "", "", False),
+        (TaskState.BUILDING, "peer-label", "", "node-1", True),
+        (TaskState.ASSIGNED, "worker-1", "worker-1", "", True),
+        (TaskState.RUNNING, "", "", "", True),
+    ],
+)
+def test_inference_endpoint_wait_distinguishes_queued_and_placed_tasks(
+    task_state: TaskState, display_worker: str, attempt_worker: str, node_name: str, placed: bool, monkeypatch
+) -> None:
+    class FixedDeadline:
+        def __init__(self, seconds: float) -> None:
+            self.seconds = seconds
+
+        def expired(self) -> bool:
+            return self.seconds == 0
+
+    endpoint_probes = 0
+
+    def list_endpoint_instances(_endpoint_name: str):
+        nonlocal endpoint_probes
+        endpoint_probes += 1
+        if endpoint_probes > 1:
+            return [SimpleNamespace(address="https://inference.example", metadata={})]
+        return []
+
+    monkeypatch.setattr(iris_module.Deadline, "from_seconds", FixedDeadline)
+    monkeypatch.setattr(iris_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                list_endpoint_instances=list_endpoint_instances,
+                list_tasks=lambda _job_id: [
+                    SimpleNamespace(
+                        state=task_state,
+                        worker_id=display_worker,
+                        current_attempt_number=0,
+                        attempts=(SimpleNamespace(attempt_number=0, worker_id=attempt_worker, node_name=node_name),),
+                    ),
+                ],
+            )
+        ),
+    )
+    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
+
+    if placed:
+        with pytest.raises(TimeoutError):
+            iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0)
+    else:
+        assert iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=0) == (
+            "https://inference.example",
+            {},
+        )
+
+
+def test_inference_endpoint_wait_preserves_startup_budget_across_gate_and_requeue(monkeypatch) -> None:
+    now = 0.0
+    delays = iter((6, 1, 3, 7, 1, 4))
+
+    def sleep(_seconds: float) -> None:
+        nonlocal now
+        now += next(delays)
+
+    def task(state: TaskState, current_attempt: int, *nodes: str):
+        return SimpleNamespace(
+            state=state,
+            worker_id="",
+            current_attempt_number=current_attempt,
+            attempts=tuple(
+                SimpleNamespace(attempt_number=i, worker_id="", node_name=node) for i, node in enumerate(nodes)
+            ),
+        )
+
+    snapshots = iter(
+        (
+            task(TaskState.BUILDING, 0, ""),
+            task(TaskState.BUILDING, 0, ""),
+            task(TaskState.BUILDING, 0, "node-a"),
+            task(TaskState.PENDING, 0, "node-a"),
+            task(TaskState.BUILDING, 1, "node-a", ""),
+            task(TaskState.BUILDING, 1, "node-a", "node-b"),
+        )
+    )
+    probes = 0
+
+    def list_endpoint_instances(_endpoint_name: str):
+        nonlocal probes
+        probes += 1
+        if probes == 7:
+            return [SimpleNamespace(address="https://inference.example", metadata={})]
+        return []
+
+    monkeypatch.setattr(iris_module.time, "monotonic", lambda: now)
+    monkeypatch.setattr(iris_module.time, "sleep", sleep)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                list_endpoint_instances=list_endpoint_instances,
+                list_tasks=lambda _job_id: [next(snapshots)],
+            )
+        ),
+    )
+    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
+
+    assert iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=5) == (
+        "https://inference.example",
+        {},
+    )
+
+
+def test_inference_endpoint_wait_requeue_preserves_placement_deadline(monkeypatch) -> None:
+    now = 0.0
+    snapshots = iter(
+        (
+            SimpleNamespace(state=TaskState.BUILDING, worker_id="", current_attempt_number=0, attempts=()),
+            SimpleNamespace(
+                state=TaskState.BUILDING,
+                worker_id="",
+                current_attempt_number=0,
+                attempts=(SimpleNamespace(attempt_number=0, worker_id="", node_name="node-a"),),
+            ),
+            SimpleNamespace(state=TaskState.PENDING, worker_id="", current_attempt_number=0, attempts=()),
+        )
+    )
+
+    def sleep(_seconds: float) -> None:
+        nonlocal now
+        now += 6
+
+    monkeypatch.setattr(iris_module, "_ENDPOINT_PLACEMENT_TIMEOUT_SECONDS", 10.0)
+    monkeypatch.setattr(iris_module.time, "monotonic", lambda: now)
+    monkeypatch.setattr(iris_module.time, "sleep", sleep)
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                list_endpoint_instances=lambda _endpoint_name: [],
+                list_tasks=lambda _job_id: [next(snapshots)],
+            )
+        ),
+    )
+    job = cast(JobHandle, _SessionJob(JobStatus.RUNNING))
+
+    with pytest.raises(TimeoutError, match="to be placed"):
+        iris_module._wait_for_endpoint(job, "/serve/inference", timeout_seconds=5)
 
 
 def test_inference_recovery_stops_when_job_becomes_terminal(monkeypatch) -> None:
@@ -301,11 +468,11 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
     task_pending = True
     probe_statuses: list[int] = []
 
-    def list_tasks(_job_id):
+    def job_status(_job_id):
         nonlocal task_pending
         state = TaskState.PENDING if task_pending else TaskState.RUNNING
         task_pending = False
-        return [SimpleNamespace(state=state)]
+        return SimpleNamespace(state=JobState.RUNNING, task_count=1, task_state_counts={state: 1})
 
     def probe_endpoint(_url, timeout):
         del timeout
@@ -318,9 +485,9 @@ def test_inference_recovery_waits_for_tasks_and_routed_endpoint(monkeypatch) -> 
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                job_status=lambda *_args: SimpleNamespace(state=JobState.RUNNING),
-                list_tasks=list_tasks,
+                job_status=job_status,
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
+                resolve_endpoint=lambda _name: "https://inference.example",
             )
         ),
     )
@@ -353,9 +520,13 @@ def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monke
         "iris_ctx",
         lambda: SimpleNamespace(
             client=SimpleNamespace(
-                job_status=lambda *_args: SimpleNamespace(state=JobState.RUNNING),
-                list_tasks=lambda _job_id: [SimpleNamespace(state=TaskState.RUNNING)],
+                job_status=lambda *_args: SimpleNamespace(
+                    state=JobState.RUNNING,
+                    task_count=1,
+                    task_state_counts={TaskState.RUNNING: 1},
+                ),
                 list_endpoint_instances=lambda _endpoint_name: [SimpleNamespace()],
+                resolve_endpoint=lambda _name: "https://replacement.example",
             )
         ),
     )
@@ -372,7 +543,7 @@ def test_inference_recovery_times_out_when_routed_endpoint_stays_unhealthy(monke
 
     with pytest.raises(TimeoutError, match=r"did not become healthy within 1800\.0s"):
         _remote_session().wait_until_ready()
-    assert probes == ["https://iris.example/capability/v1/models"]
+    assert probes == ["https://replacement.example/v1/models"]
 
 
 def test_broker_config_rejects_invalid_timeout_ordering() -> None:
@@ -393,7 +564,7 @@ def mock_cluster() -> Iterator[MockInferenceCluster]:
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     with serve_deterministic_openai_stub() as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
-        worker = InferenceWorker(broker=broker, upstream=upstream, request_timeout_seconds=5)
+        worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=5)
         with (
             _serve_inference_proxy(
                 broker=broker,
@@ -409,6 +580,298 @@ def mock_cluster() -> Iterator[MockInferenceCluster]:
                 upstream=upstream_stub,
                 proxy=proxy,
             )
+
+
+def test_broker_stream_expiry_never_replays_a_started_response() -> None:
+    now = [0.0]
+    broker = InferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
+    request = InferenceRequest("stream", "POST", "/v1/chat/completions", b"{}", streaming=True)
+    broker.submit_request(request)
+    [old] = broker.fetch_requests(max_items=1)
+    now[0] = 11
+    [replacement] = broker.fetch_requests(max_items=1)
+    assert not broker.submit_stream_event(StreamStart("stream", old.lease_id, 0, 200, ()))
+    start = StreamStart("stream", replacement.lease_id, 0, 200, ())
+    assert broker.submit_stream_event(start)
+    assert broker.submit_stream_event(StreamChunk("stream", replacement.lease_id, 1, b"first"))
+    assert not broker.submit_stream_event(StreamChunk("stream", replacement.lease_id, 1, b"duplicate"))
+    now[0] = 22
+    events = broker.fetch_responses(max_items=10)
+    assert events[:2] == [start, StreamChunk("stream", replacement.lease_id, 1, b"first")]
+    assert isinstance(events[2], StreamError)
+    assert broker.fetch_requests(max_items=1) == []
+    assert not broker.submit_stream_event(StreamEnd("stream", replacement.lease_id, 2))
+    assert broker.pending() == []
+
+
+def test_broker_cancellation_removes_queued_and_leased_requests() -> None:
+    broker = InferenceBroker(request_lease_timeout_seconds=10)
+    for name in ("leased", "queued"):
+        broker.submit_request(InferenceRequest(name, "POST", "/v1/completions", b"{}"))
+    [leased] = broker.fetch_requests(max_items=1)
+    broker.cancel_request("leased")
+    broker.cancel_request("queued")
+    broker.submit_responses([LeasedInferenceResponse(leased.lease_id, InferenceResponse("leased", 200, b"late"))])
+    assert broker.fetch_requests(max_items=1) == []
+    assert broker.fetch_responses(max_items=10) == []
+    assert broker.size() == 0
+
+
+def test_stream_buffer_overflow_fails_without_replaying() -> None:
+    broker = InferenceBroker(request_lease_timeout_seconds=10)
+    broker.submit_request(InferenceRequest("overflow", "POST", "/v1/completions", b"{}", streaming=True))
+    [lease] = broker.fetch_requests(max_items=1)
+    assert broker.submit_stream_event(StreamStart("overflow", lease.lease_id, 0, 200, ()))
+    assert not broker.submit_stream_event(StreamChunk("overflow", lease.lease_id, 1, b"x" * (STREAM_BUFFER_BYTES + 1)))
+    events = broker.fetch_responses(max_items=10)
+    assert isinstance(events[-1], StreamError)
+    assert not any(isinstance(event, StreamChunk) for event in events)
+    assert broker.fetch_requests(max_items=1) == []
+    assert broker.pending() == []
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_worker_preserves_compression_only_for_raw_streams(streaming) -> None:
+    broker = InferenceBroker(request_lease_timeout_seconds=10)
+    broker.submit_request(InferenceRequest("gzip", "GET", "/metrics", b"", streaming=streaming))
+    [lease] = broker.fetch_requests(max_items=1)
+    compressed = gzip.compress(b"metric_total 1\n")
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            headers={"Content-Encoding": "gzip"},
+            stream=httpx.ByteStream(compressed),
+        )
+    )
+    worker = InferenceWorker(
+        worker_id="test-worker",
+        broker=broker,
+        upstream=RunningModel(OpenAIEndpoint("http://upstream/v1", "test")),
+        request_timeout_seconds=5,
+    )
+    with httpx.Client(transport=transport) as client:
+        result = worker._forward_one(client, lease)
+    if streaming:
+        events = broker.fetch_responses(max_items=10)
+        assert isinstance(events[0], StreamStart)
+        assert dict(events[0].headers)["content-encoding"] == "gzip"
+        assert b"".join(event.payload for event in events if isinstance(event, StreamChunk)) == compressed
+    else:
+        assert result is not None
+        assert result.response.payload == b"metric_total 1\n"
+        assert "content-encoding" not in dict(result.response.headers)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["disconnect", "send", "deadline"])
+async def test_stream_response_cleans_up_when_http_delivery_stops(failure) -> None:
+    release = threading.Event()
+    disconnected = asyncio.Event()
+    blocked = asyncio.Event()
+    broker = InferenceBroker(request_lease_timeout_seconds=10)
+    with _streaming_upstream(release) as upstream:
+        worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=5)
+        with (
+            run_inference_worker(worker, max_in_flight=1),
+            InferenceProxy(
+                broker=broker,
+                model="test",
+                request_timeout_seconds=5,
+                readiness_timeout_seconds=5,
+                max_pending_requests=4,
+                response_fetch_batch_size=16,
+            ) as proxy,
+        ):
+            try:
+                response = await proxy.forward_raw_request(
+                    "/v1/chat/completions",
+                    b"{}",
+                    method="POST",
+                    streaming=True,
+                    timeout_seconds=0.5 if failure == "deadline" else 5,
+                )
+
+                async def receive():
+                    await disconnected.wait()
+                    return {"type": "http.disconnect"}
+
+                async def send(message):
+                    if message["type"] != "http.response.body":
+                        return
+                    if failure == "send":
+                        raise OSError("client connection closed")
+                    if failure == "disconnect":
+                        disconnected.set()
+                    await blocked.wait()
+
+                try:
+                    await response({"type": "http", "asgi": {"spec_version": "2.3"}}, receive, send)
+                except (OSError, ExceptionGroup):
+                    assert failure == "send"
+            finally:
+                release.set()
+            assert broker.pending() == []
+            assert broker.fetch_requests(max_items=1) == []
+
+
+def test_broker_readiness_expires_without_evaluator_iris_polling() -> None:
+    now = [0.0]
+    broker = InferenceBroker(request_lease_timeout_seconds=100, clock=lambda: now[0])
+    session = RemoteInferenceSession(
+        model=RunningModel(OpenAIEndpoint("http://broker/v1", "test")),
+        jobs=(),
+        endpoint_name="broker",
+        endpoint_health_timeout_seconds=5,
+        streaming=True,
+        tensor_parallel_size=1,
+        backend_name="vllm",
+        broker=broker,
+    )
+    assert session.backend_state() is InferenceBackendState.RECOVERING
+    broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm"))
+    assert session.backend_state() is InferenceBackendState.READY
+    now[0] += WORKER_LEASE_SECONDS + 1
+    assert session.backend_state() is InferenceBackendState.RECOVERING
+    assert session.preemption_count() == 1
+    broker.heartbeat("worker")
+    assert session.backend_state() is InferenceBackendState.READY
+    broker.finish()
+    assert session.backend_state() is InferenceBackendState.FINISHED
+
+
+@pytest.mark.asyncio
+async def test_proxy_distinguishes_liveness_from_worker_readiness() -> None:
+    broker = InferenceBroker(request_lease_timeout_seconds=10)
+    with InferenceProxy(
+        broker=broker,
+        model="test",
+        request_timeout_seconds=5,
+        readiness_timeout_seconds=5,
+        max_pending_requests=4,
+        response_fetch_batch_size=16,
+    ) as proxy:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=proxy.app), base_url="http://broker") as client:
+            assert (await client.get("/health")).status_code == 200
+            response = await client.get("/ready")
+            assert response.status_code == 503
+            assert response.json()["status"] == "recovering"
+            broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm"))
+            assert (await client.get("/ready")).status_code == 200
+            broker.finish()
+            response = await client.get("/ready")
+            assert response.status_code == 503
+            assert response.json()["status"] == "finished"
+
+
+@pytest.mark.asyncio
+async def test_disconnect_before_headers_cancels_the_broker_request() -> None:
+    broker = InferenceBroker(request_lease_timeout_seconds=10)
+    received_body = False
+
+    async def receive():
+        nonlocal received_body
+        if not received_body:
+            received_body = True
+            return {"type": "http.request", "body": b'{"stream":true}', "more_body": False}
+        await _fetch_until_requests(broker, count=1)
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        pass
+
+    with InferenceProxy(
+        broker=broker,
+        model="test",
+        request_timeout_seconds=5,
+        readiness_timeout_seconds=5,
+        max_pending_requests=4,
+        response_fetch_batch_size=16,
+    ) as proxy:
+        await proxy.app(
+            {
+                "type": "http",
+                "asgi": {"spec_version": "2.3"},
+                "method": "POST",
+                "path": "/v1/chat/completions",
+                "query_string": b"",
+                "headers": [(b"content-type", b"application/json")],
+            },
+            receive,
+            send,
+        )
+    assert broker.pending() == []
+    assert broker.size() == 0
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_broker_forwards_incremental_stream_and_exposes_worker_loss(interrupt) -> None:
+    release = threading.Event()
+    now = [0.0]
+    broker = InferenceBroker(request_lease_timeout_seconds=10, clock=lambda: now[0])
+    with _streaming_upstream(release) as upstream:
+        worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=5)
+        with (
+            run_inference_worker(worker, max_in_flight=1),
+            serve_inference_proxy(
+                broker=broker,
+                model="test",
+                request_timeout_seconds=5,
+                readiness_timeout_seconds=5,
+                max_pending_requests=4,
+                response_fetch_batch_size=16,
+                server_start_timeout_seconds=5,
+            ) as proxy,
+        ):
+            try:
+                with httpx.stream(
+                    "POST", proxy.endpoint.url("chat/completions"), json={"stream": True}, timeout=5
+                ) as response:
+                    assert response.status_code == 200
+                    chunks = response.iter_raw()
+                    assert next(chunks) == b"data: first\n\n"
+                    if interrupt:
+                        now[0] = 11
+                        with pytest.raises(httpx.RemoteProtocolError):
+                            next(chunks)
+                    else:
+                        release.set()
+                        assert b"".join(chunks) == b"data: [DONE]\n\n"
+            finally:
+                release.set()
+    assert broker.pending() == []
+    assert broker.size() == 0
+
+
+@contextmanager
+def _streaming_upstream(release: threading.Event) -> Iterator[RunningModel]:
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers["Content-Length"]))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for payload in (b"data: first\n\n", b"data: [DONE]\n\n"):
+                self.wfile.write(f"{len(payload):x}\r\n".encode() + payload + b"\r\n")
+                self.wfile.flush()
+                if not release.wait(timeout=5):
+                    self.close_connection = True
+                    return
+            self.wfile.write(b"0\r\n\r\n")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield RunningModel(OpenAIEndpoint(f"http://127.0.0.1:{server.server_port}/v1", "test"))
+    finally:
+        release.set()
+        server.shutdown()
+        server.server_close()
+        thread.join()
 
 
 def test_inference_broker_round_trip() -> None:
@@ -454,6 +917,7 @@ def test_inference_worker_preserves_raw_transport_fields() -> None:
         )
 
     worker = InferenceWorker(
+        worker_id="test-worker",
         broker=InferenceBroker(request_lease_timeout_seconds=5),
         upstream=RunningModel(endpoint=OpenAIEndpoint(base_url="http://upstream/v1", model="gpt2")),
         request_timeout_seconds=5,
@@ -514,7 +978,8 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
     assert broker.fetch_responses(max_items=1) == [fresh_response]
 
 
-def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) -> None:
+@pytest.mark.parametrize("instances", [1, 2])
+def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, instances) -> None:
     broker_actor = InferenceBroker(request_lease_timeout_seconds=240)
     broker_actor.register_worker("worker-0", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="vllm"))
     proxy_models: list[str] = []
@@ -595,12 +1060,15 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
             model=ServedModelConfig(weights="physical-model", api_model="public-model"),
             engine=VllmEngineConfig(),
             iris=iris,
-            instances=2,
+            instances=instances,
+            broker=BrokerConfig(),
             capability_origin="https://iris.example",
         )
     ) as session:
         assert session.model.endpoint.model == "public-model"
         assert session.model.endpoint.base_url.startswith("https://iris.example/proxy/t/broker-token/")
+        assert session.effective_serving is not None
+        assert session.effective_serving.task_count == instances
 
     assert proxy_models == ["public-model"]
     _, register_args, register_kwargs = events[0]
@@ -608,9 +1076,10 @@ def test_remote_inference_automatically_brokers_multiple_instances(monkeypatch) 
     assert endpoint_name == minted[0]
     assert address == "http://127.0.0.1:1"
     assert metadata["model"] == "public-model"
+    assert metadata["task_count"] == str(instances)
     assert register_kwargs["access"] == EndpointAccess.ENDPOINT_ACCESS_LINK
     assert events[-1] == ("unregister", "endpoint-id")
-    assert len(client.submissions) == 2
+    assert len(client.submissions) == instances
     for worker_request in client.submissions:
         assert worker_request.environment.extras == ["tpu"]
         assert worker_request.environment.env_vars["VLLM_ENABLE_V1_MULTIPROCESSING"] == "0"
@@ -637,7 +1106,26 @@ def test_inference_proxy_routes_models_readiness_to_running_model(mock_cluster: 
     assert mock_cluster.broker.size() == 0
 
 
-def test_inference_proxy_rejects_streaming_before_submitting_to_broker(
+def test_inference_proxy_forwards_server_root_tokenize_route(mock_cluster: MockInferenceCluster) -> None:
+    server_root = mock_cluster.proxy.endpoint.base_url.removesuffix("/v1")
+    response = httpx.post(
+        f"{server_root}/tokenize",
+        json={
+            "model": mock_cluster.model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "add_generation_prompt": True,
+        },
+        timeout=5,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"count": 3, "max_model_len": 32768, "tokens": [1, 2, 3]}
+    assert len(mock_cluster.upstream.requests_for("/tokenize")) == 1
+    assert mock_cluster.broker.pending() == []
+    assert mock_cluster.broker.size() == 0
+
+
+def test_inference_proxy_preserves_upstream_response_to_streaming_request(
     mock_cluster: MockInferenceCluster,
 ) -> None:
     response = httpx.post(
@@ -646,9 +1134,9 @@ def test_inference_proxy_rejects_streaming_before_submitting_to_broker(
         timeout=5,
     )
 
-    assert response.status_code == 400
-    assert response.json() == {"error": "brokered inference does not support streaming"}
-    assert mock_cluster.upstream.requests_for("/v1/chat/completions") == []
+    assert response.status_code == 200
+    assert response.json()["choices"]
+    assert len(mock_cluster.upstream.requests_for("/v1/chat/completions")) == 1
     assert mock_cluster.broker.size() == 0
 
 
@@ -664,6 +1152,7 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
     ) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
+            worker_id="test-worker",
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=5,
@@ -689,6 +1178,7 @@ async def test_inference_worker_returns_504_for_upstream_timeout() -> None:
     with serve_deterministic_openai_stub(prompt_pauses={"slow": release_slow}) as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(
+            worker_id="test-worker",
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=0.05,
@@ -714,6 +1204,7 @@ async def test_inference_worker_returns_502_for_upstream_connection_failure() ->
     broker.submit_request(_completion_inference_request(request_id="connect-failure", prompt="connect failure"))
     upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=f"http://127.0.0.1:{_closed_port()}/v1", model="gpt2"))
     worker = InferenceWorker(
+        worker_id="test-worker",
         broker=broker,
         upstream=upstream,
         request_timeout_seconds=1,
@@ -736,6 +1227,7 @@ async def test_inference_worker_preserves_status_for_non_json_upstream_response(
     broker.submit_request(_completion_inference_request(request_id="non-json", prompt="non json"))
     with _serve_text_upstream(status_code=503, body="temporarily unavailable") as upstream:
         worker = InferenceWorker(
+            worker_id="test-worker",
             broker=broker,
             upstream=upstream,
             request_timeout_seconds=1,

@@ -22,13 +22,17 @@ Downstream:
   one or more :class:`TokenizedAttrData` artifacts to produce a Levanter cache
   per split (sharded layout).
 * Other datakit attribute consumers (joins, mixing) can use the ``id`` column to
-  align tokens with quality scores, dedup flags, etc.
+  align tokens with quality scores, dedup flags, etc. :func:`iter_tokenized_documents`
+  regroups a shard's chunk rows into one token array per document for them.
 """
 import dataclasses
 import logging
 import os
+from collections.abc import Iterator
 
+import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 from fray.types import ResourceConfig
 from levanter.data.text.formats import LmDatasetFormatBase, TextLmDatasetFormat
 from levanter.tokenizers import TokenizerBackend
@@ -99,6 +103,59 @@ class TokenizedAttrData(BaseModel):
         if d is None:
             return []
         return sorted(str(m) for m in StoragePath(prefix_join(d, "*.parquet")).glob())
+
+
+# Rows read from a tokenized shard at once during the positional join.
+_TOKENIZE_BATCH_SIZE = 8192
+
+
+def iter_tokenized_documents(path: str) -> Iterator[tuple[str, np.ndarray]]:
+    """Yield ``(doc_id, input_ids)`` per document from one tokenized shard.
+
+    A document above the token limit of one Parquet row occupies several adjacent
+    rows that share its ``id``, ordered by ``chunk_index`` (see
+    :class:`TokenizedAttrData`). Those rows are joined back into one token array
+    here, so this shard yields one document per source document and the
+    positional join against the dense per-document tables holds.
+
+    ``chunk_index == 0`` marks the first row of a document. A rule that instead
+    started a document on a change of ``id`` would merge two adjacent documents
+    that share an id, which some sources produce.
+
+    Raises ``RuntimeError`` on a shard with no ``chunk_index`` column (written
+    before the column existed) and on rows that do not run 0, 1, 2 ... within one
+    id. Concatenating out-of-order rows would corrupt the token stream silently.
+    """
+    with StoragePath(path).open("rb") as fh:
+        parquet = pq.ParquetFile(fh)
+        if CHUNK_INDEX_FIELD not in parquet.schema_arrow.names:
+            raise RuntimeError(
+                f"{path}: tokenize shard has no {CHUNK_INDEX_FIELD} column. It predates the column, "
+                "so its step identity does not match this code. Re-run tokenize for this source."
+            )
+        doc_id: str | None = None
+        chunks: list[np.ndarray] = []
+        for batch in parquet.iter_batches(
+            batch_size=_TOKENIZE_BATCH_SIZE, columns=["id", CHUNK_INDEX_FIELD, "input_ids"]
+        ):
+            row_ids = batch.column("id").to_pylist()
+            chunk_indices = batch.column(CHUNK_INDEX_FIELD).to_pylist()
+            input_ids = batch.column("input_ids")
+            for i, row_id in enumerate(row_ids):
+                if chunk_indices[i] == 0:
+                    if chunks:
+                        assert doc_id is not None
+                        yield doc_id, chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
+                    doc_id, chunks = row_id, []
+                elif row_id != doc_id or chunk_indices[i] != len(chunks):
+                    raise RuntimeError(
+                        f"{path}: row {i} is chunk {chunk_indices[i]} of {row_id}, but chunk "
+                        f"{len(chunks)} of {doc_id} must come next"
+                    )
+                chunks.append(input_ids[i].values.to_numpy())
+        if chunks:
+            assert doc_id is not None
+            yield doc_id, chunks[0] if len(chunks) == 1 else np.concatenate(chunks)
 
 
 @dataclasses.dataclass(frozen=True, kw_only=True)
@@ -291,6 +348,7 @@ def tokenize_attributes_step(
     max_workers: int = 4096,
     worker_resources: ResourceConfig | None = None,
     zephyr_context: ZephyrContext | None = None,
+    output_path_prefix: str | None = None,
     override_output_path: str | None = None,
 ) -> StepSpec:
     """Create a :class:`StepSpec` that tokenizes :class:`NormalizedData` source(s) into attribute parquet.
@@ -318,6 +376,7 @@ def tokenize_attributes_step(
         max_workers: Zephyr worker cap.
         worker_resources: Per-worker resources; defaults inside the config.
         zephyr_context: Optional shared Zephyr context.
+        output_path_prefix: Optional output root in place of ``MARIN_PREFIX``.
         override_output_path: Optional explicit output path.
     """
     if train_normalize is None and validation_normalize is None:
@@ -362,5 +421,6 @@ def tokenize_attributes_step(
         deps=deps,
         fn=_fn,
         hash_attrs=hash_attrs,
+        output_path_prefix=output_path_prefix,
         override_output_path=override_output_path,
     )

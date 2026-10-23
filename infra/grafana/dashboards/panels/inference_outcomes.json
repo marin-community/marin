@@ -87,5 +87,6 @@
       "mode": "single",
       "sort": "none"
     }
-  }
+  },
+  "maxDataPoints": 360
 }

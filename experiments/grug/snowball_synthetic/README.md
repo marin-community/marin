@@ -1,6 +1,6 @@
 # grug-snowball-synthetic
 
-Single-node harness that trains Snowball on uniform-random tokens through Levanter's `Trainer` and reports step time, tokens/s, MFU, and peak device memory. It exists to produce the AMD baseline for [#9462](https://github.com/marin-community/marin/issues/9462) and to be rerun after each kernel change, so it uses only portable code paths: reference attention and `RAGGED_DOT_IMPL=xla`.
+Single-node harness that trains Snowball on uniform-random tokens through Levanter's `Trainer` and reports step time, tokens/s, MFU, and peak device memory. It exists to produce the AMD baseline for [#9462](https://github.com/marin-community/marin/issues/9462) and to be rerun after each kernel change, so by default it uses the portable code paths: reference attention and `RAGGED_DOT_IMPL=xla`. `--attention` selects any Grug attention implementation, for example `xla_flash`, which also runs everywhere.
 
 Unlike the neighbouring variants, this directory carries no model copy. [`train.py`](./train.py) drives `levanter.models.snowball.SnowballConfig` directly, because the point is to measure the production Snowball code path rather than a variant of it.
 

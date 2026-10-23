@@ -250,7 +250,7 @@ jobs_table = Table(
     # The authenticated principal that submitted this job, distinct from the
     # friendly ``user_id`` owner: an IAP/JWT email, or ``local_admin`` for a
     # CIDR/loopback (null-auth) submission. Drives per-cluster federation
-    # authorization and budget accounting; a child inherits its root's value and
+    # authorization; a child inherits its root's value and
     # a federated handoff carries it as a signed claim the receiving peer re-checks.
     Column("submitting_user", String, nullable=False, server_default=""),
     Column("parent_job_id", JobNameType, ForeignKey("jobs.job_id", ondelete="CASCADE")),
@@ -310,6 +310,7 @@ job_config_table = Table(
     Column("submit_argv_json", JSONList(), nullable=False, server_default="[]"),
     Column("fail_if_exists", BoolIntType, nullable=False, server_default="0"),
     Column("container_profile", Integer, nullable=False, server_default="0"),
+    Column("egress_policy", Integer, nullable=False, server_default="0"),
     Index("idx_job_config_name", "name"),
 )
 

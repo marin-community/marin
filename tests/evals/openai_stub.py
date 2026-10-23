@@ -55,6 +55,9 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         payload = self._read_json()
+        if self.path == "/tokenize":
+            self._handle_tokenize(payload)
+            return
         if self.path == "/v1/completions":
             self._handle_completions(payload)
             return
@@ -62,6 +65,13 @@ class _DeterministicOpenAIHandler(BaseHTTPRequestHandler):
             self._handle_chat_completions(payload)
             return
         self._write_json(404, {"error": "not found"})
+
+    def _handle_tokenize(self, payload: dict[str, object]) -> None:
+        self._stub_server.state.requests.append(OpenAIStubRequest(path=self.path, payload=payload))
+        if payload.get("model") != self._stub_server.model:
+            self._write_json(404, {"error": "wrong model"})
+            return
+        self._write_json(200, {"count": 3, "max_model_len": 32768, "tokens": [1, 2, 3]})
 
     @property
     def _stub_server(self) -> _DeterministicOpenAIServer:

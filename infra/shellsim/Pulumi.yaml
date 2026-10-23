@@ -1,0 +1,8 @@
+name: marin-shellsim-ports
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Buildomatic worker image and public R2 release locations for guest ports.

@@ -381,7 +381,8 @@
           ]
         }
       ],
-      "timeFrom": "15m"
+      "timeFrom": "15m",
+      "maxDataPoints": 360
     },
     {
       "id": 2,
@@ -478,7 +479,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 3,
@@ -576,7 +578,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 4,
@@ -674,7 +677,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 5,
@@ -771,7 +775,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 6,
@@ -874,7 +879,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     },
     {
       "id": 7,
@@ -978,7 +984,8 @@
           ]
         }
       ],
-      "interval": "1m"
+      "interval": "1m",
+      "maxDataPoints": 360
     },
     {
       "id": 8,
@@ -1075,7 +1082,8 @@
             }
           ]
         }
-      ]
+      ],
+      "maxDataPoints": 360
     }
   ]
 }

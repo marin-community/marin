@@ -75,5 +75,6 @@
   "options": {
     "showHeader": true,
     "cellHeight": "sm"
-  }
+  },
+  "maxDataPoints": 360
 }

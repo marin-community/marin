@@ -102,6 +102,7 @@ MAX_SOURCE_ERRORS = 5
 # failing we wait until nothing is pending and report success.
 _CI_PENDING_BUCKET = "pending"
 _CI_FAILING_BUCKETS = {"fail", "cancel"}
+_GH_NO_CHECKS_PREFIX = "no checks reported on the '"
 
 _DURATION_RE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*([smhd]?)\s*$")
 _DURATION_UNITS = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}
@@ -172,8 +173,8 @@ def gh_pr_checks(pr: str, repo: str) -> list[dict]:
     """Return gh's check rows for the PR head (empty until any check registers)."""
     # `gh pr checks --json` prints the rows and exits 0 even while checks are pending.
     # We read stdout directly instead of via gh_json because a PR with no checks
-    # registered yet returns an empty body — which means "nothing to judge yet, keep
-    # polling", but which gh_json would raise on (json.loads("") fails / non-zero exit).
+    # registered yet returns an empty body and exit 1. Populated JSON can also
+    # describe failed checks despite a nonzero exit.
     proc = subprocess.run(
         ["gh", "pr", "checks", pr, "--repo", repo, "--json", "name,bucket,state"],
         capture_output=True,
@@ -182,6 +183,8 @@ def gh_pr_checks(pr: str, repo: str) -> list[dict]:
     )
     out = proc.stdout.strip()
     if not out:
+        if proc.returncode != 0 and not proc.stderr.strip().startswith(_GH_NO_CHECKS_PREFIX):
+            raise GhError(f"`gh pr checks {pr}` failed (exit {proc.returncode}): {proc.stderr.strip()}")
         return []
     try:
         return json.loads(out)

@@ -5,6 +5,7 @@
   "scripts": {
     "build": "vue-tsc --noEmit && rsbuild build",
     "dev": "rsbuild dev",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {

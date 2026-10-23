@@ -144,10 +144,10 @@ def cache_hf_model(
     """Mirror HuggingFace repo *model_id* to *cache_path* once under a distributed lock.
 
     The easy path over :func:`cache_to_prefix`: streams the repo into the cache
-    one file at a time (see :func:`_stream_hf_snapshot`), so the snapshot never
-    has to fit on local disk. The caller chooses ``cache_path``; use
-    :func:`resolve_cached_model_path` when a branch or tag must be resolved and
-    included in the cache identity. Returns ``cache_path``.
+    one file at a time (see :func:`_stream_hf_snapshot`), excluding the cache
+    completion marker, so the snapshot never has to fit on local disk. The caller
+    chooses ``cache_path``; use :func:`resolve_cached_model_path` when a branch
+    or tag must be resolved and included in the cache identity. Returns ``cache_path``.
 
     Args:
         cache_path: Destination prefix for the mirrored snapshot.
@@ -159,7 +159,7 @@ def cache_hf_model(
     """
     return cache_to_prefix(
         cache_path,
-        lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision),
+        lambda fs, dest: _stream_hf_snapshot(fs, dest, model_id, revision, complete_marker),
         metadata=CacheMetadata(source_revision=revision),
         complete_marker=complete_marker,
         poll_interval=poll_interval,
@@ -227,14 +227,17 @@ def _cache_slug(model: str) -> str:
     return f"{readable}-{digest}"
 
 
-def _stream_hf_snapshot(fs: fsspec.AbstractFileSystem, dest: str, model_id: str, revision: str | None) -> None:
-    """Copy every file of HF repo *model_id* into *dest*, one file at a time.
+def _stream_hf_snapshot(
+    fs: fsspec.AbstractFileSystem, dest: str, model_id: str, revision: str | None, complete_marker: str
+) -> None:
+    """Copy HF repo *model_id* into *dest*, excluding the completion marker.
 
     Each file is downloaded to a scratch dir, uploaded to ``dest``, then deleted
     before the next download, so peak local disk is one file rather than the full
     repo.
     """
-    filenames = list_repo_files(model_id, revision=revision)
+    # A repository may contain this filename; only cache_to_prefix may write it.
+    filenames = [filename for filename in list_repo_files(model_id, revision=revision) if filename != complete_marker]
     logger.info("streaming %d files from HF repo %s into %s", len(filenames), model_id, dest)
     with tempfile.TemporaryDirectory(prefix="hf_stream_") as scratch:
         for filename in filenames:

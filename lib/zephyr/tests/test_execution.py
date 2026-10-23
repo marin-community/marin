@@ -6,10 +6,12 @@
 import json
 import logging
 import os
+import re
 import threading
 import time
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -19,7 +21,9 @@ import zephyr.coordinator as coordinator_module
 from fray.actor import ActorContext
 from fray.local_backend import LocalClient
 from fray.types import ResourceConfig
+from rigging.filesystem.storage_path import StoragePath
 from zephyr import counters
+from zephyr import worker as worker_module
 from zephyr.context import (
     _NON_RETRYABLE_ERRORS,
     MAX_IRIS_WORKER_REPLICAS,
@@ -34,6 +38,7 @@ from zephyr.coordinator import (
     PullStatus,
     WorkerState,
     ZephyrCoordinator,
+    ZephyrExecutionResult,
 )
 from zephyr.dataset import Dataset
 from zephyr.plan import compute_plan
@@ -65,6 +70,30 @@ class _UnpicklableError(Exception):
         super().__init__(f"boom {a}/{b}/{c}")  # self.args = (message,) -> revive needs 3 args
 
 
+@pytest.mark.parametrize("pool", ["dedicated", "shared"])
+@pytest.mark.parametrize(
+    ("name", "prefix"),
+    [
+        (None, ""),
+        ("", ""),
+        (" /?! ", ""),
+        (" RLVR/IfEval__Review! ", "rlvr-ifeval-review-"),
+        ("a" * 63 + " /tail", "a" * 63 + "-"),
+        ("b" * 80, "b" * 64 + "-"),
+    ],
+)
+def test_execute_names_execution_id(local_client, tmp_path, pool, name, prefix):
+    context = ZephyrContext(client=local_client, max_workers=1, chunk_storage_prefix=str(tmp_path))
+    if pool == "shared":
+        context.start()
+    try:
+        result = context.execute(Dataset.from_list([1]).map(lambda x: x + 1), name=name)
+        assert result.results == [2]
+        assert re.fullmatch(prefix + r"\d{8}-\d{6}-[0-9a-f]{8}", result.execution_id)
+    finally:
+        context.shutdown()
+
+
 def test_ensure_picklable_exception_passes_through_picklable():
     err = ValueError("plain and picklable")
     assert _ensure_picklable_exception(err) is err
@@ -82,6 +111,44 @@ def test_ensure_picklable_exception_wraps_unrevivable_and_preserves_message():
     assert isinstance(revived, _NON_RETRYABLE_ERRORS)  # un-revivable -> fail fast, never retry
     assert "_UnpicklableError" in str(revived) and "boom 1/2/3" in str(revived)
     assert any("subprocess traceback" in n for n in revived.__notes__)
+
+
+def test_persisted_result_streams_before_serialization_finishes(coordinator, tmp_path, monkeypatch):
+    path = tmp_path / "results" / "panel.pkl"
+    written_bytes = 0
+    original_open = StoragePath.open
+
+    @contextmanager
+    def recording_open(storage_path, mode="rb", **kwargs):
+        with original_open(storage_path, mode, **kwargs) as stream:
+
+            class RecordingStream:
+                def write(self, data):
+                    nonlocal written_bytes
+                    written_bytes += len(data)
+                    return stream.write(data)
+
+            yield RecordingStream()
+
+    class CheckEarlierWrites:
+        def __reduce__(self):
+            # A whole-result dumps() cannot write the first item before reaching this one.
+            assert written_bytes > 0
+            return (str, ("serialized",))
+
+    monkeypatch.setattr(StoragePath, "open", recording_open)
+    binary = b"x" * 1024**2
+    result = ZephyrExecutionResult(
+        results=[binary, CheckEarlierWrites()],
+        counters={"rows": 2},
+        execution_id="archive-panel",
+    )
+
+    coordinator._persist_result(str(path), result)
+    recovered = cloudpickle.loads(path.read_bytes())
+
+    assert recovered.results == [binary, "serialized"]
+    assert recovered.counters == {"rows": 2}
 
 
 def test_simple_map(zephyr_ctx):
@@ -1108,6 +1175,50 @@ def test_worker_reregistration_does_not_count_toward_shard_failures(coordinator)
     assert run.task_error_attempts[0] == 0
 
 
+def _worker_for_attempt(monkeypatch, attempt_id: int) -> ZephyrWorker:
+    """Construct worker 6 of a group as Iris attempt ``attempt_id``, without its background loops."""
+    actor = MagicMock(group_name="workers", index=6, shutdown_event=None)
+    job_info = MagicMock(job_id="job", attempt_id=attempt_id)
+    monkeypatch.setattr(worker_module, "current_actor", lambda: actor)
+    monkeypatch.setattr(worker_module, "get_job_info", lambda: job_info)
+    monkeypatch.setattr(ZephyrWorker, "_heartbeat_loop", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ZephyrWorker, "_poll_loop", lambda *_args, **_kwargs: None)
+    return ZephyrWorker(MagicMock(), MagicMock(), TEST_WORKER_AVAILABLE)
+
+
+def test_shard_of_a_dead_replaced_attempt_is_requeued_while_its_successor_lives(coordinator, monkeypatch):
+    """Iris can start attempt 1 of a worker task while attempt 0 still runs.
+
+    When both used one worker_id, attempt 0 could pull a shard and die while attempt 1's
+    heartbeats kept that worker_id alive, so the shard stayed in flight forever.
+    """
+    task = ShardTask(
+        shard_idx=0,
+        total_shards=1,
+        shard=ListShard(refs=[]),
+        operations=[],
+        stage_name="test",
+        cost=TEST_TASK_COST,
+    )
+    run = start_test_stage(coordinator, [task])
+    old = _worker_for_attempt(monkeypatch, 0)._worker_id
+    new = _worker_for_attempt(monkeypatch, 1)._worker_id
+    coordinator.register_worker(old, MagicMock())
+    coordinator.register_worker(new, MagicMock())
+
+    status, _work = coordinator.pull_task(old, TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+
+    coordinator._last_seen[old] = 0.0
+    coordinator.heartbeat(new)
+    coordinator.check_heartbeats(timeout=1.0)
+
+    assert 0 not in run.in_flight
+    status, work = coordinator.pull_task(new, TEST_WORKER_AVAILABLE)
+    assert status == PullStatus.RUN_TASK
+    assert work.task.shard_idx == 0
+
+
 def test_report_error_still_aborts_at_max_shard_failures_after_preemptions(coordinator):
     """Task errors still abort at MAX_SHARD_FAILURES even after many survived preemptions."""
     task = ShardTask(
@@ -1620,7 +1731,7 @@ def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
             if self._timeouts > 0:
                 self._timeouts -= 1
                 raise TimeoutError
-            return ()
+            return None
 
     rpc = _RegistrationRpc()
     worker = ZephyrWorker.__new__(ZephyrWorker)
@@ -1628,13 +1739,11 @@ def test_registration_retries_a_failed_rpc_and_waits_out_a_slow_one():
     worker._task_id = ""
     worker._worker_id = "test-worker-0"
     worker._actor_handle = MagicMock()
-    worker._memory_store = MagicMock()
     worker._shutdown_event = threading.Event()
     worker._host_shutdown_event = None
 
     assert worker._register() is True
     assert rpc.calls == 2, "one retry for the failed RPC, none for the slow answer"
-    worker._memory_store.restore.assert_called_once_with(())
 
 
 def test_zephyr_context_custom_map_and_reduce_resources_executes_successfully(local_client):
@@ -1651,6 +1760,70 @@ def test_zephyr_context_custom_map_and_reduce_resources_executes_successfully(lo
         reduce_task_resources=ResourceConfig(cpu=2, ram="4g", disk="4g"),
     )
     assert sorted(result.results) == [2, 4, 6]
+
+
+def test_telemetry_includes_live_progress_without_recounting_completed_tasks(coordinator, monkeypatch):
+    run = start_test_stage(coordinator, [_make_task("review")], stage_name="review")
+    emitted = {}
+
+    class Gauge:
+        def __init__(self, name):
+            self.name = name
+
+        def set(self, value, *, attributes=None):
+            emitted[(attributes["run"], self.name)] = value
+
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
+    live = CounterSnapshot(counters={"review/completed": CounterEntry(7)}, generation=1)
+    coordinator.heartbeat("worker-0", {TEST_EXECUTION_ID: live})
+    coordinator._publish_telemetry()
+    assert emitted[(TEST_EXECUTION_ID, "review_completed")] == 7
+
+    coordinator.report_result(
+        "worker-0",
+        TEST_EXECUTION_ID,
+        0,
+        0,
+        TaskResult(shard=ListShard(refs=[])),
+        CounterSnapshot(counters={"review/completed": CounterEntry(10)}, generation=2),
+        run.stage_generation,
+    )
+    coordinator.heartbeat("worker-0", {TEST_EXECUTION_ID: live})
+    coordinator._publish_telemetry()
+    assert emitted[(TEST_EXECUTION_ID, "review_completed")] == 10
+
+
+def test_dedicated_execution_exports_final_counters_without_periodic_snapshot(local_client, tmp_path, monkeypatch):
+    emitted = []
+
+    class Gauge:
+        def __init__(self, name):
+            self.name = name
+
+        def set(self, value, *, attributes=None):
+            emitted.append((self.name, value, attributes))
+
+    monkeypatch.setattr(coordinator_module.telemetry, "gauge", lambda name, **_kwargs: Gauge(name))
+    monkeypatch.setattr(ZephyrCoordinator, "_publish_telemetry", lambda _self: None)
+    context = ZephyrContext(
+        client=local_client,
+        max_workers=1,
+        resources=ResourceConfig(cpu=1, ram="512m"),
+        chunk_storage_prefix=str(tmp_path / "chunks"),
+        name=f"test-final-counters-{uuid.uuid4().hex[:8]}",
+    )
+
+    def count_item(value):
+        counters.pipeline.update_counter("review/cache_hits", 1)
+        return value
+
+    result = context.execute(Dataset.from_list([1, 2]).map(count_item))
+    assert sorted(result.results) == [1, 2]
+    assert (
+        "review_cache_hits",
+        2,
+        {"run": result.execution_id, "source_kind": "gauge", "source_temporality": "current_snapshot"},
+    ) in emitted
 
 
 def test_report_from_a_previous_stage_is_rejected(coordinator):

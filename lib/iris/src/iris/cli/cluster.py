@@ -25,6 +25,7 @@ from connectrpc.errors import ConnectError
 from finelog.deploy.cli import down_cmd, logs_cmd, restart_cmd, status_cmd, up_cmd
 from rigging.config_discovery import list_cluster_configs
 from rigging.provenance import Provenance
+from rigging.secrets import SecretResolutionError, as_secret_spec, resolve_secret_spec
 from rigging.timing import Duration, ExponentialBackoff, Timestamp
 from rigging.token_authority import SigningKey, generate_ed25519_keypair, signing_key_from_private_pem
 
@@ -41,7 +42,10 @@ from iris.cli.connect import IRIS_CLUSTER_CONFIG_DIRS, require_controller_url, r
 from iris.cluster.composer import build_base_worker_config, provider_bundle
 from iris.cluster.config import (
     KUBERNETES_WORKER_RUNTIME,
+    IrisClusterConfig,
+    assert_no_inlined_secrets,
     make_local_config,
+    resolve_principal_references,
     slice_template_zone,
 )
 from iris.cluster.controller.autoscaler.scaling_group import (
@@ -58,11 +62,11 @@ from iris.cluster.controller.rollout import (
     write_rollout_record,
 )
 from iris.cluster.dashboard_common import VUE_DIST_DIR
-from iris.cluster.inject_env import with_injected_task_env
 from iris.cluster.local_cluster import LocalCluster
 from iris.cluster.platforms.factory import ProviderBundle
 from iris.cluster.platforms.gcp.worker_bootstrap import build_worker_bootstrap_script
 from iris.cluster.platforms.gcp.workers import GcpWorkerProvider
+from iris.cluster.platforms.k8s.controller import PRINCIPAL_DIRECTORY_ENV_VAR, resolve_controller_secrets
 from iris.cluster.platforms.types import Labels
 from iris.cluster.provenance import is_same_image_provenance, provenance_from_proto
 from iris.rpc import controller_pb2, job_pb2, query_pb2, vm_pb2
@@ -115,6 +119,22 @@ def _fetch_worker_bootstrap_rows(client, worker_ids: list[str]) -> dict[str, Wor
 # =============================================================================
 # Helpers
 # =============================================================================
+
+
+def _preflight_principal_references(config: IrisClusterConfig) -> IrisClusterConfig:
+    try:
+        if config.controller.controller_kind() != "local":
+            assert_no_inlined_secrets(config)
+        if config.auth and config.auth.principal_directory:
+            if config.controller.controller_kind() == "coreweave":
+                directory = resolve_controller_secrets(config)[PRINCIPAL_DIRECTORY_ENV_VAR]
+            else:
+                directory = resolve_secret_spec(as_secret_spec(config.auth.principal_directory)).value
+            auth = config.auth.model_copy(update={"principal_directory": directory})
+            config = config.model_copy(update={"auth": auth})
+        return resolve_principal_references(config)
+    except (ValueError, SecretResolutionError) as e:
+        raise click.ClickException(f"Principal directory preflight failed: {e}") from e
 
 
 def _format_timestamp(ms: int) -> str:
@@ -679,7 +699,10 @@ def cluster_start(ctx, local: bool, fresh: bool, task_image_platforms: str | Non
         raise click.ClickException("--config is required for cluster start")
     if local:
         config = make_local_config(config)
+    resolved_config = _preflight_principal_references(config)
     is_local = config.controller.controller_kind() == "local"
+    if is_local:
+        config = resolved_config
     if not is_local:
         provenance = get_git_provenance()
         _pin_latest_images(config, provenance, task_image_platforms)
@@ -764,6 +787,10 @@ def cluster_stop(ctx, dry_run: bool):
 @click.pass_context
 def cluster_restart(ctx):
     """Restart cluster by stopping then starting."""
+    config = ctx.obj.get("config")
+    if not config:
+        raise click.ClickException("--config is required for cluster restart")
+    _preflight_principal_references(config)
     ctx.invoke(cluster_stop)
     click.echo("")
     ctx.invoke(cluster_start)
@@ -873,7 +900,9 @@ def cluster_create_slice(ctx, scale_group_name: str):
     # Verify the controller is reachable before creating the slice. The
     # returned URL may be a tunnel endpoint that's only reachable from the CLI
     # host; workers need the cluster-internal address instead, resolved below.
-    require_controller_url(ctx)
+    controller_url = require_controller_url(ctx)
+    with rpc_client_for_ctx(ctx, url=controller_url) as client:
+        worker_token = client.renew_worker_token(controller_pb2.Controller.RenewWorkerTokenRequest()).token
     bundle = ctx.obj.get("provider_bundle") or provider_bundle(config)
 
     # Resolve the address workers will connect to. Prefer an explicit value in
@@ -891,13 +920,11 @@ def cluster_create_slice(ctx, scale_group_name: str):
 
     # Build the worker config through the same helper the controller uses, so a
     # manually created slice matches its autoscaler-provisioned peers.
-    # ``with_injected_task_env`` folds operator-injected env (defaults.inject_env)
-    # into task_env; the worker token is minted controller-side, hence the empty one.
     base_worker_config = build_base_worker_config(
-        with_injected_task_env(config),
+        config,
         controller_address=worker_controller_address,
         storage_prefix=config.storage.remote_state_dir,
-        auth_token="",
+        auth_token=worker_token,
     )
 
     worker_config = build_worker_config_for_group(base_worker_config, sg_config)
@@ -1285,6 +1312,7 @@ def controller_restart(
     if not config:
         raise click.ClickException("--config is required")
 
+    _preflight_principal_references(config)
     is_local = config.controller.controller_kind() == "local"
     if is_local:
         raise click.ClickException(
@@ -1621,18 +1649,16 @@ def worker_restart(
     if not worker_controller_address:
         worker_controller_address = bundle.controller.discover_controller(config.controller)
 
-    # Same helper and empty-token rationale as cluster_create_slice, so a
-    # restarted worker matches its autoscaler-provisioned peers.
-    base_worker_config = build_base_worker_config(
-        with_injected_task_env(config),
-        controller_address=worker_controller_address,
-        storage_prefix=config.storage.remote_state_dir,
-        auth_token="",
-    )
-
     scale_groups = dict(config.scale_groups)
 
     with rpc_client_for_ctx(ctx, url=controller_url) as client:
+        worker_token = client.renew_worker_token(controller_pb2.Controller.RenewWorkerTokenRequest()).token
+        base_worker_config = build_base_worker_config(
+            config,
+            controller_address=worker_controller_address,
+            storage_prefix=config.storage.remote_state_dir,
+            auth_token=worker_token,
+        )
         workers_resp = client.list_workers(controller_pb2.Controller.ListWorkersRequest())
         all_workers = workers_resp.workers
 

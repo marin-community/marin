@@ -71,7 +71,7 @@ const gauges = computed<Gauge[]>(() =>
         }
       }
       const kind =
-        gap.status === RUN_STATUS.INFRA_FAILED
+        gap.status === RUN_STATUS.INFRA_FAILED || gap.status === 'running'
           ? 'infra'
           : gap.status === RUN_STATUS.ARTIFACT_FAILED
             ? 'artifact'

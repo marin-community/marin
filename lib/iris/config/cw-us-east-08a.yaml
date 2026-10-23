@@ -19,7 +19,7 @@
 #
 # Workflow:
 #   1. Set CoreWeave AI Object Storage credentials (console -> Object Storage ->
-#      Access Keys). `iris cluster start` turns them into the iris-task-env
+#      Access Keys). `iris cluster start` turns them into the iris-storage-secrets
 #      Secret (addressing style is derived from the endpoint domain):
 #        export CW_KEY_ID=<coreweave-access-key-id>
 #        export CW_KEY_SECRET=<coreweave-access-key-secret>
@@ -44,6 +44,7 @@ finelog:
 # egress (scripts/install_cw_network.py); there is no off-cluster user surface.
 dashboard_url: https://iris-cw-us-east-08a.oa.dev
 federation_public_parent: https://iris.oa.dev
+budget_parent: marin
 endpoints:
   /system/zephyr-history:
     uri: https://marina.oa.dev/zephyr/
@@ -100,15 +101,16 @@ storage:
 # `signing_key` signs this controller's worker and /proxy tokens. The controller pod
 # has no GCP credentials, so `iris cluster up` resolves the Secret Manager reference in
 # the operator's shell and projects it as IRIS_SIGNING_KEY through the
-# iris-controller-env Secret, which task pods do not mount. Rotate with
+# iris-controller-secrets Secret, which task pods do not mount. Rotate with
 # `iris cluster init-keys --rotate`.
 #
 # The iris-cw-us-east-08a-signing-key secret does NOT exist yet — mint it with
 # `iris cluster init-keys` and register this cluster's public half in the marin /
 # marin-dev federation_peers before first start.
 auth:
+  principal_directory:
+    - gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
   signing_key:
-    - env:IRIS_SIGNING_KEY
     - gcp-secret://projects/748532799086/secrets/iris-cw-us-east-08a-signing-key/versions/1
   trusted_cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8, "::1/128"]
   federation_peers:
@@ -123,13 +125,20 @@ auth:
   # GitHub GPU workflows submit through the marin hub as github-iris; the
   # remaining non-openathena identities are interactive principals.
   allowed_submitters:
+    - principal:human-080
     - "*@openathena.ai"
     - github-iris@hai-gcp-models.iam.gserviceaccount.com
     - contractor@hai-gcp-models.iam.gserviceaccount.com
     - ravwojdyla@rav-openathena.iam.gserviceaccount.com
+    - wg0420@princeton.edu
 
 kubernetes_provider:
   namespace: iris
+  node_health:
+    storage:
+      scratch: s3://marin-us-east-08a/tmp/ttl=1d/iris-node-health/cw-us-east-08a
+      minimum_healthy_nodes: 2
+    max_cordoned_nodes: 1
   host_network: true                # Required for NCCL/IB multi-host traffic
   cache_dir: /mnt/local/iris-cache  # NVMe; default /cache hits the 15GB ramdisk on bare-metal nodes
   cache_max_age:
@@ -146,6 +155,7 @@ controller:
     port: 10000
     service_name: iris-controller-svc
     scale_group: cpu-erapids
+    hostname: g8fc280
     # Off-cluster reach is the operator-managed, IP-locked federation ingress
     # (docs/coreweave.md, scripts/install_cw_network.py).
 
@@ -158,10 +168,8 @@ defaults:
     scale_down_delay:
       milliseconds: 300000
   task_env:
-    # Durable outputs remain in 02A. All lifecycle-managed temporary writes use
-    # the region-local 08A bucket; rigging adds the tmp/ttl=Nd prefixes.
+    # Durable outputs remain in 02A; shared scratch uses the separate 08A bucket.
     MARIN_PREFIX: s3://marin-us-east-02a/marin
-    MARIN_TEMP_PREFIX: s3://hero-checkpoints
     # Task pods carry one CoreWeave endpoint/credential set valid for both buckets.
     # GB200 hostNetwork pods also see IB and SR-IOV link-local interfaces. Exclude
     # IB/IPoIB (ibs*, ibp*) and virtual interfaces so NCCL's bootstrap socket falls
@@ -175,10 +183,6 @@ defaults:
     cache_dir: /mnt/local/iris-cache
     runtime: kubernetes
     default_task_image: ghcr.io/marin-community/iris-task:latest
-
-user_budget_defaults:
-  budget_limit: 5680
-  max_band: interactive
 
 scale_groups:
   cpu-erapids:
@@ -224,33 +228,3 @@ scale_groups:
       coreweave:
         region: US-EAST-08A
         instance_type: gb200-4x
-
-# 128000 is about one NVL72 rack: 18 gb200-4x nodes cost ~102,000.
-user_budgets:
-  - user_ids:
-      - betsy
-      - eczech
-      - larry
-      - marin
-      - zack
-    budget_limit: 128000
-    max_band: PRIORITY_BAND_INTERACTIVE
-  - user_ids:
-      - ben.feuer@openathena.ai
-      - benjaminfeuer
-      - david.hall@openathena.ai
-      - dlwh
-      - mark.muchane@openathena.ai
-      - muchanem
-      - matt.wittmann@openathena.ai
-      - mwittmann
-      - rafal.wojdyla@openathena.ai
-      - rav
-      - romain.yon@openathena.ai
-      - romain
-      - russell.power@openathena.ai
-      - power
-      - will.held@openathena.ai
-      - held
-    budget_limit: 0
-    max_band: PRIORITY_BAND_INTERACTIVE

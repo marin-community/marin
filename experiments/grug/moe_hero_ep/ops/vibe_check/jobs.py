@@ -33,6 +33,9 @@ MAX_ATTEMPTS = 3
 # checkpoint restore. Keep enough margin that a slow node does not discard a finished attempt:
 # the job holds no partial result, and a timeout consumes one of MAX_ATTEMPTS.
 SAMPLING_TIMEOUT = Duration.from_hours(6)
+# Queue wait makes one sample set take about 40 hours, and the hero writes a permanent checkpoint
+# about every 28 hours. One active job falls behind, so the next mode keeps two jobs active.
+MAX_ACTIVE_JOBS = 2
 
 
 class SubmissionMode(StrEnum):
@@ -61,7 +64,7 @@ def submit_pending(
     priority_band: int | None = None,
     submission: SubmissionMode = SubmissionMode.NEXT,
 ) -> None:
-    """Submit the next request or all discovered requests. The workflow serializes callers."""
+    """Fill the free active-job slots, or submit all discovered requests. The workflow serializes callers."""
     if priority_band is not None:
         priority_band_rank(priority_band)
     for request in requests:
@@ -73,9 +76,9 @@ def submit_pending(
     saved_requests = store.requests(spec)
     current_names = {name for request in saved_requests for name in sample_job_names(request)}
     active = {name for name, state in states.items() if name in current_names and state not in TERMINAL_JOB_STATES}
-    if active and submission == SubmissionMode.NEXT:
+    if len(active) >= MAX_ACTIVE_JOBS and submission == SubmissionMode.NEXT:
         logger.info("Waiting for active jobs: %s", active)
-        return  # Wait for teardown even if the active job already wrote its result.
+        return  # Wait for teardown even if an active job already wrote its result.
     completed = store.completed_ids()
     attempts = store.attempt_names()
     priorities = store.priorities()
@@ -107,7 +110,7 @@ def submit_pending(
     if not pending:
         logger.info("No pending sample sets; %d completed", len(completed))
         return
-    selected = pending[:1] if submission == SubmissionMode.NEXT else pending
+    selected = pending[: MAX_ACTIVE_JOBS - len(active)] if submission == SubmissionMode.NEXT else pending
     for request, name in selected:
         store.save_attempt(name)  # A lost or pruned job still consumes this attempt.
         jobs.submit(request, name, priorities.get(request.sample_id, job_pb2.PRIORITY_BAND_BATCH))

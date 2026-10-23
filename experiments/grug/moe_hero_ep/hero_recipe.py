@@ -29,7 +29,10 @@ from experiments.grug.moe_hero_ep.train import (
 from experiments.marin_tokenizer import marin_tokenizer
 
 DEFAULT_WANDB_PROJECT = "marin_moe"
-HERO_EP_BATCH_SIZE = 1024
+# The hero started at 4K context with 1024 sequences per rack. Every later context keeps those tokens
+# per rack per update.
+HERO_INITIAL_SEQ_LEN = 4096
+HERO_TOKENS_PER_RACK = 1024 * HERO_INITIAL_SEQ_LEN
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
@@ -55,6 +58,13 @@ HERO_MODEL_CONFIG = dataclasses.replace(
     qb_estimator=QbEstimator.HIST,
     qb_hist_bins=HERO_QB_HIST_BINS,
 )
+
+
+def hero_rack_batch_size(seq_len: int) -> int:
+    """Sequences per rack that hold the hero's tokens per rack at ``seq_len``."""
+    if HERO_TOKENS_PER_RACK % seq_len:
+        raise ValueError(f"seq_len={seq_len} must divide the hero's {HERO_TOKENS_PER_RACK} tokens per rack")
+    return HERO_TOKENS_PER_RACK // seq_len
 
 
 def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:

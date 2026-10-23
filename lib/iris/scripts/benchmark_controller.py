@@ -2258,7 +2258,7 @@ def serve_cmd(db_path: Path, state_dir: Path) -> None:
         log_service_address="",
         local_log_dir=config.local_state_dir / "log-server",
         host=config.host,
-        worker_token=None,
+        worker_token_provider=None,
     )
     controller = Controller(config=config, log_stack=log_stack, db=db, threads=threads)
     controller.register_backend(FakeProvider())
