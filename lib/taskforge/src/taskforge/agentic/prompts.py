@@ -117,9 +117,10 @@ with commas, tabs or spaces."""
 gets a shell and the task's files in /workspace on a Linux machine: a bubblewrap sandbox with bash, coreutils, grep, \
 sed, awk, find and similar tools, and no network. Such a task sets environment_requirements.command_semantics to \
 "linux_process".
-- The solver has python3 only when the task sets environment_requirements.package_spec to a PackageSpec with \
-pypi_packages, and declares the capability "python", as /workspace/example_build.py does. An empty pypi_packages \
-gives the standard library. List each PyPI package with its version, for example "numpy==2.3.4", to install it."""
+- A task whose solver uses Python declares the capability "python" and sets environment_requirements.package_spec \
+to a PackageSpec with pypi_packages, as /workspace/example_build.py does: the solver's python3 is then a Python of \
+its own. An empty pypi_packages gives the standard library. List each PyPI package with its version, for example \
+"numpy==2.3.4", to install it."""
     ),
 }
 """The description of the solver's machine in the agent prompt, for each solver backend."""

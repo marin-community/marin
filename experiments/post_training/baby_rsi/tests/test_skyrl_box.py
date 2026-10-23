@@ -70,7 +70,8 @@ def test_the_box_returns_the_feed_in_order_and_a_resumed_box_continues(tmp_path)
 
     # The skipped task does not come back.
     assert asyncio.run(run(root, [f"t{k}" for k in range(5)], groups=4)) == ["t0", "t1", "t3", "t4"]
-    assert asyncio.run(run(root, ["u0", "u1"], groups=2)) == ["u0", "u1"]
+    # ``groups`` counts the whole run, also the groups that the job graded before a restart.
+    assert asyncio.run(run(root, ["u0", "u1"], groups=6)) == ["u0", "u1"]
 
     # A resumed box writes after the last task of the feed.
     feed = {}

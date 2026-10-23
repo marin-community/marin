@@ -33,6 +33,7 @@ from taskforge.agentic.parallel import ParallelWeb
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.glm_client import GlmClient, Pool
 from taskforge.llm.policy import LLMPolicy, ReasoningEffort
+from transformers import AutoTokenizer
 
 from experiments.post_training.baby_rsi.evaluate import Evaluation, eval_policy, group_record, write_jsonl
 from experiments.post_training.baby_rsi.feedback import (
@@ -55,7 +56,7 @@ from experiments.post_training.baby_rsi.resume import (
 )
 from experiments.post_training.baby_rsi.rollouts import PolicyRunner, TaskRollouts, rollout_engine
 from experiments.post_training.baby_rsi.seed import POOL_URL, TRAIN_FILE, VALIDATION_FILE, TaskPool
-from experiments.post_training.baby_rsi.skyrl_box import FeedConfig, live_policy, skyrl_train, written_tasks
+from experiments.post_training.baby_rsi.skyrl_box import FeedConfig, LivePolicy, skyrl_train, written_tasks
 from experiments.post_training.baby_rsi.streams import Source, from_iterable, mix
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 from experiments.post_training.capability_driven_envs.generate_tasks_agentic import (
@@ -92,7 +93,7 @@ SOLVER_ROLLOUTS_PER_TASK = 160
 cheap, and a weak policy needs more rounds to bring a task into the gate's band."""
 ANALYSIS_POLICY = LLMPolicy(reasoning_effort=ReasoningEffort.LOW, max_tokens=32768)
 FEED_POLL_SECONDS = 10.0
-UPLOAD_EVERY_GROUPS = 64
+UPLOAD_EVERY_GROUPS = 8
 
 
 @dataclass(frozen=True)
@@ -375,9 +376,8 @@ async def _skyrl_run(options: SkyrlOptions, *, feedback: FeedbackOptions | None)
         else:
             sampling = Sampling(temperature=1.0, top_p=1.0, max_tokens=options.max_tokens)
             chat_template = {"enable_thinking": options.thinking}
-            solver = await live_policy(
-                feed.root, options.model, sampling, MAX_MODEL_LEN, chat_template_kwargs=chat_template
-            )
+            tokenizer = AutoTokenizer.from_pretrained(options.model)
+            solver = LivePolicy(feed.root, tokenizer, sampling, MAX_MODEL_LEN, chat_template)
             boxes = await _feedback_boxes(stack, feedback, solver, trainer, output, written)
             config = LoopConfig(
                 max_pass_rate=feedback.max_pass_rate,
