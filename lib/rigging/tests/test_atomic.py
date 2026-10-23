@@ -4,7 +4,8 @@
 from pathlib import Path
 
 import pytest
-from rigging.filesystem.atomic import atomic_rename, fetch_file_atomic, unique_temp_path
+from rigging.filesystem.atomic import atomic_rename, fetch_file_atomic, unique_temp_path, write_bytes_atomic
+from rigging.filesystem.storage_path import StoragePath
 
 
 def test_unique_temp_path_produces_distinct_paths():
@@ -72,3 +73,12 @@ def test_fetch_file_atomic_failure_preserves_destination_and_cleans_temp(tmp_pat
 
     assert destination.read_bytes() == b'{"version": 1}'
     assert [path.name for path in destination.parent.iterdir()] == ["tokenizer.json"]
+
+
+@pytest.mark.parametrize("remote", [False, True])
+def test_write_bytes_atomic_replaces_complete_file_and_creates_parent(tmp_path, remote):
+    path = f"memory://{tmp_path.name}/nested/out.bin" if remote else str(tmp_path / "nested" / "out.bin")
+    write_bytes_atomic(path, b"old payload")
+    write_bytes_atomic(path, b"new")
+    assert StoragePath(path).read_bytes() == b"new"
+    assert StoragePath(path + ".tmp.*").glob() == []

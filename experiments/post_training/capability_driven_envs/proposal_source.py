@@ -12,16 +12,15 @@
    machine that does not fit its environment, a slot in an environment the host lacks, or too many
    slots on one environment x verification pairing, and the model gets one repair.
 2. ``write(idea, portfolio, slot)``: for one proposed slot, independent of every other, GLM writes a
-   proposal document in the ``stage10_proposal`` markdown format, thinking first. The request decodes under
-   ``stage10_proposal.model.document_regex``. The regex fixes the front matter's keys, their order,
-   the enum values, the id and source lines and the body's headings. Continuations stay off, since
-   a continuation would restart the regex in the middle of the document.
+   proposal document in the ``stage10_proposal`` JSON format, thinking first. The request decodes under
+   schema derived from the proposal dataclasses, with fixed id and source fields. Continuations
+   stay off because a continuation would restart the JSON grammar inside the object.
 
 A slot fails alone, as a ``SlotFailure``, when the output limit cuts its document off or when its
 model call runs out of retries or is rejected (``ModelUnavailable``, ``ModelRequestRejected``); the
 batch keeps the plan and every other slot. When the parser refuses a document on a rule outside the
-regex, such as the research citations or the research decision against its list, GLM gets one
-repair request under the same regex. The repair request keeps the prior reply as the assistant turn
+schema, such as the research citations or the research decision against its list, GLM gets one
+repair request under the same schema. The repair request keeps the prior reply as the assistant turn
 and quotes the parse error. A slot the plan marks null becomes a proposal with ``null_reason`` set
 and costs no model call.
 
@@ -301,40 +300,30 @@ CAPABILITY RECORD:
 {pretty_json(capability_idea_record(idea))}"""
 
 
-TEMPLATE_HEADER = """---
-id: "{id}"
-source: {{kind: capability, ref: "{ref}", hash: "{hash}"}}
-grounding: unverified
-null_reason: null
-environment: <reasoning | shellsim | container>
-solver_machine: <none (reasoning only) | shellsim | cpython | packages, or null for container>
-verification: <{verifications}>
-composite: []
-research_need: <needed | not_needed>
-research_reason: "<one line: what does or does not require looking anything up>"
-research:
-  - {{kind: <web | github>, purpose: "<what to find and why; desired properties and a fallback>"}}
-build:
-  - "<short-artifact-name>": "<one line: what this build artifact is and how it is checked>"
-resources: ["<relative/path/of/a/file/the/build/produces>", "<another>"]
----
-"""
-
-
 def document_template(proposal_id: str, idea: CapabilityIdea) -> str:
-    """Build the document skeleton the proposal prompt shows, front matter keys in ``HEADER_KEYS`` order.
-
-    The id, source and grounding lines and ``null_reason: null`` are literal. Placeholders stand in
-    for the other values and for each section's text.
-    """
-    headings = "\n".join(f"## {h}\n<...>\n" for h in REQUIRED_HEADINGS)
-    header = TEMPLATE_HEADER.format(
-        id=proposal_id,
-        ref=idea.capability_id,
-        hash=idea.capability_hash,
-        verifications=" | ".join(OFFERED_VERIFICATIONS),
+    """Show the JSON object and Markdown sections the proposal must contain."""
+    return pretty_json(
+        {
+            "header": {
+                "id": proposal_id,
+                "source": {"kind": "capability", "ref": idea.capability_id, "hash": idea.capability_hash},
+                "grounding": "unverified",
+                "null_reason": None,
+                "environment": "<reasoning | shellsim | container>",
+                "solver_machine": "<none (reasoning only) | shellsim | cpython | packages, or null for container>",
+                "verification": " | ".join(OFFERED_VERIFICATIONS),
+                "composite": [],
+                "research_need": "<needed | not_needed>",
+                "research_reason": "<what does or does not require looking anything up>",
+                "research": [{"kind": "<web | github>", "purpose": "<what to find, desired properties and fallback>"}],
+                "build": [
+                    {"name": "<short-artifact-name>", "description": "<what this artifact is and how it is checked>"}
+                ],
+                "resources": ["<relative/path/of/a/file/the/build/produces>"],
+            },
+            "body": "\n".join(f"## {heading}\n<...>\n" for heading in REQUIRED_HEADINGS),
+        }
     )
-    return header + headings
 
 
 SECTION_GUIDE = """- Task: the realistic user request as the solver sees it; the concrete visible inputs and
@@ -375,18 +364,14 @@ unless developing the design shows otherwise; if you change it, say why in the R
 def proposal_prompt(idea: CapabilityIdea, plan: SlotPlan, slot: PlannedSlot, proposal_id: str) -> str:
     """Build the request for the proposal document of ``slot``, quoting the whole portfolio."""
     return f"""Develop ONLY slot {slot.slot} of the portfolio below into a detailed construction blueprint,
-written as one markdown document with YAML front matter in exactly this format:
+written as one JSON object containing a typed header and a Markdown body in this format:
 
 {document_template(proposal_id, idea)}
 Format rules:
-- Reply with the document only. The first line is `---`. No code fences around it.
-- Copy the id, source, and grounding lines exactly as shown. null_reason comes next and is
-  `null` for a proposed task.
-- The front matter has exactly these twelve keys, all required, in this order. Write every key,
-  including composite, research, build, and resources when a list is empty (`[]`).
-- composite: always `[]`.
-- Double-quote every string value. Inside a quoted value use single quotes, never a double
-  quote or a backslash, and keep the value on one line.
+- Reply with the JSON object only, without a surrounding code fence.
+- Copy header.id, header.source and header.grounding exactly as shown. header.null_reason is
+  null for a proposed task. Include every header field, including empty lists.
+- composite: always []. Encode newlines, quotes and backslashes with standard JSON escapes.
 - {SOLVER_MACHINE_RULE}
 - research_need decides whether building this task requires looking anything up. It is
 {indent(RESEARCH_DECISION_CRITERION, "  ")}
@@ -396,11 +381,11 @@ Format rules:
   github only; when it is not_needed, `research: []`.
 - Every lookup the body mentions (a web or repository search, a contamination or name-collision
   search, a license or version check, reading external documentation) is one of the research
-  entries, and the body cites it as `research[i]` (0-based, in front-matter order) where it is
+  entries, and the body cites it as `research[i]` (0-based, in research array order) where it is
   mentioned. A lookup not worth an entry is not worth mentioning. If research_need is not_needed,
   the body mentions no lookup, search, browsing, or external-source check anywhere.
-- build: one entry per build artifact, as a one-entry mapping from a short name to a one-line
-  description. The Build plan section explains each one.
+- build: one entry per build artifact, with a short name and a one-line description.
+  The Build plan section explains each one.
 - resources: relative paths (globs allowed) of the files the build will produce.
 - The body has these level-two headings, once each, in this order:
   {", ".join(f"`## {h}`" for h in REQUIRED_HEADINGS)}. Use `###` or lists inside a section.
@@ -419,7 +404,7 @@ evaluation tasks. Solver and grader execute separately: code verification does n
 container for the solver.
 
 If the slot cannot be made credible, write a substantive, double-quoted reason as the value of
-null_reason instead of `null`, keep the other front-matter keys (research_need may be not_needed
+null_reason instead of `null`, keep the other header fields (research_need may be not_needed
 with `research: []`, and build and resources may be empty lists), and write a short body explaining
 why. A null proposal is better than a contrived or ungradable one.
 
@@ -525,7 +510,7 @@ def _portfolio_slot(slot: PlannedSlot) -> PortfolioSlot:
 async def author_proposal(
     model: ModelClient, policy: LLMPolicy, idea: CapabilityIdea, plan: SlotPlan, slot: PlannedSlot
 ) -> SlotOutcome:
-    """Have GLM write the proposal document of ``slot`` under the document regex, repairing it once.
+    """Have GLM write the proposal document of ``slot`` under the proposal JSON schema, repairing it once.
 
     Both requests carry ``document_request_fields`` and run with continuations off, so a reply the
     output limit cuts off comes back as a ``SlotFailure``. So does a request that raises one of

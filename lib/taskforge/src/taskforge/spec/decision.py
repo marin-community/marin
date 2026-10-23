@@ -66,7 +66,7 @@ TASK_GRADER_REASON = "decision_model: graded on the host by the decision grader 
 TRIAL_GRADER_REASON = "decision_model: graded on the host after the trial"
 """The ``NoGrader.reason`` a decision task's trial runs under (``trial_form``)."""
 
-# The question, its levels and the rubric's view are WS10d v3's form DE verbatim (the verifier v3 measured).
+# Credit follows agreement with the reference, allowing equivalent notation and wording.
 LEVELS = (
     "missing: the candidate does not address this (empty, off-task, or only keywords)",
     "contradicts the reference: the candidate addresses it but its content disagrees with the reference",
@@ -263,9 +263,6 @@ def known_correct_check(levels: Mapping[str, float]) -> KnownCorrectCheck:
     is the lowest read, capped at "equivalent", so every known-correct candidate passes; the reference is in
     the set, so the bar never rejects the positive control.
 
-    This check is not decided. It is kept in this one function, called only by
-    ``sandbox_effects.calibrate_decision_grader``, so dropping or switching it touches nothing else: a
-    replacement that returns ``KnownCorrectCheck(None, None)`` accepts every grader at the ``PARTIAL_LEVEL`` bar.
     """
     if not levels:
         return KnownCorrectCheck("no known-correct candidate was read", None)

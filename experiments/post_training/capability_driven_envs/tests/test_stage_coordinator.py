@@ -3,6 +3,9 @@
 
 """The stage coordinator runs the catalog entry ``d43.culinary.scaling`` to an accepted task."""
 
+import json
+from functools import partial
+
 import pytest
 
 # These tests run in the marin-taskforge package environment; environments without it skip them.
@@ -14,6 +17,7 @@ from pydantic import BaseModel
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.models import TaskSpec
+from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
@@ -87,23 +91,26 @@ def catalog_proposal(idea: CapabilityIdea) -> TaskProposal:
     sections["Task"] = f"{idea.capability['outcome']} {SECTION}"
     body = "\n\n".join(f"## {heading}\n{text}" for heading, text in sections.items())
     return parse(
-        f"""---
-id: "{idea.capability_id}/0"
-source: {{kind: capability, ref: "{idea.capability_id}", hash: "{idea.capability_hash}"}}
-grounding: unverified
-null_reason: null
-environment: shellsim
-solver_machine: shellsim
-verification: answer_in_box
-composite: []
-research_need: not_needed
-research_reason: "the example program draws its own recipe"
-research: []
-build: []
-resources: []
----
-{body}
-"""
+        json.dumps(
+            {
+                "header": {
+                    "id": f"{idea.capability_id}/0",
+                    "source": {"kind": "capability", "ref": idea.capability_id, "hash": idea.capability_hash},
+                    "grounding": "unverified",
+                    "null_reason": None,
+                    "environment": "shellsim",
+                    "solver_machine": "shellsim",
+                    "verification": "answer_in_box",
+                    "composite": [],
+                    "research_need": "not_needed",
+                    "research_reason": "the example program draws its own recipe",
+                    "research": [],
+                    "build": [],
+                    "resources": [],
+                },
+                "body": f"{body}\n",
+            }
+        )
     )
 
 
@@ -131,7 +138,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         load_program=load_program,
         build=run_build,
         validate=validate,
-        review=default_review,
+        review=partial(default_review, band=BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND}))),
     )
     model = UnusedModel()
     sampling = LLMPolicy()
@@ -140,7 +147,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
         images=None,
         web_tools=(),
-        ledger=None,
+        ledger=DiscardingLedger(),
         reasoning_replay=ReasoningReplay.KEEP,
         agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
         decision=None,
@@ -150,7 +157,6 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         budget=WorkpieceBudget(
             max_triage_repairs=0, max_build_revisions=0, max_validation_retries=0, max_modify_rounds=0
         ),
-        band=BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND})),
         root=tmp_path,
         event_store=JsonEventStore(tmp_path),
         model=model,

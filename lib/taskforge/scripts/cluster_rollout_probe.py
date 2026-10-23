@@ -23,7 +23,7 @@ Phases, each ``k`` trials through ``taskforge.stage50_validate.trials.run_trials
 
 - ``math``: a null-environment numeric task (no machine).
 - ``docker``: a task on a digest-pinned public image on
-  ``machine_factories(MachineHost.IRIS, controller_url)`` as shipped, with the
+  ``machine_factories((Backend.GVISOR,), controller_url)`` as shipped, with the
   task's ``IRIS_CONTROLLER_URL``. Its script grader runs in a separate verifier machine started from
   the same image, which receives the agent's ``/workspace/sum.txt`` as an artifact.
 
@@ -50,7 +50,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
-from rigging.timing import ExponentialBackoff
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.image import RegistryImage
 from shellbox.machine import (
@@ -84,15 +83,14 @@ from taskforge.spec.draft import (
     assemble,
     file,
     grader_environment,
-    lower,
-    machine,
     requirements,
     rollout_limits,
     script_grader,
 )
-from taskforge.stage50_validate.evidence import Complete, Evidence
+from taskforge.stage50_validate.evidence import Evidence
+from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Graded, Outcome, TrialKind
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, rollout_steps, run_trials
+from taskforge.stage50_validate.trials import EngineSettings, RetryBackoff, TrialPlan, rollout_steps, run_trials
 
 GLM_TOKEN_ENV = "GLM_HIGH_TOKEN"
 IRIS_CONTROLLER_URL_ENV = "IRIS_CONTROLLER_URL"
@@ -133,17 +131,13 @@ COMMAND_TIMEOUT = 120
 TOOL_TURN_TIMEOUT = 240
 MODEL_TURN_TIMEOUT = 600
 CLEANUP_TIMEOUT = 120
-STARTUP_TIMEOUT = 900
 VERIFIER_TIMEOUT = 300
-DEADLINES = Deadlines(total_turn_timeout=1800, attempt_timeout=2400)
-# The builder's limits; EngineSettings and DEADLINES replace all but the verifier deadline, and
-# EngineSettings registers COMMAND_TIMEOUT with the shell harness.
 LIMITS = rollout_limits(
     max_turns=MAX_TURNS,
     model_turn_timeout=MODEL_TURN_TIMEOUT,
     tool_turn_timeout=TOOL_TURN_TIMEOUT,
-    total_turn_timeout=DEADLINES.total_turn_timeout,
-    attempt_timeout=DEADLINES.attempt_timeout,
+    total_turn_timeout=1800,
+    attempt_timeout=2400,
     verifier_timeout=VERIFIER_TIMEOUT,
     cleanup_timeout=CLEANUP_TIMEOUT,
 )
@@ -204,9 +198,7 @@ def math_task(factories: dict[str, MachineFactory]) -> TaskRolloutSpec:
         source("math"),
         environment=None,
     )
-    return lower(
-        task, host=MachineHost.IRIS, task_machine=None, verifier_machine=None, limits=LIMITS, factories=factories
-    )
+    return lower(task, MachineHost.IRIS, factories, LIMITS)
 
 
 def docker_task(factories: dict[str, MachineFactory]) -> TaskRolloutSpec:
@@ -234,15 +226,7 @@ def docker_task(factories: dict[str, MachineFactory]) -> TaskRolloutSpec:
         environment=requirements(image=IMAGE),
         files=(file("workspace/numbers.txt", NUMBERS),),
     )
-    settings = machine(startup_timeout=STARTUP_TIMEOUT)
-    return lower(
-        task,
-        host=MachineHost.IRIS,
-        task_machine=settings,
-        verifier_machine=settings,
-        limits=LIMITS,
-        factories=factories,
-    )
+    return lower(task, MachineHost.IRIS, factories, LIMITS)
 
 
 def assistant_messages(outcome: Outcome) -> list[dict[str, Any]]:
@@ -310,10 +294,10 @@ def outcome_summary(outcome: Outcome) -> dict[str, Any]:
 
 def evidence_summary(outcomes: list[Outcome]) -> dict[str, Any]:
     evidence = Evidence({TrialKind.SOLVER: tuple(outcomes)})
-    status = evidence.status
+    ungraded = evidence.ungraded
     stats = evidence.reward_stats(TrialKind.SOLVER)
     return {
-        "status": "complete" if isinstance(status, Complete) else {"incomplete": dict(status.causes)},
+        "status": "complete" if not ungraded else {"incomplete": dict(ungraded)},
         "graded": stats.graded,
         "mean_reward": stats.mean_reward,
         "solved": stats.solved,
@@ -336,23 +320,14 @@ async def run_phase(
     ledger = JsonlLedger(directory / "ledger")
     model = GlmRolloutModel(client, POLICY, CallLedger(ledger, task.id, 0, str(TrialKind.SOLVER)))
     timed = {backend: TimedFactory(factory) for backend, factory in factories.items()}
-    settings = EngineSettings(
-        factories=timed,
-        max_turns=MAX_TURNS,
-        command_timeout=COMMAND_TIMEOUT,
-        tool_turn_timeout=TOOL_TURN_TIMEOUT,
-        model_turn_timeout=MODEL_TURN_TIMEOUT,
-        cleanup_timeout=CLEANUP_TIMEOUT,
-        decision=None,
-    )
+    settings = EngineSettings(factories=timed, command_timeout=COMMAND_TIMEOUT, limits=LIMITS, decision=None)
     plan = TrialPlan(
         workpiece_id=task.id,
         round=0,
         kind=TrialKind.SOLVER,
         k=k,
-        deadlines=DEADLINES,
         max_retries=max_retries,
-        retry_backoff=ExponentialBackoff(initial=5, maximum=60),
+        retry_backoff=RetryBackoff(initial=5, maximum=60, factor=2, jitter=0.1),
         evidence_dir=directory,
         ledger=ledger,
         first_attempt=0,
@@ -410,7 +385,7 @@ async def probe(args: argparse.Namespace, token: str, controller_url: str, resul
         "phases": [],
     }
     async with GlmClient(relay, PROVIDER) as client:
-        factories = dict(machine_factories(MachineHost.IRIS, controller_url))
+        factories = dict(machine_factories((Backend.GVISOR,), controller_url))
         summary["phases"].append(
             await run_phase(Phase.MATH, math_task(factories), factories, client, results, args.k, 2)
         )

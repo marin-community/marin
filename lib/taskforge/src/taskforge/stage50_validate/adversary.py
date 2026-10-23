@@ -28,15 +28,15 @@ conversation whose steps are the agent's turns; it carries no token ids. Each su
 ``CONTROL`` trial ``s<ordinal>`` under ``<evidence_dir>/adversary/<trial>/submissions/<attempt>/``, whose attempt
 file keeps the grader's full result.
 
-An attempt that ran its loop is ``Graded`` with the grade of its last passing submission, else of its last
-submission, and ``SUBMISSION_FAILURE`` without one. An attempt whose machine did not start or whose deadline
-expired is ``Ungraded`` with the cause ``classify`` gives it, and is retried like a solver attempt. The final
+An attempt retains the outcome of its last passing submission, else its last submission, and reports
+``SUBMISSION_FAILURE`` without one. A verifier failure retains its ungraded cause. An attempt whose machine
+did not start or whose deadline expired is ``Ungraded`` with the cause ``classify`` gives it, and is retried
+like a solver attempt. The final
 reply's verdict line is recorded as the adversary's ``Claim``; whether a passing submission is a shortcut is not
 judged here.
 """
 
 import asyncio
-import copy
 import json
 import posixpath
 import tempfile
@@ -88,8 +88,15 @@ from taskforge.llm.agent import (
 from taskforge.llm.client import Completion, FinishReason, ModelClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
-from taskforge.sandbox.factories import task_refusals
-from taskforge.spec.controls import Control, Transcript, Workspace, candidate_turns
+from taskforge.sandbox.host_failures import machine_lost
+from taskforge.spec.controls import (
+    Control,
+    ScriptedModel,
+    Transcript,
+    Workspace,
+    candidate_turns,
+    context_assistant_turns,
+)
 from taskforge.spec.decision import (
     LEVELS,
     QUESTION,
@@ -99,6 +106,7 @@ from taskforge.spec.decision import (
     decision_state,
     task_decision_grader,
 )
+from taskforge.spec.draft import GRADER_RESOURCE_ROOT
 from taskforge.stage50_validate.adversary_prompts import (
     BRIEF_TEMPLATE,
     DECISION_LINE_CLAUSE,
@@ -117,27 +125,24 @@ from taskforge.stage50_validate.adversary_prompts import (
     WHITEBOX_LINE_CLAUSE,
 )
 from taskforge.stage50_validate.classify import classify
-from taskforge.stage50_validate.controls import ScriptedModel, context_assistant_turns
-from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, TrialKind, Ungraded
+from taskforge.stage50_validate.evidence import passed
+from taskforge.stage50_validate.outcome import GRADED_STATUSES, Graded, Outcome, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
     CLEANUP_ERROR_COUNT,
     EngineSettings,
     TrialPlan,
     attempt_span,
-    attempt_step,
     outcome_json,
     record_attempt,
-    refusal_detail,
+    refusal,
     require_decision_client,
     rollout_steps,
+    run_attempts,
     run_trial,
-    submission_refusal,
     task_digest,
 )
 
 SUBMIT_TOOL_NAME = "submit"
-GRADER_RESOURCE_ROOT = "/tests"
-"""Where the verifier's resources are installed on the grading machine."""
 SUBMISSIONS_DIR = "submissions"
 SUBMISSION_PREFIX = "s"
 ADVERSARY_KEY = "adversary"
@@ -147,7 +152,6 @@ CAPTURED_FILE_MODE = "644"
 FILE_PROBE_TIMEOUT = 60.0
 CONTEXT_STOP_REASON = "context"
 MACHINE_LOST_STOP_REASON = "machine_lost"
-MACHINE_LOST_MESSAGES = ("Machine is closed", "ShellSim terminated")
 GRADER_FILE_CHARS = 60_000
 """Characters of each verifier file a white-box brief shows; a longer file is cut with a marker."""
 CONTROL_CHARS = 4_000
@@ -171,7 +175,7 @@ class AdversaryPolicy:
         k: Adversary trials per round; 0 runs none.
         submissions: Verifier submissions per attempt.
         repair_submissions: The submissions within which a first accepted shortcut makes a grader repair finding.
-            The round records each submission's ordinal and grade; review applies this bound.
+            Recorded for an arbiter policy; the default review does not yet decide on adversary findings.
         max_turns: Agent turns per attempt.
         sampling: The adversary's sampling policy; an agent loop has no continuation.
         mode: What the adversary knows of the grader.
@@ -431,13 +435,6 @@ def submit_parameters(executable: bool) -> dict[str, object]:
     return {"type": "object", "properties": properties, "required": ["reply"], "additionalProperties": False}
 
 
-def passing(grade: GradeResult) -> bool:
-    """Whether a submission's grade accepts it: the grader's pass flag, else a reward at the scale's maximum."""
-    if grade.status not in GRADED_STATUSES or grade.reward is None:
-        return False
-    return grade.reward >= grade.score_max if grade.passed is None else grade.passed
-
-
 class BadPath(ValueError):
     """A listed file path is not absolute and normalized; its argument is the path."""
 
@@ -516,6 +513,7 @@ class Verifier:
     machine: Machine | None
     budget: int
     submissions: list[SubmissionRecord] = field(default_factory=list)
+    outcomes: list[Outcome] = field(default_factory=list)
 
     async def submit(self, arguments: Mapping[str, object]) -> str:
         if len(self.submissions) >= self.budget:
@@ -535,7 +533,9 @@ class Verifier:
         name = f"{SUBMISSION_PREFIX}{ordinal}"
         started = time.monotonic()
         model = ScriptedModel(candidate_turns(reply, files), context_assistant_turns(self.spec.task))
-        grade = _submission_grade(await run_trial(self.spec, self.plan, self.settings, model, name))
+        outcome = await run_trial(self.spec, self.plan, self.settings, model, name)
+        self.outcomes.append(outcome)
+        grade = _submission_grade(outcome)
         submission = SubmissionRecord(
             ordinal=ordinal,
             turn=None,
@@ -543,23 +543,21 @@ class Verifier:
             reply=reply,
             files=tuple(SubmittedFile(f"/{file.path}", _text(file)) for file in files),
             grade=grade,
-            passed=passing(grade),
+            passed=passed(grade),
             wall_time=time.monotonic() - started,
         )
         self.submissions.append(submission)
         return json.dumps(_observation(submission, self.budget))
 
 
-def trial_grade(submissions: Sequence[SubmissionRecord]) -> GradeResult:
-    """The grade of an attempt: its last passing submission's, else its last submission's when the verifier graded
-    it, else a submission failure."""
-    passed = [submission for submission in submissions if submission.passed]
-    chosen = passed[-1] if passed else submissions[-1] if submissions else None
+def trial_outcome(rollout: Rollout, submissions: Sequence[SubmissionRecord], outcomes: Sequence[Outcome]) -> Outcome:
+    """Use the last passing submission, or the last submission, preserving verifier failures."""
+    accepted = [submission for submission in submissions if submission.passed]
+    chosen = accepted[-1] if accepted else submissions[-1] if submissions else None
     if chosen is None:
-        return GradeResult(GradeStatus.SUBMISSION_FAILURE, None, "no verifier submission")
-    if chosen.grade.status not in GRADED_STATUSES:
-        return GradeResult(GradeStatus.SUBMISSION_FAILURE, None, f"the last verifier call failed: {chosen.grade.status}")
-    return chosen.grade
+        return Graded(rollout, GradeResult(GradeStatus.SUBMISSION_FAILURE, None, "no verifier submission"), False)
+    outcome = outcomes[chosen.ordinal - 1]
+    return replace(outcome, rollout=rollout)
 
 
 AGENT_STOPS: Mapping[AgentStop, str] = {
@@ -641,10 +639,7 @@ def submission_turns(run: AgentRun) -> dict[int, int]:
         for result in turn.tool_results:
             if result.call.name != SUBMIT_TOOL_NAME or result.outcome is not ToolOutcome.EXECUTED:
                 continue
-            try:
-                ordinal = json.loads(result.output).get("submission")
-            except ValueError:
-                continue
+            ordinal = json.loads(result.output).get("submission")
             if ordinal is not None:
                 turns[ordinal] = index
     return turns
@@ -673,16 +668,12 @@ async def attempt_machine(spec: TaskRolloutSpec, settings: EngineSettings, run_i
         try:
             machine = await stack.enter_async_context(
                 task_machine(
-                    spec.task, settings.factories[runtime.backend], runtime, cleanup_timeout=settings.cleanup_timeout
+                    spec.task, settings.factories[runtime.backend], runtime, cleanup_timeout=spec.limits.cleanup_timeout
                 )
             )
         except Exception as error:
             raise RolloutInterrupted(Rollout(run_id, (), "error"), RolloutOperation.START) from error
         yield machine
-
-
-def _machine_lost(error: RuntimeError) -> bool:
-    return str(error).startswith(MACHINE_LOST_MESSAGES)
 
 
 async def _agent_attempt(
@@ -706,9 +697,12 @@ async def _agent_attempt(
     finished = False
     lost = False
     cleanup_errors = 0
+    outcomes: list[Outcome] = []
     try:
         async with deadline, attempt_machine(spec, settings, run_id) as machine:
-            verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions, submissions)
+            verifier = Verifier(
+                spec, settings, submission_plan, machine, policy.submissions, submissions, outcomes=outcomes
+            )
             submit = AgentTool(
                 SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, submit_parameters(machine is not None), verifier.submit
             )
@@ -724,14 +718,17 @@ async def _agent_attempt(
                 if not agent_deadline.expired():
                     raise
             except RuntimeError as error:
-                if not _machine_lost(error):
+                if not machine_lost(error):
                     raise
                 lost = True
             finished = True
     except Exception as error:
         if not finished or deadline.expired():
-            cause = Cause.ATTEMPT_TIMEOUT if deadline.expired() else classify(error, spec.task)
-            return Ungraded(cause, "".join(traceback.format_exception(error)), None, None)
+            if deadline.expired():
+                interrupted = RolloutInterrupted(Rollout(run_id, (), "error"), RolloutOperation.ATTEMPT)
+                interrupted.__cause__ = error
+                error = interrupted
+            return Ungraded(classify(error, spec.task), "".join(traceback.format_exception(error)), None, None)
         cleanup_errors = 1
     if run is not None:
         turns = submission_turns(run)
@@ -741,18 +738,7 @@ async def _agent_attempt(
     else:
         stop = TOTAL_TURN_TIMEOUT_STOP_REASON if run is None else AGENT_STOPS[run.stop]
     rollout = agent_rollout(run_id, opening, run, stop, cleanup_errors, submissions)
-    return Graded(rollout, trial_grade(submissions), False)
-
-
-def _refused(spec: TaskRolloutSpec, settings: EngineSettings) -> Ungraded | None:
-    """The ``Ungraded`` of a trial that is not started, as ``run_trial`` refuses one."""
-    unsupported = submission_refusal(spec.task)
-    if unsupported is not None:
-        return Ungraded(Cause.SUBMISSION_UNSUPPORTED, unsupported, None, None)
-    refusals = task_refusals(spec, settings.factories)
-    if refusals:
-        return Ungraded(Cause.MACHINE_UNSUPPORTED, refusal_detail(refusals), None, None)
-    return None
+    return trial_outcome(rollout, submissions, outcomes)
 
 
 def _attempt_json(outcome: Outcome, record: AdversaryRecord) -> bytes:
@@ -775,7 +761,7 @@ async def run_adversary_trial(
     while it fails for a retryable cause, up to ``plan.max_retries`` times.
 
     Args:
-        spec: The lowered spec; ``plan.deadlines`` and ``settings`` apply to it as to every trial.
+        spec: The lowered spec; its limits already include the validation policy.
         brief: The adversary's brief.
         policy: The adversary policy.
         plan: An ``ADVERSARY`` plan; ``plan.first_attempt`` numbers the first attempt.
@@ -789,10 +775,9 @@ async def run_adversary_trial(
             attempt, as ``run_trial`` raises it.
     """
     require_decision_client(spec.task, settings)
-    spec = settings.apply(plan.deadlines.apply(spec))
     trial_digest = task_digest(spec, settings.command_timeout)
     grader_digest = digest(grader_source(spec.task))
-    refused = _refused(spec, settings)
+    refused = refusal(spec, settings.factories)
     if refused is not None:
         record = AdversaryRecord(policy.mode, brief, "", NO_CLAIM, grader_digest, ())
         with attempt_span(trial_digest, plan, trial, plan.first_attempt) as fields:
@@ -800,11 +785,8 @@ async def run_adversary_trial(
         return refused
     opening = opening_messages(spec, brief)
     system = str(opening[0]["content"])
-    backoff = copy.copy(plan.retry_backoff)
-    retries = 0
-    attempt = plan.first_attempt
-    while True:
-        step = attempt_step(plan, trial, attempt)
+
+    async def attempt_once(attempt: int, step: str) -> Outcome:
         submissions: list[SubmissionRecord] = []
         submission_plan = replace(
             plan,
@@ -830,11 +812,9 @@ async def run_adversary_trial(
                     "claim": str(claim.kind),
                 }
             )
-        if isinstance(outcome, Graded) or not outcome.retryable or retries >= plan.max_retries:
-            return outcome
-        retries += 1
-        await asyncio.sleep(backoff.next_interval())
-        attempt += 1
+        return outcome
+
+    return await run_attempts(plan, trial, attempt_once)
 
 
 _RECORD: TypeAdapter[AdversaryRecord] = TypeAdapter(AdversaryRecord)

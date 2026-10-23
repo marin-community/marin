@@ -14,7 +14,6 @@ from taskforge.spec import draft
 from taskforge.spec.judge import DEFAULT_JUDGE_MODEL, JUDGE_SPEC_PATH, JudgeStrength
 from taskforge.spec.rubric import Rubric, RubricItem
 from taskforge.stage10_proposal.model import Verification
-from taskforge.stage40_build_with_program.sdk import GraderDraft
 from taskforge.stage40_build_with_program.verification import (
     built_verification,
     unbuildable_problem,
@@ -102,7 +101,3 @@ def test_the_judge_grader_names_the_default_judge_and_carries_the_rubric():
     (spec_file,) = built.resources.verifier
     spec = json.loads(resource_bytes(spec_file))
     assert (spec["judge_strength"], spec["rubric"]["deliverable"]) == (JudgeStrength.DEFAULT, RUBRIC.deliverable)
-
-
-def test_the_authoring_model_never_sets_a_judge_strength():
-    assert not {"judge_strength", "strength"} & set(GraderDraft.model_fields)

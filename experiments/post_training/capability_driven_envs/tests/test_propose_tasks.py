@@ -42,23 +42,26 @@ REASONING_ONLY = frozenset({Environment.REASONING})
 
 def proposal_document(capability_hash: str) -> str:
     body = "\n".join(f"## {heading}\n{SECTION}\n" for heading in REQUIRED_HEADINGS)
-    return f"""---
-id: "{CAPABILITY_ID}/1"
-source: {{kind: capability, ref: "{CAPABILITY_ID}", hash: "{capability_hash}"}}
-grounding: unverified
-null_reason: null
-environment: reasoning
-solver_machine: shellsim
-verification: code
-composite: []
-research_need: not_needed
-research_reason: "the recipe and yields are synthetic"
-research: []
-build:
-  - "grader": "the private checker for the scaled quantities"
-resources: ["grader/check.py"]
----
-{body}"""
+    return json.dumps(
+        {
+            "header": {
+                "id": f"{CAPABILITY_ID}/1",
+                "source": {"kind": "capability", "ref": CAPABILITY_ID, "hash": capability_hash},
+                "grounding": "unverified",
+                "null_reason": None,
+                "environment": "reasoning",
+                "solver_machine": "shellsim",
+                "verification": "code",
+                "composite": [],
+                "research_need": "not_needed",
+                "research_reason": "the recipe and yields are synthetic",
+                "research": [],
+                "build": [{"name": "grader", "description": "the private checker for the scaled quantities"}],
+                "resources": ["grader/check.py"],
+            },
+            "body": body,
+        }
+    )
 
 
 def test_a_capability_is_proposed_and_each_proposal_triaged_by_the_preflight_without_a_model_call(tmp_path: Path):
@@ -75,7 +78,7 @@ def test_a_capability_is_proposed_and_each_proposal_triaged_by_the_preflight_wit
     assert json.loads((output / SUMMARY_FILE).read_text()) == {CAPABILITY_ID: {"1": TriageDecision.ACCEPT}}
     assert len(model.requests) == 2
     directory = output / CAPABILITY_ID
-    assert parse((directory / "slot-01.md").read_text()).header.id == f"{CAPABILITY_ID}/1"
+    assert parse((directory / "slot-01.json").read_text()).header.id == f"{CAPABILITY_ID}/1"
     verdict = Verdict.from_json((directory / "slot-01.verdict.json").read_text())
     assert (verdict.decision, verdict.reasons) == (TriageDecision.ACCEPT, ())
     assert len(json.loads((directory / "plan.completions.json").read_text())) == 1
@@ -119,10 +122,10 @@ def test_a_slot_whose_model_runs_out_of_retries_fails_alone_and_keeps_the_plan_a
     assert summary == {CAPABILITY_ID: {"1": TriageDecision.ACCEPT, "2": str(unavailable)}}
     directory = output / CAPABILITY_ID
     assert len(json.loads((directory / "plan.completions.json").read_text())) == 1
-    assert parse((directory / "slot-01.md").read_text()).header.id == f"{CAPABILITY_ID}/1"
+    assert parse((directory / "slot-01.json").read_text()).header.id == f"{CAPABILITY_ID}/1"
     assert (directory / "slot-02.failure.txt").read_text() == str(unavailable)
     assert json.loads((directory / "slot-02.completions.json").read_text()) == []
-    assert not (directory / "slot-02.md").exists()
+    assert not (directory / "slot-02.json").exists()
 
 
 def test_an_unknown_capability_is_refused_before_the_run_starts():

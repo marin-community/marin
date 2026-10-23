@@ -17,6 +17,7 @@ from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, GradingAttempt, PlainText, Source, TaskSpec
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
+from taskforge.llm.clef import budget
 from taskforge.llm.clef.budget import MAX_LENGTH, ClefTokenizer, input_tokens
 from taskforge.llm.clef.decision_client import (
     WINDOW_HEADER,
@@ -279,6 +280,17 @@ async def test_the_token_is_never_logged_or_shown(caplog, monkeypatch):
         assert TOKEN not in repr(opened)
 
 
-def test_a_window_clef_does_not_run_is_refused():
-    with pytest.raises(ValueError, match="window must be one of"):
-        config(20000)
+def test_tokenizer_download_failure_does_not_substitute_another_vocabulary(monkeypatch, tmp_path):
+    fallback = tmp_path / "fallback.json"
+    TOKENIZER.tokenizer.save(str(fallback))
+    unavailable = OSError("pinned Clef tokenizer unavailable")
+
+    def download(repo, filename, **kwargs):
+        if repo == budget.CLEF_REPO:
+            raise unavailable
+        return str(fallback)
+
+    monkeypatch.setattr(budget, "hf_hub_download", download)
+    with pytest.raises(OSError) as failed:
+        budget.load_tokenizer()
+    assert failed.value is unavailable

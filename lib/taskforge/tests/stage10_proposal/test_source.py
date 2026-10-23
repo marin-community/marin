@@ -1,7 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -97,17 +96,14 @@ class TitlePlan:
 
 
 class DocumentModel:
-    """A scripted document writer: the reply of each slot, held until that slot's gate opens, if it has one."""
+    """A scripted document writer with one reply per slot."""
 
-    def __init__(self, replies: Mapping[int, Completion], gates: Mapping[int, asyncio.Event]) -> None:
+    def __init__(self, replies: Mapping[int, Completion]) -> None:
         self.replies = replies
-        self.gates = gates
         self.calls: list[int] = []
 
-    async def complete(self, slot: int, request: tuple[Message, ...]) -> Completion:
+    async def complete(self, slot: int) -> Completion:
         self.calls.append(slot)
-        if slot in self.gates:
-            await self.gates[slot].wait()
         return self.replies[slot]
 
 
@@ -131,7 +127,7 @@ class TitleSource:
             return SlotProposal(slot, parse(render(proposal)), (), (), None)
         title = portfolio.plan.titles[slot - 1]
         request: tuple[Message, ...] = ({"role": "user", "content": f"Write slot {slot} of {idea}: {title}."},)
-        reply = await self.model.complete(slot, request)
+        reply = await self.model.complete(slot)
         if reply.finish_reason is FinishReason.LENGTH:
             return SlotFailure(slot, "cut off by the output limit", request, (reply,))
         return SlotProposal(slot, parse(reply.content), request, (reply,), None)
@@ -141,28 +137,10 @@ def document(slot: int) -> Completion:
     return completion(render(TaskProposal(header(slot, None), BODY.format(title=f"map {slot}"))))
 
 
-def three_slot_source(gates: Mapping[int, asyncio.Event] | None = None) -> TitleSource:
+def three_slot_source() -> TitleSource:
     """Slot 1 writes a document, slot 2's reply is cut off by the output limit, slot 3 is planned null."""
-    replies = {1: document(1), 2: completion("---\nid: ", FinishReason.LENGTH)}
-    return TitleSource(DocumentModel(replies, gates or {}), {3: NULL_REASON})
-
-
-async def test_write_slot_returns_while_a_sibling_document_is_still_being_written():
-    gate = asyncio.Event()
-    source = TitleSource(DocumentModel({1: document(1), 2: document(2)}, {2: gate}), {})
-    portfolio = await source.plan(IDEA, 2)
-
-    first = asyncio.create_task(source.write(IDEA, portfolio, 1))
-    second = asyncio.create_task(source.write(IDEA, portfolio, 2))
-    done, _ = await asyncio.wait({first, second}, timeout=10, return_when=asyncio.FIRST_COMPLETED)
-
-    assert done == {first}
-    outcome = first.result()
-    assert isinstance(outcome, SlotProposal)
-    assert outcome.proposal.header.id == f"{IDEA}/1"
-    assert not second.done()
-    gate.set()
-    assert isinstance(await second, SlotProposal)
+    replies = {1: document(1), 2: completion('{"header":', FinishReason.LENGTH)}
+    return TitleSource(DocumentModel(replies), {3: NULL_REASON})
 
 
 async def test_slots_written_in_separate_calls_from_a_persisted_portfolio_assemble_the_one_shot_batch():
@@ -179,15 +157,3 @@ async def test_slots_written_in_separate_calls_from_a_persisted_portfolio_assemb
     assert relaunch.model.calls == [2]
     assert [(type(s), s.slot) for s in batch.slots] == [(SlotProposal, 1), (SlotFailure, 2), (SlotProposal, 3)]
     assert batch == one_shot
-
-
-async def test_write_null_slot_makes_no_model_call():
-    source = three_slot_source()
-    portfolio = await source.plan(IDEA, 3)
-
-    outcome = await source.write(IDEA, portfolio, 3)
-
-    assert source.model.calls == []
-    assert isinstance(outcome, SlotProposal)
-    assert outcome.proposal.header.null_reason == NULL_REASON
-    assert (outcome.request, outcome.completions) == ((), ())

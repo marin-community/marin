@@ -16,8 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from rigging.timing import ExponentialBackoff
-from rolloutengine.models import TaskRolloutSpec
+from rolloutengine.models import RolloutLimits, TaskRolloutSpec
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, MachineFactory, UnsupportedMachineSpec
 
@@ -27,11 +26,19 @@ from taskforge.llm.glm_client import GlmClient
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.recording import CallLedger
 from taskforge.llm.rollout_model import GlmRolloutModel
+from taskforge.sandbox.factories import MachineHost
 from taskforge.spec.controls import Control
 from taskforge.stage50_validate.controls import ControlOutcome, ControlPlan, ControlVerdict, replay
-from taskforge.stage50_validate.evidence import Complete, Evidence, Incomplete
+from taskforge.stage50_validate.evidence import Evidence
+from taskforge.stage50_validate.lowering import lower
 from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind, Ungraded
-from taskforge.stage50_validate.trials import Deadlines, EngineSettings, TrialPlan, rollout_steps, run_trials
+from taskforge.stage50_validate.trials import (
+    EngineSettings,
+    RetryBackoff,
+    TrialPlan,
+    rollout_steps,
+    run_trials,
+)
 from tests.conftest import unique_run_name
 from tests.sandbox.fixture_images import FixtureImageFactory
 
@@ -40,8 +47,7 @@ pytestmark = pytest.mark.live_glm
 POLICY = LLMPolicy(max_continuations=0)
 K = 3
 LIVE_TIMEOUT = 1800
-RETRY_BACKOFF = ExponentialBackoff(initial=0.5, maximum=5.0)
-DEADLINES = Deadlines(total_turn_timeout=900, attempt_timeout=1200)
+RETRY_BACKOFF = RetryBackoff(initial=0.5, maximum=5.0, factor=2.0, jitter=0.1)
 SHELLSIM_BACKEND = Backend.SHELLSIM.value
 DOCKER_BACKEND = Backend.DOCKER.value
 
@@ -50,11 +56,17 @@ def settings(factories: dict[str, MachineFactory]) -> EngineSettings:
     """``factories`` for task machines; verifier machines on the ShellSim-backed fixture image factory."""
     return EngineSettings(
         factories={DOCKER_BACKEND: FixtureImageFactory(), **factories},
-        max_turns=12,
         command_timeout=60,
-        tool_turn_timeout=120,
-        model_turn_timeout=600,
-        cleanup_timeout=60,
+        limits=RolloutLimits(
+            max_turns=12,
+            tool_turn_timeout=120,
+            model_turn_timeout=600,
+            cleanup_timeout=60,
+            total_turn_timeout=900,
+            attempt_timeout=1200,
+            verifier_timeout=None,
+            max_total_tokens=None,
+        ),
         decision=None,
     )
 
@@ -65,7 +77,6 @@ def plan(directory: Path, kind: TrialKind, workpiece_id: str, k: int = K, max_re
         round=0,
         kind=kind,
         k=k,
-        deadlines=DEADLINES,
         max_retries=max_retries,
         retry_backoff=RETRY_BACKOFF,
         evidence_dir=directory,
@@ -78,7 +89,6 @@ def control_plan(directory: Path, workpiece_id: str) -> ControlPlan:
     return ControlPlan(
         workpiece_id=workpiece_id,
         round=0,
-        deadlines=DEADLINES,
         max_retries=2,
         retry_backoff=RETRY_BACKOFF,
         evidence_dir=directory,
@@ -153,10 +163,10 @@ def write_summary(directory: Path, purpose: str, wall_time: float, body: dict[st
 
 
 def evidence_summary(evidence: Evidence, kind: TrialKind) -> dict[str, object]:
-    status = evidence.status
+    ungraded = evidence.ungraded
     stats = evidence.reward_stats(kind)
     return {
-        "status": "complete" if isinstance(status, Complete) else {"incomplete": dict(status.causes)},
+        "status": "complete" if not ungraded else {"incomplete": dict(ungraded)},
         "graded": stats.graded,
         "mean_reward": stats.mean_reward,
         "solved": stats.solved,
@@ -196,7 +206,9 @@ async def solver_trials(
     trial_plan = plan(directory, TrialKind.SOLVER, workpiece_id)
     model = GlmRolloutModel(client, POLICY, CallLedger(trial_plan.ledger, workpiece_id, 0, str(TrialKind.SOLVER)))
     started = time.monotonic()
-    outcomes = await run_trials(lowered, trial_plan, settings(factories), model)
+    engine = settings(factories)
+    lowered = lower(lowered.task, MachineHost.LAPTOP, engine.factories, engine.limits)
+    outcomes = await run_trials(lowered, trial_plan, engine, model)
     evidence = Evidence({TrialKind.SOLVER: tuple(outcomes)})
     write_summary(
         directory,
@@ -248,7 +260,9 @@ async def replay_controls(
     directory = check_dir(evidence_dir, check)
     workpiece_id = lowered.task.id
     started = time.monotonic()
-    outcomes = await replay(lowered, controls, control_plan(directory, workpiece_id), settings(factories))
+    engine = settings(factories)
+    lowered = lower(lowered.task, MachineHost.LAPTOP, engine.factories, engine.limits)
+    outcomes = await replay(lowered, controls, control_plan(directory, workpiece_id), engine)
     write_summary(
         directory,
         f"control replay on {workpiece_id}: scripted turns under the messages trace, graded by the engine",
@@ -307,5 +321,5 @@ async def test_unsupported_machine_is_not_retried(client, evidence_dir, file_tas
     )
     assert all(isinstance(o, Ungraded) and o.cause is Cause.MACHINE_UNSUPPORTED for o in outcomes)
     assert factory.creates == K
-    status = Evidence({TrialKind.SOLVER: tuple(outcomes)}).status
-    assert isinstance(status, Incomplete) and status.causes[Cause.MACHINE_UNSUPPORTED] == K
+    ungraded = Evidence({TrialKind.SOLVER: tuple(outcomes)}).ungraded
+    assert ungraded[Cause.MACHINE_UNSUPPORTED] == K
