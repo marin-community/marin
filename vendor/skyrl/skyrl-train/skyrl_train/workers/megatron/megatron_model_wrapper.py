@@ -14,7 +14,11 @@ from megatron.core.distributed import finalize_model_grads
 from megatron.core.transformer.module import Float16Module
 
 from skyrl_train.models.router_instrumentation import observe_router_forwards
-from skyrl_train.workers.megatron.router_telemetry import RouterTelemetryStep, router_telemetry_enabled
+from skyrl_train.workers.megatron.router_telemetry import (
+    RouterTelemetryStep,
+    response_positions,
+    router_telemetry_enabled,
+)
 
 from skyrl_train.distributed.megatron.model_utils import (
     from_parallel_logits_to_logprobs,
@@ -250,49 +254,40 @@ class MegatronModelWrapper:
             probe_positions[:, prediction_window, 0] = probe_row_indices[:, None] + 1
             probe_positions[:, prediction_window, 1] = torch.arange(1, num_actions + 1, device=device)
 
+        flat = self._router_rows(dense, attention_mask)
+        mask = self._router_rows(mask_BS, attention_mask)
+        prediction_mask = self._router_rows(prediction_BS, attention_mask)
+        if probe_positions is not None:
+            probe_positions = self._router_rows(probe_positions, attention_mask) - 1
+        per_layer = {idx: flat[:, idx, :].to(device) for idx in layer_indices}
+        return RouterReplayTargets(per_layer, mask.to(device), prediction_mask.to(device), probe_positions)
+
+    def _router_rows(self, tensor_BS: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
+        """Lay a ``[batch, seq, ...]`` tensor out as the routers see their rows.
+
+        The tensor takes the model input's own sequence transform (packing or left
+        unpadding), is flattened sequence-major (``s*B + b``), and under TP sequence
+        parallelism is sliced to this rank's contiguous chunk. The transform always
+        runs locally (``pre_process=True``): the tensor is ours, not the pipeline's
+        input, so every PP stage derives the same layout.
+        """
         if self.use_sample_packing:
-            # The routes tensor is ours, not the pipeline's input: always run the
-            # packing arithmetic locally (pre_process=True) so every PP stage
-            # derives its own layer targets from the replicated batch.
-            dense, _ = preprocess_packed_seqs(dense, attention_mask, pre_process=True)
-            mask_BS, _ = preprocess_packed_seqs(mask_BS, attention_mask, pre_process=True)
-            prediction_BS, _ = preprocess_packed_seqs(prediction_BS, attention_mask, pre_process=True)
-            if probe_positions is not None:
-                probe_positions, _ = preprocess_packed_seqs(probe_positions, attention_mask, pre_process=True)
+            transformed, _ = preprocess_packed_seqs(tensor_BS, attention_mask, pre_process=True)
         else:
             position_ids = attention_mask.long().cumsum(-1) - 1
             position_ids = position_ids.masked_fill(attention_mask == 0, 0)
-            dense, _, _ = remove_left_padding(dense, attention_mask, position_ids, pre_process=True)
-            mask_BS, _, _ = remove_left_padding(mask_BS, attention_mask, position_ids, pre_process=True)
-            prediction_BS, _, _ = remove_left_padding(prediction_BS, attention_mask, position_ids, pre_process=True)
-            if probe_positions is not None:
-                probe_positions, _, _ = remove_left_padding(
-                    probe_positions, attention_mask, position_ids, pre_process=True
-                )
-
-        flat = sequence_major_flatten(dense)
-        mask = sequence_major_flatten(mask_BS)
-        prediction_mask = sequence_major_flatten(prediction_BS)
-        if probe_positions is not None:
-            probe_positions = sequence_major_flatten(probe_positions) - 1
+            transformed, _, _ = remove_left_padding(tensor_BS, attention_mask, position_ids, pre_process=True)
+        flat = sequence_major_flatten(transformed)
         tp_size = mpu.get_tensor_model_parallel_world_size()
         if tp_size > 1:
-            # Under TP sequence parallelism the router sees this rank's
-            # contiguous chunk of the sequence dim.
-            transform_batch, transform_seq = dense.shape[0], dense.shape[1]
-            slice_kwargs = dict(
-                seq_len=transform_seq,
-                batch_size=transform_batch,
+            flat = slice_sequence_parallel(
+                flat,
+                seq_len=transformed.shape[1],
+                batch_size=transformed.shape[0],
                 tp_rank=mpu.get_tensor_model_parallel_rank(),
                 tp_size=tp_size,
             )
-            flat = slice_sequence_parallel(flat, **slice_kwargs)
-            mask = slice_sequence_parallel(mask, **slice_kwargs)
-            prediction_mask = slice_sequence_parallel(prediction_mask, **slice_kwargs)
-            if probe_positions is not None:
-                probe_positions = slice_sequence_parallel(probe_positions, **slice_kwargs)
-        per_layer = {idx: flat[:, idx, :].to(device) for idx in layer_indices}
-        return RouterReplayTargets(per_layer, mask.to(device), prediction_mask.to(device), probe_positions)
+        return flat
 
     def _forward_micro_batch(
         self,
@@ -507,8 +502,6 @@ class MegatronModelWrapper:
         completed_microbatches = 0
         telemetry = None
         if router_telemetry_enabled(self.cfg):
-            if self.use_sample_packing:
-                raise ValueError("router telemetry requires trainer.use_sample_packing=false")
             if global_step is None:
                 raise ValueError("router telemetry needs the global step for its sidecar record")
             telemetry = RouterTelemetryStep(
@@ -652,7 +645,11 @@ class MegatronModelWrapper:
         def forward_step(batch_iter, model):
             batch = next(batch_iter)
             if telemetry is not None:
-                telemetry.begin_micro_batch(batch, data_source_names)
+                attention_mask = batch.attention_mask.to(bool)
+                positions = response_positions(batch.loss_mask, attention_mask.shape[1], batch.num_actions)
+                telemetry.begin_micro_batch(
+                    self._router_rows(positions, attention_mask).to(torch.bool), batch, data_source_names
+                )
 
             with profiler.capture_forward() if profiler is not None else nullcontext():
                 outputs, packed_seq_params = self._forward_micro_batch(
