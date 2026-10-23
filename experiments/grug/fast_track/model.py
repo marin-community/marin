@@ -187,6 +187,8 @@ _HALT_GATES = "halt_gates"
 _HALT_GATES_RAW = "halt_gates_raw"
 # The routed experts' down-projection grows by the halting-vote column plus zero padding to this width.
 _HALT_COLUMN_PAD = 8
+# Seed of the training-time uniforms of the binary halting gates (``halt_hard``), folded with the step.
+_HALT_SEED = 1931
 _ENTROPY_CHUNK = 1024
 # Per-layer router stats carrying each token's ``[T, K]`` selected experts and combine weights to
 # ``Transformer.routing_assignments``.
@@ -896,6 +898,12 @@ class GrugModelConfig:
     """The "low and wrong" term ``mu * mean((1 - g) * stop_gradient(CE_t))`` over gated layers and loss tokens."""
     halt_threshold: float | None = None
     """Outside training (no halt schedule), a gated layer with ``g < halt_threshold`` is skipped (scale 0)."""
+    halt_hard: bool = False
+    """Binary gates: training runs a gated layer for a token when ``g > u`` (``u`` uniform per token and step, shared
+    by the gated layers, so a halted token stays halted) with the straight-through scale ``keep + g - sg(g)``;
+    outside training a layer runs at scale 1 when ``g >= halt_threshold`` (default 0.5). A soft ``g`` scale is
+    degenerate: the model shrinks every token's g and compensates downstream (AttnRes and the norms are scale
+    invariant), so the penalty falls with no token actually skippable."""
     mid_head_layer: int | None = None
     """A second lm_head (own weights, initialized like the lm_head) reads the rms-normed stream entering this layer
     and adds its next-token loss (``mid_head_loss_weight``) in training. A confidence head (``mid_confidence_dim``
@@ -5615,20 +5623,20 @@ def _strip_unread_weights(stats: dict[str, jax.Array], schedule: _BlockSchedule,
 HALT_THRESHOLDS = (0.1, 0.3, 0.5)
 
 
-def halt_schedule(cfg: GrugModelConfig, step: jax.Array, total_steps: int) -> Float[Array, " 2"]:
-    """``(penalty weight, floor)`` of the halting gate at ``step``: ``halt_penalty`` ramped linearly from 0 over
-    ``halt_penalty_ramp_frac`` of training, and ``halt_floor`` decaying linearly to 0 at ``halt_floor_frac``."""
+def halt_schedule(cfg: GrugModelConfig, step: jax.Array, total_steps: int) -> Float[Array, " 3"]:
+    """``(penalty weight, floor, step)`` of the halting gate at ``step``: ``halt_penalty`` ramped linearly from 0
+    over ``halt_penalty_ramp_frac`` of training, and ``halt_floor`` decaying linearly to 0 at ``halt_floor_frac``."""
     frac = jnp.asarray(step, jnp.float32) / max(total_steps, 1)
     penalty = cfg.halt_penalty * jnp.clip(frac / cfg.halt_penalty_ramp_frac, 0.0, 1.0)
     floor = cfg.halt_floor * jnp.clip(1.0 - frac / max(cfg.halt_floor_frac, 1e-9), 0.0, 1.0)
-    return jnp.stack([penalty, floor])
+    return jnp.stack([penalty, floor, jnp.asarray(step, jnp.float32)])
 
 
 def _halt_terms(
     cfg: GrugModelConfig,
     gates: Float[Array, "G B S"],
     raw: Float[Array, "G B S"],
-    schedule: Float[Array, " 2"],
+    schedule: Float[Array, " 3"],
     loss_weight: Float[Array, "B S"],
     token_ce: Float[Array, "B S"] | None,
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
@@ -5935,7 +5943,7 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 2"] | None = None,
+        halt_schedule: Float[Array, " 3"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``layer_gates`` (``layer_onset_gates`` at the train step) masks or ramps the delayed layers' AttnRes
         sources; None runs every layer fully on.
@@ -6127,7 +6135,7 @@ class Transformer(eqx.Module):
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 2"] | None = None,
+        halt_schedule: Float[Array, " 3"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -6229,15 +6237,26 @@ class Transformer(eqx.Module):
             step_gate = jax.nn.sigmoid(extra_state["halt_z"] + self.halt_bias[n])
             raw = step_gate if "halt_g" not in extra_state else extra_state["halt_g"] * step_gate
             extra_state["halt_g"] = raw
+            gate = raw
             if halt_schedule is not None:
                 floor = halt_schedule[1]
                 gate = floor + (1.0 - floor) * raw
-            elif cfg.halt_threshold is not None:
-                gate = jnp.where(raw >= cfg.halt_threshold, raw, 0.0)
+            if not cfg.halt_hard:
+                if halt_schedule is None and cfg.halt_threshold is not None:
+                    gate = jnp.where(raw >= cfg.halt_threshold, raw, 0.0)
+                halt_gates.append((gate, raw))
+                return gate
+            if halt_schedule is None:
+                threshold = 0.5 if cfg.halt_threshold is None else cfg.halt_threshold
+                scale = (raw >= threshold).astype(jnp.float32)
             else:
-                gate = raw
+                if "halt_u" not in extra_state:
+                    key = jax.random.fold_in(jax.random.PRNGKey(_HALT_SEED), halt_schedule[2].astype(jnp.int32))
+                    extra_state["halt_u"] = jax.random.uniform(key, gate.shape, jnp.float32)
+                keep = (gate > extra_state["halt_u"]).astype(jnp.float32)
+                scale = keep + gate - jax.lax.stop_gradient(gate)
             halt_gates.append((gate, raw))
-            return gate
+            return scale
 
         def run_pass(state, pass_index, start=0):
             """One pass over the physical layers from ``start``, extending the history; returns the new state."""
@@ -6913,7 +6932,7 @@ class Transformer(eqx.Module):
         head_grad_probe: Float[Array, "B S"] | None = None,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 2"] | None = None,
+        halt_schedule: Float[Array, " 3"] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
         so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
