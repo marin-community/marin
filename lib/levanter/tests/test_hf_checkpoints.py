@@ -165,6 +165,27 @@ def test_hf_release_resolves_hub_source_without_treating_storage_as_hub(
     assert request["source_model_commit"] == expected_commit
 
 
+def test_completed_hf_release_skips_duplicate_export_and_rejects_changed_request(local_gpt2_tokenizer_path, tmp_path):
+    config = Gpt2Config(hidden_dim=32, num_heads=1, num_layers=1, use_flash_attention=False)
+    converter = config.hf_checkpoint_converter(ref_checkpoint=local_gpt2_tokenizer_path)
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(11))
+        options = {"save_reference_code": False, "source_checkpoint": "checkpoint-1"}
+        converter.save_pretrained(model, str(tmp_path), **options)
+        manifest = (tmp_path / "hf_release_manifest.json").read_bytes()
+
+        with patch.object(
+            hf_checkpoints, "_shard_hf_checkpoint", side_effect=AssertionError("duplicate shard export")
+        ):
+            converter.save_pretrained(model, str(tmp_path), **options)
+
+        assert (tmp_path / "hf_release_manifest.json").read_bytes() == manifest
+        with pytest.raises(FileExistsError, match="request changed"):
+            converter.save_pretrained(
+                model, str(tmp_path), save_reference_code=False, source_checkpoint="checkpoint-2"
+            )
+
+
 @pytest.mark.parametrize("attributes", [None, "*.blob filter=lfs diff=lfs merge=lfs -text\n"])
 @pytest.mark.parametrize("max_shard_size", [4096, 10**9])
 def test_url_reference_export_copies_code_and_preserves_trained_weights(

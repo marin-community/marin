@@ -1291,15 +1291,25 @@ class HFCheckpointConverter(Generic[LevConfig]):
                 exporter_revision=exporter_revision(Path(__file__)),
             )
 
-            def store_request() -> None:
-                if (StoragePath(path) / MANIFEST_NAME).exists():
-                    raise FileExistsError(f"HF release is already complete: {path}")
-                if StoragePath(path).is_remote:
-                    write_export_json(StoragePath(path) / REQUEST_NAME, request.payload())
+            def store_request() -> bool:
+                export_path = StoragePath(path)
+                if export_path.is_remote:
+                    write_export_json(export_path / REQUEST_NAME, request.payload())
                 else:
                     persist_request(Path(path), request)
+                marker = export_path / MANIFEST_NAME
+                if not marker.exists():
+                    return False
+                if json.loads(marker.read_bytes()).get("request_sha256") != request.digest():
+                    raise FileExistsError(f"HF release is already complete with a different request: {path}")
+                if upload_to_hf is not False:
+                    raise FileExistsError(f"HF release is already complete: {path}")
+                return True
 
-            run_on_export_writer(store_request)
+            completed_on_writer = run_on_export_writer(store_request)
+            if bool(multihost_utils.broadcast_one_to_all(np.asarray(completed_on_writer or False))):
+                logger.info("HF release is already complete: %s", path)
+                return
         elif upload_to_hf:
             raise ValueError("Hugging Face publication requires tokenizer metadata")
 

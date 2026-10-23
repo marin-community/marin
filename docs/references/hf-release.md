@@ -50,6 +50,8 @@ config, and generation metadata before writing `hf_release_manifest.json`.
 The manifest records hashes of the release files and source provenance.
 `hf_release_request.json` records the resolved policy for retries. The
 completion manifest is the signal that a directory is ready for publication.
+Levanter skips a repeated non-Hub request when its completed export has the
+same request digest. A changed request fails before any weights are rewritten.
 
 ## Enable BF16 by default
 
