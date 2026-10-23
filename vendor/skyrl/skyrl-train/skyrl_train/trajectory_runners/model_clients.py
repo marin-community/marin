@@ -81,6 +81,10 @@ class GenerationBudgetExceededError(ContextLengthExceededError):
 def _generation_token_budget(
     request: InferenceEngineInput, prompt_ids: list[int], requested_tokens: list[int]
 ) -> int | None:
+    """Return the tightest output cap, or None when uncapped.
+
+    Raise GenerationBudgetExceededError if the prompt exceeds its cap or fills the context.
+    """
     max_prompt_length = request.get("max_prompt_length")
     if max_prompt_length is not None and len(prompt_ids) > max_prompt_length:
         raise GenerationBudgetExceededError(prompt_ids)

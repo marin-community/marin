@@ -1,4 +1,4 @@
-"""Train from unified TaskCompendium tasks with the Shellbox rollout engine."""
+"""Train from unified TaskCompendium task specifications."""
 
 import hydra
 import ray
