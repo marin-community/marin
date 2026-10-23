@@ -1,0 +1,22 @@
+{
+  "added_variants": [
+    "noise_belay"
+  ],
+  "base_sha": "3eb121f2ee254188726ece865527a2ae3dc133f4",
+  "head_sha": "587eb6f55163c3cb5d38d1cc85a3f845fd93c36b",
+  "report_count": 1,
+  "reports": [
+    {
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 4071,
+      "report_relpath": "noise_belay/index.html",
+      "status_counts": {
+        "added": 16,
+        "changed": 1,
+        "removed": 3,
+        "unchanged": 0
+      },
+      "variant": "noise_belay"
+    }
+  ]
+}
