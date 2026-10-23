@@ -64,6 +64,7 @@ class VllmServer:
         max_model_len: int,
         max_lora_rank: int,
         gpu_memory_utilization: float,
+        extra_args: Sequence[str] = (),
     ) -> Iterator["VllmServer"]:
         """Start the server on a free port, wait until it is healthy, and stop it.
 
@@ -92,6 +93,7 @@ class VllmServer:
             "8",
             "--disable-log-requests",
             "--disable-uvicorn-access-log",
+            *extra_args,
         ]
         environment = {**os.environ, "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True"}
         # The server writes its log to the task's log.
