@@ -8,6 +8,13 @@ LABEL org.opencontainers.image.source="https://github.com/marin-community/MarinS
 
 # Preserve the authors' native CUDA closure while resolving and validating the
 # pure-Python corrections from the same manifest used by the runtime preflight.
+# The pinned base fixes the CUDA closure, not its trust stores. Refresh the OS
+# store and certifi, which requests and huggingface_hub read, to current releases.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --no-cache-dir "certifi>=2026.10.18"
+
 COPY cloud/iris/configs/open_mopd_fidelity.json /opt/open-mopd/fidelity.json
 COPY open_mopd_versions.py /opt/open-mopd/open_mopd_versions.py
 COPY docker/install_open_mopd_runtime.py /opt/open-mopd/install_runtime.py

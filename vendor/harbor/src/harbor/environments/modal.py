@@ -526,10 +526,13 @@ class _ModalDinD(_ModalStrategy):
         # modules and netlink permissions for creating veth pairs.  Disabling
         # iptables and the default bridge avoids both issues.  All compose
         # services must use network_mode: host (handled by a compose overlay).
+        # docker:28.3.3-dind is no longer rebuilt, so the CA bundle is refreshed to
+        # the current Alpine release before dockerd pulls task images.
         env._image = Image.from_registry(dind_image).dockerfile_commands(
             "RUN mkdir -p /etc/docker "
             '&& echo \'{"iptables": false, "bridge": "none"}\' '
-            "> /etc/docker/daemon.json"
+            "> /etc/docker/daemon.json",
+            "RUN apk upgrade --no-cache ca-certificates",
         )
 
         env._app = await App.lookup.aio(

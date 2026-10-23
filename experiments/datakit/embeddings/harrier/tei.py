@@ -135,9 +135,10 @@ def run_tei_service(config: TeiServiceConfig) -> None:
 
 
 def _setup_script() -> str:
+    # ca-certificates upgrades the TEI image's trust store, which predates the pinned digest.
     bootstrap = """set -e
 apt-get update
-apt-get install -y --no-install-recommends curl python3 python3-venv
+apt-get install -y --no-install-recommends ca-certificates curl python3 python3-venv
 curl -LsSf https://astral.sh/uv/0.13.5/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 """
     workspace = default_setup_script(

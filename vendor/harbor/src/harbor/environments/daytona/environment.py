@@ -875,7 +875,11 @@ class _DaytonaDinD(_DaytonaStrategy):
                 labels={"harbor.instance": env._instance_label},
             )
         else:
-            image = Image.base(dind_image)
+            # docker:28.3.3-dind is no longer rebuilt, so refresh its CA bundle to
+            # the current Alpine release before dockerd pulls task images.
+            image = Image.base(dind_image).dockerfile_commands(
+                ["RUN apk upgrade --no-cache ca-certificates"]
+            )
             params = env._image_sandbox_params(
                 image=image,
                 resources=resources,
