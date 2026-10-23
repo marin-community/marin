@@ -25,10 +25,10 @@ from taskcompendium.models import (
 )
 from taskforge.capability import CapabilityIdea
 
-from experiments.post_training.baby_rsi.feedback import FailedRun, synthesized
-from experiments.post_training.baby_rsi.loop import Boxes, LoopConfig, rsi_loop
-from experiments.post_training.baby_rsi.rollouts import TaskRollouts
-from experiments.post_training.baby_rsi.streams import batched, from_iterable
+from experiments.post_training.rsi.feedback import FailedRun, synthesized
+from experiments.post_training.rsi.loop import Boxes, LoopConfig, rsi_loop
+from experiments.post_training.rsi.rollouts import TaskRollouts
+from experiments.post_training.rsi.streams import batched, from_iterable
 
 TASKS_PER_STEP = 2
 STEPS = 8

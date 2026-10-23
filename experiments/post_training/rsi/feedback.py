@@ -16,35 +16,41 @@ import json
 import logging
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Sequence
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 from fray.current_client import set_current_client
 from fray.local_backend import LocalClient
+from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import GradedRollout
 from taskcompendium.models import TaskSpec
 from taskforge.agentic import agent as agentic
 from taskforge.agentic.config import AgenticConfig
+from taskforge.agentic.gate import Evidence
 from taskforge.agentic.instances import task_instances
-from taskforge.agentic.tools import AcceptedTask, content_digest
+from taskforge.agentic.tools import AcceptedTask, TaskReview, ToolSpend, content_digest
 from taskforge.capability import CapabilityIdea
 from taskforge.llm.policy import LLMPolicy
 from zephyr.context import ZephyrContext
 
-from experiments.post_training.baby_rsi.rollouts import PASS_REWARD, TaskRollouts, reward
 from experiments.post_training.capability_driven_envs.analyze_failed_runs import pipeline as failed_run_analysis
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.pipeline import MakeClient
 from experiments.post_training.capability_driven_envs.analyze_failed_runs.rollouts import policy_failed
+from experiments.post_training.rsi.rollouts import PASS_REWARD, TaskRollouts, reward
 
 logger = logging.getLogger(__name__)
 
 SYNTHESIZED_TAG = "baby-rsi.synthesized"
 CAPABILITY_TAG_PREFIX = "capability:"
 SYNTHESIZED_LABEL_PREFIX = "synthesized:"
-HELD_OUT_MARKER = "held-out"
-"""The file in an idea's directory that marks a held-out idea, whose tasks the loop never trains on."""
 """The record label of a synthesized task: the prefix and its capability ID."""
 INSTANCE_TIMEOUT = 120.0
+IDEAS_DIRECTORY = "ideas"
+TASKS_DIRECTORY = "tasks"
+SESSION_FILE = "session.json"
+AGENT_FILE = "agent.json"
+WORKSPACE_FILE = "workspace.tgz"
+PROBES_FILE = "probes.jsonl"
 
 FailedRun = tuple[TaskSpec, GradedRollout]
 
@@ -229,38 +235,55 @@ def capability_of(task: TaskSpec) -> str | None:
     )
 
 
+class TaskRecord(BaseModel):
+    """An accepted task in the record of its session. Its workspace and probes are files in its directory."""
+
+    model_config = ConfigDict(frozen=True)
+
+    task: TaskSpec
+    evidence: Evidence
+    review: TaskReview
+    program: str
+
+
+class SessionRecord(BaseModel):
+    """What a finished synthesis session made, in ``ideas/<capability ID>/session.json``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    idea: CapabilityIdea
+    held_out: bool
+    """Whether the loop never trains on the tasks of the idea: their probes measure transfer to an unseen family."""
+    tasks: tuple[TaskRecord, ...]
+    report: str | None
+    failure: str | None
+    agent_tokens: int
+    spend: ToolSpend
+
+
 def write_session(
     output: StoragePath, result: agentic.AgentResult, probes: Sequence[Sequence[TaskSpec]], *, held_out: bool
 ) -> None:
-    """The idea, the agent's report and spend, and each accepted task with its program, workspace and probes.
-
-    A held-out idea gets the ``HELD_OUT_MARKER`` file. ``task.json`` comes last in a task's directory and
-    ``idea.json`` last in the idea's, so that a resumed run reads only complete records.
-    """
-    directory = output / "ideas" / result.idea.capability_id
-    summary = {
-        "tasks": [accepted.task.id for accepted in result.tasks],
-        "report": result.report,
-        "failure": result.failure,
-        "agent_tokens": result.agent_tokens,
-        "spend": asdict(result.spend),
-    }
-    (directory / "session.json").write_text(_json(summary))
+    """The record of a finished session, the workspace and the probes of each accepted task, and the agent's
+    conversation. The record comes last, so that a resumed run reads only finished sessions."""
+    directory = output / IDEAS_DIRECTORY / result.idea.capability_id
     conversations = [list(conversation.messages) for conversation in result.rollout.conversations]
-    (directory / "agent.json").write_text(_json(conversations))
+    (directory / AGENT_FILE).write_text(json.dumps(conversations, indent=1, default=str))
     for accepted, task_probes in zip(result.tasks, probes, strict=True):
-        task_directory = directory / "tasks" / accepted.task.id
-        (task_directory / "evidence.json").write_text(_json(asdict(accepted.evidence)))
-        (task_directory / "review.json").write_text(accepted.review.model_dump_json(indent=1))
-        (task_directory / "program.txt").write_text(accepted.program)
-        (task_directory / "workspace.tgz").write_bytes(accepted.workspace)
+        task_directory = directory / TASKS_DIRECTORY / accepted.task.id
+        (task_directory / WORKSPACE_FILE).write_bytes(accepted.workspace)
         lines = "".join(synthesized(probe, result.idea).model_dump_json() + "\n" for probe in task_probes)
-        (task_directory / "probes.jsonl").write_text(lines)
-        (task_directory / "task.json").write_text(accepted.task.model_dump_json(indent=1))
-    if held_out:
-        (directory / HELD_OUT_MARKER).write_text("")
-    (directory / "idea.json").write_text(result.idea.model_dump_json(indent=1))
-
-
-def _json(value: object) -> str:
-    return json.dumps(value, indent=1, default=str)
+        (task_directory / PROBES_FILE).write_text(lines)
+    record = SessionRecord(
+        idea=result.idea,
+        held_out=held_out,
+        tasks=tuple(
+            TaskRecord(task=accepted.task, evidence=accepted.evidence, review=accepted.review, program=accepted.program)
+            for accepted in result.tasks
+        ),
+        report=result.report,
+        failure=result.failure,
+        agent_tokens=result.agent_tokens,
+        spend=result.spend,
+    )
+    (directory / SESSION_FILE).write_text(record.model_dump_json(indent=1))

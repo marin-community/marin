@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from taskcompendium.models import TaskSpec
 from taskforge.capability import CapabilityIdea
 
-from experiments.post_training.baby_rsi.feedback import FailedRun, failed_runs
-from experiments.post_training.baby_rsi.rollouts import TaskRollouts
-from experiments.post_training.baby_rsi.streams import Broadcast, Source, batched, mix
+from experiments.post_training.rsi.feedback import FailedRun, failed_runs
+from experiments.post_training.rsi.rollouts import TaskRollouts
+from experiments.post_training.rsi.streams import Broadcast, Source, batched, mix
 
 
 @dataclass(frozen=True)

@@ -11,9 +11,9 @@ serves with vLLM.
 
 Plan or run one arm::
 
-    uv run python -m experiments.post_training.baby_rsi.skyrl_launch --version 2026.10.23 \\
+    uv run python -m experiments.post_training.rsi.skyrl_launch --version 2026.10.23 \\
         --model qwen3-4b --arm control --feed-root s3://marin-us-east-02a/<prefix>/control/feed --export-every 120
-    uv run python -m experiments.post_training.baby_rsi.skyrl_launch --version 2026.10.23 \\
+    uv run python -m experiments.post_training.rsi.skyrl_launch --version 2026.10.23 \\
         --model qwen3-4b --arm rsi --feed-root s3://marin-us-east-02a/<prefix>/rsi/feed --export-every 120 --run
 """
 

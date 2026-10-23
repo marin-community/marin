@@ -8,7 +8,7 @@ reference answer, and two held-out probe instances, and judges whether the task 
 posed, and has a correct reference answer. The agreement with the GLM reviewer, which accepted every audited task,
 measures how much the acceptance depends on the reviewer's model. Inside an Iris task on the GLM relay's cluster::
 
-    uv run --package marin-taskforge --frozen python -m experiments.post_training.baby_rsi.audit \\
+    uv run --package marin-taskforge --frozen python -m experiments.post_training.rsi.audit \\
         s3://<bucket>/<prefix>/rsi --relay-job /muchanem/glm53-relay
 """
 
@@ -28,6 +28,8 @@ from taskforge.llm.policy import LLMPolicy, LLMProviderConfig, Message
 
 from experiments.post_training.capability_driven_envs.generate_tasks import GLM_PROVIDER, endpoint_source
 from experiments.post_training.capability_driven_envs.generate_tasks_agentic import DEEPSEEK_MODEL
+from experiments.post_training.rsi.feedback import PROBES_FILE
+from experiments.post_training.rsi.resume import accepted_tasks
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +84,12 @@ def task_view(task: TaskSpec) -> dict[str, object]:
 
 async def audit_all(root: str, client: GlmClient) -> list[dict[str, object]]:
     records = []
-    for task_path in sorted((StoragePath(root) / "ideas/*/tasks/*/task.json").glob(), key=str):
-        directory = task_path.parent
-        idea = json.loads((directory.parent.parent / "idea.json").read_text())
-        task = TaskSpec.model_validate_json(task_path.read_text())
-        probes = [TaskSpec.model_validate_json(line) for line in (directory / "probes.jsonl").read_text().splitlines()]
+    for saved in accepted_tasks(StoragePath(root)):
+        task = saved.accepted.task
+        lines = (saved.directory / PROBES_FILE).read_text().splitlines()
+        probes = [TaskSpec.model_validate_json(line) for line in lines]
         content = {
-            "capability": idea["capability"],
+            "capability": saved.idea.capability,
             "task": task_view(task),
             "other_instances": [task_view(probe) for probe in probes[:PROBES_SHOWN]],
         }
@@ -97,7 +98,7 @@ async def audit_all(root: str, client: GlmClient) -> list[dict[str, object]]:
             {"role": "user", "content": json.dumps(content, indent=1)},
         ]
         result = await client.complete_structured(messages, TaskAudit, DeepSeekPolicy(max_tokens=32768))
-        records.append({"capability_id": idea["capability_id"], "task_id": task.id, **result.value.model_dump()})
+        records.append({"capability_id": saved.idea.capability_id, "task_id": task.id, **result.value.model_dump()})
         logger.info("%s: %s", task.id, result.value)
     return records
 

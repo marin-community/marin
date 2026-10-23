@@ -39,7 +39,7 @@ seed tasks). The control arm is `boxes.train(seed_tasks)`: the same training on 
 | Train | `skyrl_box.py`, `skyrl_launch.py` | A SkyRL job (full-parameter GRPO with Megatron, vLLM engines on their own node, staleness 1). The box writes the tasks into the job's feed and yields the graded groups that the job writes back. The job serves the live policy on an OpenAI-compatible endpoint, which the Taskforge gate uses. |
 | Analyze | `feedback.py` | Keeps one failed attempt of each task that the policy passes at most 25% of the time, and runs `analyze_failed_runs` (#10265) on each batch. It yields each new capability ID once. |
 | Generate | `feedback.py` | One agentic Taskforge session (`taskforge.agentic`) for each idea, with bubblewrap solver machines. The live policy is the solver of the gate, so an accepted task has a policy pass rate from 0.1 to 0.8. The build program of each accepted task makes more training instances and held-out probe instances. `submit` refuses a program whose 8 test instances share one reference answer more than 25% of the time: in the first run, a family with answers 3, 4 or 5 taught the policy to guess. |
-| Evaluate | `evaluate.py`, `run.py evaluate` | The base policy (twice) and the HF exports of the trained policies on held-out pool tasks (the Smartie validation file) and on the probe instances, which no arm trained on. |
+| Evaluate | `evaluate.py` | The base policy (twice) and the HF exports of the trained policies on held-out pool tasks (the Smartie validation file) and on the probe instances, which no arm trained on. |
 
 The feed is an object-store prefix that the loop and the SkyRL job share: the loop writes task chunks, and the job
 writes one graded group (or the reason that it skipped a task) for each task. The box keeps a few training batches
@@ -59,21 +59,24 @@ An arm is a SkyRL job and a loop job with the same feed. Start the SkyRL job wit
 in a privileged CPU task (the Taskforge agent and its solvers run in bubblewrap):
 
 ```bash
-uv run python -m experiments.post_training.baby_rsi.skyrl_launch --version <version> --model qwen3-4b --arm rsi \
+uv run python -m experiments.post_training.rsi.skyrl_launch --version <version> --model qwen3-4b --arm rsi \
   --feed-root s3://<bucket>/<prefix>/rsi/feed --steps 60 --train-batch 32 --lr 2e-6 --export-every 30 --run
 uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-02a --cpu 32 --memory 128GB \
   --sync-package marin-taskforge --container-profile container_profile_privileged --job-name <name> \
   -e HF_TOKEN "$HF_TOKEN" -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" -e PARALLEL_API_KEY "$PARALLEL_API_KEY" \
-  -- .venv/bin/python -m experiments.post_training.baby_rsi.run skyrl-rsi --model Qwen/Qwen3-4B-Instruct-2507 \
+  -- .venv/bin/python -m experiments.post_training.rsi.run skyrl-rsi --model Qwen/Qwen3-4B-Instruct-2507 \
   --feed-root s3://<bucket>/<prefix>/rsi/feed --output-dir s3://<bucket>/<prefix>/rsi --steps 60 --tasks-per-step 32
 ```
 
-`skyrl-control` takes the same options without the feedback options. The SkyRL job resumes from its checkpoints and
-its feed position; a restarted loop continues the feed, does not write its pool tasks again, gives back the
-synthesized instances that are not in the feed, and does not synthesize the same idea again (`resume.py`).
+`skyrl-control` takes the same options without the feedback options. A finished synthesis session writes one record,
+`ideas/<capability ID>/session.json`, after the workspace and the probes of each accepted task. The SkyRL job resumes
+from its checkpoints and its feed position; a restarted loop continues the feed, does not write its pool tasks again,
+gives back the synthesized instances that are not in the feed, and does not synthesize the same idea again
+(`resume.py`).
 
-`evaluate` runs in an Iris GPU task through `job.sh`, which installs the Marin vLLM wheel of the SkyRL engines in
-its own environment and selects the task's own GPUs. It takes `--checkpoint NAME=URL` for each HF export and
+`evaluate.py evaluate` runs in an Iris GPU task through `job.sh`, which selects the task's own GPUs. Submit it with
+`--sync-package marin-taskforge --sync-package marin-core`: the server is the vLLM backend of `marin.inference`,
+which installs the Marin vLLM fork (it also serves Snowball). It takes `--checkpoint NAME=URL` for each HF export and
 `--probes` for each RSI output directory, and `report.py` compares the policies with paired bootstrap intervals over
 tasks. By default, vLLM streams s3:// weights. `--weight-transfer download` copies them to the task's disk before
 vLLM starts. Snowball needs a whole 8×H100 node

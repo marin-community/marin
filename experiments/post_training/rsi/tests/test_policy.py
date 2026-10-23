@@ -11,7 +11,7 @@ pytest.importorskip("transformers")
 
 import json
 
-from experiments.post_training.baby_rsi.policy import assistant_message
+from experiments.post_training.rsi.policy import assistant_message
 
 CALL = '<tool_call>\n{"name": "shell", "arguments": {"command": "ls"}}\n</tool_call>'
 

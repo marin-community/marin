@@ -15,7 +15,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import GradedRollout, Rollout
 from taskcompendium.grading_result import GradeResult, Outcome
 
-from experiments.post_training.baby_rsi.skyrl_box import (
+from experiments.post_training.rsi.skyrl_box import (
     CHUNKS,
     GRADED,
     SKIPPED,
@@ -25,8 +25,8 @@ from experiments.post_training.baby_rsi.skyrl_box import (
     seq_name,
     skyrl_train,
 )
-from experiments.post_training.baby_rsi.streams import from_iterable
-from experiments.post_training.baby_rsi.tests.test_loop import task
+from experiments.post_training.rsi.streams import from_iterable
+from experiments.post_training.rsi.tests.test_loop import task
 
 
 async def fake_job(root: StoragePath, skip: str, stop: asyncio.Event) -> None:
