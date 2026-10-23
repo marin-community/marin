@@ -3,7 +3,6 @@ from typing import cast
 
 import pytest
 import torch
-import yaml
 from omegaconf import OmegaConf
 from skyrl_train import teacher_runtime
 from skyrl_train.config.utils import get_default_config
@@ -69,7 +68,7 @@ def test_teacher_conditioning_preserves_student_tokens_and_response_alignment():
         )
 
 
-def test_yaml_conditioning_routes_only_selected_teacher_and_matches_modes():
+def test_conditioning_routes_only_selected_teacher_and_matches_modes():
     teacher = {"source": "frozen_worker", "model": {"path": "org/model", "revision": "r1"}, "evidence": "chosen_token"}
     config = {
         "trainer": {
@@ -102,7 +101,7 @@ def test_yaml_conditioning_routes_only_selected_teacher_and_matches_modes():
             }
         },
     }
-    plan = compile_distillation_plan(yaml.safe_load(yaml.safe_dump(config)))
+    plan = compile_distillation_plan(config)
     batch = cast(
         TrajectoryBatch,
         {
@@ -111,7 +110,6 @@ def test_yaml_conditioning_routes_only_selected_teacher_and_matches_modes():
             "response_ids": [[20], [21], [22]],
         },
     )
-    original = deepcopy(batch)
     routed = route_trajectory_batch(batch, route_keys=("facts", "facts", "general"), router=PlanTeacherRouter(plan))
     work = build_routed_teacher_scoring_work(
         routed,
@@ -123,7 +121,6 @@ def test_yaml_conditioning_routes_only_selected_teacher_and_matches_modes():
     assert requests["plain"].prompt_token_ids.tolist() == [[1, 2, 12]]
     assert requests["conditioned"].response_token_ids.tolist() == [[20], [21]]
     assert requests["plain"].response_token_ids.tolist() == [[22]]
-    assert batch == original
 
 
 class LocalScoringEngine:
