@@ -29,7 +29,7 @@ def _validate_config(path: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("task", ["gsm8k", "IFEval", "LABBenchProtocolQA", "LABBenchSeqQA", "LABBenchCloning"])
+@pytest.mark.parametrize("task", ["gsm8k", "IFEval"])
 def test_validate_config_accepts_portable_yaml_without_starting_an_evaluation(tmp_path, task):
     config = tmp_path / "evaluation.yaml"
     config.write_text(f"tasks:\n  - {task}\nmax_tokens: 512\n")

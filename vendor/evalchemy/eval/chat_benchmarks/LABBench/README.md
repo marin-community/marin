@@ -22,6 +22,9 @@ of `<run seed>:<subset>:<item id>`, independently of item order and run limits.
 The prompt requests a final `Answer: X`. Scoring reuses Evalchemy's
 `letter_choice` grader with HLE's extractor: it first looks for an answer-prefixed
 letter, including boxed variants, then falls back to the last isolated letter.
+It uses the first answer-prefixed match in normalized response text, which can
+include reasoning, so an intermediate answer can take precedence over the final
+answer. This behavior is shared with HLE.
 The extracted answer is compared with the shuffled target. There is no separate
 LAB-Bench parser, LLM extraction fallback, or abstention scoring. This is a
 forced-choice capability evaluation; it does not reproduce the original
