@@ -235,7 +235,7 @@ Print the three-update qualification plan:
 
 ```bash
 uv run python -m experiments.post_training.inventory.train \
-  --version 2026.10.22.4 --data-version 2026.10.22.3 --steps 3 \
+  --version 2026.10.22.4 --data-version 2026.10.22.4 --steps 3 \
   --train-source "$TRAIN_SOURCE" --validation-source "$VALIDATION_SOURCE"
 ```
 
