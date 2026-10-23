@@ -117,14 +117,15 @@ def build_score_batch(
     Sequences are left-padded to one common width; the worker's forward strips
     the padding. ``gather_ids`` is ``[n, padded_len, K]`` of candidate-pass ids
     (padding positions carry 0 and are never scored); ``exact_positions`` selects
-    the seeded subsample of each sequence's scored positions for the exact pass.
+    the seeded subsample of each sequence's scored positions for the exact pass,
+    tagged with the sequence's row plus one so the worker reports batch-wide rows.
     """
     widths = [len(sequence.token_ids) for sequence in sequences]
     padded_len = max(widths)
     count = len(sequences)
     token_ids = np.full((count, padded_len), pad_token_id, dtype=np.int64)
     attention_mask = np.zeros((count, padded_len), dtype=np.int64)
-    positions: np.ndarray | None = np.zeros((count, padded_len), dtype=bool) if exact_positions else None
+    positions: np.ndarray | None = np.zeros((count, padded_len), dtype=np.int64) if exact_positions else None
     for row, (sequence, width) in enumerate(zip(sequences, widths, strict=True)):
         start = padded_len - width
         token_ids[row, start:] = sequence.token_ids
@@ -135,7 +136,7 @@ def build_score_batch(
                 seed = exact_subsample_seed(master_seed, sequence.probe_hash)
                 mask = position_subsample_mask(len(scored), rate=exact_rate, seed=seed)
                 for selected, position in zip(mask.tolist(), scored, strict=True):
-                    positions[row, start + position] = bool(selected)
+                    positions[row, start + position] = row + 1 if selected else 0
     padded_gather: np.ndarray | None = None
     if gather_ids is not None:
         if gather_ids.shape[:2] != (count, padded_len):

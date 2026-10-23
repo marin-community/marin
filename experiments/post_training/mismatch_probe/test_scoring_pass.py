@@ -62,8 +62,8 @@ def test_build_score_batch_pads_left_and_selects_exact_positions():
     )
     assert batch["sequences"].tolist() == [[1, 2, 3, 4], [99, 99, 5, 6]]
     assert batch["attention_mask"].tolist() == [[1, 1, 1, 1], [0, 0, 1, 1]]
-    # Rate 1.0 selects every scored position, in the sequence's own indexing.
-    assert batch["probe_score_positions"].tolist() == [[False, False, False, False], [False, False, False, True]]
+    # Rate 1.0 selects every scored position, tagged with its row plus one.
+    assert batch["probe_score_positions"].tolist() == [[0, 0, 0, 0], [0, 0, 0, 2]]
 
 
 def test_build_score_batch_exact_selection_is_seeded_and_reproducible():

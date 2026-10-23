@@ -36,9 +36,12 @@ def score_compacted_logits(
 
     Exactly one mode must be set: ``top_k`` returns the top-K token ids and their
     logprobs per position; ``gather_ids`` ([B, T, K], padded layout) returns the
-    log-softmax gathered at those ids; ``probe_score_positions`` ([B, T] bool)
+    log-softmax gathered at those ids; ``probe_score_positions`` ([B, T] int64)
     returns the full-vocabulary log-softmax rows of the selected positions,
-    compacted in (row, position) order beside their original coordinates.
+    compacted in (row, position) order beside their coordinates. A selected
+    position holds its sequence's batch-wide row id plus one (0 elsewhere), and the
+    coordinates report that row id: the local row would be lost once micro-batches
+    and data-parallel shards are concatenated.
     """
     modes = (top_k is not None, gather_ids is not None, probe_score_positions is not None)
     if sum(modes) != 1:
@@ -60,18 +63,16 @@ def score_compacted_logits(
         )
         for row, length in enumerate(seq_lens.tolist()):
             compact_gather[row, :length] = gather_ids[row, attention_mask[row]].long()
-    selected_rows_meta: list[tuple[int, int, int]] | None = None
+    selected_rows_meta: list[tuple[int, int, int, int]] | None = None
     if probe_score_positions is not None:
-        selected_rows_meta = [
-            (
-                row,
-                compact_index,
-                int(attention_mask[row].nonzero(as_tuple=True)[0][compact_index].item()),
-            )
-            for row, length in enumerate(seq_lens.tolist())
-            for compact_index in range(length)
-            if bool(probe_score_positions[row, attention_mask[row]][compact_index].item())
-        ]
+        selected_rows_meta = []
+        for row, length in enumerate(seq_lens.tolist()):
+            padded_positions = attention_mask[row].nonzero(as_tuple=True)[0]
+            tags = probe_score_positions[row, attention_mask[row]]
+            for compact_index in range(length):
+                tag = int(tags[compact_index].item())
+                if tag > 0:
+                    selected_rows_meta.append((row, compact_index, int(padded_positions[compact_index].item()), tag - 1))
 
     collected: dict[str, list[torch.Tensor]] = {}
     selected_rows: list[torch.Tensor] = []
@@ -89,10 +90,10 @@ def score_compacted_logits(
                 torch.gather(logprobs, -1, compact_gather[:, start:stop])
             )
         else:
-            for row, compact_index, padded_position in selected_rows_meta:
+            for row, compact_index, padded_position, sequence_row in selected_rows_meta:
                 if start <= compact_index < stop:
                     selected_rows.append(logprobs[row, compact_index - start])
-                    selected_coordinates.append((row, padded_position))
+                    selected_coordinates.append((sequence_row, padded_position))
     scores = {key: torch.cat(chunks, dim=1) for key, chunks in collected.items()}
 
     if probe_score_positions is not None:

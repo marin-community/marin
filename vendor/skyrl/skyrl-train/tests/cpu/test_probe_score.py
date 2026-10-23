@@ -69,9 +69,12 @@ def test_gather_reads_the_log_softmax_at_the_given_ids():
 
 def test_exact_rows_are_the_full_log_softmax_of_the_selected_positions():
     logits, mask = batch(seed=3)
-    positions = torch.zeros(BATCH, PADDED_LEN, dtype=torch.bool)
-    positions[0] = mask[0]  # every real position of the longest row
-    positions[2, PADDED_LEN - 1] = True  # one position of the shortest row
+    # This micro-batch holds rows 40.. of the full batch: each selected position is
+    # tagged with its batch-wide row plus one, and the coordinates report that row.
+    first_row = 40
+    positions = torch.zeros(BATCH, PADDED_LEN, dtype=torch.long)
+    positions[0] = mask[0].long() * (first_row + 1)  # every real position of the longest row
+    positions[2, PADDED_LEN - 1] = first_row + 3  # one position of the shortest row
     scores = score_compacted_logits(
         logits, mask, top_k=None, gather_ids=None, probe_score_positions=positions, vocabulary_size=VOCAB, chunk_size=4
     )
@@ -79,14 +82,16 @@ def test_exact_rows_are_the_full_log_softmax_of_the_selected_positions():
     # Values and coordinates are produced in the chunk sweep's order; the contract
     # is their pairing, not the order.
     assert sorted(scores["exact_positions"].tolist()) == sorted(
-        [[0, position] for position in mask[0].nonzero(as_tuple=True)[0].tolist()] + [[2, PADDED_LEN - 1]]
+        [[first_row, position] for position in mask[0].nonzero(as_tuple=True)[0].tolist()]
+        + [[first_row + 2, PADDED_LEN - 1]]
     )
     padded_to_compact = {
         row: {int(padded): compact for compact, padded in enumerate(mask[row].nonzero(as_tuple=True)[0].tolist())}
         for row in range(BATCH)
     }
     for value, (row, position) in zip(scores["exact_logprobs"], scores["exact_positions"].tolist(), strict=True):
-        torch.testing.assert_close(value, reference[row, padded_to_compact[row][position]])
+        local = row - first_row
+        torch.testing.assert_close(value, reference[local, padded_to_compact[local][position]])
 
 
 def test_exactly_one_mode_must_be_set():

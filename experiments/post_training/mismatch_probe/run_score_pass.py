@@ -60,7 +60,7 @@ def run_score(policy, batch: dict, *, top_k: int | None, micro_batch_size: int =
         "probe_score_top_k": top_k,
     }
     started = time.monotonic()
-    output = ray.get(policy.async_run_ray_method("mesh", "probe_score_forward", data=data))
+    output = policy.run_method("mesh", "probe_score_forward", data=data)  # DP shards concatenated in order
     duration = time.monotonic() - started
     return {key: value.numpy() for key, value in output.items()}, duration
 

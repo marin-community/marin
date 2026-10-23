@@ -342,7 +342,7 @@ class MegatronWorker:
         position, the top-K token ids and their fp32 log-softmax). Leaving it
         ``None`` selects the candidate pass, which gathers the log-softmax at
         ``data["probe_score_gather_ids"]`` ([B, T, K]), or the exact pass when the
-        batch carries ``data["probe_score_positions"]`` ([B, T] bool of positions
+        batch carries ``data["probe_score_positions"]`` ([B, T] int64: row id + 1 at positions
         whose full-vocabulary log-softmax rows come back compacted). Rows are
         aligned with the model's logits positions — position t predicts the token
         at t+1. ``data.metadata["probe_micro_batch_size"]`` sizes the micro-batch,
