@@ -975,9 +975,8 @@ def _adopt_profile_secrets(config: DeploymentConfig, apis: list[gcp.projects.Ser
     """Manage each Secret Manager secret that a profile environment references.
 
     An operator creates the secret and uploads its value before a profile references it, so
-    Pulumi imports the existing secret and never holds a version. The secret declares no labels
-    or annotations, so operator-set ones, such as a token's expiry, persist. Removing the last
-    reference leaves the secret and its versions in place.
+    Pulumi imports the existing secret and never holds a version. Removing the last reference
+    leaves the secret and its versions in place.
     """
     secret_ids = {
         environment.secret_ref.split("/")[3]
@@ -986,6 +985,7 @@ def _adopt_profile_secrets(config: DeploymentConfig, apis: list[gcp.projects.Ser
         if isinstance(environment, ProfileSecretConfig)
     }
     for secret_id in sorted(secret_ids):
+        # Declare no labels or annotations so operator-set ones, such as a token's expiry, persist.
         gcp.secretmanager.Secret(
             f"loom-profile-secret-{secret_id}",
             project=config.project,
