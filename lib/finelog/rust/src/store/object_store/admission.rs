@@ -69,11 +69,13 @@ impl QueryCacheAdmission {
         if budget.remaining_objects == 0 {
             return AdmissionDecision::ObjectLimit;
         }
-        if reference.version.byte_size > budget.remaining_bytes {
+        if budget.remaining_bytes == 0 {
             return AdmissionDecision::ByteLimit;
         }
         budget.remaining_objects -= 1;
-        budget.remaining_bytes -= reference.version.byte_size;
+        budget.remaining_bytes = budget
+            .remaining_bytes
+            .saturating_sub(reference.version.byte_size);
         AdmissionDecision::Admitted
     }
 }

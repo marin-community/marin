@@ -81,8 +81,8 @@ download slots; a broad query cannot leave an unbounded queue of cache fills
 after its deadline. Maintenance reads use cached files or read directly from
 object storage. A nonzero `required_fill_bytes` counter means a caller still
 forces a local file; inspect the remaining `local_path` callers.
-`query_byte_limit` includes objects larger than the whole query fill allowance;
-repeated requests for those objects continue reading directly from storage.
+`query_byte_limit` counts objects skipped after the query's byte allowance is
+exhausted. The last admitted object can cross the allowance.
 
 When cache eviction remains high despite little query traffic, check ingestion
 and compaction activity; both write through to the cache. Compare `write_bytes`
