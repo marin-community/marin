@@ -25,6 +25,7 @@ import click
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rolloutengine.models import RolloutLimits
+from shellbox.machine import Backend
 from taskcompendium.models import TaskSpec
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.instances import task_instances
@@ -68,6 +69,7 @@ from experiments.post_training.capability_driven_envs.generate_tasks_agentic imp
     SOLVER_LIMITS,
     agent_limits,
     chat_model,
+    solver_factory,
     workspace_factory,
 )
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
@@ -356,6 +358,7 @@ async def _feedback_boxes(
         agent_model=chat_model(endpoint, model=GLM_MODEL, reasoning_effort="low", cache_key=None),
         workspace_factory=workspace_factory(),
         solver_model=served.policy,
+        solver_factory=solver_factory(Backend.LOCAL),
         judge=judge,
         judge_policy=LLMPolicy(),
         web=web,

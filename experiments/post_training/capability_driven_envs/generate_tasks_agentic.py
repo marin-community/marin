@@ -42,6 +42,8 @@ from rigging.log_setup import configure_logging
 from rolloutengine.chat import ChatModel
 from rolloutengine.models import Model, ModelRequest, ModelTurn, RolloutLimits
 from shellbox.backends.local.machine import LocalMachineFactory
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from shellbox.machine import Backend, MachineFactory
 from taskforge.agentic.agent import AgentResult, generate_tasks
 from taskforge.agentic.config import AgenticConfig, ToolBudget
 from taskforge.agentic.gate import Gate
@@ -119,6 +121,16 @@ def workspace_factory() -> LocalMachineFactory:
     return LocalMachineFactory(read_only=(venv.parent,), bin_dirs=(venv / "bin",))
 
 
+def solver_factory(backend: Backend) -> MachineFactory:
+    """The machines of the solver rollouts: ShellSim, or a bubblewrap sandbox with no host directory mounted, whose
+    tasks install their Python with ``PackageSpec.pypi_packages``."""
+    if backend == Backend.SHELLSIM:
+        return ShellSimMachineFactory()
+    if backend == Backend.LOCAL:
+        return LocalMachineFactory()
+    raise ValueError(f"No solver machines on {backend}")
+
+
 def chat_model(endpoint: GlmEndpoint, *, model: str, reasoning_effort: str, cache_key: str | None) -> ChatModel:
     """A chat model on ``endpoint``. GLM sets an effort, and DeepSeek thinks unless the effort is ``NO_REASONING``.
 
@@ -172,6 +184,7 @@ async def generate_all(
     concurrency: int,
     output: StoragePath,
     parallel_api_key: str,
+    solver_backend: Backend,
 ) -> list[dict[str, Any]]:
     """Run one agent for each idea, at most ``concurrency`` at a time, and write each result when it finishes."""
 
@@ -186,6 +199,7 @@ async def generate_all(
             agent_model=relay_model(GLM_MODEL, agent_reasoning_effort, None),
             workspace_factory=workspace_factory(),
             solver_model=solver,
+            solver_factory=solver_factory(solver_backend),
             judge=judge,
             judge_policy=LLMPolicy(temperature=JUDGE_TEMPERATURE),
             web=web,
@@ -278,6 +292,13 @@ def _write(path: StoragePath, text: str) -> None:
     show_default=True,
     help=f"The reasoning effort of the solvers. {NO_REASONING!r} switches the thinking of DeepSeek off.",
 )
+@click.option(
+    "--solver-backend",
+    type=click.Choice([Backend.SHELLSIM.value, Backend.LOCAL.value]),
+    default=Backend.SHELLSIM.value,
+    show_default=True,
+    help="The machines of the solver rollouts: ShellSim, or bubblewrap (local), which needs the privileged profile.",
+)
 @click.option("--concurrency", type=click.IntRange(min=1), default=4, show_default=True, help="Ideas at once.")
 def main(
     output_dir: str,
@@ -292,6 +313,7 @@ def main(
     agent_reasoning_effort: str,
     solver_model: str,
     solver_reasoning_effort: str,
+    solver_backend: str,
     concurrency: int,
 ) -> None:
     """Generate TaskSpecs for catalog capabilities, with one GLM agent for each capability."""
@@ -318,6 +340,7 @@ def main(
             concurrency=concurrency,
             output=output,
             parallel_api_key=os.environ[PARALLEL_API_KEY_ENV],
+            solver_backend=Backend(solver_backend),
         )
     )
     _write(output / SUMMARY_FILE, json.dumps(summary, indent=2))

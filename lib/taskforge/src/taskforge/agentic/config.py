@@ -43,6 +43,9 @@ class AgenticConfig:
     taskcompendium and verifyit, or a ShellSim factory, which has no Python."""
     solver_model: Model
     """The policy of the validation rollouts."""
+    solver_factory: MachineFactory
+    """The machines of the validation rollouts: a ShellSim factory, or a ``LocalMachineFactory`` (bubblewrap) whose
+    shell runs real Linux programs. A task declares the command semantics of this backend."""
     judge: ModelClient
     """The independent reviewer that ``submit`` asks last."""
     judge_policy: LLMPolicy
