@@ -110,9 +110,43 @@ The Viewer has no historical-revision parameter and may serve a different
 revision from the one we used. Eight current sources also originate outside
 Hugging Face's row datasets. Every source can have stable file and record
 coordinates, but universal access through `/rows` would require additional
-hosting. The reconstruction tool must verify Viewer revision and content,
-and use pinned provider files when necessary. A successful lookup at the
-same numeric offset is not sufficient evidence of a matching revision.
+hosting. In strict reconstruction mode, the tool must verify Viewer revision
+and content, and use pinned provider files when necessary. A successful lookup
+at the same numeric offset is not sufficient evidence of a matching revision.
+
+The reconstruction client should also offer explicit content-verified recovery
+for `hf_viewer_parquet` locators when the current Viewer revision differs.
+Removing an earlier provider row can shift the offsets of surviving rows.
+Inspect the recorded offset and up to 100 rows on either side, clipped to the
+split bounds. This configurable search radius gives at most 201 candidate rows.
+Even if the recorded offset matches, inspect the window for ambiguous matches.
+Fetch slices in bounded requests and keep every response in an attempt on the
+same observed revision. Reject partial or truncated values. Do not expand to
+an unbounded scan. `source_manifest` offsets must use their pinned-file path;
+they cannot be substituted for Viewer offsets.
+
+Every candidate must pass the documented source transform and normalization
+before its hash can match the released `id`. Use stable provider IDs as
+additional identity checks where available. If several rows match and their
+original occurrence cannot be distinguished, report ambiguous provenance.
+Emit one recovered occurrence for each release-index occurrence; finding
+duplicate provider rows must not add copies. Record the original locator,
+observed revision, recovered coordinates, and matching hash in a recovery
+report, leaving the release manifest intact. A content match establishes the
+selected text; it does not establish the original row's provenance at a changed
+revision, even if the bounded window contains only one match.
+
+This fallback can recover small positional shifts while source order and text
+remain stable. It cannot recover a removed target or guarantee recovery after
+reordering, large deletions, or text edits. The initial recovery client should
+support transforms that reconstruct a document from one provider row. Assembled
+documents still require all contributing rows in the documented order; finding
+one nearby page is insufficient. Keep those documents on the pinned-file path
+until complete input assembly can be verified. If a bounded search fails or
+leaves ambiguous provenance, use pinned files when available or report the
+document as unresolved. The current draft implements strict coordinate and
+Viewer-response validation; window search belongs in the reconstruction client
+when that client is built.
 
 The transforms need to be documented precisely. For FineTranslations, for
 example, a document contains both the original text and its English
