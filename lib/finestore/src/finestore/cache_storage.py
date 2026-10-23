@@ -29,7 +29,6 @@ from finestore.reader import BlobCorruptionError, ReadView
 logger = logging.getLogger(__name__)
 
 _REPAIR_ATTEMPTS = 3
-_GCS_SCHEME = "gs"
 
 
 class CacheReadView(ReadView):
@@ -98,26 +97,6 @@ def available_cache_snapshot(root: str) -> ArchiveSnapshot:
     return _discard_cache_history(snapshot, missing)
 
 
-def _refresh_object(path: str, refresh_before: datetime | None) -> None:
-    location = StoragePath(path)
-    fs, key = factory.url_to_fs(path)
-    fs.invalidate_cache(key)
-    modified = fs.created(key) if location.scheme == _GCS_SCHEME else fs.modified(key)
-    if refresh_before is None or modified >= refresh_before:
-        return
-    if location.is_local:
-        fs.touch(key, truncate=False)
-    elif location.scheme == "s3":
-        # S3 requires metadata replacement for self-copies. FineStore's integrity and
-        # table contracts live in the manifest, so replacing object metadata preserves them.
-        fs.cp_file(key, key, MetadataDirective="REPLACE")
-    elif location.scheme == _GCS_SCHEME:
-        fs.cp_file(key, key)
-    else:
-        raise ValueError(f"cache retention does not support {location.scheme!r}")
-    fs.invalidate_cache(key)
-
-
 def maintain_cache(root: str, *, refresh_before: datetime | None) -> None:
     """Repair missing cache references and refresh aging live objects before a write.
 
@@ -139,14 +118,14 @@ def _maintain_cache_once(root: str, *, refresh_before: datetime | None) -> None:
     missing = set()
     for name, table in snapshot.manifest.tables.items():
         try:
-            _refresh_object(table.metadata_path, refresh_before)
+            StoragePath(table.metadata_path).refresh_lifetime(before=refresh_before)
         except FileNotFoundError as exc:
             schema_path = write_schema(layout, blob_table_metadata(BlobTables(name)))
             if schema_path != table.metadata_path:
                 raise ValueError(f"cache table {name!r} has an unexpected schema path") from exc
         for shard in table.shards:
             try:
-                _refresh_object(shard.path, refresh_before)
+                StoragePath(shard.path).refresh_lifetime(before=refresh_before)
             except FileNotFoundError:
                 missing.add(shard.path)
     available = _discard_cache_history(snapshot, missing)
