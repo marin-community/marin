@@ -43,7 +43,9 @@ use crate::errors::StatsError;
 use crate::indices::{IndexRegistry, SegmentArtifacts};
 use crate::partition_policy::{PhysicalPartitionPolicy, SegmentPartition};
 use crate::query::file_scan::REMOTE_FOOTER_SIZE_HINT;
-use crate::store::object_store::{ObjectId, ObjectStore, QueryCacheAdmission, ScanSource};
+use crate::store::object_store::{
+    CacheMode, ObjectId, ObjectStore, QueryCacheAdmission, ScanSource,
+};
 use crate::store::table::query_view::SegmentObjectMap;
 
 /// Concurrent exact existence probes for selected uncached source objects.
@@ -106,10 +108,8 @@ impl ObjectSources {
     /// cache file when one exists, otherwise the object's remote URL —
     /// the query proceeds against the remote while admitted background fills
     /// materialize the cache for later scans. Reuse and the shared query budget
-    /// gate those fills before the store's fetch semaphore. A store whose
-    /// provider cannot serve remote scans localizes
-    /// synchronously, and a source that exists nowhere fails the scan: its
-    /// rows are part of the answer.
+    /// gate those fills before the store's fetch semaphore. A source that exists
+    /// nowhere fails the scan: its rows are part of the answer.
     ///
     /// Artifacts never block a query. A cached bundle or projection is used; an
     /// uncached one may be warmed in the background and this scan reads the source
@@ -128,7 +128,7 @@ impl ObjectSources {
             };
             match self
                 .store
-                .scan_source(&objects.source)
+                .scan_source(&objects.source, CacheMode::Query(admission))
                 .await
                 .map_err(external)?
             {
@@ -136,7 +136,6 @@ impl ObjectSources {
                     resolved.local.push(local.to_string_lossy().into_owned())
                 }
                 ScanSource::Remote(url) => {
-                    self.store.warm_query(&objects.source, admission);
                     resolved.remote.push(url);
                     remote_sources.push(objects.source.id.clone());
                 }
@@ -151,15 +150,10 @@ impl ObjectSources {
                 else {
                     continue;
                 };
-                if self
-                    .store
-                    .cached_path(&artifact)
+                self.store
+                    .scan_source(&artifact, CacheMode::Query(admission))
                     .await
-                    .map_err(external)?
-                    .is_none()
-                {
-                    self.store.warm_query(&artifact, admission);
-                }
+                    .map_err(external)?;
             }
         }
         self.verify_remote_sources_exist(&remote_sources)

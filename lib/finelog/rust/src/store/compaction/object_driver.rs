@@ -30,7 +30,7 @@ use crate::store::compaction::executor::{
 };
 use crate::store::compaction::planner::{plan, plan_forced_l0, UnpartitionedRunPolicy};
 use crate::store::compaction::staging::StagingDir;
-use crate::store::object_store::{ObjectReference, ScanSource, OBJECTS_PREFIX};
+use crate::store::object_store::{CacheMode, ObjectReference, ScanSource, OBJECTS_PREFIX};
 use crate::store::table::controller::{MaintenanceLease, TableController};
 use crate::store::table::index_artifacts::publish_segment_artifacts;
 use crate::store::table::segment_format::SegmentFormat;
@@ -237,7 +237,7 @@ async fn run(
                 })?;
                 runtime.block_on(async {
                     let guard = visibility.read().await;
-                    match objects.scan_source(reference).await? {
+                    match objects.scan_source(reference, CacheMode::Disabled).await? {
                         ScanSource::Local(path) => {
                             cached_inputs += 1;
                             read_parquet_batches(

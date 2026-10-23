@@ -68,6 +68,12 @@ pub enum ScanSource {
     Remote(String),
 }
 
+pub enum CacheMode<'a> {
+    Query(&'a QueryCacheAdmission),
+    /// Use existing cache entries without populating misses or recording demand.
+    Disabled,
+}
+
 /// Result of a best-effort batch deletion.
 ///
 /// Confirmed IDs are safe to forget even when the provider reports a later
@@ -259,14 +265,24 @@ pub trait ObjectStore: Send + Sync {
 
     /// Resolve an input using the cache when present, otherwise its backing
     /// scan location. Callers must protect cached paths from concurrent eviction.
-    async fn scan_source(&self, reference: &ObjectReference) -> Result<ScanSource, StatsError> {
+    async fn scan_source(
+        &self,
+        reference: &ObjectReference,
+        cache_mode: CacheMode<'_>,
+    ) -> Result<ScanSource, StatsError> {
         if let Some(path) = self.cached_path(reference).await? {
             return Ok(ScanSource::Local(path));
         }
         if let Some(url) = self.remote_scan_url(&reference.id) {
+            if let CacheMode::Query(query) = cache_mode {
+                self.warm_query(reference, query);
+            }
             return Ok(ScanSource::Remote(url));
         }
-        Ok(ScanSource::Local(self.local_path(reference).await?))
+        Err(StatsError::Internal(format!(
+            "object store has no scan source for {:?}",
+            reference.id.as_str()
+        )))
     }
 
     /// Begin a maintenance cache fill without waiting. Query callers use
