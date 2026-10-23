@@ -21,7 +21,7 @@ from taskforge.ledger.jsonl import JsonlLedger, read_entries
 from taskforge.ledger.records import EntryKind, Ledger
 from taskforge.llm.client import Completion, FinishReason, Usage
 from taskforge.llm.policy import LLMPolicy
-from taskforge.stage10_proposal.model import TaskProposal
+from taskforge.stage10_proposal.model import SolverMachine, TaskProposal
 from taskforge.stage30_author import load_process
 from taskforge.stage30_author.author import AuthorContext, AuthoredProgram, AuthorFailure, Revision, RevisionKind
 from taskforge.stage30_author.load_process import ProgramManifest, load_program_in_process
@@ -190,6 +190,35 @@ async def test_a_candidate_file_at_an_absolute_path_is_refused_and_the_session_g
     refused, graded = tool_outputs(model)[2:4]
     assert refused.startswith("error: grading refused: '/workspace/report.md'") and "workspace/report.md" in refused
     assert graded.startswith("status graded, reward 0.0")
+
+
+@pytest.mark.parametrize(
+    ("machine", "environment"),
+    [(SolverMachine.SHELLSIM, "draft.requirements(image=None)"), (SolverMachine.NONE, "draft.NO_MACHINE")],
+    ids=["shellsim", "no-machine"],
+)
+async def test_a_task_with_or_without_a_machine_grades_in_its_build_and_through_the_tool(
+    tmp_path, services, proposal, ledger, machine, environment
+):
+    """The program's grader step and ``run_grade_candidate`` both pass the task's requirements as they are."""
+    declared = declaring(proposal, machine)
+    program = PROGRAM.replace("grade_candidate(context, None,", f"grade_candidate(context, {environment},").replace(
+        "environment=draft.requirements(image=None)", f"environment={environment}"
+    )
+    assert program.count(environment) == 2
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": program})),
+        turn(("run_build", {"path": "program.py"})),
+        turn(("run_grade_candidate", {"reply": "42"})),
+        turn(("run_grade_candidate", {"reply": "41"})),
+        turn(("submit", {"path": "program.py", "notes": "grades 6 * 7"})),
+    )
+    build = session_build(tmp_path, model, services, declared, 0)
+    await author_call(build, model, ledger, tmp_path / "workpiece", declared)
+
+    built, right, wrong = tool_outputs(model)[1:4]
+    assert built.startswith("built: program ")
+    assert right.startswith("status graded, reward 1.0") and wrong.startswith("status graded, reward 0.0")
 
 
 async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_step(tmp_path, author, proposal, services):

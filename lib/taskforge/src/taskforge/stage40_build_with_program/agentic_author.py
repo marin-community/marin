@@ -89,7 +89,6 @@ from taskforge.llm.client import ModelClient, ModelUnavailable, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
 from taskforge.spec import draft as draft_module
-from taskforge.spec.draft import SHELL_CAPABILITY
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
@@ -714,10 +713,9 @@ class AuthorSession:
             services=self.services,
             step=GRADE_STEP,
         )
-        machine = SHELL_CAPABILITY in task.environment_requirements.capabilities
         return await grade_candidate(
             context,
-            task.environment_requirements if machine else None,
+            task.environment_requirements,
             grader.package,
             task.answer_type,
             task.answer_format,

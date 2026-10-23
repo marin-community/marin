@@ -307,8 +307,11 @@ build without a ledger records nothing.
 
 A step uses the host through `sandbox_effects`: `build_machine` prepares a machine as a task attempt
 would, `grade_candidate` grades a candidate reply and workspace through `RolloutEngine.run_task`, and
-`publish_image` pushes a task image. `infrastructure.host_checked_factories` wraps the factories
-first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
+`publish_image` pushes a task image. `grade_candidate` takes the task's requirements as the
+`requirements` step returns them and starts a task machine exactly when they have the shell
+capability, as validation's lowering does, so `draft.NO_MACHINE` grades without one. The SDK
+reference the authors read (`glm_author.sdk_reference`) describes the `GradeResult` it returns.
+`infrastructure.host_checked_factories` wraps the factories first, and `run_program` raises `BuildInfrastructureFailure` for a host fault anywhere in a step's
 cause chain, even one the program wrapped, so the caller retries or abandons the workpiece instead of
 asking the author for a revision. A host fault is a machine the host could not create or lost
 (classified by the message table in `sandbox.host_failures`, which validation's classifier reads too),

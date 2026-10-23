@@ -31,6 +31,17 @@ def test_the_sdk_reference_lists_the_fields_of_the_task_types_steps_read():
     assert "resource_bytes(resource: taskcompendium.models.TaskResource) -> bytes" in reference
 
 
+def test_the_sdk_reference_lists_what_grade_candidate_returns():
+    reference = sdk_reference()
+
+    assert "class GradeResult(status: taskcompendium.grading_result.Outcome, reward: float | None" in reference
+    assert "score_min: float = 0.0, score_max: float = 1.0" in reference
+    assert "enum Outcome: GRADED = 'graded', SUBMISSION_FAILURE = 'submission_failure'" in reference
+    assert "enum AnswerType: TEXT = 'text'" in reference
+    assert "reward_in_range(grade: taskcompendium.grading_result.GradeResult) -> bool" in reference
+    assert "grader_checks(grade: taskcompendium.grading_result.GradeResult)" in reference
+
+
 def test_each_name_appears_in_one_section_of_the_sdk_reference():
     names = [name for _, _, section in REFERENCE_SECTIONS for name in section]
 
