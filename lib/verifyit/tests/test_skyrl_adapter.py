@@ -164,6 +164,7 @@ def test_gsm8k_malformed_reference_cannot_award_literal_or_format_credit(expecte
         r"\text{Inf}",
         r"\dfracfoo{3}{\pi}",
         "1,2",
+        r"\sqrt{\begin{pmatrix}1 & 2\\3 & 4\end{pmatrix}}",
     ],
 )
 @pytest.mark.parametrize("candidate", ["", "42", "same_reference"])
@@ -172,7 +173,10 @@ def test_aime_invalid_reference_precedes_candidate_scoring(expected, candidate):
         grade_aime_candidate(expected, expected if candidate == "same_reference" else candidate)
 
 
-@pytest.mark.parametrize("candidate", [r"\frac{1}{0}", "nan", "inf", "42,43", "43,42"])
+@pytest.mark.parametrize(
+    "candidate",
+    [r"\frac{1}{0}", "nan", "inf", "42,43", "43,42", r"\sqrt{\begin{pmatrix}1 & 2\\3 & 4\end{pmatrix}}"],
+)
 def test_aime_undefined_or_multiple_candidates_cannot_earn_credit(candidate):
     assert grade_aime_candidate("42", candidate).reward == 0.0
 
