@@ -104,6 +104,7 @@ def build_diagnostic_run(
     max_seq_len: int | None = None,
     context_axis_size: int = 1,
     expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
+    balance_attention_rows: bool = False,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
@@ -237,7 +238,10 @@ def build_diagnostic_run(
         master_param_mode=master_param_mode,
     )
     grug_trainer = dataclasses.replace(
-        grug_trainer, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size
+        grug_trainer,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+        balance_attention_rows=balance_attention_rows,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -553,6 +557,12 @@ def build_diagnostic_run(
 )
 @click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_EP_EXPERT_AXIS_SIZE, show_default=True)
 @click.option(
+    "--balance-attention-rows/--no-balance-attention-rows",
+    default=False,
+    show_default=True,
+    help="Deal rows to batch shards by attention cost.",
+)
+@click.option(
     "--qk-mult",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
@@ -596,6 +606,7 @@ def main(
     seq_len: int | None,
     context_axis_size: int,
     expert_axis_size: int,
+    balance_attention_rows: bool,
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     restore_from: str | None,
@@ -615,6 +626,7 @@ def main(
         max_seq_len=seq_len,
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
+        balance_attention_rows=balance_attention_rows,
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,

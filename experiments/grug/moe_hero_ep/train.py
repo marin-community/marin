@@ -334,6 +334,9 @@ class GrugTrainerConfig:
     replica_axis_size: int | None = None
     # Sequence shards route independently; routing statistics and loss include this axis.
     context_axis_size: int = 1
+    # Deal rows to batch shards by attention cost (`balance_attention_rows`). Off by default: it was
+    # measured to pay off at 65K, gained only 0.4% at 16K on one rack, and its full-batch gather crosses racks.
+    balance_attention_rows: bool = False
     sharding_dump_path: str | None = None
 
     def __post_init__(self):
@@ -860,9 +863,6 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
 
 
 def _loss_and_grads(params, batch, mp: jmp.Policy, z_loss: float | None):
-    # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
-    batch = balance_attention_rows(batch)
-
     def loss_fn(model):
         compute_params = mp.cast_to_compute(model)
         return compute_params.next_token_loss(
@@ -891,7 +891,9 @@ def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float
     )
 
 
-def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
+def _make_diagnostic_watch_step(
+    mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig, balance_rows: bool = False
+):
     watch_targets = (
         tuple(t.strip() for t in watch_config.watch_targets.split(","))
         if isinstance(watch_config.watch_targets, str)
@@ -906,6 +908,8 @@ def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_c
     @jax.jit
     def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
         params = apply_qb_betas(params, pending_qb_betas)
+        if balance_rows:
+            batch = balance_attention_rows(batch)
         return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
 
     return diagnostic_watch_step
@@ -920,6 +924,7 @@ def _make_train_step(
     watch_config: WatchConfig | None = None,
     offload_opt_state: bool = False,
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE,
+    balance_rows: bool = False,
 ):
     one = jnp.array(1, dtype=jnp.int32)
     z_loss = z_loss_weight if z_loss_weight > 0 else None
@@ -941,6 +946,9 @@ def _make_train_step(
         else:
             qb_ema_params = None
 
+        if balance_rows:
+            # Moves rows between batch shards; see `balance_attention_rows` for its effect on the loss.
+            batch = balance_attention_rows(batch)
         (loss, summarized_metrics), grads = _loss_and_grads(qb_params, batch, mp, z_loss)
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
@@ -1027,6 +1035,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
             trainer.mp,
             z_loss_weight=config.trainer.z_loss_weight,
             watch_config=watch_config,
+            balance_rows=config.trainer.balance_attention_rows,
         )
         inline_watch_config = None
     train_step = _make_train_step(
@@ -1037,6 +1046,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         watch_config=inline_watch_config,
         offload_opt_state=config.trainer.offload_opt_state,
         master_param_mode=config.trainer.master_param_mode,
+        balance_rows=config.trainer.balance_attention_rows,
     )
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
