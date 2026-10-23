@@ -39,7 +39,7 @@ class IngestConfig:
 
 
 def prepare_data(config: IngestConfig) -> None:
-    """Produce task Parquet in the trainer's frozen CPU dependency environment."""
+    """Write the pinned training pool and held-out task Parquet files."""
     environment = dict(os.environ)
     for key in ("PYTHONPATH", "PYTHONHOME", "UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV"):
         environment.pop(key, None)
