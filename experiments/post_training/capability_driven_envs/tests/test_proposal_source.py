@@ -1,6 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import jsonschema
 import pytest
 
 # These tests run in the marin-taskforge package environment; environments without it skip them.
@@ -21,7 +22,6 @@ from taskforge.stage10_proposal.model import (
     Environment,
     ResearchNeed,
     SolverMachine,
-    document_regex,
     document_request_fields,
     solver_machine_violation,
 )
@@ -180,25 +180,27 @@ def test_plan_and_proposal_prompts_share_the_research_criterion_and_the_catalog_
 
 def filled_document(idea, number: int, research_need: ResearchNeed = ResearchNeed.NEEDED) -> str:
     """Fill every placeholder of the prompt's template; a needed document cites its research item."""
-    document = (
-        document_template(f"{CAPABILITY_ID}/{number}", idea)
-        .replace("<reasoning | shellsim | container>", "shellsim")
-        .replace("<none (reasoning only) | shellsim | cpython | packages, or null for container>", "cpython")
-        .replace("<simple | code | judge | composite>", "code")
-        .replace("<needed | not_needed>", str(research_need))
-        .replace("<web | github>", "github")
+    raw = json.loads(document_template(f"{CAPABILITY_ID}/{number}", idea))
+    raw["header"].update(
+        environment="shellsim", solver_machine="cpython", verification="judge", research_need=str(research_need)
     )
+    raw["header"]["research"][0]["kind"] = "github"
     if research_need is ResearchNeed.NOT_NEEDED:
-        return re.sub(r"research:\n  - .*\n", "research: []\n", document)
-    return document.replace("## Research plan\n<...>", "## Research plan\nFind the repository (research[0]).")
+        raw["header"]["research"] = []
+    else:
+        raw["body"] = raw["body"].replace(
+            "## Research plan\n<...>", "## Research plan\nFind the repository (research[0])."
+        )
+    return json.dumps(raw)
 
 
 @pytest.mark.parametrize("research_need", list(ResearchNeed))
-def test_the_filled_template_is_a_document_the_regex_accepts_and_the_identity_is_checked(ideas, research_need):
+def test_filled_template_matches_generation_schema_and_identity_is_checked(ideas, research_need):
     idea = ideas[CAPABILITY_ID]
     text = filled_document(idea, 4, research_need)
 
-    assert re.fullmatch(document_regex(f"{CAPABILITY_ID}/4", source_ref(idea)), text)
+    schema = document_request_fields(f"{CAPABILITY_ID}/4", source_ref(idea))["response_format"]["json_schema"]["schema"]
+    jsonschema.validate(json.loads(text), schema)
     proposal = checked_proposal(text, idea, 4)
     assert proposal.header.environment is Environment.SHELLSIM
     assert proposal.header.solver_machine is SolverMachine.CPYTHON
@@ -214,7 +216,7 @@ def author(model: ScriptedModel, idea) -> SlotOutcome:
     return asyncio.run(author_proposal(model, LLMPolicy(), idea, two_slots, two_slots.slots[0]))
 
 
-def test_author_request_carries_the_document_regex_with_continuations_off(ideas):
+def test_author_request_carries_the_document_schema_with_continuations_off(ideas):
     idea = ideas[CAPABILITY_ID]
     model = ScriptedModel()
     model.reply(filled_document(idea, 1))
@@ -239,7 +241,7 @@ def test_length_cut_document_is_a_slot_failure_without_continuation(ideas):
     assert len(model.requests) == 1
 
 
-def test_consistency_error_gets_one_regex_repair(ideas):
+def test_consistency_error_gets_one_schema_repair(ideas):
     idea = ideas[CAPABILITY_ID]
     valid = filled_document(idea, 1)
     uncited = valid.replace("Find the repository (research[0]).", "Find the repository.")
