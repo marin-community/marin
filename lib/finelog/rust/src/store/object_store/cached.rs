@@ -884,7 +884,6 @@ mod tests {
 
     #[tokio::test]
     async fn query_warming_requires_reuse_and_shares_byte_and_object_limits() {
-        // Each case tests observable cache contents with real remote files.
         // The first limit binds bytes, the second binds object count.
         for (bytes, objects) in [(8, 10), (100, 2)] {
             let (store, roots) = cached_store("object_cache_query_admission", None);
