@@ -28,7 +28,7 @@ from experiments.grug.moe_hero_ep.weights import restore_weights
 MANIFEST_FILENAME = "export-manifest.json"
 REQUEST_FILENAME = "export-request.json"
 INDEX_FILENAME = "model.safetensors.index.json"
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
 EXPERT_BANK = re.compile(r"^(.*\.mlp\.experts)\.(gate_proj|up_proj|down_proj)\.weight$")
 
 
@@ -74,7 +74,6 @@ def export(config: ExportConfig) -> None:
     mesh = compact_grug_mesh(expert_axis_size=config.expert_axis_size, replica_axis_size=config.replica_axis_size)
     with jax.set_mesh(mesh):
         model = restore_weights(config.checkpoint, config.metadata_digest, config.model, mesh)
-        # restore_weights already applied the pending QB update to authoritative weights.
         model = jax.tree.map(lambda x: x.astype(jnp.bfloat16) if eqx.is_inexact_array(x) else x, model)
         jax.block_until_ready(model)
         gc.collect()

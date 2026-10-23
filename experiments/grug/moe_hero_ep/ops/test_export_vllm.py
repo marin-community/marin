@@ -52,7 +52,11 @@ def native_fixture(root: str, *, master: bool = False) -> tuple[ExportConfig, Tr
                 for i, x in enumerate(leaves)
             ],
         )
-        model = eqx.tree_at(lambda m: m.stacked_blocks.stacked.mlp.router_bias, model, jnp.full((2, 4), 9.0))
+        model = eqx.tree_at(
+            lambda m: m.stacked_blocks.stacked.mlp.router_bias,
+            model,
+            jnp.array([[3.0, -1.0, 2.0, -4.0], [1.0, -2.0, 4.0, -3.0]]),
+        )
         pending = jnp.array([[1, -2, 4, -1], [-4, 1, 2, 7]], dtype=jnp.float32)
         state = {"params": model, "pending_qb_betas": pending}
         if master:
@@ -80,19 +84,18 @@ def reload_export(root: Path) -> tuple[dict, dict[str, np.ndarray]]:
     return index, tensors
 
 
-def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch):
+@pytest.mark.parametrize("master", [False, True])
+def test_native_export_preserves_all_weights_and_config(tmp_path, monkeypatch, master):
     monkeypatch.setattr(hero_export, "DEFAULT_MAX_SHARD_SIZE", 4096)
-    request, model = native_fixture(str(tmp_path / "checkpoint"), master=True)
+    request, model = native_fixture(str(tmp_path / "checkpoint"), master=master)
     export(request)
     root = Path(request.destination)
     index, tensors = reload_export(root)
     assert len(set(index["weight_map"].values())) > 1
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1, replica_axis_size=1)):
-        # The established HF mapping is the oracle for unchanged ordinary weights.
+        # The established HF mapping is the oracle for unchanged ordinary weights. Its router bias is
+        # the saved one, which differs from the pending betas stored in the checkpoint.
         expected = model.to_state_dict()
-        # Known centered negative betas replace the saved bias (9).
-        for layer, bias in enumerate([[-0.5, 2.5, -3.5, 1.5], [5.5, 0.5, -0.5, -5.5]]):
-            expected[f"model.layers.{layer}.mlp.router.bias"] = jnp.asarray(bias)
         # Check routed experts independently from the exporter and its bank mapping.
         bank = model.stacked_blocks.stacked.mlp.expert_mlp
         for projection, values in [("gate_proj", bank.w_gate), ("up_proj", bank.w_up), ("down_proj", bank.w_down)]:
