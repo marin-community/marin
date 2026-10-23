@@ -37,6 +37,9 @@ def main() -> None:
             allow_patterns=["*.json", "*.safetensors", "*.jinja", "merges.txt", "vocab.json"],
         )
     (args.output / "model-paths.json").write_text(json.dumps(paths, indent=2) + "\n")
+    (args.output / "model-sources.json").write_text(
+        json.dumps({name: manifest[name] for name in args.models}, indent=2) + "\n"
+    )
     revisions = DATASET_REVISIONS
     gsm = load_dataset("openai/gsm8k", "main", split="test", revision=revisions["openai/gsm8k"])
     mbpp = load_dataset(
