@@ -24,7 +24,7 @@ src/taskforge/
   sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
-  stage10_proposal/            model.py: the TaskProposal document and its generation regex;
+  stage10_proposal/            model.py: the TaskProposal document and its generation schema;
                                source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
                                protocol, `proposal_batch`, `propose_all`
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
@@ -82,8 +82,8 @@ solver's machine: `null` for a container proposal, which runs in the image its b
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
 The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
 not a relative path inside the build root and a `build` name that repeats.
-`document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
-field that constrains a completion to the canonical layout for that id and source. A reply cut off
+`document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
+field that constrains a completion to the typed object for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
 
