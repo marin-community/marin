@@ -177,12 +177,14 @@ and submits no GPU jobs.
 ```bash
 python3 experiments/grug/noise_belay/prepare.py --checkout /tmp/noise-belay-runtime
 cd /tmp/noise-belay-runtime
-JAX_PLATFORMS=cpu PYTHONPATH=.:experiments/grug/noise_belay uv run --all-packages --no-default-groups --group test python -m pytest -n 2 -m manual experiments/grug/noise_belay/test_candidate11_forward.py experiments/grug/noise_belay/test_forward_credit.py experiments/grug/noise_belay/test_routed_expert_credit.py -q
+JAX_PLATFORMS=cpu PYTHONPATH=.:experiments/grug/noise_belay uv run --all-packages --no-default-groups --group test python -m pytest -n 2 -m manual experiments/grug/noise_belay/check_candidate11_forward.py experiments/grug/noise_belay/check_forward_credit.py experiments/grug/noise_belay/check_routed_expert_credit.py -q
 ```
 
 These specific CPU checks carry `manual` because they require that source-pinned
-runtime, not because they use a live cluster. The explicit file list and marker
-select only this experiment. Ordinary current-main CI excludes them.
+runtime, not because they use a live cluster. Their `check_*.py` filenames keep
+them outside automatic current-main test discovery: marker filtering happens
+after imports, which already require historical APIs. The explicit file list
+and marker above run all 24 checks in the prepared runtime.
 
 For native data/control, prepare a separate destination instead of reusing the
 CPU-only worktree:

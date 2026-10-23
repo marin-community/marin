@@ -4,11 +4,12 @@
   "component_checks": {
     "passed": 24,
     "failed": 0,
-    "seconds": 31.57,
+    "seconds": 51.91,
     "workers": 2,
     "hardware": "local CPU",
     "marker": "manual",
-    "reason_for_marker": "historical runtime required; no cluster access"
+    "reason_for_marker": "historical runtime required; no cluster access",
+    "discovery": "Explicit check_*.py paths in the source-pinned runtime; excluded from automatic current-main discovery before import"
   },
   "current_main_affected_suite": {
     "passed": 3113,
@@ -44,5 +45,6 @@
       "ml-overloaded-function": "Retain the historical timing entrypoints and their explicit compilation, training, checkpoint and evaluation boundaries. Shared repetition logic is extracted; a larger orchestration refactor is outside this incomplete experiment record.",
       "ml-raw-fsspec-io": "The writer uses rigging.filesystem.buckets.filesystem_for, the repository-approved bucket resolver, not raw fsspec construction. Preserve its bucket-specific endpoint/credential routing in the pinned runtime."
     }
-  }
+  },
+  "ci_packaging_fix": "Initial CI imported a historical-runtime module before manual-marker filtering and failed on removed _receiver_kept_at_sender. Renamed the three suites to check_*.py and reran all 24 in a fresh prepared runtime; numerical assertions unchanged."
 }
