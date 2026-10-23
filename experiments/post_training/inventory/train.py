@@ -26,7 +26,8 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
-from experiments.post_training.inventory.data import TRAIN_FILENAME, VALIDATION_FILENAME, VALIDATION_ROWS, data_step
+from experiments.post_training.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
+from experiments.post_training.inventory.data import VALIDATION_ROWS, data_step
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
