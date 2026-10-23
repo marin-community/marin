@@ -234,7 +234,7 @@ def verifier_timeout(grader: Grader) -> float:
 
 def rollout_limits(
     *,
-    max_turns: int,
+    max_turns: int | None,
     model_turn_timeout: float | None,
     tool_turn_timeout: float | None,
     total_turn_timeout: float | None,
