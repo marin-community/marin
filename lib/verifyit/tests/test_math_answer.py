@@ -332,3 +332,12 @@ def test_relation_answers_the_verifier_cannot_compare_are_invalid_not_crashes():
     spec = MathSpec(expected=r"x \neq 3", profile=MathProfile.BOXED)
     with pytest.raises(InvalidTask, match="cannot compare"):
         grade_math.grade_math_candidate(spec, r"The final answer is $\boxed{x \neq 3X'}$.")
+
+
+@pytest.mark.parametrize("profile", [MathProfile.BOXED, MathProfile.RAW])
+def test_relation_chains_of_different_length_grade_as_a_mismatch(profile):
+    """math-verify raises on chains of different length (huggingface/Math-Verify#93);
+    a longer chain is a wrong answer, not a grading failure."""
+    spec = MathSpec(expected="1<x<3", profile=profile)
+    assert grade_math.grade_math_candidate(spec, r"\boxed{1<x<3<5}").reward == 0
+    assert grade_math.grade_math_candidate(spec, r"\boxed{1<x<3}").reward == 1
