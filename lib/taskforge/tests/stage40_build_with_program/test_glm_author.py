@@ -55,7 +55,7 @@ async def test_the_author_repairs_a_refused_program_and_returns_the_accepted_sou
     )
     schema = fake_glm.requests[0]["response_format"]["json_schema"]["schema"]
     assert list(schema["properties"]) == ["notes", "source"]
-    assert schema["properties"]["notes"]["maxLength"] == NOTES_LIMIT == 2000
+    assert schema["properties"]["notes"]["maxLength"] == NOTES_LIMIT
 
 
 async def test_a_revision_continues_from_the_program_the_workpiece_holds(

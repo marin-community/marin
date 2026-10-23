@@ -202,4 +202,3 @@ def test_build_manifest_cannot_escape_root_or_replace_named_artifact(proposal, f
     raw["header"][field] = value
     with pytest.raises(ProposalFormatError, match=field):
         parse(json.dumps(raw))
-
