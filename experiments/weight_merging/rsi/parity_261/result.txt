@@ -1,0 +1,27 @@
+# Step12 multi-host v4-32 MATH500 — task261 step1
+
+Job `/karan/rsi261-step12-v4-32-r3`: all four tasks succeeded; slice `t1v-n-4667bb3c` released. One reserved v4-32, four hosts/16chips, BF16 TP16/PP1, job-local v4 tiles, layer_types override; all26 windows and four KV groups verified. Model S@50fe2f488aee, vLLMfb02daf, tpu-inferenceae387b8, Evalchemy3bb with historical client.
+
+| Measurement | Result |
+|---|---:|
+| MATH500 | 467/500 = 0.934 |
+| vs H1000.944 combined-SEM z | -0.661, parity |
+| vs fixed singlehostTPU0.940 combined-SEM z | -0.390, parity |
+| vs H100 per-item gains / losses / agreement | 14 / 19 / 467 of500 |
+| Generated tokens | 992,143 |
+| Finish reasons | 500stop; 0length/abort/error/repetition |
+| Evaluation wall | 1990.707s (33m10.7s) |
+| Effective evaluation throughput | 498.387tokens/s; 15.070items/min |
+| Worker start to cleanup | 3121.480s (52m1.5s) |
+| Worker start to serving readiness | 1076.846s (17m56.8s) |
+| Engine init (profile/cache/warmup) | 463.75s, including449.58s compilation |
+| Warm short-output microbenchmark | 675.491tokens/s, concurrency8,16x128tokens after one warmup |
+| Post-load HBM/chip | 13,582,974,976–14,023,953,920 bytes (12.650–13.061GiB) |
+| Measured device memory limit | 33,014,407,168bytes (30.748GiB) |
+
+The token/finish counters are server Prometheus after-before deltas, excluding all17 warmup/microbenchmark requests. Effective evaluation throughput includes harness/scoring overhead; the short-output warm microbenchmark is a separate workload. Post-load HBM is not runtime peak. Server context73728 is larger than reference32768; evaluator effective32704 and seed19311/concurrency8 are retained. Sampling is unseeded at the request level. This is one pass, not a claim of exact numerical identity.
+
+Reproduce analysis: `.venv/bin/python -m experiments.weight_merging.rsi.parity_261.parity_check /home/karan/scratchpad/task-261/r3 --h100-items /home/karan/scratchpad/task-261/reference/h100_20261017_per_item.json`.
+Archive: `gs://marin-us-central2/scratch/karan/task261/step12-r3/`; result/samples tables in `math500/data/`; derived `summary.json`, `per-item.json`, and this report at archive root. No generation failure is hidden by the client exit status: task outcome succeeded, generated/scored counts500, and500unique sample IDs independently checked.
+
+Attempts r1/r2 ended before weight load on task-local host-path/EnvironmentConfig errors; r3 succeeded. No other jobs were touched. Next slice belongs to cormorant batch4; task261 v0.1 subset follows its release.

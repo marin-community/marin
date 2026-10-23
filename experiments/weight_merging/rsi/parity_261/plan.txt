@@ -1,0 +1,21 @@
+Task 261 Step12 full MATH500, submitted 2026-10-23 01:07 UTC
+Job: /karan/rsi261-step12-v4-32-r1
+Base: task260 f6431a208de69c7b7a8343e06ebdf7d3f8f9b395 (launcher PR10535)
+Command: .venv/bin/python -m experiments.weight_merging.rsi.parity_261.launch --submit
+Dry-run: same command without --submit.
+Placement: one v4-32 reserved slice in us-central2-b, four replicas coscheduled by tpu-name; in-job same-slice/distinct-host preflight.
+Bounds: 4h queue, 4h runtime, zero failure/preemption retries. Every host owns only its Ray subprocesses. Rank0 returns from the experiment callback to close server/endpoint and coordinate follower shutdown.
+Stack: vLLM fb02daf1d7139d2adaeb0588448649591657d1e3; tpu-inference ae387b8bb7a644bbe7e17a9ce11bd701a012aa8d; job-private v4 tile preset validated by task255; static window trace and post-load HBM only.
+Model: Step12 S@50fe2f488aee7730bbccc721024b35229075602e; same-region staged weights and tokenizer. BF16, TP16/PP1, no EP; 73728 context, max_num_batched_tokens512, max_num_seqs8.
+Gate before eval: all26 layers, local2048 at19 layers; globalNone at3,7,11,15,19,23,25; four KV groups; /v1/models success.
+Evaluator: historical client SHA eefd4118bb5c93cd98488904a1a13cb6025faad6718e7526356f043b2bc8e93c; isolated Evalchemy3bb8278078e7ad4b5a6b1f81e8a08db3dd206ae6. Full500, seed19311, concurrency8, chat template, no sampling overrides; effective max_length32704 matches task236 reference. Server context differs: requested73728 vs reference32768. Do not claim identical server context.
+Evaluator runs on the already allocated leader CPU in an isolated CPU-only uvx environment; no additional TPU/CPU allocation. The callback is bounded by the remaining four-hour runtime with cleanup margin.
+Warm throughput: one warmup, then16 fixed128-output-token requests at concurrency8; report separately from real MATH500 throughput, do not extrapolate blindly. Archive before/after Prometheus metrics and eval wall for actual token accounting.
+Output: gs://marin-us-central2/scratch/karan/task261/step12-r1/
+Expected artifacts: gate.json, models.json, warm-throughput.json, server.log, host-*/{identity,wall,error}.json, eval-settings.json, eval-process.json, eval-results.json, eval.log, math500/ FineStore tables, metrics-before/after.txt.
+Success requires aggregate task success, 500 scored items, valid finish reasons; a client exit0 is not sufficient. Compare combined-SEM z against Step12 H1000.944 and fixed single-hostTPU0.940. Record mean generation throughput, eval wall and total wall independently.
+Monitor: /home/karan/scratchpad/task-261/watch.py (status-only, once/minute, terminal message to bittern; no automatic resubmit). Log /tmp/task261-watch.log. Outer cancel bound490min. Cormorant holds zero slices until release.
+
+Attempt r1 FAILED before weights load: cloudpickle captured the submit-host absolute HERE path. All4 tasks terminal. Corrected HERE to workspace-relative; subprocess bootstrap resolves on worker. Resubmitted r2 at 01:09:50 UTC with all configuration/bounds unchanged; archive step12-r2/. Controller evidence /home/karan/scratchpad/task-261/r1-final.json.
+
+Attempt r2 FAILED before load: missing workspace in Fray EnvironmentConfig. All4 tasks terminal. Fixed workspace=worker cwd; extracted build_service and construct full service in dry-run before allocation. Dry-run passed. Submitted r3 at 01:16 UTC with unchanged model/settings/bounds, archive step12-r3/.
