@@ -43,12 +43,19 @@ def host_python_mounts() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     """The read-only directories and the ``bin`` directory of the Python environment that runs this process.
 
     The directories are the environment, the source directories of its editable installs, the uv archive that
-    its files link to (the task bootstrap runs ``uv sync --link-mode symlink``), and the base interpreter. The editable sources of SkyRL's own environment are Marin's ``lib`` packages outside the
+    its files link to (the task bootstrap runs ``uv sync --link-mode symlink``), and the base interpreter by its
+    resolved path and by the path that the environment names. The editable sources of SkyRL's own environment are Marin's ``lib`` packages outside the
     environment, for example ``verifyit``, which the script graders import. Every sandbox sees the system
     directories already, and mounts inside them fail; a directory inside another mount is not mounted again.
     """
     environment = Path(sys.prefix)
-    candidates = (environment, *editable_sources(environment), *linked_archives(environment), Path(sys.base_prefix))
+    candidates = (
+        environment,
+        *editable_sources(environment),
+        *linked_archives(environment),
+        Path(sys.base_prefix),
+        interpreter_home(environment),
+    )
     usable = [
         path
         for path in dict.fromkeys(candidates)
@@ -56,6 +63,20 @@ def host_python_mounts() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     ]
     mounts = tuple(path for path in usable if not any(path != other and path.is_relative_to(other) for other in usable))
     return mounts, (environment / "bin",)
+
+
+def interpreter_home(environment: Path) -> Path:
+    """The base interpreter's directory by the path that ``pyvenv.cfg`` of ``environment`` names.
+
+    uv names its minor-version link (``cpython-3.12-linux-x86_64-gnu``), which ``sys.base_prefix`` resolves to the
+    patch version. Without the link in the sandbox, ``bin/python`` dangles and ``python3`` is the system interpreter,
+    which has none of the environment's packages.
+    """
+    for line in (environment / "pyvenv.cfg").read_text().splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "home":
+            return Path(value.strip()).parent
+    raise ValueError(f"{environment}/pyvenv.cfg names no interpreter home")
 
 
 def linked_archives(environment: Path) -> tuple[Path, ...]:

@@ -71,10 +71,10 @@ def machine_factories(grader_slots: int) -> dict[str, MachineFactory]:
     """
     venv = Path(sys.prefix)
     # The sandbox sees the system directories already, and mounts inside them fail.
-    interpreter = (
-        ()
-        if any(Path(sys.base_prefix).is_relative_to(path) for path in SYSTEM_DIRECTORIES)
-        else (Path(sys.base_prefix),)
+    interpreter = tuple(
+        path
+        for path in dict.fromkeys((Path(sys.base_prefix), interpreter_home(venv)))
+        if not any(path.is_relative_to(system) for system in SYSTEM_DIRECTORIES)
     )
     mounts = (venv, venv.parent / "lib", *interpreter, *linked_archives(venv))
     graders = LocalMachineFactory(read_only=mounts, bin_dirs=(venv / "bin",))
@@ -82,6 +82,20 @@ def machine_factories(grader_slots: int) -> dict[str, MachineFactory]:
         Backend.LOCAL: BoundedFactory(graders, asyncio.Semaphore(grader_slots)),
         Backend.SHELLSIM: ShellSimMachineFactory(),
     }
+
+
+def interpreter_home(environment: Path) -> Path:
+    """The base interpreter's directory by the path that ``pyvenv.cfg`` of ``environment`` names.
+
+    uv names its minor-version link (``cpython-3.12-linux-x86_64-gnu``), which ``sys.base_prefix`` resolves to the
+    patch version. Without the link in the sandbox, ``bin/python`` dangles and ``python3`` is the system interpreter,
+    which has none of the environment's packages.
+    """
+    for line in (environment / "pyvenv.cfg").read_text().splitlines():
+        key, _, value = line.partition("=")
+        if key.strip() == "home":
+            return Path(value.strip()).parent
+    raise ValueError(f"{environment}/pyvenv.cfg names no interpreter home")
 
 
 def linked_archives(environment: Path) -> tuple[Path, ...]:
