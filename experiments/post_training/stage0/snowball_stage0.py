@@ -66,6 +66,7 @@ from experiments.sft.launcher import (
     ConvertedCheckpointModel,
     LevanterCheckpointModel,
     SFTSpec,
+    chat_tokenize,
     resources_from_accelerator,
     sft_step,
 )
@@ -295,6 +296,21 @@ def snowball_stage0_steps() -> dict[str, ArtifactStep[LevanterCheckpoint]]:
 _RUNS = {"full": full_run, "smoke": smoke_run}
 
 
+def stage_chat_cache(graph: SnowballStage0, stage_name: str) -> ArtifactStep:
+    """A later stage's chat cache with only the data as its dependency, to build ahead of training.
+
+    The launcher's cache step also depends on the stage's init step, because a converted
+    checkpoint supplies its tokenizer. Stages 2 and 3 read the pinned base tokenizer, so their
+    caches need only the converted rows; this handle has the same name, version and output
+    path as the launcher's, which then finds it built.
+    """
+    spec = graph.specs[stage_name]
+    if not isinstance(spec.model, LevanterCheckpointModel):
+        raise ValueError(f"{stage_name}'s tokenizer comes from its init step; build its cache in the chain")
+    cache = chat_tokenize(spec, spec.datasets[0], graph.convert)
+    return replace(cache, deps=(graph.convert,))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Snowball Stage 0 (CL12): conversion and the three SFT stages.")
     parser.add_argument("--dry-run", action="store_true", help="lower and build every config; submit nothing")
@@ -306,8 +322,15 @@ def main() -> None:
     train.add_argument("--run", choices=sorted(_RUNS), required=True)
     train.add_argument("--through", choices=STAGE_NAMES, required=True)
     train.add_argument("--num-workers", type=int, default=os.cpu_count() or 1)
+    cache = subparsers.add_parser("cache", help="build a later stage's chat cache ahead of its training")
+    cache.add_argument("--run", choices=sorted(_RUNS), required=True)
+    cache.add_argument("--stage", choices=STAGE_NAMES[1:], required=True)
     args = parser.parse_args()
 
+    if args.command == "cache":
+        target = stage_chat_cache(snowball_stage0(_RUNS[args.run]()), args.stage)
+        StepRunner().run([lower(target)], dry_run=args.dry_run)
+        return
     run = _RUNS[args.run](num_workers=args.num_workers)
     target = run.convert if args.command == "convert" else snowball_stage0(run).steps[args.through]
     # The GPU steps (the HF conversion, then each stage) form one dependency chain, so at most

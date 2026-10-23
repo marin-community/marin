@@ -57,6 +57,7 @@ from experiments.post_training.stage0.snowball_stage0 import (
     smoke_run,
     snowball_stage0,
     stage0_convert,
+    stage_chat_cache,
 )
 from experiments.sft.launcher import _TRAIN_RESOURCES, ArtifactDatasetSpec, sft_run_id
 
@@ -646,6 +647,17 @@ def test_snowball_stage_runs_have_distinct_tracker_ids():
     ]
     assert len(set(ids)) == len(ids) == 6
     assert sft_run_id(snowball_stage0().specs["s1-chat"]) == "stage0-snowball-s1-chat-2026.10.22"
+
+
+def test_prebuilt_stage_cache_is_the_chains_cache_without_the_training_dependency():
+    graph = snowball_stage0()
+    for stage_name in ("s2-thinking", "s3-terminal"):
+        (chain_cache,) = [dep for dep in graph.steps[stage_name].deps if dep.name.startswith("tokenized/")]
+        early = stage_chat_cache(graph, stage_name)
+        assert (early.name, early.version) == (chain_cache.name, chain_cache.version)
+        assert early.deps == (graph.convert,)
+    with pytest.raises(ValueError, match="init step"):
+        stage_chat_cache(graph, "s1-chat")
 
 
 def test_snowball_and_axolotl_budgets_agree():
