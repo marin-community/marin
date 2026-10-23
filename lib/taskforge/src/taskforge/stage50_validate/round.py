@@ -46,7 +46,7 @@ A trial is done when its last attempt file holds a grade or a cause that is not 
 (``ValidationContext.validation_pass``). Otherwise the trial resumes at the next attempt number with the retries
 left in the current budget, so a review ``Retry``, or a relaunch of an abandoned workpiece, reruns exactly the
 trials that ended ungraded for a retryable cause, each with a full budget, and its attempt files follow the ones
-on disk. An attempt cancelled before its outcome writes no file (``trials.write_evidence`` writes whole files
+on disk. An attempt cancelled before its outcome writes no file (``write_bytes_atomic`` writes whole files
 only), so a cancelled trial is run again rather than counted as ungraded.
 
 The result is read back from the unit files, each outcome through ``trials.attempt_outcome``, so a resumed
@@ -70,6 +70,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from pydantic import TypeAdapter
+from rigging.filesystem.atomic import write_bytes_atomic
 from rolloutengine.models import TaskRolloutSpec
 from taskcompendium.grading_result import Outcome as GradeStatus
 
@@ -107,7 +108,6 @@ from taskforge.stage50_validate.trials import (
     attempt_outcome,
     run_trial,
     task_digest,
-    write_evidence,
 )
 
 VALIDATION_FILE = "validation.json"
@@ -358,7 +358,7 @@ async def validate_round(
 
 def write_validation(round_dir: Path, result: ValidationResult) -> None:
     """Write ``result`` to ``round_dir`` as ``validation.json``, whole or not at all."""
-    write_evidence(round_dir / VALIDATION_FILE, pretty_json(result).encode())
+    write_bytes_atomic(str(round_dir / VALIDATION_FILE), pretty_json(result).encode())
 
 
 def load_validation(round_dir: Path) -> ValidationResult:
@@ -379,7 +379,7 @@ async def _lowering_unit(draft: TaskDraft, settings: ValidationSettings, directo
         done = _LOWERED.validate_json(path.read_bytes())
         if done.host == settings.host and done.backends == backends:
             return done
-    write_evidence(path, pretty_json(await _lower(draft, settings, backends)).encode())
+    write_bytes_atomic(str(path), pretty_json(await _lower(draft, settings, backends)).encode())
     return _LOWERED.validate_json(path.read_bytes())
 
 
