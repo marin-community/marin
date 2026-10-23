@@ -83,8 +83,12 @@ RESULTS_PREFIX = "s3://marin-us-east-02a/marin/scratch/karan/mopd2/review"
 REFERENCE_LABEL = "E"
 
 # Relative tolerance on b2/d2 and the derived per-component shares and cosines
-# (plan steps 2 and 3).
-SUM_TOLERANCE = 1e-6
+# (plan steps 2 and 3). #9920 accumulated its sums in fp32, ours in float64: against
+# E, ``changed`` and ``dmax`` match exactly on all 502 tensors (the weights are
+# identical) while the sums differ by a median 1e-5, growing with tensor size to
+# 7e-4 on lm_head. A GPU fp32 reduction order cannot be replayed, so the sums are
+# held to fp32 accumulation accuracy.
+SUM_TOLERANCE = 1e-3
 # The published overlap, null and sign-agreement rows are read off a comment
 # table at 2-3 significant figures; that is the agreement they can support.
 PUBLISHED_TOLERANCE = 0.05
