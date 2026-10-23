@@ -1,12 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Command line of the Baby RSI experiments. Run it inside an Iris GPU task through ``job.sh``.
+"""Command line of the Baby RSI experiments.
 
-- ``baseline``: pass rates of a base policy on a stratified pool sample.
-- ``rsi``: train with the RSI loop: seed tasks from the pool, and tasks synthesized from the policy's own failures.
-- ``control``: the same training on seed tasks only.
-- ``evaluate``: the base policy and trained adapters on the held-out pool tasks and on held-out synthesized tasks.
+- ``skyrl-rsi``: the RSI loop with a SkyRL job as its train box: seed tasks from the pool, and tasks synthesized from
+  the policy's own failures. It runs in a privileged CPU task beside the SkyRL job of its feed.
+- ``skyrl-control``: the same training on seed tasks only.
+- ``baseline`` and ``evaluate`` run in an Iris GPU task through ``job.sh``: the pass rates of a base policy on a
+  stratified pool sample, and of the base policy and trained checkpoints on held-out pool and synthesized tasks.
 """
 
 import asyncio
