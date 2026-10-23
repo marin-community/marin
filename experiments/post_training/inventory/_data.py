@@ -55,6 +55,8 @@ LOCAL_VERIFIER = MachineRuntimeSpec(
     cleanup_timeout=60,
 )
 
+IMAGE_VERIFIER = LOCAL_VERIFIER.model_copy(update={"backend": "daytona"})
+
 
 def current_task(document: dict[str, Any]) -> TaskSpec:
     """Import the pinned 0.27 source into the current schema without changing its grader."""
@@ -77,13 +79,17 @@ def native_task(raw: str, task_id: str) -> TaskSpec:
 
 def lower(task: TaskSpec, harness: str) -> TaskRolloutSpec:
     grader = task.grader
-    needs_machine = isinstance(grader, ScriptGrader | VerifyitGrader) and grader.environment is not None
-    if grades_with_judge(grader):
-        needs_machine = False
+    verifier = None
+    if (
+        isinstance(grader, ScriptGrader | VerifyitGrader)
+        and grader.environment is not None
+        and not grades_with_judge(grader)
+    ):
+        verifier = IMAGE_VERIFIER if grader.environment.docker_image is not None else LOCAL_VERIFIER
     return rollout_spec(
         task,
         {**LIMITS.model_dump(), "task_session": harness, "command_timeout": 30, "shell_tool": {}},
-        verifier_machine=LOCAL_VERIFIER if needs_machine else None,
+        verifier_machine=verifier,
     )
 
 
@@ -204,7 +210,7 @@ def prepare(
             "import_changes": [
                 "TaskSpec.schema_version:0.27->0.28",
                 "native structure_closure->assistant_prefix using shared importer",
-                "grader machines use local backend instead of historical source runtime",
+                "registry-image graders use Daytona; package-based graders use the local backend",
             ],
             "files": output_hashes,
         }
