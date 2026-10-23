@@ -133,6 +133,26 @@ Parquet. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
+The checked-in [Snowball 100k recipe](../../experiments/post_training/task_curation/recipes/snowball-100k.json)
+sets the five-family and 13-source allocation. Run it against a saved FULL corpus:
+
+```bash
+uv run --with-editable './lib/taskcompendium[pipeline]' python \
+  -m experiments.post_training.task_curation.driver \
+  --corpus /path/to/full-campaign/corpus.json \
+  --selection experiments/post_training/task_curation/recipes/snowball-100k.json
+```
+
+Omit `--run` to inspect the plan; add it to produce the selection. The corpus
+must contain all recipe sources. `source_limits`, when supplied, covers every
+source and sums to each family quota. Each source is sampled independently,
+and an admission shortfall fails before publishing the training files. The
+100k recipe preserves the historical allocation on fresh admitted populations;
+it does not reproduce the historical selected rows or native stratification.
+Its new artifact version has not been produced. See the
+[training recipe](rl-launching.md#snowball-100k-selection) for the artifact handoff
+and before/final evaluation.
+
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:
 
@@ -179,8 +199,9 @@ The output lives under the active artifact root at
 Before sampling, selection removes matches against the **complete** heldout set
 by task ID, public semantics or exact conversation context. It deduplicates
 eligible training contracts with TaskCompendium's shared identity rules, retaining
-distinct private script and closure contracts. Each family is sampled without
-replacement in seeded task-ID order. Quotas must fit the eligible population;
+distinct private script and closure contracts. Each source-quota group, or family
+when source quotas are omitted, is sampled without replacement in seeded task-ID
+order. Quotas must fit the eligible population;
 a shortfall fails before publishing the training files. These rules provide
 exact overlap checks, not semantic decontamination.
 

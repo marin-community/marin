@@ -223,39 +223,44 @@ data-dependent numerical failures in runtime diagnosis rather than guessing at t
 For live submission, monitoring, or recovery, follow the `launch-rl` and `use-iris` skills and
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
-## Snowball calendar trial
+## Snowball 100k selection
 
-`experiments.post_training.inventory.train` starts RL from Datakit SFT revision
-`fe666478454e79fe6027a0bab0388d9abd68f51a`, using its tokenizer at the same revision.
-It defaults to the `calendar-trial/2026.10.23.1`
-[task-selection artifact](task-curation.md#final-task-selection). The documented
-recipe selects 100 calendar training `TaskSpec` rows and a fixed 100-task heldout
-panel with 20 per family. It retains all 910 heldout source tasks in
-`full_validation.parquet`.
-The curation driver must publish this selection before a live run; the default URI
-comes from its documented recipe, and publication has not been verified.
-SkyRL binds the task harness, rollout limits and verifier backend when loading
-the `task_spec` rows.
+`experiments.post_training.inventory.train` consumes the curation selection from
+[`recipes/snowball-100k.json`](../../experiments/post_training/task_curation/recipes/snowball-100k.json).
+Publish it through the [curation driver](task-curation.md#final-task-selection)
+before launching training. The selection URI is versioned; its default has not
+been published or runtime-qualified.
 
-Print the three-update qualification plan:
+The recipe selects 100,000 admitted training tasks across 13 sources. Its family
+counts are calendar 9,115, competitive coding 22,722, Reasoning Gym 22,721, STEM
+22,721 and structural 22,721. Explicit source quotas preserve the earlier
+Snowball allocation, including 11,634 native structural tasks. These tasks now
+pass through FULL curation. This produces a fresh selection; it does not replay
+the historical pool's exact rows or native family/control stratification.
+A source shortfall fails instead of borrowing tasks from another source.
+
+The selection artifact supplies `train.parquet` and `validation.parquet` to the
+trainer. Validation contains 20 tasks per family, sampled from the original
+910-task development panel. All 910 tasks remain in `full_validation.parquet`
+for training-overlap exclusion. This reused development panel is not an
+independent final benchmark. SkyRL binds harnesses, rollout limits and verifier
+backends when loading the canonical `task_spec` rows.
+
+Print the three-update training plan after publishing the selection:
 
 ```bash
 uv run python -m experiments.post_training.inventory.train \
-  --version 2026.10.23.1 --steps 3
+  --version 2026.10.23.2 --steps 3
 ```
 
-To use another published selection, pass its `task_selection` path from the
-curation driver as `--selection-uri`. Its path includes the selection name and
-version and contains `train.parquet`, `validation.parquet` and `summary.json`.
-Check the summary's row counts and family counts before submission.
-Add `--run` to submit. Use a fresh run version for subsequent iterations; the
-default is 25 updates, and `--steps` changes the count.
+`--selection-uri` accepts another published selection artifact root. The trainer
+starts from Datakit SFT revision `fe666478454e79fe6027a0bab0388d9abd68f51a`, with
+the tokenizer at the same revision, and defaults to 25 updates. Add `--run` to
+submit; use a fresh run version for each iteration.
 
 Every run uses 40 H100s, 128 prompt groups per update and four samples per group.
-It uses synchronous RLOO-N, a 24,576-token request window and an 8,192-token response
-limit. Native task evaluation attempts the fixed 100 tasks before training and after
-the final update. The final update commits a checkpoint and produces a
-durable HF export. The launch document and saved evaluation results retain the
-standard artifact and source provenance. Local grader execution requires the
-privileged container profile. Image-backed heldout graders require the dedicated
-`DAYTONA_EVAL_API_KEY`; remote-judge tasks require the configured judge credentials.
+It uses synchronous RLOO-N, a 24,576-token context and an 8,192-token response
+limit. Evaluation runs before training and after the final update. The final
+update also saves a checkpoint and HF export. Saved evaluation results retain
+task-level verifier outcomes. Local graders require the privileged container profile; image-backed
+graders and remote judges require their configured credentials.

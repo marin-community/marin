@@ -62,6 +62,7 @@ class SelectionRecipe(BaseModel):
     version: str
     sources: dict[str, str]
     family_limits: dict[str, PositiveInt]
+    source_limits: dict[str, PositiveInt] | None = None
     heldout: HeldoutSource
     validation_per_family: PositiveInt
     seed: int
@@ -172,10 +173,8 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
     seen_contracts: set[str] = set()
     counts = {source.source_id: SourceCounts() for source in config.sources}
 
-    def candidates(family: str) -> Iterator[Candidate]:
-        for source in config.sources:
-            if source.family != family:
-                continue
+    def candidates(sources: tuple[SelectionInput, ...]) -> Iterator[Candidate]:
+        for source in sources:
             root = StoragePath(source.root)
             manifest = json.loads((root / "manifest.json").read_text())
             if manifest["mode"] != "full":
@@ -206,12 +205,20 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
                             yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id)
 
     def selected_records() -> Iterator[dict[str, str]]:
-        for family, limit in sorted(config.recipe.family_limits.items()):
+        groups = (
+            [(source.source_id, config.recipe.source_limits[source.source_id], (source,)) for source in config.sources]
+            if config.recipe.source_limits is not None
+            else [
+                (family, limit, tuple(source for source in config.sources if source.family == family))
+                for family, limit in sorted(config.recipe.family_limits.items())
+            ]
+        )
+        for group, limit, sources in groups:
             count, sample = seeded_sample(
-                candidates(family), size=limit, key=lambda row: seeded_order(row.task_id, config.recipe.seed)
+                candidates(sources), size=limit, key=lambda row: seeded_order(row.task_id, config.recipe.seed)
             )
             if count < limit:
-                raise ValueError(f"Selection shortfall for {family}: requested {limit}, eligible {count}")
+                raise ValueError(f"Selection shortfall for {group}: requested {limit}, eligible {count}")
             for row in sample:
                 counts[row.source_id].selected += 1
                 yield {TASK_SPEC_COLUMN: row.task_json}
@@ -241,6 +248,10 @@ def prepare(config: SelectionConfig) -> None:
             "sources": [asdict(source) for source in config.sources],
             "source_counts": {source: asdict(count) for source, count in counts.items()},
             "training_rows": sum(count.selected for count in counts.values()),
+            "training_family_counts": {
+                family: sum(counts[source.source_id].selected for source in config.sources if source.family == family)
+                for family in sorted(config.recipe.family_limits)
+            },
             "validation_rows": len(selection.sample),
             "full_validation_rows": len(selection.full),
             "validation_family_counts": selection.family_counts,
@@ -260,6 +271,14 @@ def task_selection_step(curated: dict[str, ArtifactStep], recipe: SelectionRecip
         raise ValueError(f"Selection requires curation sources: {', '.join(sorted(missing))}")
     if not recipe.sources or set(recipe.sources.values()) != recipe.family_limits.keys():
         raise ValueError("Selection sources must cover exactly the families with quotas")
+    if recipe.source_limits is not None:
+        if recipe.source_limits.keys() != recipe.sources.keys():
+            raise ValueError("Source quotas must cover exactly the selection sources")
+        family_totals: Counter[str] = Counter()
+        for source, limit in recipe.source_limits.items():
+            family_totals[recipe.sources[source]] += limit
+        if family_totals != recipe.family_limits:
+            raise ValueError("Source quotas must sum to each family quota")
     heldout = ArtifactStep.adopt(
         f"rl-data/selection-inputs/{recipe.name}-heldout", recipe.heldout.version, recipe.heldout.uri
     )

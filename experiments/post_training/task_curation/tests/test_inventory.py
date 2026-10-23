@@ -12,8 +12,9 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import yaml
 from click.testing import CliRunner
-from marin.execution.lazy import ArtifactStep, run
+from marin.execution.lazy import ArtifactStep, StepContext, run
 from taskcompendium.models import (
     AnswerType,
     Boxed,
@@ -30,6 +31,7 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.models import IntendedUse
 from taskcompendium.runtime.resources import inline_resource, resource_bytes
 
+from experiments.post_training.inventory.train import build_run
 from experiments.post_training.task_curation.datasets.skyrl import math as skyrl_math
 from experiments.post_training.task_curation.driver import main
 from experiments.post_training.task_curation.inventory import (
@@ -196,6 +198,51 @@ def test_selection_filters_full_heldout_and_duplicates_before_sampling(tmp_path)
     )[0]
     assert tasks == read_tasks(Path(repeated.path) / TRAIN_FILENAME)
     assert sample == read_tasks(Path(repeated.path) / VALIDATION_FILENAME)
+
+
+def test_source_quotas_feed_training_and_heldout_evaluation(tmp_path):
+    settings = recipe(tmp_path).model_copy(
+        update={"family_limits": {"calendar": 3}, "source_limits": {"fixture:first": 1, "fixture:second": 2}}
+    )
+    curated = {
+        f"fixture:{name}": admitted_source(tmp_path / name, [source_task(f"{name}-{index}") for index in range(5)])
+        for name in ("first", "second")
+    }
+    selection = task_selection_step(curated, settings)
+    run(selection)
+    training = build_run("2026.10.23.2", selection=selection)
+    config = training.build_config(
+        StepContext.for_run(
+            output_path=training.path(),
+            prefix=str(tmp_path / "artifacts"),
+            runtime_args=training.runtime_args,
+            deps=training.deps,
+        )
+    )
+    launch = yaml.safe_load(config.launch_config_yaml)
+    train_input = launch["inputs"]["train_data"][0]
+    validation_input = launch["inputs"]["validation_data"][0]
+    train = read_tasks(Path(train_input["uri"]) / train_input["relative_path"])
+    validation = read_tasks(Path(validation_input["uri"]) / validation_input["relative_path"])
+    assert Counter(task.id.split("-")[0] for task in train) == {"first": 1, "second": 2}
+    assert len(validation) == 100
+    assert not {task.id for task in train} & {task.id for task in validation}
+    assert launch["skyrl"]["trainer"]["eval_before_train"]
+    assert launch["skyrl"]["trainer"]["eval_interval"] == launch["skyrl"]["trainer"]["max_steps"]
+
+
+def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
+    settings = recipe(tmp_path).model_copy(
+        update={"family_limits": {"calendar": 3}, "source_limits": {"fixture:first": 1, "fixture:second": 2}}
+    )
+    curated = {
+        "fixture:first": admitted_source(tmp_path / "first", [source_task(f"first-{i}") for i in range(5)]),
+        "fixture:second": admitted_source(tmp_path / "second", [source_task("second-only")]),
+    }
+    selection = task_selection_step(curated, settings)
+    with pytest.raises(RuntimeError):
+        run(selection)
+    assert not (Path(selection.path()) / TRAIN_FILENAME).exists()
 
 
 @pytest.mark.parametrize("failure", ["shortfall", "evaluation-source"])
