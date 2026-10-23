@@ -5,21 +5,68 @@
 
 import argparse
 import json
-import shutil
 import subprocess
 from dataclasses import replace
-from pathlib import Path
 
+import fsspec
 import pytest
+import s3fs
+from fsspec.implementations.memory import MemoryFileSystem
+from rigging.filesystem import cluster_config
+from rigging.filesystem.storage_path import StoragePath
 
 from infra.shellsim.ports import ReleaseConfig, StageConfig, publish_ports
 
 
-def test_failed_stable_publication_preserves_version_and_older_releases_cannot_replace_it(tmp_path, monkeypatch):
-    publication = tmp_path / "public/shellsim/ports"
-    publication.mkdir(parents=True)
-    (publication / "release-version").write_text("1")
-    (publication / "catalog.json").write_text("previous catalog")
+@pytest.fixture
+def public_store(tmp_path, monkeypatch):
+    config = tmp_path / "config"
+    config.mkdir()
+    (config / "r2.yaml").write_text(
+        """data:
+  scheme: s3
+  region_buckets:
+    na: { bucket: public-releases, store: r2 }
+  stores:
+    r2:
+      endpoint: https://r2.example
+      endpoint_env: R2_S3_ENDPOINT
+      key_id_env: R2_KEY_ID
+      key_secret_env: R2_KEY_SECRET
+"""
+    )
+    monkeypatch.setattr(cluster_config, "MARIN_CLUSTER_CONFIG_DIRS", (str(config),))
+    monkeypatch.setitem(fsspec.config.conf, "s3", {"endpoint_url": "https://cw.example"})
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "cw-id")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "cw-secret")
+    monkeypatch.setenv("R2_KEY_ID", "r2-id")
+    monkeypatch.setenv("R2_KEY_SECRET", "r2-secret")
+    monkeypatch.delenv("R2_S3_ENDPOINT", raising=False)
+    cluster_config.reset_data_config_cache()
+    storage = MemoryFileSystem(skip_instance_cache=True)
+
+    def authenticated(fs):
+        assert (fs.endpoint_url, fs.key, fs.secret) == ("https://r2.example", "r2-id", "r2-secret")
+        return storage
+
+    monkeypatch.setattr(s3fs.S3FileSystem, "exists", lambda fs, key: authenticated(fs).exists(key))
+    monkeypatch.setattr(s3fs.S3FileSystem, "open", lambda fs, key, mode: authenticated(fs).open(key, mode))
+    yield storage
+    cluster_config.reset_data_config_cache()
+    s3fs.S3FileSystem.clear_instance_cache()
+
+
+def test_r2_publication_preserves_stable_version_under_coreweave_configuration(tmp_path, monkeypatch, public_store):
+    publication = StoragePath("s3://public-releases/shellsim/ports")
+
+    def key(relative):
+        return str(publication / relative).removeprefix("s3://")
+
+    def read(relative):
+        return public_store.cat_file(key(relative))
+
+    public_store.pipe_file(key("release-version"), b"1")
+    public_store.pipe_file(key("catalog.json"), b"previous catalog")
     cache = tmp_path / "cache"
     (cache / "assets/build").mkdir(parents=True)
     (cache / "assets/build/package.whl").write_bytes(b"checked release")
@@ -43,34 +90,33 @@ def test_failed_stable_publication_preserves_version_and_older_releases_cannot_r
         if command[0] == "git":
             return subprocess.CompletedProcess(command, 0, stdout=release.source_revision)
         parser = argparse.ArgumentParser()
-        parser.add_argument("--output", type=Path, required=True)
-        parser.add_argument("--asset-output", type=Path)
+        parser.add_argument("--output", type=StoragePath, required=True)
+        parser.add_argument("--asset-output", type=StoragePath)
         parser.add_argument("--url-prefix", required=True)
         parser.add_argument("--copy-assets", action="store_true")
         args, _ = parser.parse_known_args(command[4:])
         if args.output == publication and fail_stable:
             raise subprocess.CalledProcessError(1, command)
-        args.output.mkdir(parents=True, exist_ok=True)
         if args.copy_assets:
-            target = args.asset_output / "assets/build/package.whl"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(cache / "assets/build/package.whl", target)
-        (args.output / "catalog.json").write_text(json.dumps({"url": args.url_prefix + "/assets/build/package.whl"}))
+            target = str(args.asset_output / "assets/build/package.whl").removeprefix("s3://")
+            public_store.pipe_file(target, (cache / "assets/build/package.whl").read_bytes())
+        target = str(args.output / "catalog.json").removeprefix("s3://")
+        public_store.pipe_file(target, json.dumps({"url": args.url_prefix + "/assets/build/package.whl"}).encode())
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(subprocess, "run", run)
     config = StageConfig(release, str(tmp_path / "stages/published"), str(checked))
     with pytest.raises(subprocess.CalledProcessError):
         publish_ports(config)
-    assert (publication / "release-version").read_text() == "1"
-    assert (publication / "catalog.json").read_text() == "previous catalog"
-    assert (publication / "assets/build/package.whl").read_bytes() == b"checked release"
-    snapshot = (publication / "releases/2/catalog.json").read_bytes()
+    assert read("release-version") == b"1"
+    assert read("catalog.json") == b"previous catalog"
+    assert read("assets/build/package.whl") == b"checked release"
+    snapshot = read("releases/2/catalog.json")
     fail_stable = False
     publish_ports(config)
-    assert (publication / "catalog.json").read_bytes() == snapshot
-    assert (publication / "release-version").read_text() == "2"
+    assert read("catalog.json") == snapshot
+    assert read("release-version") == b"2"
     publish_ports(replace(config, release=replace(release, version="1")))
-    assert (publication / "catalog.json").read_bytes() == snapshot
-    assert (publication / "release-version").read_text() == "2"
-    assert (publication / "releases/1/catalog.json").is_file()
+    assert read("catalog.json") == snapshot
+    assert read("release-version") == b"2"
+    assert public_store.exists(key("releases/1/catalog.json"))

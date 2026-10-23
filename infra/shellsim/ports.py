@@ -21,6 +21,7 @@ from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep, StepContext, lower, run
 from marin.execution.step_status import step_lock
 from packaging.version import Version
+from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
@@ -158,9 +159,10 @@ def publish_ports(config: StageConfig) -> None:
     )
     publication = StoragePath(config.release.publication_prefix)
     with step_lock(str(StoragePath(config.output_path).parent / ".promotion"), "ports stable catalog", force_rerun=True):
-        current = publication / "release-version"
-        if current.exists():
-            current_version = Version(current.read_text())
+        version_fs, version_key = filesystem_for(str(publication / "release-version"))
+        if version_fs.exists(version_key):
+            with version_fs.open(version_key, "rt") as current:
+                current_version = Version(current.read())
             if current_version > Version(config.release.version):
                 logger.info(
                     "Published snapshot %s; skipping stable promotion because %s is newer",
@@ -178,7 +180,8 @@ def publish_ports(config: StageConfig) -> None:
             config.release.publication_prefix,
             "--simple",
         )
-        current.write_text(config.release.version)
+        with version_fs.open(version_key, "wt") as current:
+            current.write(config.release.version)
 
 
 def _release_config(config: ReleaseConfig, ctx: StepContext) -> ReleaseConfig:
