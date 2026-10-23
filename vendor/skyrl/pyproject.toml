@@ -160,7 +160,6 @@ packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_tra
 
 [tool.hatch.build.targets.wheel.force-include]
 "chat_templates" = "chat_templates"
-"open_mopd_versions.py" = "open_mopd_versions.py"
 
 [tool.uv]
 exclude-dependencies = ["litellm"]
