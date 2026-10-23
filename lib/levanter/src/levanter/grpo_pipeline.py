@@ -620,7 +620,7 @@ class _PreparedPipelineScorer:
     trainable: tuple[Any, ...]
     frozen: tuple[Any, ...]
     report_routing: bool
-    output_sharding: Any
+    output_sharding: NamedSharding | tuple[NamedSharding, dict[str, P]]
 
 
 def _compile_pipeline_scorer(scorer, state, sample, mpmd_mesh) -> _PreparedPipelineScorer:
@@ -761,7 +761,7 @@ class PipelineGrpoBackend:
     scorer: Callable
     train_step: Callable
     microbatches: int
-    mpmd_mesh: Any
+    mpmd_mesh: "pp.MpmdMesh"
     routing_drop_policy: RoutingDropPolicy
 
     def score(self, state: PipelineState, batch: GrpoExample) -> GrpoExample:
@@ -778,6 +778,14 @@ class PipelineGrpoBackend:
         batches = pipeline_batch(batch, microbatches=self.microbatches)
         prepared = prepare_pipeline_train(self.train_step, state, batches, self.mpmd_mesh)
         next_state, metrics = prepared.update(prepared.state, prepared.batches)
+        # Compiled outputs are stage-owned MPMD arrays, including scalar metrics.
+        # Replicate the small metric tree before host checks on every process.
+        metric_shardings = jax.tree.map(lambda _: NamedSharding(self.mpmd_mesh.jax_mesh, P()), metrics)
+        metric_bytes = sum(np.dtype(value.dtype).itemsize for value in jax.tree.leaves(metrics))
+        with jax.set_mesh(None):
+            metrics = _require_jaxpp().mpmd_to_spmd_reshard(
+                self.mpmd_mesh, metrics, metric_shardings, threshold=metric_bytes * self.mpmd_mesh.mpmd_dim
+            )
         validate_routing_drops(metrics, context="GRPO update", policy=self.routing_drop_policy)
         return GrpoStep(next_state, float(metrics["loss"]))
 
