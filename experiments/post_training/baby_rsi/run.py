@@ -313,6 +313,7 @@ def skyrl_options(function):
             click.option("--model", required=True, help="The Hugging Face ID of the policy's tokenizer."),
             click.option("--thinking/--no-thinking", default=False, show_default=True, help="Qwen3 thinking mode."),
             click.option("--max-tokens", type=int, default=4096, show_default=True, help="Tokens of one gate turn."),
+            click.option("--max-model-len", type=int, default=MAX_MODEL_LEN, show_default=True),
             click.option("--steps", type=int, required=True, help="The training steps of the SkyRL job."),
             click.option("--tasks-per-step", type=int, required=True, help="The prompts of one SkyRL step."),
             click.option("--lookahead-steps", type=int, default=3, show_default=True, help="Feed tasks ahead."),
@@ -330,6 +331,7 @@ class SkyrlOptions:
     model: str
     thinking: bool
     max_tokens: int
+    max_model_len: int
     steps: int
     tasks_per_step: int
     lookahead_steps: int
@@ -377,7 +379,7 @@ async def _skyrl_run(options: SkyrlOptions, *, feedback: FeedbackOptions | None)
             sampling = Sampling(temperature=1.0, top_p=1.0, max_tokens=options.max_tokens)
             chat_template = {"enable_thinking": options.thinking}
             tokenizer = AutoTokenizer.from_pretrained(options.model)
-            solver = LivePolicy(feed.root, tokenizer, sampling, MAX_MODEL_LEN, chat_template)
+            solver = LivePolicy(feed.root, tokenizer, sampling, options.max_model_len, chat_template)
             boxes = await _feedback_boxes(stack, feedback, solver, trainer, output, written)
             config = LoopConfig(
                 max_pass_rate=feedback.max_pass_rate,
