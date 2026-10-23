@@ -12,6 +12,7 @@ from experiments.post_training.pivotrl.mixed_rlvr_figures import (
     grid,
     load_deltas,
     missing_note,
+    save,
     scatter,
     scatter_marks,
 )
@@ -50,7 +51,7 @@ def test_scatter_marks_pair_each_checkpoint_and_separate_coincident_marks_of_one
     assert missing_note(deltas, "swebench-verified") == ""
 
 
-def test_both_figures_render_from_the_analysis_csv(tmp_path):
+def test_both_figures_draw_the_checkpoints_from_the_analysis_csv(tmp_path):
     csv_path = write_deltas_csv(
         tmp_path / "deltas.csv",
         [
@@ -68,7 +69,21 @@ def test_both_figures_render_from_the_analysis_csv(tmp_path):
     json_path = tmp_path / "deltas.json"
     json_path.write_text(json.dumps(list(csv.DictReader(csv_path.open()))))
     assert load_deltas(json_path) == deltas
-    scatter(deltas, tmp_path / "scatter", ["math500", "mmlu-pro", "gpqa-diamond"])
-    grid(deltas, tmp_path / "grid")
-    written = {path.name for path in tmp_path.iterdir()}
-    assert written >= {"scatter.png", "scatter.pdf", "scatter.svg", "grid.png", "grid.pdf", "grid.svg"}
+    figure = scatter(deltas, ["math500", "mmlu-pro", "gpqa-diamond"])
+    math_panel, mmlu_panel, gpqa_panel = figure.axes
+    assert [(t.get_text(), t.get_position()) for t in math_panel.texts if t.get_text() in {"4", "8"}] == [
+        ("4", (2.8, 0.0)),
+        ("8", (6.8, -0.6)),
+    ]
+    assert [t.get_text() for t in mmlu_panel.texts if t.get_text() in {"4", "8"}] == ["4"]
+    assert "not evaluated: B8 s43" in [t.get_text() for t in mmlu_panel.texts]
+    assert [t.get_text() for t in gpqa_panel.texts if t.get_text() in {"4", "8"}] == ["4", "8"]
+
+    cells = grid(deltas)
+    assert [t.get_text() for t in cells.axes[0].get_yticklabels()] == ["A  step  4  s42", "B  step  8  s43"]
+    cell_text = [t.get_text() for t in cells.axes[0].texts]
+    assert cell_text.count("—") == 12 - 7
+    assert "+6.8" in cell_text and "-0.6" in cell_text
+
+    save(figure, tmp_path / "scatter")
+    assert {path.name for path in tmp_path.iterdir()} >= {"scatter.png", "scatter.pdf", "scatter.svg"}

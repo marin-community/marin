@@ -1,6 +1,6 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Summary figures for the mixed-RLVR pivot arms, drawn from the paired-deltas CSV that ``mixed_rlvr_analysis plot`` writes.
+"""Summary figures for the mixed-RLVR pivot arms, drawn from the paired-deltas rows of ``mixed_rlvr_analysis plot``.
 
     python -m experiments.post_training.pivotrl.mixed_rlvr_figures scatter DELTAS OUT_PREFIX
     python -m experiments.post_training.pivotrl.mixed_rlvr_figures grid DELTAS OUT_PREFIX
@@ -13,9 +13,9 @@ change in points and the cell colour is that change in standard errors, so bench
 comparably. A benchmark's standard error is the median half-width of its 80% paired bootstrap intervals divided by
 1.2816; each scatter panel shows it as a small cross. Both actions write OUT_PREFIX.png, .pdf and .svg.
 
-``figures/`` holds the figures for the two-seed series of #10214, rendered from ``figures/mixed_rlvr_paired_deltas.json``:
-the rows of the CSV that ``mixed_rlvr_analysis plot --shared-items`` wrote for the series a, b, c, a-seed43, b-seed43
-and c-seed43 on 2026-10-22, saved as JSON because the repository ignores CSV files.
+``figures/`` holds the figures for the two-seed series of #10214, rendered from ``mixed_rlvr_paired_deltas.json`` beside
+them: the rows of the CSV that ``mixed_rlvr_analysis plot --shared-items`` wrote for the series a, b, c, a-seed43,
+b-seed43 and c-seed43 on 2026-10-22, saved as JSON because the repository ignores CSV files.
 """
 
 import argparse
@@ -161,7 +161,7 @@ def save(fig: Figure, out_prefix: Path) -> None:
     plt.close(fig)
 
 
-def scatter(deltas: Deltas, out_prefix: Path, y_benchmarks: list[str]) -> None:
+def scatter(deltas: Deltas, y_benchmarks: list[str]) -> Figure:
     plt.rcParams.update(RC)
     panels = len(y_benchmarks)
     fig, axes = plt.subplots(1, panels, figsize=(5.4 if panels == 1 else 3.6 * panels + 0.6, 4.3), squeeze=False)
@@ -171,19 +171,31 @@ def scatter(deltas: Deltas, out_prefix: Path, y_benchmarks: list[str]) -> None:
     for ax, y_benchmark in zip(axes[0], y_benchmarks, strict=True):
         y_label = f"{BENCHMARKS[y_benchmark]}, Δ accuracy vs SFT (pts)"
         errors = (deltas.errors[X_BENCHMARK], deltas.errors[y_benchmark])
-        draw_scatter_panel(ax, scatter_marks(deltas, y_benchmark), y_label, *errors, x_limits, missing_note(deltas, y_benchmark))
+        draw_scatter_panel(
+            ax, scatter_marks(deltas, y_benchmark), y_label, *errors, x_limits, missing_note(deltas, y_benchmark)
+        )
         ax.set_xlabel(x_label)
     first, last = axes[0][0], axes[0][-1]
     first.set_title(TITLE, loc="left", fontsize=10, fontweight="bold", color="#111111", pad=16)
     first.text(0, 1.012, SUBTITLE, transform=first.transAxes, fontsize=8, color="#666666", va="bottom")
     for i, (label, color) in enumerate(ARMS.values()):
         y = 0.05 + 0.058 * (len(ARMS) - 1 - i)
-        last.text(0.98, y, label, transform=last.transAxes, fontsize=8.5, color=color, ha="right", va="bottom", fontweight="bold")
+        last.text(
+            0.98,
+            y,
+            label,
+            transform=last.transAxes,
+            fontsize=8.5,
+            color=color,
+            ha="right",
+            va="bottom",
+            fontweight="bold",
+        )
     fig.tight_layout()
-    save(fig, out_prefix)
+    return fig
 
 
-def grid(deltas: Deltas, out_prefix: Path) -> None:
+def grid(deltas: Deltas) -> Figure:
     rows: list[tuple[str, int]] = []  # (arm label, step)
     for base in ARMS:
         for step in STEPS:
@@ -215,7 +227,9 @@ def grid(deltas: Deltas, out_prefix: Path) -> None:
     ax.set_xticklabels([BENCHMARKS[bench].replace(" ", "\n") for bench in benches], fontsize=8.5)
     ax.xaxis.tick_top()
     ax.set_yticks(range(len(rows)))
-    ax.set_yticklabels([f"{arm_base(arm).upper()}  step {step:>2}  {seed_tag(arm)}" for arm, step in rows], fontsize=8.5, family="Menlo")
+    ax.set_yticklabels(
+        [f"{arm_base(arm).upper()}  step {step:>2}  {seed_tag(arm)}" for arm, step in rows], fontsize=8.5, family="Menlo"
+    )
     for tick, (arm, _) in zip(ax.get_yticklabels(), rows, strict=True):
         tick.set_color(ARMS[arm_base(arm)][1])
     ax.tick_params(length=0)
@@ -226,10 +240,18 @@ def grid(deltas: Deltas, out_prefix: Path) -> None:
             ax.axhline(i - 0.5, color="white", lw=3)
     fig.tight_layout(rect=(0, 0, 1, 0.955))
     left = ax.get_position().x0
-    fig.text(left, 0.985, "Δ accuracy vs SFT (pts), every checkpoint", fontsize=10, fontweight="bold", color="#111111", va="top")
+    fig.text(
+        left,
+        0.985,
+        "Δ accuracy vs SFT (pts), every checkpoint",
+        fontsize=10,
+        fontweight="bold",
+        color="#111111",
+        va="top",
+    )
     note = f"colour = Δ in standard errors, clipped at ±{GRID_CLIP:g} · — = not evaluated"
     fig.text(left, 0.962, note, fontsize=8, color="#666666", va="top")
-    save(fig, out_prefix)
+    return fig
 
 
 def main() -> None:
@@ -237,13 +259,13 @@ def main() -> None:
     parser.add_argument("action", choices=("scatter", "grid"))
     parser.add_argument("deltas", type=Path, help="the CSV from mixed_rlvr_analysis plot, or its rows as JSON")
     parser.add_argument("out_prefix", type=Path, help="output path without extension")
-    parser.add_argument("--y-benchmarks", default=DEFAULT_Y_BENCHMARKS, help="scatter: comma-separated y-axis benchmarks")
+    parser.add_argument(
+        "--y-benchmarks", default=DEFAULT_Y_BENCHMARKS, help="scatter: comma-separated y-axis benchmarks"
+    )
     args = parser.parse_args()
     deltas = load_deltas(args.deltas)
-    if args.action == "scatter":
-        scatter(deltas, args.out_prefix, args.y_benchmarks.split(","))
-    else:
-        grid(deltas, args.out_prefix)
+    fig = scatter(deltas, args.y_benchmarks.split(",")) if args.action == "scatter" else grid(deltas)
+    save(fig, args.out_prefix)
 
 
 if __name__ == "__main__":
