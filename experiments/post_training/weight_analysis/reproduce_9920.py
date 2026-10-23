@@ -667,6 +667,8 @@ def print_overlap_report(reports: dict[str, ModelReport], reference_label: str) 
         print(f"\n{label}: overlap multiples over the random null, published value in parens")
         print(f"{'component':>15}" + "".join(f"  {kind}/{pooling:>16}" for kind, pooling in OVERLAP_CONVENTIONS))
         for component, table in PUBLISHED_OVERLAP_MULTIPLE.items():
+            if ("matrix", component) not in report.overlaps:
+                continue  # a --tensors subset scored no matrix of this component
             cells = []
             for kind, pooling in OVERLAP_CONVENTIONS:
                 overlap, null = report.overlap_shares(kind, component).pooled(pooling)
