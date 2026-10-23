@@ -33,10 +33,10 @@ data:
     weighting: pass-variance # learnability/grade-prior weight curve: pass-variance|group-informative
     seed: null # falls back to trainer.seed
   # A task feed that a producer extends while training runs (skyrl_train/dataset/task_feed.py). With a root, the
-  # taskcompendium entrypoint reads <root>/chunks instead of train_data, trains each row once in feed order, and
+  # taskcompendium entrypoint reads <root>/chunks instead of train_data, offers each row once in feed order, and
   # writes graded/, skipped/ and policy_endpoint.json under the root.
   feed:
-    root: null # object-store prefix or local directory; null reads train_data once
+    root: null # object-store prefix or local directory; null uses train_data
     poll_seconds: 10 # the least time between two listings of <root>/chunks
     min_rows: ${trainer.train_batch_size} # rows to wait for before training starts; at least one batch
     session: # rollout limits and Shellbox settings of each feed task
