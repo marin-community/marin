@@ -36,15 +36,17 @@ seed tasks). The control arm is `boxes.train(seed_tasks)`: the same training on 
 | Box | Module | What it does |
 |---|---|---|
 | Seed | `seed.py` | Samples the RL task pool of Marin-Snowball-67B-A2B-v0.1 (the Smartie run's `train.parquet`, 69,487 tasks) in an order whose every prefix keeps the pool's strata weights: structural closure 82.6%, competitive coding 10.9%, Reasoning Gym 2.8%, STEM multiple choice 2.7%, calendar 1.1%. |
-| Train | `trainer.py` | On-policy GRPO with a LoRA adapter. Each step runs 8 attempts of each task with the served policy, yields the groups, and makes one update. The new adapter loads into the vLLM server at once, so the other boxes use the new policy. |
+| Train | `skyrl_box.py`, `skyrl_launch.py` | A SkyRL job (full-parameter GRPO with Megatron, vLLM engines on their own node, staleness 1). The box writes the tasks into the job's feed and yields the graded groups that the job writes back. The job serves the live policy on an OpenAI-compatible endpoint, which the Taskforge gate uses. |
 | Analyze | `feedback.py` | Keeps one failed attempt of each task that the policy passes at most 25% of the time, and runs `analyze_failed_runs` (#10265) on each batch. It yields each new capability ID once. |
-| Generate | `feedback.py` | One agentic Taskforge session (`taskforge.agentic`) for each idea. The served policy is the solver of the gate, so an accepted task has a policy pass rate from 0.1 to 0.8. The build program of each accepted task makes more training instances and held-out probe instances. `submit` refuses a program whose 8 test instances share one reference answer more than 25% of the time: in the first run, a family with answers 3, 4 or 5 taught the policy to guess. |
-| Evaluate | `evaluate.py`, `run.py evaluate` | The base policy (twice) and trained adapters on held-out pool tasks (the Smartie validation file) and on the probe instances, which no arm trained on. |
+| Generate | `feedback.py` | One agentic Taskforge session (`taskforge.agentic`) for each idea, with bubblewrap solver machines. The live policy is the solver of the gate, so an accepted task has a policy pass rate from 0.1 to 0.8. The build program of each accepted task makes more training instances and held-out probe instances. `submit` refuses a program whose 8 test instances share one reference answer more than 25% of the time: in the first run, a family with answers 3, 4 or 5 taught the policy to guess. |
+| Evaluate | `evaluate.py`, `run.py evaluate` | The base policy (twice) and the HF exports of the trained policies on held-out pool tasks (the Smartie validation file) and on the probe instances, which no arm trained on. |
 
-`policy.py` serves the policy: a `vllm serve` process with runtime LoRA loading, and `VllmPolicy`, a
-`rolloutengine` model that renders the chat template itself and keeps the exact sampled tokens and log
-probabilities. `rollouts.py` gives every task the same `RolloutEngine`: a pool task answers in one turn, a
-structural-closure task continues its assistant prefix, and a synthesized task gets a shell on a ShellSim machine.
+The feed is an object-store prefix that the loop and the SkyRL job share: the loop writes task chunks, and the job
+writes one graded group (or the reason that it skipped a task) for each task. The box keeps a few training batches
+of tasks ahead, so the shares of `mix` apply to each batch. In the job, a structural-closure task continues its
+assistant prefix, a task with a shell gets a bubblewrap machine, and a script grader runs in bubblewrap.
+`policy.py` serves a policy for the gate and the evaluation: `VllmPolicy` is a `rolloutengine` model that renders
+the chat template itself and keeps the exact sampled tokens.
 
 Two conversions run the pool tasks on any policy and without Daytona. A structural-closure row holds prompt token
 IDs of the Snowball tokenizer; `structure_closure_task` turns it into a conversation that ends with the unfinished
@@ -53,34 +55,30 @@ environment (which has `reasoning_gym`, `verifyit`, numpy and pandas) in a bubbl
 
 ## Run
 
-The commands run in an Iris GPU task through `job.sh`, which installs vLLM in its own environment, adds the
-trainer's packages, and selects the task's own GPU. A privileged CoreWeave task sees every GPU of its node and
-shares the host network, so `job.sh` reads the assigned GPU from the device plugin, and the vLLM server binds a free
-port.
+An arm is a SkyRL job and a loop job with the same feed. Start the SkyRL job with its launch module, then the loop
+in a privileged CPU task (the Taskforge agent and its solvers run in bubblewrap):
 
 ```bash
-uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-02a \
-  --enable-extra-resources --gpu H100x1 --cpu 16 --memory 128GB --disk 150GB \
-  --sync-package marin-taskforge --container-profile container_profile_privileged \
-  --job-name <name> -e HF_TOKEN "$HF_TOKEN" -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" \
-  -e PARALLEL_API_KEY "$PARALLEL_API_KEY" \
-  -- bash experiments/post_training/baby_rsi/job.sh -m experiments.post_training.baby_rsi.run \
-  rsi --model Qwen/Qwen3-4B-Instruct-2507 --gpu-memory-utilization 0.4 --output-dir s3://<bucket>/<prefix>/rsi
+uv run python -m experiments.post_training.baby_rsi.skyrl_launch --version <version> --model qwen3-4b --arm rsi \
+  --feed-root s3://<bucket>/<prefix>/rsi/feed --steps 60 --train-batch 32 --lr 2e-6 --export-every 30 --run
+uv run iris --cluster=marin job run --no-wait --target-cluster cw-us-east-02a --cpu 32 --memory 128GB \
+  --sync-package marin-taskforge --container-profile container_profile_privileged --job-name <name> \
+  -e HF_TOKEN "$HF_TOKEN" -e GLM_BULK_TOKEN "$GLM_BULK_TOKEN" -e PARALLEL_API_KEY "$PARALLEL_API_KEY" \
+  -- .venv/bin/python -m experiments.post_training.baby_rsi.run skyrl-rsi --model Qwen/Qwen3-4B-Instruct-2507 \
+  --feed-root s3://<bucket>/<prefix>/rsi/feed --output-dir s3://<bucket>/<prefix>/rsi --steps 60 --tasks-per-step 32
 ```
 
-The defaults are the settings of the results below; the vLLM server and the trainer share the one GPU.
+`skyrl-control` takes the same options without the feedback options. The SkyRL job resumes from its checkpoints and
+its feed position; a restarted loop continues the feed, does not write its pool tasks again, gives back the
+synthesized instances that are not in the feed, and does not synthesize the same idea again (`resume.py`).
 
-A preempted run continues from what it uploaded (`resume.py`): the adapter and optimizer state of every tenth step,
-the records of the groups that it trained, and the accepted tasks of its finished synthesis sessions. It skips the
-pool tasks that it trained, gives back the synthesized instances that it did not train on, and does not synthesize
-the same idea again.
+`evaluate` runs in an Iris GPU task through `job.sh`, which installs vLLM in its own environment and selects the
+task's own GPUs. It takes `--checkpoint NAME=URL` for each HF export and `--probes` for each RSI output directory,
+and `report.py` compares the policies with paired bootstrap intervals over tasks.
 
-`control` takes the same training options without the feedback options. `evaluate` takes `--adapter
-NAME=URL` for each trained adapter and `--probes` for each `rsi` output directory, and `report.py` compares the
-policies with paired bootstrap intervals over tasks.
+## Results of the LoRA trainer (2026-10-21)
 
-## Results (2026-10-21)
-
+These runs used an in-process LoRA trainer beside one vLLM server, before SkyRL became the train box.
 Qwen3-4B-Instruct-2507, LoRA rank 32, 120 GRPO steps of 32 tasks × 8 attempts, learning rate 4e-5, one H100 for
 each arm, two seeds. The RSI arm mixes the pool's tasks 50/50 with the synthesized tasks once they come; the
 control trains on the pool's tasks only. The evaluation uses 400 held-out tasks of the pool's validation file and
