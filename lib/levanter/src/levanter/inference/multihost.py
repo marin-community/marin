@@ -23,7 +23,7 @@ import haliax as hax
 from levanter.inference.engine import GenerationResult, InferenceEngine, Request, TokenSequenceLogprobs
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.snowball import SnowballCache
-from levanter.inference.snowball_scoring import score_cached
+from levanter.inference.snowball_scoring import score_cached, validate_score_request
 from levanter.inference.snowball_prefill import prefill_cached
 
 
@@ -150,10 +150,7 @@ class MultiHostInferenceEngine(InferenceEngine):
         if jax.process_index() != 0:
             raise RuntimeError("Only process zero may submit scoring batches")
         token_ids = list(token_ids)
-        if top_k < 1 or len(token_ids) > self.config.max_seq_len:
-            raise ValueError("Scoring requires positive top_k and a sequence within the configured length")
-        if any(t < 0 or t >= self.model.Vocab.size for t in token_ids):
-            raise ValueError("Scoring contains a token outside the model vocabulary")
+        validate_score_request(self, token_ids, top_k)
         with self._command_lock:
             command = _broadcast_command(dict(op="score", tokens=token_ids, top_k=top_k))
             result = self._execute_or_abort(command)

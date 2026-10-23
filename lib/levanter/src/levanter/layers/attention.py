@@ -1615,7 +1615,9 @@ def ragged_paged_attention(
     """Ragged attention for paged KV caches.
 
     This function dispatches to the TPU implementation when available and
-    supported, otherwise it falls back to :func:`default_ragged_paged_attention`.
+    supported. With ``allow_fallback=False``, an unavailable or failing TPU kernel
+    raises; otherwise it falls back to :func:`default_ragged_paged_attention`.
+    CPU execution uses the reference implementation for validation.
     """
 
     def _tpu_rpa_available() -> bool:

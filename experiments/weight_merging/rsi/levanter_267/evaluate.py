@@ -24,6 +24,8 @@ from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
+from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH
+
 STEP12_REPO = "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
 STEP12_REVISION = "50fe2f488aee7730bbccc721024b35229075602e"
 STEP12_EVALCHEMY = "3bb8278078e7ad4b5a6b1f81e8a08db3dd206ae6"
@@ -37,7 +39,7 @@ def run_eval(source, config, endpoint_name, output, commit, runtime_minutes, gat
     context = next(int(card["max_model_len"]) for card in cards if card["id"] == config["model_id"])
     if context < 32768:
         raise ValueError(f"Matched MATH500 requires server context>=32768; got {context}")
-    with urllib.request.urlopen(config["base_url"].removesuffix("/v1") + "/levanter267/run", timeout=30) as response:
+    with urllib.request.urlopen(config["base_url"].removesuffix("/v1") + RUN_PROVENANCE_PATH, timeout=30) as response:
         provenance = json.load(response)
     keys = ("run_id", "source_commit", "serve_job", "model_path")
     if any(gate.get(key) != provenance.get(key) for key in keys):

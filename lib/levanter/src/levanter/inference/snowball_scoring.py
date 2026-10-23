@@ -16,11 +16,16 @@ from levanter.inference.page_table import PageBatchInfo
 from levanter.models.snowball import SnowballLMHeadModel
 
 
+def validate_score_request(engine: InferenceEngine, token_ids, top_k: int):
+    """Validate deterministic errors before any distributed command is broadcast."""
+    if top_k < 1 or len(token_ids) > engine.config.max_seq_len:
+        raise ValueError("Scoring requires positive top_k and a sequence within the configured length")
+    if any(token < 0 or token >= engine.model.Vocab.size for token in token_ids):
+        raise ValueError("Scoring contains a token outside the model vocabulary")
+
+
 def score_cached(engine: InferenceEngine, token_ids, top_k: int) -> TokenSequenceLogprobs:
-    if top_k < 1:
-        raise ValueError("top_k must be positive")
-    if len(token_ids) > engine.config.max_seq_len:
-        raise ValueError("Token sequence exceeds configured cache length")
+    validate_score_request(engine, token_ids, top_k)
     if not token_ids:
         return TokenSequenceLogprobs([], [])
     tokens = np.asarray(token_ids, dtype=np.int32)

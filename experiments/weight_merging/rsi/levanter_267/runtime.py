@@ -29,6 +29,8 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH
+
 
 class ProbeEngine(MultiHostInferenceEngine):
     """Retain raw IDs so the smoke can verify HTTP usage and stop stripping."""
@@ -96,7 +98,7 @@ def _load_model(mode, model_path, tokenizer, max_seq_len):
     return model
 
 
-def _capture_numerics(engine, tokenizer, item, output, config, local):
+def _validate_numerical_input(tokenizer, item, output):
     text = item["prompt"] + item["completion"]
     tokens = tokenizer.encode(text, add_special_tokens=False)
     input_sha = hashlib.sha256(text.encode()).hexdigest()
@@ -115,6 +117,11 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
     )
     if not matches or len(tokens) != 5279:
         raise ValueError("Item303 input hash or token IDs differ from the pinned oracle")
+    return tokens
+
+
+def _capture_numerics(engine, tokenizer, item, output, config, local):
+    tokens = _validate_numerical_input(tokenizer, item, output)
     start = time.monotonic()
     result = engine.score_token_logprobs(tokens, 1)
     elapsed = time.monotonic() - start
@@ -138,7 +145,7 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
         "303.json",
         dict(
             id=303,
-            input_sha256=hashlib.sha256(text.encode()).hexdigest(),
+            input_sha256=item["expected_input_sha256"],
             tokens=rows,
             elapsed_seconds=elapsed,
             tokens_per_second=(len(tokens) - 1) / elapsed,
@@ -146,6 +153,10 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
             dropped_assignments=np.asarray(engine.gen_state.cache.dropped_assignments).tolist(),
         ),
     )
+    _probe_long_decode(engine, tokenizer, tokens, result.top_token_logprobs[2050], output, config, local)
+
+
+def _probe_long_decode(engine, tokenizer, tokens, next_token_logprobs, output, config, local):
     # Exercise the production scheduler's padded decode path after a >2048-token prompt too.
     long_prompt = tokenizer.decode(tokens[:2050], skip_special_tokens=False)
     if tokenizer.encode(long_prompt, add_special_tokens=False) != tokens[:2050]:
@@ -163,7 +174,7 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
     )
     raw_ids = engine.last_generated_tokens[0]
     long_smoke["generated_token_ids"] = raw_ids
-    expected_first = max(result.top_token_logprobs[2050], key=result.top_token_logprobs[2050].get)
+    expected_first = max(next_token_logprobs, key=next_token_logprobs.get)
     long_smoke["cached_first_token_id"] = expected_first
     long_smoke["first_token_matches_cached_score"] = bool(raw_ids and raw_ids[0] == expected_first)
     long_smoke["wall_seconds"] = time.monotonic() - start
@@ -180,9 +191,112 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
         raise RuntimeError("Long-prompt decode failed continuation count, EOS, or cached-first-token consistency")
 
 
+def _server_config(trainer, model_path, max_seq_len):
+    info = get_job_info()
+    page_size = 128
+    pages = (max_seq_len + page_size - 1) // page_size
+    generation_config = json.loads((StoragePath(model_path) / "generation_config.json").read_text())
+    eos_ids = generation_config["eos_token_id"]
+    eos_ids = (eos_ids,) if isinstance(eos_ids, int) else tuple(eos_ids)
+    print("PINNED_EOS_IDS", json.dumps(eos_ids), flush=True)
+    return InferenceServerConfig(
+        eos_token_ids=eos_ids,
+        trainer=trainer,
+        model_name="snowball-levanter",
+        host="0.0.0.0",
+        port=info.ports["http"],
+        service=InferenceEngineConfig(
+            max_seq_len=max_seq_len,
+            page_size=page_size,
+            max_pages=pages + 2,
+            max_stop_seqs=8,
+            max_seqs=1,
+            max_seqs_in_prefill=1,
+            max_prefill_size=256,
+            max_queued_tokens=max_seq_len,
+            max_tokens_per_round=16,
+            max_rounds=8,
+        ),
+    )
+
+
+def _serve_and_probe(engine, config, model_path, output, item, mode, source_commit):
+    info = get_job_info()
+    model, tokenizer = engine.model, engine.tokenizer
+    context = InferenceContext(model, tokenizer, engine, config)
+    app = InferenceServer._create_app(context)
+    provenance = dict(
+        run_id=uuid.uuid4().hex,
+        source_commit=source_commit,
+        serve_job=str(info.job_id),
+        model_path=model_path,
+        model_revision=model_path.rstrip("/").rsplit("@", 1)[-1],
+    )
+    _save(output, "run-provenance.json", provenance)
+
+    @app.get(RUN_PROVENANCE_PATH)
+    async def run_provenance():
+        return provenance
+
+    server = InferenceServer(config, context, app)
+    context.start()
+    http_thread = threading.Thread(target=server.serve, daemon=True)
+    http_thread.start()
+    local = f"http://127.0.0.1:{config.port}"
+    registration = None
+    try:
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            if server._server is not None and server._server.started:
+                break
+            time.sleep(0.2)
+        else:
+            raise TimeoutError("HTTP server did not start")
+        registration = iris_ctx().registry.register(
+            "levanter267-http",
+            f"http://{info.advertise_host}:{config.port}",
+            metadata={"model": config.model_name},
+        )
+        with urllib.request.urlopen(local + "/v1/models", timeout=30) as response:
+            _save(output, "models.json", json.load(response))
+        # Invalid deterministic requests must not broadcast and strand the followers.
+        try:
+            engine.score_token_logprobs([0], 0)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Malformed scoring request was accepted")
+        start = time.monotonic()
+        smoke = _post(
+            local + "/v1/completions",
+            dict(
+                model=config.model_name,
+                prompt="The answer to 2 + 2 is",
+                max_tokens=4,
+                temperature=0,
+                seed=19311,
+            ),
+        )
+        _save(output, "first-token.json", dict(response=smoke, wall_seconds=time.monotonic() - start))
+        print("FIRST_SERVED_TOKEN", json.dumps(smoke), flush=True)
+        if item is not None:
+            _capture_numerics(engine, tokenizer, item, output, config, local)
+        if mode == "serve":
+            print("AWAITING_EXTERNAL_NUMERICS_REVIEW; evaluator requires an accepted gate report", flush=True)
+            http_thread.join()
+    finally:
+        if registration is not None:
+            iris_ctx().registry.unregister(registration)
+        if server._server is not None:
+            server._server.should_exit = True
+        http_thread.join(timeout=10)
+        if http_thread.is_alive():
+            raise RuntimeError("HTTP server did not shut down; refusing to desynchronize workers")
+        engine.shutdown_workers()
+
+
 def run(mode, model_path, output, item, max_seq_len, source_commit):
     logging.basicConfig(level=logging.INFO)
-    info = get_job_info()
     initialize_jax()
     if jax.process_count() != 4 or jax.device_count() != 16:
         raise RuntimeError(f"Expected 4 processes / 16 chips, got {jax.process_count()} / {jax.device_count()}")
@@ -210,105 +324,12 @@ def run(mode, model_path, output, item, max_seq_len, source_commit):
             flush=True,
         )
         _record_memory(output, "model-loaded")
-        page_size = 128
-        pages = (max_seq_len + page_size - 1) // page_size
-        generation_config = json.loads((StoragePath(model_path) / "generation_config.json").read_text())
-        eos_ids = generation_config["eos_token_id"]
-        eos_ids = (eos_ids,) if isinstance(eos_ids, int) else tuple(eos_ids)
-        print("PINNED_EOS_IDS", json.dumps(eos_ids), flush=True)
-        config = InferenceServerConfig(
-            eos_token_ids=eos_ids,
-            trainer=trainer,
-            model_name="snowball-levanter",
-            host="0.0.0.0",
-            port=info.ports["http"],
-            service=InferenceEngineConfig(
-                max_seq_len=max_seq_len,
-                page_size=page_size,
-                max_pages=pages + 2,
-                max_stop_seqs=8,
-                max_seqs=1,
-                max_seqs_in_prefill=1,
-                max_prefill_size=256,
-                max_queued_tokens=max_seq_len,
-                max_tokens_per_round=16,
-                max_rounds=8,
-            ),
-        )
+        config = _server_config(trainer, model_path, max_seq_len)
         engine = ProbeEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
         if jax.process_index() != 0:
             engine.worker_loop()
             _record_memory(output, "complete")
             return
-        context = InferenceContext(model, tokenizer, engine, config)
-        app = InferenceServer._create_app(context)
-        provenance = dict(
-            run_id=uuid.uuid4().hex,
-            source_commit=source_commit,
-            serve_job=str(info.job_id),
-            model_path=model_path,
-            model_revision=model_path.rstrip("/").rsplit("@", 1)[-1],
-        )
-        _save(output, "run-provenance.json", provenance)
-
-        @app.get("/levanter267/run")
-        async def run_provenance():
-            return provenance
-
-        server = InferenceServer(config, context, app)
-        context.start()
-        http_thread = threading.Thread(target=server.serve, daemon=True)
-        http_thread.start()
-        local = f"http://127.0.0.1:{config.port}"
-        registration = None
-        try:
-            deadline = time.monotonic() + 60
-            while time.monotonic() < deadline:
-                if server._server is not None and server._server.started:
-                    break
-                time.sleep(0.2)
-            else:
-                raise TimeoutError("HTTP server did not start")
-            registration = iris_ctx().registry.register(
-                "levanter267-http",
-                f"http://{info.advertise_host}:{config.port}",
-                metadata={"model": config.model_name},
-            )
-            with urllib.request.urlopen(local + "/v1/models", timeout=30) as response:
-                _save(output, "models.json", json.load(response))
-            # Invalid deterministic requests must not broadcast and strand the followers.
-            try:
-                engine.score_token_logprobs([0], 0)
-            except ValueError:
-                pass
-            else:
-                raise AssertionError("Malformed scoring request was accepted")
-            start = time.monotonic()
-            smoke = _post(
-                local + "/v1/completions",
-                dict(
-                    model=config.model_name,
-                    prompt="The answer to 2 + 2 is",
-                    max_tokens=4,
-                    temperature=0,
-                    seed=19311,
-                ),
-            )
-            _save(output, "first-token.json", dict(response=smoke, wall_seconds=time.monotonic() - start))
-            print("FIRST_SERVED_TOKEN", json.dumps(smoke), flush=True)
-            if item is not None:
-                _capture_numerics(engine, tokenizer, item, output, config, local)
-            if mode == "serve":
-                print("AWAITING_EXTERNAL_NUMERICS_REVIEW; evaluator requires an accepted gate report", flush=True)
-                http_thread.join()
-        finally:
-            if registration is not None:
-                iris_ctx().registry.unregister(registration)
-            if server._server is not None:
-                server._server.should_exit = True
-            http_thread.join(timeout=10)
-            if http_thread.is_alive():
-                raise RuntimeError("HTTP server did not shut down; refusing to desynchronize workers")
-            engine.shutdown_workers()
+        _serve_and_probe(engine, config, model_path, output, item, mode, source_commit)
         _record_memory(output, "complete")
         _save(output, "complete.json", dict(mode=mode, success=True))
