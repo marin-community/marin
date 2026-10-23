@@ -1712,6 +1712,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                                 "moe_bias/",
                                 "train/attn_res/",
                                 "train/aux/",
+                                "train/halt/",
                                 "train/optim/",
                                 LM_HEAD_GRAD_PREFIX,
                                 LM_HEAD_GRAD_PRE_PREFIX,
