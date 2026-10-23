@@ -102,7 +102,7 @@ bootstrap over tasks:
 | 4B | Held-out probes | 855 | 0.145 | 0.119 | 0.684 | +0.565 [+0.535, +0.595] |
 | 4B | Held-out pool tasks | 300 | 0.211 | 0.406 | 0.358 | −0.048 [−0.082, −0.014] |
 | Snowball | Held-out probes | 214 | 0.298 | 0.549 | 0.820 | +0.271 [+0.230, +0.314] |
-| Snowball | Held-out pool tasks | 300 | 0.374 | 0.499 | SNOWRSI | SNOWDELTA |
+| Snowball | Held-out pool tasks | 300 | 0.374 | 0.499 | pending | pending |
 
 Each RSI arm restarted once after a fix (the engines' tool parser for 4B, the trajectory window for Snowball). It
 began with the 14 and 17 tasks that its first run had accepted, so synthesized tasks entered its training from the
