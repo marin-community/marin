@@ -463,6 +463,29 @@ def main() -> None:
         logger.info("probe %s: auroc %.3f", name, probes[f"vec_{name}_logistic"]["auroc"])
     roc["exit_entropy"] = roc_curve(ent[test], need[test])
     roc["token_id_table"] = roc_curve(tt[test], need[test])
+    # In-job probes (trained on 49M separate tokens, so every evaluated token is a test token).
+    if "probe_pred" in z:
+        pp = z["probe_pred"].astype(np.float32)
+        inj = {}
+        for e, ex_name in enumerate(z["probe_exits"]):
+            b_e = exit_loss[stages.index(str(ex_name)), ph][w] - loss_full[w]
+            entry = dict(
+                oracle=skip_cost(b_e, b_e, rates),
+                random=(rates * b_e.mean()).tolist(),
+                need_rate=float((b_e > NEED).mean()),
+            )
+            for kk, kind in enumerate(z["probe_kinds"]):
+                score = pp[kk, e][w]
+                entry[str(kind)] = skip_cost(score, b_e, rates)
+                entry[f"{kind}_auroc"] = auroc(score, b_e > NEED)
+                entry[f"{kind}_corr"] = float(np.corrcoef(score, b_e)[0, 1])
+                if e == 0:
+                    roc[f"injob_{kind}"] = roc_curve(score, b_e > NEED)
+            entry["exit_entropy"] = skip_cost(ent, b_e, rates)
+            inj[str(ex_name)] = entry
+        report["injob_probes"] = inj
+        frontier["injob_mlp"] = inj["block2"]["mlp"]
+        frontier["injob_linear"] = inj["block2"]["linear"]
     report["probes"] = probes
     report["frontier"] = frontier
     report["probe_subset_frontier"] = sub_frontier

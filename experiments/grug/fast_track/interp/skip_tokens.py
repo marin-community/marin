@@ -80,6 +80,48 @@ def scored_weight(tokens: jax.Array, seg: jax.Array, weight: jax.Array) -> jax.A
     return weight * same_doc
 
 
+PROBE_EXITS = ("block2", "block3", "block4")
+PROBE_KINDS = ("linear", "mlp")
+PROBE_HIDDEN = 512
+BENEFIT_CLIP = (-2.0, 10.0)
+
+
+def router3_proxy(model_r, tr) -> jax.Array:
+    """First-half proxy of the L3 router logits: L3's router on its MLP gate's mix of ``[embed, L0, L1, L2]``."""
+    layer3 = list(model_r.layers())[3]
+    _, h2 = forward._gate(tr["blocks"][:4], layer3.attn_res_query_mlp, EPS, plain_sum=model_r.config.attn_res_plain_sum)
+    return jnp.einsum("bsd,de->bse", layer3._mlp_input(h2), layer3.mlp.router).astype(jnp.float32)
+
+
+def signal_features(x2: jax.Array, proxy: jax.Array, exit_logp: jax.Array) -> jax.Array:
+    """The first-half skip signals ``[B, S, F]``: the normed block2 mix, the L3 router proxy, and the after-L2 full
+    exit head's entropy and max log-prob; each token's vector standardized (parameter-free)."""
+    p = jnp.exp(exit_logp)
+    stats = jnp.stack([-jnp.sum(p * exit_logp, axis=-1), jnp.max(exit_logp, axis=-1)], axis=-1)
+    f = jnp.concatenate([x2, proxy / 4.0, stats], axis=-1)
+    return (f - jnp.mean(f, -1, keepdims=True)) * jax.lax.rsqrt(jnp.var(f, -1, keepdims=True) + 1e-5)
+
+
+def init_probes(num_features: int, key: jax.Array) -> dict:
+    k1, k2 = jax.random.split(key)
+    n = len(PROBE_EXITS)
+    return dict(
+        lin_w=jnp.zeros((num_features, n)),
+        lin_b=jnp.zeros((n,)),
+        w1=jax.random.normal(k1, (num_features, PROBE_HIDDEN)) / np.sqrt(num_features),
+        b1=jnp.zeros((PROBE_HIDDEN,)),
+        w2=jax.random.normal(k2, (PROBE_HIDDEN, n)) * (0.1 / np.sqrt(PROBE_HIDDEN)),
+        b2=jnp.zeros((n,)),
+    )
+
+
+def probe_predictions(probes: dict, f: jax.Array) -> jax.Array:
+    """``[kind, B, S, exit]`` predicted benefit."""
+    lin = f @ probes["lin_w"] + probes["lin_b"]
+    mlp = jax.nn.gelu(f @ probes["w1"] + probes["b1"]) @ probes["w2"] + probes["b2"]
+    return jnp.stack([lin, mlp])
+
+
 def make_fns():
     def run(model, tokens, seg, abl):
         model_r = forward.replicate(model)
@@ -106,7 +148,7 @@ def make_fns():
         return tr["loss"]
 
     @jax.jit
-    def evaluate(model, tokens, seg, tuned, params):
+    def evaluate(model, tokens, seg, tuned, params, probes):
         model_r, tr = run(model, tokens, seg, forward.no_ablation())
         out_proj = model_r.output_proj
         labels = tr["labels"]
@@ -154,12 +196,10 @@ def make_fns():
             terms[f"L{i}.routed"] = dla(lay["routed_out"], i + 1)
         first = sum(terms[n] for n in FIRST_HALF_TERMS)
         res["dla"] = jnp.stack([first, *[terms[n] for n in SECOND_HALF_TERMS]])
-        # First-half proxy of the L3 router: L3's MLP gate without the L3 attention source.
+        proxy = router3_proxy(model_r, tr)
+        sig = signal_features(feats[0], proxy, head_logp("full", 0, feats[0], params, tuned, out_proj))
+        res["probe_pred"] = jnp.moveaxis(probe_predictions(probes, sig), -1, 1)  # [kind, exit, B, S]
         layer3 = list(model_r.layers())[3]
-        _, h2 = forward._gate(
-            tr["blocks"][:4], layer3.attn_res_query_mlp, EPS, plain_sum=model_r.config.attn_res_plain_sum
-        )
-        proxy = jnp.einsum("bsd,de->bse", layer3._mlp_input(h2), layer3.mlp.router).astype(jnp.float32)
         bias = layer3.mlp.router_bias.astype(jnp.float32)
         _, proxy_sel = jax.lax.top_k(proxy + bias, forward.TOP_K)
         real_sel = tr["layers"][3]["selected"].reshape(*labels.shape, forward.TOP_K)
@@ -171,7 +211,27 @@ def make_fns():
         res["probe_router3"] = proxy.astype(jnp.bfloat16)
         return res
 
-    return features, train_loss, ablated_loss, evaluate
+    @jax.jit
+    def probe_batch(model, tokens, seg, tuned, params):
+        """Signal features and the clipped benefit targets of the probe exits."""
+        model_r, tr = run(model, tokens, seg, forward.no_ablation())
+        out_proj = model_r.output_proj
+        labels = tr["labels"]
+        feats = stage_features(model_r, tr)
+
+        def nll(logp):
+            return -jnp.take_along_axis(logp, labels[..., None], axis=-1)[..., 0]
+
+        logp0 = head_logp("full", 0, feats[0], params, tuned, out_proj)
+        targets = []
+        for name in PROBE_EXITS:
+            k = STAGES.index(name)
+            logp = logp0 if k == 0 else head_logp("full", k, feats[k], params, tuned, out_proj)
+            targets.append(jnp.clip(nll(logp) - tr["loss"], *BENEFIT_CLIP))
+        sig = signal_features(feats[0], router3_proxy(model_r, tr), logp0)
+        return jax.lax.stop_gradient(sig), jax.lax.stop_gradient(jnp.stack(targets, -1))
+
+    return features, train_loss, ablated_loss, evaluate, probe_batch
 
 
 def init_heads(tuned: np.ndarray, out_proj: jax.Array) -> dict:
@@ -235,6 +295,8 @@ def main() -> None:
     parser.add_argument("--eval-train-sequences", type=int, default=256)
     parser.add_argument("--eval-paloma-sequences", type=int, default=4, help="per Paloma set")
     parser.add_argument("--probe-sequences", type=int, default=48, help="train eval sequences kept for probes")
+    parser.add_argument("--probe-steps", type=int, default=3000, help="in-job skip-signal probe training steps")
+    parser.add_argument("--lr-probe", type=float, default=1e-3)
     parser.add_argument(
         "--masks-tag", default="tn-d512-ckpt1-rno", help="tag holding skip_unit_masks ('': no unit ablations)"
     )
@@ -250,6 +312,7 @@ def main() -> None:
     routed_mean = jnp.asarray(stats["act_sum"] / np.maximum(stats["expert_tokens"][..., None], 1.0), jnp.float32)
     fit = list(common.train_batches(FIT_BATCH, args.fit_sequences, seed=1))
     head_data = list(common.train_batches(args.head_batch, args.head_steps * args.head_batch, seed=3))
+    probe_data = list(common.train_batches(args.head_batch, args.probe_steps * args.head_batch, seed=4))
     evals = [
         *common.train_batches(EVAL_BATCH, args.eval_train_sequences, seed=2),
         *common.paloma_batches(EVAL_BATCH, max_sequences=args.eval_paloma_sequences),
@@ -258,7 +321,7 @@ def main() -> None:
     with set_mesh(mesh):
         model = common.compute_model(params)
         _, means_fn, tuned_fn, _ = attrib.make_fns()
-        features_fn, train_loss, ablated_loss, evaluate = make_fns()
+        features_fn, train_loss, ablated_loss, evaluate, probe_batch = make_fns()
         head_sum = sub_sum = xtx = xty = None
         n_sum = 0.0
         for b in fit:
@@ -302,16 +365,42 @@ def main() -> None:
                 losses = np.asarray(losses)
                 curve.append(np.concatenate([[i], losses]))
                 logger.info("head step %d losses %s (%.0fs)", i, np.round(losses, 3).tolist(), time.time() - t0)
-        common.save_npz(args.tag, "skip_heads", curve=np.stack(curve), tuned=tuned)
+        tuned_dev = jnp.asarray(tuned)
+        b0 = probe_data[0]
+        sig0, _ = probe_batch(model, *common.device_batch(b0, mesh)[:2], tuned_dev, heads)
+        probes = init_probes(sig0.shape[-1], jax.random.PRNGKey(0))
+        probe_opt = optax.adamw(
+            optax.warmup_cosine_decay_schedule(0.0, args.lr_probe, 100, args.probe_steps), weight_decay=1e-2
+        )
+        probe_state = probe_opt.init(probes)
+
+        @jax.jit
+        def probe_step(probes, probe_state, sig, target, w):
+            def loss(p):
+                err = jnp.square(probe_predictions(p, sig) - target[None])  # [kind, B, S, exit]
+                return jnp.sum(err * w[None, ..., None]) / jnp.maximum(jnp.sum(w), 1.0)
+
+            value, grads = jax.value_and_grad(loss)(probes)
+            updates, probe_state = probe_opt.update(grads, probe_state, probes)
+            return optax.apply_updates(probes, updates), probe_state, value
+
+        probe_curve = []
+        for i, b in enumerate(probe_data):
+            tokens, seg, w = common.device_batch(b, mesh)
+            sig, target = probe_batch(model, tokens, seg, tuned_dev, heads)
+            probes, probe_state, value = probe_step(probes, probe_state, sig, target, scored_weight(tokens, seg, w))
+            if i % 100 == 0 or i == len(probe_data) - 1:
+                probe_curve.append([i, float(value)])
+                logger.info("probe step %d mse(sum over kinds, exits) %.3f (%.0fs)", i, float(value), time.time() - t0)
+        common.save_npz(args.tag, "skip_heads", curve=np.stack(curve), tuned=tuned, probe_curve=np.asarray(probe_curve))
 
         abls = ablation_set(head_mean, sub_mean, routed_mean, masks)
-        tuned_dev = jnp.asarray(tuned)
         per_token: dict[str, list[np.ndarray]] = {}
         probe: dict[str, list[np.ndarray]] = {"x": [], "router3": []}
         sources = []
         for j, b in enumerate(evals):
             tokens, seg, w = common.device_batch(b, mesh)
-            res = evaluate(model, tokens, seg, tuned_dev, heads)
+            res = evaluate(model, tokens, seg, tuned_dev, heads, probes)
             px, pr = res.pop("probe_x"), res.pop("probe_router3")
             if j * EVAL_BATCH < args.probe_sequences:
                 probe["x"].append(np.asarray(px.astype(jnp.float16)))
@@ -338,6 +427,8 @@ def main() -> None:
         arrays["heads"] = np.asarray(HEADS)
         arrays["dla_terms"] = np.asarray(["first_half", *SECOND_HALF_TERMS])
         arrays["ablations"] = np.asarray([name for name, _ in abls])
+        arrays["probe_kinds"] = np.asarray(PROBE_KINDS)
+        arrays["probe_exits"] = np.asarray(PROBE_EXITS)
         common.save_npz(args.tag, "skip_tokens", **arrays)
         common.save_npz(args.tag, "skip_probe", **{k: np.concatenate(v) for k, v in probe.items()})
     logger.info("done in %.0fs", time.time() - t0)
