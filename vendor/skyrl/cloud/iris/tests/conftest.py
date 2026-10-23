@@ -1,9 +1,15 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import sys
+from pathlib import Path
+
 import pytest
 
 from cloud.iris.ray_ports import RayPort
+
+# Inventory producer tests import the maintained experiment from the outer workspace.
+sys.path.insert(0, str(Path(__file__).resolve().parents[5]))
 
 
 @pytest.fixture
