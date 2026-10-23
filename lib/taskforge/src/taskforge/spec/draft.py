@@ -498,7 +498,7 @@ def lower(
     requirements and each machine's ``MachineRuntimeSpec.backend`` names its backend. A grader with an
     environment (a script grader, or a verifyit grader that is neither in process nor a judge) takes a
     verifier machine; no other grader does. The spec keeps the engine's default exact-token trace; a
-    validation trial replaces it (``stage50_validate.trials.EngineSettings.apply``).
+    caller can select ``TraceMode.MESSAGES`` when token evidence is unnecessary.
 
     Raises:
         ValueError: A machine is given where the task has none or missing where it has one, or
