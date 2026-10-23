@@ -19,10 +19,8 @@ from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection, 
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from functools import partial
-from pathlib import Path
 
 import click
-from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rolloutengine.models import Model, RolloutLimits
@@ -75,9 +73,7 @@ from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 logger = logging.getLogger(__name__)
 
 VLLM_ENV = "BABY_RSI_VLLM"
-CHECKPOINT_DIR = "/tmp/baby-rsi-checkpoints"
 MAX_MODEL_LEN = 16384
-MAX_LORA_RANK = 64
 POLICY_LIMITS = RolloutLimits(
     max_turns=20,
     max_total_tokens=None,
@@ -100,8 +96,10 @@ UPLOAD_EVERY_GROUPS = 8
 @dataclass(frozen=True)
 class PolicyOptions:
     model: str
+    weights: str | None
     thinking: bool
     max_tokens: int
+    max_model_len: int
     gpu_memory_utilization: float
     concurrency: int
     grader_slots: int
@@ -111,9 +109,11 @@ class PolicyOptions:
 def policy_options(function):
     for option in reversed(
         [
-            click.option("--model", required=True, help="The Hugging Face ID of the policy."),
-            click.option("--thinking/--no-thinking", default=False, show_default=True, help="Qwen3 thinking mode."),
+            click.option("--model", required=True, help="The Hugging Face ID of the policy and its tokenizer."),
+            click.option("--weights", help="The base weights to serve (for example an s3:// copy); --model if unset."),
+            click.option("--thinking/--no-thinking", default=False, show_default=True, help="Thinking mode."),
             click.option("--max-tokens", type=int, default=4096, show_default=True, help="Tokens of one turn."),
+            click.option("--max-model-len", type=int, default=MAX_MODEL_LEN, show_default=True),
             click.option("--gpu-memory-utilization", type=float, default=0.85, show_default=True),
             click.option("--concurrency", type=int, default=128, show_default=True, help="Attempts at a time."),
             click.option("--grader-slots", type=int, default=16, show_default=True, help="Script graders at a time."),
@@ -138,19 +138,18 @@ class Served:
             server.base_url,
             options.model,
             Sampling(temperature=1.0, top_p=1.0, max_tokens=options.max_tokens),
-            MAX_MODEL_LEN,
+            options.max_model_len,
             chat_template_kwargs={"enable_thinking": options.thinking},
         )
         self.runner = PolicyRunner(rollout_engine(options.grader_slots), self.policy, POLICY_LIMITS, options.concurrency)
 
 
-def serve(options: PolicyOptions, model: str | None = None):
-    """A vLLM server of ``options.model``, or of the weights at ``model`` with the same tokenizer."""
+def serve(options: PolicyOptions, weights: str | None = None):
+    """A vLLM server of the base weights, or of ``weights`` (a trained checkpoint) with the same tokenizer."""
     return VllmServer.start(
-        model or options.model,
+        weights or options.weights or options.model,
         executable=os.environ[VLLM_ENV],
-        max_model_len=MAX_MODEL_LEN,
-        max_lora_rank=MAX_LORA_RANK,
+        max_model_len=options.max_model_len,
         gpu_memory_utilization=options.gpu_memory_utilization,
         extra_args=options.vllm_args,
     )
@@ -475,9 +474,8 @@ async def _evaluate(
             for name in base_names:
                 results[name] = await eval_policy(runner, tasks, labels, samples)
     for name, url in checkpoints.items():
-        local = Path(CHECKPOINT_DIR) / name
-        await asyncio.to_thread(_download_tree, url, local)
-        with serve(options, str(local)) as server:
+        # vLLM streams the weights of an s3:// URL, so no copy goes to the task's disk.
+        with serve(options, url) as server:
             results[name] = await eval_policy(Served(options, server).runner, tasks, labels, samples)
     write_evaluation(output, options.model, results)
 
@@ -496,11 +494,6 @@ async def read_probes(roots: Sequence[str], instances_per_task: int) -> list[Tas
             logger.info("%s: %d of %d probes are held out", saved.accepted.task.id, len(kept), len(stored))
             probes += kept
     return probes
-
-
-def _download_tree(url: str, local: Path) -> None:
-    fs, path = url_to_fs(url)
-    fs.get(path.rstrip("/") + "/", str(local), recursive=True)
 
 
 if __name__ == "__main__":

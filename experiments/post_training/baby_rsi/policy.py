@@ -13,7 +13,6 @@ appends only the template's boundary and the new messages. ``model`` names the w
 import asyncio
 import json
 import logging
-import os
 import re
 import socket
 import subprocess
@@ -31,10 +30,19 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 logger = logging.getLogger(__name__)
 
 BASE_MODEL_NAME = "base"
-"""The served name of the base weights; an adapter is served under its own name."""
+"""The served name of the weights."""
 TOKEN_ID_PREFIX = "token_id:"
 TOOL_CALL = re.compile(r"<tool_call>\s*(.*?)\s*</tool_call>", re.DOTALL)
-STARTUP_TIMEOUT = 1200.0
+REASONING = re.compile(r"\s*(?:<\|start_think\|>|<think>)(.*?)(?:<\|end_think\|>|</think>|$)", re.DOTALL)
+"""A reasoning block at the start of a reply, with Snowball's or Qwen's delimiters. A block that does not close (the
+turn used all its tokens) holds the rest of the reply."""
+MARKUP_TOKENS = frozenset({"<tool_call>", "</tool_call>", "<|start_think|>", "<|end_think|>"})
+"""Special tokens of the Snowball tokenizer that mark tool calls and reasoning; the decoded text keeps them."""
+OBJECT_STORE_SCHEMES = ("s3://", "gs://")
+OBJECT_STORE_LOADER = ("--model-loader-extra-config", json.dumps({"distributed": True}))
+"""vLLM streams the weights of an object-store path with the Run:ai loader. ``distributed`` divides the reads among
+the ranks of the server, as the Marin evaluation serves Snowball; vLLM refuses it for local weights."""
+STARTUP_TIMEOUT = 1800.0
 REQUEST_TIMEOUT = 1800.0
 BOUNDARY_PROBE = "boundary"
 
@@ -49,7 +57,7 @@ class Sampling:
 
 @dataclass
 class VllmServer:
-    """A running ``vllm serve`` process for one base model, with runtime LoRA loading."""
+    """A running ``vllm serve`` process for one set of weights."""
 
     base_url: str
     process: subprocess.Popen[bytes]
@@ -62,16 +70,17 @@ class VllmServer:
         *,
         executable: str,
         max_model_len: int,
-        max_lora_rank: int,
         gpu_memory_utilization: float,
         extra_args: Sequence[str] = (),
     ) -> Iterator["VllmServer"]:
         """Start the server on a free port, wait until it is healthy, and stop it.
 
-        The server uses the first GPU that ``CUDA_VISIBLE_DEVICES`` names. Pods on CoreWeave share the host's network,
-        so a fixed port can belong to another task on the same node.
+        ``model`` is a Hugging Face ID, a local directory or an object-store path. The server uses the GPUs of
+        ``CUDA_VISIBLE_DEVICES`` that ``extra_args`` ask for (one by default). Pods on CoreWeave share the host's
+        network, so a fixed port can belong to another task on the same node.
         """
         port = _free_port()
+        loader = OBJECT_STORE_LOADER if model.startswith(OBJECT_STORE_SCHEMES) else ()
         command = [
             executable,
             "serve",
@@ -84,20 +93,12 @@ class VllmServer:
             str(max_model_len),
             "--gpu-memory-utilization",
             str(gpu_memory_utilization),
-            "--enable-lora",
-            "--max-lora-rank",
-            str(max_lora_rank),
-            "--max-loras",
-            "4",
-            "--max-cpu-loras",
-            "8",
-            "--disable-log-requests",
             "--disable-uvicorn-access-log",
+            *loader,
             *extra_args,
         ]
-        environment = {**os.environ, "VLLM_ALLOW_RUNTIME_LORA_UPDATING": "True"}
         # The server writes its log to the task's log.
-        process = subprocess.Popen(command, env=environment)
+        process = subprocess.Popen(command)
         server = cls(f"http://127.0.0.1:{port}", process)
         try:
             server._wait_healthy()
@@ -122,16 +123,6 @@ class VllmServer:
             time.sleep(5)
         raise TimeoutError("vllm serve did not become healthy")
 
-    async def load_adapter(self, name: str, path: str) -> None:
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=600) as client:
-            response = await client.post("/v1/load_lora_adapter", json={"lora_name": name, "lora_path": path})
-            response.raise_for_status()
-
-    async def unload_adapter(self, name: str) -> None:
-        async with httpx.AsyncClient(base_url=self.base_url, timeout=600) as client:
-            response = await client.post("/v1/unload_lora_adapter", json={"lora_name": name})
-            response.raise_for_status()
-
 
 @dataclass
 class VllmPolicy:
@@ -147,6 +138,16 @@ class VllmPolicy:
     max_concurrent_requests: int = 256
     _client: httpx.AsyncClient | None = field(default=None, init=False, repr=False)
     _slots: asyncio.Semaphore | None = field(default=None, init=False, repr=False)
+    _hidden_ids: frozenset[int] = field(default=frozenset(), init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # The text of a reply has no special tokens (the end of the turn, padding), except the markup of tool calls
+        # and reasoning: Qwen's markup tokens are not special, Snowball's are.
+        self._hidden_ids = frozenset(
+            token_id
+            for token_id, token in self.tokenizer.added_tokens_decoder.items()
+            if token.special and token.content not in MARKUP_TOKENS
+        )
 
     @classmethod
     def for_model(cls, base_url: str, model: str, sampling: Sampling, max_model_len: int, **kwargs: Any) -> "VllmPolicy":
@@ -179,7 +180,7 @@ class VllmPolicy:
         choice = response.json()["choices"][0]
         tokens = tuple(int(token.removeprefix(TOKEN_ID_PREFIX)) for token in choice["logprobs"]["tokens"])
         logprobs = tuple(float(value) for value in choice["logprobs"]["token_logprobs"])
-        text = self.tokenizer.decode(tokens, skip_special_tokens=True)
+        text = self.tokenizer.decode([token for token in tokens if token not in self._hidden_ids])
         # A continuation of an assistant prefix is raw text, even when it closes a tool call of the prefix.
         tool_names = frozenset(tool["function"]["name"] for tool in request.options.get("tools") or ())
         message = (
@@ -288,13 +289,20 @@ def _template_message(message: dict[str, Any]) -> dict[str, Any]:
 
 
 def assistant_message(text: str, tool_names: frozenset[str] = frozenset()) -> dict[str, Any]:
-    """The assistant message of a reply in the Hermes tool-call format that Qwen chat templates use.
+    """The assistant message of a reply in the Hermes tool-call format that the Qwen and Snowball templates use.
 
+    A reasoning block at the start of the reply goes to ``reasoning_content``, so that the grader reads only the rest.
     A reply whose ``<tool_call>`` blocks hold JSON objects with a name calls those tools. Small policies often drop the
     opening tag, so a reply that is one JSON object with ``arguments`` and the name of one of ``tool_names``, the
     advertised tools, with or without the closing tag, is one call too; a JSON answer is not a call. Anything else
     stays text, so that the harness ends the attempt and the grader sees what the policy wrote.
     """
+    message: dict[str, Any] = {"role": "assistant"}
+    reasoning = REASONING.match(text)
+    if reasoning:
+        if reasoning.group(1).strip():
+            message["reasoning_content"] = reasoning.group(1).strip()
+        text = text[reasoning.end() :].lstrip()
     blocks = TOOL_CALL.findall(text)
     prefix = text[: text.index("<tool_call>")] if blocks else ""
     if not blocks:
@@ -307,8 +315,8 @@ def assistant_message(text: str, tool_names: frozenset[str] = frozenset()) -> di
             blocks = [bare]
     calls = [_tool_call(block) for block in blocks]
     if not calls or any(call is None for call in calls):
-        return {"role": "assistant", "content": text}
-    return {"role": "assistant", "content": prefix.strip(), "tool_calls": calls}
+        return {**message, "content": text}
+    return {**message, "content": prefix.strip(), "tool_calls": calls}
 
 
 def _tool_call(block: str) -> dict[str, Any] | None:
