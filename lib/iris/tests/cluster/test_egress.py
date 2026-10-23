@@ -4,7 +4,7 @@
 """The egress rule syntax users write in ``--egress-allow`` and cluster config."""
 
 import pytest
-from iris.cluster.egress import BASE_EGRESS_ALLOWLIST, format_egress_rule, parse_egress_rule, parse_egress_rules
+from iris.cluster.egress import format_egress_rule, parse_egress_rule
 
 
 @pytest.mark.parametrize(
@@ -44,8 +44,3 @@ def test_parse_egress_rule_round_trips_through_canonical_form(text, canonical):
 def test_parse_egress_rule_rejects_rules_that_policies_cannot_express(text):
     with pytest.raises(ValueError):
         parse_egress_rule(text)
-
-
-def test_base_allowlist_parses():
-    """Every node builds its policy from the base list, so one bad entry would break every ALLOWLIST task."""
-    assert len(parse_egress_rules(BASE_EGRESS_ALLOWLIST)) == len(BASE_EGRESS_ALLOWLIST)

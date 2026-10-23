@@ -196,6 +196,5 @@ def test_restarted_worker_restores_an_adopted_tasks_filter(make_filters, filter_
     assert not restarted.restore("other_attempt_0")
     address = (_nameserver(resolv_conf), filter_port)
     assert _resolves(address, "api.example.com")
-    # The task keeps the allowlist it started with, not the new worker's.
     assert _resolves(address, "pypi.org")
     assert not _resolves(address, "unrelated.example.org")

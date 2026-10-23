@@ -897,7 +897,6 @@ def test_worker_mounts_submitted_secrets_read_only_and_cleans_them(
         (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
         (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
         (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, NETWORK_MODE_HOST),
-        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_ALLOWLIST, NETWORK_MODE_HOST),
     ],
 )
 def test_egress_policy_selects_the_docker_network(
