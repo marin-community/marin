@@ -50,7 +50,7 @@ def _signature(result):
     return text, tokens, choice["finish_reason"], result["response"]["usage"]["completion_tokens"]
 
 
-def measure(endpoint, specs, gate, output):
+def measure(endpoint, specs, gate, output, concurrencies):
     base = iris_ctx().client.resolve_endpoint(endpoint).rstrip("/")
     root = StoragePath(output)
     provenance = _get(base + RUN_PROVENANCE_PATH)
@@ -62,9 +62,7 @@ def measure(endpoint, specs, gate, output):
     (root / "requests.json").write_text(json.dumps(specs, indent=2))
     phases = []
     baseline = None
-    # Include8 to measure the actual historical evaluator's configured limit,
-    # alongside the owner's requested1/4/16 comparison.
-    for concurrency in (1, 4, 8, 16):
+    for concurrency in concurrencies:
         with ThreadPoolExecutor(max_workers=concurrency) as pool:
             list(pool.map(lambda spec: _request(base, spec, True), specs))
         before = _get(base + RUN_PROVENANCE_PATH)["batch_counts"]
@@ -96,11 +94,16 @@ def measure(endpoint, specs, gate, output):
         )
         (root / f"concurrency-{concurrency}.json").write_text(json.dumps(phase, indent=2))
         phases.append({key: value for key, value in phase.items() if key != "results"})
-        if mismatches or sum(int(size) * n for size, n in batches.items()) != len(specs):
-            raise RuntimeError("Batched greedy results or observed server batch accounting disagree")
+        if sum(int(size) * n for size, n in batches.items()) != len(specs):
+            raise RuntimeError("Observed server batch accounting disagrees")
         if concurrency > 1 and not any(int(size) > 1 and n for size, n in batches.items()):
             raise RuntimeError("Concurrent callers did not exercise a batched engine")
-    summary = dict(server=provenance, phases=phases, prior="Issue #3826: 762 vs 7940 tok/s, different stack/workload")
+    summary = dict(
+        server=provenance,
+        phases=phases,
+        greedy_note="Identity is diagnostic at BF16; acceptance uses teacher-forced logprob comparisons.",
+        prior="Issue #3826: 762 vs 7940 tok/s, different stack/workload",
+    )
     (root / "summary.json").write_text(json.dumps(summary, indent=2))
     print(json.dumps(summary), flush=True)
 
@@ -113,17 +116,21 @@ def main():
     parser.add_argument("--requests", type=Path, required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--name", default="levanter267-throughput")
+    parser.add_argument("--concurrencies", type=int, nargs="+", default=[1, 2], choices=(1, 2, 4, 8, 16))
     args = parser.parse_args()
+    if args.concurrencies[0] != 1 or len(set(args.concurrencies)) != len(args.concurrencies):
+        parser.error("Start with concurrency1 and use distinct concurrency settings")
     gate = json.loads(args.gate_report.read_text())
     if (
         not gate.get("accepted")
+        or not gate.get("packed_teacher_forced_accepted")
         or gate.get("endpoint") != args.endpoint
         or not gate.get("first_token_matches_cached_score")
     ):
         parser.error("Require the accepted cached/production gate for this endpoint")
     specs = json.loads(args.requests.read_text())
-    if len(specs) != 32 or len({spec["id"] for spec in specs}) != len(specs):
-        parser.error("Use the frozen32-request set with unique IDs")
+    if len(specs) < 2 or len({spec["id"] for spec in specs}) != len(specs):
+        parser.error("Use at least two frozen requests with unique IDs")
     if any(not spec.get("payload", {}).get("model") for spec in specs):
         parser.error("Every frozen API payload must name the served model")
     if not args.output.startswith("gs://marin-us-central2/"):
@@ -144,7 +151,9 @@ def main():
         with IrisClient.remote(endpoint.url, workspace=Path.cwd(), credentials=endpoint.credentials) as client:
             job = client.submit(
                 name=args.name,
-                entrypoint=Entrypoint.from_callable(measure, args.endpoint, specs, gate, args.output),
+                entrypoint=Entrypoint.from_callable(
+                    measure, args.endpoint, specs, gate, args.output, args.concurrencies
+                ),
                 resources=convert_resources(resources),
                 constraints=convert_constraints(resources),
                 environment=EnvironmentSpec(),

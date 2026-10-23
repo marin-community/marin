@@ -17,6 +17,7 @@ from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.multihost import MultiHostInferenceEngine
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.inference.snowball import SnowballCache
+from levanter.inference.snowball_scoring import score_cached_packed
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
@@ -313,3 +314,60 @@ def test_chunked_generation_matches_two_full_forward_steps(chunk_size, prompt_le
             stopped = engine.generate([Request(prompt, 0, dataclasses.replace(params, stop_tokens=stops), 1)])
             assert stopped.tokens == [[expected[0]]]
             assert stopped.total_generated == 1
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(180)
+def test_packed_teacher_forcing_matches_serial_and_full_forward_with_independent_pages():
+    if jax.device_count() != 1:
+        pytest.skip("single-device reference test")
+    cfg = SnowballConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=8,
+        shared_expert_intermediate_dim=8,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sliding_window=32,
+        max_seq_len=112,
+        attention_implementation="reference",
+        moe_implementation="ring",
+    )
+    mesh = compact_grug_mesh(replica_axis_size=1)
+    with jax.set_mesh(mesh), hax.axis_mapping({}):
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), cfg, key=jax.random.key(913))
+        config = InferenceEngineConfig(
+            max_seq_len=112,
+            page_size=8,
+            max_pages=28,
+            max_seqs=2,
+            max_seqs_in_prefill=2,
+            max_prefill_size=64,
+            max_queued_tokens=224,
+        )
+        engine = MultiHostInferenceEngine.from_model_with_config(model, None, config, axis_resources={})
+        sequences = [
+            (1 + (np.arange(length) * (idx + 1) + idx * 3) % 31).tolist() for idx, length in enumerate((97, 63))
+        ]
+        serial = [score_cached_packed(engine, [s], 2)[0] for s in sequences]
+        repeat = [score_cached_packed(engine, [s], 2)[0] for s in sequences]
+        packed = score_cached_packed(engine, sequences, 2)
+        reversed_pack = score_cached_packed(engine, sequences[::-1], 2)[::-1]
+        layout = engine.last_packed_score_layout
+        assert layout["per_sequence_chunk"] == 32
+        assert any(step["starts"][0] == 32 and step["physical_query_width"] == 2 for step in layout["steps"])
+        assert any(step["valid_lengths"][0] == 0 and step["valid_lengths"][1] > 0 for step in layout["steps"])
+        for i, sequence in enumerate(sequences):
+            assert serial[i].token_logprobs == repeat[i].token_logprobs
+            np.testing.assert_allclose(packed[i].token_logprobs, serial[i].token_logprobs, atol=1e-5, rtol=1e-5)
+            np.testing.assert_allclose(reversed_pack[i].token_logprobs, serial[i].token_logprobs, atol=1e-5, rtol=1e-5)
+            ids = hax.named(jnp.asarray(sequence), "position")
+            logits = model(ids)
+            full = jax.nn.log_softmax(logits.array[:-1].astype(jnp.float32), axis=-1)
+            expected = np.asarray(full[jnp.arange(len(sequence) - 1), jnp.asarray(sequence[1:])])
+            np.testing.assert_allclose(packed[i].token_logprobs[1:], expected, atol=1e-5, rtol=1e-5)
+        np.testing.assert_array_equal(engine.gen_state.cache.dropped_assignments, [0, 0])

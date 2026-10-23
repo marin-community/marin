@@ -23,7 +23,12 @@ import haliax as hax
 from levanter.inference.engine import GenerationResult, InferenceEngine, Request, TokenSequenceLogprobs
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.snowball import SnowballCache
-from levanter.inference.snowball_scoring import score_cached, validate_score_request
+from levanter.inference.snowball_scoring import (
+    score_cached,
+    score_cached_packed,
+    validate_packed_score_request,
+    validate_score_request,
+)
 from levanter.inference.snowball_prefill import prefill_cached
 
 
@@ -95,6 +100,8 @@ class MultiHostInferenceEngine(InferenceEngine):
             if isinstance(cache, SnowballCache) and np.any(np.asarray(cache.dropped_assignments)):
                 raise RuntimeError(f"Inference dropped expert assignments: {np.asarray(cache.dropped_assignments)}")
             return result
+        if command["op"] == "score_packed":
+            return score_cached_packed(self, command["sequences"], command["top_k"])
         if command["op"] == "score":
             if isinstance(self.gen_state.cache, SnowballCache):
                 return score_cached(self, command["tokens"], command["top_k"])
@@ -171,6 +178,15 @@ class MultiHostInferenceEngine(InferenceEngine):
             result = self._execute_or_abort(command)
             assert isinstance(result, TokenSequenceLogprobs)
             return result
+
+    def score_packed_token_logprobs(self, sequences, top_k: int):
+        """Diagnostic teacher forcing with independent sequences in one cache."""
+        if jax.process_index() != 0 or not isinstance(self.gen_state.cache, SnowballCache):
+            raise ValueError("Packed scoring requires process zero and a Snowball cache")
+        validate_packed_score_request(self, sequences, top_k)
+        with self._command_lock:
+            command = _broadcast_command(dict(op="score_packed", sequences=[list(s) for s in sequences], top_k=top_k))
+            return self._execute_or_abort(command)
 
     def worker_loop(self):
         if jax.process_index() == 0:

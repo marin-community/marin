@@ -62,6 +62,11 @@ def run_eval(
         or gate["architecture_gate"].get("inference_source_sha256") != provenance.get("inference_source_sha256")
     ):
         raise ValueError("Serving code differs from the validated architecture gate")
+    if provenance.get("max_seqs", 1) > 1 and not (
+        gate.get("packed_teacher_forced_accepted")
+        or gate.get("architecture_gate", {}).get("packed_teacher_forced_accepted")
+    ):
+        raise ValueError("Batched evaluation requires the accepted packed teacher-forced numerical gate")
     if gate.get("model_revision") != model_revision or not model_revision.startswith(provenance["model_revision"]):
         raise ValueError("Gate report does not identify the pinned model")
     client_sha = hashlib.sha256(source.encode()).hexdigest()
@@ -154,8 +159,8 @@ def main():
     parser.add_argument("--name", default="levanter267-step12-math500")
     parser.add_argument("--runtime-minutes", type=int, default=240)
     args = parser.parse_args()
-    if not 2 <= args.runtime_minutes <= 240:
-        parser.error("Runtime must be between two minutes and four hours")
+    if not 2 <= args.runtime_minutes <= 1140:
+        parser.error("Runtime must be between two minutes and nineteen hours")
     if not args.output.startswith("gs://marin-us-central2/"):
         parser.error("Place evaluator archives in us-central2 with the serving job")
     if args.limit is not None and args.limit < 1:

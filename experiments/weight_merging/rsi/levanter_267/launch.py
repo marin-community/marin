@@ -79,8 +79,8 @@ def main():
     parser.add_argument("--runtime-minutes", type=int, default=90)
     parser.add_argument("--name", default="levanter267-v4-32-tiny")
     args = parser.parse_args()
-    if not 1 <= args.runtime_minutes <= 240:
-        parser.error("Runtime must be bounded to at most four hours")
+    if not 1 <= args.runtime_minutes <= 1200:
+        parser.error("Runtime must be bounded to at most twenty hours")
     if args.mode != "tiny" and (not args.item or not args.oracle):
         parser.error("The numerics item and pinned oracle are required for full-model runs")
     # Reads and outputs stay in the reserved slice's region. No implicit cross-region mirror.

@@ -30,6 +30,7 @@ from levanter.utils.mesh import MeshConfig
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.weight_merging.rsi.levanter_267.compile_profile import instrument_prefill
+from experiments.weight_merging.rsi.levanter_267.packed_gate import capture as capture_packed_gate
 from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH, inference_source_digest
 
 
@@ -161,6 +162,8 @@ def _capture_numerics(engine, tokenizer, item, output, config, local):
             dropped_assignments=np.asarray(engine.gen_state.cache.dropped_assignments).tolist(),
         ),
     )
+    if engine.config.max_seqs >= 2:
+        capture_packed_gate(engine, tokens, result, output)
     _probe_long_decode(engine, tokenizer, tokens, result.top_token_logprobs[2050], output, config, local)
 
 

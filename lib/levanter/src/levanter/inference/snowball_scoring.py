@@ -95,3 +95,116 @@ def score_cached(engine: InferenceEngine, token_ids, top_k: int) -> TokenSequenc
     if np.any(np.asarray(cache.dropped_assignments)):
         raise RuntimeError(f"Cached scoring dropped assignments: {np.asarray(cache.dropped_assignments)}")
     return TokenSequenceLogprobs(scores, tops)
+
+
+def validate_packed_score_request(engine: InferenceEngine, sequences, top_k: int):
+    """Validate the diagnostic's disjoint page reservation before broadcast."""
+    if not 1 <= len(sequences) <= engine.config.max_seqs:
+        raise ValueError("Packed scoring exceeds configured sequence slots")
+    for sequence in sequences:
+        validate_score_request(engine, sequence, top_k)
+        if len(sequence) < 2:
+            raise ValueError("Packed scoring requires at least two tokens per sequence")
+    if engine.config.max_prefill_size is None or engine.config.max_prefill_size < len(sequences):
+        raise ValueError("Prefill capacity must hold at least one query per sequence")
+    required_pages = sum((len(s) - 2 + engine.config.page_size) // engine.config.page_size for s in sequences)
+    if required_pages > engine.gen_state.decode_state.page_table.num_pages:
+        raise ValueError("Packed scoring exceeds physical page capacity")
+
+
+@eqx.filter_jit
+def _packed_score_step(model, cache, ids, targets, positions, info, top_k):
+    logits, cache = model.decode(ids, cache, info, positions)
+    logprobs = jax.nn.log_softmax(logits.array.astype(jnp.float32), axis=-1)
+    values, indices = jax.lax.top_k(logprobs, top_k)
+    selected = jnp.take_along_axis(logprobs, targets[:, None], axis=-1)[:, 0]
+    return cache, selected, values, indices
+
+
+def score_cached_packed(engine: InferenceEngine, sequences, top_k: int):
+    """Score independent sequences together through the paged decode kernel.
+
+    Each sequence owns disjoint physical pages and restarts its absolute positions
+    at zero. Valid queries are packed contiguously; buffer padding stays invalid.
+    Both serial controls and packed checks use this implementation.
+    """
+    validate_packed_score_request(engine, sequences, top_k)
+    tokens = [np.asarray(s, dtype=np.int32) for s in sequences]
+    n = len(tokens)
+    page_size = engine.config.page_size
+    page_width = engine.config.max_pages_per_seq
+    page_counts = [(len(s) - 2 + page_size) // page_size for s in tokens]
+    page_offsets = np.cumsum([0, *page_counts[:-1]])
+    page_indices = np.full((n, page_width), -1, dtype=np.int32)
+    for i, (offset, count) in enumerate(zip(page_offsets, page_counts, strict=True)):
+        page_indices[i, :count] = offset + np.arange(count)
+    cache = engine.gen_state.cache.reset()
+    scores = [[FIRST_TOKEN_LOGPROB] for _ in tokens]
+    tops = [[{int(s[0]): FIRST_TOKEN_LOGPROB}] for s in tokens]
+    starts = np.zeros(n, dtype=np.int32)
+    assert engine.config.max_prefill_size is not None
+    per_seq_chunk = min(128, engine.config.max_prefill_size // n)
+    if per_seq_chunk < 1:
+        raise ValueError("Prefill capacity must hold at least one query per sequence")
+    boundary = engine.model.config.sliding_window
+    singles = set(range(max(0, boundary - 2), boundary + 3))
+    top_k = min(top_k, engine.model.Vocab.size)
+    layout_steps = []
+    while any(start < len(s) - 1 for start, s in zip(starts, tokens, strict=True)):
+        lengths = []
+        for start, s in zip(starts, tokens, strict=True):
+            length = min(per_seq_chunk, len(s) - 1 - start)
+            if start in singles:
+                length = min(length, 1)
+            else:
+                upcoming = [p for p in singles if start < p < start + length]
+                if upcoming:
+                    length = min(upcoming) - start
+            lengths.append(int(length))
+        # Physical single-row-per-sequence buffers around the window boundary.
+        width = n if max(lengths) <= 1 else n * per_seq_chunk
+        layout_steps.append(dict(starts=starts.tolist(), valid_lengths=lengths, physical_query_width=width))
+        ids = np.zeros(width, np.int32)
+        targets = np.zeros(width, np.int32)
+        positions = np.zeros(width, np.int32)
+        destinations = np.full(width, -1, np.int32)
+        cu_q_lens = np.cumsum([0, *lengths], dtype=np.int32)
+        ends = starts + np.asarray(lengths, np.int32)
+        for i, (start, end) in enumerate(zip(starts, ends, strict=True)):
+            dest = slice(cu_q_lens[i], cu_q_lens[i + 1])
+            ids[dest] = tokens[i][start:end]
+            targets[dest] = tokens[i][start + 1 : end + 1]
+            positions[dest] = np.arange(start, end)
+            destinations[dest] = page_offsets[i] * page_size + positions[dest]
+        info = PageBatchInfo(
+            slot_ids=hax.named(jnp.arange(n, dtype=jnp.int32), "seq"),
+            page_indices=hax.named(jnp.asarray(page_indices), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray(ends), "seq"),
+            cu_q_lens=hax.named(jnp.asarray(cu_q_lens), "seq"),
+            num_seqs=jnp.asarray(n, jnp.int32),
+            new_token_dests=hax.named(jnp.asarray(destinations), "position"),
+            page_size=page_size,
+        )
+        cache, selected, values, indices = _packed_score_step(
+            engine.model,
+            cache,
+            hax.named(jnp.asarray(ids), "position"),
+            jnp.asarray(targets),
+            hax.named(jnp.asarray(positions), "position"),
+            info,
+            top_k,
+        )
+        selected, values, indices = map(np.asarray, (selected, values, indices))
+        for i in range(n):
+            dest = slice(cu_q_lens[i], cu_q_lens[i + 1])
+            scores[i].extend(selected[dest].tolist())
+            tops[i].extend(
+                {int(k): float(v) for k, v in zip(ks, vs, strict=True)}
+                for ks, vs in zip(indices[dest], values[dest], strict=True)
+            )
+        starts = ends
+    engine.gen_state = dataclasses.replace(engine.gen_state, cache=cache)
+    if np.any(np.asarray(cache.dropped_assignments)):
+        raise RuntimeError("Packed cached scoring dropped expert assignments")
+    engine.last_packed_score_layout = dict(num_sequences=n, per_sequence_chunk=per_seq_chunk, steps=layout_steps)
+    return [TokenSequenceLogprobs(s, t) for s, t in zip(scores, tops, strict=True)]
