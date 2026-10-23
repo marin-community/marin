@@ -9,7 +9,6 @@ from types import MappingProxyType
 import pyarrow.parquet as pq
 from eval.contracts.eval_spec import ReducerSpec, SourceRef
 from eval.data_sources import fetch_hf
-from eval.limits import ensure_context_window, require_context_length
 from eval.sources.common import SourceOptions, text_specs
 from eval.task import BaseBenchmark
 from rigging.filesystem.factory import open_url
@@ -92,23 +91,10 @@ class LABBenchBenchmark(BaseBenchmark):
         if len(rows) != component.count or len({row["id"] for row in rows}) != component.count:
             raise ValueError(f"LAB-Bench {component.subset} must contain {component.count} distinct items")
         records = [prepare_question(row, component.subset, options.seed) for row in rows]
-        specs = list(text_specs(
+        return text_specs(
             records, options,
             prompt=lambda row: row["prompt"], target=lambda row: row["answer"],
-            grader="letter_choice", generation_kwargs={"temperature": 0.0, "do_sample": False, "max_gen_toks": 8192},
+            grader="letter_choice", generation_kwargs={"temperature": 0.0, "do_sample": False},
             reference=lambda row: {"extractor": "hle"},
             tags=lambda row: {"subtask": row["subtask"]},
-        ))
-        context = require_context_length(options.context_length, task_name=options.task)
-        if options.prompt_token_count is None:
-            raise ValueError("LAB-Bench requires the served tokenizer for context validation")
-        # Validate the entire selected cohort before sending any requests. Do not silently
-        # truncate questions, lower their output budgets, or score overflow as an incorrect answer.
-        for spec in specs:
-            request = spec.requests[0]
-            ensure_context_window(
-                context_length=context,
-                prompt_tokens=options.prompt_token_count(request.prompt),
-                output_tokens=request.generation["max_gen_toks"],
-            )
-        yield from specs
+        )

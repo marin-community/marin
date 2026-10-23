@@ -37,13 +37,14 @@ The existing reducer supplies accuracy, standard error, and sample counts.
 No dedicated launcher suite or dashboard group is required.
 
 The checked-in configurations request one response per item, temperature 0,
-seed 42, thinking enabled through the chat template, a 40,960-token context,
-and an 8,192-token output budget. Effective model settings and overrides are
-retained in run provenance. Comparisons require matching those settings.
-The loader checks the selected cohort's prompt and output budgets before
-submitting requests. Context overflow fails preparation without truncating
-questions or dropping them. Transport failures follow Evalchemy's existing
-execution-error handling.
+seed 42, and thinking enabled through the chat template. They impose no fixed
+context or output cap. An explicit run/model output limit takes precedence;
+otherwise Evalchemy reserves the component's measured longest prompt and shared
+margins from the served context window, using the remainder for generation, as
+for GPQA. The existing endpoint preflight checks requests against the actual
+context window. Effective model settings and overrides are retained in run
+provenance; comparisons require matching those settings. Transport failures
+follow Evalchemy's existing execution-error handling.
 
 ## Running
 

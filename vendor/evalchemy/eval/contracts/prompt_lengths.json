@@ -111,6 +111,24 @@
       "longest_prompt_tokens": 581,
       "sha256": "e2c216de51da5e376f338c3dd14a7f88d2c4377da664e13c93b9fc76bef8a422"
     },
+    "LABBenchCloning": {
+      "distinct_prompt_count": 33,
+      "longest_prompt_chars": 51684,
+      "longest_prompt_tokens": 26388,
+      "sha256": "bad6427e1a07d7f41695319fa00899755d090e999971c19de499f2ed286b1524"
+    },
+    "LABBenchProtocolQA": {
+      "distinct_prompt_count": 108,
+      "longest_prompt_chars": 15144,
+      "longest_prompt_tokens": 5033,
+      "sha256": "a1a8d9ad421d6ce3d14f10c1f0b655bb5276f3913a382a07b678354ab51d3b7c"
+    },
+    "LABBenchSeqQA": {
+      "distinct_prompt_count": 600,
+      "longest_prompt_chars": 8439,
+      "longest_prompt_tokens": 4464,
+      "sha256": "9609f948792c5eeb7b75d60157cd32887db64c9ad317d8724c2d6b71a7825f24"
+    },
     "LiveCodeBench": {
       "distinct_prompt_count": 511,
       "longest_prompt_chars": 4180,
@@ -215,9 +233,6 @@
     }
   },
   "unmeasured": {
-    "LABBenchProtocolQA": "Pinned public component; the complete selected cohort is checked with the served tokenizer and explicit output budget before generation.",
-    "LABBenchSeqQA": "Pinned public component; the complete selected cohort is checked with the served tokenizer and explicit output budget before generation.",
-    "LABBenchCloning": "Pinned public component; the complete selected cohort is checked with the served tokenizer and explicit output budget before generation.",
     "GraphWalks": "Context-selected pinned dataset; prompt tokens and gold-dependent output budgets are computed per example with the served model tokenizer.",
     "LiveBench": "IndexError: list index out of range",
     "MRCR": "MissingContextLengthError: MRCR requires an explicit max_length so unsupported examples can be excluded",
