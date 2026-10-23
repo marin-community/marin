@@ -185,7 +185,9 @@ def _listing(directory: StoragePath) -> list[StoragePath]:
     return [directory / name for name in names]
 
 
-async def live_policy(root: StoragePath, tokenizer: str, sampling: Sampling, max_model_len: int, **kwargs: Any) -> VllmPolicy:
+async def live_policy(
+    root: StoragePath, tokenizer: str, sampling: Sampling, max_model_len: int, **kwargs: Any
+) -> VllmPolicy:
     """The live policy of the SkyRL job of ``root``, for the Taskforge gate; waits until the job serves it."""
     path = root / ENDPOINT
     while not await asyncio.to_thread(path.exists):

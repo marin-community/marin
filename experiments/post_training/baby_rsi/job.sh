@@ -5,8 +5,7 @@
 # Set up the GPU environment of a Baby RSI Iris task, then run Python with the arguments, for example
 # `job.sh -m experiments.post_training.baby_rsi.run baseline ...`.
 #
-# vLLM runs from its own virtual environment, because its Torch pin differs from the trainer's environment. The
-# task's environment gets the trainer's packages beside marin-taskforge. Submit with
+# vLLM runs from its own virtual environment, because its Torch pin differs from the task's environment. Submit with
 # `--sync-package marin-taskforge --container-profile container_profile_privileged` (bubblewrap needs namespaces).
 set -euo pipefail
 
@@ -29,14 +28,11 @@ echo "NVIDIA_VISIBLE_DEVICES=${NVIDIA_VISIBLE_DEVICES:-unset} CUDA_VISIBLE_DEVIC
 nvidia-smi -L || true
 
 VLLM_VENV=/tmp/vllm-venv
-TASK_PYTHON="$PWD/.venv/bin/python"
 # The installs run outside the repository, so that its uv index settings do not select Torch builds.
 (
   cd /tmp
   uv venv --quiet --python 3.12 "$VLLM_VENV"
   uv pip install --quiet --python "$VLLM_VENV/bin/python" --torch-backend cu128 vllm==0.11.0 transformers==4.57.1
-  uv pip install --quiet --python "$TASK_PYTHON" --torch-backend cu128 \
-    torch==2.8.0 transformers==4.57.1 peft==0.17.1 pandas==2.3.3
 )
 export BABY_RSI_VLLM="$VLLM_VENV/bin/vllm"
 exec .venv/bin/python "$@"
