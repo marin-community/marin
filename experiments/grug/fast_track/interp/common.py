@@ -53,6 +53,21 @@ CHECKPOINTS = {
     "lc1-l171-d1024": "s3://marin-us-east-02a/marin/grug/lc1-l171-d1024/2026.09.25/checkpoints/step-32323",
     "lc1-l171-d1280": "s3://marin-us-east-02a/marin/grug/lc1-l171-d1280/2026.09.25/checkpoints/step-57578",
 }
+# The skippable-second-half study (first-half KV for L3-L5, learned / entropy / random skipping), seed 0, by arm: the
+# model settings on top of Ckpt 1 (the training branch's attn_res_kv_strict is implied by attn_res_kv_layers here).
+_KV = {"attn_res_kv_layers": "3,4,5"}
+_ROUTER = {"skip_router_layers": "3,4,5", "skip_adapter_dim": "512"}
+SKIPKV_ARMS = {
+    "kv1": _KV,
+    "kv1-skip50": {**_KV, **_ROUTER, "skip_router_frac": "0.5"},
+    "kv1-skip30": {**_KV, **_ROUTER, "skip_router_frac": "0.3"},
+    "kv1-skip70": {**_KV, **_ROUTER, "skip_router_frac": "0.7"},
+    "plain-skip50": {**_ROUTER, "skip_router_frac": "0.5"},
+}
+SKIPKV_TAGS = {f"lc1-skipkv-{arm}-s0": settings for arm, settings in SKIPKV_ARMS.items()}
+CHECKPOINTS.update(
+    {tag: f"s3://marin-us-east-02a/marin/grug/{tag}/2026.09.25/checkpoints/step-2760" for tag in SKIPKV_TAGS}
+)
 # Study tags of other ladder sizes (every other tag is d512).
 TAG_SIZES = {"lc1-l171-d768": "d768", "lc1-l171-d1024": "d1024", "lc1-l171-d1280": "d1280"}
 OUTPUT_ROOT = "s3://marin-us-east-02a/tmp/ttl=30d/interp-belay-d512"
@@ -101,7 +116,7 @@ def model_config(tag: str) -> GrugModelConfig:
     rung = launch._resolved_rung(size, None, None)
     model = dataclasses.replace(launch._h100_ladder_model(rung), vocab_size=launch.V16384_VOCAB)
     model = launch._kma_model(model)
-    model = launch._apply_settings(model, settings)
+    model = launch._apply_settings(model, {**settings, **SKIPKV_TAGS.get(tag, {})})
     return dataclasses.replace(model, attn_res_plain_sum=tag in PLAIN_SUM_TAGS)
 
 

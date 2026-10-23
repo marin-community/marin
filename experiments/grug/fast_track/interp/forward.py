@@ -227,22 +227,26 @@ def _heads_through(conv, contrib: jax.Array, seg: jax.Array) -> jax.Array:
     return _bspec(rearrange(out, "(h b) s d -> b s h d", h=h))
 
 
-def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mult, head_mean, abl: Ablation, out: dict):
-    """KDA (as ``KimiDeltaAttention.__call__``) with per-head outputs; records q, k, v, log-decay g and beta."""
+def _kda_branch(
+    attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mult, head_mean, abl: Ablation, out: dict, kv_x=None
+):
+    """KDA (as ``KimiDeltaAttention.__call__``) with per-head outputs; records q, k, v, log-decay g and beta.
+    ``kv_x`` (first-half KV, ``attn_res_kv_strict``): the normed KV mix that k, v, the decay and beta read."""
+    kv_x = x if kv_x is None else kv_x
 
-    def project(w, conv):
-        y = jax.nn.silu(conv(jnp.einsum("bsd,de->bse", x, w), seg))
+    def project(w, conv, inp):
+        y = jax.nn.silu(conv(jnp.einsum("bsd,de->bse", inp, w), seg))
         return rearrange(y, "... (n d) -> ... n d", d=HEAD_DIM)
 
-    q = project(attn.w_q, attn.sconv_q)
-    k = project(attn.w_k, attn.sconv_k)
-    v = project(attn.w_v, attn.sconv_v)
-    a = jnp.einsum("bsr,re->bse", jnp.einsum("bsd,dr->bsr", x, attn.w_a_down), attn.w_a_up)
+    q = project(attn.w_q, attn.sconv_q, x)
+    k = project(attn.w_k, attn.sconv_k, kv_x)
+    v = project(attn.w_v, attn.sconv_v, kv_x)
+    a = jnp.einsum("bsr,re->bse", jnp.einsum("bsd,dr->bsr", kv_x, attn.w_a_down), attn.w_a_up)
     a = rearrange(a, "... (n d) -> ... n d", d=attn.dt_bias.shape[-1])
     scale = jnp.exp(attn.a_log.astype(jnp.float32))[:, None]
     gate_p = jnp.broadcast_to(scale, attn.dt_bias.shape)
     gate_bias = attn.dt_bias.astype(jnp.float32)
-    beta = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn.w_beta).astype(jnp.float32))
+    beta = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", kv_x, attn.w_beta).astype(jnp.float32))
     out["v_clean"] = v
     early = (position_in_document(seg) < abl.kda_early_tokens)[..., None]  # [B, S, 1]
     beta = jnp.where(early & (abl.kda_early_mode == 1), 0.0, beta)
@@ -291,16 +295,18 @@ def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mul
     return jnp.sum(contrib.astype(jnp.float32), axis=2).astype(x.dtype), contrib
 
 
-def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult, ve_mean):
+def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult, ve_mean, kv_x=None):
     """MLA q, k (offset, normed, qk_mult-scaled as the kernel sees them), the projected value and the gated value
-    embedding (``v = v_proj + ve``), and the Inkling bias band."""
-    latent = attn.kv_latent_norm(jnp.einsum("bsd,dl->bsl", x, attn.w_dkv))
+    embedding (``v = v_proj + ve``), and the Inkling bias band. ``kv_x`` (first-half KV, ``attn_res_kv_strict``):
+    the normed KV mix that the KV latent and the value-embedding gate read."""
+    kv_x = x if kv_x is None else kv_x
+    latent = attn.kv_latent_norm(jnp.einsum("bsd,dl->bsl", kv_x, attn.w_dkv))
     q = rearrange(jnp.einsum("bsd,de->bse", x, attn.w_q), "... (n d) -> ... n d", d=HEAD_DIM)
     k = rearrange(jnp.einsum("bsl,le->bse", latent, attn.w_uk), "... (n d) -> ... n d", d=HEAD_DIM)
     v_proj = rearrange(jnp.einsum("bsl,le->bse", latent, attn.w_uv), "... (n d) -> ... n d", d=HEAD_DIM)
     table = _embedding_gather(attn.value_embed.astype(x.dtype), token_ids)
     ve = rearrange(table, "... (n d) -> ... n d", d=HEAD_DIM)
-    ve_w = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, attn.ve_gate.astype(x.dtype)))[..., None]
+    ve_w = jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", kv_x, attn.ve_gate.astype(x.dtype)))[..., None]
     lam = attn.ve_lambda.astype(x.dtype)
     v_proj = lam[0] * v_proj
     m = ve_mult.astype(jnp.float32)[None, None, :, None]
@@ -319,10 +325,12 @@ def _xsa(y: jax.Array, v: jax.Array) -> jax.Array:
     return (dot / (jnp.sum(v * v, axis=-1, keepdims=True) + 1e-6)) * v
 
 
-def _mla_branch(attn: CausalSelfAttention, x, seg, token_ids, mask, head_mult, head_mean, ve_mult, ve_mean, out: dict):
+def _mla_branch(
+    attn: CausalSelfAttention, x, seg, token_ids, mask, head_mult, head_mean, ve_mult, ve_mean, out: dict, kv_x=None
+):
     """MLA (as ``CausalSelfAttention.__call__``) with per-head outputs split into the projected-value and the
     value-embedding parts (XSA, the output gate and ``w_o`` are linear in the attended value)."""
-    q, k, v_proj, ve, rel_bias, ve_w = mla_qkv(attn, x, seg, token_ids, ve_mult, ve_mean)
+    q, k, v_proj, ve, rel_bias, ve_w = mla_qkv(attn, x, seg, token_ids, ve_mult, ve_mean, kv_x)
     v = v_proj + ve
     impl = attn.cfg.gpu_attention if jax.default_backend() == "gpu" else None
     y_proj = _bspec(attention(q, k, v_proj, mask, implementation=impl, rel_bias=rel_bias)[..., :HEAD_DIM])
@@ -454,11 +462,19 @@ def trace_forward(
     segment_ids: jax.Array,
     abl: Ablation,
     routing: RoutingOverride | None = None,
+    skip_frac: float = 0.0,
 ) -> dict:
     """The forward of ``model`` (compute dtype) on ``[B, S]`` tokens, returning every intermediate: ``layers[i]`` holds
     layer ``i``'s gate weights, attention internals, MoE internals and branch outputs, and the top level the final
     gate, the normed hidden state, the capped logits' loss, top-1 and the label. ``routing`` edits the MoE routing
-    (``no_override`` when None)."""
+    (``no_override`` when None).
+
+    First-half KV (``attn_res_kv_layers``, always strict here: the training branch's ``attn_res_kv_strict``): those
+    layers' K/V, KDA decay / beta and MLA value-embedding gate read their own AttnRes mix over the first
+    ``kv_source_layers`` layers' sources. The skip router (``skip_router_layers``) scores the plain sum of the sources
+    entering its first layer; the ``skip_frac`` of the batch with the lowest score skip those layers (zero output),
+    kept tokens scale their outputs by ``2 sigmoid(score)``, and skipped tokens' final mix goes through the skip
+    adapter. ``skip_frac`` 0: every token keeps (the scale still applies)."""
     cfg = model.config
     eps = cfg.layer_norm_eps
     b, s = tokens.shape
@@ -475,12 +491,31 @@ def trace_forward(
     )
     blocks = [embed]
     layers_out = []
+    keep_scale = skipped = router_score = None
     for i, layer in enumerate(model.layers()):
         out: dict = {}
+        if cfg.skip_router_layers and i == min(cfg.skip_router_layers):
+            total = functools.reduce(jnp.add, [src.astype(jnp.float32) for src in blocks])
+            router_score = jnp.einsum("bsd,d->bs", rms_norm(total, eps), model.skip_router) + model.skip_router_bias
+            if skip_frac == 0.0:
+                keep = jnp.ones(router_score.shape, bool)
+            else:
+                keep = router_score > jnp.quantile(reshard(router_score, P(None, None)), skip_frac)
+            keep_scale = keep * 2.0 * jax.nn.sigmoid(router_score)
+            skipped = ~keep
+        layer_keep = keep_scale if i in cfg.skip_router_layers else None
         w_attn, h = _gate(blocks, layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum)
         attn_in = layer._attn_input(h)
+        kv_x = None
+        if i in cfg.attn_res_kv_layers:
+            # The extra sources (none here), the embedding and the first kv_source_layers layers' blocks.
+            _, h_kv = _gate(blocks[: 1 + cfg.kv_source_layers], layer.attn_res_query_kv, eps, plain_sum=False)
+            kv_x = layer._attn_input(h_kv)
+            out["kv_in"] = kv_x
         if i in KDA_LAYERS:
-            _, contrib = _kda_branch(layer.attn, attn_in, seg, cfg, abl.head_mult[i], abl.head_mean[i], abl, out)
+            _, contrib = _kda_branch(
+                layer.attn, attn_in, seg, cfg, abl.head_mult[i], abl.head_mean[i], abl, out, kv_x=kv_x
+            )
             ve_contrib = jnp.zeros_like(contrib)
         else:
             contrib, ve_contrib = _mla_branch(
@@ -494,18 +529,23 @@ def trace_forward(
                 abl.sub_mult[i, SUB_VE] * abl.ve_head_mult[i],
                 abl.ve_mean[i],
                 out,
+                kv_x=kv_x,
             )
             # The branch-output SConv (MLA only) is linear and channelwise: per-head parts go through it alone.
             contrib = _heads_through(layer.sconv_attn, contrib, seg)
             ve_contrib = _heads_through(layer.sconv_attn, ve_contrib, seg)
         attn_out = jnp.sum(contrib.astype(jnp.float32), axis=2)
         attn_out = _mix(abl.sub_mult[i, SUB_ATTN], attn_out, abl.sub_mean[i, SUB_ATTN]).astype(embed.dtype)
+        if layer_keep is not None:
+            attn_out = attn_out * layer_keep[..., None].astype(attn_out.dtype)
         w_mlp, h2 = _gate([*blocks, attn_out], layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum)
         mlp_in = layer._mlp_input(h2)
         routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out)
         routed_sc = layer.sconv_mlp(routed, seg)
         shared_sc = layer.sconv_mlp(shared_out, seg)
         mlp_out = layer.sconv_mlp(routed + shared_out, seg)
+        if layer_keep is not None:
+            mlp_out = mlp_out * layer_keep[..., None].astype(mlp_out.dtype)
         block_out = attn_out + mlp_out
         out.update(
             w_attn=w_attn,
@@ -526,6 +566,9 @@ def trace_forward(
         layers_out.append(out)
         blocks.append(block_out)
     w_final, mixed = _gate(blocks, model.attn_res_query_final, eps, plain_sum=cfg.attn_res_plain_sum)
+    if model.skip_adapter is not None and skipped is not None:
+        adapted = model.skip_adapter(rms_norm(mixed, eps), moe_output_reshard=False)
+        mixed = mixed + skipped[..., None].astype(mixed.dtype) * adapted.astype(mixed.dtype)
     mixed_f = mixed.astype(jnp.float32)
     inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(mixed_f), axis=-1, keepdims=True) + eps)
     hidden = model.final_norm(mixed)
@@ -547,6 +590,7 @@ def trace_forward(
         top_ids=top[1],
         labels=labels,
         entropy=-jnp.sum(jnp.exp(logp) * logp, axis=-1),
+        **({} if router_score is None else {"skip_router_score": router_score, "skipped": skipped}),
     )
 
 
