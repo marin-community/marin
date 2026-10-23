@@ -102,12 +102,15 @@ bootstrap over tasks:
 | 4B | Held-out probes | 855 | 0.145 | 0.119 | 0.684 | +0.565 [+0.535, +0.595] |
 | 4B | Held-out pool tasks | 300 | 0.211 | 0.406 | 0.358 | −0.048 [−0.082, −0.014] |
 | Snowball | Held-out probes | 214 | 0.298 | 0.549 | 0.820 | +0.271 [+0.230, +0.314] |
-| Snowball | Held-out pool tasks | 300 | 0.374 | 0.499 | pending | pending |
+| Snowball | Held-out pool tasks, 3 strata | 190 | 0.363 | 0.509 | 0.474 | −0.036 [−0.068, −0.003] |
 
 Each RSI arm restarted once after a fix (the engines' tool parser for 4B, the trajectory window for Snowball). It
 began with the 14 and 17 tasks that its first run had accepted, so synthesized tasks entered its training from the
 first step; the controls did not restart. A second evaluation of the base differs from the first by at most 0.02 on
-every set. Of the probes that the base
+every set. In the Snowball RSI pool evaluation, the competitive-coding and Reasoning Gym graders could not import
+numpy and reasoning_gym (uv had linked the task environment into its cache; the grader sandbox now mounts it), and
+three more runs failed to load the weights, so that row compares calendar, STEM multiple choice and structural tasks;
+on all 300 tasks the control scores 0.499. Of the probes that the base
 never passes, the 4B RSI arm passes 87% at least once (control 13%, second base run 14%); for Snowball, 89% (control
 67%, second base run 47%). The RSI arm loses some pool pass rate against the control: it trains on half as many pool
 tasks.
