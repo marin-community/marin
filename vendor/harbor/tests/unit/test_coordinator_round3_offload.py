@@ -32,6 +32,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
+import httpx
 import pytest
 
 from harbor.agents.terminus_2.terminus_2 import Terminus2
@@ -87,7 +88,7 @@ async def test_acount_total_tokens_uses_truly_async_client() -> None:
 
     async def _recording_post(url, json):  # noqa: A002 - mirrors AsyncClient.post
         called["url"] = url
-        return SimpleNamespace(status_code=200, json=lambda: {"count": 42})
+        return httpx.Response(200, json={"count": 42}, request=httpx.Request("POST", url))
 
     fake_async_client = SimpleNamespace(post=_recording_post)
 
