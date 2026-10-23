@@ -21,7 +21,10 @@ src/taskforge/
   ledger/                      timed spans to per-workpiece JSONL, and the Finelog backend
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
-                               RolloutEngine model
+                               RolloutEngine model;
+                               clef/: the Clef client, whose `decide` grades score questions and
+                               whose `read` (`ClefReader`) asks any mix of question types, both
+                               through one HTTP pool and in-flight limit
   sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts

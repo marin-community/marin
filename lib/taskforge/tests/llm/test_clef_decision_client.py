@@ -1,9 +1,11 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The Clef decision client against FakeClef: the bar, the deadline, the error split, the window, the token."""
+"""The Clef decision client against FakeClef: the bar, the deadline, the error split, the window, the token,
+the request bytes, and reads of every question type."""
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -18,14 +20,23 @@ from taskcompendium.models import AnswerType, GradingAttempt, PlainText, Source,
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
 from taskforge.llm.clef import budget
-from taskforge.llm.clef.budget import ClefTokenizer
+from taskforge.llm.clef.budget import ClefTokenizer, TruncateFrom
 from taskforge.llm.clef.decision_client import (
+    WINDOW_HEADER,
     ClefDecisionClient,
     ClefDecisionConfig,
+    ClefReader,
     DecisionRequestError,
     open_clef_decision_client,
 )
-from taskforge.llm.clef.schema import ScoreQuestion
+from taskforge.llm.clef.schema import (
+    ChoiceAnswer,
+    ChoiceQuestion,
+    NoulAnswer,
+    NoulQuestion,
+    ScoreAnswer,
+    ScoreQuestion,
+)
 from taskforge.spec import decision, draft
 from taskforge.spec.decision import (
     LEVELS,
@@ -36,7 +47,7 @@ from taskforge.spec.decision import (
     trial_form,
 )
 from taskforge.spec.rubric import Rubric, RubricItem
-from tests.llm.fake_clef import FakeClef
+from tests.llm.fake_clef import FakeClef, Prober, first_option_prober
 from tests.spec.fake_decision import level_probabilities
 
 TOKEN = "secret-bearer-123"
@@ -162,19 +173,31 @@ def wrong_questions(request):
     return httpx.Response(200, json=body)
 
 
-@pytest.mark.parametrize(
-    ("handler", "error"),
-    [
-        (FakeClef(token=TOKEN, unavailable=[503]).handle, DecisionUnavailable),
-        (FakeClef(token=TOKEN, unavailable=[502]).handle, DecisionUnavailable),
-        (lambda request: httpx.Response(503, json={"error": {"code": "clef_unavailable"}}), DecisionUnavailable),
-        (refusing_connection, DecisionUnavailable),
-        (FakeClef(token="another-token").handle, DecisionRequestError),
-        (lambda request: httpx.Response(400, json={"error": "bad schema"}), DecisionRequestError),
-        (wrong_questions, DecisionRequestError),
-    ],
-    ids=["503", "502", "front-door", "connection", "401", "400", "schema-mismatch"],
-)
+def wrong_answer_type(request):
+    body = FakeClef(tokenizer=TOKENIZER).answer(json.loads(request.content))
+    body["answers"]["whole"] = {"type": "choice", "choice": "a", "probabilities": {"a": 1.0}, "confidence": 1.0}
+    return httpx.Response(200, json=body)
+
+
+def failing_clefs() -> list:
+    """Each failing Clef, built fresh for one test (a FakeClef's leading failures are used up), with the error."""
+    return [
+        pytest.param(FakeClef(token=TOKEN, unavailable=[503]).handle, DecisionUnavailable, id="503"),
+        pytest.param(FakeClef(token=TOKEN, unavailable=[502]).handle, DecisionUnavailable, id="502"),
+        pytest.param(
+            lambda request: httpx.Response(503, json={"error": {"code": "clef_unavailable"}}),
+            DecisionUnavailable,
+            id="front-door",
+        ),
+        pytest.param(refusing_connection, DecisionUnavailable, id="connection"),
+        pytest.param(FakeClef(token="another-token").handle, DecisionRequestError, id="401"),
+        pytest.param(lambda request: httpx.Response(400, json={"error": "bad schema"}), DecisionRequestError, id="400"),
+        pytest.param(wrong_questions, DecisionRequestError, id="schema-mismatch"),
+        pytest.param(wrong_answer_type, DecisionRequestError, id="answer-type-mismatch"),
+    ]
+
+
+@pytest.mark.parametrize(("handler", "error"), failing_clefs())
 async def test_transient_and_permanent_failures_raise_apart(handler, error):
     async with client(handler) as clef:
         with pytest.raises(error):
@@ -229,14 +252,14 @@ async def test_a_permanent_clef_failure_is_not_retried(monkeypatch):
 
 
 class Recording:
-    """FakeClef behind a handler that keeps every request's headers."""
+    """FakeClef behind a handler that keeps every request as sent."""
 
-    def __init__(self):
-        self.fake = FakeClef(tokenizer=TOKENIZER, prober=at_level(3.0), token=TOKEN)
-        self.headers: list[httpx.Headers] = []
+    def __init__(self, prober: Prober = at_level(3.0)):
+        self.fake = FakeClef(tokenizer=TOKENIZER, prober=prober, token=TOKEN)
+        self.sent: list[httpx.Request] = []
 
     def handle(self, request):
-        self.headers.append(request.headers)
+        self.sent.append(request)
         return self.fake.handle(request)
 
 
@@ -271,6 +294,75 @@ async def test_the_token_is_never_logged_or_shown(caplog, monkeypatch):
     monkeypatch.setenv("CLEF_TEST_TOKEN", TOKEN)
     async with open_clef_decision_client(config(), TOKENIZER) as opened:
         assert TOKEN not in repr(opened)
+
+
+GOLDEN_STATE = {"task_deliverable": RUBRIC.deliverable, "y_reference_answer": REFERENCE}
+
+
+@pytest.mark.parametrize(
+    ("window", "reply", "digest"),
+    [
+        (None, REPLY, "bb71f0e9fcd2fc9a4d12587371ef4f30088a47fbcb41c79b174fdf17d25c6682"),
+        (
+            16384,
+            REPLY,
+            "bb71f0e9fcd2fc9a4d12587371ef4f30088a47fbcb41c79b174fdf17d25c6682",
+        ),
+    ],
+    ids=["unpinned", "pinned-16k"],
+)
+async def test_decide_sends_the_pinned_request_bytes(window, reply, digest):
+    recording = Recording()
+    async with client(recording.handle, window) as clef:
+        await clef.decide(
+            {**GOLDEN_STATE, "z_candidate_answer": reply},
+            {"whole": decision.comparative_question()},
+            elastic="z_candidate_answer",
+            timeout=30,
+        )
+
+    (sent,) = recording.sent
+    assert b"tokens truncated by the Clef state budget" not in sent.content
+    assert hashlib.sha256(sent.content).hexdigest() == digest
+    assert sent.headers.get(WINDOW_HEADER) == (None if window is None else str(window))
+
+
+async def test_one_read_asks_a_noul_a_choice_and_a_score_question():
+    recording = Recording(prober=first_option_prober)
+    questions = {
+        "stated": NoulQuestion("Does the answer state a total?", true="It states one total."),
+        "currency": ChoiceQuestion.of("Which currency is the total in?", {"USD": None, "EUR": "Euros."}),
+        "whole": ScoreQuestion(QUESTION, LEVELS),
+    }
+    async with client(recording.handle) as clef:
+        reader: ClefReader = clef
+        response = await reader.read(
+            {**GOLDEN_STATE, "z_candidate_answer": REPLY},
+            questions,
+            elastic=("z_candidate_answer",),
+            truncate_from=TruncateFrom.HEAD,
+            timeout=30,
+        )
+
+    answers = response.answers
+    assert isinstance(answers["stated"], NoulAnswer) and answers["stated"].noul == pytest.approx(0.7)
+    assert isinstance(answers["currency"], ChoiceAnswer) and answers["currency"].choice == "USD"
+    assert isinstance(answers["whole"], ScoreAnswer)
+    (sent,) = recording.sent
+    assert json.loads(sent.content)["questions"] == {qid: q.to_json() for qid, q in questions.items()}
+
+
+@pytest.mark.parametrize(("handler", "error"), failing_clefs())
+async def test_a_read_fails_as_a_decision_does(handler, error):
+    async with client(handler) as clef:
+        with pytest.raises(error):
+            await clef.read(
+                {"z_candidate_answer": REPLY},
+                {"whole": NoulQuestion("Does the answer state a total?")},
+                elastic=("z_candidate_answer",),
+                truncate_from=TruncateFrom.MIDDLE,
+                timeout=30,
+            )
 
 
 def test_tokenizer_download_failure_does_not_substitute_another_vocabulary(monkeypatch, tmp_path):
