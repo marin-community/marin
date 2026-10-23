@@ -96,10 +96,20 @@ class TeacherPromptInsertion:
     after_prefix: tuple[int, ...]
     tokens: tuple[int, ...]
 
-    def apply(self, prompt: list[int]) -> list[int]:
-        if tuple(prompt[: len(self.after_prefix)]) != self.after_prefix:
-            raise ValueError("teacher prompt does not match the configured insertion prefix")
-        return [*self.after_prefix, *self.tokens, *prompt[len(self.after_prefix) :]]
+
+def conditioned_teacher_prompt(prompt: list[int], insertions: tuple[TeacherPromptInsertion, ...]) -> list[int]:
+    """Insert teacher context using exactly one matching prefix rule."""
+    if not insertions:
+        return list(prompt)
+    matching = [rule for rule in insertions if tuple(prompt[: len(rule.after_prefix)]) == rule.after_prefix]
+    if len(matching) != 1:
+        raise ValueError("teacher prompt must match exactly one insertion prefix")
+    rule = matching[0]
+    return [*rule.after_prefix, *rule.tokens, *prompt[len(rule.after_prefix) :]]
+
+
+def max_insertion_length(insertions: tuple[TeacherPromptInsertion, ...]) -> int:
+    return max((len(rule.tokens) for rule in insertions), default=0)
 
 
 class TeacherSpec(Protocol):

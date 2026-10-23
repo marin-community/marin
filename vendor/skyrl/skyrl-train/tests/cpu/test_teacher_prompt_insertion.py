@@ -199,3 +199,21 @@ async def test_local_teacher_scores_full_student_window_with_inserted_context(tm
     GPT2Config(n_positions=7).save_pretrained(tmp_path)
     with pytest.raises(ValueError, match="conditioning tokens"):
         teacher_runtime.prepare_distillation_runtime(config, tokenizer)
+
+    # External endpoints may serve shorter actual requests than the student engine limit.
+    config.teachers = {
+        "teacher": {
+            "source": "openai_compatible",
+            "placement": "external",
+            "model": {"path": "synthetic/teacher", "revision": "r1"},
+            "endpoints": [{"url": "http://localhost:8000/v1", "max_concurrency": 1}],
+            "tokenizer_fingerprint": prepared.student_fingerprint,
+            "max_sequence_length": 5,
+            "request_timeout_seconds": 120,
+            "evidence": "chosen_token",
+        }
+    }
+    assert len(teacher_runtime.prepare_distillation_runtime(config, tokenizer).external_teachers) == 1
+    config.teachers.teacher.prompt_insertions = [{"after_prefix": [1], "tokens": [2, 3]}]
+    with pytest.raises(ValueError, match="conditioning tokens"):
+        teacher_runtime.prepare_distillation_runtime(config, tokenizer)

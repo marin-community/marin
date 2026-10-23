@@ -16,6 +16,7 @@ from marinskyrl.distillation import (
     TeacherEvidenceKind,
     TeacherPlacement,
     compile_distillation_plan_from_config,
+    max_insertion_length,
     validate_distillation_runtime_support,
 )
 from rigging.secrets import resolve_secret_spec
@@ -96,12 +97,12 @@ def prepare_distillation_runtime(
     external_teachers: list[OpenAICompatibleTeacherSpec] = []
     student_window = cfg.generator.engine_init_kwargs.get("max_model_len")
     for teacher in plan.teachers:
-        insertion_length = max((len(insertion.tokens) for insertion in teacher.prompt_insertions), default=0)
+        insertion_length = max_insertion_length(teacher.prompt_insertions)
         if insertion_length and student_window is None:
             raise ValueError("Teacher conditioning requires an explicit student max_model_len")
         required_window = None if student_window is None else int(student_window) + insertion_length
         if isinstance(teacher, OpenAICompatibleTeacherSpec):
-            if required_window is not None and teacher.max_sequence_length < required_window:
+            if insertion_length and required_window is not None and teacher.max_sequence_length < required_window:
                 raise ValueError(
                     f"teacher {teacher.id!r} max_sequence_length={teacher.max_sequence_length} cannot score "
                     f"the student window plus conditioning tokens ({required_window})"
@@ -166,7 +167,7 @@ async def _start_local_teacher_pool(
     engine_init_kwargs["served_model_name"] = teacher.model.path
     if "max_model_len" in engine_init_kwargs:
         # Reserve inserted teacher context and one disposable scoring output token.
-        insertion_length = max((len(insertion.tokens) for insertion in teacher.prompt_insertions), default=0)
+        insertion_length = max_insertion_length(teacher.prompt_insertions)
         engine_init_kwargs["max_model_len"] = int(engine_init_kwargs["max_model_len"]) + insertion_length + 1
     role = InferenceEngineRoleConfig(
         pretrain=teacher.model.path,
