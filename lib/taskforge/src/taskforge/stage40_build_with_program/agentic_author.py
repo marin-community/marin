@@ -75,6 +75,7 @@ from collections import Counter
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
@@ -84,7 +85,16 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskResource, TextMessage
 
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
-from taskforge.llm.agent import AgentRun, AgentStop, AgentTool, AgentTurn, ReasoningReplay, ToolOutcome, run_agent
+from taskforge.llm.agent import (
+    AgentRun,
+    AgentStop,
+    AgentTool,
+    AgentTurn,
+    ReasoningReplay,
+    ToolOutcome,
+    clip_tool_output,
+    run_agent,
+)
 from taskforge.llm.client import ModelClient, ModelUnavailable, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
@@ -488,12 +498,7 @@ class Submission:
     tested: bool
 
 
-def clip(text: str) -> str:
-    """Keep a short tool reply whole; otherwise retain its head and tail with a truncation marker."""
-    if len(text) <= TOOL_OUTPUT_CHARS:
-        return text
-    dropped = len(text) - TOOL_OUTPUT_HEAD - TOOL_OUTPUT_TAIL
-    return f"{text[:TOOL_OUTPUT_HEAD]}\n... [{dropped} characters dropped] ...\n{text[-TOOL_OUTPUT_TAIL:]}"
+clip = partial(clip_tool_output, limit=TOOL_OUTPUT_CHARS, head=TOOL_OUTPUT_HEAD, tail=TOOL_OUTPUT_TAIL)
 
 
 def _schema(properties: Mapping[str, object], required: Sequence[str]) -> dict[str, object]:

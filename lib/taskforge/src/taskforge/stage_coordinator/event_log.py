@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Protocol, TypedDict
 
 from pydantic import TypeAdapter
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 
 from taskforge.ledger.records import check_workpiece_id
 from taskforge.stage_coordinator.workpiece_machine import WorkpieceEvent
@@ -76,9 +76,7 @@ class EventFile(TypedDict):
 
 def write_events(path: Path, events: tuple[WorkpieceEvent, ...]) -> None:
     """Write ``events`` to ``path`` as JSON tagged with ``EVENT_SCHEMA``, through a temporary sibling."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_rename(str(path)) as temp:
-        Path(temp).write_bytes(_EVENT_FILE.dump_json(EventFile(schema=EVENT_SCHEMA, events=events), indent=2))
+    write_bytes_atomic(str(path), _EVENT_FILE.dump_json(EventFile(schema=EVENT_SCHEMA, events=events), indent=2))
 
 
 def load_events(path: Path) -> tuple[WorkpieceEvent, ...]:
