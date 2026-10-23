@@ -5,6 +5,17 @@ Data Atlas through [all_sources()](sources.py). See the
 [reference](../../../docs/references/task-curation.md) for source fields, grading,
 reviewed SAMPLE/FULL campaigns and artifact outputs.
 
+## Final task selection
+
+Pass `--selection RECIPE.json` to a FULL campaign to append a
+`rl-data/task-selection/<name>/<version>` artifact after source admission.
+The recipe names the source IDs, assigns them to selection families, sets
+family quotas and pins the complete heldout source in retained storage.
+The step filters heldout overlap and cross-source duplicates before sampling,
+then writes canonical `task_spec` Parquet for training and evaluation.
+See [task selection](../../../docs/references/task-curation.md#final-task-selection)
+for the recipe and resume commands.
+
 ## Local conversion loop
 
 From the repository root:

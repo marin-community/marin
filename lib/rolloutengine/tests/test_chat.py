@@ -187,7 +187,7 @@ async def test_a_response_without_usage_is_a_model_failure():
     )
 
 
-async def test_prefill_harness_reaches_chat_endpoint_as_text_without_pinned_tokens():
+async def test_assistant_prefix_harness_reaches_chat_endpoint_as_text_without_pinned_tokens():
     server = ChatServer([completion({"content": "2"})])
     task = arithmetic_task(
         context=ConversationInput(
@@ -213,7 +213,7 @@ async def test_prefill_harness_reaches_chat_endpoint_as_text_without_pinned_toke
 
 
 @pytest.mark.parametrize("channel", ["reasoning_content", "reasoning"])
-async def test_prefill_rejects_reasoning_parsed_by_a_chat_endpoint(channel):
+async def test_assistant_prefix_rejects_reasoning_parsed_by_a_chat_endpoint(channel):
     server = ChatServer([completion({"content": "", channel: "2"})])
     task = arithmetic_task(
         context=ConversationInput(
