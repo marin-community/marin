@@ -21,20 +21,12 @@ from finestore.commit import (
     read_snapshot,
     write_schema,
 )
-from finestore.layout import BlobColumns, BlobTables, FineStoreLayout, OnConflict, TableMetadata
+from finestore.layout import BLOB_TABLE_METADATA, BlobTables, FineStoreLayout, TableMetadata
 from finestore.reader import BlobCorruptionError, ReadView
 
 logger = logging.getLogger(__name__)
 
 _REPAIR_ATTEMPTS = 3
-
-
-def _blob_metadata(table: str) -> TableMetadata:
-    if table == BlobTables.DESCRIPTORS:
-        return TableMetadata(primary_key=(BlobColumns.NAME,), on_conflict=OnConflict.SUPERSEDE)
-    if table == BlobTables.PARTS:
-        return TableMetadata(primary_key=(BlobColumns.NAME, BlobColumns.PART), on_conflict=OnConflict.SUPERSEDE)
-    raise ValueError(f"cache contains unexpected table {table!r}")
 
 
 class CacheReadView(ReadView):
@@ -50,7 +42,7 @@ class CacheReadView(ReadView):
         except FileNotFoundError:
             # The two cache tables have fixed contracts; readers need not recreate expired schemas.
             self.missing_schema = True
-            return _blob_metadata(table)
+            return BLOB_TABLE_METADATA[BlobTables(table)]
 
     def read_blobs(self, names: Sequence[str]) -> dict[str, bytes]:
         try:
@@ -119,7 +111,7 @@ def maintain_cache(root: str, *, refresh_before: datetime | None) -> None:
             try:
                 _refresh_object(table.metadata_path, refresh_before)
             except FileNotFoundError as exc:
-                schema_path = write_schema(layout, _blob_metadata(name))
+                schema_path = write_schema(layout, BLOB_TABLE_METADATA[BlobTables(name)])
                 if schema_path != table.metadata_path:
                     raise ValueError(f"cache table {name!r} has an unexpected schema path") from exc
             missing = set()

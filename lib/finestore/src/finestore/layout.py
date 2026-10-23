@@ -101,6 +101,12 @@ class TableMetadata(_FormatModel):
     on_conflict: OnConflict = OnConflict.ERROR
 
 
+BLOB_TABLE_METADATA = {
+    BlobTables.DESCRIPTORS: TableMetadata(primary_key=(BlobColumns.NAME,), on_conflict=OnConflict.SUPERSEDE),
+    BlobTables.PARTS: TableMetadata(primary_key=(BlobColumns.NAME, BlobColumns.PART), on_conflict=OnConflict.SUPERSEDE),
+}
+
+
 class SealMarker(_FormatModel):
     """Seal state embedded in a committed manifest."""
 

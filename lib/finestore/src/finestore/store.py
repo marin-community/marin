@@ -34,6 +34,7 @@ from finestore.commit import (
 )
 from finestore.compaction import COMPACTION_TARGET_BYTES, CompactionResult, compact_level_zero_tables, compact_table
 from finestore.layout import (
+    BLOB_TABLE_METADATA,
     CHUNKED_BLOBS_FEATURE,
     RESERVED_COLUMNS,
     BlobColumns,
@@ -270,19 +271,23 @@ class DataStore:
         return build_uri(BlobTables.DESCRIPTORS, name)
 
     def _blob_table(self) -> DataTable:
+        metadata = BLOB_TABLE_METADATA[BlobTables.DESCRIPTORS]
         return self._tables.get(BlobTables.DESCRIPTORS) or self.table(
             BlobTables.DESCRIPTORS,
-            primary_key=(BlobColumns.NAME,),
+            primary_key=metadata.primary_key,
             schema=_BLOB_SCHEMA,
-            on_conflict=OnConflict.SUPERSEDE,
+            schema_version=metadata.schema_version,
+            on_conflict=metadata.on_conflict,
         )
 
     def _blob_part_table(self) -> DataTable:
+        metadata = BLOB_TABLE_METADATA[BlobTables.PARTS]
         return self._tables.get(BlobTables.PARTS) or self.table(
             BlobTables.PARTS,
-            primary_key=(BlobColumns.NAME, BlobColumns.PART),
+            primary_key=metadata.primary_key,
             schema=_BLOB_PART_SCHEMA,
-            on_conflict=OnConflict.SUPERSEDE,
+            schema_version=metadata.schema_version,
+            on_conflict=metadata.on_conflict,
         )
 
     @staticmethod
