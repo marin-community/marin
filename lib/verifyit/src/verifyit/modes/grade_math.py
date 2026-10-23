@@ -225,6 +225,12 @@ def grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     except TimeoutException as error:
         # This backend exception inherits BaseException, unlike Python's TimeoutError.
         raise GradingInfraError("math verifier deadline exhausted") from error
+    except KeyError as error:
+        # math-verify's relation-comparison table lacks some SymPy relation types
+        # (e.g. Unequality), so an answer of that kind can never be graded here.
+        # That is a property of the task, not of the run: the answer is invalid,
+        # and callers drop it, instead of the grader crashing.
+        raise InvalidTask(f"math-verify cannot compare this input: {error}") from error
 
 
 def _grade_raw_math(spec: MathSpec, candidate: str) -> Reward:

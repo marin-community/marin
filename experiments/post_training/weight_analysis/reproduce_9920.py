@@ -194,7 +194,7 @@ class TheirResults:
     cos_vs_ref0: dict[str, float]
 
     @classmethod
-    def load(cls, label: str, results_prefix: str, model_path: str) -> "TheirResults":
+    def load(cls, label: str, results_prefix: str, model_path: str) -> TheirResults:
         filesystem, path = fsspec.core.url_to_fs(results_prefix)
         with filesystem.open(f"{path.rstrip('/')}/wdelta-{label}.json") as handle:
             document = json.load(handle)
@@ -575,7 +575,10 @@ def print_overlap_report(reports: dict[str, ModelReport], reference_label: str) 
             f"{'ALL':>15}  overlap {overlap:.3f} (published {PUBLISHED_OVERLAP[label][0]:.3f}), "
             f"random {null:.3f} (published {PUBLISHED_OVERLAP[label][1]:.3f})"
         )
-        print(f"{'sign agree':>15}  {report.comparison.sign_agreement:.3f} (published {PUBLISHED_SIGN_AGREEMENT[label]:.3f})")
+        print(
+            f"{'sign agree':>15}  {report.comparison.sign_agreement:.3f}"
+            f" (published {PUBLISHED_SIGN_AGREEMENT[label]:.3f})"
+        )
 
 
 def main() -> None:
@@ -627,8 +630,7 @@ def main() -> None:
         print(f"wrote {len(rows)} comparison rows to {args.csv}")
     if summary_failures:
         raise SystemExit(
-            f"{len(summary_failures)} summary mismatches against the #9920 results:\n"
-            + "\n".join(summary_failures[:20])
+            f"{len(summary_failures)} summary mismatches against the #9920 results:\n" + "\n".join(summary_failures[:20])
         )
 
 

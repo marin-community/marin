@@ -324,3 +324,11 @@ def test_boxed_preserves_physics_reference_raw_fallback():
     missing = grade_math.grade_math_candidate(spec, "")
     assert missing.status == Status.SCORED
     assert missing.reward == 0
+
+
+def test_relation_answers_the_verifier_cannot_compare_are_invalid_not_crashes():
+    """math-verify's comparison table lacks Unequality, so a \\neq-style answer can
+    never be graded; the verdict is InvalidTask (the task is dropped), not a crash."""
+    spec = MathSpec(expected=r"x \neq 3", profile=MathProfile.BOXED)
+    with pytest.raises(InvalidTask, match="cannot compare"):
+        grade_math.grade_math_candidate(spec, r"The final answer is $\boxed{x \neq 3X'}$.")

@@ -55,13 +55,17 @@ class ProbeBucket(StrEnum):
 
     WP8 (PR #10511) owns the values; reconcile this mirror when that PR lands.
     Only bucketed tokens are scored — fixed context carries no bucket — so every
-    scored position tags with one of these.
+    scored position tags with one of these. ``assistant_text`` is earlier assistant
+    content outside the structured buckets, and ``delimiter`` the generated
+    structural tokens; both are assistant output and are scored.
     """
 
     REASONING = "reasoning"
     TOOL_NAME = "tool_name"
     TOOL_ARGUMENTS = "tool_arguments"
     FINAL_MESSAGE = "final_message"
+    ASSISTANT_TEXT = "assistant_text"
+    DELIMITER = "delimiter"
 
 
 @dataclass(frozen=True)
