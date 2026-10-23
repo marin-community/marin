@@ -66,10 +66,6 @@ _SANDBOX_POLICIES = frozenset({job_pb2.EGRESS_POLICY_INTERNET, job_pb2.EGRESS_PO
 def resolve_egress_policy(profile: int, egress_policy: int) -> job_pb2.EgressPolicy:
     """Resolve UNSPECIFIED to the profile's default: INTERNET for SANDBOX, CLUSTER otherwise.
 
-    The controller resolves UNSPECIFIED before storing a job, applying its
-    backend's default (see ``TaskBackend.default_egress_policy``); this
-    fallback only covers callers that never stored one.
-
     Raises ValueError for an unknown policy or a SANDBOX job on a policy that
     reaches the controller.
     """

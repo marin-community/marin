@@ -54,7 +54,6 @@ from iris.cluster.controller.worker_health import (
     WorkerHealthEvent,
     WorkerHealthEventKind,
 )
-from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import WellKnownAttribute, WorkerId
 from iris.rpc import controller_pb2, job_pb2, vm_pb2, worker_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -327,14 +326,9 @@ class RpcTaskBackend:
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
         return None
 
-    def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
-        """ALLOWLIST when the cluster's allowlist is the default, else the profile's default.
-
-        Workers enforce ALLOWLIST only on DNS (see ``iris.cluster.worker.egress_dns``).
-        """
-        if self.egress_allowlist_default and request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
-            return job_pb2.EGRESS_POLICY_ALLOWLIST
-        return resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
+    def egress_allowlist_is_default(self) -> bool:
+        """Workers enforce ALLOWLIST only on DNS (see ``iris.cluster.worker.egress_dns``)."""
+        return self.egress_allowlist_default
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         if self.autoscaler is None:

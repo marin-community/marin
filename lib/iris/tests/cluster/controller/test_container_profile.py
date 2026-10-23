@@ -270,7 +270,7 @@ def allowlist_default_service(service):
         kubectl=InMemoryK8sService(namespace="iris"),
         pods=pod_config(egress_allowlist=EgressAllowlistConfig(default=True)),
     )
-    service._controller.backend.default_egress_policy.side_effect = backend.default_egress_policy
+    service._controller.backend.egress_allowlist_is_default.side_effect = backend.egress_allowlist_is_default
     yield service
     backend.close()
 

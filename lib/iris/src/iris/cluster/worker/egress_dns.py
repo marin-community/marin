@@ -31,6 +31,8 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from iris.cluster.egress import domain_matches, is_domain_pattern
+
 logger = logging.getLogger(__name__)
 
 DNS_PORT = 53
@@ -56,7 +58,6 @@ _FLAGS_OPCODE_AND_RD = 0x7900
 _FLAG_RA = 0x0080
 _RCODE_REFUSED = 5
 _MAX_LABEL = 63
-_WILDCARD = "*"
 
 
 @dataclass(frozen=True)
@@ -95,14 +96,9 @@ class DomainAllowlist:
     """
 
     def __init__(self, domains: Iterable[str], suffixes: Iterable[str]) -> None:
-        self._names: set[str] = set()
-        self._patterns: list[tuple[str, ...]] = []
-        for domain in domains:
-            labels = tuple(domain.split("."))
-            if _WILDCARD in labels:
-                self._patterns.append(labels)
-            else:
-                self._names.add(domain)
+        domains = list(domains)
+        self._names = {domain for domain in domains if not is_domain_pattern(domain)}
+        self._patterns = [domain for domain in domains if is_domain_pattern(domain)]
         self._suffixes = tuple(suffix for suffix in suffixes if suffix)
 
     def allows(self, name: str) -> bool:
@@ -110,14 +106,7 @@ class DomainAllowlist:
             return True
         if any(name == suffix or name.endswith(f".{suffix}") for suffix in self._suffixes):
             return True
-        labels = name.split(".")
-        return any(_matches(pattern, labels) for pattern in self._patterns)
-
-
-def _matches(pattern: tuple[str, ...], labels: list[str]) -> bool:
-    if len(pattern) != len(labels):
-        return False
-    return all(want == _WILDCARD or want == label for want, label in zip(pattern, labels, strict=True))
+        return any(domain_matches(pattern, name) for pattern in self._patterns)
 
 
 @dataclass(frozen=True)

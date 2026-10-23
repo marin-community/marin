@@ -561,8 +561,8 @@ class EgressAllowlistConfig(_Config):
     """
 
     # Resolve an UNSPECIFIED egress policy to ALLOWLIST for every job except
-    # SANDBOX jobs and, on Kubernetes, GPU jobs with more than one task, which
-    # keep host networking for InfiniBand.
+    # SANDBOX jobs. On Kubernetes, GPU jobs with more than one task keep host
+    # networking for InfiniBand, so the allowlist does not restrict them.
     default: bool = False
     # Cluster additions to the base allowlist, in egress rule syntax.
     allow: list[str] = Field(default_factory=list)

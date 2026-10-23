@@ -134,7 +134,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.sandbox import TaskNetwork, resolve_egress_policy, task_isolation
+from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.secrets import task_secret_values
 from iris.cluster.stats.emitter import PeriodicEmitter
@@ -2552,12 +2552,9 @@ class K8sTaskProvider:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
 
-    def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
-        """ALLOWLIST when the cluster's allowlist is the default, else the profile's default."""
+    def egress_allowlist_is_default(self) -> bool:
         allowlist = self.pods.egress_allowlist
-        if allowlist is None or not allowlist.default or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
-            return resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
-        return job_pb2.EGRESS_POLICY_ALLOWLIST
+        return allowlist is not None and allowlist.default
 
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
@@ -2856,6 +2853,9 @@ class K8sTaskProvider:
                 run_req.egress_allow,
             )
             # Before the pod, so its first connections already see the job's rules.
+            # If the pod apply then fails, the policy stays unowned until the
+            # attempt is retried; it selects only this attempt's UID, so it
+            # grants nothing to other pods.
             self.kubectl.apply_json(task_policy)
 
         task_id = run_req.task_id

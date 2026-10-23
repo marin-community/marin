@@ -664,10 +664,8 @@ def _validate_egress(request: controller_pb2.Controller.LaunchJobRequest) -> Non
 
     Rejects an unknown policy, a SANDBOX job on a policy that reaches the
     controller, a malformed or excessive rule list, and rules alongside an
-    explicit policy other than ALLOWLIST. An UNSPECIFIED policy stays
-    unresolved until the job's placement is known
-    (:func:`_resolve_egress_default`); its rules take effect only if it
-    resolves to ALLOWLIST.
+    explicit policy other than ALLOWLIST. An UNSPECIFIED policy is left
+    unresolved; its rules take effect only if it resolves to ALLOWLIST.
     """
     try:
         validate_egress_rules(request.egress_allow)
@@ -689,8 +687,10 @@ def _resolve_egress_default(
 
     A child job inherits its parent's policy and rules, so a job tree that
     opted out of the allowlist, or added rules, keeps that choice. A root job,
-    and a SANDBOX child, takes the backend's default. A job queued for a
-    federation peer stays UNSPECIFIED; the peer resolves it with its own default.
+    and a SANDBOX child, takes the cluster's default: ALLOWLIST where the
+    backend's allowlist is the default and the job is not SANDBOX, otherwise
+    its profile's default. A job queued for a federation peer stays
+    UNSPECIFIED; the peer resolves it with its own default.
     """
     if request.egress_policy != job_pb2.EGRESS_POLICY_UNSPECIFIED:
         return
@@ -702,7 +702,13 @@ def _resolve_egress_default(
             request.egress_policy = parent.egress_policy
             request.egress_allow.extend(parse_egress_rules(parent.egress_allow_json))
             return
-    request.egress_policy = dependencies.runtime.backend.default_egress_policy(request)
+    if (
+        request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX
+        and dependencies.runtime.backend.egress_allowlist_is_default()
+    ):
+        request.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
+        return
+    request.egress_policy = resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
 
 
 def _validate_launch_capacity(

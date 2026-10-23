@@ -30,7 +30,6 @@ from iris.cluster.controller.backend import (
 )
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import job_scheduling_deadline
-from iris.cluster.runtime.sandbox import resolve_egress_policy
 from iris.cluster.types import DEFAULT_BACKEND_ID, AttemptUid, JobName
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
@@ -178,8 +177,8 @@ class ScriptedTaskBackend:
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
         return None
 
-    def default_egress_policy(self, request: controller_pb2.Controller.LaunchJobRequest) -> job_pb2.EgressPolicy:
-        return resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
+    def egress_allowlist_is_default(self) -> bool:
+        return False
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None

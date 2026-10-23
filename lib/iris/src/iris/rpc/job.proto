@@ -781,7 +781,7 @@ message RunTaskRequest {
   // profile that withholds it (SANDBOX) or a controller without a JWT signer.
   string task_token = 17;
 
-  // The job's destinations beyond the cluster allowlist. Set only with
-  // EGRESS_POLICY_ALLOWLIST.
+  // The job's destinations beyond the cluster allowlist. Workers apply them
+  // only under EGRESS_POLICY_ALLOWLIST.
   repeated EgressRule egress_allow = 18;
 }

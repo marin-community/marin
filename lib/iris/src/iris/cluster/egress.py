@@ -157,6 +157,14 @@ def is_domain_pattern(domain: str) -> bool:
     return _WILDCARD in domain.split(".")
 
 
+def domain_matches(pattern: str, name: str) -> bool:
+    """Whether ``name`` matches a domain or pattern; each ``*`` matches one label, as in Cilium's ``matchPattern``."""
+    want, labels = pattern.split("."), name.split(".")
+    return len(want) == len(labels) and all(
+        expected in (_WILDCARD, label) for expected, label in zip(want, labels, strict=True)
+    )
+
+
 def rule_domains(rules: Iterable[job_pb2.EgressRule]) -> list[str]:
     """The distinct domains and patterns of ``rules``, in order."""
     return list(dict.fromkeys(rule.domain for rule in rules if rule.WhichOneof("destination") == "domain"))
