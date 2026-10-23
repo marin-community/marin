@@ -178,16 +178,15 @@ _SKIP_KEEP = "layer_skip_keep"
 _EXTRA_KEEP = "extra_mlp_keep"
 _ENTROPY_PRED = "entropy_pred"
 _SKIP_ROUTER_SCORE = "skip_router_score"
-# Learned halting gate (``halt_layers``): per-layer extras key carrying a gated layer's ``g`` (scales its branch
-# outputs before their SConv), the stats key of each layer's ``[B, S]`` write to the halting stream ``z``, and the
-# final stats key of the ``[G, B, S]`` gates of the gated layers.
+# Learned halting (``halt_points``): per-layer extras key carrying a dampened layer's output scale ``G`` (applied before
+# its branch SConvs), the stats key of each layer's ``[B, S]`` vote to the halting stream ``z``, and the final stats keys
+# of the ``[P, B, S]`` dampening logits and the ``[P, B, S, D]`` exit readouts of the decision points.
 _HALT_SCALE = "halt_scale"
 _HALT_Z = "halt_z"
-_HALT_GATES = "halt_gates"
+_HALT_LOGITS = "halt_logits"
+_HALT_EXITS = "halt_exits"
 # The routed experts' down-projection grows by the halting-vote column plus zero padding to this width.
 _HALT_COLUMN_PAD = 8
-# Seed of the training-time uniforms of the binary halting gates (``halt_hard``), folded with the step.
-_HALT_SEED = 1931
 _ENTROPY_CHUNK = 1024
 # Per-layer router stats carrying each token's ``[T, K]`` selected experts and combine weights to
 # ``Transformer.routing_assignments``.
@@ -254,8 +253,15 @@ class ExtraMlpSelect(StrEnum):
     RANDOM = "random"  # a fixed pseudo-random subset (the control)
 
 
+class HaltMode(StrEnum):
+    """How a halting decision acts (``halt_points``)."""
+
+    DAMPEN = "dampen"  # the later layers' outputs are scaled by G, in training and eval
+    MIX = "mix"  # p = G p_full + sum_k G_{k-1} d_k p_exit_k; the later layers run normally
+
+
 class HaltWrite(StrEnum):
-    """How a layer writes to the halting stream ``z`` (``halt_layers``)."""
+    """How a layer writes to the halting stream ``z`` (``halt_points``)."""
 
     UNIT = "unit"  # every unit casts its own vote: activation x its own zero-init coefficient
     READ = "read"  # one zero-init linear read of the rms-normed layer output
@@ -877,30 +883,24 @@ class GrugModelConfig:
     ``LayerSkip``), and the kept tokens' sublayer outputs are scaled by ``2 sigmoid(score)``, which trains the
     router. The threshold is the batch quantile of the scores."""
     skip_router_frac: float = 0.2
-    halt_layers: tuple[int, ...] = ()
-    """Learned halting gate: layer ``l`` in this list scales its attention and MLP branch outputs (before their
-    SConv) by ``g_l = prod_{j in halt_layers, j <= l} sigmoid(z_j + b_j)``, where ``z_j`` is a per-token scalar
-    side stream summing the writes of every layer below ``j`` (``halt_write``) and ``b_j`` a learned bias (init
-    ``halt_bias_init``). ``z`` never enters a norm, an AttnRes gate or the lm_head. ``g`` is non-increasing in
-    depth, so inference can skip every later gated layer once ``g < halt_threshold``."""
+    halt_points: tuple[int, ...] = ()
+    """Learned halting: after each listed layer ``k``, a per-token dampening decision ``d_k = sigmoid(z_k + b_k)``, where
+    ``z_k`` sums the halting votes (``halt_write``) of every layer ``<= k`` and never enters a norm, an AttnRes gate or
+    the lm_head. ``G_k = prod_{j <= k} (1 - d_j)`` never reopens, so inference skips every later layer once
+    ``G < halt_threshold``. Each point has an exit head (the shared final norm and lm_head on an AttnRes readout of the
+    sources after layer ``k``, with its own query) trained by ``halt_exit_weight`` CE, and ``d_k`` is rewarded by a
+    ``halt_reward_weight`` BCE toward the stop-gradient label "the exit's top-1 is the target with probability >
+    ``halt_confidence``". No compute penalty."""
+    halt_mode: HaltMode = HaltMode.DAMPEN
     halt_write: HaltWrite = HaltWrite.UNIT
-    halt_bias_init: float = 4.0
-    halt_penalty: float = 0.0
-    """Compute penalty ``lambda * mean(g)`` over the gated layers and loss tokens, ramped linearly from 0 over the
-    first ``halt_penalty_ramp_frac`` of training."""
-    halt_penalty_ramp_frac: float = 0.35
-    halt_floor: float = 0.0
-    """``halt_hard`` training: a gated layer runs for a token when ``max(g, halt_floor) > u``, so every gated layer
-    keeps training on at least this fraction of tokens (a layer muted for every token stops learning and its gate
-    never recovers)."""
+    halt_bias_init: float = -4.0
+    """Initial dampening logit ``b_k`` (``-4``: ``d = 0.018``, the later layers start fully on)."""
+    halt_exit_weight: float = 0.2
+    halt_reward_weight: float = 0.1
+    halt_confidence: float = 0.9
     halt_threshold: float | None = None
-    """Outside training (no halt schedule), a gated layer with ``g < halt_threshold`` is skipped (scale 0)."""
-    halt_hard: bool = False
-    """Binary gates: training runs a gated layer for a token when ``g > u`` (``u`` uniform per token and step, shared
-    by the gated layers, so a halted token stays halted) with the straight-through scale ``keep + g - sg(g)``;
-    outside training a layer runs at scale 1 when ``g >= halt_threshold`` (default 0.5). A soft ``g`` scale is
-    degenerate: the model shrinks every token's g and compensates downstream (AttnRes and the norms are scale
-    invariant), so the penalty falls with no token actually skippable."""
+    """Outside training, a token whose ``G`` falls below this skips every later layer (scale 0; under ``mix`` it takes
+    the exit's prediction)."""
     mid_head_layer: int | None = None
     """A second lm_head (own weights, initialized like the lm_head) reads the rms-normed stream entering this layer
     and adds its next-token loss (``mid_head_loss_weight``) in training. A confidence head (``mid_confidence_dim``
@@ -1196,20 +1196,18 @@ class GrugModelConfig:
                 raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
         if self.skip_adapter_dim and not self.attn_res:
             raise ValueError("skip_adapter_dim needs attn_res")
-        if self.halt_layers:
-            layers = self.halt_layers
+        if self.halt_points:
+            points = self.halt_points
             if not self.attn_res or self.scan_layers or self.dense_mlp:
-                raise ValueError("halt_layers needs attn_res, the unrolled layer loop and a MoE")
-            if layers != tuple(sorted(set(layers))) or not 1 <= layers[0] <= layers[-1] < self.num_layers:
-                raise ValueError(f"halt_layers must be increasing layers in 1..{self.num_layers - 1}, got {layers}")
-            if not 0.0 < self.halt_penalty_ramp_frac <= 1.0 or not 0.0 <= self.halt_floor < 1.0:
-                raise ValueError("halt_penalty_ramp_frac must be in (0, 1] and halt_floor in [0, 1)")
-            if self.halt_floor and not self.halt_hard:
-                raise ValueError("halt_floor needs halt_hard")
+                raise ValueError("halt_points needs attn_res, the unrolled layer loop and a MoE")
+            if points != tuple(sorted(set(points))) or not 0 <= points[0] <= points[-1] < self.num_layers - 1:
+                raise ValueError(f"halt_points must be increasing layers in 0..{self.num_layers - 2}, got {points}")
             if self.attn_res_layer_backward != AttnResLayerBackward.SAVE:
-                raise ValueError("halt_layers needs attn_res_layer_backward=save (plain autodiff)")
+                raise ValueError("halt_points needs attn_res_layer_backward=save (plain autodiff)")
             if self.halt_write == HaltWrite.UNIT and (not self.moe_ungated_relu2 or self.num_null_experts):
                 raise ValueError("halt_write=unit needs ungated ReLU^2 experts in one bank (no null experts)")
+            if bad := [i for i in self.attn_res_kv_layers if i <= points[0]]:
+                raise ValueError(f"with halt_points, attn_res_kv_layers {bad} must come after the first point")
         if self.skip_router_layers:
             if not self.attn_res or self.scan_layers or not 0.0 <= self.skip_router_frac < 1.0:
                 raise ValueError("skip_router_layers needs attn_res, the unrolled layer loop and 0 <= frac < 1")
@@ -1345,6 +1343,12 @@ class GrugModelConfig:
     def kv_source_layers(self) -> int:
         """The leading layers whose outputs ``attn_res_kv_layers`` read (``attn_res_kv_source_layers``)."""
         return self.num_layers // 2 if self.attn_res_kv_source_layers is None else self.attn_res_kv_source_layers
+
+    def kv_cutoff(self, layer_index: int) -> int:
+        """How many leading layers' outputs layer ``layer_index``'s KV mix reads: up to the last halting point before
+        it (``halt_points``, so a token halted there needs none of its later work), else ``kv_source_layers``."""
+        earlier = [p for p in self.halt_points if p < layer_index]
+        return earlier[-1] + 1 if earlier else self.kv_source_layers
 
     @property
     def num_null_experts(self) -> int:
@@ -3549,14 +3553,16 @@ def _memory_branch(
 def _halt_init(
     cfg: GrugModelConfig, attn: "CausalSelfAttention | KimiDeltaAttention", mlp: "MoEMLP | DenseMLP", shared
 ) -> dict[str, jax.Array | None]:
-    """``Block``'s zero-init halting-stream writes (``halt_layers``, ``halt_write``)."""
+    """``Block``'s zero-init halting-stream writes (``halt_points``, ``halt_write``)."""
     out: dict[str, jax.Array | None] = dict.fromkeys(
-        ("halt_read", "halt_attn", "halt_shared", "halt_routed", "halt_bias")
+        ("halt_read", "halt_attn", "halt_shared", "halt_routed", "halt_bias", "halt_exit_query")
     )
-    if not cfg.halt_layers:
+    if not cfg.halt_points:
         return out
-    # A per-layer scalar: a [G] replicated vector indexed per gated layer got a NaN gradient on the GPU.
+    # Per-layer leaves (every layer carries them; the decision points read theirs): a [P] replicated bias vector indexed
+    # per point got a NaN gradient on the GPU.
     out["halt_bias"] = jnp.asarray(cfg.halt_bias_init, jnp.float32)
+    out["halt_exit_query"] = reshard(jnp.zeros((_attn_res_key_dim(cfg),), jnp.float32), P(None))
     if cfg.halt_write == HaltWrite.READ:
         out["halt_read"] = reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None))
         return out
@@ -3588,13 +3594,14 @@ class Block(eqx.Module):
     extra_mlp: DenseMLP | None  # cfg.extra_mlp_layers (every layer carries one; those use it)
     extra_mlp_gain: Float[Array, ""] | None
     attn_res_partial_scale: Float[Array, " 2"] | None  # cfg.attn_res_partial_scale: (a_attn, a_mlp)
-    # Learned halting gate (cfg.halt_layers): zero-init writes to the halting stream z. Every layer carries them;
-    # the layers below the last gated layer write z.
+    # Learned halting (cfg.halt_points): zero-init votes to the halting stream z. Every layer carries them; the layers
+    # up to the last decision point vote.
     halt_read: Float[Array, " D"] | None  # halt_write=read: one linear read of the rms-normed layer output
     halt_attn: Float[Array, " NH"] | None  # halt_write=unit: per attention output channel (before w_o)
     halt_shared: Float[Array, " I"] | None  # halt_write=unit: per shared-expert unit
     halt_routed: Float[Array, "E I"] | None  # halt_write=unit: per routed-expert unit (times its combine weight)
-    halt_bias: Float[Array, ""] | None  # the halting bias b_l a gated layer adds to the stream (every layer carries one)
+    halt_bias: Float[Array, ""] | None  # a decision point's dampening bias b_k
+    halt_exit_query: Float[Array, " D"] | None  # a decision point's exit readout query (zero init: uniform average)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
@@ -4728,7 +4735,7 @@ def _attn_res_layer(
         # cutoff (each holds only earlier layers); the partial and later blocks are later layers' work.
         starts = attn_res_block_starts(cfg)
         num_extra = len(blocks) - sum(start <= layer_index for start in starts)
-        keep = num_extra + sum(start <= cfg.kv_source_layers for start in starts)
+        keep = num_extra + sum(start <= cfg.kv_cutoff(layer_index % cfg.num_layers) for start in starts)
         return _attn_res_mix(
             blocks[:keep],
             block_logits[:keep],
@@ -5629,36 +5636,109 @@ def _strip_unread_weights(stats: dict[str, jax.Array], schedule: _BlockSchedule,
         stats[name] = jnp.concatenate([weights[:filled], weights[num_sources:]]) if has_partial else weights[:filled]
 
 
-HALT_THRESHOLDS = (0.1, 0.3, 0.5)
-_HALT_QUANTILES = (0.1, 0.25, 0.5, 0.75, 0.9)
+HALT_THRESHOLDS = (0.05, 0.1, 0.2)
 
 
-def halt_schedule(cfg: GrugModelConfig, step: jax.Array, total_steps: int) -> Float[Array, " 2"]:
-    """``(penalty weight, step)`` of the halting gate at ``step``: ``halt_penalty`` ramped linearly from 0 over
-    ``halt_penalty_ramp_frac`` of training."""
-    frac = jnp.asarray(step, jnp.float32) / max(total_steps, 1)
-    penalty = cfg.halt_penalty * jnp.clip(frac / cfg.halt_penalty_ramp_frac, 0.0, 1.0)
-    return jnp.stack([penalty, jnp.asarray(step, jnp.float32)])
+class HaltHeads(NamedTuple):
+    """Per decision point (``[P, B, S]``): the dampening logits, the exits' per-token CE (with gradient), and the
+    stop-gradient reward labels and exit statistics."""
+
+    logits: jax.Array
+    exit_ce: jax.Array
+    label: jax.Array
+    exit_correct: jax.Array
+    exit_prob: jax.Array
+
+
+def _halt_heads(
+    cfg: GrugModelConfig,
+    logits: Float[Array, "P B S"],
+    exits: Float[Array, "P B S D"],
+    lm_head: Float[Array, "D V"],
+    labels: Int[Array, "B S"],
+    loss_weight: Float[Array, "B S"],
+) -> HaltHeads:
+    """Score every exit readout (already final-normed) with the shared lm_head."""
+    cap = _logit_cap(cfg)
+    assert cap is None or isinstance(cap, float), "halting exits need a scalar logit_soft_cap"
+    exit_ce, correct, prob = [], [], []
+    for exit_in in exits:
+        exit_ce.append(
+            fused_linear_softmax_cross_entropy_loss(
+                exit_in,
+                lm_head,
+                labels,
+                weight=loss_weight,
+                reduction="none",
+                dtype=jnp.float32,
+                implementation="xla_fast_bwd",
+                block_sizes=_ce_block_sizes(),
+                logit_soft_cap=cap,
+            )
+        )
+        stats = _vocab_stats(exit_in, lm_head, cap, labels)
+        correct.append((stats.top_id == labels).astype(jnp.float32))
+        prob.append(jnp.exp(stats.label_logit - stats.logsumexp))
+    correct_a, prob_a = jnp.stack(correct), jnp.stack(prob)
+    label = correct_a * (prob_a > cfg.halt_confidence).astype(jnp.float32)
+    return HaltHeads(logits, jnp.stack(exit_ce), label, correct_a, prob_a)
+
+
+def _halt_keep(logits: Float[Array, "P B S"], threshold: float | None) -> tuple[jax.Array, jax.Array]:
+    """``(G_k, stop_k)`` per point: the running keep product and, below ``threshold``, the point where a token stops
+    (``stop_k = 1`` at its first point with ``G_k < threshold``, which then drops ``G`` to 0 from there on)."""
+    g = jnp.cumprod(jax.nn.sigmoid(-logits), axis=0)
+    if threshold is None:
+        return g, jnp.zeros_like(g)
+    below = (g < threshold).astype(g.dtype)
+    stopped_before = jnp.concatenate([jnp.zeros_like(below[:1]), jnp.cumsum(below, axis=0)[:-1]], axis=0) > 0
+    stop = below * (1.0 - stopped_before.astype(g.dtype))
+    return jnp.where(jnp.cumsum(below, axis=0) > 0, 0.0, g), stop
+
+
+def _halt_mix_nll(heads: HaltHeads, full_ce: Float[Array, "B S"], threshold: float | None) -> Float[Array, "B S"]:
+    """``halt_mode=mix`` per-token NLL of ``p = G p_full + sum_k G_{k-1} d_k p_exit_k`` (below ``threshold``, a token
+    takes all of its remaining mass from the exit where it stops)."""
+    g, stop = _halt_keep(heads.logits, threshold)
+    prev = jnp.concatenate([jnp.ones_like(g[:1]), g[:-1]], axis=0)
+    if threshold is None:
+        exit_w = prev * jax.nn.sigmoid(heads.logits)
+    else:
+        exit_w = jnp.where(stop > 0, prev, prev * jax.nn.sigmoid(heads.logits))
+    terms = jnp.concatenate(
+        [jnp.log(jnp.maximum(exit_w, 1e-30)) - heads.exit_ce, (jnp.log(jnp.maximum(g[-1], 1e-30)) - full_ce)[None]]
+    )
+    return -jax.nn.logsumexp(terms, axis=0)
 
 
 def _halt_terms(
-    cfg: GrugModelConfig, gates: Float[Array, "G B S"], schedule: Float[Array, " 2"], loss_weight: Float[Array, "B S"]
+    cfg: GrugModelConfig, heads: HaltHeads, loss_weight: Float[Array, "B S"]
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
-    """The halting gate's compute penalty ``lambda * mean(g)`` and its logs: per gated layer the mean, quantiles and
-    fraction below each of ``HALT_THRESHOLDS`` of the gate."""
+    """The exits' auxiliary CE and the dampening reward (BCE of ``d_k`` toward the label), and their logs."""
     weight = loss_weight.astype(jnp.float32)
     count = jnp.maximum(jnp.sum(weight), 1.0)
-    penalty = schedule[0] * jnp.sum(weight * jnp.mean(gates, axis=0)) / count
-    metrics = {"train/halt/penalty_weight": schedule[0], "train/halt/penalty": jax.lax.stop_gradient(penalty)}
-    sg = jax.lax.stop_gradient(gates)
-    quantiles = jnp.quantile(reshard(sg.reshape(sg.shape[0], -1), P(None, None)), jnp.asarray(_HALT_QUANTILES), axis=1)
-    for n, layer in enumerate(cfg.halt_layers):
-        metrics[f"train/halt/g_mean_L{layer}"] = jnp.sum(weight * sg[n]) / count
-        for q, level in zip(quantiles[:, n], _HALT_QUANTILES, strict=True):
-            metrics[f"train/halt/g_p{round(100 * level)}_L{layer}"] = q
+
+    def mean(x):
+        return jnp.sum(weight * x) / count
+
+    bce = jax.nn.softplus(heads.logits) - jax.lax.stop_gradient(heads.label) * heads.logits
+    exit_loss = sum(jnp.sum(ce) for ce in heads.exit_ce) / count
+    reward = sum(mean(b) for b in bce)
+    loss = cfg.halt_exit_weight * exit_loss + cfg.halt_reward_weight * reward
+    sg = jax.lax.stop_gradient
+    g, _ = _halt_keep(sg(heads.logits), None)
+    metrics = {}
+    for n, point in enumerate(cfg.halt_points):
+        tag = f"P{point}"
+        metrics[f"train/halt/dampen_mean_{tag}"] = mean(jax.nn.sigmoid(sg(heads.logits[n])))
+        metrics[f"train/halt/label_rate_{tag}"] = mean(heads.label[n])
+        metrics[f"train/halt/exit_ce_{tag}"] = sg(jnp.sum(heads.exit_ce[n])) / count
+        metrics[f"train/halt/exit_acc_{tag}"] = mean(heads.exit_correct[n])
+        metrics[f"train/halt/reward_bce_{tag}"] = sg(mean(bce[n]))
+        metrics[f"train/halt/g_mean_{tag}"] = mean(g[n])
         for tau in HALT_THRESHOLDS:
-            metrics[f"train/halt/frac_below_{tau:g}_L{layer}"] = jnp.sum(weight * (sg[n] < tau)) / count
-    return penalty, metrics
+            metrics[f"train/halt/frac_g_below_{tau:g}_{tag}"] = mean((g[n] < tau).astype(jnp.float32))
+    return loss.astype(jnp.float32), metrics
 
 
 class Transformer(eqx.Module):
@@ -5933,12 +6013,10 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 2"] | None = None,
+        halt_training: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``layer_gates`` (``layer_onset_gates`` at the train step) masks or ramps the delayed layers' AttnRes
-        sources; None runs every layer fully on.
-        ``halt_schedule`` (``halt_schedule`` at the train step: penalty weight, step) marks a training forward of
-        the halting gate (sampled binary gates under ``halt_hard``; ``halt_threshold`` does not apply).
+        sources; None runs every layer fully on. ``halt_training`` (static) turns off ``halt_threshold``.
         ``extra_mlp_active`` (traced bool) turns on the ``extra_mlp_layers`` MLPs (off: no token reaches them).
         ``pre_norm_grad_probe`` (zeros ``[B, S]``) passes the stream entering ``final_norm`` through
         ``lm_head_grad_probe`` and adds each token's RMS of it as ``FINAL_NORM_INPUT_RMS_KEY``.
@@ -6031,7 +6109,7 @@ class Transformer(eqx.Module):
                 layer_skip,
                 extra_mlp_active,
                 layer_gates,
-                halt_schedule,
+                halt_training,
             )
         else:
             if layer_skip is not None:
@@ -6125,7 +6203,7 @@ class Transformer(eqx.Module):
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 2"] | None = None,
+        halt_training: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -6218,28 +6296,26 @@ class Transformer(eqx.Module):
         stats_out: list[dict[str, jax.Array]] = []
         z_out: list[jax.Array] = []
         extra_state: dict[str, jax.Array] = {}
-        halt_gates: list[jax.Array] = []
+        halt_logits: list[jax.Array] = []
+        halt_exits: list[jax.Array] = []
+        halt_threshold = None if halt_training else cfg.halt_threshold
 
-        def halt_gate(i: int) -> jax.Array:
-            """Gated layer ``i``'s output scale from the halting stream written by the layers below it."""
-            bias = layers[i].halt_bias
-            assert bias is not None and "halt_z" in extra_state
-            step_gate = jax.nn.sigmoid(extra_state["halt_z"] + bias)
-            gate = step_gate if "halt_g" not in extra_state else extra_state["halt_g"] * step_gate
-            extra_state["halt_g"] = gate
-            halt_gates.append(gate)
-            threshold = cfg.halt_threshold
-            if not cfg.halt_hard:
-                return (
-                    gate if halt_schedule is not None or threshold is None else jnp.where(gate >= threshold, gate, 0.0)
-                )
-            if halt_schedule is None:
-                return (gate >= (0.5 if threshold is None else threshold)).astype(jnp.float32)
-            if "halt_u" not in extra_state:
-                key = jax.random.fold_in(jax.random.PRNGKey(_HALT_SEED), halt_schedule[1].astype(jnp.int32))
-                extra_state["halt_u"] = jax.random.uniform(key, gate.shape, jnp.float32)
-            keep = (jnp.maximum(gate, cfg.halt_floor) > extra_state["halt_u"]).astype(jnp.float32)
-            return keep + gate - jax.lax.stop_gradient(gate)
+        def halt_decide(i: int, sources: list[jax.Array]) -> None:
+            """Decision point ``i``: the dampening logit from the votes so far, the running ``G``, the exit readout."""
+            layer = layers[i]
+            assert layer.halt_bias is not None and layer.halt_exit_query is not None and "halt_z" in extra_state
+            logit = extra_state["halt_z"] + layer.halt_bias
+            keep = jax.nn.sigmoid(-logit)
+            extra_state["halt_g"] = keep if "halt_g" not in extra_state else extra_state["halt_g"] * keep
+            halt_logits.append(logit)
+            query = layer.halt_exit_query.astype(sources[0].dtype)[None]
+            logits = [_attn_res_source_logits(src, query, eps)[0] for src in sources]
+            halt_exits.append(_softmax_mix(logits, sources)[1].astype(sources[0].dtype))
+
+        def halt_scale() -> jax.Array:
+            """A dampened layer's output scale: ``G``, or 0 below ``halt_threshold`` outside training."""
+            g = extra_state["halt_g"]
+            return g if halt_threshold is None else jnp.where(g >= halt_threshold, g, 0.0)
 
         def run_pass(state, pass_index, start=0):
             """One pass over the physical layers from ``start``, extending the history; returns the new state."""
@@ -6315,8 +6391,8 @@ class Transformer(eqx.Module):
                 skip_keep = functools.reduce(jnp.multiply, keeps) if keeps else None
                 if skip_keep is not None:
                     layer_extras = {**(layer_extras or {}), _SKIP_KEEP: skip_keep}
-                if i in cfg.halt_layers:
-                    layer_extras = {**(layer_extras or {}), _HALT_SCALE: halt_gate(i)}
+                if cfg.halt_points and i > cfg.halt_points[0] and cfg.halt_mode == HaltMode.DAMPEN:
+                    layer_extras = {**(layer_extras or {}), _HALT_SCALE: halt_scale()}
                 layer_args = (
                     (layer, blocks, block_logits, partial, queries, layer_extras),
                     long_layer_mask if use_long else short_layer_mask,
@@ -6331,8 +6407,10 @@ class Transformer(eqx.Module):
                 else:
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
                 halt_write = stats.pop(_HALT_Z, None)
-                if halt_write is not None and i < cfg.halt_layers[-1]:
+                if halt_write is not None and i <= cfg.halt_points[-1]:
                     extra_state["halt_z"] = extra_state["halt_z"] + halt_write if "halt_z" in extra_state else halt_write
+                if i in cfg.halt_points:
+                    halt_decide(i, [*blocks, *([] if partial is None else [partial])])
                 absorb(eff, stats, partial_before is not None)
             return blocks, block_logits, partial
 
@@ -6438,8 +6516,9 @@ class Transformer(eqx.Module):
         if "router_frac" in extra_state:
             final_stats["attn_res_skip_router_frac"] = extra_state["router_frac"]
             final_stats[_SKIP_ROUTER_SCORE] = extra_state["router_score"]
-        if halt_gates:
-            final_stats[_HALT_GATES] = jnp.stack(halt_gates)
+        if halt_logits:
+            final_stats[_HALT_LOGITS] = jnp.stack(halt_logits)
+            final_stats[_HALT_EXITS] = jnp.stack(halt_exits)
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
@@ -6648,22 +6727,22 @@ class Transformer(eqx.Module):
     def halt_vote_dump(
         self, token_ids: Int[Array, "B S"], mask: AttentionMask | jax.Array, top_units: int, chunk: int
     ) -> dict[str, jax.Array]:
-        """The routed experts' halting votes (``halt_write=unit``; a vote is ``combine x h x u / sqrt(I)``, negative
-        votes mute), with ``T = B * S`` and the writer layers ``W`` (below the last gated layer):
+        """The routed experts' halting votes (``halt_write=unit``; a vote is ``combine x h x u / sqrt(I)``; positive
+        votes dampen), with ``T = B * S`` and the voting layers ``W`` (up to the last decision point):
 
-        ``gates`` ``[G, T]``; ``routed_vote`` ``[W, T]``, each token's summed routed vote; ``vote_sum_muted`` /
-        ``vote_sum_all`` ``[W, E, I]``, each unit's summed vote over the muted tokens (first gate below 0.5) and over
-        all tokens; ``top_ids`` / ``top_vals`` ``[W, T, top_units]``, each token's most muting units
-        (id ``expert * I + unit``)."""
+        ``gates`` ``[P, T]``, the keep products G; ``routed_vote`` ``[W, T]``, each token's summed routed vote;
+        ``vote_sum_muted`` / ``vote_sum_all`` ``[W, E, I]``, each unit's summed vote over the dampened tokens (first G
+        below 0.5) and over all tokens; ``top_ids`` / ``top_vals`` ``[W, T, top_units]``, each token's most dampening
+        units (id ``expert * I + unit``)."""
         cfg = self.config
-        if not cfg.halt_layers or cfg.halt_write != HaltWrite.UNIT:
-            raise ValueError("halt_vote_dump needs halt_layers with halt_write=unit")
+        if not cfg.halt_points or cfg.halt_write != HaltWrite.UNIT:
+            raise ValueError("halt_vote_dump needs halt_points with halt_write=unit")
         _, metrics = self(token_ids, mask=mask, return_routing=True)
 
         def replicated(x):
             return reshard(x, P(*([None] * x.ndim)))
 
-        gates = replicated(metrics[_HALT_GATES]).reshape(len(cfg.halt_layers), -1)
+        gates = replicated(_halt_keep(metrics[_HALT_LOGITS], None)[0]).reshape(len(cfg.halt_points), -1)
         muted = (gates[0] < 0.5).astype(jnp.float32)
         selected = replicated(metrics[ROUTING_SELECTED_KEY])
         weights = replicated(metrics[ROUTING_WEIGHTS_KEY]).astype(jnp.float32)
@@ -6673,7 +6752,7 @@ class Transformer(eqx.Module):
         out: dict[str, list[jax.Array]] = {
             n: [] for n in ("routed_vote", "vote_sum_muted", "vote_sum_all", "top_ids", "top_vals")
         }
-        for layer, block in enumerate(self.layers()[: cfg.halt_layers[-1]]):
+        for layer, block in enumerate(self.layers()[: cfg.halt_points[-1] + 1]):
             assert block.halt_routed is not None
             w_up = replicated(block.mlp.expert_mlp.w_up)
             coef = replicated(block.halt_routed)
@@ -6688,9 +6767,9 @@ class Transformer(eqx.Module):
                 sum_all = sum_all + jax.ops.segment_sum(votes.reshape(-1, inter), flat_sel, num_segments=e)
                 weighted = (votes * m[:, None, None]).reshape(-1, inter)
                 sum_muted = sum_muted + jax.ops.segment_sum(weighted, flat_sel, num_segments=e)
-                vals, idx = jax.lax.top_k(-votes.reshape(votes.shape[0], -1), top_units)
+                vals, idx = jax.lax.top_k(votes.reshape(votes.shape[0], -1), top_units)
                 ids = jnp.take_along_axis(sel, idx // inter, axis=1) * inter + idx % inter
-                return (sum_muted, sum_all), (jnp.sum(votes, axis=(1, 2)), ids, -vals)
+                return (sum_muted, sum_all), (jnp.sum(votes, axis=(1, 2)), ids, vals)
 
             xs = (
                 routed[layer].reshape(num_tokens // chunk, chunk, -1),
@@ -6934,9 +7013,16 @@ class Transformer(eqx.Module):
             out["skip_router_score"] = stats[_SKIP_ROUTER_SCORE]
         if _ENTROPY_PRED in stats:
             out["entropy_pred"] = stats[_ENTROPY_PRED]
-        if _HALT_GATES in stats:
-            for n, layer in enumerate(self.config.halt_layers):
-                out[f"halt_g_L{layer}"] = stats[_HALT_GATES][n]
+        if _HALT_LOGITS in stats:
+            labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
+            cap = _logit_cap(self.config)
+            assert cap is None or isinstance(cap, float)
+            g, _ = _halt_keep(stats[_HALT_LOGITS], None)
+            for n, point in enumerate(self.config.halt_points):
+                exit_stats = _vocab_stats(self.final_norm(stats[_HALT_EXITS][n]), self.output_proj, cap, labels)
+                out[f"halt_g_P{point}"] = g[n]
+                out[f"halt_exit_loss_P{point}"] = exit_stats.logsumexp - exit_stats.label_logit
+                out[f"halt_exit_correct_P{point}"] = (exit_stats.top_id == labels).astype(jnp.float32)
         return out
 
     def mid_head_diagnostics(self, token_ids: Int[Array, "B S"], mask: AttentionMask) -> dict[str, Float[Array, "B S"]]:
@@ -6976,7 +7062,6 @@ class Transformer(eqx.Module):
         head_grad_probe: Float[Array, "B S"] | None = None,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 2"] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
         so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
@@ -6993,9 +7078,10 @@ class Transformer(eqx.Module):
             extra_mlp_active=extra_mlp_active,
             pre_norm_grad_probe=pre_norm_grad_probe,
             layer_gates=layer_gates,
-            halt_schedule=halt_schedule,
+            halt_training=train_terms,
         )
-        halt_gates = router_metrics.pop(_HALT_GATES, None)
+        halt_logits = router_metrics.pop(_HALT_LOGITS, None)
+        halt_exits = router_metrics.pop(_HALT_EXITS, None)
         final_norm_rms = router_metrics.pop(FINAL_NORM_INPUT_RMS_KEY, None)
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         mid_hidden = router_metrics.pop(_MID_HIDDEN, None)
@@ -7013,7 +7099,7 @@ class Transformer(eqx.Module):
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        def lm_loss(h: jax.Array) -> jax.Array:
+        def lm_loss(h: jax.Array, reduction: str = reduction) -> jax.Array:
             head_in, lm_head = self._lm_head_operands(h, token_ids)
             ce = functools.partial(
                 fused_linear_softmax_cross_entropy_loss,
@@ -7034,8 +7120,18 @@ class Transformer(eqx.Module):
             # The loss is a mean over loss tokens, so the raw per-token gradient is the per-token one / N.
             raw_clip = jnp.inf if clip is None else clip / jnp.maximum(jnp.sum(loss_weight.astype(jnp.float32)), 1.0)
             head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
-        halt_train = halt_gates is not None and train_terms and halt_schedule is not None
-        cross_entropy_loss = lm_loss(head_in)
+        halt_heads = None
+        if halt_logits is not None:
+            assert halt_exits is not None
+            exits = jnp.stack([self.final_norm(e) for e in halt_exits])
+            halt_heads = _halt_heads(self.config, halt_logits, exits, self.output_proj, labels, loss_weight)
+        if halt_heads is not None and self.config.halt_mode == HaltMode.MIX:
+            threshold = None if train_terms else self.config.halt_threshold
+            nll = _halt_mix_nll(halt_heads, lm_loss(head_in, "none"), threshold) * loss_weight
+            count = jnp.maximum(jnp.sum(loss_weight), 1.0)
+            cross_entropy_loss = {"none": nll, "sum": jnp.sum(nll), "mean": jnp.sum(nll) / count}[reduction]
+        else:
+            cross_entropy_loss = lm_loss(head_in)
         replay_loss = None
         if head_replay is not None:
             # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
@@ -7108,9 +7204,8 @@ class Transformer(eqx.Module):
             }
         if compress_loss is not None and train_terms:
             loss = loss + jnp.sum(compress_loss).astype(loss_dtype)
-        if halt_train:
-            assert halt_gates is not None and halt_schedule is not None
-            halt_loss, halt_metrics = _halt_terms(self.config, halt_gates, halt_schedule, loss_weight)
+        if halt_heads is not None and train_terms:
+            halt_loss, halt_metrics = _halt_terms(self.config, halt_heads, loss_weight)
             loss = loss + halt_loss.astype(loss_dtype)
             mid_metrics = {**mid_metrics, **halt_metrics}
         entropy_metrics: dict[str, jax.Array] = {}

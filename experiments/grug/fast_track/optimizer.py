@@ -471,6 +471,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     adam_ademamix_beta3: float = 0.999
     """Decay of the AdEMAMix slow EMA, warmed up over ``adam_ademamix_warmup`` as in the paper."""
     router_lr_mult: float = 1.0
+    halt_only: bool = False
+    """Train only the halting leaves (``halt_*``: votes, biases, exit queries); every other parameter is frozen."""
     halt_lr_mult: float = 1.0
     """Adam LR (no weight decay) of the halting gate's zero-init stream writes and biases (``halt_layers``), as a
     multiple of ``adam_lr``."""
@@ -562,6 +564,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "embed2": adam_at(adam_lr * self.embed2_lr_mult),
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
                 "halt": adam_at(adam_lr * self.halt_lr_mult),
+                "frozen": optax.set_to_zero(),
                 "embed": embed_at(adam_lr),
             }
             return optax.multi_transform(
@@ -581,6 +584,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
         def mask_fn(param, path):
             path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+            if self.halt_only:
+                return "halt" if re.search(r"(^|\.)halt_", path_lower) else "frozen"
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
                 return "kda_beta_adam" if self.kda_beta_group == "adam" else self.kda_beta_group
