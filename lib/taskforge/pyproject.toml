@@ -17,13 +17,12 @@ dependencies = [
     "marin-iris",
     "httpx>=0.27,<1",
     "openai",
-    "pydantic>=2.0",
+    "pydantic>=2.7",
     # The capability experiment's driver, which runs in this package's environment on a pod, needs
     # click for its CLI and marin-iris to resolve the GLM relay inside an Iris task.
     "click",
     "marin-iris",
     "jsonschema>=4.20",
-    "pyyaml>=6.0",
     # Its failed-run analysis is a Zephyr pipeline over the rollout records of rolloutengine.
     "marin-zephyr",
 ]

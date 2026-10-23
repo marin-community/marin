@@ -29,7 +29,7 @@ A REPAIR verdict is a surface the preflight or a Taskforge consumer may use, for
 rewrite such as fixing a proposal header, by setting ``max_triage_repairs``. The edge may later
 retry a proposal on the findings of the deterministic preflight, which returns no REPAIR verdict
 today. While the budget lasts, the stage calls ``StageFunctions.repair``, writes the rewritten
-proposal to ``repaired/<k>.md`` in the workpiece directory, ``k`` counting the rewrites, and exits
+proposal to ``repaired/<k>.json`` in the workpiece directory, ``k`` counting the rewrites, and exits
 repair, so triage judges the rewrite next. A REPAIR verdict past the budget, which is every one
 under a budget of zero, or a rewrite raising ``ProposalFormatError``, exits reject. Every stage
 after a rewrite runs it, read back from its file and checked against the digest its event records.
@@ -231,7 +231,7 @@ class _Workpiece:
 
 def _repaired_file(repairs: int) -> Path:
     """The path, in the workpiece directory, of the proposal after ``repairs`` triage repairs."""
-    return Path(REPAIRED_DIR) / f"{repairs}.md"
+    return Path(REPAIRED_DIR) / f"{repairs}.json"
 
 
 async def run_workpiece(
@@ -331,7 +331,7 @@ async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
 
     An ACCEPT records the verdict's ``author_state`` as canonical JSON on the event, and a REJECT the
     verdict's reasons. A REPAIR verdict within ``max_triage_repairs`` has ``StageFunctions.repair``
-    rewrite the proposal, writes the rewrite to ``repaired/<k>.md``, ``k`` counting the rewrites, and
+    rewrite the proposal, writes the rewrite to ``repaired/<k>.json``, ``k`` counting the rewrites, and
     exits repair with the rewrite's digest. A REPAIR verdict past the budget, or a rewrite raising
     ``ProposalFormatError``, exits reject with the reason.
     """
@@ -358,7 +358,7 @@ async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
 
 
 def _repaired(workpiece: _Workpiece, state: WorkpieceState, proposal: TaskProposal) -> WorkpieceEvent:
-    """Write the rewritten ``proposal`` to ``repaired/<k>.md`` and return the ``TRIAGED`` event exiting repair."""
+    """Write the rewritten ``proposal`` to ``repaired/<k>.json`` and return the ``TRIAGED`` event exiting repair."""
     repairs = state.triage_repairs + 1
     relative = _repaired_file(repairs)
     write_bytes_atomic(str(workpiece.directory / relative), render(proposal).encode())
