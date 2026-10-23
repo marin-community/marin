@@ -73,19 +73,19 @@ Serve the completed checkpoint with the model YAML and vLLM settings from the pi
 ```bash
 export MARIN_DIR="$PWD"
 export RECORDS_PREFIX="s3://your-bucket/campaign4-replay/evals"
-source experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/common.sh
+source experiments/evaluation/campaigns/eval-policy/common.sh
 prepare_judge_environment
 resolve_coreweave_credentials
 run_campaign_launch 1 \
-  --model-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/model-configs/campaign4-candidate.yaml \
+  --model-config experiments/evaluation/campaigns/eval-policy/model-configs/campaign4-candidate.yaml \
   --records-prefix "$RECORDS_PREFIX" \
   --federated_cluster cw-rno2a \
   --priority interactive \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/humanevalplus.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/mbppplus.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/olympiadbench.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/math500.yaml \
-  --harbor-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/harbor-configs/bfclparity-pi.yaml
+  --evalchemy-config experiments/evaluation/campaigns/eval-policy/evalchemy-configs/humanevalplus.yaml \
+  --evalchemy-config experiments/evaluation/campaigns/eval-policy/evalchemy-configs/mbppplus.yaml \
+  --evalchemy-config experiments/evaluation/campaigns/eval-policy/evalchemy-configs/olympiadbench.yaml \
+  --evalchemy-config experiments/evaluation/campaigns/eval-policy/evalchemy-configs/math500.yaml \
+  --harbor-config experiments/evaluation/campaigns/eval-policy/harbor-configs/bfclparity-pi.yaml
 ```
 
 The pinned campaign [README](https://github.com/marin-community/marin/blob/aaf1878ce65a1a05b386aef257b952fa7205283a/experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/README.md) documents credentials, durable records, and policy-conformance limits. The command above matches the original one-server topology and selects these exact configurations:

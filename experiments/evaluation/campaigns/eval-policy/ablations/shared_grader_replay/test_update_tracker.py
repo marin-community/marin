@@ -8,7 +8,7 @@ import fsspec
 import pytest
 import yaml
 
-MODULE = "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.ablations.shared_grader_replay.update_tracker"
+MODULE = "experiments.evaluation.campaigns.eval-policy.ablations.shared_grader_replay.update_tracker"
 
 
 @pytest.mark.parametrize(

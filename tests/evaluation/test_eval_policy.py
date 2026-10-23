@@ -22,7 +22,7 @@ from marin.evaluation.runner import LaunchProvenance
 from experiments.evaluation.evals import EvalchemyDefinition
 from experiments.evaluation.launch import LaunchSpec, build_evaluation_batch
 
-CAMPAIGN_ROOT = Path(__file__).resolve().parents[2] / "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled"
+CAMPAIGN_ROOT = Path(__file__).resolve().parents[2] / "experiments/evaluation/campaigns/eval-policy"
 
 
 def _model(name: str = "Qwen-Qwen3.6-35B-A3B") -> ModelRef:

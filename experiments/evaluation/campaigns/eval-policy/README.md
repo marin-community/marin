@@ -46,7 +46,7 @@ cannot be used for new launches. Capped smoke runs require an experimental label
 From a clean checkout of the campaign's pinned Marin commit:
 
 ```bash
-cd experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled
+cd experiments/evaluation/campaigns/eval-policy
 ./validate-campaign.sh
 ./launch-campaign.sh --model Qwen-Qwen3.6-35B-A3B
 ./launch-campaign.sh --submit --model Qwen-Qwen3.6-35B-A3B

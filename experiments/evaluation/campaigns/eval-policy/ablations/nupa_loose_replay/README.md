@@ -16,7 +16,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --cpu 8 --memory 32GB --disk 64GB --timeout 21600 \
   --job-name nupa-loose-repeated-terminal-replay-20261016 \
   -- uv run --project config/external/evalchemy --with-editable lib/iris --with-editable lib/marin \
-  python -m experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.ablations.nupa_loose_replay.regrade \
+  python -m experiments.evaluation.campaigns.eval-policy.ablations.nupa_loose_replay.regrade \
   --tracker-uri "$OUTPUT/input/TRACKER.md" --output-prefix "$OUTPUT" --workers 4
 ```
 

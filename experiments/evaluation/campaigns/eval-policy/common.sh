@@ -13,8 +13,8 @@ EVALCHEMY_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/evalchemy-configs"
 HARBOR_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/harbor-configs"
 JUDGE_MODEL_CONFIG_DIR="$CANONICAL_CONFIG_ROOT/judge-model-configs"
 JUDGE_MODEL_CONFIG="$JUDGE_MODEL_CONFIG_DIR/MiniMaxAI-MiniMax-M3-MXFP8.yaml"
-CONFIG_SNAPSHOT_DIR="$MARIN_DIR/experiments/evaluation/campaigns/.launch-snapshots/eval-campaign-09-25-unlabeled"
-STAGING_ROOT="$MARIN_DIR/experiments/evaluation/campaigns/.launch-staging/eval-campaign-09-25-unlabeled"
+CONFIG_SNAPSHOT_DIR="$MARIN_DIR/experiments/evaluation/campaigns/.launch-snapshots/eval-policy"
+STAGING_ROOT="$MARIN_DIR/experiments/evaluation/campaigns/.launch-staging/eval-policy"
 EVAL_CAMPAIGN_SECRETS_ENV="${EVAL_CAMPAIGN_SECRETS_ENV:-}"
 TOGETHER_SECRET_PROJECT="${TOGETHER_SECRET_PROJECT:-hai-gcp-models}"
 COREWEAVE_SECRET_PROJECT="${COREWEAVE_SECRET_PROJECT:-hai-gcp-models}"
@@ -46,7 +46,7 @@ die() {
 }
 
 reset_staging_root() {
-  local expected="$MARIN_DIR/experiments/evaluation/campaigns/.launch-staging/eval-campaign-09-25-unlabeled"
+  local expected="$MARIN_DIR/experiments/evaluation/campaigns/.launch-staging/eval-policy"
   [ "$STAGING_ROOT" = "$expected" ] || die "refusing to clear unexpected staging root: $STAGING_ROOT"
   rm -rf -- "$STAGING_ROOT"
 }

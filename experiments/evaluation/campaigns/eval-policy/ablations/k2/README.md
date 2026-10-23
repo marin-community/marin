@@ -6,9 +6,9 @@ The first pair holds the current compiled TP2/DP1 serve path and 73,728-token se
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/model-tp2-dp1-low.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/humanevalplus.yaml \
-  --evalchemy-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs/math500.yaml \
+  --model-config experiments/evaluation/campaigns/eval-policy/ablations/k2/model-tp2-dp1-low.yaml \
+  --evalchemy-config experiments/evaluation/campaigns/eval-policy/evalchemy-configs/humanevalplus.yaml \
+  --evalchemy-config experiments/evaluation/campaigns/eval-policy/evalchemy-configs/math500.yaml \
   --federated_cluster cw-rno2a --priority interactive --no-wait \
   --description 'Unlabeled K2 screen: compiled TP2/DP1, low reasoning on thinking-off tasks'
 ```
@@ -63,8 +63,8 @@ For example, launch A from the Marin checkout with:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
-  --model-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/model-grid-a-eager-dp1-65k-8k.yaml \
-  --harbor-config experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/k2/tb2-ten-old-wins-output8k.yaml \
+  --model-config experiments/evaluation/campaigns/eval-policy/ablations/k2/model-grid-a-eager-dp1-65k-8k.yaml \
+  --harbor-config experiments/evaluation/campaigns/eval-policy/ablations/k2/tb2-ten-old-wins-output8k.yaml \
   --federated_cluster cw-rno2a --priority interactive --no-wait \
   --description 'Unlabeled K2 ten-task grid arm A'
 ```

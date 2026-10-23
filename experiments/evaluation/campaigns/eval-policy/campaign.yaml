@@ -44,6 +44,8 @@ harbor_eval_harness_profiles:
 # context/output limits. Selection is benchmark-specific; neither launcher nor
 # refill manager changes the serving settings in these canonical YAML files.
 model_config_overrides:
+  open-athena-Marin-Snowball-67B-A2B-v0.1.1:
+    tau3-pi: model-configs/tau3/open-athena-Marin-Snowball-67B-A2B-v0.1.1.yaml
   CohereLabs-North-Mini-Code-1.0:
     tau3-pi: model-configs/tau3/CohereLabs-North-Mini-Code-1.0.yaml
   google-gemma-4-31B-it:

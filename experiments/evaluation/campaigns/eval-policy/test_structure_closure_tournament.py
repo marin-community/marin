@@ -12,10 +12,10 @@ import pytest
 from marin.evaluation.records import TaskCoverage
 
 tournament = importlib.import_module(
-    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.structure_closure_tournament"
+    "experiments.evaluation.campaigns.eval-policy.structure_closure_tournament"
 )
 refresh = importlib.import_module(
-    "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.analysis.structure_closure_tournament.refresh"
+    "experiments.evaluation.campaigns.eval-policy.analysis.structure_closure_tournament.refresh"
 )
 
 

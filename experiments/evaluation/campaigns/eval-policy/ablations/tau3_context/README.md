@@ -42,8 +42,8 @@ Run each arm from the Marin worktree with `--no-wait` and no policy version:
 ```bash
 for arm in 131k-65k 262k-65k; do
   uv run python -m experiments.evaluation.cli launch \
-    --model-config "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/tau3_context/model-${arm}.yaml" \
-    --harbor-config "experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/ablations/tau3_context/tau3-${arm}.yaml" \
+    --model-config "experiments/evaluation/campaigns/eval-policy/ablations/tau3_context/model-${arm}.yaml" \
+    --harbor-config "experiments/evaluation/campaigns/eval-policy/ablations/tau3_context/tau3-${arm}.yaml" \
     --federated_cluster cw-rno2a --priority interactive --no-wait \
     --description "Unlabeled Qwen3.6 tau3 context ablation ${arm}"
 done

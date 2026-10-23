@@ -7,7 +7,7 @@ Each model attempted 89 tasks with three trials per task, totaling 267 trials. A
 Run from the Marin repository root with `CW_KEY_ID` and `CW_KEY_SECRET` set for CoreWeave S3. Credentials are required for reading the source results and publishing reviews. This example uses the current local campaign:
 
 ```bash
-CAMPAIGN=experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled
+CAMPAIGN=experiments/evaluation/campaigns/eval-policy
 CAMPAIGN_ROOT=/Users/benfeuer/Documents/experiments/active/eval-policy-09-25
 TRACKER="$CAMPAIGN_ROOT/TRACKER.md"
 RECOVERED_METRICS="$CAMPAIGN_ROOT/artifacts/recovered-record-metrics.json"

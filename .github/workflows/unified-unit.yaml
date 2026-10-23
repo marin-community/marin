@@ -352,7 +352,7 @@ jobs:
           UV_PROJECT_ENVIRONMENT: ${{ github.workspace }}/vendor/evalchemy/.venv
         run: >-
           uv run --frozen --all-extras --group test python
-          ../../experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/check_policy_metrics.py
+          ../../experiments/evaluation/campaigns/eval-policy/check_policy_metrics.py
 
   harbor:
     name: harbor-unit

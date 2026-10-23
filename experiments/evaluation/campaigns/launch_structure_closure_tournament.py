@@ -7,9 +7,7 @@ import importlib
 
 
 def main() -> None:
-    runner = importlib.import_module(
-        "experiments.evaluation.campaigns.eval-campaign-09-25-unlabeled.structure_closure_tournament"
-    )
+    runner = importlib.import_module("experiments.evaluation.campaigns.eval-policy.structure_closure_tournament")
     runner.main()
 
 
