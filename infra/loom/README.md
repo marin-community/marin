@@ -204,9 +204,12 @@ HTTP MCP headers in place.
 
 A profile's `env` block declares the environment every session of that profile
 receives. Each entry sets either an inline `value` for non-secret configuration
-or a same-project `secretRef` that the host resolves from Secret Manager at launch. Declare
-`roles/secretmanager.secretAccessor` for each reference in
-`infra/pulumi/src/iac/gcp/loom.py` before applying the profile. Profile
+or a same-project `secretRef` that the host resolves from Secret Manager at launch.
+Create the secret and upload its value before referencing it. The stack imports
+each referenced secret without managing its versions, so preview fails while one
+is missing, and removing the last reference leaves the secret in place. The VM
+account's project-level `roles/secretmanager.secretAccessor` grant in
+`infra/pulumi/src/iac/gcp/loom.py` covers every reference. Profile
 environment is applied after `envClear`, so strict automation profiles receive
 it too. All profiles set `IRIS_USER=loom`, which makes Iris jobs submitted from
 a session land under `/loom/<job>` instead of inheriting the session container's
