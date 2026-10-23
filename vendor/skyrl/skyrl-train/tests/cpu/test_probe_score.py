@@ -36,6 +36,12 @@ def reference_log_softmax(logits: torch.Tensor) -> torch.Tensor:
     return torch.log_softmax(logits[..., :VOCAB].float(), dim=-1)
 
 
+def brute_force_tail(full: torch.Tensor, support_ids: torch.Tensor) -> torch.Tensor:
+    """The log mass outside ``support_ids``, summed term by term in float64."""
+    keep = torch.ones_like(full, dtype=torch.bool).scatter(-1, support_ids, False)
+    return torch.log((full.double().exp() * keep).sum(-1))
+
+
 def test_topk_equals_torch_topk_of_the_full_log_softmax():
     logits, mask = batch(seed=0)
     scores = score_compacted_logits(
@@ -46,12 +52,18 @@ def test_topk_equals_torch_topk_of_the_full_log_softmax():
         torch.testing.assert_close(scores["topk_ids"][row, mask[row]], reference_ids[row, :length])
         torch.testing.assert_close(scores["topk_logprobs"][row, mask[row]], reference_values[row, :length])
         assert torch.count_nonzero(scores["topk_ids"][row, ~mask[row]]) == 0
+        tail = brute_force_tail(reference_log_softmax(logits)[row, :length], reference_ids[row, :length])
+        torch.testing.assert_close(scores["topk_tail_logmass"][row, mask[row]].double(), tail, rtol=1e-5, atol=1e-6)
 
 
 def test_gather_reads_the_log_softmax_at_the_given_ids():
     logits, mask = batch(seed=1)
     generator = torch.Generator().manual_seed(2)
-    gather_ids = torch.randint(0, VOCAB, (BATCH, PADDED_LEN, TOP_K), generator=generator)
+    # TOP_K distinct support ids per position, then one extra column (the realized
+    # token) that may repeat a support id and stays out of the tail's complement.
+    support = torch.rand(BATCH, PADDED_LEN, VOCAB, generator=generator).argsort(-1)[..., :TOP_K]
+    realized = torch.randint(0, VOCAB, (BATCH, PADDED_LEN, 1), generator=generator)
+    gather_ids = torch.cat((support, realized), dim=-1)
     scores = score_compacted_logits(
         logits,
         mask,
@@ -60,11 +72,14 @@ def test_gather_reads_the_log_softmax_at_the_given_ids():
         probe_score_positions=None,
         vocabulary_size=VOCAB,
         chunk_size=None,
+        support_width=TOP_K,
     )
     reference = reference_log_softmax(logits)
     for row, length in enumerate(LENGTHS):
         expected = torch.gather(reference[row, :length], -1, gather_ids[row, mask[row]].long())
         torch.testing.assert_close(scores["gathered_logprobs"][row, mask[row]], expected)
+        tail = brute_force_tail(reference[row, :length], support[row, mask[row]])
+        torch.testing.assert_close(scores["gathered_tail_logmass"][row, mask[row]].double(), tail, rtol=1e-5, atol=1e-6)
 
 
 def test_exact_rows_are_the_full_log_softmax_of_the_selected_positions():
@@ -143,4 +158,5 @@ def test_mismatched_gather_shape_raises():
             probe_score_positions=None,
             vocabulary_size=VOCAB,
             chunk_size=None,
+            support_width=TOP_K,
         )

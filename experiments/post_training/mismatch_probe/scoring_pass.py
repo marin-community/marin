@@ -43,7 +43,6 @@ from experiments.post_training.mismatch_probe.sequence_kl import (
     exact_kl,
     exact_subsample_seed,
     position_subsample_mask,
-    tail_log_mass,
 )
 
 TOP_K = 256
@@ -179,7 +178,9 @@ def kl_rows_from_passes(
     sequences: list[ProbeSequence],
     reference_topk_ids: np.ndarray,
     reference_topk_logprobs: np.ndarray,
+    reference_tail_logmass: np.ndarray,
     candidate_gathered: np.ndarray,
+    candidate_tail_logmass: np.ndarray,
     *,
     reference_id: str,
     candidate_id: str,
@@ -190,8 +191,8 @@ def kl_rows_from_passes(
     The pass arrays are ``[n, L, ...]`` in the padded batch layout;
     ``candidate_gathered`` holds K + 1 columns — the reference's K stored ids
     gathered on the candidate, then the realized token's own logprob. The KL's
-    support is the reference's stored top-K logprobs; both tails derive on device
-    inside :func:`binned_kl`.
+    support is the reference's stored top-K logprobs; each pass's tail log mass
+    (``[n, L]``) is its own logsumexp outside the support ids.
     """
     top_k = candidate_gathered.shape[2] - 1
     if reference_topk_ids.shape[2] != top_k or reference_topk_logprobs.shape[2] != top_k:
@@ -204,7 +205,16 @@ def kl_rows_from_passes(
             token_id = int(sequence.token_ids[position])
             support = torch.from_numpy(reference_topk_logprobs[row, logits_position].astype(np.float64))
             scored = torch.from_numpy(candidate_gathered[row, logits_position, :top_k].astype(np.float64))
-            kl = float(binned_kl(support, scored))
+            reference_tail = float(reference_tail_logmass[row, logits_position])
+            candidate_tail = float(candidate_tail_logmass[row, logits_position])
+            kl = float(
+                binned_kl(
+                    support,
+                    torch.tensor(reference_tail, dtype=torch.float64),
+                    scored,
+                    torch.tensor(candidate_tail, dtype=torch.float64),
+                )
+            )
             if not np.isfinite(kl):
                 raise ValueError(f"{sequence.sample_id}@{position}: KL is not finite")
             rows.append(
@@ -223,8 +233,8 @@ def kl_rows_from_passes(
                     reference_id=reference_id,
                     probe_hash=sequence.probe_hash,
                     top_k=top_k,
-                    reference_tail_mass=float(tail_log_mass(support)),
-                    candidate_tail_mass=float(tail_log_mass(scored)),
+                    reference_tail_mass=reference_tail,
+                    candidate_tail_mass=candidate_tail,
                     form=KLForm.FORWARD,
                     token_type_tag=ProbeBucket(sequence.token_type_tags[position]),
                     position_tag=sequence.position_tags[position],

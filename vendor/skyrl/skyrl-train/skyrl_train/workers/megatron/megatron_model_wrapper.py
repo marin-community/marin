@@ -466,6 +466,7 @@ class MegatronModelWrapper:
         micro_batch_size: int,
         *,
         top_k: int | None = None,
+        support_width: int | None = None,
     ) -> dict[str, torch.Tensor]:
         """Score frozen sequences for the KL passes: top-K supports, gathers, or exact rows.
 
@@ -500,6 +501,7 @@ class MegatronModelWrapper:
                 probe_score_positions=data.probe_score_positions,
                 vocabulary_size=self.vocabulary_size,
                 chunk_size=self._logprob_chunk_size,
+                support_width=support_width,
             )
             zero = torch.tensor(0.0, device=logits.device)
             return zero, scores

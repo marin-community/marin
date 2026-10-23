@@ -9,6 +9,12 @@ the reference pass's top-K support, the candidate pass's gather at stored ids,
 and the exact pass's full-vocabulary rows — each computed from the float32
 log-softmax in sequence chunks and scattered back to the batch's padded layout.
 Position t's distribution predicts the token at t+1.
+
+The reference and candidate passes also return each position's tail: the log
+mass outside the support ids, a logsumexp over the complement of the full
+log-softmax. Deriving it later as ``1 - sum(exp(support))`` cannot resolve a tail
+below the fp32 rounding of that sum (about 1e-6), which rounds a candidate's true
+tail to zero and its KL to infinity.
 """
 
 from __future__ import annotations
@@ -25,6 +31,7 @@ def score_compacted_logits(
     probe_score_positions: torch.Tensor | None,
     vocabulary_size: int,
     chunk_size: int | None,
+    support_width: int | None = None,
 ) -> dict[str, torch.Tensor]:
     """Top-K, gathered, or exact rows from one micro's compact-space logits.
 
@@ -36,7 +43,8 @@ def score_compacted_logits(
 
     Exactly one mode must be set: ``top_k`` returns the top-K token ids and their
     logprobs per position; ``gather_ids`` ([B, T, K], padded layout) returns the
-    log-softmax gathered at those ids; ``probe_score_positions`` ([B, T] int64)
+    log-softmax gathered at those ids, of which the first ``support_width`` are the
+    support whose tail is returned; ``probe_score_positions`` ([B, T] int64)
     returns the full-vocabulary log-softmax rows of the selected positions,
     compacted in (row, position) order beside their coordinates. A selected
     position holds its sequence's batch-wide row id plus one (0 elsewhere), and the
@@ -48,6 +56,8 @@ def score_compacted_logits(
         raise ValueError("pass exactly one of top_k, gather_ids, or probe_score_positions")
     attention_mask = attention_mask.to(bool)
     batch_size, padded_len = attention_mask.shape
+    if (gather_ids is not None) != (support_width is not None):
+        raise ValueError("the gather pass needs support_width, and only the gather pass takes it")
     if gather_ids is not None and gather_ids.shape[:2] != (batch_size, padded_len):
         raise ValueError(f"gather ids {tuple(gather_ids.shape)} do not match the batch {batch_size}x{padded_len}")
     seq_lens = attention_mask.sum(dim=1, dtype=torch.int32)
@@ -85,9 +95,12 @@ def score_compacted_logits(
             values, ids = torch.topk(logprobs, top_k, dim=-1)
             collected.setdefault("topk_ids", []).append(ids)
             collected.setdefault("topk_logprobs", []).append(values)
+            collected.setdefault("topk_tail_logmass", []).append(complement_log_mass(logprobs, ids))
         elif gather_ids is not None:
-            collected.setdefault("gathered_logprobs", []).append(
-                torch.gather(logprobs, -1, compact_gather[:, start:stop])
+            chunk_ids = compact_gather[:, start:stop]
+            collected.setdefault("gathered_logprobs", []).append(torch.gather(logprobs, -1, chunk_ids))
+            collected.setdefault("gathered_tail_logmass", []).append(
+                complement_log_mass(logprobs, chunk_ids[..., :support_width])
             )
         else:
             for row, compact_index, padded_position, sequence_row in selected_rows_meta:
@@ -113,3 +126,8 @@ def score_compacted_logits(
             restored[row, attention_mask[row]] = values[row, :length]
         scores[key] = restored
     return scores
+
+
+def complement_log_mass(logprobs: torch.Tensor, support_ids: torch.Tensor) -> torch.Tensor:
+    """Log mass of each position's distribution outside ``support_ids`` (``[..., V]`` -> ``[...]``)."""
+    return torch.logsumexp(logprobs.scatter(-1, support_ids, float("-inf")), dim=-1)

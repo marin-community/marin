@@ -105,11 +105,15 @@ def test_kl_rows_reduce_binned_kl_per_scored_position():
     # The distribution predicting token 1 sits at logits position 0, and so on.
     gathered[0, 0] = [math.log(0.3), math.log(0.2), math.log(0.4)]
     gathered[0, 1] = [math.log(0.3), math.log(0.2), math.log(0.4)]
+    reference_tail = np.full((1, 3), -math.inf)  # the support holds all of the reference's mass
+    candidate_tail = np.full((1, 3), math.log(0.5))
     rows = kl_rows_from_passes(
         [sequence_row],
         reference_ids,
         reference_logprobs,
+        reference_tail,
         gathered,
+        candidate_tail,
         reference_id="E",
         candidate_id="B",
         candidate_step=92,
@@ -138,8 +142,18 @@ def test_rows_parquet_round_trip(tmp_path):
     reference_logprobs = np.full((1, 2, 2), math.log(0.5))
     gathered = np.zeros((1, 2, 3))
     gathered[0, 0] = [math.log(0.3), -20.0, math.log(0.2)]
+    reference_tail = np.full((1, 2), -math.inf)
+    candidate_tail = np.full((1, 2), math.log(0.7 - math.exp(-20.0)))
     rows = kl_rows_from_passes(
-        [sequence_row], reference_ids, reference_logprobs, gathered, reference_id="E", candidate_id="B", candidate_step=1
+        [sequence_row],
+        reference_ids,
+        reference_logprobs,
+        reference_tail,
+        gathered,
+        candidate_tail,
+        reference_id="E",
+        candidate_id="B",
+        candidate_step=1,
     )
     path = tmp_path / "rows" / "kl.parquet"
     count = write_rows_parquet(rows, path)

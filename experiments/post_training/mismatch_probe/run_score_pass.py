@@ -49,7 +49,9 @@ EXACT_RATE = 0.01
 MASTER_SEED = 20261023
 
 
-def run_score(policy, batch: dict, *, top_k: int | None, micro_batch_size: int = 1) -> tuple[dict, float]:
+def run_score(
+    policy, batch: dict, *, top_k: int | None, micro_batch_size: int = 1, support_width: int | None = None
+) -> tuple[dict, float]:
     """One ``probe_score_forward`` call over the whole batch, CPU tensors back."""
     from skyrl_train.training_batch import TrainingInputBatch  # noqa: PLC0415  # skyrl_train only in a SkyRL runtime
 
@@ -58,6 +60,7 @@ def run_score(policy, batch: dict, *, top_k: int | None, micro_batch_size: int =
         "response_length": batch["sequences"].shape[1],
         "probe_micro_batch_size": micro_batch_size,
         "probe_score_top_k": top_k,
+        "probe_score_support_width": support_width,
     }
     started = time.monotonic()
     output = policy.run_method("mesh", "probe_score_forward", data=data)  # DP shards concatenated in order
@@ -86,6 +89,7 @@ def reference_pass(args) -> None:
         args.out,
         topk_ids=results["topk_ids"],
         topk_logprobs=results["topk_logprobs"],
+        topk_tail_logmass=results["topk_tail_logmass"],
         model_path=args.model_path,
         sequences_path=args.sequences,
         top_k=TOP_K,
@@ -99,6 +103,7 @@ def candidate_pass(args) -> None:
     with np.load(args.reference) as stored:
         topk_ids = stored["topk_ids"]
         topk_logprobs = stored["topk_logprobs"]
+        reference_tail_logmass = stored["topk_tail_logmass"]
         reference_id = str(stored["model_path"])
         if str(stored["sequences_path"]) != args.sequences:
             raise ValueError("the reference pass scored different sequences")
@@ -119,14 +124,21 @@ def candidate_pass(args) -> None:
         master_seed=MASTER_SEED,
     )
     with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
-        results, duration = run_score(policy, batch, top_k=None)
+        results, duration = run_score(policy, batch, top_k=None, support_width=TOP_K)
     # Kept beside the rows so the reduction can be rerun without the GPU pass.
-    np.savez(args.gathered_out, gathered_logprobs=results["gathered_logprobs"], model_path=args.model_path)
+    np.savez(
+        args.gathered_out,
+        gathered_logprobs=results["gathered_logprobs"],
+        gathered_tail_logmass=results["gathered_tail_logmass"],
+        model_path=args.model_path,
+    )
     rows = kl_rows_from_passes(
         sequences,
         topk_ids,
         topk_logprobs,
+        reference_tail_logmass,
         results["gathered_logprobs"],
+        results["gathered_tail_logmass"],
         reference_id=reference_id,
         candidate_id=args.model_path,
         candidate_step=args.candidate_step,

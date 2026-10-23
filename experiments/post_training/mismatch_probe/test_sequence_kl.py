@@ -18,7 +18,6 @@ from experiments.post_training.mismatch_probe.sequence_kl import (
     exact_kl,
     exact_subsample_seed,
     position_subsample_mask,
-    tail_log_mass,
 )
 
 
@@ -26,21 +25,35 @@ def _normalized(logits: torch.Tensor) -> torch.Tensor:
     return torch.log_softmax(logits.double(), dim=-1)
 
 
+def _complement(full: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
+    return torch.logsumexp(full.scatter(-1, ids, float("-inf")), dim=-1)
+
+
+def _binned(support_model: torch.Tensor, scored_model: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
+    """binned_kl on ``ids`` as the support, each side's tail from its full distribution, as the passes compute it."""
+    return binned_kl(
+        support_model.gather(-1, ids),
+        _complement(support_model, ids),
+        scored_model.gather(-1, ids),
+        _complement(scored_model, ids),
+    )
+
+
 def test_identical_models_score_zero_over_the_support_and_tail():
     torch.manual_seed(0)
     full = _normalized(torch.randn(5, 16, 32))
-    support, _ids = full.topk(8, dim=-1)
-    assert torch.all(binned_kl(support, support).abs() < 1e-9)
+    _values, ids = full.topk(8, dim=-1)
+    assert torch.all(_binned(full, full, ids).abs() < 1e-9)
 
 
 def test_forward_and_reverse_are_role_swaps_of_one_math():
     torch.manual_seed(1)
     reference = _normalized(torch.randn(4, 24))
     candidate = _normalized(torch.randn(4, 24))
-    reference_topk, reference_ids = reference.topk(12, dim=-1)
-    candidate_topk, candidate_ids = candidate.topk(12, dim=-1)
-    forward = binned_kl(reference_topk, candidate.gather(-1, reference_ids))
-    reverse = binned_kl(candidate_topk, reference.gather(-1, candidate_ids))
+    _values, reference_ids = reference.topk(12, dim=-1)
+    _values, candidate_ids = candidate.topk(12, dim=-1)
+    forward = _binned(reference, candidate, reference_ids)
+    reverse = _binned(candidate, reference, candidate_ids)
     # The forms score different supports, so the same pair of models gives two
     # different numbers, and each is a lower bound on its own exact divergence.
     assert not torch.allclose(forward, reverse)
@@ -62,8 +75,8 @@ def test_binned_matches_exact_when_the_support_spans_the_vocabulary():
     )
     exact = exact_kl(reference, candidate)
     assert float(exact) > 0
-    support, ids = reference.topk(reference.shape[-1], dim=-1)
-    assert torch.allclose(binned_kl(support, candidate.gather(-1, ids)), exact, atol=1e-12)
+    _support, ids = reference.topk(reference.shape[-1], dim=-1)
+    assert torch.allclose(_binned(reference, candidate, ids), exact, atol=1e-12)
 
 
 def test_forward_gap_shrinks_monotonically_as_k_grows():
@@ -73,8 +86,8 @@ def test_forward_gap_shrinks_monotonically_as_k_grows():
     exact = exact_kl(reference, candidate)
     gaps = []
     for top_k in (4, 16, 64):
-        reference_topk, reference_ids = reference.topk(top_k, dim=-1)
-        binned = binned_kl(reference_topk, candidate.gather(-1, reference_ids))
+        _values, reference_ids = reference.topk(top_k, dim=-1)
+        binned = _binned(reference, candidate, reference_ids)
         gaps.append((binned - exact).abs().max().item())
     assert gaps[0] > gaps[1] > gaps[2] > 0.0
     # At K = V the gap closes exactly (powers-of-two test); below V the residual
@@ -89,8 +102,8 @@ def test_reverse_matches_the_exact_reverse_kl_as_k_grows():
     exact_reverse = exact_kl(candidate, reference)
     gaps = []
     for top_k in (4, 16, 64):
-        candidate_topk, candidate_ids = candidate.topk(top_k, dim=-1)
-        reverse = binned_kl(candidate_topk, reference.gather(-1, candidate_ids))
+        _values, candidate_ids = candidate.topk(top_k, dim=-1)
+        reverse = _binned(candidate, reference, candidate_ids)
         gaps.append((reverse - exact_reverse).abs().max().item())
     assert gaps[0] > gaps[1] > gaps[2] > 0.0
     assert gaps[2] < 1e-3
@@ -104,45 +117,63 @@ def test_no_tail_is_floored():
         [[math.log(0.25), math.log(0.25), math.log(0.5 - tail), math.log(tail)]], dtype=torch.float64
     )
     candidate = torch.tensor([[math.log(0.25), math.log(0.25), math.log(0.49), math.log(0.01)]], dtype=torch.float64)
-    support, ids = reference.topk(3, dim=-1)
-    assert float(tail_log_mass(support).exp()) == pytest.approx(tail, rel=1e-2, abs=0)
-    assert torch.allclose(
-        binned_kl(support, candidate.gather(-1, ids)), exact_kl(reference, candidate), rtol=1e-10, atol=0
-    )
+    _support, ids = reference.topk(3, dim=-1)
+    assert float(_complement(reference, ids).exp()) == pytest.approx(tail, rel=1e-2, abs=0)
+    assert torch.allclose(_binned(reference, candidate, ids), exact_kl(reference, candidate), rtol=1e-10, atol=0)
 
 
-def test_tail_log_mass_is_derived_from_the_stored_logprobs():
-    support = torch.tensor([[math.log(0.4), math.log(0.3), math.log(0.3 - 1e-13)]], dtype=torch.float64)
-    assert torch.allclose(tail_log_mass(support).exp(), torch.tensor([1e-13], dtype=torch.float64), rtol=1e-2, atol=0)
-    # A peaked support keeps its true near-zero tail; no floor substitutes a constant.
-    peaked = torch.tensor([[0.0, -40.0, -40.0]], dtype=torch.float64)
-    assert float(tail_log_mass(peaked).exp()) < 1e-15
-    with pytest.raises(ValueError, match="more than the full distribution"):
-        tail_log_mass(torch.zeros(1, 3))
+def test_a_tail_below_fp32_resolution_of_the_support_sum_keeps_a_finite_divergence():
+    # Two confident fp32 models: summing either side's 64 stored probabilities in fp32
+    # can reach 1, which a 1 - sum(exp) tail rounds to zero and an infinite KL. The
+    # complement's own logsumexp resolves both tails, and the binned KL is a finite
+    # lower bound close to the exact one.
+    torch.manual_seed(7)
+    logits = torch.randn(64, 2048) * 4.0
+    logits[:, 0] += 30.0
+    reference = torch.log_softmax(logits.float(), dim=-1)
+    candidate = torch.log_softmax((logits + 0.3 * torch.randn_like(logits)).float(), dim=-1)
+    _values, ids = reference.topk(64, dim=-1)
+    rounded = torch.exp(candidate.gather(-1, ids)).sum(-1) >= 1.0  # fp32 sum, as the old derivation saw it
+    assert bool(rounded.any()), "the fixture must hit the fp32 rounding the derivation could not resolve"
+    reference, candidate = _normalized(reference), _normalized(candidate)  # exact_kl needs float64 normalization
+    binned = _binned(reference, candidate, ids)
+    assert bool(torch.isfinite(binned).all())
+    exact = exact_kl(reference, candidate)
+    assert bool((binned <= exact + 1e-12).all())
+    assert bool((binned >= 0.8 * exact).all())
+
+
+def test_a_tail_that_disagrees_with_its_support_is_rejected():
+    torch.manual_seed(8)
+    reference = _normalized(torch.randn(2, 16))
+    _values, ids = reference.topk(4, dim=-1)
+    support = reference.gather(-1, ids)
+    wrong_tail = _complement(reference, ids) - 1.0
+    with pytest.raises(ValueError, match="do not sum to one distribution"):
+        binned_kl(support, wrong_tail, support, _complement(reference, ids))
 
 
 def test_a_peaked_scored_model_gets_an_honest_divergence():
     torch.manual_seed(5)
     reference = _normalized(torch.randn(2, 8))
-    reference_topk, reference_ids = reference.topk(6, dim=-1)
+    _values, reference_ids = reference.topk(6, dim=-1)
     # All candidate mass on the reference's top id: the candidate's tail is zero, so
     # forward KL is genuinely infinite wherever the reference keeps tail mass...
-    peaked = torch.full_like(reference, -40.0).scatter(-1, reference_ids[..., :1], 0.0)
-    assert bool(torch.isinf(binned_kl(reference_topk, peaked.gather(-1, reference_ids))).all())
+    peaked = torch.full_like(reference, float("-inf")).scatter(-1, reference_ids[..., :1], 0.0)
+    assert bool(torch.isinf(_binned(reference, peaked, reference_ids)).all())
     # ...and the role-swapped form is finite, because the support's own tail is zero.
-    candidate_topk, candidate_ids = peaked.topk(6, dim=-1)
-    reverse = binned_kl(candidate_topk, reference.gather(-1, candidate_ids))
+    _values, peaked_ids = peaked.topk(6, dim=-1)
+    reverse = _binned(peaked, reference, peaked_ids)
     assert bool(torch.isfinite(reverse).all())
     assert bool((reverse >= 0).all())
 
 
 def test_logprobs_summing_past_one_are_rejected():
     support = torch.zeros(2, 4)
-    scored = torch.full((2, 4), -1.0)
-    with pytest.raises(ValueError, match="more than the full distribution"):
-        binned_kl(support, scored)
+    with pytest.raises(ValueError, match="do not sum to one distribution"):
+        binned_kl(support, torch.full((2,), float("-inf")), torch.full((2, 4), -1.0), torch.zeros(2))
     with pytest.raises(ValueError, match="normalized distribution"):
-        exact_kl(support, scored)
+        exact_kl(support, torch.full((2, 4), -1.0))
 
 
 def test_exact_kl_matches_a_manual_computation_and_rejects_partial_support():
@@ -156,7 +187,7 @@ def test_exact_kl_matches_a_manual_computation_and_rejects_partial_support():
     with pytest.raises(ValueError, match="share a shape"):
         exact_kl(reference, candidate[..., :8])
     with pytest.raises(ValueError, match="share a shape"):
-        binned_kl(torch.zeros(2, 4), torch.zeros(2, 5))
+        binned_kl(torch.zeros(2, 4), torch.zeros(2), torch.zeros(2, 5), torch.zeros(2))
 
 
 def test_subsample_mask_is_seeded_over_scored_positions_and_stays_unbiased():

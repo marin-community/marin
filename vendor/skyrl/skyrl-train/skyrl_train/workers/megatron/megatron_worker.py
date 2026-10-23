@@ -341,7 +341,9 @@ class MegatronWorker:
         ``data.metadata["probe_score_top_k"]`` selects the reference pass (per
         position, the top-K token ids and their fp32 log-softmax). Leaving it
         ``None`` selects the candidate pass, which gathers the log-softmax at
-        ``data["probe_score_gather_ids"]`` ([B, T, K]), or the exact pass when the
+        ``data["probe_score_gather_ids"]`` ([B, T, K], of which the first
+        ``data.metadata["probe_score_support_width"]`` are the support whose tail
+        log mass comes back beside them), or the exact pass when the
         batch carries ``data["probe_score_positions"]`` ([B, T] int64: row id + 1 at positions
         whose full-vocabulary log-softmax rows come back compacted). Rows are
         aligned with the model's logits positions — position t predicts the token
@@ -349,6 +351,7 @@ class MegatronWorker:
         so the B-vs-B noise floor can rescore under a different layout.
         """
         top_k = data.metadata.get("probe_score_top_k")
+        support_width = data.metadata.get("probe_score_support_width")
         micro_batch_size = (
             data.metadata.get("probe_micro_batch_size") or self.cfg.trainer.micro_forward_batch_size_per_gpu
         )
@@ -379,6 +382,7 @@ class MegatronWorker:
                 seq_len=seq_len,
                 micro_batch_size=mbs,
                 top_k=top_k,
+                support_width=support_width,
             )
         if top_k is not None and "topk_logprobs" not in results:
             raise ValueError("the reference pass returned no top-K logprobs")
