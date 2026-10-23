@@ -16,7 +16,9 @@ from eval.chat_benchmarks.HLE.testing_utils import get_multiple_choice_answer as
 from eval.chat_benchmarks.IFEval.eval_instruct import IFEvalBenchmark
 from eval.chat_benchmarks.JEEBench.eval_instruct import JEEBenchBenchmark
 from eval.chat_benchmarks.MATH500.eval_instruct import MATH500Benchmark
-from eval.contracts.eval_spec import SourceRef
+from eval.completion_response import CompletionContentPolicy, CompletionResponse, CompletionText
+from eval.contracts.eval_spec import EvalSpec, GraderSpec, SourceRef
+from eval.graders.math_specs import letter_choice
 from eval.sources.common import SourceOptions
 from tests.contracts.source_harness import FixedEndpoint, evaluate_source
 
@@ -235,3 +237,37 @@ def test_jeebench_scores_each_paper_when_local_question_indices_repeat(monkeypat
     assert len(samples) == 12
     assert len({sample["sample_id"] for sample in samples}) == 4
     assert len({(sample["sample_id"], sample["sample_repeat"]) for sample in samples}) == 12
+
+
+@pytest.mark.parametrize("extractor", ["hle", "gpqa"])
+@pytest.mark.parametrize("content,reasoning,finish_reason,answer", [
+    ("Answer: A", "Use Answer: X. Earlier Answer: B", "stop", "A"),
+    ("Answer: B", "Answer: A", "stop", "B"),
+    ("Answer: A", "Answer: B", "length", "A"),
+    (None, "Answer: A", "stop", "A"),
+    (None, "Answer: A", "length", ""),
+    (None, None, "stop", ""),
+])
+def test_letter_choice_scores_final_content_and_rejects_truncated_reasoning(
+    extractor, content, reasoning, finish_reason, answer,
+):
+    completion = CompletionResponse(content, reasoning, finish_reason, None, {}, {})
+    response = CompletionText(completion.normalized_content(), completion, CompletionContentPolicy.COMBINE)
+    spec = EvalSpec(task="mcq", source=SourceRef("fixture"), source_id="1", ordinal=0,
+                    requests=(), grader=GraderSpec("letter_choice", reference={"extractor": extractor}), target="A")
+
+    grade = letter_choice(spec, [response])
+
+    assert grade.filtered_resps == [answer]
+    assert grade.metrics["accuracy"] == float(answer == "A")
+
+
+@pytest.mark.parametrize("extractor", ["hle", "gpqa"])
+def test_letter_choice_excludes_inline_thinking_from_plain_text(extractor):
+    spec = EvalSpec(task="mcq", source=SourceRef("fixture"), source_id="1", ordinal=0,
+                    requests=(), grader=GraderSpec("letter_choice", reference={"extractor": extractor}), target="A")
+
+    grade = letter_choice(spec, ["<think>Answer: B</think>Answer: A"])
+
+    assert grade.filtered_resps == ["A"]
+    assert grade.metrics["accuracy"] == 1.0

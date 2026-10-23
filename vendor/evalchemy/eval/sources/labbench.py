@@ -15,7 +15,7 @@ from rigging.filesystem.factory import open_url
 
 DATASET = "futurehouse/lab-bench"
 REVISION = "5c77cec648430f30611808808861eb86f81d5eaa"
-PROTOCOL_VERSION = "marin-labbench-no-tools-v2"
+PROTOCOL_VERSION = "marin-labbench-no-tools-v3"
 PROMPT = """The following is a multiple choice question about biology.
 Please answer by responding with the letter of the correct answer.
 Think step by step.

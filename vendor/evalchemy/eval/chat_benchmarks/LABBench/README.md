@@ -13,7 +13,7 @@ is excluded. ProtocolQA prepends its `protocol` field to its question.
 
 ## Evaluation protocol
 
-Protocol `marin-labbench-no-tools-v2` evaluates generated multiple-choice answers
+Protocol `marin-labbench-no-tools-v3` evaluates generated multiple-choice answers
 with reasoning allowed and no tools. It preserves the dataset's correct answer
 and distractors, without adding the original harness's insufficient-information
 option. Choices are shuffled with Python's `random.Random`, seeded by SHA-256
@@ -22,14 +22,19 @@ of `<run seed>:<subset>:<item id>`, independently of item order and run limits.
 The prompt requests a final `Answer: X`. Scoring reuses Evalchemy's
 `letter_choice` grader with HLE's extractor: it first looks for an answer-prefixed
 letter, including boxed variants, then falls back to the last isolated letter.
-It uses the first answer-prefixed match in normalized response text, which can
-include reasoning, so an intermediate answer can take precedence over the final
-answer. This behavior is shared with HLE.
+The shared grader prefers the provider's final-answer field and removes explicit
+thinking blocks before extraction. When no final field exists, normally completed
+reasoning-only responses remain eligible for extraction; reasoning-only truncations
+produce an empty answer and score zero. The extractor still uses the first
+answer-prefixed match within the selected text.
 The extracted answer is compared with the shuffled target. There is no separate
 LAB-Bench parser, LLM extraction fallback, or abstention scoring. This is a
 forced-choice capability evaluation; it does not reproduce the original
 benchmark's uncertainty calibration or historical scores. Earlier v1 runs used
-tagged answers and an added abstention choice and are not comparable.
+tagged answers and an added abstention choice. Version 2 scored combined reasoning
+and final content, allowing an intermediate answer to override the final answer.
+Version 3 corrects that shared grading behavior; retain the original scores and
+identify any rescoring of saved responses separately from fresh generation.
 
 Each component has its own Marin evaluation key and accuracy column in EvalDash.
 SeqQA's 15 subtask accuracies remain diagnostic metrics within its record.
