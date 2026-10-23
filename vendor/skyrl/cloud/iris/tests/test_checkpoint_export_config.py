@@ -15,6 +15,9 @@ from cloud.iris.export_hf_checkpoint import (
 )
 from cloud.iris.launch_config import validate_iris_allocation
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from skyrl_train.config.utils import get_default_config
+from skyrl_train.hf_export import read_hf_export_request
+from skyrl_train.trainer import RayPPOTrainer
 from skyrl_train.hf_export_schema import HFExportRequest
 from marinskyrl.checkpoint_paths import selected_export_step
 
@@ -198,3 +201,32 @@ def test_export_selection_does_not_substitute_training_for_best_initializer(tmp_
     (tmp_path / "best_checkpoint.json").write_text(json.dumps({"step": 0, "model_format": "hf"}))
     with pytest.raises(ValueError, match="initial HF model"):
         selected_export_step(str(tmp_path), "best", 20)
+
+
+@pytest.mark.parametrize(("selection", "expected_step"), [("best", 15), ("latest", 20)])
+def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, selection, expected_step) -> None:
+    config = get_default_config()
+    config.trainer.ckpt_path = str(tmp_path / "checkpoints")
+    config.trainer.export_path = str(tmp_path / "exports")
+    config.trainer.hf_export_checkpoint = selection
+    config.trainer.export_hf_artifact = True
+    config.trainer.policy.model.path = "org/policy"
+    root = Path(config.trainer.ckpt_path)
+    for step in (15, 20):
+        checkpoint = root / f"global_step_{step}"
+        checkpoint.mkdir(parents=True)
+        (checkpoint / "trainer_state.pt").write_bytes(b"complete")
+    (root / "best_checkpoint.json").write_text(json.dumps({"step": 15, "model_format": "native"}))
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = config
+    trainer.global_step = 20
+    trainer.all_timings = {}
+    trainer.handle_hf_export()
+    selected = root / f"global_step_{expected_step}"
+    request = read_hf_export_request(str(selected))
+    assert request is not None
+    assert request.step == expected_step
+    assert request.checkpoint_path == str(selected)
+    assert request.model_path == "org/policy"
+    other_step = 20 if expected_step == 15 else 15
+    assert read_hf_export_request(str(root / f"global_step_{other_step}")) is None
