@@ -33,7 +33,7 @@ import numpy as np
 import ray
 import torch
 
-from experiments.post_training.mismatch_probe.long_context import scoring_config
+from experiments.post_training.mismatch_probe.long_context import boot_scoring_worker
 from experiments.post_training.mismatch_probe.scoring_pass import (
     TOP_K,
     build_score_batch,
@@ -47,32 +47,6 @@ from experiments.post_training.mismatch_probe.scoring_pass import (
 PAD_TOKEN_ID = 0
 EXACT_RATE = 0.01
 MASTER_SEED = 20261023
-
-
-def boot_worker(model_path: str, *, num_gpus: int):
-    """The policy worker with the model loaded, and nothing else."""
-    # skyrl_train exists only in a SkyRL runtime environment.
-    from ray.util.placement_group import placement_group  # noqa: PLC0415
-    from skyrl_train.utils import get_ray_pg_ready_with_timeout  # noqa: PLC0415
-    from skyrl_train.workers.megatron.megatron_worker import PolicyWorker  # noqa: PLC0415
-    from skyrl_train.workers.worker import PPORayActorGroup  # noqa: PLC0415
-
-    cfg = scoring_config(model_path, num_gpus=num_gpus)
-    pg = placement_group([{"GPU": num_gpus, "CPU": num_gpus}], strategy="PACK")
-    get_ray_pg_ready_with_timeout(pg, timeout=600)
-    policy = PPORayActorGroup(
-        cfg,
-        num_nodes=1,
-        num_gpus_per_node=num_gpus,
-        ray_actor_type=PolicyWorker,
-        pg=pg,
-        num_gpus_per_actor=0.75,
-        colocate_all=False,
-        sequence_parallel_size=cfg.trainer.policy.sequence_parallel_size,
-        record_memory=cfg.trainer.policy.record_memory,
-    )
-    ray.get(policy.async_init_model(model_path))
-    return policy
 
 
 def run_score(policy, batch: dict, *, top_k: int | None, micro_batch_size: int = 1) -> tuple[dict, float]:
@@ -98,7 +72,7 @@ def shuffled_batch(batch: dict, order: np.ndarray) -> dict:
 
 def reference_pass(args) -> None:
     sequences = load_probe_sequences(args.sequences)
-    policy = boot_worker(args.model_path, num_gpus=args.num_gpus)
+    policy = boot_scoring_worker(args.model_path, num_gpus=args.num_gpus)
     batch = build_score_batch(
         sequences,
         pad_token_id=PAD_TOKEN_ID,
@@ -128,7 +102,7 @@ def candidate_pass(args) -> None:
         reference_id = str(stored["model_path"])
         if str(stored["sequences_path"]) != args.sequences:
             raise ValueError("the reference pass scored different sequences")
-    policy = boot_worker(args.model_path, num_gpus=args.num_gpus)
+    policy = boot_scoring_worker(args.model_path, num_gpus=args.num_gpus)
     padded_len = topk_ids.shape[1]
     gather = np.stack(
         [
@@ -178,7 +152,7 @@ def exact_pass(args) -> None:
     )
     passes = {}
     for label, model_path in (("reference", args.reference_model), ("candidate", args.candidate_model)):
-        policy = boot_worker(model_path, num_gpus=args.num_gpus)
+        policy = boot_scoring_worker(model_path, num_gpus=args.num_gpus)
         try:
             results, duration = run_score(policy, batch, top_k=None)
         finally:
@@ -211,7 +185,7 @@ def exact_pass(args) -> None:
 def noise_pass(args) -> None:
     """B against B under a different batch layout: the pre-registered floor."""
     sequences = load_probe_sequences(args.sequences)
-    policy = boot_worker(args.model_path, num_gpus=args.num_gpus)
+    policy = boot_scoring_worker(args.model_path, num_gpus=args.num_gpus)
     batch = build_score_batch(
         sequences,
         pad_token_id=PAD_TOKEN_ID,

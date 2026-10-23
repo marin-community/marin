@@ -77,7 +77,7 @@ def select_prompts(reserved_rows: list[dict], x_rows: list[dict], *, count_per_s
         {
             "sample_id": f"dev-math-{index}",
             "bucket_group": "P_think",
-            "prompt": row["prompt"],
+            "prompt": row["problem"],  # the reserved file keeps WP7's problem field
             "max_tokens": MATH_MAX_TOKENS,
         }
         for index, row in enumerate(chosen[:count_per_source])
@@ -115,10 +115,22 @@ async def generate(engines_client, tokenizer, requests: list[dict], *, master_se
     started = time.monotonic()
     output = await engines_client.generate(engine_input)
     print(f"generation took {time.monotonic() - started:.0f} s")
-    responses = output["responses"]
-    if len(responses) != len(requests):
-        raise ValueError(f"the engines returned {len(responses)} responses for {len(requests)} prompts")
-    return responses
+    response_ids = output["response_ids"]
+    if len(response_ids) != len(requests):
+        raise ValueError(f"the engines returned {len(response_ids)} responses for {len(requests)} prompts")
+    return [response_text(tokenizer, ids) for ids in response_ids]
+
+
+def response_text(tokenizer, ids: list[int]) -> str:
+    """The continuation's text with the think markers kept and the closing turn token dropped.
+
+    The engines' own text skips special tokens, which would erase the think markers
+    ``split_thinking`` looks for; the shared template re-adds the turn close.
+    """
+    stop_ids = {tokenizer.convert_tokens_to_ids(FAMILY_TOKEN_MAPS[FAMILY].turn_close), tokenizer.eos_token_id}
+    while ids and ids[-1] in stop_ids:
+        ids = ids[:-1]
+    return tokenizer.decode(ids, skip_special_tokens=False)
 
 
 def sequence_rows(requests: list[dict], responses: list[str], tokenizer) -> list[dict]:
