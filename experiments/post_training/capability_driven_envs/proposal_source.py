@@ -36,7 +36,7 @@ from typing import Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from taskforge.capability import CapabilityIdea, capability_idea_record
 from taskforge.content_hash import pretty_json
-from taskforge.llm.client import FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
+from taskforge.llm.client import Completion, FinishReason, ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import ERROR_TEXT_LIMIT, schema_instruction
 from taskforge.stage10_proposal.model import (
@@ -460,9 +460,9 @@ def _portfolio_slot(slot: PlannedSlot) -> PortfolioSlot:
 async def author_proposal(
     model: ModelClient, policy: LLMPolicy, idea: CapabilityIdea, plan: SlotPlan, slot: PlannedSlot
 ) -> SlotOutcome:
-    """Have GLM write the proposal document of ``slot`` under the proposal JSON schema, repairing it once.
+    """Have GLM write the proposal document of ``slot`` under the proposal JSON schema, repairing until valid or held.
 
-    Both requests carry ``document_request_fields`` and run with continuations off, so a reply the
+    Every request carries ``document_request_fields`` and run with continuations off, so a reply the
     output limit cuts off comes back as a ``SlotFailure``. So does a request that raises one of
     ``SLOT_MODEL_ERRORS``, with the error's text and the completions received before it.
     """
@@ -474,31 +474,28 @@ async def author_proposal(
         {"role": "user", "content": proposal_prompt(idea, plan, slot, slot_id)},
     ]
     request = tuple(messages)
-    try:
-        first = await model.complete(messages, single, fields)
-    except SLOT_MODEL_ERRORS as error:
-        return SlotFailure(slot.slot, str(error), request, ())
-    if first.finish_reason is FinishReason.LENGTH:
-        return SlotFailure(slot.slot, CUT_OFF, request, (first,))
-    try:
-        return SlotProposal(slot.slot, checked_proposal(first.content, idea, slot.slot), request, (first,), None)
-    except ProposalFormatError as error:
-        repair_messages: list[Message] = [
-            *messages,
-            {"role": "assistant", "content": first.content},
-            {"role": "user", "content": DOCUMENT_REPAIR_PROMPT.format(error=str(error)[:ERROR_TEXT_LIMIT])},
-        ]
+    completions: list[Completion] = []
+    first_error: str | None = None
+    while True:
         try:
-            repair = await model.complete(repair_messages, single, fields)
-        except SLOT_MODEL_ERRORS as repair_error:
-            return SlotFailure(slot.slot, f"repair: {repair_error}", request, (first,))
-        if repair.finish_reason is FinishReason.LENGTH:
-            return SlotFailure(slot.slot, f"repair {CUT_OFF}", request, (first, repair))
+            reply = await model.complete(messages, single, fields)
+        except SLOT_MODEL_ERRORS as error:
+            prefix = "repair: " if completions else ""
+            return SlotFailure(slot.slot, f"{prefix}{error}", request, tuple(completions))
+        completions.append(reply)
+        if reply.finish_reason is FinishReason.LENGTH:
+            return SlotFailure(slot.slot, CUT_OFF, request, tuple(completions))
         try:
-            proposal = checked_proposal(repair.content, idea, slot.slot)
-        except ProposalFormatError as repair_error:
-            return SlotFailure(slot.slot, f"invalid after repair: {repair_error}", request, (first, repair))
-        return SlotProposal(slot.slot, proposal, request, (first, repair), str(error))
+            proposal = checked_proposal(reply.content, idea, slot.slot)
+        except ProposalFormatError as error:
+            if first_error is None:
+                first_error = str(error)
+            messages.append({"role": "assistant", "content": reply.content})
+            messages.append(
+                {"role": "user", "content": DOCUMENT_REPAIR_PROMPT.format(error=str(error)[:ERROR_TEXT_LIMIT])}
+            )
+            continue
+        return SlotProposal(slot.slot, proposal, request, tuple(completions), first_error)
 
 
 class CapabilitySource:
@@ -528,8 +525,8 @@ class CapabilitySource:
     async def write(self, idea: CapabilityIdea, portfolio: Portfolio[SlotPlan], slot: int) -> SlotOutcome:
         """The proposal of ``slot``, or a null proposal with no model call for a slot the plan marked null.
 
-        A document the output limit cuts off, whose repair still fails the parser, or whose model call
-        raises one of ``SLOT_MODEL_ERRORS`` comes back as a ``SlotFailure``; no other slot is involved.
+        Parser failures receive repair feedback until the document is valid. A cut-off document or a model
+        call raising ``SLOT_MODEL_ERRORS`` returns ``SlotFailure`` with its completions; other slots continue.
         """
         planned = portfolio.plan.slots[slot - 1]
         if planned.status is not SlotStatus.PROPOSE:
