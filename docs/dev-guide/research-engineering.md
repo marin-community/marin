@@ -30,8 +30,8 @@ tried, why it was tried, the interesting results, and what was learned.
 
 Reuse an existing coordinating issue when possible. Starting an authorized
 public research program includes creating its coordinating issue through
-`file-issue`. Keep private work on its authorized surface until publication is
-approved; logbooks is public.
+`file-issue`, targeting `marin-community/marin-logbooks`. Keep private work on
+its authorized surface until publication is approved; logbooks is public.
 
 ## Preserve two outputs
 

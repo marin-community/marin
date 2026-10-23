@@ -22,8 +22,9 @@ root instructions rather than the logbooks index branch's instructions.
   Search prior work through `use-echo` and inspect the current checkout.
 - Use a task issue in `marin-community/marin-logbooks` as the public entry point.
   Reuse an existing issue; when the task authorizes a new public research
-  program, use `file-issue` to create its coordinating issue. An existing Marin
-  issue can link to it. Do not publish private work without authorization.
+  program, use `file-issue` with target repository
+  `marin-community/marin-logbooks` to create its coordinating issue. An existing
+  Marin issue can link to it. Do not publish private work without authorization.
 - Work on a Marin-derived branch in logbooks. Preserve the notebook and
   supporting analysis alongside the actual experimental source changes.
 - Record why each meaningful alternative was tried, the evidence it produced,
