@@ -33,7 +33,7 @@ import numpy as np
 import ray
 import torch
 
-from experiments.post_training.mismatch_probe.long_context import boot_scoring_worker
+from experiments.post_training.mismatch_probe.long_context import scoring_worker
 from experiments.post_training.mismatch_probe.scoring_pass import (
     TOP_K,
     build_score_batch,
@@ -72,7 +72,6 @@ def shuffled_batch(batch: dict, order: np.ndarray) -> dict:
 
 def reference_pass(args) -> None:
     sequences = load_probe_sequences(args.sequences)
-    policy = boot_scoring_worker(args.model_path, num_gpus=args.num_gpus)
     batch = build_score_batch(
         sequences,
         pad_token_id=PAD_TOKEN_ID,
@@ -81,7 +80,8 @@ def reference_pass(args) -> None:
         exact_rate=0.0,
         master_seed=MASTER_SEED,
     )
-    results, duration = run_score(policy, batch, top_k=TOP_K)
+    with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
+        results, duration = run_score(policy, batch, top_k=TOP_K)
     np.savez(
         args.out,
         topk_ids=results["topk_ids"],
@@ -102,7 +102,6 @@ def candidate_pass(args) -> None:
         reference_id = str(stored["model_path"])
         if str(stored["sequences_path"]) != args.sequences:
             raise ValueError("the reference pass scored different sequences")
-    policy = boot_scoring_worker(args.model_path, num_gpus=args.num_gpus)
     padded_len = topk_ids.shape[1]
     gather = np.stack(
         [
@@ -119,7 +118,8 @@ def candidate_pass(args) -> None:
         exact_rate=0.0,
         master_seed=MASTER_SEED,
     )
-    results, duration = run_score(policy, batch, top_k=None)
+    with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
+        results, duration = run_score(policy, batch, top_k=None)
     rows = kl_rows_from_passes(
         sequences,
         topk_ids,
@@ -153,11 +153,8 @@ def exact_pass(args) -> None:
     )
     passes = {}
     for label, model_path in (("reference", args.reference_model), ("candidate", args.candidate_model)):
-        policy = boot_scoring_worker(model_path, num_gpus=args.num_gpus)
-        try:
+        with scoring_worker(model_path, num_gpus=args.num_gpus) as policy:
             results, duration = run_score(policy, batch, top_k=None)
-        finally:
-            policy.kill_actors()
         passes[label] = (results["exact_logprobs"], results["exact_positions"].tolist())
         print(f"{label} exact pass ({model_path}): {len(results['exact_positions'])} positions in {duration:.0f} s")
     rows = exact_rows_from_passes(sequences, *passes["reference"], *passes["candidate"])
@@ -186,7 +183,6 @@ def exact_pass(args) -> None:
 def noise_pass(args) -> None:
     """B against B under a different batch layout: the pre-registered floor."""
     sequences = load_probe_sequences(args.sequences)
-    policy = boot_scoring_worker(args.model_path, num_gpus=args.num_gpus)
     batch = build_score_batch(
         sequences,
         pad_token_id=PAD_TOKEN_ID,
@@ -195,9 +191,10 @@ def noise_pass(args) -> None:
         exact_rate=0.0,
         master_seed=MASTER_SEED,
     )
-    reference, _duration = run_score(policy, batch, top_k=TOP_K, micro_batch_size=1)
     order = np.arange(len(sequences))[::-1]
-    rescored, duration = run_score(policy, shuffled_batch(batch, order), top_k=TOP_K, micro_batch_size=4)
+    with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
+        reference, _duration = run_score(policy, batch, top_k=TOP_K, micro_batch_size=1)
+        rescored, duration = run_score(policy, shuffled_batch(batch, order), top_k=TOP_K, micro_batch_size=4)
     # Undo the layout's permutation, then compare the supports position by position.
     rescored = {key: value[order] for key, value in rescored.items()}
     mask = batch["attention_mask"].astype(bool)

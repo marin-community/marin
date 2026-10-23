@@ -22,6 +22,8 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 import fsspec
 import numpy as np
@@ -102,13 +104,16 @@ def vocabulary_size_of(model_path: str) -> int:
         return int(json.load(handle)["vocab_size"])
 
 
-def boot_scoring_worker(model_path: str, *, num_gpus: int):
+@contextmanager
+def scoring_worker(model_path: str, *, num_gpus: int) -> Iterator[object]:
     """The policy worker with the checkpoint loaded for forward-only scoring.
 
     ``init_model_for_export`` builds the model without DDP gradient buffers or an
-    optimizer; the training init's fp32 buffers alone overflow an H100 at EP8.
+    optimizer; the training init's fp32 buffers alone overflow an H100 at EP8. On
+    exit the actors and their placement group are released, so a second worker
+    can claim the node's GPUs.
     """
-    from ray.util.placement_group import placement_group  # noqa: PLC0415  # the runtime has ray only
+    from ray.util.placement_group import placement_group, remove_placement_group  # noqa: PLC0415  # ray only at runtime
     from skyrl_train.utils import get_ray_pg_ready_with_timeout  # noqa: PLC0415  # skyrl_train only in a SkyRL runtime
     from skyrl_train.workers.worker import PPORayActorGroup  # noqa: PLC0415
 
@@ -128,8 +133,30 @@ def boot_scoring_worker(model_path: str, *, num_gpus: int):
         sequence_parallel_size=cfg.trainer.policy.sequence_parallel_size,
         record_memory=cfg.trainer.policy.record_memory,
     )
-    ray.get(policy.async_run_ray_method("pass_through", "init_model_for_export", model_path))
-    return policy
+    try:
+        ray.get(policy.async_run_ray_method("pass_through", "init_model_for_export", model_path))
+        yield policy
+    finally:
+        policy.kill_actors()
+        remove_placement_group(pg)
+
+
+def scan_lengths(policy, args) -> dict:
+    """Score increasing lengths until one fails; the report names the largest that scored."""
+    vocabulary_size = vocabulary_size_of(args.model_path)
+    records = []
+    largest = None
+    for length in sorted(args.lengths):
+        try:
+            record = score_length(policy, length, vocabulary_size, args.seed, num_gpus=args.num_gpus)
+        except Exception as error:
+            records.append({"length": length, "failed": type(error).__name__, "detail": str(error)[:500]})
+            print(f"length {length}: FAILED {type(error).__name__}")
+            break
+        largest = length
+        records.append(record)
+        print(f"length {length}: {record['seconds']:.0f} s, memory {json.dumps(record['memory'])[:300]}")
+    return {"model_path": args.model_path, "largest_scored": largest, "lengths": records}
 
 
 def main() -> None:
@@ -141,25 +168,12 @@ def main() -> None:
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
 
-    policy = boot_scoring_worker(args.model_path, num_gpus=args.num_gpus)
     try:
-        vocabulary_size = vocabulary_size_of(args.model_path)
-        records = []
-        largest = None
-        for length in sorted(args.lengths):
-            try:
-                record = score_length(policy, length, vocabulary_size, args.seed, num_gpus=args.num_gpus)
-            except Exception as error:
-                records.append({"length": length, "failed": type(error).__name__, "detail": str(error)[:500]})
-                print(f"length {length}: FAILED {type(error).__name__}")
-                break
-            largest = length
-            records.append(record)
-            print(f"length {length}: {record['seconds']:.0f} s, memory {json.dumps(record['memory'])[:300]}")
-        report = {"model_path": args.model_path, "largest_scored": largest, "lengths": records}
+        with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
+            report = scan_lengths(policy, args)
         with open(args.report, "w") as handle:
             json.dump(report, handle, indent=2)
-        print(f"LARGEST SCORED LENGTH: {largest}")
+        print(f"LARGEST SCORED LENGTH: {report['largest_scored']}")
     finally:
         ray.shutdown()
 
