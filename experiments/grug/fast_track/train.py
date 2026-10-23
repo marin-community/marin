@@ -77,6 +77,7 @@ from experiments.grug.fast_track.model import (
     DenseMLP,
     GradProbeSite,
     GrugModelConfig,
+    HaltWrite,
     LayerSkip,
     Transformer,
     forward_flops_per_token,
@@ -521,7 +522,9 @@ def _reshard_tree_to_mesh(tree, mesh: Mesh):
 def dropless_moe_implementation(cfg: GrugModelConfig) -> MoeImplementation:
     """The dropless MoE kernel for evals and probes: sonic needs equal expert read and write widths; scatter also
     handles ``latent_out_dim`` and the full-width tail layers of ``latent_out_full_layers``."""
-    if cfg.expert_in_dim == cfg.expert_out_dim and not cfg.latent_out_full_layers:
+    # The halting votes widen the routed down-projection by one column (halt_write=unit), which sonic cannot take.
+    unit_votes = bool(cfg.halt_points) and cfg.halt_write == HaltWrite.UNIT
+    if cfg.expert_in_dim == cfg.expert_out_dim and not cfg.latent_out_full_layers and not unit_votes:
         return "sonic"
     return "scatter"
 
