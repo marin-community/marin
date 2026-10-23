@@ -67,10 +67,10 @@ The tested GPU driver is 535.309.01; CUDA 12.1 is compatible with it.
 
 ```bash
 uv venv /tmp/merge-eval --python 3.12
-uv pip install --python /tmp/merge-eval/bin/python \
+uv --no-config pip install --python /tmp/merge-eval/bin/python \
   torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
-uv pip install --python /tmp/merge-eval/bin/python \
-  vllm==0.6.6.post1 transformers==4.48.3 datasets==4.8.5 pyarrow==18.1.0
+uv --no-config pip install --python /tmp/merge-eval/bin/python \
+  vllm==0.6.6.post1 transformers==4.48.3 datasets==3.2.0 pyarrow==18.1.0 numpy==1.26.4
 uv run --no-project --python /tmp/merge-eval/bin/python \
   python -m experiments.weight_merging.playground.prepare --output /tmp/merge-run --panel full
 uv run --no-project --python /tmp/merge-eval/bin/python \
@@ -110,9 +110,9 @@ the length cap are excluded instead of truncating their answers.
 
 ```bash
 uv venv /tmp/merge-train --python 3.12
-uv pip install --python /tmp/merge-train/bin/python \
+uv --no-config pip install --python /tmp/merge-train/bin/python \
   torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
-uv pip install --python /tmp/merge-train/bin/python \
+uv --no-config pip install --python /tmp/merge-train/bin/python \
   transformers==4.57.6 datasets==4.8.5 accelerate==1.12.0 \
   bitsandbytes==0.45.5 liger-kernel==0.6.4 wandb
 
