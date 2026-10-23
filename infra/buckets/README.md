@@ -25,12 +25,16 @@ custom domain `public.oa.dev` serves objects without credentials; `r2.dev`
 access stays disabled. The stack exports `publicUrl` and `publicPrefix` for
 application stacks. Objects must carry their HTTP content type and cache policy;
 the domain cache respects origin headers, including catalog revalidation.
+A hostname-scoped configuration rule disables Browser Integrity Check so package
+clients such as Python's `urllib` can download artifacts.
 
 Before applying public hosting, audit the zone's `http_request_cache_settings`
-ruleset. Cloudflare has one entry-point ruleset per phase. If one already exists,
-preserve its rules in the declaration and import it through the program-first
+and `http_config_settings` rulesets. Cloudflare has one entry-point ruleset per
+phase. If one already exists, preserve its rules in the declaration and import it through the program-first
 workflow in `infra/pulumi/README.md`; do not replace unrelated zone rules.
-Provider tokens need R2 bucket management, zone read and cache-rules permissions.
+Provider tokens need R2 bucket management plus Zone Read, Cache Rules Edit and
+Config Rules Edit on `oa.dev`. R2 Admin Read & Write alone covers bucket and domain
+operations but does not include these zone permissions.
 
 ## Credentials
 

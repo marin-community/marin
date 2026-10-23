@@ -136,6 +136,22 @@ class R2PublicBucket(pulumi.ComponentResource):
             enabled=True,
             opts=options,
         )
+        client_access = cloudflare.Ruleset(
+            "public-bucket-client-access",
+            zone_id=zone_id,
+            name="Public object storage clients",
+            kind="zone",
+            phase="http_config_settings",
+            rules=[
+                cloudflare.RulesetRuleArgs(
+                    ref="public_object_storage_clients",
+                    action="set_config",
+                    expression=f'(http.host eq "{hostname}")',
+                    action_parameters=cloudflare.RulesetRuleActionParametersArgs(bic=False),
+                ),
+            ],
+            opts=options,
+        )
         cache = cloudflare.Ruleset(
             "public-bucket-cache",
             zone_id=zone_id,
@@ -157,6 +173,8 @@ class R2PublicBucket(pulumi.ComponentResource):
             ],
             opts=options,
         )
-        self.url = pulumi.Output.all(domain.domain, cache.urn).apply(lambda values: f"https://{values[0]}")
+        self.url = pulumi.Output.all(domain.domain, cache.urn, client_access.urn).apply(
+            lambda values: f"https://{values[0]}"
+        )
         self.prefix = bucket.name.apply(lambda value: f"s3://{value}")
         self.register_outputs({"url": self.url, "prefix": self.prefix})
