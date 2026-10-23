@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""A preempted run continues from its last complete adapter and gives back the synthesized tasks it did not train."""
+"""A restarted loop gives back the synthesized instances that are not in its feed, and knows its finished ideas."""
 
 import pytest
 
