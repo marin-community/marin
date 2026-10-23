@@ -823,8 +823,10 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
     varies several-fold, and every layer waits for the busiest shard at its next collective. The loss is a
     mean over all tokens and the router statistics are global sums, so every token still enters the
     objective; only which assignments exceed expert capacity can change. Expert capacity drops a shard's
-    later tokens first, so rows keep their loaded order within a shard rather than a cost order. This
-    spreads drops over rows of all costs only because the loader shuffles rows within a batch.
+    later tokens first, so rows keep their loaded order within a shard rather than a cost order. A full
+    receiver keeps earlier senders' tokens first, so the deal starts at the costliest row's loaded shard
+    rather than shard 0. Both spread drops over rows of all costs only because the loader shuffles rows
+    within a batch.
     Batches without segment ids, or with one row per shard, are returned as is.
     """
     segment_ids = batch.attn_mask.segment_ids
@@ -851,6 +853,7 @@ def balance_attention_rows(batch: GrugLmExample) -> GrugLmExample:
     deal_round, deal_index = np.divmod(np.arange(rows), shards)
     shard = np.where(deal_round % 2 == 0, deal_index, shards - 1 - deal_index)
     rows_by_shard = order[np.argsort(shard, stable=True)].reshape(shards, rows // shards)
+    rows_by_shard = jnp.roll(rows_by_shard, order[0] // (rows // shards), axis=0)
     source_row = jnp.sort(rows_by_shard, axis=1).reshape(rows)
 
     def permute(x: jax.Array) -> jax.Array:

@@ -417,7 +417,13 @@ def test_balance_attention_rows_spreads_long_documents_across_shards(context_siz
         long_rows_per_shard = np.isin(source, [rows - 2, rows - 1]).reshape(shards, rows // shards).sum(axis=1)
         assert long_rows_per_shard.max() == 1, long_rows_per_shard
         # Padding adds no cost, so row 0 is the cheapest row and the snake deal pairs it with the costliest.
-        assert sorted(source[: rows // shards].tolist()) == [0, rows - 2], source
+        # A full receiver keeps earlier senders' tokens first, so the deal starts at the costliest row's
+        # loaded shard instead of always giving that row shard 0.
+        by_shard = source.reshape(shards, rows // shards)
+        assert sorted(by_shard[(rows - 2) // (rows // shards)].tolist()) == [0, rows - 2], source
+        reversed_out = balance(slice(None, None, -1))
+        reversed_by_shard = (np.asarray(reversed_out.tokens)[:, 0] // 100).reshape(shards, rows // shards)
+        assert sorted(reversed_by_shard[0].tolist()) == [0, rows - 1], reversed_by_shard
         # Expert capacity drops a shard's later tokens first, so a shard keeps its rows in loaded order.
         assert (np.diff(source.reshape(shards, rows // shards), axis=1) > 0).all(), source
 
