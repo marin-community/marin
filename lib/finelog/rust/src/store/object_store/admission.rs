@@ -75,6 +75,7 @@ pub(super) struct RequestHistory {
 }
 
 impl RequestHistory {
+    /// Record a request and return whether an unexpired observation already exists.
     fn observe(&mut self, id: &ObjectId, now: Instant) -> bool {
         while self
             .order
