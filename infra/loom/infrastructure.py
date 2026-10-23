@@ -1010,6 +1010,9 @@ def _create_image(
         build_args={"CARGO_PROFILE": "release"},
         labels={"org.opencontainers.image.source": REPOSITORY_URL},
         platforms=[docker_build.Platform.LINUX_AMD64],
+        # Resolve base image tags against the registry so a workstation's stale local
+        # base image cannot carry an outdated trust store into the release.
+        pull=True,
         tags=[image_tag],
         build_on_preview=True,
         push=True,
