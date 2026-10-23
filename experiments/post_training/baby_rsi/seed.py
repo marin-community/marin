@@ -28,7 +28,7 @@ import pyarrow.parquet as pq
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.machine import PackageSpec
 from taskcompendium.convert.structure_closure import structure_closure_task
-from taskcompendium.models import ScriptGrader, Source, TaskSpec
+from taskcompendium.models import SCHEMA_VERSION, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.models import ImportRejection, RawRow
 
 POOL_URL = "hf://datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data@cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
@@ -38,6 +38,9 @@ VALIDATION_FILE = "validation.parquet"
 STRATUM_COLUMN = "teacher_route"
 TASK_COLUMN = "lowered_task_spec"
 STRUCTURAL = "structural"
+POOL_SCHEMA = "0.27"
+"""The TaskSpec schema of the pool rows. Schema 0.28 only adds the optional ``FinalAction.normal_submission``, so
+a row of the pool is also a TaskSpec of the current schema."""
 
 
 @dataclass(frozen=True)
@@ -119,7 +122,9 @@ def pool_task(lowered: Mapping[str, object], stratum: str) -> TaskSpec | None:
         source = Source.model_validate(native["source"])
         converted = structure_closure_task(RawRow(str(native["id"]), source, {TASK_COLUMN: json.dumps(lowered)}))
         return None if isinstance(converted, ImportRejection) else converted.task
-    return host_graded(TaskSpec.model_validate(lowered["task"]))
+    native = lowered["task"]
+    assert isinstance(native, Mapping) and native["schema_version"] == POOL_SCHEMA
+    return host_graded(TaskSpec.model_validate({**native, "schema_version": SCHEMA_VERSION}))
 
 
 def host_graded(task: TaskSpec) -> TaskSpec:
