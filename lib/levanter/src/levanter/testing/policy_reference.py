@@ -32,4 +32,3 @@ def full_softmax_response_logprobs(model: LmHeadModel, batch: PolicyBatch) -> Na
     )
     selected = jnp.take_along_axis(logprobs, tokens.array[:, 1:, None], axis=-1)[..., 0]
     return hax.named(selected[:, -width:], batch.response_mask.axes)
-
