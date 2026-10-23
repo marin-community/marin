@@ -21,6 +21,8 @@ src/taskforge/
   llm/                         the ModelClient protocol, the GLM client, sampling policy, structured
                                output, ledger recording, agent loop, web tools, the
                                RolloutEngine model
+  sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
+                               the host-failure messages build and validation both classify
   stage20_triage/              verdict.py: TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
@@ -35,11 +37,23 @@ src/taskforge/
 Each pipeline stage is a package named `stageNN_<name>`, numbered by tens in pipeline order:
 proposal 10, triage 20, author 30, build 40, validate 50, review 60. The gaps leave room to insert a
 stage later without renumbering. A stage imports from lower-numbered stages and from the shared
-modules (`capability`, `content_hash`, `ledger`, `llm`), and the shared modules import no stage.
-The coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It may
-import any stage and shared module, and `tests/test_imports.py` refuses an import of it from any
-other package, along with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
-and step over JSONL ledgers.
+modules (`capability`, `content_hash`, `ledger`, `llm`, `sandbox`), and the shared modules import no
+stage. The coordinator package, `stage_coordinator`, runs the stages in order and is unnumbered. It
+may import any stage and shared module, and `tests/test_imports.py` refuses an import of it from any
+other package, along with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time
+and tokens per kind and step over JSONL ledgers. `scripts/build_image_job.py` runs on Iris and
+documents its submit command in its docstring: it builds a directory's `DockerBuild` context with
+`taskforge.sandbox.image_builder` and prints the pinned registry digest.
+
+## Machine backends
+
+Call `sandbox.factories.machine_factories(backends, controller_url)` with the exact shellbox
+`Backend` values the run uses. A requested backend that cannot start on the host raises during
+factory construction; the selection never silently shrinks. Supply a controller URL exactly when
+selecting `Backend.GVISOR`. A ShellSim-only run does not probe Docker or the local sandbox.
+
+Custom-image builds remain available through `sandbox.image_builder`; selecting a backend and
+choosing or building its image are separate caller decisions.
 
 ## Model calls
 
