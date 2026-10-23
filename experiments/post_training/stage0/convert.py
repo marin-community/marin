@@ -28,7 +28,12 @@ import fsspec
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
-from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
+from experiments.post_training.chat_template import (
+    FAMILY_TOKEN_MAPS,
+    FAMILY_TOKENIZER_REVISIONS,
+    shared_template,
+    template_sha256,
+)
 
 Message = dict[str, Any]
 MAX_RENDERED_TOKENS = 32768
@@ -136,20 +141,12 @@ def _default_render_lengths(messages: list[Message]) -> dict[str, int]:
     """Rendered token lengths per family, through the pinned real tokenizers."""
     lengths = {}
     for family in _LENGTH_FILTER_FAMILIES:
-        repo, revision = _FAMILY_TOKENIZER_REVISIONS[family]
+        repo, revision = FAMILY_TOKENIZER_REVISIONS[family]
         tokenizer = AutoTokenizer.from_pretrained(repo, revision=revision)
         lengths[family] = len(
             tokenizer.apply_chat_template(messages, chat_template=shared_template(FAMILY_TOKEN_MAPS[family]))
         )
     return lengths
-
-
-_FAMILY_TOKENIZER_REVISIONS = {
-    "grug": ("open-athena/snowball-67b-a2b-base-262k-qk175", "11c9430da3075ef4596f92ee0af142d9d08215c1"),
-    "qwen3_moe": ("Qwen/Qwen3-30B-A3B-Base", "1b75feb79f60b8dc6c5bc769a898c206a1c6a4f9"),
-    "qwen3_5_moe": ("Qwen/Qwen3.5-35B-A3B-Base", "0f0813072d2358973511097385626f21fcb6d422"),
-    "nemotron_h": ("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-Base-BF16", "e0ac9ee3dfd02be21b5479edfc2f671ed269d0a2"),
-}
 
 
 def row_id(source: str, messages: list[Message]) -> str:
