@@ -13,8 +13,6 @@ graders, streaming execution, FineStore output and resume support. Marin owns
 serving and evaluation orchestration. A local GraphWalks adapter adds the pinned
 `openai/graphwalks` dataset to the shared execution and grading flow, selecting
 examples with the served tokenizer and preserving their output budgets.
-A shared [LAB-Bench source](eval/chat_benchmarks/LABBench/README.md) registers
-ProtocolQA, SeqQA and CloningScenarios as separate no-tools evaluations.
 Database tracking, Curator dispatch,
 W&B reporting, standalone serving launchers, benchmark websites and unused
 leaderboard outputs have been removed. Nested benchmark packages retain only

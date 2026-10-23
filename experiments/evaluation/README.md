@@ -26,7 +26,7 @@ Choose exactly one model source:
 - `--model-config <path>`: a YAML or JSON file with the same schema.
 
 Pass a suite name or comma-separated evaluation keys to `--evals`. Suites are
-`smoke`, `core`, `nlp`, `chat`, `math`, `code`, `agentic`, and `lab-bench-no-tools`.
+`smoke`, `core`, `nlp`, `chat`, `math`, `code`, and `agentic`.
 [evals.py](evals.py) lists their members and the available evaluation keys.
 
 To use evaluation files, repeat `--evalchemy-config` or `--harbor-config`.

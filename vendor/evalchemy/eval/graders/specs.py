@@ -18,7 +18,6 @@ from eval.graders.programs import crux, live_code, program
 from eval.graders.judged import equivalence_judge, equivalence_label, judge_failed, simpleqa, simpleqa_label
 from eval.graders.structured import nonce_similarity
 from eval.graders.graphwalks import graphwalks
-from eval.graders.labbench import labbench
 
 
 def exact_match(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
@@ -28,7 +27,6 @@ def exact_match(spec: EvalSpec, responses: Sequence[Any]) -> Grade:
 
 
 GRADERS = {
-    "labbench": Grader(labbench),
     "graphwalks": Grader(graphwalks),
     "exact_match": Grader(exact_match), "boxed_math": Grader(boxed_math), "gsm8k": Grader(gsm8k),
     "letter_choice": Grader(letter_choice), "mmlu_choice": Grader(mmlu_choice),

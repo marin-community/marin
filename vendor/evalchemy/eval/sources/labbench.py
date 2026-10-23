@@ -1,4 +1,4 @@
-"""Public LAB-Bench text components with deterministic Marin answer extraction."""
+"""Public LAB-Bench text components with shared multiple-choice scoring."""
 
 import hashlib
 import random
@@ -16,8 +16,7 @@ from rigging.filesystem.factory import open_url
 
 DATASET = "futurehouse/lab-bench"
 REVISION = "5c77cec648430f30611808808861eb86f81d5eaa"
-PROTOCOL_VERSION = "marin-labbench-no-tools-v1"
-ABSTENTION = "Insufficient information to answer the question"
+PROTOCOL_VERSION = "marin-labbench-no-tools-v2"
 PROMPT = """The following is a multiple choice question about biology.
 Please answer by responding with the letter of the correct answer.
 Think step by step.
@@ -27,10 +26,7 @@ Question: {question}
 Options:
 {answers}
 
-You MUST include the letter of the correct answer within the following tags: [ANSWER] and [/ANSWER].
-For example, '[ANSWER]<answer>[/ANSWER]', where <answer> is the correct letter.
-Always answer in exactly this format of a single letter between the two tags, even if you are unsure.
-We require this because we use automatic parsing."""
+End your response with "Answer: X", where X is the letter of your chosen answer."""
 
 
 @dataclass(frozen=True)
@@ -48,7 +44,7 @@ COMPONENTS = MappingProxyType({
 
 def prepare_question(row: dict, subset: str, seed: int) -> dict:
     """Shuffle all choices per item, independently of execution order or run caps."""
-    choices = [row["ideal"], ABSTENTION, *row["distractors"]]
+    choices = [row["ideal"], *row["distractors"]]
     if len(choices) > len(ascii_uppercase):
         raise ValueError(f"Too many answer choices for {row['id']}")
     permutation = list(range(len(choices)))
@@ -62,17 +58,15 @@ def prepare_question(row: dict, subset: str, seed: int) -> dict:
         "id": row["id"],
         "prompt": PROMPT.format(question=question, answers=answers),
         "answer": letters[permutation.index(0)],
-        "abstention": letters[permutation.index(1)],
-        "letters": letters,
         "subtask": row["subtask"],
     }
 
 
 class LABBenchBenchmark(BaseBenchmark):
     SOURCE = SourceRef(DATASET, "train", REVISION)
-    METRICS = ("accuracy", "precision", "attempted_answer_coverage", "abstention_rate", "parse_failure_rate")
+    METRICS = ("accuracy",)
     PRIMARY_METRIC = "accuracy"
-    REDUCER = ReducerSpec(name="labbench", trial_metric=None)
+    REDUCER = ReducerSpec(trial_metric=None)
 
     def __init__(self, logger=None, system_instruction=None):
         if system_instruction is not None:
@@ -101,15 +95,15 @@ class LABBenchBenchmark(BaseBenchmark):
         specs = list(text_specs(
             records, options,
             prompt=lambda row: row["prompt"], target=lambda row: row["answer"],
-            grader="labbench", generation_kwargs={"temperature": 0.0, "do_sample": False, "max_gen_toks": 8192},
-            reference=lambda row: {"abstention": row["abstention"], "letters": row["letters"]},
+            grader="letter_choice", generation_kwargs={"temperature": 0.0, "do_sample": False, "max_gen_toks": 8192},
+            reference=lambda row: {"extractor": "hle"},
             tags=lambda row: {"subtask": row["subtask"]},
         ))
         context = require_context_length(options.context_length, task_name=options.task)
         if options.prompt_token_count is None:
             raise ValueError("LAB-Bench requires the served tokenizer for context validation")
         # Validate the entire selected cohort before sending any requests. Do not silently
-        # truncate questions, lower their output budgets, or score overflow as abstention.
+        # truncate questions, lower their output budgets, or score overflow as an incorrect answer.
         for spec in specs:
             request = spec.requests[0]
             ensure_context_window(
