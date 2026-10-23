@@ -37,7 +37,7 @@ from eval.contracts.prompt_length import (  # noqa: E402
     load_prompt_lengths,
 )
 
-CHAT_BENCHMARKS_DIR = REPO_ROOT / "eval" / "chat_benchmarks"
+from eval.sources import SOURCES  # noqa: E402
 
 # A benchmark that downloads a multi-gigabyte dataset, or waits on something that
 # never arrives, must not stall the whole sweep: it is recorded as unmeasured with
@@ -46,8 +46,8 @@ DEFAULT_TIMEOUT = 900
 
 
 def registered_benchmarks() -> list[str]:
-    """Return every benchmark dir the driver would load."""
-    return sorted(path.parent.name for path in CHAT_BENCHMARKS_DIR.glob("*/eval_instruct.py"))
+    """Return every registered task name the driver would load."""
+    return sorted(SOURCES)
 
 
 @contextlib.contextmanager

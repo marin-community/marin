@@ -98,6 +98,21 @@ uv run python -m experiments.evaluation.cli launch \
   --evals smoke
 ```
 
+Run a capped LAB-Bench no-tools smoke across ProtocolQA, SeqQA and CloningScenarios:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-0.6b --evals lab-bench-no-tools --limit 3 \
+  --platform gpu --accelerator H100x1 --federated_cluster cw-us-east-02a
+```
+
+Each component writes a separate evaluation record and EvalDash column. The cap
+applies to each component; omit it for all 108/600/33 public questions. These are
+development evaluations, outside the canonical release panels. The
+[LAB-Bench protocol](https://github.com/marin-community/marin/blob/main/vendor/evalchemy/eval/chat_benchmarks/LABBench/README.md)
+specifies deterministic parsing, abstention, context-overflow handling and
+the differences from the author harness. Smoke results must be labeled partial.
+
 Run the 14-task NLP suite on a base model. This suite works with base and instruct models:
 
 ```bash

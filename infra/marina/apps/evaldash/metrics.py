@@ -56,6 +56,7 @@ SMOKE_SUFFIX = "-smoke"
 # launcher's suite membership (experiments/evaluation/evals.py). Experiment catalogs are not part of
 # applet releases. An eval not listed here falls into "Other".
 EVAL_SUITES: dict[str, tuple[str, ...]] = {
+    "LAB-Bench (no tools)": ("lab-bench-protocolqa", "lab-bench-seqqa", "lab-bench-cloning"),
     "NLP": (
         "mmlu",
         "arc-challenge",

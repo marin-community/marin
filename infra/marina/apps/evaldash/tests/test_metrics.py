@@ -146,6 +146,33 @@ def test_panel_takes_the_latest_valid_result_for_each_benchmark_across_cohorts()
     assert row["cells"]["gsm8k-0shot"]["version"] == "v1"
 
 
+def test_labbench_components_keep_separate_accuracy_columns():
+    scores = {"lab-bench-protocolqa": 0.25, "lab-bench-seqqa": 0.5, "lab-bench-cloning": 0.75}
+    records = [
+        _record(
+            "m",
+            name,
+            None,
+            "2026-01-01T00:00:00+00:00",
+            score,
+            primary_metric="accuracy",
+            metric_kind=MetricKind.BINARY,
+            metric="accuracy",
+            coverage={
+                name: TaskCoverage(n_benchmark=ITEMS, n_attempted=ITEMS, n_scored=ITEMS, n_correct=int(score * ITEMS))
+            },
+        )
+        for name, score in scores.items()
+    ]
+    for record in records:
+        record.metrics[record.evaluation.name].update(precision=1.0, abstention_rate=0.5, parse_failure_rate=0.1)
+    panel = build_panel(records, panel_request(benchmarks=tuple(scores)))
+    (row,) = panel["rows"]
+    assert {name: cell["value"] for name, cell in row["cells"].items()} == scores
+    assert eval_suites(set(scores)) == [{"suite": "LAB-Bench (no tools)", "evals": sorted(scores)}]
+    assert all(protocol["metric"] == "accuracy" for protocol in panel["protocols"].values())
+
+
 def test_a_row_is_dated_by_its_newest_contributing_cell():
     records = [
         _record("m", "gsm8k-0shot", "v1", "2026-01-01T00:00:00+00:00", 0.30),

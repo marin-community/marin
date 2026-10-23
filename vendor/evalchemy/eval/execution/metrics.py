@@ -125,6 +125,12 @@ class SourceMetrics:
                     metrics[f"accuracy_{group}_std_err"] = math.sqrt(sum((score - value) ** 2 for score in trials) / denominator) if denominator > 0 else 0.0
             if "accuracy" in accumulator.counts:
                 metrics[f"count_{group}"] = accumulator.counts["accuracy"]
+        if self.policy.name == "labbench":
+            metrics.update(
+                num_attempted_answers=self.means.sums["attempted_answer_coverage"],
+                num_abstained=self.means.sums["abstention_rate"],
+                num_parse_failures=self.means.sums["parse_failure_rate"],
+            )
         if self.policy.name == "classification":
             correct = self.means.sums["accuracy"]
             incorrect = self.means.sums["incorrect"]

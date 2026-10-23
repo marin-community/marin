@@ -9,6 +9,7 @@ from pathlib import Path
 from types import ModuleType
 
 from lm_eval.tasks import TaskManager as LMEvalTaskManager
+from eval.sources import SOURCES
 
 from .preflight import ResourceRequirement
 from .task_outcome import TaskRoute
@@ -54,11 +55,10 @@ def build_task_contract_registry(
     return contracts
 
 
-def discover_task_contracts(custom_root: Path, lm_eval_include_dir: Path) -> tuple[TaskContract, ...]:
-    """Discover packaged custom modules and all names accepted by lm-eval."""
-    custom_names = {path.parent.name for path in custom_root.glob("*/eval_instruct.py")}
+def discover_task_contracts(lm_eval_include_dir: Path) -> tuple[TaskContract, ...]:
+    """Discover registered task names, including names sharing a source module."""
     lm_eval_names = set(LMEvalTaskManager(include_path=[str(lm_eval_include_dir)]).all_tasks)
-    return build_task_contract_registry(custom_names, lm_eval_names)
+    return build_task_contract_registry(SOURCES, lm_eval_names)
 
 
 def find_custom_benchmark_classes(

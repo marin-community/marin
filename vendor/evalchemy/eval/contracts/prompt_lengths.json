@@ -215,6 +215,9 @@
     }
   },
   "unmeasured": {
+    "LABBenchProtocolQA": "Pinned public component; the complete selected cohort is checked with the served tokenizer and explicit output budget before generation.",
+    "LABBenchSeqQA": "Pinned public component; the complete selected cohort is checked with the served tokenizer and explicit output budget before generation.",
+    "LABBenchCloning": "Pinned public component; the complete selected cohort is checked with the served tokenizer and explicit output budget before generation.",
     "GraphWalks": "Context-selected pinned dataset; prompt tokens and gold-dependent output budgets are computed per example with the served model tokenizer.",
     "LiveBench": "IndexError: list index out of range",
     "MRCR": "MissingContextLengthError: MRCR requires an explicit max_length so unsupported examples can be excluded",
