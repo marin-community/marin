@@ -100,10 +100,19 @@ raw notebook entries.
 Build contribution branches from current Marin and extract the chosen source
 changes. Leave notebook files, abandoned variants, and archive CI changes in
 logbooks. Split independent reusable fixes into their own PRs when useful.
+
+Before committing the extracted changes, have a separate, fresh reviewer
+inspect every piece of the proposed contribution, including code,
+configuration, and tests. For each piece, ask: will we use and maintain this
+going forward, or is it a historical artifact of the research? Keep material
+whose only purpose is to document or reproduce past trials in the research
+branch. Producing the final experiment result does not by itself justify
+promoting an artifact into Marin.
+
 Validate the extracted code in its contribution branch; results from the
 research branch do not establish that the extracted version works.
 
-Finish the issue with the selected approach, supporting evidence, rejected
+Finish the issue with the decision, supporting evidence, rejected
 alternatives and their reasons, remaining uncertainty, and links to code PRs.
 Record whether those PRs are open or merged. Preserve the research branch and
 its index entry even if every attempted approach was rejected.
