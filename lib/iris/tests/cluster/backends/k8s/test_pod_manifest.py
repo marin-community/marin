@@ -14,10 +14,11 @@ from iris.cluster.backends.k8s.tasks import (
     K8sTaskProvider,
     PodConfig,
 )
-from iris.cluster.config import TaskOutputPolicy
+from iris.cluster.config import EgressAllowlistConfig, TaskOutputPolicy
 from iris.cluster.controller.reconcile.snapshot import TaskUpdate
 from iris.cluster.controller.task_state import RunningTaskEntry
-from iris.cluster.platforms.k8s.constants import EGRESS_LABEL
+from iris.cluster.egress import parse_egress_rules
+from iris.cluster.platforms.k8s.constants import EGRESS_LABEL, RDMA_RESOURCE
 from iris.cluster.platforms.k8s.coreweave_topology import (
     NVL72_GPUS_PER_NODE,
     RACK_SIZE,
@@ -82,7 +83,13 @@ def _dispatch(
         updates = provider.sync(make_batch(tasks_to_run=[request]))
         resources = {
             resource: deepcopy(k8s.list_json(resource))
-            for resource in (K8sResource.PODS, K8sResource.CONFIGMAPS, K8sResource.PDBS)
+            for resource in (
+                K8sResource.PODS,
+                K8sResource.CONFIGMAPS,
+                K8sResource.PDBS,
+                K8sResource.CILIUM_NETWORK_POLICIES,
+                K8sResource.SECRETS,
+            )
         }
     finally:
         provider.close()
@@ -1121,6 +1128,92 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert [c["name"] for c in spec["containers"]] == ["task"]
     assert spec["initContainers"] == []
     assert manifest["metadata"]["labels"][EGRESS_LABEL] == label
+
+
+def _allowlist_request(
+    num_tasks: int = 1, gpus: int = 0, rules: Sequence[str] = (), attempt_uid: str = "0123456789abcdef"
+) -> job_pb2.RunTaskRequest:
+    req = make_run_req("/my-job/task-0", num_tasks=num_tasks, attempt_uid=attempt_uid)
+    req.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
+    req.egress_allow.extend(parse_egress_rules(rules))
+    if gpus:
+        req.resources.device.gpu.CopyFrom(job_pb2.GpuDevice(variant="H100", count=gpus))
+    return req
+
+
+def _allowlist_config() -> PodConfig:
+    return pod_config(controller_address="http://ctrl:8080", host_network=True, egress_allowlist=EgressAllowlistConfig())
+
+
+@pytest.mark.parametrize(
+    ("num_tasks", "gpus", "host_network"),
+    [
+        pytest.param(1, 0, False, id="cpu"),
+        pytest.param(1, 8, False, id="single-host-gpu"),
+        pytest.param(2, 8, True, id="multi-host-gpu"),
+    ],
+)
+def test_allowlist_pod_leaves_the_host_network_unless_it_needs_infiniband(num_tasks, gpus, host_network):
+    """Pod policy cannot see a host-network pod, so only a multi-host GPU job, which needs InfiniBand, keeps it."""
+    updates, resources = _dispatch(_allowlist_request(num_tasks, gpus, rules=["api.openai.com"]), _allowlist_config())
+    assert updates == []
+    [manifest] = resources[K8sResource.PODS]
+    spec = manifest["spec"]
+    task = spec["containers"][0]
+    env = {e["name"]: e.get("value") for e in task["env"]}
+
+    assert spec.get("hostNetwork", False) == host_network
+    assert (RDMA_RESOURCE in task["resources"].get("limits", {})) == host_network
+    assert manifest["metadata"]["labels"].get(EGRESS_LABEL) == (None if host_network else "allowlist")
+    # A policy the pod cannot be subject to is not created.
+    assert len(resources[K8sResource.CILIUM_NETWORK_POLICIES]) == (0 if host_network else 1)
+    # Unlike a sandbox, an allowlisted task stays a cluster citizen.
+    assert env["IRIS_CONTROLLER_ADDRESS"] == "http://ctrl:8080"
+    assert any(c["name"] == "log-shipper" for c in spec["initContainers"])
+
+
+def test_allowlist_job_rules_reach_only_their_own_attempt():
+    updates, resources = _dispatch(
+        _allowlist_request(rules=["api.openai.com:443", "*.example.com", "203.0.113.0/24"]), _allowlist_config()
+    )
+    # A resubmitted job reuses the task ID and attempt number while the earlier policy may still exist.
+    _, resubmitted = _dispatch(_allowlist_request(attempt_uid="fedcba9876543210"), _allowlist_config())
+    assert updates == []
+    [pod] = resources[K8sResource.PODS]
+    [other_pod] = resubmitted[K8sResource.PODS]
+    [policy] = resources[K8sResource.CILIUM_NETWORK_POLICIES]
+    [secret] = resources[K8sResource.SECRETS]
+    spec = policy["spec"]
+    selector = spec["endpointSelector"]["matchLabels"]
+    by_destination = {
+        next(iter(entry.values())): section.get("toPorts")
+        for section in spec["egress"]
+        for entry in [*section.get("toFQDNs", []), *section.get("toCIDRSet", [])]
+    }
+    dns_names = [
+        next(iter(name.values()))
+        for section in spec["egress"]
+        for port in section.get("toPorts", [])
+        for name in port.get("rules", {}).get("dns", [])
+    ]
+
+    # The policy selects this attempt's pod and no other, and is deleted with it.
+    assert selector.items() <= pod["metadata"]["labels"].items()
+    assert not selector.items() <= other_pod["metadata"]["labels"].items()
+    [owner] = policy["metadata"]["ownerReferences"]
+    assert (owner["kind"], owner["uid"]) == ("Pod", pod["metadata"]["uid"])
+    # The job has no secrets, but the pod still mounts its Secret: the provider
+    # writes it after the policy, so the containers start only once the policy exists.
+    secret_volumes = {v["secret"]["secretName"] for v in pod["spec"]["volumes"] if "secret" in v}
+    assert secret["metadata"]["name"] in secret_volumes
+    assert secret["metadata"]["ownerReferences"] == policy["metadata"]["ownerReferences"]
+    assert by_destination == {
+        "api.openai.com": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
+        "*.example.com": None,
+        "203.0.113.0/24": None,
+    }
+    # Cilium's DNS proxy refuses any name no policy lists, even one toFQDNs admits.
+    assert set(dns_names) == {"api.openai.com", "*.example.com"}
 
 
 def test_default_profile_off_the_cluster_network_keeps_cluster_env_but_no_cluster_route():

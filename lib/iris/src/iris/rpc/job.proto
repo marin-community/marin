@@ -677,9 +677,9 @@ enum ContainerProfile {
   // the intercepted guest kernel isolates the host. The task receives only the
   // job's own env_vars and Iris task identity: no cluster task_env or injected
   // secrets, no controller address, no shared node cache mounts, and no
-  // Kubernetes service account token. Its egress policy cannot be CLUSTER. The
-  // job must carry no workspace bundle. CPU-only (runsc cannot pass a GPU/TPU
-  // through). Not elevated.
+  // Kubernetes service account token. Its egress policy cannot be CLUSTER or
+  // ALLOWLIST. The job must carry no workspace bundle. CPU-only (runsc cannot
+  // pass a GPU/TPU through). Not elevated.
   CONTAINER_PROFILE_SANDBOX = 6;
 }
 
@@ -687,7 +687,10 @@ enum ContainerProfile {
 // workers, other tasks and the cloud metadata server, and a task under either
 // runs without the Kubernetes log-shipping and output-upload sidecars.
 enum EgressPolicy {
-  // Resolves to INTERNET for a SANDBOX job and CLUSTER for every other profile.
+  // Resolved by the controller that runs the job: INTERNET for a SANDBOX job;
+  // ALLOWLIST on a cluster whose allowlist is the default; CLUSTER otherwise. A
+  // child job inherits its parent's policy and adds the parent's rules to its
+  // own.
   EGRESS_POLICY_UNSPECIFIED = 0;
   // The cluster network: the node's host network where configured, the
   // controller, workers and other tasks. Not allowed for SANDBOX.
@@ -698,6 +701,28 @@ enum EgressPolicy {
   EGRESS_POLICY_INTERNET = 2;
   // No network beyond DNS on Kubernetes; loopback only on Docker workers.
   EGRESS_POLICY_NONE = 3;
+  // The cluster's internal services, and the domains and networks on the
+  // cluster's allowlist and the job's egress_allow rules. Kubernetes denies
+  // everything else, except for GPU jobs with more than one task, which keep
+  // host networking for InfiniBand and run unrestricted. Docker workers refuse
+  // DNS lookups of other names but do not filter connections. A Kubernetes
+  // cluster without Cilium runs the job under CLUSTER instead. Not allowed for
+  // SANDBOX.
+  EGRESS_POLICY_ALLOWLIST = 4;
+}
+
+// A destination an ALLOWLIST task may reach beyond the cluster's allowlist.
+message EgressRule {
+  oneof destination {
+    // A DNS name ("api.openai.com") or a pattern whose "*" stands for exactly
+    // one label ("*.openai.com" matches "api.openai.com", not "openai.com" or
+    // "a.b.openai.com").
+    string domain = 1;
+    // An IPv4 or IPv6 network in CIDR notation ("203.0.113.0/24").
+    string cidr = 2;
+  }
+  // TCP ports the rule admits. Empty admits every port and protocol.
+  repeated int32 ports = 3;
 }
 
 // ============================================================================
@@ -756,4 +781,8 @@ message RunTaskRequest {
   // that the task's own Iris client presents to the controller. Empty for a
   // profile that withholds it (SANDBOX) or a controller without a JWT signer.
   string task_token = 17;
+
+  // The job's destinations beyond the cluster allowlist. Workers apply them
+  // only under EGRESS_POLICY_ALLOWLIST.
+  repeated EgressRule egress_allow = 18;
 }
