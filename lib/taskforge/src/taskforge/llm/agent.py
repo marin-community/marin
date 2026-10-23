@@ -79,6 +79,17 @@ class AgentTool:
         }
 
 
+def clip_tool_output(text: str, *, limit: int = 2000, head: int | None = None, tail: int = 0) -> str:
+    """Keep a short reply whole, or retain its selected head and tail with a truncation marker."""
+    if len(text) <= limit:
+        return text
+    head = limit if head is None else head
+    if tail == 0:
+        return f"{text[:head]}..."
+    dropped = len(text) - head - tail
+    return f"{text[:head]}\n... [{dropped} characters dropped] ...\n{text[-tail:]}"
+
+
 class ReasoningReplay(StrEnum):
     """Whether replayed assistant turns of a ``run_agent`` loop carry their ``reasoning_content``."""
 
