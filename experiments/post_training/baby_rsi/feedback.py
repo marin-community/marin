@@ -11,6 +11,7 @@ instances for training, and held-out instances that only the evaluation sees.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterable, AsyncIterator, Iterable, Sequence
@@ -40,6 +41,8 @@ logger = logging.getLogger(__name__)
 SYNTHESIZED_TAG = "baby-rsi.synthesized"
 CAPABILITY_TAG_PREFIX = "capability:"
 SYNTHESIZED_LABEL_PREFIX = "synthesized:"
+HELD_OUT_MARKER = "held-out"
+"""The file in an idea's directory that marks a held-out idea, whose tasks the loop never trains on."""
 """The record label of a synthesized task: the prefix and its capability ID."""
 INSTANCE_TIMEOUT = 120.0
 
@@ -124,6 +127,8 @@ class SynthesisConfig:
     concurrency: int
     """Agent sessions at the same time."""
     output: StoragePath
+    held_out_idea_share: float
+    """The share of ideas whose tasks are never trained on: their probes measure transfer to unseen families."""
 
 
 async def generate_tasks(ideas: AsyncIterable[CapabilityIdea], config: SynthesisConfig) -> AsyncIterator[TaskSpec]:
@@ -137,7 +142,11 @@ async def generate_tasks(ideas: AsyncIterable[CapabilityIdea], config: Synthesis
                 result = await agentic.generate_tasks(idea, config.tasks_per_idea, config.agentic)
             logger.info("%s: %d tasks accepted, failure %s", idea.capability_id, len(result.tasks), result.failure)
             instances = [await _instances(accepted, config) for accepted in result.tasks]
-            write_session(config.output, result, [probes for _, probes in instances])
+            unseen = held_out_idea(idea, config.held_out_idea_share)
+            write_session(config.output, result, [probes for _, probes in instances], held_out=unseen)
+            if unseen:
+                logger.info("%s is held out: its tasks are only probes", idea.capability_id)
+                return
             for accepted, (training, _) in zip(result.tasks, instances, strict=True):
                 for task in (accepted.task, *training):
                     made.put_nowait(synthesized(task, idea))
@@ -167,6 +176,11 @@ async def generate_tasks(ideas: AsyncIterable[CapabilityIdea], config: Synthesis
         runner.cancel()
         with suppress(asyncio.CancelledError):
             await runner
+
+
+def held_out_idea(idea: CapabilityIdea, share: float) -> bool:
+    """Whether ``idea`` falls in the held-out ``share`` of ideas, by a stable hash of its capability ID."""
+    return int(hashlib.sha256(idea.capability_id.encode()).hexdigest()[:8], 16) < share * 2**32
 
 
 def training_ids(accepted: AcceptedTask, count: int) -> list[str]:
@@ -215,11 +229,13 @@ def capability_of(task: TaskSpec) -> str | None:
     )
 
 
-def write_session(output: StoragePath, result: agentic.AgentResult, probes: Sequence[Sequence[TaskSpec]]) -> None:
+def write_session(
+    output: StoragePath, result: agentic.AgentResult, probes: Sequence[Sequence[TaskSpec]], *, held_out: bool
+) -> None:
     """The idea, the agent's report and spend, and each accepted task with its program, workspace and probes.
 
-    ``task.json`` comes last in a task's directory and ``idea.json`` last in the idea's, so that a resumed run reads
-    only complete records.
+    A held-out idea gets the ``HELD_OUT_MARKER`` file. ``task.json`` comes last in a task's directory and
+    ``idea.json`` last in the idea's, so that a resumed run reads only complete records.
     """
     directory = output / "ideas" / result.idea.capability_id
     summary = {
@@ -241,6 +257,8 @@ def write_session(output: StoragePath, result: agentic.AgentResult, probes: Sequ
         lines = "".join(synthesized(probe, result.idea).model_dump_json() + "\n" for probe in task_probes)
         (task_directory / "probes.jsonl").write_text(lines)
         (task_directory / "task.json").write_text(accepted.task.model_dump_json(indent=1))
+    if held_out:
+        (directory / HELD_OUT_MARKER).write_text("")
     (directory / "idea.json").write_text(result.idea.model_dump_json(indent=1))
 
 
