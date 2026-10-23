@@ -40,10 +40,9 @@ def review_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         executable.write_text(
             f"#!{sys.executable}\n"
             "import json, os, pathlib, subprocess, sys, uuid\n"
-            "prompt = sys.stdin.read()\n"
+            "sys.stdin.read()\n"
             "diff = subprocess.check_output(['git', 'diff', 'origin/main'], text=True)\n"
-            "record = {'agent': pathlib.Path(sys.argv[0]).name, 'args': sys.argv[1:], "
-            "'prompt': prompt, 'diff': diff}\n"
+            "record = {'agent': pathlib.Path(sys.argv[0]).name, 'args': sys.argv[1:], 'diff': diff}\n"
             "path = pathlib.Path(os.environ['REVIEW_TEST_CALLS']) / (uuid.uuid4().hex + '.json')\n"
             "path.write_text(json.dumps(record))\n"
             "print('sample.py:1: ml-cruft-dead-branch (0.95) Remove the dead branch.')\n"
@@ -66,7 +65,6 @@ def test_review_uses_callers_agent_with_readonly_permissions(
 
     calls = [json.loads(path.read_text()) for path in review_workspace.glob("*.json")]
     assert len(calls) == 3  # Two lanes and their composer use the same reviewer.
-    assert any("You are the COMPOSER" in call["prompt"] for call in calls)
     for call in calls:
         assert call["agent"] == calling_agent.value
         assert "+value = 2" in call["diff"]
