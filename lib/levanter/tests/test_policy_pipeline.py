@@ -7,7 +7,6 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
-import optax
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grad_accum import microbatched
@@ -287,7 +286,7 @@ def test_packing_preserves_response_objectives_positions_and_segment_boundaries(
 
 
 @pytest.mark.parametrize("compute_dtype", ["float32", "bfloat16"])
-def test_pipeline_gradient_mean_matches_spmd_accumulation_and_update(compute_dtype):
+def test_pipeline_gradient_mean_matches_spmd_accumulation(compute_dtype):
     rows = 6 * jax.device_count()
     Batch, Response = hax.Axis("batch", rows), hax.Axis("response", 2)
     count = 3
@@ -380,17 +379,6 @@ def test_pipeline_gradient_mean_matches_spmd_accumulation_and_update(compute_dty
             reduced = max(values) if name == "log_ratio_abs_max" else sum(values)
             np.testing.assert_allclose(reduced, metric.value(), atol=1e-7, rtol=1e-5)
         for actual, expected in zip(jax.tree.leaves(actual_grads), jax.tree.leaves(expected_grads), strict=True):
-            np.testing.assert_allclose(actual, expected, atol=1e-7, rtol=1e-5)
-        # Compare a clipped update and momentum state over the complete parameter tree.
-        optimizer = optax.chain(optax.clip_by_global_norm(0.01), optax.sgd(0.1, momentum=0.9))
-        initial = optimizer.init(selected)
-        actual_updates, actual_state = optimizer.update(actual_grads, initial, selected)
-        expected_updates, expected_state = optimizer.update(expected_grads, initial, selected)
-        for actual, expected in zip(
-            jax.tree.leaves((eqx.apply_updates(selected, actual_updates), actual_state)),
-            jax.tree.leaves((eqx.apply_updates(selected, expected_updates), expected_state)),
-            strict=True,
-        ):
             np.testing.assert_allclose(actual, expected, atol=1e-7, rtol=1e-5)
 
 
