@@ -52,6 +52,7 @@ _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
 _OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 _PI_ACP_REGISTRY_ID = "pi-acp"
+_PI_VERSION = "0.87.0"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
@@ -267,6 +268,8 @@ def _agent_config(
     kwargs: Mapping[str, object],
 ) -> AgentConfig:
     runtime_kwargs = {**kwargs, "api_base": endpoint_url}
+    if agent.name == AgentName.PI:
+        runtime_kwargs["version"] = _PI_VERSION
     if agent.name == _OPENCODE_AGENT:
         runtime_kwargs["opencode_config"] = _opencode_config(kwargs.get("opencode_config", {}), endpoint_url)
     runtime_env = agent.env
