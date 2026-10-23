@@ -42,7 +42,9 @@ async def fake_job(root: StoragePath, skip: str, stop: asyncio.Event) -> None:
                     continue
                 done.add(seq)
                 if f'"id":"{skip}"' in task_json:
-                    (root / SKIPPED / seq_name(seq, ".json")).write_text(Skipped(uid=str(seq), reason="test").model_dump_json())
+                    (root / SKIPPED / seq_name(seq, ".json")).write_text(
+                        Skipped(uid=str(seq), reason="test").model_dump_json()
+                    )
                     continue
                 rollout = GradedRollout(Rollout(f"run-{seq}", (), "stop"), GradeResult(Outcome.GRADED, 1.0, None))
                 group = GradedGroup(uid=str(seq), policy_step=seq // 2, rollouts=(rollout,))
@@ -57,7 +59,9 @@ async def run(root: StoragePath, ids: list[str], groups: int) -> list[str]:
     trained = [group async for group in skyrl_train(from_iterable(task(i) for i in ids), config)]
     stop.set()
     await job
-    assert all(group.model == f"skyrl-step-{int(group.rollouts[0].rollout.run_id.split('-')[1]) // 2}" for group in trained)
+    assert all(
+        group.model == f"skyrl-step-{int(group.rollouts[0].rollout.run_id.split('-')[1]) // 2}" for group in trained
+    )
     return [group.task.id for group in trained]
 
 
