@@ -137,9 +137,18 @@ def build_kvstore_spec(path: str) -> dict:
             # tensorstore from trying (and failing) to discover the region via HEAD bucket.
             spec["aws_region"] = "us-east-1"
 
-        # Supplying credentials explicitly reduces noisy AWS CRT logs in containers.
+        # TensorStore's default chain does not reliably load a mounted shared
+        # credentials file in a task pod. Its profile provider also requires
+        # a readable config path, even if that config is empty.
         if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
             spec["aws_credentials"] = {"type": "environment"}
+        elif credentials_file := os.environ.get("AWS_SHARED_CREDENTIALS_FILE"):
+            spec["aws_credentials"] = {
+                "type": "profile",
+                "profile": os.environ.get("AWS_PROFILE") or "default",
+                "credentials_file": credentials_file,
+                "config_file": os.environ.get("AWS_CONFIG_FILE") or os.devnull,
+            }
 
         return spec
     elif parsed.scheme == "gs":
