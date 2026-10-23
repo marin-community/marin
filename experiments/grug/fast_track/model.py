@@ -184,7 +184,6 @@ _SKIP_ROUTER_SCORE = "skip_router_score"
 _HALT_SCALE = "halt_scale"
 _HALT_Z = "halt_z"
 _HALT_GATES = "halt_gates"
-_HALT_GATES_RAW = "halt_gates_raw"
 # The routed experts' down-projection grows by the halting-vote column plus zero padding to this width.
 _HALT_COLUMN_PAD = 8
 # Seed of the training-time uniforms of the binary halting gates (``halt_hard``), folded with the step.
@@ -204,7 +203,7 @@ _ROUTED_COMBINE = "routed_combine"
 _SAVED_ROUTED = "saved_routed"
 # Per-layer moe_compress / moe_shadow_width loss and metrics, stacked over layers like the router stats.
 _COMPRESS_LOSS = "compress_loss"
-_DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA, _HALT_Z)
+_DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA)
 _COMPRESS_PREFIX = "compress/"
 # Per-layer branch-output max |x| and RMS (``layer_output_stats``), stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
@@ -890,12 +889,6 @@ class GrugModelConfig:
     """Compute penalty ``lambda * mean(g)`` over the gated layers and loss tokens, ramped linearly from 0 over the
     first ``halt_penalty_ramp_frac`` of training."""
     halt_penalty_ramp_frac: float = 0.35
-    halt_floor: float = 0.0
-    """Training floor ``g_eff = f + (1 - f) g`` with ``f`` decaying linearly from this value to 0 at
-    ``halt_floor_frac`` of training (0: no floor)."""
-    halt_floor_frac: float = 0.2
-    halt_wrong_weight: float = 0.0
-    """The "low and wrong" term ``mu * mean((1 - g) * stop_gradient(CE_t))`` over gated layers and loss tokens."""
     halt_threshold: float | None = None
     """Outside training (no halt schedule), a gated layer with ``g < halt_threshold`` is skipped (scale 0)."""
     halt_hard: bool = False
@@ -1205,8 +1198,10 @@ class GrugModelConfig:
                 raise ValueError("halt_layers needs attn_res, the unrolled layer loop and a MoE")
             if layers != tuple(sorted(set(layers))) or not 1 <= layers[0] <= layers[-1] < self.num_layers:
                 raise ValueError(f"halt_layers must be increasing layers in 1..{self.num_layers - 1}, got {layers}")
-            if not 0.0 <= self.halt_floor < 1.0 or not 0.0 < self.halt_penalty_ramp_frac <= 1.0:
-                raise ValueError("halt_floor must be in [0, 1) and halt_penalty_ramp_frac in (0, 1]")
+            if not 0.0 < self.halt_penalty_ramp_frac <= 1.0:
+                raise ValueError("halt_penalty_ramp_frac must be in (0, 1]")
+            if self.attn_res_layer_backward != AttnResLayerBackward.SAVE:
+                raise ValueError("halt_layers needs attn_res_layer_backward=save (plain autodiff)")
             if self.halt_write == HaltWrite.UNIT and (not self.moe_ungated_relu2 or self.num_null_experts):
                 raise ValueError("halt_write=unit needs ungated ReLU^2 experts in one bank (no null experts)")
         if self.skip_router_layers:
@@ -5621,48 +5616,35 @@ def _strip_unread_weights(stats: dict[str, jax.Array], schedule: _BlockSchedule,
 
 
 HALT_THRESHOLDS = (0.1, 0.3, 0.5)
+_HALT_QUANTILES = (0.1, 0.25, 0.5, 0.75, 0.9)
 
 
-def halt_schedule(cfg: GrugModelConfig, step: jax.Array, total_steps: int) -> Float[Array, " 3"]:
-    """``(penalty weight, floor, step)`` of the halting gate at ``step``: ``halt_penalty`` ramped linearly from 0
-    over ``halt_penalty_ramp_frac`` of training, and ``halt_floor`` decaying linearly to 0 at ``halt_floor_frac``."""
+def halt_schedule(cfg: GrugModelConfig, step: jax.Array, total_steps: int) -> Float[Array, " 2"]:
+    """``(penalty weight, step)`` of the halting gate at ``step``: ``halt_penalty`` ramped linearly from 0 over
+    ``halt_penalty_ramp_frac`` of training."""
     frac = jnp.asarray(step, jnp.float32) / max(total_steps, 1)
     penalty = cfg.halt_penalty * jnp.clip(frac / cfg.halt_penalty_ramp_frac, 0.0, 1.0)
-    floor = cfg.halt_floor * jnp.clip(1.0 - frac / max(cfg.halt_floor_frac, 1e-9), 0.0, 1.0)
-    return jnp.stack([penalty, floor, jnp.asarray(step, jnp.float32)])
+    return jnp.stack([penalty, jnp.asarray(step, jnp.float32)])
 
 
 def _halt_terms(
-    cfg: GrugModelConfig,
-    gates: Float[Array, "G B S"],
-    raw: Float[Array, "G B S"],
-    schedule: Float[Array, " 3"],
-    loss_weight: Float[Array, "B S"],
-    token_ce: Float[Array, "B S"] | None,
+    cfg: GrugModelConfig, gates: Float[Array, "G B S"], schedule: Float[Array, " 2"], loss_weight: Float[Array, "B S"]
 ) -> tuple[jax.Array, dict[str, jax.Array]]:
-    """The halting gate's training loss (compute penalty plus the optional "low and wrong" term) and its logs:
-    per gated layer the mean, quantiles and fraction below each of ``HALT_THRESHOLDS`` of the raw gate."""
+    """The halting gate's compute penalty ``lambda * mean(g)`` and its logs: per gated layer the mean, quantiles and
+    fraction below each of ``HALT_THRESHOLDS`` of the gate."""
     weight = loss_weight.astype(jnp.float32)
     count = jnp.maximum(jnp.sum(weight), 1.0)
-    mean_gate = jnp.mean(gates, axis=0)
-    penalty = schedule[0] * jnp.sum(weight * mean_gate) / count
-    loss = penalty
-    metrics = {"train/halt/penalty_weight": schedule[0], "train/halt/floor": schedule[1]}
-    if token_ce is not None:
-        wrong = jnp.sum(weight * (1.0 - mean_gate) * jax.lax.stop_gradient(token_ce)) / count
-        loss = loss + cfg.halt_wrong_weight * wrong
-        metrics["train/halt/wrong_term"] = jax.lax.stop_gradient(wrong)
-    metrics["train/halt/penalty"] = jax.lax.stop_gradient(penalty)
-    sg_raw = jax.lax.stop_gradient(raw)
-    flat = reshard(sg_raw.reshape(sg_raw.shape[0], -1), P(None, None))
-    quantiles = jnp.quantile(flat, jnp.asarray([0.1, 0.25, 0.5, 0.75, 0.9]), axis=1)
+    penalty = schedule[0] * jnp.sum(weight * jnp.mean(gates, axis=0)) / count
+    metrics = {"train/halt/penalty_weight": schedule[0], "train/halt/penalty": jax.lax.stop_gradient(penalty)}
+    sg = jax.lax.stop_gradient(gates)
+    quantiles = jnp.quantile(reshard(sg.reshape(sg.shape[0], -1), P(None, None)), jnp.asarray(_HALT_QUANTILES), axis=1)
     for n, layer in enumerate(cfg.halt_layers):
-        metrics[f"train/halt/g_mean_L{layer}"] = jnp.sum(weight * sg_raw[n]) / count
-        for q, name in zip(quantiles[:, n], ("p10", "p25", "p50", "p75", "p90"), strict=True):
-            metrics[f"train/halt/g_{name}_L{layer}"] = q
+        metrics[f"train/halt/g_mean_L{layer}"] = jnp.sum(weight * sg[n]) / count
+        for q, level in zip(quantiles[:, n], _HALT_QUANTILES, strict=True):
+            metrics[f"train/halt/g_p{round(100 * level)}_L{layer}"] = q
         for tau in HALT_THRESHOLDS:
-            metrics[f"train/halt/frac_below_{tau:g}_L{layer}"] = jnp.sum(weight * (sg_raw[n] < tau)) / count
-    return loss, metrics
+            metrics[f"train/halt/frac_below_{tau:g}_L{layer}"] = jnp.sum(weight * (sg[n] < tau)) / count
+    return penalty, metrics
 
 
 class Transformer(eqx.Module):
@@ -5943,12 +5925,12 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 3"] | None = None,
+        halt_schedule: Float[Array, " 2"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``layer_gates`` (``layer_onset_gates`` at the train step) masks or ramps the delayed layers' AttnRes
         sources; None runs every layer fully on.
-        ``halt_schedule`` (``halt_schedule`` at the train step: penalty weight, floor) marks a training forward of
-        the halting gate: the floor applies and ``halt_threshold`` does not.
+        ``halt_schedule`` (``halt_schedule`` at the train step: penalty weight, step) marks a training forward of
+        the halting gate (sampled binary gates under ``halt_hard``; ``halt_threshold`` does not apply).
         ``extra_mlp_active`` (traced bool) turns on the ``extra_mlp_layers`` MLPs (off: no token reaches them).
         ``pre_norm_grad_probe`` (zeros ``[B, S]``) passes the stream entering ``final_norm`` through
         ``lm_head_grad_probe`` and adds each token's RMS of it as ``FINAL_NORM_INPUT_RMS_KEY``.
@@ -6135,7 +6117,7 @@ class Transformer(eqx.Module):
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 3"] | None = None,
+        halt_schedule: Float[Array, " 2"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -6228,35 +6210,27 @@ class Transformer(eqx.Module):
         stats_out: list[dict[str, jax.Array]] = []
         z_out: list[jax.Array] = []
         extra_state: dict[str, jax.Array] = {}
-        halt_gates: list[tuple[jax.Array, jax.Array]] = []  # (effective, raw) per gated layer
+        halt_gates: list[jax.Array] = []
 
         def halt_gate(i: int) -> jax.Array:
             """Gated layer ``i``'s output scale from the halting stream written by the layers below it."""
             assert self.halt_bias is not None and "halt_z" in extra_state
-            n = cfg.halt_layers.index(i)
-            step_gate = jax.nn.sigmoid(extra_state["halt_z"] + self.halt_bias[n])
-            raw = step_gate if "halt_g" not in extra_state else extra_state["halt_g"] * step_gate
-            extra_state["halt_g"] = raw
-            gate = raw
-            if halt_schedule is not None:
-                floor = halt_schedule[1]
-                gate = floor + (1.0 - floor) * raw
+            step_gate = jax.nn.sigmoid(extra_state["halt_z"] + self.halt_bias[cfg.halt_layers.index(i)])
+            gate = step_gate if "halt_g" not in extra_state else extra_state["halt_g"] * step_gate
+            extra_state["halt_g"] = gate
+            halt_gates.append(gate)
+            threshold = cfg.halt_threshold
             if not cfg.halt_hard:
-                if halt_schedule is None and cfg.halt_threshold is not None:
-                    gate = jnp.where(raw >= cfg.halt_threshold, raw, 0.0)
-                halt_gates.append((gate, raw))
-                return gate
+                return (
+                    gate if halt_schedule is not None or threshold is None else jnp.where(gate >= threshold, gate, 0.0)
+                )
             if halt_schedule is None:
-                threshold = 0.5 if cfg.halt_threshold is None else cfg.halt_threshold
-                scale = (raw >= threshold).astype(jnp.float32)
-            else:
-                if "halt_u" not in extra_state:
-                    key = jax.random.fold_in(jax.random.PRNGKey(_HALT_SEED), halt_schedule[2].astype(jnp.int32))
-                    extra_state["halt_u"] = jax.random.uniform(key, gate.shape, jnp.float32)
-                keep = (gate > extra_state["halt_u"]).astype(jnp.float32)
-                scale = keep + gate - jax.lax.stop_gradient(gate)
-            halt_gates.append((gate, raw))
-            return scale
+                return (gate >= (0.5 if threshold is None else threshold)).astype(jnp.float32)
+            if "halt_u" not in extra_state:
+                key = jax.random.fold_in(jax.random.PRNGKey(_HALT_SEED), halt_schedule[1].astype(jnp.int32))
+                extra_state["halt_u"] = jax.random.uniform(key, gate.shape, jnp.float32)
+            keep = (gate > extra_state["halt_u"]).astype(jnp.float32)
+            return keep + gate - jax.lax.stop_gradient(gate)
 
         def run_pass(state, pass_index, start=0):
             """One pass over the physical layers from ``start``, extending the history; returns the new state."""
@@ -6456,8 +6430,7 @@ class Transformer(eqx.Module):
             final_stats["attn_res_skip_router_frac"] = extra_state["router_frac"]
             final_stats[_SKIP_ROUTER_SCORE] = extra_state["router_score"]
         if halt_gates:
-            final_stats[_HALT_GATES] = jnp.stack([gate for gate, _ in halt_gates])
-            final_stats[_HALT_GATES_RAW] = jnp.stack([raw for _, raw in halt_gates])
+            final_stats[_HALT_GATES] = jnp.stack(halt_gates)
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
@@ -6890,9 +6863,9 @@ class Transformer(eqx.Module):
             out["skip_router_score"] = stats[_SKIP_ROUTER_SCORE]
         if _ENTROPY_PRED in stats:
             out["entropy_pred"] = stats[_ENTROPY_PRED]
-        if _HALT_GATES_RAW in stats:
+        if _HALT_GATES in stats:
             for n, layer in enumerate(self.config.halt_layers):
-                out[f"halt_g_L{layer}"] = stats[_HALT_GATES_RAW][n]
+                out[f"halt_g_L{layer}"] = stats[_HALT_GATES][n]
         return out
 
     def mid_head_diagnostics(self, token_ids: Int[Array, "B S"], mask: AttentionMask) -> dict[str, Float[Array, "B S"]]:
@@ -6932,7 +6905,7 @@ class Transformer(eqx.Module):
         head_grad_probe: Float[Array, "B S"] | None = None,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
-        halt_schedule: Float[Array, " 3"] | None = None,
+        halt_schedule: Float[Array, " 2"] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
         so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
@@ -6952,7 +6925,6 @@ class Transformer(eqx.Module):
             halt_schedule=halt_schedule,
         )
         halt_gates = router_metrics.pop(_HALT_GATES, None)
-        halt_raw = router_metrics.pop(_HALT_GATES_RAW, None)
         final_norm_rms = router_metrics.pop(FINAL_NORM_INPUT_RMS_KEY, None)
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         mid_hidden = router_metrics.pop(_MID_HIDDEN, None)
@@ -6970,7 +6942,7 @@ class Transformer(eqx.Module):
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        def lm_loss(h: jax.Array, reduction: str = reduction) -> jax.Array:
+        def lm_loss(h: jax.Array) -> jax.Array:
             head_in, lm_head = self._lm_head_operands(h, token_ids)
             ce = functools.partial(
                 fused_linear_softmax_cross_entropy_loss,
@@ -6992,13 +6964,7 @@ class Transformer(eqx.Module):
             raw_clip = jnp.inf if clip is None else clip / jnp.maximum(jnp.sum(loss_weight.astype(jnp.float32)), 1.0)
             head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
         halt_train = halt_gates is not None and train_terms and halt_schedule is not None
-        token_ce = None
-        if halt_train and self.config.halt_wrong_weight:
-            # The "low and wrong" term weights each token by its own loss: score per token, then average.
-            token_ce = lm_loss(head_in, "none")
-            cross_entropy_loss = jnp.sum(token_ce) / jnp.maximum(jnp.sum(loss_weight), 1.0)
-        else:
-            cross_entropy_loss = lm_loss(head_in)
+        cross_entropy_loss = lm_loss(head_in)
         replay_loss = None
         if head_replay is not None:
             # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
@@ -7072,10 +7038,8 @@ class Transformer(eqx.Module):
         if compress_loss is not None and train_terms:
             loss = loss + jnp.sum(compress_loss).astype(loss_dtype)
         if halt_train:
-            assert halt_gates is not None and halt_raw is not None and halt_schedule is not None
-            halt_loss, halt_metrics = _halt_terms(
-                self.config, halt_gates, halt_raw, halt_schedule, loss_weight, token_ce
-            )
+            assert halt_gates is not None and halt_schedule is not None
+            halt_loss, halt_metrics = _halt_terms(self.config, halt_gates, halt_schedule, loss_weight)
             loss = loss + halt_loss.astype(loss_dtype)
             mid_metrics = {**mid_metrics, **halt_metrics}
         entropy_metrics: dict[str, jax.Array] = {}
