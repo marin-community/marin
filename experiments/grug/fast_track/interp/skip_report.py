@@ -399,6 +399,7 @@ def main() -> None:
         router3_proxy_entropy=z["router3_proxy_entropy"].astype(np.float32)[w],
         neg_router3_proxy_max=-z["router3_proxy_max"].astype(np.float32)[w],
         cur_seen=ctx["cur_seen"][w].astype(np.float32),
+        induction_available=ctx["ind_avail"][w].astype(np.float32),
         log_pos=np.log1p(ctx["pos"][w]).astype(np.float32),
         cur_freq_rank=np.log1p(freq_rank[cur]).astype(np.float32),
     )

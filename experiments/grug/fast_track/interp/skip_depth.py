@@ -44,7 +44,8 @@ def exit_hiddens(model, tokens, seg, exits: tuple[int, ...]) -> tuple[jax.Array,
         skip = LayerSkip(tuple(range(k, layers)), jnp.zeros(tokens.shape, bool))
         h, _ = model(tokens, mask=mask, layer_skip=skip)
         outs.append(h)
-    return full, outs
+    # One device: replicated arrays combine with the replicated heads without sharding rules.
+    return forward.replicate(full), forward.replicate(outs)
 
 
 def head_logp(params: dict, k: int, h: jax.Array) -> jax.Array:
@@ -55,7 +56,8 @@ def head_logp(params: dict, k: int, h: jax.Array) -> jax.Array:
 
 
 def lens_logp(model, h: jax.Array) -> jax.Array:
-    logits = jnp.einsum("bsd,dv->bsv", h, model.output_proj, preferred_element_type=jnp.float32)
+    w = forward.replicate(model.output_proj)
+    logits = jnp.einsum("bsd,dv->bsv", h, w, preferred_element_type=jnp.float32)
     return jax.nn.log_softmax(forward.soft_cap(logits), axis=-1)
 
 
@@ -83,7 +85,7 @@ def main() -> None:
         # The run's eval path: dropless local MoE.
         model = _to_dropless_local(common.compute_model(params), implementation=dropless_moe_implementation(cfg))
         d = cfg.hidden_dim
-        w = jnp.asarray(model.output_proj, jnp.float32)
+        w = forward.replicate(jnp.asarray(model.output_proj, jnp.float32))
         n = len(exits)
         heads = dict(
             a=jnp.broadcast_to(jnp.eye(d, dtype=jnp.float32), (n, d, d)),
@@ -103,8 +105,8 @@ def main() -> None:
         def step(heads, opt_state, model, tokens, seg, wt):
             _, hs = exit_hiddens(model, tokens, seg, exits)
             hs = [jax.lax.stop_gradient(h) for h in hs]
-            labels = jnp.pad(tokens[:, 1:], ((0, 0), (0, 1)))
-            ws = skip_tokens.scored_weight(tokens, seg, wt)
+            labels = forward.replicate(jnp.pad(tokens[:, 1:], ((0, 0), (0, 1))))
+            ws = forward.replicate(skip_tokens.scored_weight(tokens, seg, wt))
 
             def loss(p):
                 out = []
@@ -121,7 +123,7 @@ def main() -> None:
         @jax.jit
         def evaluate(model, heads, tokens, seg):
             full, hs = exit_hiddens(model, tokens, seg, exits)
-            labels = jnp.pad(tokens[:, 1:], ((0, 0), (0, 1)))
+            labels = forward.replicate(jnp.pad(tokens[:, 1:], ((0, 0), (0, 1))))
             full_logp = lens_logp(model, full)
             p_full = jnp.exp(full_logp)
             top1 = jnp.argmax(full_logp, axis=-1)
