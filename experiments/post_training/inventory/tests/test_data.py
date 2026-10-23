@@ -6,6 +6,7 @@
 import hashlib
 import json
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 
 import pyarrow as pa
@@ -62,7 +63,15 @@ def native_source(identifier: str) -> str:
     )
 
 
-def sources(directory: Path) -> tuple[Path, Path, list[dict], list[dict]]:
+@dataclass(frozen=True)
+class SourceFiles:
+    training: Path
+    validation: Path
+    training_rows: list[dict]
+    validation_rows: list[dict]
+
+
+def sources(directory: Path) -> SourceFiles:
     train_rows = [
         {
             "task_id": "training-a",
@@ -105,7 +114,7 @@ def sources(directory: Path) -> tuple[Path, Path, list[dict], list[dict]]:
     train, heldout = directory / "source-train.parquet", directory / "source-heldout.parquet"
     pq.write_table(pa.Table.from_pylist(train_rows), train)
     pq.write_table(pa.Table.from_pylist(heldout_rows), heldout)
-    return train, heldout, train_rows, heldout_rows
+    return SourceFiles(train, heldout, train_rows, heldout_rows)
 
 
 def produce(train: Path, heldout: Path, output: Path) -> None:
@@ -125,17 +134,17 @@ def read_tasks(path: Path) -> list[TaskRolloutSpec]:
 
 
 def test_persisted_inventory_preserves_tasks_and_repeats_the_same_stratified_split(tmp_path):
-    train, heldout, train_rows, heldout_rows = sources(tmp_path)
+    inputs = sources(tmp_path)
     first, second = tmp_path / "first", tmp_path / "second"
-    produce(train, heldout, first)
-    produce(train, heldout, second)
+    produce(inputs.training, inputs.validation, first)
+    produce(inputs.training, inputs.validation, second)
     tasks = read_tasks(first / "train.parquet")
-    assert [spec.task.id for spec in tasks] == [row["task_id"] for row in train_rows]
-    original = json.loads(train_rows[0]["task_json"])
+    assert [spec.task.id for spec in tasks] == [row["task_id"] for row in inputs.training_rows]
+    original = json.loads(inputs.training_rows[0]["task_json"])
     restored = tasks[0].task.model_dump(mode="json")
     assert restored == {**original, "schema_version": "0.28"}
     assert tasks[0].verifier_machine == LOCAL_VERIFIER
-    native_original = json.loads(train_rows[1]["lowered_task_spec"])["task"]
+    native_original = json.loads(inputs.training_rows[1]["lowered_task_spec"])["task"]
     assert tasks[1].harness == "assistant_prefix"
     assert tasks[1].task.context.events[-1] == TextMessage(role="assistant", content='{"a":[1')
     assert tasks[1].task.resources.model_dump(mode="json") == native_original["resources"]
@@ -144,10 +153,11 @@ def test_persisted_inventory_preserves_tasks_and_repeats_the_same_stratified_spl
     fixed = read_tasks(first / "validation.parquet")
     assert full[0].verifier_machine == LOCAL_VERIFIER
     assert (
-        full[0].task.grader.model_dump(mode="json") == json.loads(heldout_rows[0]["lowered_task_spec"])["task"]["grader"]
+        full[0].task.grader.model_dump(mode="json")
+        == json.loads(inputs.validation_rows[0]["lowered_task_spec"])["task"]["grader"]
     )
-    assert [spec.task.id for spec in full] == [row["task_id"] for row in heldout_rows]
-    family_by_id = {row["task_id"]: row["evaluation_family"] for row in heldout_rows}
+    assert [spec.task.id for spec in full] == [row["task_id"] for row in inputs.validation_rows]
+    family_by_id = {row["task_id"]: row["evaluation_family"] for row in inputs.validation_rows}
     assert Counter(family_by_id[spec.task.id] for spec in fixed) == dict.fromkeys(FAMILIES, 20)
     assert [spec.task.id for spec in fixed] == [
         spec.task.id for spec in full if spec.task.id in {item.task.id for item in fixed}
@@ -163,13 +173,13 @@ def test_persisted_inventory_preserves_tasks_and_repeats_the_same_stratified_spl
 
 
 def test_changed_training_identity_cannot_hide_a_heldout_prompt(tmp_path):
-    train, heldout, train_rows, heldout_rows = sources(tmp_path)
-    leaked = json.loads(heldout_rows[0]["lowered_task_spec"])["task"]
+    inputs = sources(tmp_path)
+    leaked = json.loads(inputs.validation_rows[0]["lowered_task_spec"])["task"]
     leaked["id"] = "different-training-id"
     leaked["source"]["row"] = "different-source-row"
-    train_rows[0] = {**train_rows[0], "task_id": leaked["id"], "task_json": json.dumps(leaked)}
-    pq.write_table(pa.Table.from_pylist(train_rows), train)
+    inputs.training_rows[0] = {**inputs.training_rows[0], "task_id": leaked["id"], "task_json": json.dumps(leaked)}
+    pq.write_table(pa.Table.from_pylist(inputs.training_rows), inputs.training)
     output = tmp_path / "output"
     with pytest.raises(ValueError, match="overlaps the original heldout set"):
-        produce(train, heldout, output)
+        produce(inputs.training, inputs.validation, output)
     assert not output.exists()

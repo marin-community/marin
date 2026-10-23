@@ -15,9 +15,6 @@ from marin.execution.remote import remote
 from marin.experiment.namespacing import user_owned_name
 from marin.rl.skyrl import skyrl_cpu_command
 
-TRAIN_FILENAME = "train.parquet"
-VALIDATION_FILENAME = "validation.parquet"
-FULL_VALIDATION_FILENAME = "full_validation.parquet"
 VALIDATION_ROWS = 100
 
 
