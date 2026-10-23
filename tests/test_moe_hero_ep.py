@@ -439,7 +439,9 @@ def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
     # `moe_mlp` raises on an indivisible bank only once the 16-node gang is already allocated and
     # its workspace is built, so the launcher has to reject it while it is still free to do so.
     with pytest.raises(ValueError, match=r"must be divisible by expert \(64\) \* context \(1\) = 64"):
-        launch.build_diagnostic_run(run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, version="dev")
+        launch.build_diagnostic_run(
+            run_id="bad-bank", dp_racks=1, num_steps=1, num_experts=200, context_axis_size=1, version="dev"
+        )
 
 
 def test_expert_bank_requires_context_divisibility():
@@ -461,7 +463,9 @@ def test_expert_bank_requires_context_divisibility():
 
 def test_expert_bank_override_must_support_three_waves():
     with pytest.raises(ValueError, match="local expert count=4 must be divisible by num_expert_waves=3"):
-        launch.build_diagnostic_run(run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, version="dev")
+        launch.build_diagnostic_run(
+            run_id="bad-waves", dp_racks=1, num_steps=1, num_experts=256, context_axis_size=1, version="dev"
+        )
 
 
 def _runtime_env_config(
@@ -967,7 +971,9 @@ def test_dropless_local_transform_swaps_moe_backend_and_shares_weights():
 def test_eval_every_adds_the_held_out_suites_as_dependencies():
     # Held-out sets are what make a run scoreable; a throughput-only run should not pay for them.
     off = launch.build_diagnostic_run(run_id="eval-off", dp_racks=1, num_steps=1, version="dev")
-    on = launch.build_diagnostic_run(run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, version="dev")
+    on = launch.build_diagnostic_run(
+        run_id="eval-on", dp_racks=1, num_steps=1, eval_every=50, context_axis_size=1, version="dev"
+    )
     off_config = off.build_config(StepContext.for_fingerprint(off.runtime_args, off.deps))
     on_config = on.build_config(StepContext.for_fingerprint(on.runtime_args, on.deps))
 
