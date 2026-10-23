@@ -18,6 +18,8 @@ from rolloutengine.validation import validate_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
 from shellbox.backends.local.machine import check_local_environment
 from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpec, PackageSpec
+from taskcompendium.grader import verifyit_package
+from taskcompendium.identity import canonical_sha256
 from taskcompendium.models import (
     CommandSemantics,
     ConversationInput,
@@ -28,8 +30,15 @@ from taskcompendium.models import (
     TextMessage,
 )
 from taskcompendium.runtime.resources import inline_resource
+from verifyit.spec import JudgeSpec
 
-from experiments.post_training.inventory._data import FAMILIES, IMAGE_VERIFIER, prepare
+from experiments.post_training.inventory._data import (
+    DERIVED_GRADER_LOCK,
+    FAMILIES,
+    IMAGE_VERIFIER,
+    SOURCE_GRADER_LOCK,
+    prepare,
+)
 
 
 def source_task(identifier: str) -> dict:
@@ -228,3 +237,53 @@ def test_persisted_package_graders_pass_local_allocation_admission(tmp_path, sof
     # Use the real local capability check without probing or starting bubblewrap.
     # The old per-machine CPU/storage requests fail here before any lock read or grading.
     validate_spec(spec, {"local": LocalAdmissionFactory()})
+
+
+def test_persisted_reconstruction_changes_only_the_selected_script_environment(tmp_path):
+    inputs = sources(tmp_path)
+    baseline = tmp_path / "baseline"
+    produce(inputs.training, inputs.validation, baseline)
+    native_before = read_tasks(baseline / "train.parquet")[1].model_dump(mode="json")
+    target = json.loads(inputs.training_rows[0]["task_json"])
+    environment = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS,
+        packages_lock=SOURCE_GRADER_LOCK,
+        environment_variables={"NLTK_DATA": "/srv/nltk_data"},
+    )
+    target["grader"]["environment"] = environment.model_dump(mode="json")
+    inputs.training_rows[0]["task_json"] = json.dumps(target)
+    unrelated = json.loads(inputs.training_rows[2]["task_json"])
+    unrelated["grader"]["environment"] = environment.model_copy(
+        update={"packages_lock": "s3://fixture/unrelated-grader.lock"}
+    ).model_dump(mode="json")
+    inputs.training_rows[2]["task_json"] = json.dumps(unrelated)
+    judge = source_task("host-judge")
+    judge["grader"] = verifyit_package(
+        JudgeSpec(references=("private-answer",)), environment=environment
+    ).grader.model_dump(mode="json")
+    inputs.training_rows.append(
+        {"task_id": judge["id"], "contract_kind": "task_spec", "task_json": json.dumps(judge), "lowered_task_spec": None}
+    )
+    pq.write_table(pa.Table.from_pylist(inputs.training_rows), inputs.training)
+    output = tmp_path / "derived"
+    produce(inputs.training, inputs.validation, output)
+    tasks = read_tasks(output / "train.parquet")
+    assert [spec.task.id for spec in tasks] == [row["task_id"] for row in inputs.training_rows]
+    expected = {**target, "schema_version": "0.28"}
+    expected = json.loads(json.dumps(expected))
+    expected["grader"]["environment"]["packages_lock"] = DERIVED_GRADER_LOCK
+    assert tasks[0].task.model_dump(mode="json") == expected
+    assert tasks[1].model_dump(mode="json") == native_before
+    assert tasks[2].task.model_dump(mode="json") == {**unrelated, "schema_version": "0.28"}
+    assert tasks[3].task.model_dump(mode="json") == {**judge, "schema_version": "0.28"}
+    assert tasks[3].verifier_machine is None
+    for filename in ("validation.parquet", "full_validation.parquet"):
+        assert (output / filename).read_bytes() == (baseline / filename).read_bytes()
+    derivation = json.loads((output / "summary.json").read_text())["environment_derivation"]
+    assert derivation["affected_rows"] == 1
+    assert derivation["task_spec_digests"] == {
+        target["id"]: {
+            "source_task_sha256": canonical_sha256(target),
+            "derived_task_sha256": canonical_sha256(expected),
+        }
+    }
