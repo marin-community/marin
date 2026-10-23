@@ -53,9 +53,15 @@ def main() -> None:
                 mismatches += 1
                 if mismatches <= 3:
                     ids = expected["input_ids"]
-                    extra = tokenizer.decode([i for i, t, m in zip(ids, trained, expected["assistant_masks"]) if t and not m])
-                    missing = tokenizer.decode([i for i, t, m in zip(ids, trained, expected["assistant_masks"]) if m and not t])
-                    print(f"row {row['row_id']}: trained-not-expected {extra[:300]!r} expected-not-trained {missing[:300]!r}")
+                    extra = tokenizer.decode(
+                        [i for i, t, m in zip(ids, trained, expected["assistant_masks"]) if t and not m]
+                    )
+                    missing = tokenizer.decode(
+                        [i for i, t, m in zip(ids, trained, expected["assistant_masks"]) if m and not t]
+                    )
+                    print(
+                        f"row {row['row_id']}: trained-not-expected {extra[:300]!r} expected-not-trained {missing[:300]!r}"
+                    )
     print(json.dumps({"base": config["base_model"], "rows": rows, "mismatches": mismatches}))
     sys.exit(1 if mismatches else 0)
 

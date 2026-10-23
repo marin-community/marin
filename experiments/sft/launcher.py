@@ -223,7 +223,9 @@ def _levanter_train_config(
         # A converted checkpoint emits a tokenizer already padded to its model vocab. Native init
         # has no HF reference from which the generic padding helper could re-derive that vocab.
         pad_tokenizer_to_match_model=initialize_model_from_checkpoint_path is None,
-        hf_save_steps=num_train_steps,  # one HF export at the end
+        # One HF export: the trainer's forced end-of-run hook pass. A period equal to the run
+        # length would also fire on the last step and export the same step twice.
+        hf_save_steps=num_train_steps + 1,
         hf_save_dtype=jnp.dtype(spec.hf_save_dtype) if spec.hf_save_dtype is not None else None,
         # Train-equals-serve: the export's tokenizer carries the template the run trained on.
         hf_save_chat_template=spec.chat_template,
