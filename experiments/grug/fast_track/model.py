@@ -889,6 +889,10 @@ class GrugModelConfig:
     """Compute penalty ``lambda * mean(g)`` over the gated layers and loss tokens, ramped linearly from 0 over the
     first ``halt_penalty_ramp_frac`` of training."""
     halt_penalty_ramp_frac: float = 0.35
+    halt_floor: float = 0.0
+    """``halt_hard`` training: a gated layer runs for a token when ``max(g, halt_floor) > u``, so every gated layer
+    keeps training on at least this fraction of tokens (a layer muted for every token stops learning and its gate
+    never recovers)."""
     halt_threshold: float | None = None
     """Outside training (no halt schedule), a gated layer with ``g < halt_threshold`` is skipped (scale 0)."""
     halt_hard: bool = False
@@ -1198,8 +1202,10 @@ class GrugModelConfig:
                 raise ValueError("halt_layers needs attn_res, the unrolled layer loop and a MoE")
             if layers != tuple(sorted(set(layers))) or not 1 <= layers[0] <= layers[-1] < self.num_layers:
                 raise ValueError(f"halt_layers must be increasing layers in 1..{self.num_layers - 1}, got {layers}")
-            if not 0.0 < self.halt_penalty_ramp_frac <= 1.0:
-                raise ValueError("halt_penalty_ramp_frac must be in (0, 1]")
+            if not 0.0 < self.halt_penalty_ramp_frac <= 1.0 or not 0.0 <= self.halt_floor < 1.0:
+                raise ValueError("halt_penalty_ramp_frac must be in (0, 1] and halt_floor in [0, 1)")
+            if self.halt_floor and not self.halt_hard:
+                raise ValueError("halt_floor needs halt_hard")
             if self.attn_res_layer_backward != AttnResLayerBackward.SAVE:
                 raise ValueError("halt_layers needs attn_res_layer_backward=save (plain autodiff)")
             if self.halt_write == HaltWrite.UNIT and (not self.moe_ungated_relu2 or self.num_null_experts):
@@ -6229,7 +6235,7 @@ class Transformer(eqx.Module):
             if "halt_u" not in extra_state:
                 key = jax.random.fold_in(jax.random.PRNGKey(_HALT_SEED), halt_schedule[1].astype(jnp.int32))
                 extra_state["halt_u"] = jax.random.uniform(key, gate.shape, jnp.float32)
-            keep = (gate > extra_state["halt_u"]).astype(jnp.float32)
+            keep = (jnp.maximum(gate, cfg.halt_floor) > extra_state["halt_u"]).astype(jnp.float32)
             return keep + gate - jax.lax.stop_gradient(gate)
 
         def run_pass(state, pass_index, start=0):
