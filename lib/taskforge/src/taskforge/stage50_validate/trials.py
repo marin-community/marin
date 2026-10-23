@@ -36,7 +36,7 @@ command timeout so changed validation settings do not reuse earlier evidence.
 The attempt file holds the whole ``Rollout``, every conversation and its steps included: a validation
 round is reviewed from its files alone, and the final reply, the tool calls and the per-turn usage are
 read from the steps. ``attempt_outcome`` reads the outcome back from the file. The file is written whole
-or not at all (``write_evidence``), and an attempt cancelled before its outcome writes none.
+or not at all (``write_bytes_atomic``), and an attempt cancelled before its outcome writes none.
 
 The answer format is part of the task (``TaskSpec.answer_format``), so ``input_hash`` covers it
 with the rest of the task. A task whose format cannot carry its answer for its grader
@@ -91,13 +91,15 @@ CLEANUP_ERROR_COUNT = "cleanup_error_count"
 
 @dataclass(frozen=True)
 class EngineSettings:
-    """Factories, shell-command timeout and the limits supplied when lowering validation tasks."""
+    """Factories and limits for validation; verifier_timeout must be None because the grader sets its deadline."""
 
     factories: Mapping[str, MachineFactory]
     command_timeout: float
     limits: RolloutLimits
 
     def __post_init__(self) -> None:
+        if self.limits.verifier_timeout is not None:
+            raise ValueError("validation derives the verifier deadline from the grader; pass verifier_timeout=None")
         tool_timeout = self.limits.tool_turn_timeout
         if self.command_timeout <= 0 or (tool_timeout is not None and self.command_timeout >= tool_timeout):
             raise ValueError("The command timeout must be positive and shorter than the tool-turn timeout")
@@ -299,7 +301,7 @@ def record_attempt(
     if isinstance(outcome, Ungraded):
         fields.cause = str(outcome.cause)
     fields.output_hash = sha256_hex(payload)
-    write_evidence(plan.evidence_dir / str(plan.kind) / trial / f"{ATTEMPT_PREFIX}{attempt}.json", payload)
+    write_bytes_atomic(str(plan.evidence_dir / str(plan.kind) / trial / f"{ATTEMPT_PREFIX}{attempt}.json"), payload)
 
 
 def rollout_steps(rollout: Rollout) -> tuple[RolloutStep, ...]:
@@ -377,8 +379,3 @@ def _rollout_from_record(record: dict[str, Any]) -> Rollout:
 
 _GRADE: TypeAdapter[GradeResult] = TypeAdapter(GradeResult)
 _ROLLOUT: TypeAdapter[Rollout] = TypeAdapter(Rollout)
-
-
-def write_evidence(path: Path, payload: bytes) -> None:
-    """Write ``payload`` to ``path`` through a temporary sibling, so the file is whole or absent."""
-    write_bytes_atomic(str(path), payload)
