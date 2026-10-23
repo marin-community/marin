@@ -16,6 +16,7 @@ from enum import StrEnum
 from typing import Any
 from urllib.parse import urlencode
 
+
 class OffsetNamespace(StrEnum):
     SOURCE_MANIFEST = "source_manifest"
     HF_VIEWER_PARQUET = "hf_viewer_parquet"
