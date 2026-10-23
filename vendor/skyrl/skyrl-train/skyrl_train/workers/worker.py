@@ -5,6 +5,7 @@ import logging
 import os
 import socket
 from typing import Dict, Optional, Type, List, Any, Callable
+from skyrl_train.checkpoint_schedule import OptimizerStateMode
 from skyrl_train.utils.progress import configure_progress, tqdm
 from marinskyrl.runtime_options import R3Transport
 from collections import defaultdict
@@ -1284,7 +1285,9 @@ class PolicyWorkerBase(Worker):
         _phase_diagnostics.log_phase(_phase_diagnostics.CollectivePhase.TRAINING_STEP_EXIT)
         return status
 
-    def save_checkpoint(self, ckpt_dir: Path, tokenizer=None):
+    def save_checkpoint(
+        self, ckpt_dir: Path, tokenizer=None, optimizer_state: OptimizerStateMode = OptimizerStateMode.FULL
+    ):
         upload = self.strategy.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,
@@ -1293,6 +1296,7 @@ class PolicyWorkerBase(Worker):
             node_local_rank=self.get_node_local_rank(),
             tokenizer=tokenizer,
             client_state={},
+            optimizer_state=optimizer_state,
         )
         self._start_checkpoint_upload(upload)
 

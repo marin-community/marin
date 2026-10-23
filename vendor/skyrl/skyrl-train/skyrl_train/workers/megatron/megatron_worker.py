@@ -370,6 +370,10 @@ class MegatronWorker:
             tokenizer=tokenizer,
         )
 
+    def save_fp32_master_hf_model(self, ckpt_dir: str, export_dir: str, tokenizer):
+        """Export the FP32 masters saved in ``ckpt_dir`` as an HF model in float32."""
+        self.strategy.save_fp32_master_hf_model(self.bridge, self.model, ckpt_dir, export_dir, tokenizer=tokenizer)
+
 
 class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
     def __init__(self, **kwargs):
