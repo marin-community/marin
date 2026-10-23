@@ -166,7 +166,7 @@ packages = ["marinskyrl", "cloud", "skyrl-gym/skyrl_gym", "skyrl-train/skyrl_tra
 exclude-dependencies = ["litellm"]
 package = true
 prerelease = "allow"
-required-version = ">=0.13.1"
+required-version = ">=0.13.5"
 conflicts = [
     [{ extra = "cpu" }, { extra = "cuda" }],
     [{ extra = "cpu" }, { extra = "megatron" }],
@@ -197,7 +197,7 @@ override-dependencies = [
     "opentelemetry-api ; sys_platform != 'linux'",
 ]
 constraint-dependencies = [
-    "uv>=0.13.1",
+    "uv>=0.13.5",
     "gcsfs==2026.4.0",
     "botocore==1.42.97 ; sys_platform == 'linux'",
     "boto3==1.42.97 ; sys_platform == 'linux'",

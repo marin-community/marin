@@ -466,7 +466,7 @@ class MiniSweAgent(BaseInstalledAgent):
             environment,
             command=(
                 "set -euo pipefail; "
-                "curl -LsSf https://astral.sh/uv/0.13.1/install.sh | sh && "
+                "curl -LsSf https://astral.sh/uv/0.13.5/install.sh | sh && "
                 'if ! grep -q \'export PATH="$HOME/.local/bin:$PATH"\' "$HOME/.bashrc" 2>/dev/null; then'
                 '  echo \'export PATH="$HOME/.local/bin:$PATH"\' >> "$HOME/.bashrc";'
                 " fi && "

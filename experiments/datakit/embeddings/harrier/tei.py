@@ -138,7 +138,7 @@ def _setup_script() -> str:
     bootstrap = """set -e
 apt-get update
 apt-get install -y --no-install-recommends curl python3 python3-venv
-curl -LsSf https://astral.sh/uv/0.10.3/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+curl -LsSf https://astral.sh/uv/0.13.5/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
 """
     workspace = default_setup_script(
         packages=["marin-fray", "marin-iris", "marin-rigging"],

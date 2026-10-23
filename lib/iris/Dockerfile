@@ -14,7 +14,7 @@ ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.5
 # Build the Vue SPA. Output is consumed by the deps stage at
 # /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
 # (see lib/iris/src/iris/cluster/dashboard_common.py).
-FROM --platform=$BUILDPLATFORM node:22-slim AS dashboard
+FROM --platform=$BUILDPLATFORM node:24-slim AS dashboard
 
 WORKDIR /build/dashboard
 
@@ -282,7 +282,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjemalloc2 \
     libibverbs1 \
     ibverbs-providers \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
