@@ -178,7 +178,10 @@ uv run --no-project infra/ci/run_tests.py
   It defines which events need a record, its format, and its update lifecycle.
 - Keep user-facing and reusable product documentation in `docs/`. Record
   research progress in the task's existing issue, PR, report, or durable session
-  channel. These are distinct from incident records.
+  channel. Use `research-engineering` for iterative design exploration and
+  experimental programs; preserve their runnable branches and notebooks in
+  `marin-community/marin-logbooks` and promote selected code into Marin PRs.
+  These are distinct from incident records.
 
 ## Deprecation
 

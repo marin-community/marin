@@ -92,6 +92,7 @@ nav:
       - Contributing: dev-guide/contributing.md
       - Agent Workflows: dev-guide/agent-workflows.md
       - Experiment Records: dev-guide/experiment-records.md
+      - Research Engineering: dev-guide/research-engineering.md
       - Writing Style:
           - House Style: dev-guide/writing-style/index.md
           - Prose Review: dev-guide/writing-style/ai-writing-donts.md

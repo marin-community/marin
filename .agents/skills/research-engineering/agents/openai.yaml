@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Engineering"
+  short_description: "Explore experiments and preserve runnable research"
+  default_prompt: "Use $research-engineering to explore this Marin question, preserve the experiments and notebook, and promote the selected implementation into Marin."
