@@ -1290,6 +1290,16 @@ def _make_train_step(
             if layer_onset is not None:
                 update_scales = layer_onset_update_scales(layer_onset, state.step)
                 params = _scale_layer_updates(params, qb_params, update_scales)
+            p_leaves = jax.tree_util.tree_flatten_with_path(params)[0]
+            u_leaves = jax.tree_util.tree_leaves(updates)
+            pbad = jnp.stack([jnp.sum(~jnp.isfinite(v.astype(jnp.float32))) for _, v in p_leaves])
+            ubad = jnp.stack([jnp.sum(~jnp.isfinite(v.astype(jnp.float32))) for v in u_leaves])
+            pnames = " ".join(jax.tree_util.keystr(k) for k, _ in p_leaves)
+            jax.lax.cond(
+                jnp.sum(pbad) + jnp.sum(ubad) > 0,
+                lambda: jax.debug.print("NANDBG params step {} pbad {} ubad {} names " + pnames, state.step, pbad, ubad),
+                lambda: None,
+            )
             master_params = None
         if offload_opt_state:
             opt_state = _tree_to_memory_kind(opt_state, "pinned_host")
