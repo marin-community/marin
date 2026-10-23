@@ -440,6 +440,7 @@ generator:
   reasoning_spans:
     # How task grading treats a rollout with a malformed reasoning span: `grade` scores its answer as usual,
     # `reject` grades it as a submission failure. Tasks without a grader are always graded as usual.
+    # Only chat turns are checked; raw-token and assistant-prefix turns are not.
     policy: grade
 
   chat_template:

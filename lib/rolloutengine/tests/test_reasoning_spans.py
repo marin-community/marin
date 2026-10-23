@@ -3,7 +3,7 @@
 
 import pytest
 from taskcompendium.grading_result import Outcome
-from taskcompendium.reasoning_spans import MalformedReasoning, ReasoningViolation
+from taskcompendium.reasoning_spans import ReasoningSpanRule, ReasoningViolation
 
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.shell import ShellHarness
@@ -24,10 +24,10 @@ async def _correct_answer_after_a_second_span(request: ModelRequest) -> ModelTur
 
 @pytest.mark.parametrize(
     "policy,status,reward",
-    [(MalformedReasoning.GRADE, Outcome.GRADED, 1.0), (MalformedReasoning.REJECT, Outcome.SUBMISSION_FAILURE, 0.0)],
+    [(ReasoningSpanRule.GRADE, Outcome.GRADED, 1.0), (ReasoningSpanRule.REJECT, Outcome.SUBMISSION_FAILURE, 0.0)],
 )
 async def test_the_engine_policy_decides_whether_a_malformed_span_fails_a_correct_answer(policy, status, reward):
-    engine = RolloutEngine({}, {SHELL: ShellHarness(command_timeout=None)}, malformed_reasoning=policy)
+    engine = RolloutEngine({}, {SHELL: ShellHarness(command_timeout=None)}, reasoning_span_rule=policy)
 
     result = await engine.run_task(rollout_spec(arithmetic_task()), _correct_answer_after_a_second_span)
 

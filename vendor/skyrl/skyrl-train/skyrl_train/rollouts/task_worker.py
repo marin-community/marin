@@ -17,7 +17,7 @@ from omegaconf import DictConfig, OmegaConf
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader
-from taskcompendium.reasoning_spans import MalformedReasoning
+from taskcompendium.reasoning_spans import ReasoningSpanRule
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
@@ -355,7 +355,7 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
-        self.malformed_reasoning = MalformedReasoning(trajectory_runner_cfg.reasoning_spans.policy)
+        self.reasoning_span_rule = ReasoningSpanRule(trajectory_runner_cfg.reasoning_spans.policy)
         self.harbor = harbor
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait
@@ -451,7 +451,7 @@ class TaskRolloutWorker:
             lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
             selected_harnesses.append(harnesses)
         engines = [
-            RolloutEngine(self.factories, harnesses, malformed_reasoning=self.malformed_reasoning)
+            RolloutEngine(self.factories, harnesses, reasoning_span_rule=self.reasoning_span_rule)
             for harnesses in selected_harnesses
         ]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
