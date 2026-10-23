@@ -243,3 +243,28 @@ def test_terminus_json_reply_buckets_and_reasoning_deciles():
         if b is Bucket.REASONING and t == 0
     ]
     assert first_turn == sorted(first_turn) and first_turn[0] == 0 and first_turn[-1] == 8
+
+
+@pytest.mark.parametrize(
+    "reply,reasoning,final",
+    [
+        ("<|start_think|> add the digits <|end_think|> it is 7", ["add", "the", "digits"], ["it", "is", "7"]),
+        ("<|start_think|> add the digits and keep going", ["add", "the", "digits", "and", "keep", "going"], []),
+        ("add the digits <|end_think|> it is 7", ["add", "the", "digits"], ["it", "is", "7"]),
+        ("<|end_think|> it is 7", [], ["it", "is", "7"]),
+        ("<|start_think|> add <|start_think|> carry <|end_think|> 7 <|end_think|>", ["add", "carry"], ["7"]),
+        ("no markers at all", [], ["no", "markers", "at", "all"]),
+    ],
+    ids=["paired", "unclosed", "unopened", "empty-unopened", "repeated-markers", "unmarked"],
+)
+def test_raw_think_markers_in_a_sampled_reply(reply, reasoning, final):
+    tokenizer = tiny_tokenizer(GRUG_TOKENS)
+    messages = [{"role": "user", "content": "sum the digits"}, {"role": "assistant", "content": reply}]
+    tagged = tag_conversation(tokenizer, "grug", messages)
+    words = bucket_words(tokenizer, "grug", messages, tagged)
+    assert words.get(Bucket.REASONING, []) == reasoning
+    assert words.get(Bucket.FINAL_MESSAGE, []) == final
+    markers = [word for word in reply.split() if word.startswith("<|")]
+    assert words[Bucket.DELIMITER] == [*markers, GRUG_TOKENS.turn_close]
+    decile = [d for d, b in zip(tagged.reasoning_decile, tagged.buckets, strict=True) if b is Bucket.REASONING]
+    assert decile == sorted(decile) and (not decile or decile[0] == 0)
