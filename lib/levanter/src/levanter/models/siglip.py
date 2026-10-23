@@ -44,6 +44,11 @@ from levanter.layers.attention import (  # noqa: E402
     dot_product_attention,
 )
 
+DEFAULT_SIGLIP_INITIALIZER_RANGE = 0.02
+HF_SIGLIP_GELU_ACTIVATION = "gelu_pytorch_tanh"
+ATTENTION_IN_PROJ_WEIGHT_KEY = "attention.in_proj_weight"
+ATTENTION_IN_PROJ_BIAS_KEY = "attention.in_proj_bias"
+
 
 @dataclass
 class SiglipVisionModelOutput:
@@ -102,7 +107,7 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
     hidden_act: ActivationFunctionEnum = ActivationFunctionEnum.gelu_new
     layer_norm_eps: float = 1e-6
     attention_dropout: float = 0.0
-    initializer_range: float = 0.02
+    initializer_range: float = DEFAULT_SIGLIP_INITIALIZER_RANGE
     gradient_checkpointing: bool = True
     vision_use_head: bool = True
 
@@ -151,7 +156,7 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
             hidden_act=activation_fn,
             layer_norm_eps=hf_config.layer_norm_eps,
             attention_dropout=hf_config.attention_dropout,
-            initializer_range=getattr(hf_config, "initializer_range", 0.02),
+            initializer_range=getattr(hf_config, "initializer_range", DEFAULT_SIGLIP_INITIALIZER_RANGE),
             vision_use_head=getattr(hf_config, "vision_use_head", True),
         )
 
@@ -168,7 +173,7 @@ class SiglipVisionConfig(VisionEncoderConfig["SiglipVisionModel"]):
         # gelu_new in Levanter maps back to gelu_pytorch_tanh in HF (for SigLIP compatibility)
         if isinstance(self.hidden_act, ActivationFunctionEnum):
             if self.hidden_act == ActivationFunctionEnum.gelu_new:
-                hf_hidden_act = "gelu_pytorch_tanh"
+                hf_hidden_act = HF_SIGLIP_GELU_ACTIVATION
             else:
                 hf_hidden_act = self.hidden_act.value
         else:
@@ -289,7 +294,7 @@ class SiglipBlockConfig(Protocol):
 
 
 def siglip_activation(name: str) -> ActivationFunctionEnum:
-    aliases = {"gelu_pytorch_tanh": "gelu_new", "swish": "silu"}
+    aliases = {HF_SIGLIP_GELU_ACTIVATION: "gelu_new", "swish": "silu"}
     return ActivationFunctionEnum(aliases.get(name, name))
 
 
@@ -534,10 +539,10 @@ class SiglipMultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             projection.weight.array.reshape(self.config.Embed.size, self.config.Embed.size)
             for projection in (self.q_proj, self.k_proj, self.v_proj)
         ]
-        state_dict[with_prefix(prefix, "attention.in_proj_weight")] = jnp.concatenate(weights, axis=0)
+        state_dict[with_prefix(prefix, ATTENTION_IN_PROJ_WEIGHT_KEY)] = jnp.concatenate(weights, axis=0)
         if self.q_proj.bias is not None:
             biases = [projection.bias.array.reshape(-1) for projection in (self.q_proj, self.k_proj, self.v_proj)]
-            state_dict[with_prefix(prefix, "attention.in_proj_bias")] = jnp.concatenate(biases, axis=0)
+            state_dict[with_prefix(prefix, ATTENTION_IN_PROJ_BIAS_KEY)] = jnp.concatenate(biases, axis=0)
         state_dict.update(eqx_to_state_dict(self.out_proj, with_prefix(prefix, "attention.out_proj")))
         state_dict.update(eqx_to_state_dict(self.layernorm, with_prefix(prefix, "layernorm")))
         state_dict.update(eqx_to_state_dict(self.mlp, with_prefix(prefix, "mlp")))
@@ -549,7 +554,7 @@ class SiglipMultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             probe_array = probe_array.squeeze(0)
         probe = hax.named(probe_array, self.probe.axes)
 
-        in_proj_weight = state_dict.get(with_prefix(prefix, "attention.in_proj_weight"))
+        in_proj_weight = state_dict.get(with_prefix(prefix, ATTENTION_IN_PROJ_WEIGHT_KEY))
         if in_proj_weight is None:
             q_weight, k_weight, v_weight = self.q_proj.weight, self.k_proj.weight, self.v_proj.weight
         else:
@@ -558,7 +563,7 @@ class SiglipMultiheadAttentionPoolingHead(ModuleWithStateDictSerialization):
             k_weight = hax.named(k_array, self.k_proj.weight.axes)
             v_weight = hax.named(v_array, self.v_proj.weight.axes)
 
-        in_proj_bias = state_dict.get(with_prefix(prefix, "attention.in_proj_bias"))
+        in_proj_bias = state_dict.get(with_prefix(prefix, ATTENTION_IN_PROJ_BIAS_KEY))
         if in_proj_bias is None:
             q_bias, k_bias, v_bias = self.q_proj.bias, self.k_proj.bias, self.v_proj.bias
         else:

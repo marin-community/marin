@@ -21,6 +21,8 @@ from jaxtyping import PRNGKeyArray
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, ModelWithHfSerializationMixin
 from levanter.layers.attention import AttentionBackend, AttentionConfig, AttentionMask
 from levanter.models.siglip import (
+    DEFAULT_SIGLIP_INITIALIZER_RANGE,
+    HF_SIGLIP_GELU_ACTIVATION,
     SiglipEncoderLayer,
     SiglipMultiheadAttentionPoolingHead,
     siglip_activation,
@@ -92,7 +94,7 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
     hidden_act: ActivationFunctionEnum = ActivationFunctionEnum.gelu_new
     layer_norm_eps: float = 1e-6
     attention_dropout: float = 0.0
-    initializer_range: float = 0.02
+    initializer_range: float = DEFAULT_SIGLIP_INITIALIZER_RANGE
     gradient_checkpointing: bool = True
     vision_use_head: bool = True
 
@@ -140,7 +142,7 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
             hidden_act=activation_fn,
             layer_norm_eps=hf_config.layer_norm_eps,
             attention_dropout=hf_config.attention_dropout,
-            initializer_range=getattr(hf_config, "initializer_range", 0.02),
+            initializer_range=getattr(hf_config, "initializer_range", DEFAULT_SIGLIP_INITIALIZER_RANGE),
             vision_use_head=getattr(hf_config, "vision_use_head", True),
         )
 
@@ -159,7 +161,7 @@ class Siglip2VisionConfig(VisionEncoderConfig["Siglip2VisionModel"]):
         # gelu_new in Levanter maps back to gelu_pytorch_tanh in HF (for Siglip2 compatibility)
         if isinstance(self.hidden_act, ActivationFunctionEnum):
             if self.hidden_act == ActivationFunctionEnum.gelu_new:
-                hf_hidden_act = "gelu_pytorch_tanh"
+                hf_hidden_act = HF_SIGLIP_GELU_ACTIVATION
             else:
                 hf_hidden_act = self.hidden_act.value
         else:
@@ -431,9 +433,6 @@ class Siglip2VisionTransformer(ModuleWithStateDictSerialization):
         last_hidden_state = self.post_layernorm(hidden_states)
 
         return Siglip2VisionModelOutput(last_hidden_state=last_hidden_state, hidden_states=result_hidden_states)
-
-
-Siglip2MultiheadAttentionPoolingHead = SiglipMultiheadAttentionPoolingHead
 
 
 class Siglip2VisionModel(ModuleWithStateDictSerialization, ModelWithHfSerializationMixin[Siglip2VisionConfig]):

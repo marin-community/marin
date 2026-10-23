@@ -183,6 +183,13 @@ def test_any_resolution_patch_cap_rejects_incompatible_grid(caption_processor) -
         processor([record])
 
 
+def test_output_exemplar_uses_processor_patch_size(caption_processor) -> None:
+    processor = BatchImageProcessor(caption_processor, max_num_patches=None, patch_size=4)
+    pixel_values = processor.output_exemplar["pixel_values"]
+    assert pixel_values is not None
+    assert pixel_values.shape == (1, 3, 4, 4)
+
+
 @pytest.mark.parametrize("source_kind", ["caption", "conversation"])
 @pytest.mark.parametrize("use_cache", [False, True])
 def test_image_mixture_preserves_patch_limit_and_unpadded_targets(
