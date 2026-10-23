@@ -33,12 +33,13 @@ MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-DATA_VERSION = "2026.10.22.2"
+DATA_VERSION = "2026.10.22.3"
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
 REQUEST_WINDOW_TOKENS = 24_576
 MAX_NEW_TOKENS = 8_192
+EVALUATION_API_KEY_ENV = "DAYTONA_EVAL_API_KEY"
 
 
 def training_recipe(steps: int) -> dict:
@@ -61,6 +62,7 @@ def training_recipe(steps: int) -> dict:
     config["environment"] = {
         "task_sessions": {
             "local": {},
+            "daytona": {"api_key_env": EVALUATION_API_KEY_ENV, "ttl_minutes": 60},
             "remote_judge": {"base_url": "https://api.together.xyz/v1", "api_key_env": "TOGETHER_API_KEY"},
         }
     }
@@ -149,6 +151,7 @@ def build_run(
             job_timeout_seconds=24 * 60 * 60,
             container_profile=job_pb2.CONTAINER_PROFILE_PRIVILEGED,
             wandb_entity="marin-community",
+            required_env_vars=(EVALUATION_API_KEY_ENV,),
         ),
         export_hf=True,
     )

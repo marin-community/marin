@@ -14,9 +14,12 @@ from experiments.post_training.inventory.train import build_run
 
 
 @pytest.mark.timeout(180)
-def test_three_update_run_composes_native_evaluation_and_terminal_outputs(tmp_path: Path) -> None:
+def test_three_update_run_composes_native_evaluation_and_terminal_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Exercise the runtime boundary: a three-update run must retain initial/final
     # native-task evaluation and an aligned terminal checkpoint/export schedule.
+    monkeypatch.setenv("DAYTONA_EVAL_API_KEY", "offline-test-key")
     run = build_run(
         "2026.10.22.2",
         steps=3,
@@ -29,10 +32,25 @@ def test_three_update_run_composes_native_evaluation_and_terminal_outputs(tmp_pa
     script = """
 import json
 import sys
+from omegaconf import OmegaConf
+from shellbox.image import RegistryImage
+from shellbox.machine import Backend, CommandSemantics, MachineSpec
+from taskcompendium.models import EnvironmentRequirements
+from marinskyrl.task_machine_factories import task_machine_factories
 from cloud.iris.launch_config import load_launch_config
 
 launch = load_launch_config(sys.argv[1])
 trainer = launch.skyrl.trainer
+# Image-backed heldout graders must reach a backend supporting RegistryImage.
+# Construct only the remote backend so this pure admission check is host independent.
+factories = task_machine_factories(OmegaConf.create({
+    "daytona": launch.skyrl.environment.task_sessions.daytona,
+}))
+image = "fixture@sha256:" + "a" * 64
+factories[Backend.DAYTONA].check_environment(
+    EnvironmentRequirements(command_semantics=CommandSemantics.LINUX_PROCESS, docker_image=image),
+    MachineSpec(source=RegistryImage(image)),
+)
 print(json.dumps({
     "entrypoint": launch.runtime.entrypoint,
     "training_type": launch.runtime.training_type,
@@ -43,6 +61,7 @@ print(json.dumps({
     "hf_interval": trainer.hf_save_interval,
     "export_hf": launch.run.export_hf,
     "all_heldout_prompts": trainer.eval_num_prompts is None,
+    "image_grader_admitted": True,
 }))
 """
     result = subprocess.run(
@@ -67,4 +86,5 @@ print(json.dumps({
         "hf_interval": 3,
         "export_hf": True,
         "all_heldout_prompts": True,
+        "image_grader_admitted": True,
     }
