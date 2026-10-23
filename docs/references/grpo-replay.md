@@ -1,8 +1,9 @@
-# GRPO offline learning
+# GRPO learning
 
-`levanter.grpo` implements the regular PPO surrogate used by the pinned
-MarinSkyRL GRPO recipe. The model and pipeline APIs consume in-memory
-`GrpoExample` batches.
+`levanter.grpo` implements the regular PPO surrogate from the MarinSkyRL recipe
+at [revision 8e33e017](https://github.com/marin-community/MarinSkyRL/commit/8e33e01707b7225ecde1d6b8ad172a3dd4dc8661),
+which supplies the oracle semantics below. SPMD and pipeline execution share in-memory
+`GrpoExample` batches and the `levanter.grpo_learner.grpo_step` interface.
 
 The companion [offline runner](https://github.com/marin-community/marin/pull/9048)
 provides `marin.rl.grpo_capture` and `marin.rl.train_grpo` for an ordered list of
@@ -16,14 +17,17 @@ Compute group advantages and objective weights over the complete admitted batch
 before dividing it into execution microbatches. Advantages use group sample
 standard deviation. Policy weights preserve the original objective partitions'
 masked token means; KL weights preserve their sequence means. A partition is
-an original oracle execution microbatch on one data-parallel rank. Partition
+an execution microbatch in that recipe on one data-parallel rank. Partition
 means receive equal weight; within each KL partition, sequences receive equal
 weight. Empty responses count as sequences but contribute zero KL. Old-policy scores,
 reference scores, advantages, and weights are detached. `KlGradient` explicitly
 selects detached or differentiated reference KL; the pinned oracle uses detached
 KL, with gradients through current-policy scores disabled. Reference scores are
 always detached; `KlGradient.DIFFERENTIABLE` enables only the current-policy
-contribution. `accumulation_steps` cancels Levanter's averaging over execution microbatches.
+contribution. Both execution backends average gradients over execution microbatches.
+`accumulation_steps` scales each microbatch loss before this mean so the
+precomputed full-batch objective weights retain their meaning. Metrics keep
+their sum or maximum reductions.
 
 `marin.rl.grpo_capture.CapturedRollout` stores complete token sequences,
 attention masks, response-aligned masks and rewards, group IDs, original
@@ -37,6 +41,56 @@ the clipped-ratio advantage, with independently configured lower/upper clip
 widths. Reference KL uses the clipped k3 estimator. Singleton reward groups
 retain their reward; groups with equal rewards produce zero centered advantages.
 Normalization adds epsilon `1e-6` to the sample standard deviation.
+
+## Shared learner interface
+
+`grpo_step(backend, state, batch)` recomputes raw old-policy scores and performs
+one update. It returns `GrpoStep(state, loss)`. The caller owns complete-group
+admission, reference scores, persistence, checkpoints, and policy publication.
+Scoring and training use the same execution microbatch shape.
+
+For ordinary SPMD training, including model-supported FSDP and expert sharding,
+configure a `Trainer` with `grpo_model_loss`. Bind `config`, `block_size`, and
+`accumulation_steps` in its loss partial; the latter is the full batch size
+divided by the execution microbatch size. Wrap that trainer:
+
+```python
+from levanter.grpo_learner import SpmdGrpoBackend, grpo_step
+
+backend = SpmdGrpoBackend(trainer, block_size=1024)
+result = grpo_step(backend, state, batch)
+state = result.state
+```
+
+For JaxPP, initialize stage-owned `PipelineState`, then build its adapter once:
+
+```python
+from levanter.grpo_pipeline import make_pipeline_grpo_backend
+
+backend = make_pipeline_grpo_backend(
+    optimizer,
+    mp_policy,
+    state,
+    batch,
+    config=pipeline_config,
+    grpo=grpo_config,
+    mpmd_mesh=mpmd_mesh,
+)
+result = grpo_step(backend, state, batch)
+state = result.state
+```
+
+The PP adapter retains stage-local weights and optimizer state, the 1F1B
+schedule, global clipping, and routing-drop checks. FSDP and EP can shard work
+within a stage; they do not require different GRPO semantics. The adapters use
+their backend's state and checkpoint representation.
+
+`pack_grpo_examples` packs complete trajectories before either adapter. It
+preserves exact tokens, source positions, response masks, and objective weights,
+and supplies explicit trajectory segment IDs. Set `batch_size_multiple` and
+`minimum_rows` to satisfy the chosen execution shape. Packed rows use response
+width `sequence_length - 1`, with zero weights at prompt, segment-boundary, and
+padding targets. The generic model scorer uses those segment IDs for attention.
 
 ## Offline learner
 
@@ -73,8 +127,8 @@ extra for JaxPP execution. The schedule is standard 1F1B; multihost execution
 requires one process to own all devices of each stage. Expert and replica axes
 must divide the device count evenly.
 
-`packed_pipeline_batch` uses Levanter packing to place complete trajectories in
-fixed-length rows. It preserves source position IDs, segment boundaries, and
+`packed_pipeline_batch` applies the shared `pack_grpo_examples` packing and
+reshapes its result into execution microbatches. It preserves source position IDs, segment boundaries, and
 precomputed objective weights; it rejects trajectories longer than the row.
 Cross-segment targets and padding have zero objective weight. Choose row length
 and microbatch dimensions explicitly; packing does not split trajectories.

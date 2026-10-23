@@ -20,6 +20,7 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import jmp
 import numpy as np
 from haliax import NamedArray
 from jaxtyping import Array, Float, Int, Shaped
@@ -27,9 +28,9 @@ import optax
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from levanter.data.packing import pack_documents
 from levanter.grpo import GrpoConfig, grpo_loss
-from levanter.grpo_model import GrpoExample
+from levanter.grpo_learner import GrpoStep
+from levanter.grpo_model import GrpoExample, pack_grpo_examples
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.pipeline import reshape_batch_into_microbatches
 from levanter.utils.jax_utils import barrier_sync, multihost_broadcast_sync
@@ -144,7 +145,7 @@ def pipeline_batch(example: GrpoExample, *, microbatches: int) -> PipelineBatch:
     batch = PipelineBatch(
         sequence(example.tokens),
         sequence(example.attention_mask),
-        sequence(example.attention_mask),
+        sequence(example.attention_mask if example.segment_ids is None else example.segment_ids),
         sequence(example.position_ids),
         response(example.advantages),
         response(example.policy_weights),
@@ -169,61 +170,17 @@ def packed_pipeline_batch(
     of their original target token; prompt, segment-boundary, and padding targets
     receive zero objective weight. Source position IDs are preserved verbatim.
     """
-    if sequence_length < 2 or rows_per_microbatch < 1 or minimum_microbatches < 1:
-        raise ValueError("Packing requires sequence_length >= 2 and positive batch dimensions")
-    source = jax.tree.map(lambda value: np.asarray(value[0]), pipeline_batch(example, microbatches=1))
-    response_mask = np.asarray(example.response_mask.rearrange(("batch", "response")).array)
-    if np.any((source.attention_mask != 0) & (source.attention_mask != 1)):
-        raise ValueError("Packing requires a binary input attention mask")
-    valid = source.attention_mask.astype(bool)
-    lengths = valid.sum(axis=1)
-    packs = pack_documents(lengths, sequence_length, slice_strategy="raise")
-    microbatches = max(minimum_microbatches, (len(packs) + rows_per_microbatch - 1) // rows_per_microbatch)
-    rows = microbatches * rows_per_microbatch
-    tokens = np.full((rows, sequence_length), pad_token_id, dtype=np.int32)
-    segments = np.full((rows, sequence_length), -1, dtype=np.int32)
-    positions = np.zeros((rows, sequence_length), dtype=np.int32)
-    response_names = ("advantages", "policy_weights", "kl_weights", "old_logprobs")
-    if source.reference_logprobs is not None:
-        response_names += ("reference_logprobs",)
-    objective = {
-        name: np.zeros((rows, sequence_length - 1), dtype=getattr(source, name).dtype) for name in response_names
-    }
-    response_start = source.tokens.shape[1] - source.old_logprobs.shape[1]
-    if response_start < 1:
-        raise ValueError("Each response needs a preceding prompt token")
-    if np.any(response_mask > valid[:, response_start:]) or np.any(response_mask > valid[:, response_start - 1 : -1]):
-        raise ValueError("Each response target and its predecessor must be attended")
-    if np.any((response_mask == 0) & ((source.policy_weights != 0) | (source.kl_weights != 0))):
-        raise ValueError("Objective weights must be zero outside the response mask")
-    for row, documents in enumerate(packs):
-        offset = 0
-        for document in documents:
-            indices = np.flatnonzero(valid[document])
-            count = len(indices)
-            tokens[row, offset : offset + count] = source.tokens[document, indices]
-            segments[row, offset : offset + count] = document
-            positions[row, offset : offset + count] = source.position_ids[document, indices]
-            for compact_target, target in enumerate(indices):
-                if target < response_start or compact_target == 0 or not valid[document, target - 1]:
-                    continue
-                response_index = target - response_start
-                predictor = offset + compact_target - 1
-                for name in response_names:
-                    objective[name][row, predictor] = getattr(source, name)[document, response_index]
-            offset += count
-    batch = PipelineBatch(
-        tokens,
-        (segments >= 0).astype(np.int32),
-        segments,
-        positions,
-        objective["advantages"],
-        objective["policy_weights"],
-        objective["kl_weights"],
-        objective["old_logprobs"],
-        objective.get("reference_logprobs"),
+    if rows_per_microbatch < 1 or minimum_microbatches < 1:
+        raise ValueError("Packing requires positive microbatch dimensions")
+    packed = pack_grpo_examples(
+        example,
+        sequence_length=sequence_length,
+        pad_token_id=pad_token_id,
+        batch_size_multiple=rows_per_microbatch,
+        minimum_rows=minimum_microbatches * rows_per_microbatch,
     )
-    return reshape_batch_into_microbatches(jax.tree.map(jnp.asarray, batch), microbatches)
+    microbatches = packed.tokens.axis_size("batch") // rows_per_microbatch
+    return pipeline_batch(packed, microbatches=microbatches)
 
 
 def _require_jaxpp():
@@ -378,9 +335,17 @@ def _score_stages(
 
 
 def pipeline_loss(
-    trainable, frozen, batch: PipelineBatch, *, config: GrpoConfig, mp_policy, mark=lambda x: x, report_routing=False
+    trainable,
+    frozen,
+    batch: PipelineBatch,
+    *,
+    config: GrpoConfig,
+    mp_policy,
+    accumulation_steps: int = 1,
+    mark=lambda x: x,
+    report_routing=False,
 ):
-    """Compute one microbatch contribution; objective weights already span the batch."""
+    """Compute one contribution for averaged gradients using full-batch objective weights."""
     scored = _score_stages(trainable, frozen, batch, mp_policy, mark, report_routing=report_routing)
     logprobs, routing = scored if report_routing else (scored, {})
     axes = (hax.Axis("batch", logprobs.shape[0]), hax.Axis("response", logprobs.shape[1]))
@@ -395,16 +360,32 @@ def pipeline_loss(
             batch.kl_weights,
         )
     )
-    loss, metrics = grpo_loss(*named, config=config, accumulation_steps=1)
+    loss, metrics = grpo_loss(*named, config=config, accumulation_steps=accumulation_steps)
     return mark((loss, {**{name: metric.value() for name, metric in metrics.items()}, **routing}))
 
 
 def _pipeline_value_and_grad(
-    compute_params, frozen, batch, *, config, mp_policy, mark, gradient_accum_dtype="float32", report_routing=False
+    compute_params,
+    frozen,
+    batch,
+    *,
+    config,
+    mp_policy,
+    mark,
+    accumulation_steps=1,
+    gradient_accum_dtype="float32",
+    report_routing=False,
 ):
     def loss(params):
         return pipeline_loss(
-            params, frozen, batch, config=config, mp_policy=mp_policy, mark=mark, report_routing=report_routing
+            params,
+            frozen,
+            batch,
+            config=config,
+            mp_policy=mp_policy,
+            accumulation_steps=accumulation_steps,
+            mark=mark,
+            report_routing=report_routing,
         )
 
     result, gradients = jax.value_and_grad(loss, has_aux=True)(compute_params)
@@ -448,7 +429,7 @@ def make_pipeline_train_step(
         # Share compute weights across all in-flight microbatches. Casting inside
         # the differentiated loss retains another BF16 copy in every residual.
         compute_params = mp_policy.cast_to_compute(state.trainable)
-        (value, metrics), grads = api.treduce(
+        (_, metrics), grads = api.treduce(
             lambda batch: _pipeline_value_and_grad(
                 compute_params,
                 frozen,
@@ -456,6 +437,7 @@ def make_pipeline_train_step(
                 config=grpo,
                 mp_policy=mp_policy,
                 mark=api.mark_stage_end,
+                accumulation_steps=config.microbatches,
                 gradient_accum_dtype=config.gradient_accum_dtype,
                 report_routing=config.expert_axis_size > 1,
             ),
@@ -463,6 +445,9 @@ def make_pipeline_train_step(
             schedule=api.Std1F1B(num_stages=config.stages),
             operation=((api.Add, metric_ops), api.Add),
         )
+        # Match Trainer's sum-then-average accumulation. grpo_loss scales each
+        # contribution by this count; objective metrics retain their own reductions.
+        grads = jax.tree.map(lambda gradient: gradient / config.microbatches, grads)
         grads = mp_policy.cast_to_param(grads)
         norms = tuple(sum(jnp.sum(g.astype(jnp.float32) ** 2) for g in jax.tree.leaves(stage)) for stage in grads)
         norm = jnp.sqrt(api.cross_mpmd_all_reduce(*norms))
@@ -750,3 +735,69 @@ def score_pipeline_batch(
     if prepared.report_routing:
         logger.info("GRPO scorer routing totals (padding included): %s", routing_totals)
     return dataclasses.replace(batches, old_logprobs=jnp.concatenate(scores, axis=0))
+
+
+def unstack_pipeline_scores(scores: Float[Array, "microbatch batch response"], mesh: Mesh) -> NamedArray:
+    """Merge temporal and row axes with explicit logical-batch sharding."""
+    Batch = hax.Axis("batch", scores.shape[0] * scores.shape[1])
+    Response = hax.Axis("response", scores.shape[2])
+    logical = jax.lax.reshape(
+        scores,
+        (Batch.size, Response.size),
+        out_sharding=NamedSharding(mesh, P(BATCH_AXES, None)),
+    )
+    return hax.named(logical, (Batch, Response))
+
+
+@dataclass(frozen=True)
+class PipelineGrpoBackend:
+    """Use compiled stage-local execution through the shared GRPO step API.
+
+    Construct with make_pipeline_grpo_backend after placing the initial state.
+    Batches keep their logical named axes until the execution boundary; packing
+    is performed separately with pack_grpo_examples when desired.
+    """
+
+    scorer: Callable
+    train_step: Callable
+    microbatches: int
+    mpmd_mesh: Any
+    routing_drop_policy: RoutingDropPolicy
+
+    def score(self, state: PipelineState, batch: GrpoExample) -> GrpoExample:
+        batches = pipeline_batch(batch, microbatches=self.microbatches)
+        scored = score_pipeline_batch(
+            self.scorer, state, batches, self.mpmd_mesh, routing_drop_policy=self.routing_drop_policy
+        )
+        old_logprobs = unstack_pipeline_scores(scored.old_logprobs, self.mpmd_mesh.jax_mesh).rearrange(
+            batch.old_logprobs.axes
+        )
+        return dataclasses.replace(batch, old_logprobs=old_logprobs)
+
+    def update(self, state: PipelineState, batch: GrpoExample) -> GrpoStep[PipelineState]:
+        batches = pipeline_batch(batch, microbatches=self.microbatches)
+        prepared = prepare_pipeline_train(self.train_step, state, batches, self.mpmd_mesh)
+        next_state, metrics = prepared.update(prepared.state, prepared.batches)
+        validate_routing_drops(metrics, context="GRPO update", policy=self.routing_drop_policy)
+        return GrpoStep(next_state, float(metrics["loss"]))
+
+
+def make_pipeline_grpo_backend(
+    optimizer: optax.GradientTransformation,
+    mp_policy: jmp.Policy,
+    state: PipelineState,
+    sample_batch: GrpoExample,
+    *,
+    config: GrpoPipelineConfig,
+    grpo: GrpoConfig,
+    mpmd_mesh,
+    routing_drop_policy: RoutingDropPolicy = RoutingDropPolicy.REJECT,
+) -> PipelineGrpoBackend:
+    """Build reusable scorer and update programs for a fixed execution shape."""
+    batches = pipeline_batch(sample_batch, microbatches=config.microbatches)
+    sample_microbatch = jax.tree.map(lambda value: value[0], batches)
+    scorer = make_pipeline_scorer(mp_policy, state, sample_microbatch, config=config, mpmd_mesh=mpmd_mesh)
+    train_step = make_pipeline_train_step(
+        optimizer, mp_policy, state, batches, config=config, grpo=grpo, mpmd_mesh=mpmd_mesh
+    )
+    return PipelineGrpoBackend(scorer, train_step, config.microbatches, mpmd_mesh, routing_drop_policy)

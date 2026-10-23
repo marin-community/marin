@@ -7,18 +7,23 @@ import jax
 import jax.numpy as jnp
 import jmp
 import numpy as np
+import optax
 import pytest
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+from levanter.grad_accum import microbatched
 from levanter.grpo import GrpoConfig, KlGradient, grpo_loss
 from levanter.grpo_model import GrpoExample
 from levanter.grpo_pipeline import (
     pipeline_batch,
     packed_pipeline_batch,
     PipelineBatch,
+    BATCH_AXES,
     RoutingDropPolicy,
     validate_routing_drops,
     _pipeline_value_and_grad,
     _scorer_repeatability_details,
     pipeline_loss,
+    unstack_pipeline_scores,
 )
 from levanter.grug.sharding import compact_grug_mesh
 
@@ -279,3 +284,123 @@ def test_packing_preserves_response_objectives_positions_and_segment_boundaries(
     assert np.all(np.asarray(packed.kl_weights)[boundary] == 0)
     with pytest.raises(ValueError, match="exceeds"):
         packed_pipeline_batch(example, sequence_length=4, rows_per_microbatch=1, pad_token_id=0)
+
+
+@pytest.mark.parametrize("compute_dtype", ["float32", "bfloat16"])
+def test_pipeline_gradient_mean_matches_spmd_accumulation_and_update(compute_dtype):
+    rows = 6 * jax.device_count()
+    Batch, Response = hax.Axis("batch", rows), hax.Axis("response", 2)
+    count = 3
+    policy = jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32")
+    config = GrpoConfig(0.2, 0.2, 0.1, KlGradient.DIFFERENTIABLE)
+    stages = tuple(
+        Stage(jax.random.normal(jax.random.PRNGKey(i + 30), (8, 8)) * 0.1, jnp.arange(8) * 0.001) for i in range(2)
+    )
+    selected, frozen = zip(*(eqx.partition(stage, eqx.is_inexact_array) for stage in stages), strict=True)
+    tokens = jnp.tile(jnp.array([[1, 2, 3, 4], [2, 3, 4, 5], [3, 4, 5, 6]]), (rows // 3, 1))
+    mask = jnp.ones_like(tokens)
+    # Unequal completion lengths, followed by a whole empty execution microbatch.
+    response_mask = jnp.tile(jnp.array([[1.0, 1.0], [1.0, 0.0]]), (rows // 2, 1))
+    response_mask = response_mask.at[-rows // count :].set(0)
+    weights = response_mask / response_mask.sum()
+    example = GrpoExample(
+        hax.named(tokens, (Batch, hax.Axis("position", 4))),
+        hax.named(mask, (Batch, hax.Axis("position", 4))),
+        hax.named(jnp.broadcast_to(jnp.arange(4), tokens.shape), (Batch, hax.Axis("position", 4))),
+        hax.named(response_mask, (Batch, Response)),
+        hax.named(response_mask * jnp.arange(1, rows + 1)[:, None] / rows, (Batch, Response)),
+        hax.named(weights, (Batch, Response)),
+        hax.named(weights, (Batch, Response)),
+        hax.full((Batch, Response), -2.0),
+        hax.full((Batch, Response), -2.2),
+    )
+
+    def dense_loss(params, batch, *, key=None):
+        model = eqx.combine(policy.cast_to_compute(params), frozen)
+        ids = batch.tokens.array
+        hidden = model[0].embed(ids)
+        for stage in model:
+            hidden = stage.run_blocks(hidden, batch.attention_mask.array, batch.position_ids.array)
+        logits = hidden[:, -3:-1].astype(jnp.float32) @ model[-1].get_lm_head().astype(jnp.float32)
+        logprobs = jax.nn.log_softmax(logits)
+        scores = jnp.take_along_axis(logprobs, ids[:, -2:, None], axis=-1)[..., 0]
+        return grpo_loss(
+            hax.named(scores, batch.old_logprobs.axes),
+            batch.old_logprobs,
+            batch.reference_logprobs,
+            batch.advantages,
+            batch.policy_weights,
+            batch.kl_weights,
+            config=config,
+            accumulation_steps=count,
+        )
+
+    mapping = {"batch": BATCH_AXES}
+    with jax.default_matmul_precision("float32"), jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        spmd = microbatched(
+            eqx.filter_value_and_grad(dense_loss, has_aux=True),
+            Batch,
+            rows // count,
+            mapping,
+            mapping,
+            accum_dtype=jnp.float32,
+        )
+        compiler_options = {"xla_allow_excess_precision": False}
+        (expected_loss, expected_metrics), expected_grads = eqx.filter_jit(spmd, compiler_options=compiler_options)(
+            selected, example
+        )
+        batches = pipeline_batch(example, microbatches=count)
+        contributions = []
+        for index in range(count):
+            batch = jax.tree.map(lambda value: value[index], batches)
+            contributions.append(
+                eqx.filter_jit(_pipeline_value_and_grad, compiler_options=compiler_options)(
+                    policy.cast_to_compute(selected),
+                    frozen,
+                    batch,
+                    config=config,
+                    mp_policy=policy,
+                    mark=lambda value: value,
+                    accumulation_steps=count,
+                )
+            )
+        losses, metrics = zip(*(value for value, _ in contributions), strict=True)
+        gradients = tuple(gradient for _, gradient in contributions)
+        actual_loss = sum(losses) / count
+        actual_grads = jax.tree.map(lambda *values: sum(values) / count, *gradients)
+        np.testing.assert_allclose(actual_loss, expected_loss, atol=1e-7, rtol=1e-5)
+        for name, metric in expected_metrics.items():
+            values = [result[name] for result in metrics]
+            reduced = max(values) if name == "log_ratio_abs_max" else sum(values)
+            np.testing.assert_allclose(reduced, metric.value(), atol=1e-7, rtol=1e-5)
+        for actual, expected in zip(jax.tree.leaves(actual_grads), jax.tree.leaves(expected_grads), strict=True):
+            np.testing.assert_allclose(actual, expected, atol=1e-7, rtol=1e-5)
+        # Compare a clipped update and momentum state over the complete parameter tree.
+        optimizer = optax.chain(optax.clip_by_global_norm(0.01), optax.sgd(0.1, momentum=0.9))
+        initial = optimizer.init(selected)
+        actual_updates, actual_state = optimizer.update(actual_grads, initial, selected)
+        expected_updates, expected_state = optimizer.update(expected_grads, initial, selected)
+        for actual, expected in zip(
+            jax.tree.leaves((eqx.apply_updates(selected, actual_updates), actual_state)),
+            jax.tree.leaves((eqx.apply_updates(selected, expected_updates), expected_state)),
+            strict=True,
+        ):
+            np.testing.assert_allclose(actual, expected, atol=1e-7, rtol=1e-5)
+
+
+@pytest.mark.parametrize("microbatches", [1, 3])
+def test_unstack_pipeline_scores_preserves_values_and_explicit_data_sharding(microbatches):
+    pipeline = 2 if jax.device_count() % 2 == 0 else 1
+    data = jax.device_count() // pipeline
+    mesh = Mesh(
+        np.asarray(jax.devices()).reshape((pipeline, 1, data, 1, 1)),
+        ("pipeline", *BATCH_AXES, "model"),
+        axis_types=(AxisType.Explicit,) * 5,
+    )
+    values = np.arange(microbatches * 2 * data * 3, dtype=np.float32).reshape((microbatches, 2 * data, 3))
+    with jax.set_mesh(mesh):
+        scores = jax.device_put(values, NamedSharding(mesh, P(None, BATCH_AXES, None)))
+        logical = unstack_pipeline_scores(scores, mesh)
+    np.testing.assert_array_equal(logical.array, values.reshape((-1, 3)))
+    assert logical.array.sharding.spec == P(BATCH_AXES, None)
+    assert logical.axis_size("batch") == microbatches * 2 * data
