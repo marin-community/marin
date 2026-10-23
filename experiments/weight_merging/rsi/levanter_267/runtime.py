@@ -30,7 +30,7 @@ from levanter.utils.mesh import MeshConfig
 from rigging.filesystem.storage_path import StoragePath
 
 from experiments.weight_merging.rsi.levanter_267.compile_profile import instrument_prefill
-from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH
+from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH, inference_source_digest
 
 
 class ProbeEngine(MultiHostInferenceEngine):
@@ -232,6 +232,7 @@ def _serve_and_probe(engine, config, model_path, output, item, mode, source_comm
         serve_job=str(info.job_id),
         model_path=model_path,
         model_revision=model_path.rstrip("/").rsplit("@", 1)[-1],
+        inference_source_sha256=inference_source_digest(),
     )
     _save(output, "run-provenance.json", provenance)
 
@@ -315,7 +316,13 @@ def run(mode, model_path, output, item, max_seq_len, source_commit):
         start = time.monotonic()
         tokenizer = load_tokenizer(model_path)
         if jax.process_index() == 0:
-            files = ("tokenizer.json", "tokenizer_config.json", "generation_config.json")
+            files = (
+                "config.json",
+                "tokenizer.json",
+                "tokenizer_config.json",
+                "generation_config.json",
+                "chat_template.jinja",
+            )
             hashes = {name: hashlib.sha256((StoragePath(model_path) / name).read_bytes()).hexdigest() for name in files}
             _save(output, "tokenizer-provenance.json", dict(model_path=model_path, sha256=hashes))
         model = _load_model(mode, model_path, tokenizer, max_seq_len)

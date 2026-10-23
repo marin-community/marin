@@ -31,7 +31,17 @@ STEP12_REVISION = "50fe2f488aee7730bbccc721024b35229075602e"
 STEP12_EVALCHEMY = "3bb8278078e7ad4b5a6b1f81e8a08db3dd206ae6"
 
 
-def run_eval(source, config, endpoint_name, output, commit, runtime_minutes, gate):
+def run_eval(
+    source,
+    config,
+    endpoint_name,
+    output,
+    commit,
+    runtime_minutes,
+    gate,
+    model_revision=STEP12_REVISION,
+    extras=("serve-eval", "math500"),
+):
     """Resolve the private endpoint inside Iris; keep evaluator dependencies isolated."""
     config = dict(config, base_url=iris_ctx().client.resolve_endpoint(endpoint_name).rstrip("/") + "/v1")
     with urllib.request.urlopen(config["base_url"] + "/models", timeout=30) as response:
@@ -44,10 +54,19 @@ def run_eval(source, config, endpoint_name, output, commit, runtime_minutes, gat
     keys = ("run_id", "source_commit", "serve_job", "model_path")
     if any(gate.get(key) != provenance.get(key) for key in keys):
         raise ValueError("Numerical gate report belongs to a different serving process or source")
-    if gate.get("model_revision") != STEP12_REVISION or not STEP12_REVISION.startswith(provenance["model_revision"]):
-        raise ValueError("Numerical gate report does not identify the pinned Step12 model")
+    if "architecture_gate" in gate and (
+        gate.get("inference_source_sha256") != provenance.get("inference_source_sha256")
+        or gate["architecture_gate"].get("inference_source_sha256") != provenance.get("inference_source_sha256")
+    ):
+        raise ValueError("Serving code differs from the validated architecture gate")
+    if gate.get("model_revision") != model_revision or not model_revision.startswith(provenance["model_revision"]):
+        raise ValueError("Gate report does not identify the pinned model")
     client_sha = hashlib.sha256(source.encode()).hexdigest()
-    requirement = f"evalchemy[serve-eval,math500] @ git+https://github.com/marin-community/evalchemy.git@{commit}"
+    chat_route = config["apply_chat_template"] and all(
+        task["generation"] and not task["completion_only"] for task in config["tasks"]
+    )
+    tokenizer_backend = config["chat_tokenizer_backend"] if chat_route else "huggingface"
+    requirement = f"evalchemy[{','.join(extras)}] @ git+https://github.com/marin-community/evalchemy.git@{commit}"
     command = ["uvx", "--no-config", "--python", "3.12", "--from", requirement]
     for package in ("s3fs", "gcsfs"):
         command.extend(["--with", package])
@@ -65,9 +84,10 @@ def run_eval(source, config, endpoint_name, output, commit, runtime_minutes, gat
         config={**config, "base_url": "<resolved inside Iris; omitted>"},
         server_context=context,
         client_tokenizer_revision=None,
-        tokenizer_note="Historical client uses an unrevisioned repository string; chat tokenizer backend is none.",
+        client_tokenizer_backend=tokenizer_backend,
+        tokenizer_note="Historical client uses an unrevisioned repository string; backend is recorded per route.",
         endpoint=endpoint_name,
-        model_revision=STEP12_REVISION,
+        model_revision=model_revision,
         command=command,
         started_epoch=time.time(),
     )
@@ -165,18 +185,42 @@ def main():
     print(json.dumps(plan, indent=2), flush=True)
     if not args.submit:
         return
+    submit_eval(args.name, source, payload, args.endpoint, args.output, STEP12_EVALCHEMY, args.runtime_minutes, gate)
+
+
+def submit_eval(
+    name,
+    source,
+    payload,
+    endpoint_name,
+    output,
+    commit,
+    runtime_minutes,
+    gate,
+    model_revision=STEP12_REVISION,
+    extras=("serve-eval", "math500"),
+):
     resources = ResourceConfig.with_cpu(cpu=4, ram="16g", disk="50g", regions=["us-central2"])
     with connect_controller(cluster_name="marin") as endpoint:
         with IrisClient.remote(endpoint.url, workspace=Path.cwd(), credentials=endpoint.credentials) as client:
             job = client.submit(
-                name=args.name,
+                name=name,
                 entrypoint=Entrypoint.from_callable(
-                    run_eval, source, payload, args.endpoint, args.output, STEP12_EVALCHEMY, args.runtime_minutes, gate
+                    run_eval,
+                    source,
+                    payload,
+                    endpoint_name,
+                    output,
+                    commit,
+                    runtime_minutes,
+                    gate,
+                    model_revision,
+                    extras,
                 ),
                 resources=convert_resources(resources),
                 constraints=convert_constraints(resources),
                 environment=EnvironmentSpec(),
-                timeout=Duration.from_seconds(args.runtime_minutes * 60),
+                timeout=Duration.from_seconds(runtime_minutes * 60),
                 scheduling_timeout=Duration.from_seconds(14400),
                 max_retries_failure=0,
             )
