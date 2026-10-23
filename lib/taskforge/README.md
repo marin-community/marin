@@ -234,10 +234,6 @@ cd lib/taskforge && uvx --from 'pyrefly>=1.0.0,<1.1.0' pyrefly check
 
 `tests/test_pipeline_walkthrough.py` exercises `run_workpiece` with a two-step toy program.
 
-The agentic unit tests use shell-only tasks and reject catalog or runtime downloads. Guest
-interpreter and ports acceptance coverage belongs in ShellSim, as specified in
-[the testing policy](../../TESTING.md#slop-tests-to-reject).
-
 Live tests carry `@pytest.mark.live_glm`. The default marker expression excludes them, and they
 skip with a reason when their inputs are missing. They call GLM-5.3's high pool through the router
 port-forward:
