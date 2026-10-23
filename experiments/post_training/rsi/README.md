@@ -35,7 +35,7 @@ seed tasks). The control arm is `boxes.train(seed_tasks)`: the same training on 
 
 | Box | Module | What it does |
 |---|---|---|
-| Seed | `seed.py` | Samples the RL task pool of Marin-Snowball-67B-A2B-v0.1 (the Smartie run's `train.parquet`, 69,487 tasks) in an order whose every prefix keeps the pool's strata weights: structural closure 82.6%, competitive coding 10.9%, Reasoning Gym 2.8%, STEM multiple choice 2.7%, calendar 1.1%. |
+| Seed | `seed.py` | Samples the Snowball curriculum of the RL data catalog (`rl-data/curricula/snowball-v0`, made by `task_curation`) in an order whose every prefix keeps its family weights. Without the source that a judge model grades, it has 93,347 tasks: Reasoning Gym, STEM and structural 24.3% each, competitive coding 17.2%, calendar 9.8%. The held-out pool is the 910 Snowball development tasks, which the curriculum excludes. |
 | Train | `skyrl_box.py`, `skyrl_launch.py` | A SkyRL job (full-parameter GRPO with Megatron, vLLM engines on their own node, staleness 1). The box writes the tasks into the job's feed and yields the graded groups that the job writes back. The job serves the live policy on an OpenAI-compatible endpoint, which the Taskforge gate uses. |
 | Analyze | `feedback.py` | Keeps one failed attempt of each task that the policy passes at most 25% of the time, and runs `analyze_failed_runs` (#10265) on each batch. It yields each new capability ID once. |
 | Generate | `feedback.py` | One agentic Taskforge session (`taskforge.agentic`) for each idea, with bubblewrap solver machines. The live policy is the solver of the gate, so an accepted task has a policy pass rate from 0.1 to 0.8. The build program of each accepted task makes more training instances and held-out probe instances. `submit` refuses a program whose 8 test instances share one reference answer more than 25% of the time: in the first run, a family with answers 3, 4 or 5 taught the policy to guess. |
@@ -48,10 +48,11 @@ assistant prefix, a task with a shell gets a bubblewrap machine, and a script gr
 `policy.py` serves a policy for the gate and the evaluation: `VllmPolicy` is a `rolloutengine` model that renders
 the chat template itself and keeps the exact sampled tokens.
 
-Two conversions run the pool tasks on any policy and without Daytona. A structural-closure row holds prompt token
+Two conversions run the seed tasks on any policy and without Daytona. A structural-closure row holds prompt token
 IDs of the Snowball tokenizer; `structure_closure_task` turns it into a conversation that ends with the unfinished
-assistant text. The other strata grade with a script in a Docker image; the seed tasks grade with the host's Python
-environment (which has `reasoning_gym`, `verifyit`, numpy and pandas) in a bubblewrap sandbox.
+assistant text. The script graders name a packages lock or a Docker image; they grade with the host's Python
+environment (which has `reasoning_gym`, `verifyit`, numpy, pandas and the YAML, XML and OpenAPI validators) in a
+bubblewrap sandbox.
 
 ## Run
 
@@ -86,9 +87,11 @@ tensor parallel size 1, and without LoRA).
 
 ## Results with SkyRL (2026-10-23)
 
-One seed for each model, on cw-us-east-02a. Each step trains 32 tasks with 8 attempts. The RSI arm mixes the pool's
-tasks 50/50 with synthesized tasks; the control trains on the pool's tasks only, in the same order. In every arm,
-the strata shares of the trained pool tasks are within 0.003 of the pool's weights.
+These runs seeded from the training file of the Smartie run (`open-athena/Snowball-Smartie-RL-2026.10.15.32-Data`,
+69,487 tasks, 82.6% structural closure), before the seed moved to the curriculum. One seed for each model, on
+cw-us-east-02a. Each step trains 32 tasks with 8 attempts. The RSI arm mixes the pool's tasks 50/50 with synthesized
+tasks; the control trains on the pool's tasks only, in the same order. In every arm, the strata shares of the
+trained pool tasks are within 0.003 of the pool's weights.
 
 - Qwen3-4B-Instruct-2507: 240 steps, learning rate 2e-6, 2 nodes of 8 H100 for each arm. The RSI arm trained 3,827
   synthesized groups of 185 accepted tasks from 114 Taskforge sessions.

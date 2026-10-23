@@ -1,19 +1,18 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The seed of the RSI loop: tasks sampled from the existing RL task pool, with the pool's strata weights.
+"""The seed of the RSI loop: tasks of the RL data catalog's Snowball curriculum, with its family weights.
 
-The pool is the training file of the Snowball Smartie RL run that trained Marin-Snowball-67B-A2B-v0.1. Each row
-holds a lowered TaskSpec and its stratum (``teacher_route``): structural closure, competitive coding, Reasoning Gym,
-STEM multiple choice, and calendar. A sample keeps the share of each stratum in the pool.
+The curriculum (``rl-data/curricula/snowball-v0``, made by ``experiments/post_training/task_curation``) holds
+100,000 tasks of five families: calendar, competitive coding, Reasoning Gym, STEM and structural. Most rows hold a
+TaskSpec. The structural closure rows hold the native lowered spec of the Snowball Smartie RL run, with prompt token
+IDs of the Snowball tokenizer; ``structure_closure_task`` converts such a row to a conversation that ends with the
+unfinished assistant text, which a policy continues with its own tokenizer. The held-out set is the 910 Snowball
+development tasks, which the curriculum excludes, in the same native format.
 
-Two conversions make the rows run on any policy and without Daytona:
-
-- A structural-closure row holds prompt token IDs of the Snowball tokenizer. ``structure_closure_task`` converts
-  it to a conversation that ends with the unfinished assistant text, which a policy continues with its own tokenizer.
-- The script graders of the other strata name a Docker image with Python, ``reasoning_gym``, ``verifyit``, numpy and
-  pandas. The seed tasks grade with the host's Python environment instead, which has the same packages, in a
-  bubblewrap sandbox (see ``rollouts.machine_factories``).
+The script graders name a packages lock or a Docker image with Python, ``reasoning_gym``, ``verifyit``, numpy and
+pandas. They grade with the host's Python environment, which has the same packages, in a bubblewrap sandbox (see
+``rollouts.machine_factories``).
 """
 
 import json
@@ -31,16 +30,29 @@ from taskcompendium.convert.structure_closure import structure_closure_task
 from taskcompendium.models import SCHEMA_VERSION, ScriptGrader, Source, TaskSpec
 from taskcompendium.pipeline.models import ImportRejection, RawRow
 
-POOL_URL = "hf://datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data@cb728a7636caad3fc6fa6b6ba85a49194d9d69a3"
-"""The task files of the Snowball Smartie RL run 2026.10.15.32, pinned to a revision."""
-TRAIN_FILE = "train.parquet"
-VALIDATION_FILE = "validation.parquet"
+CURRICULUM_URL = "s3://marin-us-east-02a/marin/rl-data/curricula/snowball-v0/2026.10.19.2/train.parquet"
+HELDOUT_URL = "s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet"
+JUDGED_SOURCES = frozenset({"Task Trove:laion__glaive-code-assistant-sandboxes-verified-v2"})
+"""Curriculum sources that a judge model grades. The SkyRL job has no judge, so the seed leaves them out."""
+FAMILY_COLUMN = "family"
+SOURCE_COLUMN = "source_id"
+CONTRACT_COLUMN = "contract_kind"
+TASK_JSON_COLUMN = "task_json"
+NATIVE_CONTRACT = "native-structure_closure"
 STRATUM_COLUMN = "teacher_route"
-TASK_COLUMN = "lowered_task_spec"
+LOWERED_COLUMN = "lowered_task_spec"
 STRUCTURAL = "structural"
 POOL_SCHEMA = "0.27"
-"""The TaskSpec schema of the pool rows. Schema 0.28 only adds the optional ``FinalAction.normal_submission``, so
-a row of the pool is also a TaskSpec of the current schema."""
+"""The TaskSpec schema of the rows. Schema 0.28 only adds the optional ``FinalAction.normal_submission``, so a row is
+also a TaskSpec of the current schema."""
+
+
+@dataclass(frozen=True)
+class PoolRow:
+    stratum: str
+    payload: str
+    """A TaskSpec, or with ``native`` a lowered spec of the Smartie run, as JSON."""
+    native: bool
 
 
 @dataclass(frozen=True)
@@ -54,22 +66,35 @@ class PoolTask:
 class TaskPool:
     """The rows of one pool file, read once. Tasks convert when they are sampled."""
 
-    def __init__(self, rows: Sequence[tuple[str, str]]):
+    def __init__(self, rows: Sequence[PoolRow]):
         self._rows = rows
-        """``(stratum, lowered task JSON)`` for each row, in file order."""
 
     @classmethod
     def read(cls, url: str) -> "TaskPool":
+        """The rows of the curriculum (``CURRICULUM_URL``) or of a native file (``HELDOUT_URL``), in file order."""
         with StoragePath(url).open("rb") as handle:
-            table = pq.read_table(handle, columns=[STRATUM_COLUMN, TASK_COLUMN])
-        return cls(list(zip(table[STRATUM_COLUMN].to_pylist(), table[TASK_COLUMN].to_pylist(), strict=True)))
+            parquet = pq.ParquetFile(handle)
+            if FAMILY_COLUMN not in parquet.schema_arrow.names:
+                table = parquet.read(columns=[STRATUM_COLUMN, LOWERED_COLUMN])
+                rows = zip(table[STRATUM_COLUMN].to_pylist(), table[LOWERED_COLUMN].to_pylist(), strict=True)
+                return cls([PoolRow(stratum, lowered, native=True) for stratum, lowered in rows])
+            columns = [FAMILY_COLUMN, SOURCE_COLUMN, CONTRACT_COLUMN, TASK_JSON_COLUMN, LOWERED_COLUMN]
+            table = parquet.read(columns=columns)
+        values = (table[column].to_pylist() for column in columns)
+        return cls(
+            [
+                PoolRow(family, lowered, native=True) if contract == NATIVE_CONTRACT else PoolRow(family, task, False)
+                for family, source, contract, task, lowered in zip(*values, strict=True)
+                if source not in JUDGED_SOURCES
+            ]
+        )
 
     @cached_property
     def strata(self) -> dict[str, list[int]]:
         """The row indices of each stratum."""
         strata: dict[str, list[int]] = {}
-        for index, (stratum, _) in enumerate(self._rows):
-            strata.setdefault(stratum, []).append(index)
+        for index, row in enumerate(self._rows):
+            strata.setdefault(row.stratum, []).append(index)
         return strata
 
     @property
@@ -104,22 +129,28 @@ class TaskPool:
 
     def task(self, index: int) -> PoolTask | None:
         """The task of one row, or ``None`` when the row does not convert."""
-        stratum, lowered = self._rows[index]
-        task = pool_task(json.loads(lowered), stratum)
-        return None if task is None else PoolTask(task, stratum)
+        row = self._rows[index]
+        task = pool_task(row)
+        return None if task is None else PoolTask(task, row.stratum)
 
 
-def pool_task(lowered: Mapping[str, object], stratum: str) -> TaskSpec | None:
-    """The TaskSpec of one lowered pool row, ready for any policy and a host grader; ``None`` if it does not convert."""
-    if stratum == STRUCTURAL:
-        native = lowered["task"]
-        assert isinstance(native, Mapping)
-        source = Source.model_validate(native["source"])
-        converted = structure_closure_task(RawRow(str(native["id"]), source, {TASK_COLUMN: json.dumps(lowered)}))
-        return None if isinstance(converted, ImportRejection) else converted.task
+def pool_task(row: PoolRow) -> TaskSpec | None:
+    """The TaskSpec of one pool row, ready for any policy and a host grader; ``None`` if it does not convert."""
+    if not row.native:
+        return host_graded(current_schema(json.loads(row.payload)))
+    lowered = json.loads(row.payload)
     native = lowered["task"]
-    assert isinstance(native, Mapping) and native["schema_version"] == POOL_SCHEMA
-    return host_graded(TaskSpec.model_validate({**native, "schema_version": SCHEMA_VERSION}))
+    assert isinstance(native, Mapping)
+    if row.stratum != STRUCTURAL:
+        return host_graded(current_schema(native))
+    source = Source.model_validate(native["source"])
+    converted = structure_closure_task(RawRow(str(native["id"]), source, {LOWERED_COLUMN: row.payload}))
+    return None if isinstance(converted, ImportRejection) else converted.task
+
+
+def current_schema(task: Mapping[str, object]) -> TaskSpec:
+    assert task["schema_version"] == POOL_SCHEMA
+    return TaskSpec.model_validate({**task, "schema_version": SCHEMA_VERSION})
 
 
 def host_graded(task: TaskSpec) -> TaskSpec:
