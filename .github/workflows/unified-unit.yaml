@@ -182,7 +182,8 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "24"
+          check-latest: true
 
       - name: Install dependencies
         run: uv sync --package marin-levanter --dev --group test --frozen --extra torch_test --no-install-package torch
