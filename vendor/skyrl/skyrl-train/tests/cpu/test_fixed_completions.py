@@ -311,9 +311,23 @@ def test_domain_weighted_order_fills_every_batch_with_the_configured_rows_per_ro
         assert routes == {"route_x": 32, "route_r": 32}
     every_uid = sorted(dataset.uid(index) for index in range(len(dataset)))
     assert sorted(uids(batches[:2])) == sorted(uids(batches[2:])) == every_uid
-    # Seeded passes would leave each batch's route mix to chance, so a multi-route dataset needs this order.
+    # Shuffled passes would leave each batch's route mix to chance, so a multi-route dataset needs this order.
     with pytest.raises(ValueError, match="domain-weighted"):
         prompt_order_from_config(fixed_completion_test_config(trainer={"train_batch_size": 64}), dataset)
+
+
+def test_unshuffled_passes_read_a_multi_route_file_in_order(tmp_path, tokenizer):
+    """With data.shuffle=false the file's order fixes each batch's route mix, so a builder can match another arm."""
+    dataset = build_dataset(
+        tokenizer, write_text_rows(tmp_path / "train.jsonl", num_rows=128, routes=("route_x", "route_r"))
+    )
+    cfg = with_open_maps(
+        fixed_completion_test_config(trainer={"train_batch_size": 64, "policy_mini_batch_size": 64}),
+        {"data": {"shuffle": False}},
+    )
+    validate_objective(cfg)
+    batches = consumed_batches(cfg, dataset, 2)
+    assert uids(batches) == [dataset.uid(index) for index in range(len(dataset))]
 
 
 def test_rollout_requests_cap_generation_at_their_task_cap():
