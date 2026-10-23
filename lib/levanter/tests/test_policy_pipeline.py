@@ -11,12 +11,12 @@ import optax
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grad_accum import microbatched
-from levanter.grpo import GrpoConfig, KlGradient, grpo_loss
-from levanter.grpo_model import GrpoExample
-from levanter.grpo_pipeline import (
+from levanter.policy import ClippedPolicyConfig, KlGradient, clipped_policy_loss
+from levanter.policy_model import PolicyBatch
+from levanter.policy_pipeline import (
     pipeline_batch,
     packed_pipeline_batch,
-    PipelineBatch,
+    PipelinePolicyBatch,
     BATCH_AXES,
     RoutingDropPolicy,
     validate_routing_drops,
@@ -61,7 +61,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
         positions = jnp.maximum(jnp.cumsum(mask, -1) - 1, 0)
         advantages = jnp.tile(jnp.array([[1.0, 0.0], [-1.0, -1.0]]), (rows // 2, 1))
         weights = jnp.tile(jnp.array([[1.0, 0.0], [0.5, 0.5]]), (rows // 2, 1)) / rows
-        batch = PipelineBatch(
+        batch = PipelinePolicyBatch(
             tokens,
             mask,
             mask,
@@ -72,7 +72,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
             jnp.full((rows, 2), -2.0),
             jnp.full((rows, 2), -2.1) if with_reference else None,
         )
-        config = GrpoConfig(0.2, 0.2, 0.001 if with_reference else 0.0, KlGradient.DETACHED)
+        config = ClippedPolicyConfig(0.2, 0.2, 0.001 if with_reference else 0.0, KlGradient.DETACHED)
         policy = jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32")
         if not with_reference:
             with pytest.raises(ValueError, match="reference_log_probs are required"):
@@ -80,7 +80,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
                     selected,
                     frozen,
                     batch,
-                    config=GrpoConfig(0.2, 0.2, 0.001, KlGradient.DIFFERENTIABLE),
+                    config=ClippedPolicyConfig(0.2, 0.2, 0.001, KlGradient.DIFFERENTIABLE),
                     mp_policy=policy,
                 )
 
@@ -101,7 +101,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
             )
             selected_probs = jnp.take_along_axis(logprobs, tokens[:, -2:, None], axis=-1)[..., 0]
             inputs = (selected_probs, batch.old_logprobs, batch.reference_logprobs, advantages, weights, weights)
-            return grpo_loss(
+            return clipped_policy_loss(
                 *(None if value is None else hax.named(value, (Batch, Response)) for value in inputs),
                 config=config,
                 accumulation_steps=1,
@@ -122,7 +122,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
 def test_hoisted_bf16_weights_preserve_per_microbatch_fp32_gradient_accumulation():
     rows = 2 * jax.device_count()
     policy = jmp.get_policy("params=float32,compute=bfloat16,output=float32")
-    config = GrpoConfig(0.2, 0.2, 0.0, KlGradient.DETACHED)
+    config = ClippedPolicyConfig(0.2, 0.2, 0.0, KlGradient.DETACHED)
     stage = Stage(jax.random.normal(jax.random.PRNGKey(9), (8, 8)) * 0.2, jnp.arange(8) * 0.001)
     selected = (eqx.tree_at(lambda value: value.bias, stage, None),)
     frozen = (eqx.tree_at(lambda value: value.weight, stage, None),)
@@ -135,7 +135,7 @@ def test_hoisted_bf16_weights_preserve_per_microbatch_fp32_gradient_accumulation
             positions = jnp.broadcast_to(jnp.arange(4), tokens.shape)
             advantages = jnp.tile(jnp.array([[0.37 + index, -0.71], [1.13, 0.19 - index]]), (rows // 2, 1))
             weights = jnp.ones_like(advantages) / (6 * rows)
-            batch = PipelineBatch(
+            batch = PipelinePolicyBatch(
                 tokens,
                 mask,
                 mask,
@@ -243,7 +243,7 @@ def test_packing_preserves_response_objectives_positions_and_segment_boundaries(
     def resp(x):
         return hax.named(x, (Batch, Response))
 
-    example = GrpoExample(
+    example = PolicyBatch(
         seq(tokens),
         seq(attention),
         seq(positions),
@@ -292,7 +292,7 @@ def test_pipeline_gradient_mean_matches_spmd_accumulation_and_update(compute_dty
     Batch, Response = hax.Axis("batch", rows), hax.Axis("response", 2)
     count = 3
     policy = jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32")
-    config = GrpoConfig(0.2, 0.2, 0.1, KlGradient.DIFFERENTIABLE)
+    config = ClippedPolicyConfig(0.2, 0.2, 0.1, KlGradient.DIFFERENTIABLE)
     stages = tuple(
         Stage(jax.random.normal(jax.random.PRNGKey(i + 30), (8, 8)) * 0.1, jnp.arange(8) * 0.001) for i in range(2)
     )
@@ -303,7 +303,7 @@ def test_pipeline_gradient_mean_matches_spmd_accumulation_and_update(compute_dty
     response_mask = jnp.tile(jnp.array([[1.0, 1.0], [1.0, 0.0]]), (rows // 2, 1))
     response_mask = response_mask.at[-rows // count :].set(0)
     weights = response_mask / response_mask.sum()
-    example = GrpoExample(
+    example = PolicyBatch(
         hax.named(tokens, (Batch, hax.Axis("position", 4))),
         hax.named(mask, (Batch, hax.Axis("position", 4))),
         hax.named(jnp.broadcast_to(jnp.arange(4), tokens.shape), (Batch, hax.Axis("position", 4))),
@@ -330,7 +330,7 @@ def test_pipeline_gradient_mean_matches_spmd_accumulation_and_update(compute_dty
             jnp.sum(jax.lax.exp(shifted, accuracy=accuracy), axis=-1, keepdims=True), accuracy=accuracy
         )
         scores = jnp.take_along_axis(logprobs, ids[:, -2:, None], axis=-1)[..., 0]
-        return grpo_loss(
+        return clipped_policy_loss(
             hax.named(scores, batch.old_logprobs.axes),
             batch.old_logprobs,
             batch.reference_logprobs,

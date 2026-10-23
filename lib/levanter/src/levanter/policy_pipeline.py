@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Stage-owned GRPO execution using JaxPP's standard 1F1B schedule.
+"""Stage-owned policy execution using JaxPP's standard 1F1B schedule.
 
 Each stage owns its model weights and optimizer moments.
 Model-specific stage wrappers implement the protocol below; this module owns
@@ -28,11 +28,11 @@ import optax
 from jax.sharding import AxisType, Mesh, NamedSharding
 from jax.sharding import PartitionSpec as P
 
-from levanter.grpo import GrpoConfig, grpo_loss
-from levanter.grpo_learner import GrpoStep
-from levanter.grpo_model import GrpoExample, pack_grpo_examples
 from levanter.grug.loss import fused_linear_softmax_cross_entropy_loss
 from levanter.pipeline import reshape_batch_into_microbatches
+from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
+from levanter.policy_learner import PolicyLearner, PolicyStep
+from levanter.policy_model import PolicyBatch, pack_policy_batch
 from levanter.utils.jax_utils import barrier_sync, multihost_broadcast_sync
 from levanter.utils.types import FilterTree
 
@@ -84,7 +84,7 @@ class PipelineStage(Protocol):
 
 
 @dataclass(frozen=True)
-class GrpoPipelineConfig:
+class PipelinePolicyConfig:
     stages: int
     microbatches: int
     max_grad_norm: float
@@ -93,7 +93,7 @@ class GrpoPipelineConfig:
 
     def __post_init__(self):
         if self.stages < 2 or self.microbatches < self.stages:
-            raise ValueError("Pipeline GRPO requires at least two stages and at least one microbatch per stage")
+            raise ValueError("Pipeline policy requires at least two stages and at least one microbatch per stage")
         if self.gradient_accum_dtype not in ("float32", "bfloat16"):
             raise ValueError("gradient_accum_dtype must be float32 or bfloat16")
         if self.expert_axis_size < 1:
@@ -104,7 +104,7 @@ class GrpoPipelineConfig:
 
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
-class PipelineBatch:
+class PipelinePolicyBatch:
     """Sequence and objective tensors with an optional leading microbatch axis."""
 
     tokens: Int[Array, "*microbatch batch position"]
@@ -133,7 +133,7 @@ class _OptimizerState:
     opt_state: tuple[optax.OptState, ...]
 
 
-def pipeline_batch(example: GrpoExample, *, microbatches: int) -> PipelineBatch:
+def pipeline_batch(example: PolicyBatch, *, microbatches: int) -> PipelinePolicyBatch:
     """Convert named examples once, then add an explicit temporal batch axis."""
 
     def sequence(value: NamedArray) -> Shaped[Array, "batch position"]:
@@ -142,7 +142,7 @@ def pipeline_batch(example: GrpoExample, *, microbatches: int) -> PipelineBatch:
     def response(value: NamedArray) -> Float[Array, "batch response"]:
         return value.rearrange(("batch", "response")).array
 
-    batch = PipelineBatch(
+    batch = PipelinePolicyBatch(
         sequence(example.tokens),
         sequence(example.attention_mask),
         sequence(example.attention_mask if example.segment_ids is None else example.segment_ids),
@@ -157,13 +157,13 @@ def pipeline_batch(example: GrpoExample, *, microbatches: int) -> PipelineBatch:
 
 
 def packed_pipeline_batch(
-    example: GrpoExample,
+    example: PolicyBatch,
     *,
     sequence_length: int,
     rows_per_microbatch: int,
     pad_token_id: int,
     minimum_microbatches: int = 1,
-) -> PipelineBatch:
+) -> PipelinePolicyBatch:
     """Pack complete trajectories while preserving their precomputed objectives.
 
     Only masked input padding is removed. Response fields move to the predictor
@@ -172,7 +172,7 @@ def packed_pipeline_batch(
     """
     if rows_per_microbatch < 1 or minimum_microbatches < 1:
         raise ValueError("Packing requires positive microbatch dimensions")
-    packed = pack_grpo_examples(
+    packed = pack_policy_batch(
         example,
         sequence_length=sequence_length,
         pad_token_id=pad_token_id,
@@ -185,15 +185,15 @@ def packed_pipeline_batch(
 
 def _require_jaxpp():
     if pp is None:
-        raise ModuleNotFoundError("GRPO pipeline execution requires the root `pipeline` extra")
+        raise ModuleNotFoundError("Policy pipeline execution requires the root `pipeline` extra")
     return pp
 
 
-def make_pipeline_mesh(config: GrpoPipelineConfig, *, replica_axis_size: int = 1):
+def make_pipeline_mesh(config: PipelinePolicyConfig, *, replica_axis_size: int = 1):
     """Create explicit stage/data/expert meshes without duplicating model state."""
     expert_axis_size = config.expert_axis_size
     if jax.process_count() > 1 and jax.process_count() != config.stages:
-        raise ValueError("Multihost GRPO requires one JAX process per pipeline stage")
+        raise ValueError("Multihost policy requires one JAX process per pipeline stage")
     api = _require_jaxpp()
     fixed = config.stages * replica_axis_size * expert_axis_size
     if jax.device_count() % fixed:
@@ -276,7 +276,7 @@ def initialize_pipeline_state(stages: tuple[PipelineStage, ...], optimizer, mpmd
 def _score_stages(
     trainable,
     frozen,
-    batch: PipelineBatch,
+    batch: PipelinePolicyBatch,
     mp_policy,
     mark: Callable,
     *,
@@ -337,9 +337,9 @@ def _score_stages(
 def pipeline_loss(
     trainable,
     frozen,
-    batch: PipelineBatch,
+    batch: PipelinePolicyBatch,
     *,
-    config: GrpoConfig,
+    config: ClippedPolicyConfig,
     mp_policy,
     accumulation_steps: int = 1,
     mark=lambda x: x,
@@ -360,7 +360,7 @@ def pipeline_loss(
             batch.kl_weights,
         )
     )
-    loss, metrics = grpo_loss(*named, config=config, accumulation_steps=accumulation_steps)
+    loss, metrics = clipped_policy_loss(*named, config=config, accumulation_steps=accumulation_steps)
     return mark((loss, {**{name: metric.value() for name, metric in metrics.items()}, **routing}))
 
 
@@ -410,10 +410,10 @@ def make_pipeline_train_step(
     optimizer,
     mp_policy,
     sample_state,
-    sample_batches: PipelineBatch,
+    sample_batches: PipelinePolicyBatch,
     *,
-    config: GrpoPipelineConfig,
-    grpo: GrpoConfig,
+    config: PipelinePolicyConfig,
+    objective: ClippedPolicyConfig,
     mpmd_mesh,
 ):
     """Compile 1F1B gradients and global clipping; each update consumes its state."""
@@ -434,7 +434,7 @@ def make_pipeline_train_step(
                 compute_params,
                 frozen,
                 batch,
-                config=grpo,
+                config=objective,
                 mp_policy=mp_policy,
                 mark=api.mark_stage_end,
                 accumulation_steps=config.microbatches,
@@ -445,7 +445,7 @@ def make_pipeline_train_step(
             schedule=api.Std1F1B(num_stages=config.stages),
             operation=((api.Add, metric_ops), api.Add),
         )
-        # Match Trainer's sum-then-average accumulation. grpo_loss scales each
+        # Match Trainer's sum-then-average accumulation. clipped_policy_loss scales each
         # contribution by this count; objective metrics retain their own reductions.
         grads = jax.tree.map(lambda gradient: gradient / config.microbatches, grads)
         grads = mp_policy.cast_to_param(grads)
@@ -472,7 +472,7 @@ def make_pipeline_train_step(
     return function
 
 
-def make_pipeline_scorer(mp_policy, sample_state, sample_microbatch, *, config: GrpoPipelineConfig, mpmd_mesh):
+def make_pipeline_scorer(mp_policy, sample_state, sample_microbatch, *, config: PipelinePolicyConfig, mpmd_mesh):
     """Build a forward-only MPMD scorer using the training stage placement."""
     api = _require_jaxpp()
 
@@ -544,7 +544,7 @@ def _place_existing(tree, targets, mpmd_mesh):
 class PreparedPipelineTrain(NamedTuple):
     update: Callable
     state: PipelineState
-    batches: PipelineBatch
+    batches: PipelinePolicyBatch
 
 
 def prepare_pipeline_train(step, state, batches, mpmd_mesh):
@@ -667,17 +667,17 @@ def _score_first_pipeline_microbatch(api, scorer: _PreparedPipelineScorer, sampl
         score[1] if scorer.report_routing else {},
         repeated[1] if scorer.report_routing else {},
     )
-    raise FloatingPointError(f"Compiled GRPO scorer is not repeatable: {details}")
+    raise FloatingPointError(f"Compiled policy scorer is not repeatable: {details}")
 
 
 def score_pipeline_batch(
     scorer,
     state,
-    batches: PipelineBatch,
+    batches: PipelinePolicyBatch,
     mpmd_mesh,
     *,
     routing_drop_policy: RoutingDropPolicy = RoutingDropPolicy.REJECT,
-) -> PipelineBatch:
+) -> PipelinePolicyBatch:
     """Freeze raw old scores and verify exact first-microbatch scorer repeatability."""
     api = _require_jaxpp()
     sample = jax.tree.map(lambda x: x[0], batches)
@@ -691,7 +691,7 @@ def score_pipeline_batch(
             return result
         logprobs, routing = result
         values = {name: int(value) for name, value in routing.items()}
-        validate_routing_drops(values, context=f"GRPO scorer microbatch {index}", policy=routing_drop_policy)
+        validate_routing_drops(values, context=f"policy scorer microbatch {index}", policy=routing_drop_policy)
         for name, value in values.items():
             routing_totals[name] = (
                 max(routing_totals[name], value) if name in ROUTING_MAX_METRICS else routing_totals[name] + value
@@ -733,7 +733,7 @@ def score_pipeline_batch(
             value = checked_score(result, index)
             scores.append(jax.lax.reshape(value, (1, *value.shape), out_sharding=stacked_sharding))
     if prepared.report_routing:
-        logger.info("GRPO scorer routing totals (padding included): %s", routing_totals)
+        logger.info("Policy scorer routing totals (padding included): %s", routing_totals)
     return dataclasses.replace(batches, old_logprobs=jnp.concatenate(scores, axis=0))
 
 
@@ -750,12 +750,12 @@ def unstack_pipeline_scores(scores: Float[Array, "microbatch batch response"], m
 
 
 @dataclass(frozen=True)
-class PipelineGrpoBackend:
-    """Use compiled stage-local execution through the shared GRPO step API.
+class PipelinePolicyLearner:
+    """Execute scoring and policy updates with stage-local model state.
 
-    Construct with make_pipeline_grpo_backend after placing the initial state.
+    Construct with make_pipeline_policy_learner after placing the initial state.
     Batches keep their logical named axes until the execution boundary; packing
-    is performed separately with pack_grpo_examples when desired.
+    is performed separately with pack_policy_batch when desired.
     """
 
     scorer: Callable
@@ -764,7 +764,8 @@ class PipelineGrpoBackend:
     mpmd_mesh: "pp.MpmdMesh"
     routing_drop_policy: RoutingDropPolicy
 
-    def score(self, state: PipelineState, batch: GrpoExample) -> GrpoExample:
+    def score(self, state: PipelineState, batch: PolicyBatch) -> PolicyBatch:
+        """Freeze the current policy's scores in a reusable logical batch."""
         batches = pipeline_batch(batch, microbatches=self.microbatches)
         scored = score_pipeline_batch(
             self.scorer, state, batches, self.mpmd_mesh, routing_drop_policy=self.routing_drop_policy
@@ -774,7 +775,8 @@ class PipelineGrpoBackend:
         )
         return dataclasses.replace(batch, old_logprobs=old_logprobs)
 
-    def update(self, state: PipelineState, batch: GrpoExample) -> GrpoStep[PipelineState]:
+    def update(self, state: PipelineState, batch: PolicyBatch) -> PolicyStep[PipelineState]:
+        """Update from the supplied old-policy scores without rescoring."""
         batches = pipeline_batch(batch, microbatches=self.microbatches)
         prepared = prepare_pipeline_train(self.train_step, state, batches, self.mpmd_mesh)
         next_state, metrics = prepared.update(prepared.state, prepared.batches)
@@ -786,26 +788,26 @@ class PipelineGrpoBackend:
             metrics = _require_jaxpp().mpmd_to_spmd_reshard(
                 self.mpmd_mesh, metrics, metric_shardings, threshold=metric_bytes * self.mpmd_mesh.mpmd_dim
             )
-        validate_routing_drops(metrics, context="GRPO update", policy=self.routing_drop_policy)
-        return GrpoStep(next_state, float(metrics["loss"]))
+        validate_routing_drops(metrics, context="policy update", policy=self.routing_drop_policy)
+        return PolicyStep(next_state, float(metrics["loss"]))
 
 
-def make_pipeline_grpo_backend(
+def make_pipeline_policy_learner(
     optimizer: optax.GradientTransformation,
     mp_policy: jmp.Policy,
     state: PipelineState,
-    sample_batch: GrpoExample,
+    sample_batch: PolicyBatch,
     *,
-    config: GrpoPipelineConfig,
-    grpo: GrpoConfig,
+    config: PipelinePolicyConfig,
+    objective: ClippedPolicyConfig,
     mpmd_mesh,
     routing_drop_policy: RoutingDropPolicy = RoutingDropPolicy.REJECT,
-) -> PipelineGrpoBackend:
+) -> PolicyLearner[PipelineState]:
     """Build reusable scorer and update programs for a fixed execution shape."""
     batches = pipeline_batch(sample_batch, microbatches=config.microbatches)
     sample_microbatch = jax.tree.map(lambda value: value[0], batches)
     scorer = make_pipeline_scorer(mp_policy, state, sample_microbatch, config=config, mpmd_mesh=mpmd_mesh)
     train_step = make_pipeline_train_step(
-        optimizer, mp_policy, state, batches, config=config, grpo=grpo, mpmd_mesh=mpmd_mesh
+        optimizer, mp_policy, state, batches, config=config, objective=objective, mpmd_mesh=mpmd_mesh
     )
-    return PipelineGrpoBackend(scorer, train_step, config.microbatches, mpmd_mesh, routing_drop_policy)
+    return PipelinePolicyLearner(scorer, train_step, config.microbatches, mpmd_mesh, routing_drop_policy)
