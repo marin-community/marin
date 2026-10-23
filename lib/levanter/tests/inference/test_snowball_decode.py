@@ -41,6 +41,7 @@ def test_stacked_cache_copy_and_reset_preserve_layer_and_head_order():
 
 
 @pytest.mark.parametrize("batch_size", [4, 8])
+@pytest.mark.slow
 @pytest.mark.timeout(240)
 def test_batched_chunked_prefill_preserves_sequences_and_page_budget_across_reuse(batch_size):
     if jax.device_count() != 1:
@@ -122,6 +123,7 @@ def test_batched_chunked_prefill_preserves_sequences_and_page_budget_across_reus
         )
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(180)
 def test_packed_chunked_snowball_decode_matches_full_forward():
     cfg = SnowballConfig(
@@ -191,6 +193,7 @@ def test_packed_chunked_snowball_decode_matches_full_forward():
             np.testing.assert_array_equal(cache.dropped_assignments, [0, 0])
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(180)
 def test_expert_parallel_decode_preserves_order_and_does_not_drop_skewed_routes():
     run_on_cpu_devices(
@@ -229,6 +232,7 @@ def test_expert_parallel_decode_preserves_order_and_does_not_drop_skewed_routes(
     )
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize(
     "chunk_size,prompt_length", [(4, 3), (4, 4), (4, 5), (4, 8), (4, 9), (512, 2047), (512, 2048), (512, 2049)]

@@ -10,6 +10,7 @@ import textwrap
 import pytest
 
 
+@pytest.mark.slow
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("terminal", ["shutdown", "execution-error"])
 def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutdown(tmp_path, terminal):
@@ -52,7 +53,12 @@ def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutd
                         max_num_tokens=np.array(4, np.int32), stop_tokens=None,
                         temperature=np.array(0, np.float32), top_p=np.array(1, np.float32),
                         key=np.array([0, 19311], np.uint32))
-                    for invalid in (lambda: engine.generate([]),
+                    too_long = SeqDecodingParams(
+                        max_num_tokens=np.array(25, np.int32), stop_tokens=None,
+                        temperature=np.array(0, np.float32), top_p=np.array(1, np.float32),
+                        key=np.array([0, 19311], np.uint32))
+                    for invalid in (lambda: engine.generate([Request([0], 0, too_long, 1)]),
+                                    lambda: engine.generate([]),
                                     lambda: engine.score_token_logprobs([0], 0),
                                     lambda: engine.score_token_logprobs([0] * 25, 1),
                                     lambda: engine.generate([Request([0] * 17, 0, params, 1)]),

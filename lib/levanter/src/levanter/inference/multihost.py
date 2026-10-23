@@ -139,6 +139,11 @@ class MultiHostInferenceEngine(InferenceEngine):
                 raise ValueError("Prompt must be nonempty and fit the configured sequence length")
             if len(request.prompt_tokens) > self.config.max_queued_tokens:
                 raise ValueError("Prompt exceeds configured admission queue capacity")
+            # HTTP materialization stores prompt + requested output in this
+            # field; adding the prompt again would reject valid requests.
+            token_budget = np.asarray(request.decode_params.max_num_tokens)
+            if token_budget.shape != () or int(token_budget) > self.config.max_seq_len:
+                raise ValueError("Prompt plus requested output exceeds configured sequence length")
             stops = request.decode_params.stop_tokens
             if stops is not None:
                 if (
