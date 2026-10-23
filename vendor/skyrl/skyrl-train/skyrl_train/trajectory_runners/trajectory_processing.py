@@ -4,7 +4,7 @@ from math import fsum
 from enum import StrEnum
 import numpy as np
 from skyrl_train.group_admission import group_is_fully_excluded_from_training
-from skyrl_train.task_inputs import TaskInput, PreferenceInput
+from skyrl_train.task_inputs import TaskInput, PreferenceInput, FixedCompletionInput
 from skyrl_train.trajectory_runners.types import (
     TrajectoryBatch,
     TrajectoryRequestBatch,
@@ -13,6 +13,7 @@ from skyrl_train.trajectory_runners.types import (
     TrainingPhase,
     TaskRequestBatch,
     PreferenceRequestBatch,
+    FixedCompletionRequestBatch,
 )
 from skyrl_train.trajectory_runners.trajectory_retention import RETENTION_METRIC_PREFIX
 from skyrl_train.metric_names import (
@@ -751,8 +752,21 @@ def prepare_trajectory_request(
             trajectory_ids=trajectory_ids,
             batch_metadata=metadata,
         )
+    elif all(isinstance(row, FixedCompletionInput) for row in inputs):
+        request = FixedCompletionRequestBatch(
+            prompts=tuple(row.prompt for row in inputs),
+            completions=tuple(row.completion for row in inputs),
+            metadata=tuple(row.metadata for row in inputs),
+            completion_loss_masks=tuple(row.completion_loss_mask for row in inputs),
+            sampling_params=sampling_params,
+            trajectory_ids=trajectory_ids,
+            batch_metadata=metadata,
+        )
     else:
-        raise TypeError("A request must contain TaskInput rows or static PreferenceInput rows, not a mixture")
+        raise TypeError(
+            "A request must contain TaskInput rows, static PreferenceInput rows, or static "
+            "FixedCompletionInput rows, not a mixture"
+        )
     return request, [item.instance_id for item in trajectory_ids]
 
 

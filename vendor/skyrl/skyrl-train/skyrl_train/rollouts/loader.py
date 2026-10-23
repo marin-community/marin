@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import hashlib
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -81,8 +82,10 @@ class SeededPasses:
     def _pass_order(self, epoch: int) -> list[int]:
         if not self._shuffle:
             return list(range(self._num_rows))
+        # Hash (seed, epoch): seed + epoch made seed s pass 1 replay seed s + 1 pass 0.
+        digest = hashlib.sha256(f"{self._seed}:{epoch}".encode()).digest()
         generator = torch.Generator()
-        generator.manual_seed(self._seed + epoch)
+        generator.manual_seed(int.from_bytes(digest[:8], "little") >> 1)
         return torch.randperm(self._num_rows, generator=generator).tolist()
 
 

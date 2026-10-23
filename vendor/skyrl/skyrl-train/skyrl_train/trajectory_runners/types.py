@@ -69,7 +69,22 @@ class PreferenceRequestBatch:
         return self.prompts
 
 
-TrajectoryRequestBatch = TaskRequestBatch | PreferenceRequestBatch
+@dataclass(frozen=True)
+class FixedCompletionRequestBatch:
+    prompts: tuple[ConversationType | list[int], ...]
+    completions: tuple[str | list[int], ...]
+    metadata: tuple[TrajectoryMetadata, ...]
+    completion_loss_masks: tuple[tuple[int, ...] | None, ...] | None = None
+    sampling_params: dict[str, Any] | None = None
+    trajectory_ids: tuple[TrajectoryID, ...] | None = None
+    batch_metadata: BatchMetadata | None = None
+
+    @property
+    def public_prompts(self) -> tuple[ConversationType | list[int], ...]:
+        return self.prompts
+
+
+TrajectoryRequestBatch = TaskRequestBatch | PreferenceRequestBatch | FixedCompletionRequestBatch
 
 
 class RewardShapingComponents(TypedDict):
@@ -143,3 +158,53 @@ class TrajectoryBatch(TypedDict):
     exclude_from_baseline: Optional[List[bool]]
     # DPO pairing evidence: +1 chosen / -1 rejected per row, emitted as adjacent pairs.
     pair_roles: NotRequired[List[int]]
+
+
+def static_trajectory_batch(
+    *,
+    prompt_token_ids: List[List[int]],
+    response_ids: List[List[int]],
+    loss_masks: List[List[int]],
+    data_sources: Optional[List[str | None]],
+    rewards: List[float],
+    stop_reason: str,
+    pair_roles: Optional[List[int]] = None,
+) -> TrajectoryBatch:
+    """A TrajectoryBatch of dataset-supplied rows: no engines, rollouts, or teacher channels.
+
+    Static runners differ only in their rows, row labels, inert rewards, stop reason,
+    and pairing evidence; every generated-rollout channel stays empty.
+    """
+    return {
+        "prompt_token_ids": prompt_token_ids,
+        "response_ids": response_ids,
+        "data_sources": data_sources,
+        "rewards": rewards,
+        "unshaped_rewards": None,
+        "unshaped_reward_available": None,
+        "reward_shaping_components": None,
+        "reward_shaping_loop_spans": None,
+        "loop_advantages": None,
+        "reward_shaping_versions": None,
+        "verification_results": [None] * len(response_ids),
+        "evidence_messages": [None] * len(response_ids),
+        "verifier_tests": None,
+        "loss_masks": loss_masks,
+        "stop_reasons": [stop_reason] * len(response_ids),
+        "exception_types": None,
+        "error_treatments": None,
+        "server_errors": None,
+        "rollout_metrics": {},
+        "rollout_logprobs": None,
+        "student_topk_indices": None,
+        "behavior_topk_logprobs": None,
+        "rollout_routed_experts": None,
+        "teacher_evidence": None,
+        "distillation": None,
+        "token_level_shaping": None,
+        "response_span_tags": None,
+        "teacher_route_keys": None,
+        "is_last_step": None,
+        "exclude_from_baseline": None,
+        "pair_roles": pair_roles,
+    }

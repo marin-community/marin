@@ -36,6 +36,23 @@ class PreferenceInput:
     metadata: TrajectoryMetadata
 
 
+@dataclass(frozen=True)
+class FixedCompletionInput:
+    """One pre-generated training row: a prompt plus its fixed completion.
+
+    ``prompt`` is a message list (text rows) or prompt token IDs (tokenized rows).
+    ``completion`` is completion text or, for tokenized rows, response token IDs that
+    begin at the first supervised token. ``completion_loss_mask`` is None for text
+    rows (every completion token is supervised) and aligns one-to-one with tokenized
+    completion IDs.
+    """
+
+    prompt: ConversationType | list[int]
+    completion: str | list[int]
+    metadata: TrajectoryMetadata
+    completion_loss_mask: tuple[int, ...] | None = None
+
+
 def task_messages(spec: TaskRolloutSpec) -> ConversationType:
     if not is_shell_harness(spec.harness):
         return list(episode_prompt(spec.task).messages)
