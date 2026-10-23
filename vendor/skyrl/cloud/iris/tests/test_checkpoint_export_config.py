@@ -15,6 +15,8 @@ from cloud.iris.export_hf_checkpoint import (
 )
 from cloud.iris.launch_config import validate_iris_allocation
 from cloud.iris.role_plan import derive_num_nodes, derive_policy_export_role_plan, derive_role_plan
+from skyrl_train.callbacks.base import CallbackHandler, TrainerControl, TrainerState
+from skyrl_train.callbacks.builtin import HFModelSaveCallback
 from skyrl_train.config.utils import get_default_config
 from skyrl_train.hf_export import read_hf_export_request
 from skyrl_train.trainer import RayPPOTrainer
@@ -230,3 +232,28 @@ def test_trainer_records_export_request_for_selected_checkpoint(tmp_path: Path, 
     assert request.model_path == "org/policy"
     other_step = 20 if expected_step == 15 else 15
     assert read_hf_export_request(str(root / f"global_step_{other_step}")) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("best_metadata", [None, {"step": 0, "model_format": "hf"}])
+async def test_best_export_waits_until_train_end(tmp_path: Path, best_metadata) -> None:
+    config = get_default_config()
+    config.trainer.ckpt_path = str(tmp_path)
+    config.trainer.hf_export_checkpoint = "best"
+    if best_metadata is not None:
+        (tmp_path / "best_checkpoint.json").write_text(json.dumps(best_metadata))
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = config
+    trainer.global_step = 10
+    trainer.all_timings = {}
+    trainer._control = TrainerControl()
+    trainer.callback_handler = CallbackHandler([HFModelSaveCallback(save_steps=10)])
+    state = TrainerState(global_step=10, epoch=0, total_steps=20, num_steps_per_epoch=20)
+
+    await trainer._run_step_end_callbacks(state)
+
+    assert not list(tmp_path.glob("global_step_*/hf_export_request.json"))
+    assert not trainer._control.should_save_hf_model
+    expected_error = FileNotFoundError if best_metadata is None else ValueError
+    with pytest.raises(expected_error):
+        trainer.handle_hf_export()

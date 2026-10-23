@@ -898,7 +898,9 @@ class RayPPOTrainer:
             # HF export reads the committed checkpoint. When checkpoint and HF
             # export share a cadence, wait for the background shard uploads and
             # marker publication before asking the exporter to consume it.
-            if await self._drain_checkpoint_upload():
+            # Best selection is resolved only at train end: before an eligible
+            # evaluation, metadata can be absent or still point at the initializer.
+            if self.cfg.trainer.hf_export_checkpoint != "best" and await self._drain_checkpoint_upload():
                 await asyncio.to_thread(self.handle_hf_export)
             self._control.should_save_hf_model = False
 
