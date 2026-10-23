@@ -26,8 +26,10 @@ FROM grafana/grafana:13.1.1-ubuntu
 
 USER root
 
+# ca-certificates is already in the base image; listing it upgrades the trust
+# store to the archive's current release, which the pinned base can predate.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends nginx python3 python3-venv \
+    && apt-get install -y --no-install-recommends ca-certificates nginx python3 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 RUN grafana cli --pluginsDir /var/lib/grafana/plugins plugins install yesoreyeram-infinity-datasource 3.10.1
@@ -40,7 +42,7 @@ COPY --from=infra-panel /plugin/dist /var/lib/grafana/plugins/marin-infra-panel
 # `pip --pre` would drag every dependency onto prereleases (notably httpx 1.0.dev,
 # which breaks aiobotocore at import). uv's `prerelease = "if-necessary"` in
 # pyproject.toml takes prereleases only for packages that have no stable release.
-COPY --from=ghcr.io/astral-sh/uv:0.9.7 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
 COPY pyproject.toml uv.lock /opt/bridge/
 COPY src /opt/bridge/src
 RUN cd /opt/bridge \

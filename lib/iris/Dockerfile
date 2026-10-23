@@ -27,7 +27,7 @@ RUN npm run build
 # ── Stage: iris-native-wheel ────────────────────────────────────────
 # Build the PyO3 companion once per target architecture without carrying a Rust
 # toolchain into the controller or worker images.
-FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.12.3 AS iris-native-uv
+FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.13.5 AS iris-native-uv
 FROM --platform=$BUILDPLATFORM rust:1-bookworm AS iris-native-wheel
 
 COPY --from=iris-native-uv /uv /uvx /bin/
@@ -93,6 +93,9 @@ FROM python:3.12-slim AS base
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
 
 ARG KUBECTL_VERSION=v1.32.2
+# Pinned so a version bump invalidates the cached install layer; an unpinned
+# install keeps serving the cached release while the base image is unchanged.
+ARG GOOGLE_CLOUD_CLI_VERSION=590.0.1-0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -110,7 +113,7 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     curl https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
     apt-get update && apt-get install -y --no-install-recommends \
-    google-cloud-cli \
+    "google-cloud-cli=${GOOGLE_CLOUD_CLI_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 # kubectl — TARGETARCH is auto-set by buildx (amd64 on x86 nodes, arm64 on Grace).
@@ -121,7 +124,7 @@ RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETA
     && kubectl version --client
 
 # uv
-COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 
 
 # ── Stage: deps ──────────────────────────────────────────────────────
@@ -276,7 +279,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal
