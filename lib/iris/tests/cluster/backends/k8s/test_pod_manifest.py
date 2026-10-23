@@ -88,6 +88,7 @@ def _dispatch(
                 K8sResource.CONFIGMAPS,
                 K8sResource.PDBS,
                 K8sResource.CILIUM_NETWORK_POLICIES,
+                K8sResource.SECRETS,
             )
         }
     finally:
@@ -1181,6 +1182,7 @@ def test_allowlist_job_rules_reach_only_their_own_attempt():
     [pod] = resources[K8sResource.PODS]
     [other_pod] = resubmitted[K8sResource.PODS]
     [policy] = resources[K8sResource.CILIUM_NETWORK_POLICIES]
+    [secret] = resources[K8sResource.SECRETS]
     spec = policy["spec"]
     selector = spec["endpointSelector"]["matchLabels"]
     by_destination = {
@@ -1200,6 +1202,11 @@ def test_allowlist_job_rules_reach_only_their_own_attempt():
     assert not selector.items() <= other_pod["metadata"]["labels"].items()
     [owner] = policy["metadata"]["ownerReferences"]
     assert (owner["kind"], owner["uid"]) == ("Pod", pod["metadata"]["uid"])
+    # The job has no secrets, but the pod still mounts its Secret: the provider
+    # writes it after the policy, so the containers start only once the policy exists.
+    secret_volumes = {v["secret"]["secretName"] for v in pod["spec"]["volumes"] if "secret" in v}
+    assert secret["metadata"]["name"] in secret_volumes
+    assert secret["metadata"]["ownerReferences"] == policy["metadata"]["ownerReferences"]
     assert by_destination == {
         "api.openai.com": [{"ports": [{"port": "443", "protocol": "TCP"}]}],
         "*.example.com": None,

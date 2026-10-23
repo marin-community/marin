@@ -12,8 +12,8 @@ other egress. Ingress is not restricted.
   other tasks), cluster nodes, ``kubernetes_provider.cilium.egress_endpoints``,
   and Iris's base allowlist plus ``defaults.egress_allowlist.allow``.
 - ``<pod>-egress``, one per task attempt whose job has its own rules, applied
-  by the controller before the pod and owned by it, so Kubernetes deletes it
-  with the pod.
+  by the controller after the pod is created and before its containers start,
+  and owned by the pod, so Kubernetes deletes it with the pod.
 
 Domains become ``toFQDNs`` selectors and DNS rules. Cilium's DNS proxy answers
 every name the pod's policies do not list with REFUSED, so looking up an

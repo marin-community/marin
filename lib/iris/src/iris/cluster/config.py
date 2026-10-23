@@ -748,7 +748,7 @@ class KubernetesProviderConfig(_Config):
     service_cidr: str = ""
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
-    # Absent on a cluster without Cilium, which then rejects EGRESS_POLICY_ALLOWLIST.
+    # Absent on a cluster without Cilium, which then runs EGRESS_POLICY_ALLOWLIST jobs on the cluster network.
     cilium: CiliumConfig | None = None
 
     @field_validator("service_cidr")

@@ -844,6 +844,51 @@ def test_verify_prerequisites_reports_only_the_missing_pieces():
     provider.shutdown()
 
 
+_CILIUM_POLICIES = {"apiGroups": ["cilium.io"], "resources": ["ciliumnetworkpolicies"]}
+
+
+@pytest.mark.parametrize(
+    ("cilium_rules", "granted"),
+    [
+        pytest.param([{**_CILIUM_POLICIES, "verbs": ["create", "patch"]}], True, id="create-and-patch"),
+        pytest.param(
+            [{**_CILIUM_POLICIES, "verbs": ["create"]}, {**_CILIUM_POLICIES, "verbs": ["patch"]}],
+            True,
+            id="split-across-rules",
+        ),
+        pytest.param([{"apiGroups": ["*"], "resources": ["*"], "verbs": ["*"]}], True, id="wildcard"),
+        pytest.param([{**_CILIUM_POLICIES, "verbs": ["create"]}], False, id="no-patch"),
+        pytest.param(
+            [{"apiGroups": ["networking.k8s.io"], "resources": ["ciliumnetworkpolicies"], "verbs": ["create", "patch"]}],
+            False,
+            id="other-api-group",
+        ),
+        pytest.param(
+            [{**_CILIUM_POLICIES, "verbs": ["create", "patch"], "resourceNames": ["iris-egress-allowlist"]}],
+            False,
+            id="named-policies-only",
+        ),
+        pytest.param([], False, id="absent"),
+    ],
+)
+def test_verify_prerequisites_requires_cilium_policy_writes_on_cilium_clusters(cilium_rules, granted):
+    """The controller writes per-attempt policies by server-side apply, which needs create and patch."""
+    provider, k8s = _make_provider()
+    cluster_config = _make_cluster_config()
+    cluster_config.kubernetes_provider.cilium = CiliumConfig()
+    _seed_prerequisites(k8s, cluster_config)
+    role = cluster_role_manifest(provider.rbac_cluster_role_name())
+    role["rules"] = [rule for rule in role["rules"] if "cilium.io" not in rule["apiGroups"]] + cilium_rules
+    k8s.apply_json(role)
+
+    if granted:
+        provider.verify_prerequisites(cluster_config)
+    else:
+        with pytest.raises(PrerequisitesNotProvisionedError, match="ciliumnetworkpolicies"):
+            provider.verify_prerequisites(cluster_config)
+    provider.shutdown()
+
+
 # ============================================================================
 # Tests: tunnel
 # ============================================================================

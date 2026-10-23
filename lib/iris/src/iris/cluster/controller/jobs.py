@@ -29,7 +29,13 @@ from iris.cluster.constraints import (
 from iris.cluster.controller import ops, reads, writes
 from iris.cluster.controller.auth import ADMIN_ROLE, TASK_ROLE, ControllerAuth, authorize_owner_if_configured
 from iris.cluster.controller.autoscaler.status import PendingHint
-from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
+from iris.cluster.controller.backend import (
+    BackendCapability,
+    BackendObservation,
+    EgressAllowlistMode,
+    JobFeasibilityRequest,
+    TaskBackend,
+)
 from iris.cluster.controller.codec import reconstruct_launch_job_request, resource_spec_from_job_row
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.federation_budget import FederationBudgets
@@ -37,7 +43,7 @@ from iris.cluster.controller.projections.attempt_counts import AttemptCountsProj
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
 from iris.cluster.controller.schema import jobs_table, tasks_table
-from iris.cluster.egress import parse_egress_rules, validate_egress_rules
+from iris.cluster.egress import MAX_EGRESS_RULES, format_egress_rule, parse_egress_rules, validate_egress_rules
 from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
@@ -678,37 +684,67 @@ def _validate_egress(request: controller_pb2.Controller.LaunchJobRequest) -> Non
         raise ConnectError(Code.INVALID_ARGUMENT, str(e)) from e
 
 
-def _resolve_egress_default(
+def _resolve_egress(
     dependencies: JobDependencies,
     request: controller_pb2.Controller.LaunchJobRequest,
     launch: LaunchIdentity,
 ) -> None:
-    """Resolve an UNSPECIFIED egress policy in place for a job that runs here.
+    """Resolve the egress policy in place for a job that runs here.
 
-    A child job inherits its parent's policy and rules, so a job tree that
-    opted out of the allowlist, or added rules, keeps that choice. A root job,
-    and a SANDBOX child, takes the cluster's default: ALLOWLIST where the
-    backend's allowlist is the default and the job is not SANDBOX, otherwise
-    its profile's default. A job queued for a federation peer stays
-    UNSPECIFIED; the peer resolves it with its own default.
+    A child job with an UNSPECIFIED policy inherits its parent's policy and
+    rules, so a job tree that opted out of the allowlist, or added rules,
+    keeps that choice. A root job, and a SANDBOX child, takes the cluster's
+    default: ALLOWLIST where the backend defaults to it and the job is not
+    SANDBOX, otherwise its profile's default. A job on ALLOWLIST that the
+    backend cannot enforce runs on CLUSTER instead, with a warning. A job
+    queued for a federation peer is not resolved here; the peer resolves it.
     """
-    if request.egress_policy != job_pb2.EGRESS_POLICY_UNSPECIFIED:
-        return
+    mode = dependencies.runtime.backend.egress_allowlist_mode()
+    if request.egress_policy == job_pb2.EGRESS_POLICY_UNSPECIFIED:
+        _resolve_unspecified_egress(dependencies, request, launch, mode)
+    if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST and mode is EgressAllowlistMode.UNAVAILABLE:
+        logger.warning(
+            "Job %s uses egress policy allowlist, which this cluster cannot enforce; it runs on the cluster network",
+            launch.job_id.to_wire(),
+        )
+        request.egress_policy = job_pb2.EGRESS_POLICY_CLUSTER
+
+
+def _resolve_unspecified_egress(
+    dependencies: JobDependencies,
+    request: controller_pb2.Controller.LaunchJobRequest,
+    launch: LaunchIdentity,
+    mode: EgressAllowlistMode,
+) -> None:
     parent_id = launch.job_id.parent
     if parent_id is not None and request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX:
         with dependencies.db.read_snapshot() as snapshot:
             parent = reads.get_job_detail(snapshot, parent_id)
         if parent is not None and parent.egress_policy != job_pb2.EGRESS_POLICY_UNSPECIFIED:
             request.egress_policy = parent.egress_policy
-            request.egress_allow.extend(parse_egress_rules(parent.egress_allow_json))
+            _inherit_egress_rules(request, parse_egress_rules(parent.egress_allow_json))
             return
-    if (
-        request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX
-        and dependencies.runtime.backend.egress_allowlist_is_default()
-    ):
+    if request.container_profile != job_pb2.CONTAINER_PROFILE_SANDBOX and mode is EgressAllowlistMode.DEFAULT:
         request.egress_policy = job_pb2.EGRESS_POLICY_ALLOWLIST
         return
     request.egress_policy = resolve_egress_policy(request.container_profile, job_pb2.EGRESS_POLICY_UNSPECIFIED)
+
+
+def _inherit_egress_rules(
+    request: controller_pb2.Controller.LaunchJobRequest, parent_rules: list[job_pb2.EgressRule]
+) -> None:
+    """Add the parent's rules that the job does not already declare, within ``MAX_EGRESS_RULES``."""
+    declared = {format_egress_rule(rule) for rule in request.egress_allow}
+    inherited = {format_egress_rule(rule): rule for rule in parent_rules}
+    for key in declared:
+        inherited.pop(key, None)
+    if len(request.egress_allow) + len(inherited) > MAX_EGRESS_RULES:
+        raise ConnectError(
+            Code.INVALID_ARGUMENT,
+            f"Job declares {len(request.egress_allow)} egress rules and inherits {len(inherited)} more from its "
+            f"parent; at most {MAX_EGRESS_RULES} are allowed",
+        )
+    request.egress_allow.extend(inherited.values())
 
 
 def _validate_launch_capacity(
@@ -950,7 +986,7 @@ def launch_job(
     request = _inject_resource_constraints(request)
     plan = _plan_launch(dependencies, request, launch)
     if plan.disposition == SubmitDisposition.LOCAL:
-        _resolve_egress_default(dependencies, request, launch)
+        _resolve_egress(dependencies, request, launch)
         error = dependencies.runtime.backend.validate_job(request)
         if error:
             raise ConnectError(Code.INVALID_ARGUMENT, error)

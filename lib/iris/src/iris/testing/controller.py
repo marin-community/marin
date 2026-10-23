@@ -51,6 +51,7 @@ from iris.cluster.controller.backend import (
     BackendObservationRequest,
     BackendRecoveryRequest,
     BackendRecoveryResult,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderUnsupportedError,
     ReconcileObservation,
@@ -179,8 +180,8 @@ class FakeProvider:
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
         return None
 
-    def egress_allowlist_is_default(self) -> bool:
-        return False
+    def egress_allowlist_mode(self) -> EgressAllowlistMode:
+        return EgressAllowlistMode.OPT_IN
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
@@ -224,7 +225,7 @@ class MockController:
         self.backend.descriptor = worker_backend_descriptor()
         self.backend.job_feasibility.return_value = None
         self.backend.validate_job.return_value = None
-        self.backend.egress_allowlist_is_default.return_value = False
+        self.backend.egress_allowlist_mode.return_value = EgressAllowlistMode.OPT_IN
         self.backend.runtime_image.return_value = ""
         self.worker_health = WorkerHealthTracker()
         self.backend_observation = BackendObservation()

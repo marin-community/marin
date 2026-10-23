@@ -147,7 +147,8 @@ The controller resolves an unspecified policy when it accepts a job. A child
 job takes its parent's policy and allowlist rules, so a job tree that opted
 out with `--egress-policy EGRESS_POLICY_CLUSTER`, or added rules, keeps that
 choice. A root job takes the cluster's default. A job forwarded to a federation
-peer is resolved by the peer.
+peer is resolved by the peer. A cluster that cannot enforce `ALLOWLIST` runs
+such a job under `CLUSTER` and logs a warning.
 
 `INTERNET` and `NONE` reach neither the controller, finelog, worker RPC ports,
 other tasks nor the cloud metadata server. A task under either cannot launch
@@ -178,7 +179,8 @@ A job adds destinations with `--egress-allow`, repeatable, or
 under `ALLOWLIST`, whether by the cluster's default or by
 `--egress-policy EGRESS_POLICY_ALLOWLIST`. Elsewhere they have no effect, so a
 launcher can declare what its jobs need on every cluster. The controller
-rejects rules alongside any other explicit policy. A job may carry at most 64.
+rejects rules alongside any other explicit policy. A job may carry at most 64,
+counting those it inherits from its parent.
 
 ```bash
 iris job run --egress-allow api.openai.com:443 --egress-allow 203.0.113.0/24 -- python eval.py
@@ -291,8 +293,8 @@ workers ship logs and upload outputs from the worker process, outside the
 container, so both keep working there.
 
 Kubernetes enforces `ALLOWLIST` with Cilium. A cluster without
-`kubernetes_provider.cilium` rejects `ALLOWLIST` jobs and cannot make the
-allowlist its default. The controller's ClusterRole needs the
+`kubernetes_provider.cilium` runs `ALLOWLIST` jobs under `CLUSTER` and cannot
+make the allowlist its default. The controller's ClusterRole needs the
 `cilium.io/ciliumnetworkpolicies` rule from `CLUSTER_ROLE_RULES`, which the
 Pulumi program applies; `iris cluster start` reports it missing otherwise.
 
@@ -310,8 +312,9 @@ CiliumNetworkPolicy `iris-egress-allowlist`, which admits:
 - cluster nodes (`host` and `remote-node` entities), on every port.
 
 A job with its own rules also gets a policy `<pod>-egress` for each pod,
-applied before the pod and deleted with it. Cilium admits the union of both
-policies. Ingress is not restricted.
+owned by the pod and deleted with it. The pod's containers start only after
+the policy exists. Cilium admits the union of both policies. Ingress is not
+restricted.
 
 A GPU job with more than one task keeps host networking under `ALLOWLIST`,
 because NCCL needs the node's InfiniBand devices. Pod policy does not apply to

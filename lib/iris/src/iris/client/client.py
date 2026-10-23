@@ -975,7 +975,8 @@ class IrisClient:
                 the parent job's policy, or takes the cluster's default:
                 INTERNET for SANDBOX, ALLOWLIST on a cluster whose
                 allowlist is the default, and CLUSTER otherwise. SANDBOX
-                rejects CLUSTER and ALLOWLIST.
+                rejects CLUSTER and ALLOWLIST. A cluster that cannot
+                enforce ALLOWLIST runs the job under CLUSTER.
             egress_allow: Destinations the job needs beyond the cluster's
                 allowlist, such as ``"api.openai.com"``,
                 ``"*.anthropic.com:443"`` or ``"203.0.113.0/24"`` (syntax in

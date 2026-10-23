@@ -705,7 +705,8 @@ enum EgressPolicy {
   // cluster's allowlist and the job's egress_allow rules. Kubernetes denies
   // everything else, except for GPU jobs with more than one task, which keep
   // host networking for InfiniBand and run unrestricted. Docker workers refuse
-  // DNS lookups of other names but do not filter connections. Not allowed for
+  // DNS lookups of other names but do not filter connections. A Kubernetes
+  // cluster without Cilium runs the job under CLUSTER instead. Not allowed for
   // SANDBOX.
   EGRESS_POLICY_ALLOWLIST = 4;
 }

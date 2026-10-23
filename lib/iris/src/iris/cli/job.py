@@ -1029,7 +1029,8 @@ Examples:
         "What the job's network reaches (default: the parent job's policy, else the cluster's: "
         "INTERNET for SANDBOX, ALLOWLIST where the cluster's allowlist is the default, CLUSTER "
         "otherwise). CLUSTER is unrestricted. ALLOWLIST reaches Iris services, other tasks and "
-        "allowlisted destinations. INTERNET reaches public addresses only and NONE nothing; "
+        "allowlisted destinations; a cluster that cannot enforce it runs the job under CLUSTER. "
+        "INTERNET reaches public addresses only and NONE nothing; "
         "neither reaches the controller, so the task cannot launch child jobs."
     ),
 )

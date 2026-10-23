@@ -32,6 +32,7 @@ from iris.cluster.controller.backend import (
     BackendRecoveryRequest,
     BackendRecoveryResult,
     DeviceCapacity,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderError,
     ReconcileObservation,
@@ -326,9 +327,9 @@ class RpcTaskBackend:
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
         return None
 
-    def egress_allowlist_is_default(self) -> bool:
+    def egress_allowlist_mode(self) -> EgressAllowlistMode:
         """Workers enforce ALLOWLIST only on DNS (see ``iris.cluster.worker.egress_dns``)."""
-        return self.egress_allowlist_default
+        return EgressAllowlistMode.DEFAULT if self.egress_allowlist_default else EgressAllowlistMode.OPT_IN
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         if self.autoscaler is None:

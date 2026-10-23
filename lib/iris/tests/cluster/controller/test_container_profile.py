@@ -10,7 +10,8 @@ profile is persisted on ``job_config`` and stamped onto each dispatched
 ``RunTaskRequest``.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 
 import pytest
 from connectrpc.code import Code
@@ -23,7 +24,7 @@ from iris.cluster.controller.auth import ControllerAuth
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.service import ControllerServiceImpl
-from iris.cluster.egress import format_egress_rule, parse_egress_rules
+from iris.cluster.egress import MAX_EGRESS_RULES, format_egress_rule, parse_egress_rules
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
 from iris.cluster.types import JobName
 from iris.rpc import controller_pb2, job_pb2
@@ -251,6 +252,7 @@ def _stored_rules(state, job_id: JobName) -> list[str]:
         pytest.param("service", DEFAULT, job_pb2.EGRESS_POLICY_CLUSTER, id="open-cluster"),
         pytest.param("allowlist_default_service", DEFAULT, job_pb2.EGRESS_POLICY_ALLOWLIST, id="allowlist-cluster"),
         pytest.param("allowlist_default_service", SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, id="allowlist-sandbox"),
+        pytest.param("no_cilium_service", DEFAULT, job_pb2.EGRESS_POLICY_CLUSTER, id="no-cilium-cluster"),
     ],
 )
 def test_egress_rules_keep_the_clusters_default_policy(request, state, service_fixture, profile, resolved):
@@ -263,17 +265,46 @@ def test_egress_rules_keep_the_clusters_default_policy(request, state, service_f
     assert _stored_rules(state, job_id) == ["api.openai.com:443"]
 
 
-@pytest.fixture
-def allowlist_default_service(service):
-    """The service in front of a Kubernetes backend whose cluster defaults to the allowlist."""
+@contextmanager
+def _k8s_backend(service: ControllerServiceImpl, egress_allowlist: EgressAllowlistConfig | None) -> Iterator[None]:
+    """Route the service's egress resolution and job validation to a Kubernetes backend."""
     backend = K8sTaskProvider(
         descriptor=k8s_backend_descriptor(),
         kubectl=InMemoryK8sService(namespace="iris"),
-        pods=pod_config(egress_allowlist=EgressAllowlistConfig(default=True)),
+        pods=pod_config(egress_allowlist=egress_allowlist),
     )
-    service._controller.backend.egress_allowlist_is_default.side_effect = backend.egress_allowlist_is_default
-    yield service
-    backend.close()
+    service._controller.backend.egress_allowlist_mode.side_effect = backend.egress_allowlist_mode
+    service._controller.backend.validate_job.side_effect = backend.validate_job
+    try:
+        yield
+    finally:
+        backend.close()
+
+
+@pytest.fixture
+def allowlist_default_service(service):
+    """The service in front of a Kubernetes backend whose cluster defaults to the allowlist."""
+    with _k8s_backend(service, EgressAllowlistConfig(default=True)):
+        yield service
+
+
+@pytest.fixture
+def no_cilium_service(service):
+    """The service in front of a Kubernetes backend without Cilium, which cannot enforce the allowlist."""
+    with _k8s_backend(service, None):
+        yield service
+
+
+def test_allowlist_runs_on_the_cluster_network_where_the_cluster_cannot_enforce_it(no_cilium_service, state, caplog):
+    """Launchers can request the allowlist before every cluster enforces it."""
+    job_id = JobName.from_wire("/alice/job")
+    request = _launch(job_id.to_wire(), DEFAULT, job_pb2.EGRESS_POLICY_ALLOWLIST, ["api.openai.com:443"])
+    _as("user", "alice", no_cilium_service.launch_job, request, None)
+
+    cluster = job_pb2.EGRESS_POLICY_CLUSTER
+    assert _stored_egress(state, job_id) == (cluster, cluster)
+    assert _stored_rules(state, job_id) == ["api.openai.com:443"]
+    assert "cannot enforce" in caplog.text
 
 
 @pytest.mark.parametrize(
@@ -307,3 +338,18 @@ def test_child_job_inherits_its_parents_egress(allowlist_default_service, state,
     parent, child = JobName.from_wire("/alice/parent"), JobName.from_wire("/alice/parent/child")
     assert _stored_egress(state, child) == _stored_egress(state, parent)
     assert _stored_rules(state, child) == list(parent_rules)
+
+
+def test_child_rules_and_inherited_rules_share_the_rule_cap(allowlist_default_service, state):
+    service = allowlist_default_service
+    parent_rules = [f"host{i}.example.com" for i in range(MAX_EGRESS_RULES)]
+    _as("user", "alice", service.launch_job, _launch("/alice/parent", DEFAULT, rules=parent_rules), None)
+
+    repeat = JobName.from_wire("/alice/parent/repeat")
+    _as("user", "alice", service.launch_job, _launch(repeat.to_wire(), DEFAULT, rules=parent_rules[:1]), None)
+    assert sorted(_stored_rules(state, repeat)) == sorted(parent_rules)
+
+    with pytest.raises(ConnectError) as exc:
+        _as("user", "alice", service.launch_job, _launch("/alice/parent/extra", DEFAULT, rules=["pypi.org"]), None)
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert f"at most {MAX_EGRESS_RULES}" in str(exc.value.message)

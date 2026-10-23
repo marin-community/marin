@@ -77,6 +77,14 @@ class BackendKind(StrEnum):
     KUBERNETES = "kubernetes"
 
 
+class EgressAllowlistMode(StrEnum):
+    """How a backend handles ``EGRESS_POLICY_ALLOWLIST`` jobs."""
+
+    UNAVAILABLE = "unavailable"  # cannot enforce it; such jobs run on the cluster network
+    OPT_IN = "opt-in"  # enforces it for jobs that request it
+    DEFAULT = "default"  # enforces it, and root jobs get it unless they choose otherwise
+
+
 class BackendCapability(StrEnum):
     """Mechanisms a backend asks the controller to feed during each phase."""
 
@@ -527,8 +535,8 @@ class TaskBackend(Protocol):
         """Validate backend requirements; return an error for an invalid job, or None."""
         ...
 
-    def egress_allowlist_is_default(self) -> bool:
-        """Whether a root job with an UNSPECIFIED egress policy runs under ALLOWLIST here."""
+    def egress_allowlist_mode(self) -> EgressAllowlistMode:
+        """How this backend handles ``EGRESS_POLICY_ALLOWLIST`` jobs."""
         ...
 
     def get_process_status(

@@ -53,6 +53,7 @@ from iris.cluster.controller.backend import (
     BackendRecoveryResult,
     DeviceCapacity,
     DirectReconcileRequest,
+    EgressAllowlistMode,
     JobFeasibilityRequest,
     ProviderError,
     ReconcileObservation,
@@ -877,6 +878,11 @@ def _uses_host_network(config: PodConfig, run_req: job_pb2.RunTaskRequest, netwo
     return network is TaskNetwork.ALLOWLIST and run_req.num_tasks > 1 and get_gpu_count(run_req.resources.device) > 0
 
 
+def _needs_task_policy(run_req: job_pb2.RunTaskRequest, network: TaskNetwork) -> bool:
+    """Whether the pod gets a per-attempt Cilium policy for its job's own egress rules."""
+    return network is TaskNetwork.ALLOWLIST and bool(run_req.egress_allow)
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -1003,7 +1009,9 @@ def _build_pod_manifest(
         # message with the container's own tail log output instead.
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
-    if job_secrets:
+    if job_secrets or _needs_task_policy(run_req, network):
+        # The required volume also holds task startup until the pod's egress
+        # policy exists: the provider writes the Secret after the policy.
         for name in job_secrets:
             validate_secret_name(name)
         volumes.append(
@@ -2543,18 +2551,15 @@ class K8sTaskProvider:
         return None
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
-        if request.egress_policy == job_pb2.EGRESS_POLICY_ALLOWLIST and self.pods.egress_allowlist is None:
-            return (
-                "Egress policy allowlist needs Cilium, which this cluster does not configure "
-                "(kubernetes_provider.cilium); use --egress-policy EGRESS_POLICY_CLUSTER"
-            )
         if not self.pods.require_coreweave_credentials or request.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX:
             return None
         return validate_coreweave_credentials(task_secret_values(request.environment))
 
-    def egress_allowlist_is_default(self) -> bool:
+    def egress_allowlist_mode(self) -> EgressAllowlistMode:
         allowlist = self.pods.egress_allowlist
-        return allowlist is not None and allowlist.default
+        if allowlist is None:
+            return EgressAllowlistMode.UNAVAILABLE
+        return EgressAllowlistMode.DEFAULT if allowlist.default else EgressAllowlistMode.OPT_IN
 
     def sync(self, request: DirectReconcileRequest) -> list[TaskUpdate]:
         """Sync task state: apply new pods, delete strays, poll running pods.
@@ -2841,8 +2846,9 @@ class K8sTaskProvider:
         if extra_volumes:
             manifest["spec"]["volumes"].extend(extra_volumes)
 
+        network = TaskNetwork(manifest["metadata"]["labels"].get(EGRESS_LABEL, TaskNetwork.CLUSTER.value))
         task_policy = None
-        if run_req.egress_allow and manifest["metadata"]["labels"].get(EGRESS_LABEL) == TaskNetwork.ALLOWLIST.value:
+        if _needs_task_policy(run_req, network):
             # A stale policy can outlive its pod briefly; selecting on the attempt
             # UID keeps it from granting its rules to a resubmitted job's pod.
             assert run_req.attempt_uid, "a job's own egress rules need the attempt UID to select its pod"
@@ -2852,11 +2858,6 @@ class K8sTaskProvider:
                 {_LABEL_ATTEMPT_UID: run_req.attempt_uid},
                 run_req.egress_allow,
             )
-            # Before the pod, so its first connections already see the job's rules.
-            # If the pod apply then fails, the policy stays unowned until the
-            # attempt is retried; it selects only this attempt's UID, so it
-            # grants nothing to other pods.
-            self.kubectl.apply_json(task_policy)
 
         task_id = run_req.task_id
         if _is_coordinator_task(run_req):
@@ -2874,9 +2875,10 @@ class K8sTaskProvider:
         self.kubectl.apply_json(manifest)
         job_secrets = task_secret_values(run_req.environment)
         if job_secrets or task_policy is not None:
-            # The Pod owns its Secret and policy, so Kubernetes deletes them with
+            # The Pod owns its policy and Secret, so Kubernetes deletes them with
             # the Pod however it is removed. The required Secret volume holds
-            # task startup until the Secret exists.
+            # task startup until the Secret exists, and the Secret comes last, so
+            # the task's first connections already see the job's egress rules.
             pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
             if pod is None:
                 raise KubectlError(f"Pod {pod_name} disappeared before its Secret and policy were applied")
@@ -2884,23 +2886,22 @@ class K8sTaskProvider:
             if task_policy is not None:
                 task_policy["metadata"]["ownerReferences"] = owner
                 self.kubectl.apply_json(task_policy)
-            if job_secrets:
-                self.kubectl.apply_json(
-                    {
-                        "apiVersion": "v1",
-                        "kind": "Secret",
-                        "metadata": {
-                            "name": _task_secret_name(pod_name),
-                            "namespace": self.pods.namespace,
-                            "ownerReferences": owner,
-                        },
-                        "type": "Opaque",
-                        "data": {
-                            name: base64.b64encode(value.encode()).decode()
-                            for name, value in secret_file_contents(job_secrets).items()
-                        },
-                    }
-                )
+            self.kubectl.apply_json(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {
+                        "name": _task_secret_name(pod_name),
+                        "namespace": self.pods.namespace,
+                        "ownerReferences": owner,
+                    },
+                    "type": "Opaque",
+                    "data": {
+                        name: base64.b64encode(value.encode()).decode()
+                        for name, value in secret_file_contents(job_secrets).items()
+                    },
+                }
+            )
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],

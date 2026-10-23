@@ -155,6 +155,23 @@ def configure_client_s3(config: IrisClusterConfig) -> None:
 # ============================================================================
 
 
+# The writes the controller makes to per-attempt Cilium policies (server-side apply).
+_CILIUM_POLICY_WRITE_VERBS = frozenset({"create", "patch"})
+
+
+def _grants_cilium_policy_writes(rules: list[dict]) -> bool:
+    """Whether ClusterRole ``rules`` together grant create and patch on any cilium.io CiliumNetworkPolicy."""
+    verbs: set[str] = set()
+    for rule in rules:
+        if rule.get("resourceNames"):
+            continue
+        if {"cilium.io", "*"} & set(rule.get("apiGroups", [])) and {"ciliumnetworkpolicies", "*"} & set(
+            rule.get("resources", [])
+        ):
+            verbs.update(rule.get("verbs", []))
+    return "*" in verbs or _CILIUM_POLICY_WRITE_VERBS <= verbs
+
+
 class PrerequisitesNotProvisionedError(InfraError):
     """Raised by verify_prerequisites() when one or more IaC-provisioned prerequisites are absent.
 
@@ -915,11 +932,10 @@ class K8sControllerProvider:
         role = self._kubectl.get_json(K8sResource.CLUSTER_ROLES, role_name)
         if role is None:
             missing.append(f"ClusterRole/{role_name}")
-        elif config.kubernetes_provider.cilium is not None and not any(
-            "ciliumnetworkpolicies" in rule.get("resources", []) for rule in role.get("rules", [])
-        ):
+        elif config.kubernetes_provider.cilium is not None and not _grants_cilium_policy_writes(role.get("rules", [])):
             missing.append(
-                f"ClusterRole/{role_name} rule for cilium.io ciliumnetworkpolicies (kubernetes_provider.cilium)"
+                f"ClusterRole/{role_name} rule granting create and patch on cilium.io ciliumnetworkpolicies "
+                "(kubernetes_provider.cilium)"
             )
         if self._kubectl.get_json(K8sResource.CLUSTER_ROLE_BINDINGS, role_name) is None:
             missing.append(f"ClusterRoleBinding/{role_name}")
