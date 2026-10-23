@@ -29,6 +29,7 @@ from levanter.trainer import TrainerConfig
 from levanter.utils.mesh import MeshConfig
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.weight_merging.rsi.levanter_267.compile_profile import instrument_prefill
 from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH
 
 
@@ -281,6 +282,7 @@ def _serve_and_probe(engine, config, model_path, output, item, mode, source_comm
         print("FIRST_SERVED_TOKEN", json.dumps(smoke), flush=True)
         if item is not None:
             _capture_numerics(engine, tokenizer, item, output, config, local)
+        _record_memory(output, "gates-complete")
         if mode == "serve":
             print("AWAITING_EXTERNAL_NUMERICS_REVIEW; evaluator requires an accepted gate report", flush=True)
             http_thread.join()
@@ -325,6 +327,7 @@ def run(mode, model_path, output, item, max_seq_len, source_commit):
         )
         _record_memory(output, "model-loaded")
         config = _server_config(trainer, model_path, max_seq_len)
+        instrument_prefill(output)
         engine = ProbeEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
         if jax.process_index() != 0:
             engine.worker_loop()

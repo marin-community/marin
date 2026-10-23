@@ -16,8 +16,28 @@ from levanter.inference.engine import InferenceEngineConfig, Request
 from levanter.inference.jit_scheduler import SeqDecodingParams
 from levanter.inference.multihost import MultiHostInferenceEngine
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
+from levanter.inference.snowball import SnowballCache
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 from levanter.testing.cpu_devices import run_on_cpu_devices
+
+
+def test_stacked_cache_copy_and_reset_preserve_layer_and_head_order():
+    axes = tuple(
+        hax.Axis(name, size)
+        for name, size in zip(("layer", "page", "slot", "kv_head", "head_size"), (3, 4, 2, 10, 2), strict=True)
+    )
+    values = np.arange(np.prod([axis.size for axis in axes]), dtype=np.float32).reshape(
+        tuple(axis.size for axis in axes)
+    )
+    cache = SnowballCache(hax.named(jnp.asarray(values), axes), jnp.array([2, 3], jnp.int32))
+    copied = jax.jit(lambda c: c.copy_page(1, 3))(cache)
+    expected = values.copy()
+    expected[:, 3] = values[:, 1]
+    np.testing.assert_array_equal(copied.kv_pages.array, expected)
+    np.testing.assert_array_equal(cache.kv_pages.array, values)
+    reset = jax.jit(lambda c: c.reset())(copied)
+    np.testing.assert_array_equal(reset.kv_pages.array, np.zeros_like(values))
+    np.testing.assert_array_equal(reset.dropped_assignments, [0, 0])
 
 
 @pytest.mark.timeout(180)

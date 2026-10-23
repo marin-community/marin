@@ -16,27 +16,36 @@ from levanter.grug.grug_moe import moe_mlp
 from levanter.grug.sharding import _current_mesh, _mesh_axis_size, _reshard_for_init
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.layers.attention import ragged_paged_attention
-from levanter.layers.kv_cache import KvPageCache, ListCache, PageCache
+from levanter.layers.kv_cache import KvPageCache, PageCache
 
 from levanter.models.snowball import SnowballLMHeadModel, long_attention_layer_mask, rms_norm
 
 
 class SnowballCache(PageCache):
-    pages: ListCache[KvPageCache]
+    # Keep the scan's layer dimension in storage so donated cache buffers can
+    # alias its result without concatenating and splitting every decode call.
+    kv_pages: NamedArray
     dropped_assignments: jax.Array
 
     def reset(self):
-        return SnowballCache(self.pages.reset(), jnp.zeros_like(self.dropped_assignments))
+        return SnowballCache(hax.zeros_like(self.kv_pages), jnp.zeros_like(self.dropped_assignments))
 
     def copy_page(self, src_page: int, dst_page: int):
-        return dataclasses.replace(self, pages=self.pages.copy_page(src_page, dst_page))
+        pages = self.kv_pages.at["page", dst_page].set(self.kv_pages["page", src_page])
+        return dataclasses.replace(self, kv_pages=pages)
 
 
 def initial_cache(model: "SnowballLMHeadModel", spec: PageTableSpec, *, dtype) -> SnowballCache:
     cfg = model.config
-    pages = ListCache.from_iterable(
-        KvPageCache.init(spec, Axis("kv_head", cfg.num_kv_heads), Axis("head_size", cfg.inferred_head_dim), dtype)
-        for _ in range(cfg.num_layers)
+    pages = hax.zeros(
+        {
+            "layer": cfg.num_layers,
+            "page": spec.num_pages,
+            "slot": spec.page_size,
+            "kv_head": 2 * cfg.num_kv_heads,
+            "head_size": cfg.inferred_head_dim,
+        },
+        dtype=dtype,
     )
     # Attention is replicated; the expert mesh only partitions expert weights and MoE tokens.
     pages = jax.tree.map(lambda x: _reshard_for_init(x, P()), pages)
@@ -152,8 +161,8 @@ def decode(
     valid = jnp.arange(ids.size) < batch_info.num_new_tokens
     hidden = tf.embed_gated_norm(tf.embed_norm(tf.token_embed.at[ids].get(out_sharding=P())))
     stacked_blocks = jax.tree.map(lambda *blocks: jnp.stack(blocks), *tf.blocks)
-    stacked_pages = jnp.stack([layer.kv_pages.array for layer in cache.pages])
-    page_axes = cache.pages[0].kv_pages.axes
+    stacked_pages = cache.kv_pages.array
+    page_axes = cache.kv_pages.axes[1:]
     schedule = long_attention_layer_mask(cfg.num_layers)
 
     def layer_step(carry, layer_inputs):
@@ -177,7 +186,8 @@ def decode(
     (hidden, drops), stacked_pages = jax.lax.scan(
         layer_step, (hidden, cache.dropped_assignments), (stacked_blocks, stacked_pages, schedule)
     )
-    caches = tuple(KvPageCache(hax.named(stacked_pages[i], page_axes)) for i in range(cfg.num_layers))
     hidden = tf.final_gated_norm(tf.final_norm(hidden))
     logits = _linear(hidden, tf.output_proj)
-    return hax.named(logits, (*input_ids.axes, model.Vocab)), SnowballCache(ListCache(tuple(caches)), drops)
+    return hax.named(logits, (*input_ids.axes, model.Vocab)), SnowballCache(
+        hax.named(stacked_pages, cache.kv_pages.axes), drops
+    )
