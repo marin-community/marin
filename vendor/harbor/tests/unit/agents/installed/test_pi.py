@@ -101,7 +101,17 @@ class _LocalDaytonaProcess:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "ending", ["deadline", "cancel", "cancel_submission", "cleanup_failure", "complete"]
+    "ending",
+    [
+        "deadline",
+        "cancel",
+        "cancel_submission",
+        "cleanup_failure",
+        "complete",
+        "orphan_deadline",
+        "orphan_cancel",
+        "orphan_complete",
+    ],
 )
 async def test_pi_daytona_session_remains_usable_after_agent_exit(
     tmp_path, monkeypatch, ending
@@ -113,6 +123,28 @@ async def test_pi_daytona_session_remains_usable_after_agent_exit(
         if ending != "complete"
         else '#!/bin/bash\nprintf "completed\\n"\n'
     )
+    orphan = ending.startswith("orphan_")
+    if orphan:
+        ending = ending.removeprefix("orphan_")
+        tool = (
+            'echo $$ > "$HOME/tool.pid"; trap "" TERM; '
+            'read -r line < "$HOME/block"; touch "$HOME/late"'
+        )
+        # The intermediate shell exits after starting a detached tool. The tool
+        # closes pipeline FDs, so normal completion cannot rely on EOF to wait.
+        launcher = (
+            f"setsid bash -c {shlex.quote(tool)} >/dev/null 2>&1 & "
+            'while [ ! -s "$HOME/tool.pid" ]; do sleep 0.01; done'
+        )
+        script = (
+            '#!/bin/bash\necho $$ > "$HOME/pi.pid"\n'
+            f"bash -c {shlex.quote(launcher)}\n"
+            + (
+                'printf "completed\\n"\n'
+                if ending == "complete"
+                else 'echo READY; read -r line < "$HOME/block"\n'
+            )
+        )
     shell = _local_pi_shell(tmp_path, monkeypatch, script)
     os.mkfifo(tmp_path / "block")
     process = _LocalDaytonaProcess(
@@ -152,13 +184,10 @@ async def test_pi_daytona_session_remains_usable_after_agent_exit(
 
         if ending == "cleanup_failure":
             return
-        for name in ("pi.pid", "tool.pid") if ending != "complete" else ():
+        for name in ("pi.pid", "tool.pid") if ending != "complete" or orphan else ():
             pid = int((tmp_path / name).read_text())
             stat = Path(f"/proc/{pid}/stat")
-            assert (
-                not stat.exists()
-                or stat.read_text().rsplit(")", 1)[1].split()[0] == "Z"
-            )
+            assert not stat.exists()
         assert not (tmp_path / "late").exists()
         verifier = await asyncio.wait_for(
             environment.exec("printf verifier-ready"), timeout=5
@@ -180,7 +209,7 @@ async def test_pi_daytona_session_remains_usable_after_agent_exit(
 
 
 def _local_pi_shell(temp_dir, monkeypatch, pi_script):
-    monkeypatch.setattr(Pi, "_SUPERVISOR_PATH", str(temp_dir / "supervisor.cjs"))
+    monkeypatch.setattr(Pi, "_SUPERVISOR_PATH", str(temp_dir / "supervisor.py"))
     endpoint_path = temp_dir / "harbor-pi-endpoint.env"
     extension_path = temp_dir / "harbor-pi-context-budget.js"
     monkeypatch.setattr(Pi, "_ENDPOINT_ENV_PATH", str(endpoint_path))

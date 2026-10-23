@@ -52,7 +52,7 @@ class _ModelLimits:
 
 
 class Pi(BaseInstalledAgent):
-    _SUPERVISOR_PATH = "/tmp/harbor-pi-supervisor.cjs"
+    _SUPERVISOR_PATH = "/tmp/harbor-pi-supervisor.py"
     _OUTPUT_FILENAME = "pi.txt"
     _DEFAULT_CONTEXT_WINDOW = 32768
     _DEFAULT_MAX_TOKENS = 16384
@@ -462,7 +462,7 @@ export default function (pi) {
         version_spec = f"@{self._version}" if self._version else "@latest"
         await self.exec_as_root(
             environment,
-            command="apt-get update && apt-get install -y curl",
+            command="apt-get update && apt-get install -y curl python3",
             env={"DEBIAN_FRONTEND": "noninteractive"},
         )
         await self.exec_as_agent(
@@ -687,7 +687,7 @@ export default function (pi) {
             )
             cli_flags += f"--extension {extension_path} "
         await environment.upload_file(
-            Path(__file__).with_name("pi_supervisor.cjs"), self._SUPERVISOR_PATH
+            Path(__file__).with_name("pi_supervisor.py"), self._SUPERVISOR_PATH
         )
         remaining = deadline - monotonic() if deadline is not None else None
         if remaining is not None and remaining <= 0:
@@ -720,7 +720,7 @@ export default function (pi) {
                     environment,
                     command=(
                         f"{self.nvm_shell_command()}; "
-                        f"node {shlex.quote(self._SUPERVISOR_PATH)} {control} "
+                        f"python3 {shlex.quote(self._SUPERVISOR_PATH)} {control} "
                         f"{budget} {shlex.quote(command)}"
                     ),
                     env=env,

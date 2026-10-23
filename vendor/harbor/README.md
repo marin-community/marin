@@ -41,7 +41,8 @@ removals, and update `UPSTREAM.toml`.
 All Harbor launches execute this checkout. Reproduce historical evaluation cohorts
 from their recorded Marin checkout.
 
-Pi uses a Linux process-tree supervisor to enforce its agent deadline, including
-tools that start detached process groups. Daytona cancellation signals that
-supervisor through a separate control session. Unconfirmed cleanup raises
+Pi installs Python 3 and uses a Linux child subreaper to enforce its agent
+deadline and reap tools that start detached process groups or outlive their
+parents. Background tools are also reaped after ordinary Pi completion. Daytona
+cancellation signals that supervisor through a separate control session. Unconfirmed cleanup raises
 `PhaseCancellationError` and prevents verification against a live agent.
