@@ -470,6 +470,8 @@ def build_evaluation_steps(batch: EvaluationBatch, execute: EvaluationStep) -> t
 
 def prepare_evaluation_batch(spec: LaunchSpec) -> EvaluationBatch:
     """Resolve one launch before an Iris client is opened."""
+    if spec.resume_results_path is not None and spec.resume_results_path.startswith("s3://"):
+        configure_coreweave_s3()
     provenance = LaunchProvenance(
         git_sha=_git_sha(),
         launch_host=socket.gethostname(),
