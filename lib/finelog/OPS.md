@@ -80,15 +80,20 @@ queued readers can proceed. Background warming uses only immediately available
 download slots; a broad query cannot leave an unbounded queue of cache fills
 after its deadline. Required local reads still wait for a download slot.
 
-Query misses qualify for background warming on the second distinct query
-request within ten minutes. A query shares a 256 MiB / 64-object fill budget
+Query misses qualify for background warming after two remembered query
+requests. A query shares a 256 MiB / 64-object fill budget
 across all namespaces, source Parquet, index bundles, and projections. Repeated
 scans of an object in one query count once. Objects larger than the remaining
 byte budget continue scanning remotely; smaller objects can still qualify.
-Each cached store remembers at most 65,536 objects' first observations and
-expires them after ten minutes, so old bulk scans cannot accumulate demand
-indefinitely. A process restart clears this history. Separate RPC requests,
-including retries, count as separate queries.
+Each cached store keeps saturating request counts and last-seen times in a hash
+map. Every 32,768 object observations, it halves the counts and removes zero-count
+and ten-minute-idle entries. Pruning favors repeated demand over one-off scans
+without maintaining an eviction order. The total count, and hence the entry
+count, stays below 65,536. Idle counts reset on lookup, so stale demand never
+qualifies an object between pruning passes. This is an approximate reuse
+threshold: a single observation can age out before ten minutes. A process
+restart clears the history. Separate RPC requests, including retries, count as
+separate queries.
 
 These are admission limits, not a hard disk quota. Uploads still seed the cache,
 required local reads and bounded key-bounds repair bypass query admission, and
