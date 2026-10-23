@@ -144,8 +144,11 @@ VARIANTS = 8
 MAX_ANSWER_SHARE = 0.25
 """The largest share of the variants that can have one reference answer. A policy that trains on a task whose
 answers repeat learns to guess the common answer instead of doing the work."""
-SNAPSHOT_EXCLUDES = frozenset({ROLLOUTS_DIR})
-"""Workspace entries that the snapshot of an accepted task leaves out: the transcripts are large and not inputs."""
+SUBMIT_DIR = ".submit"
+"""Where ``submit`` writes the tasks of the build program."""
+SNAPSHOT_EXCLUDES = frozenset({ROLLOUTS_DIR, SUBMIT_DIR})
+"""Workspace entries that the snapshot of an accepted task leaves out: the transcripts and the tasks of the build
+program are not inputs of the program."""
 
 
 class ToolError(Exception):
@@ -537,11 +540,11 @@ class ToolSession:
         problems = await self._program_problems(program, task)
         if problems:
             return _result({"accepted": False, "problems": problems})
+        snapshot = await self._snapshot()
         # The review comes last, so it sees all the evidence of this version of the task.
         review = await self._review(task, key, evidence)
         if not review.accept:
             return _result({"accepted": False, "review": review.model_dump(mode="json")})
-        snapshot = await self._snapshot()
         accepted = AcceptedTask(task, replace(evidence, controls=list(evidence.controls)), review, program, snapshot)
         self.tools.accepted.append(accepted)
         count = len(self.tools.accepted)
@@ -603,6 +606,10 @@ class ToolSession:
             return [str(error)]
         if _task_digest(again) != _task_digest(task):
             return [f"{program} with the task id {task.id!r} writes another TaskSpec than the submitted one"]
+        for k, variant in enumerate(variants):
+            # task_instances keeps only the tasks that have the id that the program gets.
+            if variant.id != (expected := f"{task.id}{VARIANT_SUFFIX}{k}"):
+                return [f"{program} with the task id {expected!r} writes a task with the id {variant.id!r}"]
         if any(content_digest(variant) == content_digest(task) for variant in variants):
             return [f"{program} writes the same task for another task id; derive the task's data from the id"]
         answers = Counter(_reference(variant) for variant in variants)
@@ -620,11 +627,13 @@ class ToolSession:
         ][:REVIEW_ANSWERS]
 
     async def _build(self, program: str, task_id: str) -> TaskSpec:
-        output = f".submit/{task_id}.json"
+        output = f"{SUBMIT_DIR}/{task_id}.json"
         command = (*program_command(program), task_id, output)
         result = await self.machine.run(
             Command(
-                ("sh", "-c", f"mkdir -p .submit && {shlex.join(command)}"), cwd=str(WORKDIR), timeout=PROGRAM_TIMEOUT
+                ("sh", "-c", f"mkdir -p {SUBMIT_DIR} && {shlex.join(command)}"),
+                cwd=str(WORKDIR),
+                timeout=PROGRAM_TIMEOUT,
             )
         )
         if result.exit_code != 0:
@@ -633,13 +642,20 @@ class ToolSession:
         return await self._load(output)
 
     async def _snapshot(self) -> bytes:
-        listing = await self.machine.run(Command(("ls", "-A", str(WORKDIR))))
-        entries = [name for name in listing.stdout.decode().split() if name not in SNAPSHOT_EXCLUDES]
+        """A gzipped tar of the workspace without ``SNAPSHOT_EXCLUDES``. One name on each line keeps names with
+        spaces whole; ShellSim's tar has no ``--exclude``."""
+        listing = await self.machine.run(Command(("ls", "-A1", str(WORKDIR))))
+        entries = [name for name in listing.stdout.decode().splitlines() if name not in SNAPSHOT_EXCLUDES]
         result = await self.machine.run(
             Command(("tar", "-czf", "-", *entries), cwd=str(WORKDIR), output_limit_bytes=MAX_FILE_BYTES)
         )
-        if result.exit_code != 0 or result.stdout_truncated:
-            raise RuntimeError(f"The workspace snapshot failed: {_clip(result.stderr.decode(errors='replace'))}")
+        if result.stdout_truncated:
+            raise ToolError(
+                f"The workspace is larger than {MAX_FILE_BYTES} bytes as a gzipped tar; delete the files that the "
+                "build program does not read"
+            )
+        if result.exit_code != 0:
+            raise ToolError(f"The workspace snapshot failed: {_clip(result.stderr.decode(errors='replace'))}")
         return result.stdout
 
     async def _review(self, task: TaskSpec, key: str, evidence: Evidence) -> TaskReview:

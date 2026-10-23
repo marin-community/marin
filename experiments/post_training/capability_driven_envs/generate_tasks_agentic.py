@@ -128,6 +128,7 @@ def workspace_factory() -> LocalMachineFactory:
 def interpreter_mounts(environment: Path) -> tuple[Path, ...]:
     """The directories outside ``environment`` that its Python needs in a sandbox: the base interpreter, by its
     resolved path and by the path that ``pyvenv.cfg`` names, and the uv archive that its package files link to.
+    Without the second path, ``bin/python`` dangles in the sandbox and ``python3`` is the system interpreter.
 
     The sandbox sees the system directories already, and mounts inside them fail.
     """
@@ -140,12 +141,8 @@ def interpreter_mounts(environment: Path) -> tuple[Path, ...]:
 
 
 def interpreter_home(environment: Path) -> Path:
-    """The base interpreter's directory by the path that ``pyvenv.cfg`` of ``environment`` names.
-
-    uv names its minor-version link (``cpython-3.12-linux-x86_64-gnu``), which ``sys.base_prefix`` resolves to the
-    patch version. Without the link in the sandbox, ``bin/python`` dangles and ``python3`` is the system interpreter,
-    which has none of the environment's packages.
-    """
+    """The base interpreter's directory by the path that ``pyvenv.cfg`` of ``environment`` names, for example uv's
+    minor-version link, which ``sys.base_prefix`` resolves to the patch version."""
     for line in (environment / "pyvenv.cfg").read_text().splitlines():
         key, _, value = line.partition("=")
         if key.strip() == "home":

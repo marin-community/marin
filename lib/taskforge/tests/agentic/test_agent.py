@@ -4,9 +4,11 @@
 """``generate_tasks`` with a scripted agent, solver and reviewer on real ShellSim machines and the real gate."""
 
 import dataclasses
+import io
 import itertools
 import json
 import shlex
+import tarfile
 import urllib.request
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -98,7 +100,7 @@ SCRIPT = (
     call(
         "shell",
         command=f"mkdir -p tasks; printf '%s' {shlex.quote(TASK_JSON)} > task.json; cp task.json {TASK}; "
-        f"printf '%s\\n' {shlex.quote(BUILD)} > build.sh",
+        f"printf '%s\\n' {shlex.quote(BUILD)} > build.sh; echo sources > 'notes on sources.md'",
     ),
     call("submit", path=TASK, program="build.sh"),
     call("grade", path=TASK, answer="1", expect="pass"),  # A wrong control of the agent's own does not block.
@@ -256,6 +258,9 @@ async def test_submit_accepts_only_the_task_version_with_complete_evidence():
     # A review is a blind solve and the review itself.
     assert (result.spend.solver_rollouts, result.spend.judge_calls) == (12, 2)
 
+    with tarfile.open(fileobj=io.BytesIO(accepted.workspace)) as archive:
+        names = archive.getnames()
+    assert "notes on sources.md" in names and not any(name.startswith(".submit") for name in names)
     [instance] = await task_instances(accepted, ["ledger--07"], ShellSimMachineFactory(), timeout=10)
     assert instance.id == "ledger--07"
     prompt, grader = instance.context.events[0], instance.grader
@@ -303,6 +308,26 @@ async def test_submit_refuses_a_task_whose_answer_selects_an_option():
     [submit] = tool_replies(result, "call-10")
     assert not submit["accepted"]
     assert submit["review"]["problems"] == [OPTION_PROBLEM]
+    assert result.tasks == ()
+
+
+async def test_submit_refuses_a_program_that_gives_other_ids_its_own_task_id():
+    fixed = BUILD.replace(f"s/{TASK_ID}/$1/g; ", "")
+    assert fixed != BUILD
+    script = (
+        *SCRIPT[:-1],
+        call("shell", command=f"printf '%s\\n' {shlex.quote(fixed)} > fixed.sh"),
+        call("submit", path=TASK, program="fixed.sh"),
+        call("finish", report="done"),
+    )
+    async with ParallelWeb("unused") as web:
+        config = agentic_config(ScriptedAgent(script), ToolBudget(solver_rollouts=20, judge_calls=2, web_calls=0), web)
+        result = await generate_tasks(IDEA, 1, config)
+
+    [submit] = tool_replies(result, "call-11")
+    assert submit["problems"] == [
+        f"fixed.sh with the task id '{TASK_ID}.variant-0' writes a task with the id '{TASK_ID}'"
+    ]
     assert result.tasks == ()
 
 
