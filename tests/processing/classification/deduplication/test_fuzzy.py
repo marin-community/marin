@@ -21,6 +21,7 @@ from marin.processing.classification.deduplication.fuzzy_minhash import (
     _minhash_batch,
     compute_minhash_attrs,
 )
+from zephyr.stage_io import ZephyrWorkerError
 from zephyr.writers import write_jsonl_file, write_parquet_file
 
 TEST_MINHASH_PARAMS = MinHashParams(num_perms=286, num_bands=26, ngram_size=5, seed=42)
@@ -363,13 +364,13 @@ def test_fuzzy_dups_capped_does_not_raise_and_emits(fox_corpus):
 
 
 def _minhash_attr_from_table(
-    root: Path, source_key: str, buckets: list[list[int]], bucket_type: pa.DataType
+    root: Path, source_key: str, buckets: list[list[int | str] | None], bucket_type: pa.DataType
 ) -> MinHashAttrData:
     """Write a MinHash attr shard whose ``buckets`` column has an explicit list type."""
     attr_dir = root / source_key / "outputs"
     attr_dir.mkdir(parents=True)
     if pa.types.is_string(bucket_type) or pa.types.is_large_string(bucket_type):
-        buckets = [[str(b) for b in row] for row in buckets]
+        buckets = [None if row is None else [str(b) for b in row] for row in buckets]
     ids = [f"{source_key}-doc-{i}" for i in range(len(buckets))]
     schema = pa.schema([pa.field("id", pa.string()), pa.field("buckets", pa.list_(bucket_type))])
     pq.write_table(pa.table({"id": ids, "buckets": buckets}, schema=schema), str(attr_dir / "part-00000.parquet"))
@@ -389,6 +390,26 @@ def test_fuzzy_dups_links_sources_across_bucket_types(tmp_path, other_type):
     assert len(rows) == 2
     assert len({r["dup_cluster_id"] for r in rows}) == 1
     assert sum(r["is_cluster_canonical"] for r in rows) == 1
+
+
+def test_fuzzy_dups_rejects_bucket_that_is_not_a_uint64(tmp_path):
+    """A malformed bucket fails the job instead of linking only to identical malformed strings."""
+    good = _minhash_attr_from_table(tmp_path, "good", [[5]], pa.string())
+    bad = _minhash_attr_from_table(tmp_path, "bad", [[5], ["not-a-bucket"]], pa.string())
+
+    with pytest.raises(ZephyrWorkerError, match="not-a-bucket"):
+        compute_fuzzy_dups_attrs(inputs=[good, bad], output_path=str(tmp_path / "dups"), max_parallelism=1)
+
+
+def test_fuzzy_dups_skips_null_and_empty_bucket_rows(tmp_path):
+    """Rows without buckets get no marker and leave the cluster around them intact."""
+    mh = _minhash_attr_from_table(tmp_path, "src", [None, [], [7], [7]], pa.uint64())
+
+    dups = compute_fuzzy_dups_attrs(inputs=[mh], output_path=str(tmp_path / "dups"), max_parallelism=1)
+
+    rows = _read_cluster_attrs(dups.sources["src"].attr_dir)
+    assert sorted(r["id"] for r in rows) == ["src-doc-2", "src-doc-3"]
+    assert len({r["dup_cluster_id"] for r in rows}) == 1
 
 
 def test_text_cap_chars_truncates_mega_docs_only(tmp_path):
