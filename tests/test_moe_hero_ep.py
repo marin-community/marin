@@ -1254,7 +1254,7 @@ def _fake_fa4_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, 
 @pytest.mark.parametrize("axis_sizes", [(2, 1, 1, 2, 1), (1, 2, 1, 2, 1)])
 def test_fa4_attention_traces_through_hero_loss_and_gradient(monkeypatch, axis_sizes):
     monkeypatch.setattr(jax, "default_backend", lambda: "gpu")
-    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim: object())
+    monkeypatch.setattr(fa4_cute, "_segmented_kernel_config", lambda head_dim, rel_extent=None: object())
     monkeypatch.setattr(fa4_cute, "fa4_cute_attention_forward", _fake_fa4_forward)
     mesh = AbstractMesh(
         axis_sizes=axis_sizes,

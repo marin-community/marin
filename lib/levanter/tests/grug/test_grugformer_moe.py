@@ -1903,15 +1903,19 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(
         def dense_output(x, w_up, w_down, combine_weights):
             pre = jnp.einsum("th,tkhi->tki", x, w_up[selected_experts])
             expert_output = jnp.einsum("tki,tkih->tkh", jnp.square(jax.nn.relu(pre)), w_down[selected_experts])
-            return jnp.einsum("tkh,tk->th", expert_output, combine_weights * token_valid[:, None])
+            return jnp.einsum("tkh,tk->th", expert_output, combine_weights * token_valid[:, None]), None
 
         def value_and_grads(fn):
-            args = (x, w_up, w_down, combine_weights)
-            out = fn(*args)
-            grads = jax.grad(lambda *args: jnp.sum(fn(*args) * cotangent), argnums=(0, 1, 2, 3))(*args)
-            return [np.asarray(out), *(np.asarray(g) for g in grads)]
+            # One compiled forward and backward: the output, fn's auxiliary output and the cotangent's pullback.
+            @jax.jit
+            def run(x, w_up, w_down, combine_weights, cotangent):
+                out, pullback, aux = jax.vjp(fn, x, w_up, w_down, combine_weights, has_aux=True)
+                return out, pullback(cotangent), aux
 
-        expected = value_and_grads(dense_output)
+            out, grads, aux = run(x, w_up, w_down, combine_weights, cotangent)
+            return [np.asarray(out), *(np.asarray(g) for g in grads)], aux
+
+        expected, _ = value_and_grads(dense_output)
 
         batch_sharding = NamedSharding(mesh, P(("data", "expert"), None))
         expert_sharding = NamedSharding(mesh, P("expert", None, None))
@@ -1922,8 +1926,6 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(
         w_up = jax.device_put(w_up, expert_sharding)
         w_down = jax.device_put(w_down, expert_sharding)
         cotangent = jax.device_put(cotangent, batch_sharding)
-
-        dropped = {}
 
         def backend(implementation):
             def output(x, w_up, w_down, combine_weights):
@@ -1942,16 +1944,15 @@ def test_ragged_all_to_all_matches_pooled_wave_for_ungated_relu2_experts(
                     report_capacity_overflow=True,
                     ragged_expert_chunks=__CHUNKS__,
                 )
-                dropped[implementation] = counts.dropped
-                return out
+                return out, counts.dropped
 
             return output
 
         with jax.set_mesh(mesh):
-            ragged = value_and_grads(backend("ragged_all_to_all"))
-            assert int(dropped["ragged_all_to_all"]) == 0
-            pooled = value_and_grads(backend("fixed_pooled_wave_all_to_all"))
-            assert int(dropped["fixed_pooled_wave_all_to_all"]) == 0
+            ragged, ragged_dropped = value_and_grads(backend("ragged_all_to_all"))
+            assert int(ragged_dropped) == 0
+            pooled, pooled_dropped = value_and_grads(backend("fixed_pooled_wave_all_to_all"))
+            assert int(pooled_dropped) == 0
 
         # The ragged backend forms the combine-weight gradient on the expert side, as <dy, y> / w.
         names = ["out", "dx", "dw_up", "dw_down", "dcombine_weights"]
@@ -2049,9 +2050,14 @@ def test_ragged_all_to_all_with_aligned_receiver_rows_matches_the_packed_layout(
             return jnp.einsum("tkh,tk->th", expert_output, combine_weights), None
 
         def value_and_grads(fn):
-            # One forward pass gives the output, fn's auxiliary output and the pullback of the cotangent.
-            out, pullback, aux = jax.vjp(fn, x, w_up, w_down, combine_weights, has_aux=True)
-            return [np.asarray(out), *(np.asarray(g) for g in pullback(cotangent))], aux
+            # One compiled forward and backward: the output, fn's auxiliary output and the cotangent's pullback.
+            @jax.jit
+            def run(x, w_up, w_down, combine_weights, cotangent):
+                out, pullback, aux = jax.vjp(fn, x, w_up, w_down, combine_weights, has_aux=True)
+                return out, pullback(cotangent), aux
+
+            out, grads, aux = run(x, w_up, w_down, combine_weights, cotangent)
+            return [np.asarray(out), *(np.asarray(g) for g in grads)], aux
 
         expected, _ = value_and_grads(dense_output)
 
