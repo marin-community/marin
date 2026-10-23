@@ -13,6 +13,16 @@ from skyrl_gym.identity_repair.reward import IdentityFact, RewardRecord, RewardW
 RUBRIC_VERSION = "identity-repair-v2-request-specific"
 
 
+def _assessment_json(text: str) -> str:
+    # Some judges wrap an otherwise complete JSON response in a Markdown fence.
+    # Remove only a whole-response wrapper; schema validation still rejects prose,
+    # malformed/truncated JSON, and unexpected fields.
+    lines = text.strip().splitlines()
+    if len(lines) >= 3 and lines[0] in {"```json", "```"} and lines[-1] == "```":
+        return "\n".join(lines[1:-1])
+    return text
+
+
 class ClaimAssessment(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     incorrect: StrictBool
@@ -57,7 +67,7 @@ class ProductionIdentityJudge:
             )},
             {"role": "user", "content": json.dumps({"answer": text, "claim": asdict(claim), "facts": asdict(manifest)})},
         ], max_tokens=self.max_tokens)
-        assessment = ClaimAssessment.model_validate_json(answer)
+        assessment = ClaimAssessment.model_validate_json(_assessment_json(answer))
         return JudgeVerdict(assessment.incorrect, assessment.ambiguous, None, self.version)
 
     def grade_answer(
@@ -84,7 +94,7 @@ class ProductionIdentityJudge:
                 "requested_facts": [fact.value for fact in context.requested_facts],
             })},
         ], max_tokens=self.max_tokens)
-        assessment = AnswerAssessment.model_validate_json(answer)
+        assessment = AnswerAssessment.model_validate_json(_assessment_json(answer))
         expected = {fact.value for fact in context.requested_facts}
         if set(assessment.fact_correctness) != expected:
             raise ValueError("Judge returned facts other than those requested")

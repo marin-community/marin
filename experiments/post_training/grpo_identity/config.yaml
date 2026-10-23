@@ -146,7 +146,7 @@ skyrl:
     judge_model: glm-5.3
     judge_revision: glm-5.3
     judge_api_key_env: GLM_BULK_TOKEN
-    judge_max_tokens: 2048
+    judge_max_tokens: 8192
     teacher_sampling_params:
       temperature: 1.0
       top_p: 1.0
