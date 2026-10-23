@@ -2875,38 +2875,44 @@ class K8sTaskProvider:
         self.kubectl.apply_json(manifest)
         job_secrets = task_secret_values(run_req.environment)
         if job_secrets or task_policy is not None:
-            # The Pod owns its policy and Secret, so Kubernetes deletes them with
-            # the Pod however it is removed. The required Secret volume holds
-            # task startup until the Secret exists, and the Secret comes last, so
-            # the task's first connections already see the job's egress rules.
-            pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
-            if pod is None:
-                raise KubectlError(f"Pod {pod_name} disappeared before its Secret and policy were applied")
-            owner = [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}]
-            if task_policy is not None:
-                task_policy["metadata"]["ownerReferences"] = owner
-                self.kubectl.apply_json(task_policy)
-            self.kubectl.apply_json(
-                {
-                    "apiVersion": "v1",
-                    "kind": "Secret",
-                    "metadata": {
-                        "name": _task_secret_name(pod_name),
-                        "namespace": self.pods.namespace,
-                        "ownerReferences": owner,
-                    },
-                    "type": "Opaque",
-                    "data": {
-                        name: base64.b64encode(value.encode()).decode()
-                        for name, value in secret_file_contents(job_secrets).items()
-                    },
-                }
-            )
+            self._apply_pod_owned_resources(pod_name, task_policy, job_secrets)
         logger.info(
             "Applied pod %s for task %s attempt %d",
             manifest["metadata"]["name"],
             task_id,
             run_req.attempt_id,
+        )
+
+    def _apply_pod_owned_resources(self, pod_name: str, task_policy: dict | None, job_secrets: dict[str, str]) -> None:
+        """Apply the Pod's egress policy, if any, and then its Secret, both owned by the Pod.
+
+        Kubernetes deletes them with the Pod however it is removed. The Pod's
+        required Secret volume holds task startup until the Secret exists, and
+        the Secret comes last, so the task's first connections already see the
+        job's egress rules.
+        """
+        pod = self.kubectl.get_json(K8sResource.PODS, pod_name)
+        if pod is None:
+            raise KubectlError(f"Pod {pod_name} disappeared before its Secret and policy were applied")
+        owner = [{"apiVersion": "v1", "kind": "Pod", "name": pod_name, "uid": pod["metadata"]["uid"]}]
+        if task_policy is not None:
+            task_policy["metadata"]["ownerReferences"] = owner
+            self.kubectl.apply_json(task_policy)
+        self.kubectl.apply_json(
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": _task_secret_name(pod_name),
+                    "namespace": self.pods.namespace,
+                    "ownerReferences": owner,
+                },
+                "type": "Opaque",
+                "data": {
+                    name: base64.b64encode(value.encode()).decode()
+                    for name, value in secret_file_contents(job_secrets).items()
+                },
+            }
         )
 
     def _delete_stray_pods(self, cached_pods: list[dict], desired_keys: set[tuple[str, int]]) -> None:

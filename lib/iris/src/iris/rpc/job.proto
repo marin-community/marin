@@ -677,9 +677,9 @@ enum ContainerProfile {
   // the intercepted guest kernel isolates the host. The task receives only the
   // job's own env_vars and Iris task identity: no cluster task_env or injected
   // secrets, no controller address, no shared node cache mounts, and no
-  // Kubernetes service account token. Its egress policy cannot be CLUSTER. The
-  // job must carry no workspace bundle. CPU-only (runsc cannot pass a GPU/TPU
-  // through). Not elevated.
+  // Kubernetes service account token. Its egress policy cannot be CLUSTER or
+  // ALLOWLIST. The job must carry no workspace bundle. CPU-only (runsc cannot
+  // pass a GPU/TPU through). Not elevated.
   CONTAINER_PROFILE_SANDBOX = 6;
 }
 

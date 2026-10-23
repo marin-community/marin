@@ -342,10 +342,11 @@ The controller still trusts its network. Every production cluster lists the
 private address ranges in `auth.trusted_cidrs`, and the controller
 authenticates a caller from those ranges that presents no token as the
 anonymous admin (`CidrAuthenticator` in `rigging.server_auth`). Until those
-ranges are narrowed, a task with `CLUSTER` or `ALLOWLIST` egress that drops its token can
-still submit jobs with any container profile and, since the anonymous admin
-passes the owner check on `ExecInContainer`, run commands in any task on the
-cluster. This is why `SANDBOX` rejects `CLUSTER`.
+ranges are narrowed, a task with `CLUSTER` or `ALLOWLIST` egress that drops
+its token can still submit jobs with any container profile and, since the
+anonymous admin passes the owner check on `ExecInContainer`, run commands in
+any task on the cluster. This is why `SANDBOX` rejects `CLUSTER` and
+`ALLOWLIST`.
 
 ## See also
 

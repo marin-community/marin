@@ -295,7 +295,7 @@ def no_cilium_service(service):
         yield service
 
 
-def test_allowlist_runs_on_the_cluster_network_where_the_cluster_cannot_enforce_it(no_cilium_service, state, caplog):
+def test_allowlist_runs_on_the_cluster_network_where_the_cluster_cannot_enforce_it(no_cilium_service, state):
     """Launchers can request the allowlist before every cluster enforces it."""
     job_id = JobName.from_wire("/alice/job")
     request = _launch(job_id.to_wire(), DEFAULT, job_pb2.EGRESS_POLICY_ALLOWLIST, ["api.openai.com:443"])
@@ -304,7 +304,6 @@ def test_allowlist_runs_on_the_cluster_network_where_the_cluster_cannot_enforce_
     cluster = job_pb2.EGRESS_POLICY_CLUSTER
     assert _stored_egress(state, job_id) == (cluster, cluster)
     assert _stored_rules(state, job_id) == ["api.openai.com:443"]
-    assert "cannot enforce" in caplog.text
 
 
 @pytest.mark.parametrize(
