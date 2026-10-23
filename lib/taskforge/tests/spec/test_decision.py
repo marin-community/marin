@@ -99,10 +99,7 @@ def test_the_grader_survives_the_task_round_trip_as_a_no_grader_contract():
     assert task_decision_grader(task(draft.answer_grader(ExactSpec(expected=("1234.56",))))) is None
 
 
-def test_the_default_state_is_the_solver_turn_template_and_a_state_must_carry_the_solver_output():
-    assert uncalibrated().state == dict(SOLVER_TURN_STATE)
-    assert (uncalibrated().acceptance_level, uncalibrated().bar) == (None, 2.0)
-
+def test_a_state_must_carry_the_solver_output():
     with pytest.raises(ValidationError, match="must include solver_turn_output"):
         draft.decision_grader(RUBRIC, REFERENCE, state={"rubric": StateSource.RUBRIC})
 

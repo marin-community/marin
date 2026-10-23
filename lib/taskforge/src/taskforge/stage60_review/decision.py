@@ -3,10 +3,11 @@
 
 """The decision review makes on a validation round.
 
-Review returns one of four decisions:
+Review returns one of five decisions:
 
 * ``Accept`` ends the workpiece with its task, labelled with where the solve rate fell against the band.
-* ``Reject`` ends the workpiece for the reason in its ``RejectKind``.
+* ``Reject(TASK)`` ends a completed evaluation. HOST holds and BUDGET abandons for resume.
+* ``Hold`` preserves incomplete evidence for a later validation pass.
 * ``Retry`` sends the same draft through validation again.
 * ``Modify`` sends the program back to the author for the next round, with the review's findings.
 """
@@ -52,10 +53,17 @@ class Retry:
 
 
 @dataclass(frozen=True)
+class Hold:
+    """Validation is unavailable or incomplete; preserve the task and resume without spending author budget."""
+
+    reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class Modify:
     """The author revises the program to fix ``findings``."""
 
     findings: tuple[str, ...]
 
 
-Decision = Accept | Reject | Retry | Modify
+Decision = Accept | Reject | Retry | Hold | Modify

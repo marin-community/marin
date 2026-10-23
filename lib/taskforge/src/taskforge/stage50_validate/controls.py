@@ -99,7 +99,7 @@ def control_turns(control: Control) -> tuple[dict[str, Any], ...]:
     return tuple(wire_message(turn) for turn in control.payload.turns)
 
 
-def check_replayable(task: TaskSpec, controls: Sequence[Control], max_turns: int) -> None:
+def check_replayable(task: TaskSpec, controls: Sequence[Control], max_turns: int | None) -> None:
     """Refuse a control set that cannot be replayed against ``task`` within ``max_turns`` turns.
 
     Raises:
@@ -107,7 +107,7 @@ def check_replayable(task: TaskSpec, controls: Sequence[Control], max_turns: int
             control needs more than ``max_turns`` turns.
     """
     validate_controls(task, controls)
-    too_long = [control.id for control in controls if len(control_turns(control)) > max_turns]
+    too_long = [control.id for control in controls if max_turns is not None and len(control_turns(control)) > max_turns]
     if too_long:
         raise ValueError(f"Controls {too_long} need more than max_turns={max_turns} turns")
 

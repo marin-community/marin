@@ -9,12 +9,12 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import ArtifactKind, VerifierArtifact
 from verifyit.spec import ExactSpec
 
+from taskforge.llm.structured import IncompleteOutput
 from taskforge.spec import draft
 from taskforge.spec.verdict import VERDICT_REWARD
-from taskforge.stage40_build_with_program.context import BuildFailure
+from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure
 from taskforge.stage40_build_with_program.outputs import WebCall
 from taskforge.stage40_build_with_program.sdk import (
-    ATTEMPTS,
     DIAGNOSTICS_CHARS,
     WORKDIR,
     FoolingKind,
@@ -61,32 +61,21 @@ async def test_a_check_that_returns_another_checks_coroutine_is_awaited(context,
     assert len(fake_glm.requests) == 1
 
 
-async def test_structured_until_fails_the_build_after_its_attempts(context, fake_glm):
-    for value in range(1, 2 * ATTEMPTS, 2):
+async def test_structured_checks_continue_past_the_old_three_attempt_cap(context, fake_glm):
+    for value in (1, 3, 5, 7, 42):
         fake_glm.stream(content=json.dumps({"value": value}))
+    result = await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
+    assert result.value == 42
+    assert len(fake_glm.requests) == 5
 
-    with pytest.raises(BuildFailure, match=f"after {ATTEMPTS} requests; last problem: {2 * ATTEMPTS - 1} is odd"):
-        await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
 
-
-async def test_a_reply_the_output_limit_cut_counts_as_a_failed_submission(context, fake_glm):
+async def test_a_cut_structured_reply_holds_without_spending_build_attempts(context, fake_glm):
     fake_glm.stream(content='{"value": 4', finish="length")
     fake_glm.stream(content=json.dumps({"value": 42}))
-
-    answer = await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
-
-    assert answer == Answer(value=42)
-    retry = fake_glm.requests[1]["messages"]
-    assert retry[-3] == {"role": "assistant", "content": '{"value": 4 ...[cut by the output limit]'}
-    assert "the reply was cut off by the output limit after" in retry[-2]["content"]
-
-
-async def test_replies_cut_at_every_attempt_fail_the_build(context, fake_glm):
-    for _ in range(ATTEMPTS):
-        fake_glm.stream(content='{"value": 4', finish="length")
-
-    with pytest.raises(BuildFailure, match=f"after {ATTEMPTS} requests; last problem: the reply was cut off"):
+    with pytest.raises(IncompleteOutput) as failure:
         await structured_until(context(), [{"role": "user", "content": "Pick an even number."}], Answer, even)
+    assert len(fake_glm.requests) == 1
+    assert failure.value.completions[0].content == '{"value": 4'
 
 
 async def test_research_without_a_web_call_fails_the_build(context, proposal, fake_glm):
@@ -101,7 +90,7 @@ async def test_research_with_only_error_results_fails_the_build(context, proposa
     fake_glm.stream(content="The search failed; 6 x 7 is 42.")
     failing = web_tool([], "error: Parallel rejected the request (HTTP 422): bad query")
 
-    with pytest.raises(BuildFailure, match=r"research\[0\]: no web_search or web_fetch call"):
+    with pytest.raises(BuildInfrastructureFailure, match="every executed web request failed"):
         await research(context(web_tools=(failing,)), proposal, 0)
 
 

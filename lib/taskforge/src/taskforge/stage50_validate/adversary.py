@@ -126,7 +126,7 @@ from taskforge.stage50_validate.adversary_prompts import (
 )
 from taskforge.stage50_validate.classify import classify
 from taskforge.stage50_validate.evidence import passed
-from taskforge.stage50_validate.outcome import GRADED_STATUSES, Graded, Outcome, TrialKind, Ungraded
+from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, TrialKind, Ungraded
 from taskforge.stage50_validate.trials import (
     CLEANUP_ERROR_COUNT,
     EngineSettings,
@@ -183,20 +183,23 @@ class AdversaryPolicy:
     """
 
     k: int
-    submissions: int
+    submissions: int | None
     repair_submissions: int
-    max_turns: int
+    max_turns: int | None
     sampling: LLMPolicy
     mode: AdversaryMode
     min_probes: int
 
     def __post_init__(self) -> None:
-        if self.k < 0 or self.submissions < 1 or self.max_turns < 1 or self.min_probes < 0:
+        if (
+            self.k < 0
+            or (self.submissions is not None and self.submissions < 1)
+            or (self.max_turns is not None and self.max_turns < 1)
+            or self.min_probes < 0
+        ):
             raise ValueError("AdversaryPolicy needs k >= 0, submissions >= 1, max_turns >= 1 and min_probes >= 0")
-        if not 0 <= self.repair_submissions <= self.submissions:
+        if self.repair_submissions < 0 or (self.submissions is not None and self.repair_submissions > self.submissions):
             raise ValueError("AdversaryPolicy needs 0 <= repair_submissions <= submissions")
-        if self.sampling.max_continuations != 0:
-            raise ValueError("AdversaryPolicy needs sampling.max_continuations == 0: an agent loop has no continuation")
 
 
 class ClaimKind(StrEnum):
@@ -406,8 +409,10 @@ def adversary_brief(spec: TaskRolloutSpec, controls: Sequence[Control], policy: 
     line_clause = DECISION_LINE_CLAUSE if task_decision_grader(spec.task) is not None else WHITEBOX_LINE_CLAUSE
     return BRIEF_TEMPLATE.format(
         tools=TOOLS_WITH_SHELL if spec.task_machine is not None else TOOLS_SUBMIT_ONLY,
-        submissions=policy.submissions,
-        probes=min(policy.min_probes, max(policy.submissions - 1, 1)),
+        submissions="unlimited" if policy.submissions is None else policy.submissions,
+        probes=(
+            policy.min_probes if policy.submissions is None else min(policy.min_probes, max(policy.submissions - 1, 1))
+        ),
         context=f"{PREAMBLE_SEPARATOR}{context}{PREAMBLE_SEPARATOR}" if context else " ",
         line_clause=line_clause if whitebox else "",
     )
@@ -482,12 +487,12 @@ def _submission_grade(outcome: Outcome) -> GradeResult:
     return GradeResult(GradeStatus.UNAVAILABLE, None, f"{outcome.cause}: {outcome.detail[:500]}")
 
 
-def _observation(submission: SubmissionRecord, budget: int) -> dict[str, object]:
+def _observation(submission: SubmissionRecord, budget: int | None) -> dict[str, object]:
     """What ``submit`` returns to the adversary: the grade, or that the verifier failed."""
     grade = submission.grade
     head: dict[str, object] = {
         "submission": submission.ordinal,
-        "remaining": budget - submission.ordinal,
+        "remaining": None if budget is None else budget - submission.ordinal,
         "status": str(grade.status),
     }
     if grade.status not in GRADED_STATUSES:
@@ -519,11 +524,11 @@ class Verifier:
     settings: EngineSettings
     plan: TrialPlan
     machine: Machine | None
-    budget: int
+    budget: int | None
     submissions: list[Submission] = field(default_factory=list)
 
     async def submit(self, arguments: Mapping[str, object]) -> str:
-        if len(self.submissions) >= self.budget:
+        if self.budget is not None and len(self.submissions) >= self.budget:
             return json.dumps(
                 {"error": f"submission budget spent: {self.budget} of {self.budget}; give your verdict now"}
             )
@@ -558,6 +563,17 @@ class Verifier:
 
 def trial_outcome(rollout: Rollout, submissions: Sequence[Submission]) -> Outcome:
     """Use the last passing submission, or the last submission, preserving verifier failures."""
+    for submission in submissions:
+        if isinstance(submission.outcome, Ungraded):
+            return replace(submission.outcome, rollout=rollout)
+    if rollout.stop_reason == MACHINE_LOST_STOP_REASON:
+        return Ungraded(Cause.MACHINE_TERMINATED, "adversary machine was lost", rollout, None)
+    if rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON:
+        return Ungraded(Cause.AGENT_TIMEOUT, "adversary session timed out", rollout, None)
+    if rollout.stop_reason == MAX_TURNS_STOP_REASON:
+        return Ungraded(Cause.BUDGET_EXHAUSTED, "adversary turn budget exhausted", rollout, None)
+    if rollout.stop_reason in (LENGTH_STOP_REASON, CONTEXT_STOP_REASON):
+        return Ungraded(Cause.GENERATION_LIMIT, f"adversary stopped at {rollout.stop_reason}", rollout, None)
     accepted = [submission for submission in submissions if submission.record.passed]
     chosen = accepted[-1] if accepted else submissions[-1] if submissions else None
     if chosen is None:
@@ -688,10 +704,9 @@ async def _agent_attempt(
     model: ModelClient,
     record: CallLedger,
     opening: tuple[dict[str, Any], ...],
-    submissions: list[Submission],
     submission_plan: TrialPlan,
     run_id: str,
-) -> Outcome:
+) -> tuple[Outcome, tuple[Submission, ...]]:
     """One agent loop on a private task machine under the attempt deadline, its turns under the total-turn deadline.
 
     A failure before the loop finished is ``Ungraded`` with ``classify``'s cause; a machine close that fails after
@@ -702,9 +717,10 @@ async def _agent_attempt(
     finished = False
     lost = False
     cleanup_errors = 0
+    verifier: Verifier | None = None
     try:
         async with deadline, attempt_machine(spec, settings, run_id) as machine:
-            verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions, submissions)
+            verifier = Verifier(spec, settings, submission_plan, machine, policy.submissions)
             submit = AgentTool(
                 SUBMIT_TOOL_NAME, SUBMIT_DESCRIPTION, submit_parameters(machine is not None), verifier.submit
             )
@@ -730,14 +746,17 @@ async def _agent_attempt(
                 interrupted = RolloutInterrupted(Rollout(run_id, (), "error"), RolloutOperation.ATTEMPT)
                 interrupted.__cause__ = error
                 error = interrupted
-            return Ungraded(classify(error, spec.task), "".join(traceback.format_exception(error)), None, None)
+            submissions = () if verifier is None else tuple(verifier.submissions)
+            outcome = Ungraded(classify(error, spec.task), "".join(traceback.format_exception(error)), None, None)
+            return outcome, submissions
         cleanup_errors = 1
+    submissions = () if verifier is None else tuple(verifier.submissions)
     if run is not None:
         turns = submission_turns(run)
-        submissions[:] = [
+        submissions = tuple(
             replace(submission, record=replace(submission.record, turn=turns.get(submission.record.ordinal)))
             for submission in submissions
-        ]
+        )
     if lost:
         stop = MACHINE_LOST_STOP_REASON
     else:
@@ -745,7 +764,7 @@ async def _agent_attempt(
     rollout = agent_rollout(
         run_id, opening, run, stop, cleanup_errors, tuple(submission.record for submission in submissions)
     )
-    return trial_outcome(rollout, submissions)
+    return trial_outcome(rollout, submissions), submissions
 
 
 def _attempt_json(outcome: Outcome, record: AdversaryRecord) -> bytes:
@@ -794,7 +813,6 @@ async def run_adversary_trial(
     system = str(opening[0]["content"])
 
     async def attempt_once(attempt: int, step: str) -> Outcome:
-        submissions: list[Submission] = []
         submission_plan = replace(
             plan,
             kind=TrialKind.CONTROL,
@@ -805,8 +823,8 @@ async def run_adversary_trial(
         )
         calls = CallLedger(plan.ledger, plan.workpiece_id, plan.round, step)
         with attempt_span(trial_digest, plan, trial, attempt) as fields:
-            outcome = await _agent_attempt(
-                spec, policy, settings, model, calls, opening, submissions, submission_plan, step
+            outcome, submissions = await _agent_attempt(
+                spec, policy, settings, model, calls, opening, submission_plan, step
             )
             claim = claim_of(outcome)
             record = AdversaryRecord(

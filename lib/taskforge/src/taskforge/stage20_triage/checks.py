@@ -44,9 +44,9 @@ EXECUTABLE_CHECK = re.compile(
 )
 # Evidence of a judged rubric.
 RUBRIC = re.compile(r"\brubric\b|\bjudge[ds]?\b|\bcriteri(?:on|a)\b", re.IGNORECASE)
-# Evidence of an exact, numeric, or choice match.
 RUBRIC_KINDS = frozenset({Verification.DECISION_MODEL, Verification.LLM_AS_JUDGE})
 """Verification kinds whose grader applies a rubric."""
+# Evidence of an exact, numeric, or choice match.
 SIMPLE_MATCH = re.compile(
     r"\bexact\b|\bmatch(?:es|ing)?\b|\btolerance\b|\bnumeric(?:al)?\b|\bnormali[sz]", re.IGNORECASE
 )

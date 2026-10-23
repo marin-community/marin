@@ -24,7 +24,7 @@ the error, then the traceback's tail) and a grade's diagnostics, never a host fa
 re-raised for a cause in ``HOST_REJECTIONS``, and then re-raised like ``ModelUnavailable``: the author call
 ends without a record, so it spends no revision and a relaunch hands the workspace to a fresh session. A
 ``BuildExpired`` in ``run_build`` (a wall, step or grader clock) is re-raised at once, without a retry, and
-ends the call the same way, so the driver holds the workpiece as abandoned instead of asking for a rewrite.
+ends the call the same way, so the driver holds the workpiece instead of asking for a rewrite.
 An ``OSError`` raised outside the program's frames (``infrastructure.storage_fault``: the step store failed,
 or a blob or memo is missing or corrupt) is re-raised at once too, as the coordinator's build stage does,
 since no program change repairs the store. A failed build still writes its ``run.json``,
@@ -45,8 +45,8 @@ change in ``AuthoredProgram.verification_change`` and records it in ``author.jso
 failure and an author failure offer no such tool. A session handed off within a call starts again from the
 revision's change, not from the change an unsubmitted session made.
 
-``AgenticAuthor`` is the coordinator's ``Author``: each call runs sessions in the context's round until
-one submits, and returns the submitted file's bytes as the program's source, which the coordinator
+``AgenticAuthor`` is the coordinator's ``Author``: each call runs one session in the context's round
+and returns a submitted file's bytes as the program's source, which the coordinator
 writes to ``authored/<k>/``. Each session keeps its records in its own ``agentic/<k>/``: ``author.json``
 (status, revision, mode, stop reason, wall, and for a submission its verification change),
 ``submit.json``, ``record.json`` for a submission, ``transcript.json`` (every turn: role, tool calls,
@@ -66,10 +66,9 @@ none:
   ``max_turns_used`` turns; otherwise, and for any other revision, a fresh session seeded from its
   workspace, with the revision text as the first user turn after the opening.
 
-Within one call, a session that ends without a submission hands its workspace to one fresh session
-(``HANDED_OFF``); if that one ends unsubmitted too, the call raises ``AuthorFailure``, which spends a
-revision. A session stopped by the context guard hands off until ``MAX_SESSIONS_PER_CALL`` ran. A
-relaunch never resumes a session mid-way: it starts a handoff session from the workspace.
+A session that ends without a submission persists its conversation and workspace, then raises
+``BuildInfrastructureFailure``. It does not spend an author revision. A later call starts a handoff
+session from the saved workspace. There is no nudge or automatic handoff-count cap.
 
 Author turns record under the ledger step ``author`` with ``author_kind``, ``session`` and ``segment``
 attributes; every ledger entry of an in-session grade carries ``origin=author_session``.
@@ -96,6 +95,7 @@ from taskcompendium.models import TaskResource, TextMessage
 
 from taskforge.ledger.records import EntryKind, Ledger, LedgerEntry
 from taskforge.llm.agent import (
+    AgentInterrupted,
     AgentRun,
     AgentStop,
     AgentTool,
@@ -105,7 +105,7 @@ from taskforge.llm.agent import (
     clip_tool_output,
     run_agent,
 )
-from taskforge.llm.client import ModelClient, ModelUnavailable, Usage
+from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavailable, Usage
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger
 from taskforge.spec import draft as draft_module
@@ -115,7 +115,6 @@ from taskforge.stage30_author.author import (
     ROUNDS_DIR,
     AuthorContext,
     AuthoredProgram,
-    AuthorFailure,
     Revision,
     RevisionKind,
     VerificationChange,
@@ -127,7 +126,7 @@ from taskforge.stage40_build_with_program.context import (
     BuildFailure,
     BuildInfrastructureFailure,
 )
-from taskforge.stage40_build_with_program.failure_text import failure_head, failure_text
+from taskforge.stage40_build_with_program.failure_text import BuildCrash, failure_head, failure_text
 from taskforge.stage40_build_with_program.glm_author import (
     AUTHOR_STEP,
     RECORD_FILE,
@@ -138,6 +137,8 @@ from taskforge.stage40_build_with_program.glm_author import (
 from taskforge.stage40_build_with_program.infrastructure import (
     HOST_REJECTIONS,
     InfrastructureCause,
+    authored_failure,
+    infrastructure_failure,
     machine_available,
     storage_fault,
 )
@@ -176,11 +177,6 @@ WRITE_CHARS = 24000
 NOTES_CHARS = 4000
 """The longest ``submit`` notes; a bound of 2,000 refused 32 of 77 first submit calls in an early run."""
 READ_LINES = 400
-WEB_CALLS = 8
-MAX_NUDGES = 2
-"""Nudges after replies without a tool call that were not cut; a cut reply gets ``LENGTH_NUDGE`` instead."""
-MAX_SESSIONS_PER_CALL = 4
-"""Sessions one author call may start; a session stopped by the context guard hands off until this many ran."""
 REPLAY = ReasoningReplay.KEEP
 LOAD_TIMEOUT = 120.0
 """Seconds the default ``ProgramLoader`` gives a program's module body before it refuses the load."""
@@ -249,8 +245,8 @@ class SameSessionBounds:
     ``turns - max_turns_used`` more turns; any other revision starts a fresh session from its workspace.
     """
 
-    max_prompt_tokens: int
-    max_turns_used: int
+    max_prompt_tokens: int | None
+    max_turns_used: int | None
 
 
 @dataclass(frozen=True)
@@ -268,20 +264,28 @@ class AgenticAuthorConfig:
             (1 + ``max_continuations``) x ``turn_max_tokens`` of replayed reasoning.
     """
 
-    turns: int
-    turn_max_tokens: int
-    session_token_cap: int
+    turns: int | None
+    turn_max_tokens: int | None
+    session_token_cap: int | None
     revision_same_session: SameSessionBounds
-    max_continuations: int = 0
+    max_continuations: int | None = None
 
     def __post_init__(self) -> None:
-        if self.turns < 1:
+        if self.turns is not None and self.turns < 1:
             raise ValueError(f"turns must be at least 1, got {self.turns}")
-        if self.session_token_cap <= self.turn_max_tokens:
+        if (
+            self.session_token_cap is not None
+            and self.turn_max_tokens is not None
+            and self.session_token_cap <= self.turn_max_tokens
+        ):
             raise ValueError(
                 f"session_token_cap ({self.session_token_cap}) must exceed turn_max_tokens ({self.turn_max_tokens})"
             )
-        if not 0 <= self.revision_same_session.max_turns_used < self.turns:
+        if (
+            self.turns is not None
+            and self.revision_same_session.max_turns_used is not None
+            and not 0 <= self.revision_same_session.max_turns_used < self.turns
+        ):
             raise ValueError(
                 f"revision_same_session.max_turns_used ({self.revision_same_session.max_turns_used}) must lie in "
                 f"[0, turns={self.turns})"
@@ -378,7 +382,6 @@ class AuthorStatus(StrEnum):
     ACCEPTED = "accepted"
     HANDED_OFF = "handed_off"
     """The session ended without a submission and hands its workspace to the call's next session."""
-    AUTHOR_FAILED = "author_failed"
 
 
 class SessionBuilds(Protocol):
@@ -437,8 +440,6 @@ class SessionStop(StrEnum):
     MAX_TURNS = "max_turns"
     CONTEXT = "context"
     """The context guard (``session_token_cap``) or the client's ``ContextExhausted`` ended the session."""
-    UNSUBMITTED = "unsubmitted"
-    """The model kept replying without a tool call after ``MAX_NUDGES`` nudges (cut replies not counted)."""
 
 
 class SubmitOutcome(StrEnum):
@@ -686,7 +687,7 @@ class AuthorSession:
 
         try:
             draft, empty = await host_retried(built)
-        except ModelUnavailable:
+        except (ModelUnavailable, ModelRequestRejected):
             raise
         except BuildInfrastructureFailure as error:
             record |= {"status": "infrastructure", "step": None, "wall": time.monotonic() - started}
@@ -707,6 +708,19 @@ class AuthorSession:
                 _write_json(run_dir / RUN_FILE, record)
                 self.builds.append(record)
                 raise
+            infrastructure = infrastructure_failure(error)
+            if (
+                infrastructure is None
+                and not isinstance(error, BuildCrash)
+                and not authored_failure(error, {program_file(source)})
+            ):
+                infrastructure = BuildInfrastructureFailure("unclassified_build_failure", str(error))
+            if infrastructure is not None:
+                record |= {"status": "infrastructure", "step": None, "wall": time.monotonic() - started}
+                record |= {"steps": ledger_steps(ledger, offset), "text": _traceback_tail(error)}
+                _write_json(run_dir / RUN_FILE, record)
+                self.builds.append(record)
+                raise infrastructure from error
             status, step, text = _failed_build(error, raw, source, program.steps)
             record |= {"status": status, "step": step}
             record |= {"wall": time.monotonic() - started, "steps": ledger_steps(ledger, offset), "text": text}
@@ -736,6 +750,8 @@ class AuthorSession:
         """
         grader = step_output(draft, self.build.store_root, GRADER_STEP, Grader)
         empty = await self._grade(draft, grader, "", ())
+        if empty.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
+            raise BuildInfrastructureFailure("empty_answer_ungraded", grade_diagnostics(empty))
         if empty.status == Outcome.GRADED and (empty.reward or 0.0) > grader.rejection_ceiling:
             raise BuildFailure(
                 f"the empty answer is graded with reward {empty.reward}, above the grader's declared "
@@ -748,7 +764,7 @@ class AuthorSession:
     async def _grade(
         self, draft: TaskDraft, grader: Grader, reply: str, workspace: Sequence[TaskResource]
     ) -> GradeResult:
-        """Grade ``reply`` with the ``workspace`` files it leaves against ``draft``'s task, no model called."""
+        """Grade ``reply`` with the ``workspace`` files it leaves against ``draft``'s configured verifier."""
         task = draft.task
         return await grade_candidate_on_host(
             self.services,
@@ -773,10 +789,12 @@ class AuthorSession:
         files = [candidate_file(str(f["path"]), str(f["content"])) for f in _list_argument(arguments, "files")]
         try:
             grade = await host_retried(lambda: self._grade(draft, grader, str(arguments["reply"]), files))
-        except (ModelUnavailable, BuildInfrastructureFailure):
+        except (ModelUnavailable, BuildInfrastructureFailure, BuildExpired, OSError):
             raise
         except Exception as error:
-            return f"grading failed: {_traceback_tail(error)}"
+            raise BuildInfrastructureFailure("candidate_grading_failed", _traceback_tail(error)) from error
+        if grade.status in (Outcome.INFRA_ERROR, Outcome.UNAVAILABLE):
+            raise BuildInfrastructureFailure("candidate_ungraded", grade_diagnostics(grade))
         return f"status {grade.status}, reward {grade.reward}\n{grade_diagnostics(grade)}"
 
     async def submit(self, arguments: Mapping[str, object]) -> str:
@@ -956,8 +974,6 @@ class AuthorSession:
 
     def _capped(self, tool: AgentTool) -> AgentTool:
         async def handler(arguments: Mapping[str, object]) -> str:
-            if self.web_calls >= WEB_CALLS:
-                return f"error: this session's {WEB_CALLS} web calls are spent"
             self.web_calls += 1
             return clip(await tool.handler(arguments))
 
@@ -1045,7 +1061,7 @@ class SessionPlan:
     opening: int
     """How many of ``messages`` the transcript shows as this session's own opening (a same-session revision
     shows only the revision turn)."""
-    turns: int
+    turns: int | None
     turns_before: int
     """Turns the continued session had already used (same-session revisions)."""
     continued_from: str | None
@@ -1072,10 +1088,8 @@ async def drive(
     ledger: Ledger,
     session_id: str,
 ) -> SessionResult:
-    """Run the session's tool loop until submit, the context guard, the turn budget, or unanswered nudges."""
+    """Run the session until submit, a physical context boundary, or an explicitly supplied author budget."""
     started = time.monotonic()
-    # Continuations off by default: a turn cut at turn_max_tokens comes back as LENGTH and is nudged, so one
-    # turn cannot grow to (1 + max_continuations) x turn_max_tokens of replayed reasoning.
     turn_policy = replace(policy, max_tokens=config.turn_max_tokens, max_continuations=config.max_continuations)
     tools = session.tools(session.build.services.web_tools)
     transcript: list[dict] = [_user_entry(m) for m in plan.messages[len(plan.messages) - plan.opening :]]
@@ -1087,7 +1101,9 @@ async def drive(
         # A continued turn's usage sums its segments' prompts, so with continuations on this overstates the
         # conversation and the guard trips early.
         usage = turn.completion.usage
-        return usage.prompt_tokens + usage.completion_tokens + config.turn_max_tokens > config.session_token_cap
+        return config.session_token_cap is not None and (
+            usage.prompt_tokens + usage.completion_tokens + (config.turn_max_tokens or 0) > config.session_token_cap
+        )
 
     def stop(turn: AgentTurn) -> bool:
         if session.submission is not None:
@@ -1108,7 +1124,14 @@ async def drive(
             AUTHOR_STEP,
         )
         run: AgentRun = await run_agent(
-            client, turn_policy, conversation, tools, plan.turns - len(turns), record, REPLAY, stop
+            client,
+            turn_policy,
+            conversation,
+            tools,
+            None if plan.turns is None else plan.turns - len(turns),
+            record,
+            REPLAY,
+            stop,
         )
         transcript += [_turn_entry(len(turns) + i, t) for i, t in enumerate(run.turns)]
         turns += run.turns
@@ -1120,7 +1143,7 @@ async def drive(
         if run.stop is AgentStop.CONTEXT:
             outcome = SessionStop.CONTEXT
             break
-        if run.stop is AgentStop.MAX_TURNS or len(turns) >= plan.turns:
+        if run.stop is AgentStop.MAX_TURNS or (plan.turns is not None and len(turns) >= plan.turns):
             outcome = SessionStop.MAX_TURNS
             break
         # ANSWERED or LENGTH: a reply without a tool call.
@@ -1133,9 +1156,6 @@ async def drive(
             conversation.append(nudge)
             transcript.append(_user_entry(nudge))
             continue
-        if nudges == MAX_NUDGES:
-            outcome = SessionStop.UNSUBMITTED
-            break
         nudges += 1
         nudge = {"role": "user", "content": NUDGE}
         conversation.append(nudge)
@@ -1235,10 +1255,16 @@ def session_record(session_id: str, plan: SessionPlan, session: AuthorSession, r
 # --- the author stage ------------------------------------------------------------------------------
 
 
-def opening_messages(proposal: TaskProposal, turns: int) -> list[Message]:
+def opening_messages(proposal: TaskProposal, turns: int | None) -> list[Message]:
     """The one-shot author's rules, proposal, SDK reference and template, with the agentic section added."""
     system, user = author_messages(proposal)
-    return [{**system, "content": f"{system['content']}{AGENTIC_SECTION.format(turns=turns)}"}, user]
+    return [
+        {
+            **system,
+            "content": f"{system['content']}{AGENTIC_SECTION.format(turns="unlimited" if turns is None else turns)}",
+        },
+        user,
+    ]
 
 
 def _revision_text(revision: Revision) -> str:
@@ -1289,8 +1315,8 @@ def plan_session(
         revision is not None
         and revision.kind is RevisionKind.BUILD_FAILURE
         and prior["stop_reason"] == SessionStop.SUBMITTED
-        and prior["last_prompt_tokens"] <= bounds.max_prompt_tokens
-        and prior["turns_total"] <= bounds.max_turns_used
+        and (bounds.max_prompt_tokens is None or prior["last_prompt_tokens"] <= bounds.max_prompt_tokens)
+        and (bounds.max_turns_used is None or prior["turns_total"] <= bounds.max_turns_used)
     ):
         conversation = json.loads((previous / CONVERSATION_FILE).read_text())
         message: Message = {"role": "user", "content": _revision_text(revision)}
@@ -1299,7 +1325,7 @@ def plan_session(
             previous / WORKSPACE_DIR,
             (*conversation, message),
             1,
-            config.turns - bounds.max_turns_used,
+            None if config.turns is None else config.turns - (bounds.max_turns_used or 0),
             prior["turns_total"],
             str(previous.relative_to(workpiece_dir)),
         )
@@ -1356,7 +1382,6 @@ class AgenticAuthor:
         change each session starts from, and the returned program carries the submitting session's change.
 
         Raises:
-            AuthorFailure: the call's sessions all ended without a submission.
             ModelUnavailable: the model or an in-session build or grade ran out of retries.
             BuildInfrastructureFailure: the host cannot provide the proposal's solver machine
                 (``machine_available``), before a session starts or writes a record; or the host failed an
@@ -1365,18 +1390,14 @@ class AgenticAuthor:
         """
         build = self.builds(context, proposal)
         machine_available(build.services, proposal)
-        index = 0
-        while True:
-            outcome = await self._session(build, context, proposal, revision, index)
-            if outcome.status is AuthorStatus.ACCEPTED:
-                assert outcome.source is not None
-                return AuthoredProgram(load_program(outcome.source), outcome.source, outcome.verification_change)
-            if outcome.status is AuthorStatus.AUTHOR_FAILED:
-                raise AuthorFailure(
-                    f"{index + 1} agentic sessions of round {context.round} ended without a submission; "
-                    f"the last stopped at {outcome.stop}"
-                )
-            index += 1
+        outcome = await self._session(build, context, proposal, revision)
+        if outcome.status is AuthorStatus.ACCEPTED:
+            assert outcome.source is not None
+            return AuthoredProgram(load_program(outcome.source), outcome.source, outcome.verification_change)
+        raise BuildInfrastructureFailure(
+            InfrastructureCause.BUDGET_EXHAUSTED if outcome.stop is SessionStop.MAX_TURNS else "author_incomplete",
+            f"author session stopped at {outcome.stop}; its workspace and conversation are saved for resumption",
+        )
 
     async def _session(
         self,
@@ -1384,9 +1405,8 @@ class AgenticAuthor:
         context: AuthorContext,
         proposal: TaskProposal,
         revision: Revision | None,
-        index: int,
     ) -> SessionOutcome:
-        """The call's session ``index``: writes ``agentic/<k>/``, ``k`` counting the round's sessions."""
+        """Persist one session in ``agentic/<k>/`` before returning its submission or hold."""
         sessions = _round_dir(context.workpiece_dir, context.round) / AGENTIC_DIR
         k = len(_numbered(sessions))
         session_dir = sessions / str(k)
@@ -1394,7 +1414,20 @@ class AgenticAuthor:
         session = AuthorSession(session_dir, context.workpiece_id, context.round, proposal, revision, build, session_id)
         plan = plan_session(context.workpiece_dir, context.round, session.proposal, revision, self.config)
         session.prepare(plan.seed)
-        result = await drive(session, plan, self.config, self.client, self.policy, self.ledger, session_id)
+        try:
+            result = await drive(session, plan, self.config, self.client, self.policy, self.ledger, session_id)
+        except AgentInterrupted as error:
+            _write_json(session_dir / CONVERSATION_FILE, list(error.run.messages))
+            _write_json(session_dir / TRANSCRIPT_FILE, [_turn_entry(i, turn) for i, turn in enumerate(error.run.turns)])
+            _write_json(
+                session_dir / AUTHOR_RECORD,
+                {
+                    "status": AuthorStatus.HANDED_OFF,
+                    "stop_reason": error.run.stop,
+                    "error": str(error),
+                },
+            )
+            raise
         _write_json(session_dir / CONVERSATION_FILE, list(result.messages))
         _write_json(session_dir / TRANSCRIPT_FILE, list(result.transcript))
         _write_json(session_dir / SESSION_FILE, session_record(session_id, plan, session, result))
@@ -1409,10 +1442,7 @@ class AgenticAuthor:
         calls = {"calls": session.submissions}
         if submission is None:
             _write_json(session_dir / SUBMIT_FILE, {"accepted": False, **calls})
-            handoff = index == 0 or result.stop is SessionStop.CONTEXT
-            status = (
-                AuthorStatus.HANDED_OFF if handoff and index + 1 < MAX_SESSIONS_PER_CALL else AuthorStatus.AUTHOR_FAILED
-            )
+            status = AuthorStatus.HANDED_OFF
             error = f"no submission ({result.stop})"
             _write_json(session_dir / AUTHOR_RECORD, record | {"status": status, "error": error})
             return SessionOutcome(status, None, None, result.stop)

@@ -27,9 +27,9 @@ class Web(Protocol):
 class ToolBudget:
     """The most calls that the tools make for one idea. The agent's own tokens fall under ``RolloutLimits``."""
 
-    solver_rollouts: int
-    judge_calls: int
-    web_calls: int
+    solver_rollouts: int | None
+    judge_calls: int | None
+    web_calls: int | None
 
 
 @dataclass(frozen=True)
