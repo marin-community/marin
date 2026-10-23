@@ -1,0 +1,23 @@
+{
+  "pod": "iris-benfeuer-noise-c11-capture-202-23229964-0-9f1ba7fe606619b7",
+  "phase": "Succeeded",
+  "gpu_count": 1,
+  "created_at": "2026-10-23T15:27:56Z",
+  "task_started_at": "2026-10-23T15:28:01Z",
+  "task_finished_at": "2026-10-23T15:28:49Z",
+  "outputs_finished_at": "2026-10-23T15:28:54Z",
+  "exit_code": 0,
+  "task_container_seconds": 48.0,
+  "pod_lifetime_seconds": 58.0,
+  "pod_lifetime_gpu_hours_upper_bound": 0.01611111111111111,
+  "accounting_note": "Includes queue/startup and output capture. This is a reservation upper bound, not GPU utilization.",
+  "output_archive": {
+    "state": "TASK_OUTPUT_ARCHIVE_STATE_UPLOADED",
+    "uri": "s3://marin-rno2a/tmp/ttl=7d/iris/task-outputs/benfeuer/noise-c11-capture-20261023-v6/0/9f1ba7fe606619b7/outputs.tar.zst",
+    "size_bytes": "1378",
+    "sha256": "05769acf7503eb626fffa363c6940e8a7058f3467ecce22fc6961f1510fda6c7",
+    "retention": "TASK_OUTPUT_ARCHIVE_RETENTION_TTL",
+    "ttl_days": 7,
+    "skipped_count": 0
+  }
+}

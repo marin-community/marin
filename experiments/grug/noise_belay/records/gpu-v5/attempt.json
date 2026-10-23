@@ -1,0 +1,23 @@
+{
+  "pod": "iris-benfeuer-noise-c11-forward-202-cb825f9d-0-e5eec7da891326d4",
+  "phase": "Failed",
+  "gpu_count": 8,
+  "created_at": "2026-10-23T13:24:13Z",
+  "task_started_at": "2026-10-23T13:24:17Z",
+  "task_finished_at": "2026-10-23T13:25:44Z",
+  "outputs_finished_at": "2026-10-23T13:25:47Z",
+  "exit_code": 1,
+  "task_container_seconds": 87.0,
+  "pod_lifetime_seconds": 94.0,
+  "pod_lifetime_gpu_hours_upper_bound": 0.2088888888888889,
+  "accounting_note": "Includes queue/startup and output capture. This is a reservation upper bound, not GPU utilization.",
+  "output_archive": {
+    "state": "TASK_OUTPUT_ARCHIVE_STATE_UPLOADED",
+    "uri": "s3://marin-rno2a/tmp/ttl=7d/iris/task-outputs/benfeuer/noise-c11-forward-20261023-v5/0/e5eec7da891326d4/outputs.tar.zst",
+    "size_bytes": "620744",
+    "sha256": "f43f4af010880d1292629ff64924290edbfeb7206ce39f569ebec58576689655",
+    "retention": "TASK_OUTPUT_ARCHIVE_RETENTION_TTL",
+    "ttl_days": 7,
+    "skipped_count": 0
+  }
+}

@@ -1,0 +1,202 @@
+diff --git a/experiments/grug/fast_track/grugmuon_stacked.py b/experiments/grug/fast_track/grugmuon_stacked.py
+index 1b51fa4d57..41677cb6a1 100644
+--- a/experiments/grug/fast_track/grugmuon_stacked.py
++++ b/experiments/grug/fast_track/grugmuon_stacked.py
+@@ -559,3 +558,0 @@ def _newtonschulz_4d_distributed(
+-    if not mesh_shape_items:
+-        return jax.vmap(jax.vmap(local_ns))(x)
+-
+@@ -565,0 +563,3 @@ def _newtonschulz_4d_distributed(
++    if not mesh_shape_items:
++        updated = jax.vmap(jax.vmap(local_ns))(reshard(x, PartitionSpec(None, None, None, None)))
++        return reshard(updated, orig_4d_spec)
+@@ -643 +643,4 @@ def _newtonschulz_padded_stack_sharded(
+-        return jax.vmap(local)(X)
++        # Size-one explicit axes still annotate contractions. Make the local
++        # matrix dimensions replicated before forming its Gram matrix.
++        updated = jax.vmap(local)(reshard(X, P(None, None, None)))
++        return reshard(updated, target_sharding) if target_sharding is not None else updated
+diff --git a/experiments/grug/fast_track/model.py b/experiments/grug/fast_track/model.py
+index 92aeb11ab4..25da268fa7 100644
+--- a/experiments/grug/fast_track/model.py
++++ b/experiments/grug/fast_track/model.py
+@@ -125,0 +126 @@ _ROUTING_WEIGHTS = "routing_weights"
++_ROUTING_LOGITS = "routing_selected_logits"
+@@ -1560,0 +1562,12 @@ class GrugModelConfig:
++@jax.custom_jvp
++def _activation_boundary(value: jax.Array) -> jax.Array:
++    # Capturing activations must not change arithmetic in their consumers.
++    return jax.lax.optimization_barrier(value)
++
++
++@_activation_boundary.defjvp
++def _activation_boundary_jvp(primals, tangents):
++    (value,), (tangent,) = primals, tangents
++    return _activation_boundary(value), tangent
++
++
+@@ -3459 +3472,5 @@ class MoEMLP(eqx.Module):
+-        assignments = {_ROUTING_SELECTED: selected_experts.astype(jnp.int32), _ROUTING_WEIGHTS: combine_weights_f}
++        assignments = {
++            _ROUTING_SELECTED: selected_experts.astype(jnp.int32),
++            _ROUTING_WEIGHTS: combine_weights_f,
++            _ROUTING_LOGITS: unbiased_topk,
++        }
+@@ -4962 +4979,2 @@ def _attn_res_mix(
+-    return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits), mean_weights
++    mixed = _activation_boundary(reshard(mixed.astype(sources[0].dtype), _batch_spec()))
++    return mixed, _gate_z(logits), mean_weights
+@@ -5611 +5629 @@ class Transformer(eqx.Module):
+-        tail_cfg = _tail_layer_config(cfg)
++        tail_cfg = _tail_layer_config(cfg) if softmax_tail or kda_tail else cfg
+@@ -6032 +6050 @@ class Transformer(eqx.Module):
+-            hidden = self.embed_norm(hidden)
++            hidden = _activation_boundary(self.embed_norm(hidden))
+@@ -6607 +6625 @@ class Transformer(eqx.Module):
+-        hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
++        hidden = _activation_boundary(reshard(mixed.astype(hidden.dtype), _batch_spec()))
+diff --git a/lib/levanter/src/levanter/grug/_moe/scatter.py b/lib/levanter/src/levanter/grug/_moe/scatter.py
+index aeea50bfe6..d4576b2ef1 100644
+--- a/lib/levanter/src/levanter/grug/_moe/scatter.py
++++ b/lib/levanter/src/levanter/grug/_moe/scatter.py
+@@ -4 +4 @@
+-"""Scatter-add local Grug MoE backend."""
++"""Grouped local Grug MoE backend with ordered route combination."""
+@@ -18 +18 @@ from levanter.grug._moe.common import (
+-    _prepare_moe_dispatch,
++    _prepare_moe_dispatch_indices_with_assignment_ids,
+@@ -36,3 +36,2 @@ def _moe_mlp_local_scatter(
+-    """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
+-    x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
+-        x,
++    """Local fallback MoE path: grouped GMM then float32 reduction over routes."""
++    token_dispatch, positions, group_sizes, assignment_ids = _prepare_moe_dispatch_indices_with_assignment_ids(
+@@ -40 +38,0 @@ def _moe_mlp_local_scatter(
+-        combine_weights,
+@@ -43,0 +42,2 @@ def _moe_mlp_local_scatter(
++    x_dispatch = x[token_dispatch]
++    w_dispatch = jnp.where(token_valid[token_dispatch], combine_weights.reshape(-1)[assignment_ids], 0).astype(x.dtype)
+@@ -54 +54,5 @@ def _moe_mlp_local_scatter(
+-        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
++        if moe_w13.shape[-1] == moe_dim:
++            activated = activation_fn(w13_out)
++        else:
++            gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
++            activated = activation_fn(gate) * up
+@@ -56 +60 @@ def _moe_mlp_local_scatter(
+-            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
++            ragged_dot(activated, moe_w2, group_sizes),
+@@ -60 +64 @@ def _moe_mlp_local_scatter(
+-    with jax.named_scope("scatter"):
++    with jax.named_scope("combine"):
+@@ -62 +66,3 @@ def _moe_mlp_local_scatter(
+-        out = jnp.zeros((x.shape[0], moe_w2.shape[-1]), x.dtype).at[token_dispatch].add(weighted, mode="drop")
++        # The inverse permutation restores [token, route, channel] without
++        # conflicting atomic additions in compute precision.
++        out = jnp.sum(weighted[positions].astype(jnp.float32), axis=1).astype(x.dtype)
+diff --git a/lib/levanter/tests/grug/test_grugformer_moe.py b/lib/levanter/tests/grug/test_grugformer_moe.py
+index 7de13bbbd5..ec1caf39ae 100644
+--- a/lib/levanter/tests/grug/test_grugformer_moe.py
++++ b/lib/levanter/tests/grug/test_grugformer_moe.py
+@@ -53 +52,0 @@ from levanter.utils.activation import ActivationFunctionEnum
+-
+@@ -383,0 +383,58 @@ def test_local_moe_mlp_writes_a_different_width_than_it_reads():
++def test_local_ungated_relu2_moe_matches_dense_expert_outputs_and_gradients():
++    x, selected, weights, _, _ = _make_inputs(
++        key=jax.random.key(32), tokens=8, hidden_dim=4, intermediate_dim=6, num_experts=4, topk=2
++    )
++    w_up = jax.random.normal(jax.random.key(33), (4, 4, 6))
++    w_down = jax.random.normal(jax.random.key(34), (4, 6, 8))
++    valid = jnp.array([True, False, True, True, False, True, True, True])
++
++    def reference(x, up, down):
++        hidden = jnp.einsum("td,tkdi->tki", x, up[selected])
++        outputs = jnp.einsum("tki,tkio->tko", jax.nn.relu(hidden) ** 2, down[selected])
++        return jnp.einsum("tko,tk->to", outputs, weights) * valid[:, None]
++
++    def actual(x, up, down):
++        return moe_mlp(
++            x,
++            selected,
++            weights,
++            up,
++            down,
++            token_valid=valid,
++            activation=ActivationFunctionEnum.relu2,
++            implementation="scatter",
++            mesh=None,
++        )
++
++    with jax.default_matmul_precision("highest"):
++        expected = reference(x, w_up, w_down)
++        observed = actual(x, w_up, w_down)
++        expected_grads = jax.grad(lambda *args: reference(*args).sum(), argnums=(0, 1, 2))(x, w_up, w_down)
++        observed_grads = jax.grad(lambda *args: actual(*args).sum(), argnums=(0, 1, 2))(x, w_up, w_down)
++    for observed, expected in zip((observed, *observed_grads), (expected, *expected_grads), strict=True):
++        np.testing.assert_allclose(observed, expected, atol=1e-5, rtol=1e-5)
++
++
++def test_local_bfloat16_moe_preserves_small_expert_contributions():
++    # Accumulating these expert outputs in BF16 loses the first unit term.
++    # Route combination must accumulate before rounding back to compute dtype.
++    x = jnp.ones((2, 1), dtype=jnp.bfloat16)
++    selected = jnp.array([[0, 1, 2, 3], [3, 2, 1, 0]], dtype=jnp.int32)
++    up = jnp.ones((4, 1, 1), dtype=jnp.bfloat16)
++    down = jnp.array([256, 1, -256, 1], dtype=jnp.bfloat16).reshape(4, 1, 1)
++    output = jax.jit(
++        lambda x, up, down: moe_mlp(
++            x,
++            selected,
++            jnp.ones((2, 4), dtype=jnp.bfloat16),
++            up,
++            down,
++            token_valid=jnp.array([True, False]),
++            activation=ActivationFunctionEnum.relu2,
++            implementation="scatter",
++            mesh=None,
++        )
++    )(x, up, down)
++    np.testing.assert_array_equal(output.astype(jnp.float32), np.array([[2.0], [0.0]]))
++
++
+diff --git a/tests/grug/test_fast_track_muon_bucketing.py b/tests/grug/test_fast_track_muon_bucketing.py
+index 1f18500832..c61de436c2 100644
+--- a/tests/grug/test_fast_track_muon_bucketing.py
++++ b/tests/grug/test_fast_track_muon_bucketing.py
+@@ -88,0 +89,36 @@ def test_aol_rejects_other_step_counts():
++
++
++def test_newton_schulz_with_size_one_explicit_matrix_axes():
++    run_on_cpu_devices(
++        """
++        import os
++        os.environ['XLA_FLAGS'] += ' --xla_allow_excess_precision=false'
++        import jax
++        import jax.numpy as jnp
++        import numpy as np
++        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
++        from experiments.grug.fast_track.grugmuon_stacked import (
++            _newtonschulz_padded_stack_sharded, _zeropower_via_newtonschulz_local,
++            _newtonschulz_4d_distributed,
++        )
++        values = np.random.default_rng(23).normal(size=(3,8,16)).astype(np.float32)
++        expected = jax.jit(jax.vmap(_zeropower_via_newtonschulz_local))(jnp.asarray(values))
++        mesh = Mesh(np.asarray(jax.devices()).reshape(1,1,1,1),
++                    ('replica_dcn','data','expert','model'), axis_types=(AxisType.Explicit,)*4)
++        sharding = NamedSharding(mesh, P(None,'data','model'))
++        with jax.set_mesh(mesh):
++            matrices = jax.device_put(values, sharding)
++            actual = jax.jit(lambda x: _newtonschulz_padded_stack_sharded(x, target_sharding=sharding))(matrices)
++        np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
++        assert actual.sharding == sharding
++        values4 = np.random.default_rng(24).normal(size=(2,3,8,16)).astype(np.float32)
++        expected4 = jax.jit(jax.vmap(jax.vmap(_zeropower_via_newtonschulz_local)))(jnp.asarray(values4))
++        sharding4 = NamedSharding(mesh, P(None,'expert','data','model'))
++        with jax.set_mesh(mesh):
++            matrices4 = jax.device_put(values4, sharding4)
++            actual4 = jax.jit(lambda x: _newtonschulz_4d_distributed((), x, 5, 1e-7, 'quintic'))(matrices4)
++        np.testing.assert_array_equal(np.asarray(actual4), np.asarray(expected4))
++        assert actual4.sharding == sharding4
++        """,
++        device_count=1,
++    )

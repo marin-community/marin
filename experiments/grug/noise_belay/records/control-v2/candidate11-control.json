@@ -1,0 +1,115 @@
+{
+  "kind": "native_optimizer_calibration_repeated_real_batch",
+  "manifest": {
+    "source_revision": "8983bec6fdaeb1cd6d0acff041194d2bf53ab679",
+    "runtime_patch_sha256": "40675bde9770febdba02ac7de983e3274f799fe8548e061202cc91ae34a0d868",
+    "model_source_sha256": "078959f011a8774bdd295915540a938aeeecce90d51cdc8811bdd428952d4df3",
+    "experiment_files": {
+      "candidate11.py": "ed09c2ae65d6a70ca0b8ff98f8e666a5507947ee37bebb68277be31273030ffb",
+      "candidate11_forward.py": "9e902edd0ab594e3bfc4e976769fd35ba59f7dd38bbca0119dd501107e2b0770",
+      "candidate11_boost.py": "82903a495c51c6fbe37febd48a4a8280598c6f6017e16ae44b0ec4e523bcd59b",
+      "forward_credit.py": "4986c1b47bc709bd9ef763ad15d77ac95b816443fa9d340ca3a501459b6d5337",
+      "routed_expert_credit.py": "185d63bc077b51c88e60fd896cdefc900514031505c59cb2abe0884e49164117",
+      "candidate11_gpu_probe.py": "b5e6de712c93d13ec4997f7719177b103808c6c1920f47a144cc06e7cd43fcb0",
+      "candidate11_control_probe.py": "fc51c3c4ccd9cb7e79fe4d1eeaa6e396cd14b26ec2026464885deb2884e4b0af",
+      "data-native-audit/batch-000000.npz": "b05d1674f2f565a8f85ac68e7f736d13d0a76ba3fdea13dd8be6a94b901ce99f",
+      "data-native-audit/manifest.json": "50ee31cf8d41747876901cee4446766f2559f8ec8b37cef43d52bb60893691cb",
+      "candidate11-reference.json": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5"
+    },
+    "cluster": "cw-rno2a",
+    "priority": "interactive",
+    "gpu_count": 8
+  },
+  "steps": [
+    {
+      "step": 0,
+      "step_seconds": 3.398547305027023,
+      "loss": 9.839613914489746
+    },
+    {
+      "step": 1,
+      "step_seconds": 0.23557271296158433,
+      "loss": 9.839653015136719
+    },
+    {
+      "step": 2,
+      "step_seconds": 0.1859557288698852,
+      "loss": 9.391631126403809
+    },
+    {
+      "step": 3,
+      "step_seconds": 0.185835684183985,
+      "loss": 8.596997261047363
+    },
+    {
+      "step": 4,
+      "step_seconds": 0.18590090493671596,
+      "loss": 7.652766227722168
+    },
+    {
+      "step": 5,
+      "step_seconds": 0.18557408405467868,
+      "loss": 6.779608249664307
+    },
+    {
+      "step": 6,
+      "step_seconds": 0.1865292158909142,
+      "loss": 6.087140083312988
+    },
+    {
+      "step": 7,
+      "step_seconds": 0.1863753420766443,
+      "loss": 5.573382377624512
+    }
+  ],
+  "devices": [
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3"
+  ],
+  "xla_flags": "--xla_allow_excess_precision=false --xla_gpu_enable_triton_gemm=false",
+  "jax_version": "0.11.1",
+  "schedule_steps": 2698,
+  "global_batch": 128,
+  "sequence": 4096,
+  "data_manifest": {
+    "reference_sha256": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5",
+    "tokenizer": "/Users/benfeuer/Documents/experiments/active/fast-pretraining/tokenizers/hero-bpe-v16384",
+    "tokenizer_file_sha256": {
+      "tokenizer.json": "adaba3dc92dff6eed642f10101e4183e0525437f3432d2ce004cd14232b350ae",
+      "tokenizer_config.json": "1ff46b7c04e1ef0335286b733db65c663261132d0a9866842fd48020255ea05e"
+    },
+    "eos_token_id": 1,
+    "pipeline": "experiments.grug.fast_track.train.build_train_dataset",
+    "elapsed_seconds": 2.5789445829577744,
+    "batches": [
+      {
+        "step": 0,
+        "dataset_indices": [
+          0,
+          128
+        ],
+        "shape": [
+          128,
+          4096
+        ],
+        "token_min": 0,
+        "token_max": 16383,
+        "loss_weight_sum": 524160.0,
+        "document_starts": 341,
+        "array_sha256": {
+          "tokens": "60c5f688c118e647ab71e35481bb67852533e319e0cf1cf157f2fffb9df7cc61",
+          "loss_weight": "6eaa446c86373cf88bcf03cc58bdc644d7c9cab1911d4eab35eb26c09018d774",
+          "segment_ids": "396545102e64395ce3aa995c86059687029151d51d94cf25117da9fffba6fa4c"
+        }
+      }
+    ]
+  },
+  "state_initialization_seconds": 17.185618297895417,
+  "update_compile_seconds": 61.251090987119824
+}

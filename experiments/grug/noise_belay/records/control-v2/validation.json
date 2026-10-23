@@ -1,0 +1,12 @@
+{
+  "source": "Iris attempt terminal error and task log",
+  "stage": "after eight native optimizer updates",
+  "parameters_finite": true,
+  "comparison": "capture vs native normalized hidden states",
+  "absolute_tolerance": 1e-05,
+  "relative_tolerance": 1e-05,
+  "mismatched_elements": 738906,
+  "total_elements": 268435456,
+  "max_absolute_error": 0.21484375,
+  "status": "failed"
+}

@@ -1,0 +1,220 @@
+{
+  "kind": "native_optimizer_calibration_repeated_real_batch",
+  "manifest": {
+    "source_revision": "8983bec6fdaeb1cd6d0acff041194d2bf53ab679",
+    "runtime_patch_sha256": "4fdf5cc853d156a99c559bb2e00a7710dd71c629960113362bbc8dcfac8b766d",
+    "model_source_sha256": "5f39c7bad449de5874a46190d43f87d4063121411d3a3547a20112903477455b",
+    "experiment_files": {
+      "candidate11.py": "ed09c2ae65d6a70ca0b8ff98f8e666a5507947ee37bebb68277be31273030ffb",
+      "candidate11_forward.py": "c170e1132ed75e97cedf750dfcc4853484a89f7d2a64b03f019147c0cac0b73c",
+      "candidate11_boost.py": "d3286265077040356acc217ac65b8c44206302c649aefb19bdf74b771e2cd6de",
+      "forward_credit.py": "9a9222a9f8a0298df6490283f2b4eb0b3a64d8c631bd258b89315b01995f986f",
+      "routed_expert_credit.py": "0cd8e871ccbd10c5da351c5ee95974fa9857b820b9aa36e11bc76db80e3b5290",
+      "candidate11_gpu_probe.py": "b5e6de712c93d13ec4997f7719177b103808c6c1920f47a144cc06e7cd43fcb0",
+      "candidate11_control_probe.py": "ca0019afc2e9826088606b1d7ba500a311121f3e630f024cd446f6d96f836483",
+      "candidate11_capture_probe.py": "63cb10cbfdd2b5a923f92b2b6ef8845ce797cded362cf6b8272f03895519c2fb",
+      "data-native-audit/batch-000000.npz": "b05d1674f2f565a8f85ac68e7f736d13d0a76ba3fdea13dd8be6a94b901ce99f",
+      "data-native-audit/manifest.json": "50ee31cf8d41747876901cee4446766f2559f8ec8b37cef43d52bb60893691cb",
+      "candidate11-reference.json": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5"
+    },
+    "cluster": "cw-rno2a",
+    "priority": "interactive",
+    "gpu_count": 8
+  },
+  "steps": [
+    {
+      "step": 0,
+      "step_seconds": 3.7324267625808716,
+      "loss": 9.839615821838379
+    },
+    {
+      "step": 1,
+      "step_seconds": 0.2402836661785841,
+      "loss": 9.839653015136719
+    },
+    {
+      "step": 2,
+      "step_seconds": 0.18652218580245972,
+      "loss": 9.391630172729492
+    },
+    {
+      "step": 3,
+      "step_seconds": 0.187268178910017,
+      "loss": 8.597004890441895
+    },
+    {
+      "step": 4,
+      "step_seconds": 0.18786553665995598,
+      "loss": 7.652759075164795
+    },
+    {
+      "step": 5,
+      "step_seconds": 0.18635891750454903,
+      "loss": 6.779601097106934
+    },
+    {
+      "step": 6,
+      "step_seconds": 0.18682465329766273,
+      "loss": 6.087108135223389
+    },
+    {
+      "step": 7,
+      "step_seconds": 0.18662426061928272,
+      "loss": 5.573342323303223
+    }
+  ],
+  "devices": [
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3"
+  ],
+  "xla_flags": "--xla_allow_excess_precision=false --xla_gpu_enable_triton_gemm=false",
+  "jax_version": "0.11.1",
+  "schedule_steps": 2698,
+  "global_batch": 128,
+  "sequence": 4096,
+  "data_manifest": {
+    "reference_sha256": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5",
+    "tokenizer": "/Users/benfeuer/Documents/experiments/active/fast-pretraining/tokenizers/hero-bpe-v16384",
+    "tokenizer_file_sha256": {
+      "tokenizer.json": "adaba3dc92dff6eed642f10101e4183e0525437f3432d2ce004cd14232b350ae",
+      "tokenizer_config.json": "1ff46b7c04e1ef0335286b733db65c663261132d0a9866842fd48020255ea05e"
+    },
+    "eos_token_id": 1,
+    "pipeline": "experiments.grug.fast_track.train.build_train_dataset",
+    "elapsed_seconds": 2.5789445829577744,
+    "batches": [
+      {
+        "step": 0,
+        "dataset_indices": [
+          0,
+          128
+        ],
+        "shape": [
+          128,
+          4096
+        ],
+        "token_min": 0,
+        "token_max": 16383,
+        "loss_weight_sum": 524160.0,
+        "document_starts": 341,
+        "array_sha256": {
+          "tokens": "60c5f688c118e647ab71e35481bb67852533e319e0cf1cf157f2fffb9df7cc61",
+          "loss_weight": "6eaa446c86373cf88bcf03cc58bdc644d7c9cab1911d4eab35eb26c09018d774",
+          "segment_ids": "396545102e64395ce3aa995c86059687029151d51d94cf25117da9fffba6fa4c"
+        }
+      }
+    ]
+  },
+  "state_initialization_seconds": 17.63574522547424,
+  "update_compile_seconds": 62.95283544808626,
+  "median_steady_step_seconds": 0.18682465329766273,
+  "projected_steps_in_480_seconds": 2569,
+  "parameters_finite": true,
+  "last_validation_stage": "routing",
+  "trained_hidden_errors": {
+    "capture": {
+      "max": 0.0625,
+      "mean": 2.539530896683573e-07,
+      "fraction_outside_tolerance": 8.467212319374084e-05
+    },
+    "hidden_only": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    "routing": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    }
+  },
+  "shared_pre_error_per_layer": [
+    {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    {
+      "max": 0.00390625,
+      "mean": 1.0802347105709487e-07,
+      "fraction_outside_tolerance": 0.00018979112792294472
+    }
+  ],
+  "route_mismatch_fraction_per_layer": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    9.775161743164062e-06
+  ],
+  "trained_forward_max_error": 0.0625,
+  "capture_group_errors": {
+    "shared": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    "routes": {
+      "max": 0.0625,
+      "mean": 2.539530896683573e-07,
+      "fraction_outside_tolerance": 8.467212319374084e-05
+    },
+    "stage_outputs": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    "stage_partials": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    "stage_inputs": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    "embedding_only": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    "bigram_source_only": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    },
+    "final_stream_only": {
+      "max": 0.0,
+      "mean": 0.0,
+      "fraction_outside_tolerance": 0.0
+    }
+  }
+}

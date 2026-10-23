@@ -1,0 +1,7 @@
+{
+  "uri": "s3://marin-rno2a/experiments/benfeuer/noise-belay/noise-c11-full-control-20261023-v4/evaluation-model.eqx",
+  "size_bytes": 4105973468,
+  "completed_updates": 2116,
+  "weights": "ema",
+  "format": "equinox serialized model leaves; reconstruct skeleton with pinned config/runtime patch"
+}

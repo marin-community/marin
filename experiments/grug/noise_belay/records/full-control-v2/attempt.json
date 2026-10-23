@@ -1,0 +1,16 @@
+{
+  "pod": "iris-benfeuer-noise-c11-full-contro-310f3ebc-0-2cf47413629815c2",
+  "phase": "killed",
+  "gpu_count": 8,
+  "submission_observed_at": "2026-10-23T16:20:46Z",
+  "task_started_at": "2026-10-23T16:20:54Z",
+  "pod_absence_confirmed_at": "2026-10-23T16:25:49Z",
+  "pod_lifetime_seconds_upper_bound": 303,
+  "pod_lifetime_gpu_hours_upper_bound": 0.6733333333333333,
+  "completed_training_updates": 0,
+  "failure": "First real update after discarded warmup/reset could not allocate a contiguous 34.45 GiB XLA temporary buffer; NCCL rendezvous stalled. Canceled this job to release resources.",
+  "output_archive": {
+    "state": "unavailable_after_cancel"
+  },
+  "accounting_note": "Conservative observed submission-to-confirmed-pod-absence interval; pod was deleted after cancellation before final pod timestamps could be collected. Includes cleanup. A new 8-GPU job overlapped cancellation cleanup briefly, so peak reservation upper bound is 16 GPUs, although only one training attempt progressed."
+}

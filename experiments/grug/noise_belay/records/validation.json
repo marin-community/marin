@@ -1,0 +1,27 @@
+{
+  "pinned_source": "8983bec6fdaeb1cd6d0acff041194d2bf53ab679",
+  "packaging_base": "3eb121f2ee",
+  "component_checks": {
+    "passed": 24,
+    "failed": 0,
+    "seconds": 64.79,
+    "workers": 2,
+    "hardware": "local CPU",
+    "marker": "manual",
+    "reason_for_marker": "historical runtime required; no cluster access"
+  },
+  "current_main_affected_suite": {
+    "passed": 3113,
+    "failed": 11,
+    "skipped": 6,
+    "xfailed": 5,
+    "all_failures_reproduced_on_unmodified_base": true
+  },
+  "mechanical_lint": "passed",
+  "mkdocs_strict": "passed",
+  "site_layout_widths": [
+    1280,
+    390
+  ],
+  "broken_local_anchors": 0
+}

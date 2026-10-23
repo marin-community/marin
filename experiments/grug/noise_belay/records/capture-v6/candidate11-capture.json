@@ -1,0 +1,55 @@
+{
+  "kind": "synthetic_capture_output_isolation",
+  "manifest": {
+    "source_revision": "8983bec6fdaeb1cd6d0acff041194d2bf53ab679",
+    "runtime_patch_sha256": "4fdf5cc853d156a99c559bb2e00a7710dd71c629960113362bbc8dcfac8b766d",
+    "model_source_sha256": "5f39c7bad449de5874a46190d43f87d4063121411d3a3547a20112903477455b",
+    "experiment_files": {
+      "candidate11.py": "ed09c2ae65d6a70ca0b8ff98f8e666a5507947ee37bebb68277be31273030ffb",
+      "candidate11_forward.py": "c170e1132ed75e97cedf750dfcc4853484a89f7d2a64b03f019147c0cac0b73c",
+      "candidate11_boost.py": "cc1601f13571cef9db798f915a1b1cb261b4d6e3aaed199a24e15ba276adcf06",
+      "forward_credit.py": "99e0283772188a33415eda945978d1199d47b8bfe1ba387a39b055302b491c52",
+      "routed_expert_credit.py": "0cd8e871ccbd10c5da351c5ee95974fa9857b820b9aa36e11bc76db80e3b5290",
+      "candidate11_gpu_probe.py": "b5e6de712c93d13ec4997f7719177b103808c6c1920f47a144cc06e7cd43fcb0",
+      "candidate11_control_probe.py": "8c98e204825a26b4f48cea51a6d3813b87f70286ec9acdd3a32bded032c3dbf3",
+      "candidate11_capture_probe.py": "63cb10cbfdd2b5a923f92b2b6ef8845ce797cded362cf6b8272f03895519c2fb",
+      "data-native-audit/batch-000000.npz": "b05d1674f2f565a8f85ac68e7f736d13d0a76ba3fdea13dd8be6a94b901ce99f",
+      "data-native-audit/manifest.json": "50ee31cf8d41747876901cee4446766f2559f8ec8b37cef43d52bb60893691cb",
+      "candidate11-reference.json": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5"
+    },
+    "cluster": "cw-rno2a",
+    "priority": "interactive",
+    "gpu_count": 1
+  },
+  "batch": 8,
+  "sequence": 128,
+  "query_scale": 0.1,
+  "xla_flags": "--xla_allow_excess_precision=false --xla_gpu_enable_triton_gemm=false",
+  "comparisons": [
+    {
+      "group": "all",
+      "compile_and_call_seconds": 5.684508257545531,
+      "max_error": 0.0,
+      "mean_error": 0.0,
+      "fraction_outside_tolerance": 0.0,
+      "repeat_max_error": 0.0
+    }
+  ],
+  "initialization_seconds": 17.04041146300733,
+  "parameter_count": 1026488855,
+  "native_repeat_max_error": 0.0,
+  "native_repeat_fraction_outside_tolerance": 0.0,
+  "outcome": "not_reproduced_at_reduced_batch",
+  "device_memory": {
+    "num_allocs": 1399,
+    "bytes_in_use": 6292719360,
+    "peak_bytes_in_use": 6538737152,
+    "largest_alloc_size": 1073741824,
+    "bytes_limit": 63766003712,
+    "bytes_reserved": 0,
+    "peak_bytes_reserved": 0,
+    "largest_free_block_bytes": 57343711488,
+    "pool_bytes": 63766003712,
+    "peak_pool_bytes": 63766003712
+  }
+}

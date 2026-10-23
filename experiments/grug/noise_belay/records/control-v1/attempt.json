@@ -1,0 +1,18 @@
+{
+  "pod": "iris-benfeuer-noise-c11-control-202-22d4a68c-0-e1bcd2f64b0e1611",
+  "phase": "Failed",
+  "gpu_count": 8,
+  "created_at": "2026-10-23T14:14:14Z",
+  "task_started_at": "2026-10-23T14:14:20Z",
+  "task_finished_at": "2026-10-23T14:14:47Z",
+  "outputs_finished_at": "2026-10-23T14:14:54Z",
+  "exit_code": 1,
+  "task_container_seconds": 27.0,
+  "pod_lifetime_seconds": 40.0,
+  "pod_lifetime_gpu_hours_upper_bound": 0.08888888888888889,
+  "accounting_note": "Includes queue/startup and output capture. This is a reservation upper bound, not GPU utilization.",
+  "output_archive": {
+    "state": "TASK_OUTPUT_ARCHIVE_STATE_EMPTY",
+    "skipped_count": 0
+  }
+}

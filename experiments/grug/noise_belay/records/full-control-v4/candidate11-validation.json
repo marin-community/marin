@@ -1,0 +1,26 @@
+{
+  "finite": true,
+  "max_absolute": 12.078125,
+  "mean_absolute": 0.0005855724448338151,
+  "old_fraction_outside_1e5": 0.01451638713479042,
+  "relative_rms": 0.003078739857301116,
+  "native_cross_entropy": 1.9837188720703125,
+  "captured_cross_entropy": 1.983720302581787,
+  "mean_cross_entropy_difference": 1.430511474609375e-06,
+  "route_slot_disagreement_per_layer": [
+    0.0,
+    1.1444091796875e-05,
+    5.245208740234375e-05,
+    0.00013709068298339844,
+    0.0002658367156982422,
+    0.0005064010620117188
+  ],
+  "thresholds": {
+    "relative_rms": 0.005,
+    "absolute_mean_cross_entropy_difference": 0.001,
+    "maximum_layer_route_slot_disagreement": 0.001
+  },
+  "scope": "BF16 component screening only; not equality of updates or learning trajectories",
+  "user_authorized_relaxation": true,
+  "passed": true
+}

@@ -1,0 +1,33 @@
+{
+  "reference_sha256": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5",
+  "tokenizer": "/Users/benfeuer/Documents/experiments/active/fast-pretraining/tokenizers/hero-bpe-v16384",
+  "tokenizer_file_sha256": {
+    "tokenizer.json": "adaba3dc92dff6eed642f10101e4183e0525437f3432d2ce004cd14232b350ae",
+    "tokenizer_config.json": "1ff46b7c04e1ef0335286b733db65c663261132d0a9866842fd48020255ea05e"
+  },
+  "eos_token_id": 1,
+  "pipeline": "experiments.grug.fast_track.train.build_train_dataset",
+  "elapsed_seconds": 2.5789445829577744,
+  "batches": [
+    {
+      "step": 0,
+      "dataset_indices": [
+        0,
+        128
+      ],
+      "shape": [
+        128,
+        4096
+      ],
+      "token_min": 0,
+      "token_max": 16383,
+      "loss_weight_sum": 524160.0,
+      "document_starts": 341,
+      "array_sha256": {
+        "tokens": "60c5f688c118e647ab71e35481bb67852533e319e0cf1cf157f2fffb9df7cc61",
+        "loss_weight": "6eaa446c86373cf88bcf03cc58bdc644d7c9cab1911d4eab35eb26c09018d774",
+        "segment_ids": "396545102e64395ce3aa995c86059687029151d51d94cf25117da9fffba6fa4c"
+      }
+    }
+  ]
+}

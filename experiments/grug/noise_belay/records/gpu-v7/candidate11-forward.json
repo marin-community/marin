@@ -1,0 +1,189 @@
+{
+  "kind": "synthetic_forward_parity_probe",
+  "manifest": {
+    "source_revision": "8983bec6fdaeb1cd6d0acff041194d2bf53ab679",
+    "runtime_patch_sha256": "3b16616d6170785c91f82eea6b44ec40ec02446c4335854e993cf520ef32c769",
+    "model_source_sha256": "078959f011a8774bdd295915540a938aeeecce90d51cdc8811bdd428952d4df3",
+    "experiment_files": {
+      "candidate11.py": "ed09c2ae65d6a70ca0b8ff98f8e666a5507947ee37bebb68277be31273030ffb",
+      "candidate11_forward.py": "ecbc87df3e2468ae3c6a77549a45d23cd37927a7c6ae8bc6c763148055b05b1a",
+      "candidate11_gpu_probe.py": "59893b16b0ab8d4d86ed9bd6e98686318de76bdedf34b0db1558e3e7873a7e57",
+      "candidate11-reference.json": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5"
+    },
+    "cluster": "cw-rno2a",
+    "priority": "interactive",
+    "gpu_count": 8
+  },
+  "batch": 128,
+  "sequence": 4096,
+  "devices": [
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3",
+    "NVIDIA H100 80GB HBM3"
+  ],
+  "jax_version": "0.11.1",
+  "repeats": 3,
+  "xla_flags": "--xla_allow_excess_precision=false --xla_gpu_enable_triton_gemm=false",
+  "initialization_seconds": 20.712534253951162,
+  "parameter_count": 1026488855,
+  "native_first_call_seconds": 19.287145343143493,
+  "native_steady_seconds": [
+    0.06871833885088563,
+    0.055142723955214024,
+    0.05539245577529073
+  ],
+  "capture_first_call_seconds": 7.616627415176481,
+  "capture_steady_seconds": [
+    0.06683329911902547,
+    0.06159009784460068,
+    0.06150118075311184
+  ],
+  "capture_hidden_only_first_call_seconds": 10.068407943937927,
+  "capture_hidden_only_steady_seconds": [
+    0.06019145669415593,
+    0.05539394589141011,
+    0.05517114978283644
+  ],
+  "native_with_routing_first_call_seconds": 10.274368814192712,
+  "native_with_routing_steady_seconds": [
+    0.06094744801521301,
+    0.05550339771434665,
+    0.05599141214042902
+  ],
+  "diagnostic_hidden_errors": {
+    "capture": {
+      "max": 0.0,
+      "mean": 0.0
+    },
+    "capture_hidden_only": {
+      "max": 0.0,
+      "mean": 0.0
+    },
+    "native_with_routing": {
+      "max": 0.0,
+      "mean": 0.0
+    }
+  },
+  "shared_pre_error_per_layer": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "route_mismatch_fraction_per_layer": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "max_absolute_error": 0.0,
+  "mean_absolute_error": 0.0,
+  "device_memory": [
+    {
+      "num_allocs": 1682,
+      "bytes_in_use": 992814080,
+      "peak_bytes_in_use": 18226902016,
+      "largest_alloc_size": 3344251392,
+      "bytes_limit": 63766003712,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 61632191744,
+      "pool_bytes": 63766003712,
+      "peak_pool_bytes": 63766003712
+    },
+    {
+      "num_allocs": 854,
+      "bytes_in_use": 992814080,
+      "peak_bytes_in_use": 18226902016,
+      "largest_alloc_size": 3344251392,
+      "bytes_limit": 63766003712,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 61632191744,
+      "pool_bytes": 63766003712,
+      "peak_pool_bytes": 63766003712
+    },
+    {
+      "num_allocs": 854,
+      "bytes_in_use": 992814080,
+      "peak_bytes_in_use": 18226902016,
+      "largest_alloc_size": 3344251392,
+      "bytes_limit": 63766003712,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 61632191744,
+      "pool_bytes": 63766003712,
+      "peak_pool_bytes": 63766003712
+    },
+    {
+      "num_allocs": 854,
+      "bytes_in_use": 992814080,
+      "peak_bytes_in_use": 18226902016,
+      "largest_alloc_size": 3344251392,
+      "bytes_limit": 63766003712,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 61632191744,
+      "pool_bytes": 63766003712,
+      "peak_pool_bytes": 63766003712
+    },
+    {
+      "num_allocs": 854,
+      "bytes_in_use": 992814080,
+      "peak_bytes_in_use": 18226902016,
+      "largest_alloc_size": 3344251392,
+      "bytes_limit": 63766003712,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 61632191744,
+      "pool_bytes": 63766003712,
+      "peak_pool_bytes": 63766003712
+    },
+    {
+      "num_allocs": 854,
+      "bytes_in_use": 992814080,
+      "peak_bytes_in_use": 18226902016,
+      "largest_alloc_size": 3344251392,
+      "bytes_limit": 63766003712,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 61632191744,
+      "pool_bytes": 63766003712,
+      "peak_pool_bytes": 63766003712
+    },
+    {
+      "num_allocs": 854,
+      "bytes_in_use": 992814080,
+      "peak_bytes_in_use": 18226902016,
+      "largest_alloc_size": 3344251392,
+      "bytes_limit": 63766003712,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 61632191744,
+      "pool_bytes": 63766003712,
+      "peak_pool_bytes": 63766003712
+    },
+    {
+      "num_allocs": 854,
+      "bytes_in_use": 992814080,
+      "peak_bytes_in_use": 18226902016,
+      "largest_alloc_size": 3344251392,
+      "bytes_limit": 63766003712,
+      "bytes_reserved": 0,
+      "peak_bytes_reserved": 0,
+      "largest_free_block_bytes": 61632191744,
+      "pool_bytes": 63766003712,
+      "peak_pool_bytes": 63766003712
+    }
+  ],
+  "process_work_seconds": 94.63095864001662
+}
