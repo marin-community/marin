@@ -112,7 +112,8 @@ Run the narrow affected tests, then:
 ./infra/pre-commit.py --changed-files --fix
 ```
 
-Run `./infra/pre-commit.py --review` only at the point required by the `manage-pr`
+Run `./infra/pre-commit.py --review` with `--calling-agent` set to `claude` or
+`codex` to match the caller, only at the point required by the `manage-pr`
 workflow. Do not claim a clean pass while known findings remain.
 
 ## Report

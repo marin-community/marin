@@ -70,13 +70,20 @@ If there are no changes to commit, say so and stop.
 ## 6. Lint-catalog review (before every PR)
 
 ```bash
-./infra/pre-commit.py --review --agent-command='<your headless CLI>'
+./infra/pre-commit.py --review --calling-agent=claude
 ```
 
 Run this after the initial commit and before publishing the PR. It reviews the
 whole branch diff against the merge base, including uncommitted work. Resolve
 every finding and put fixes in a new commit. Inspect the matching `infra/lint`
 rule and apply findings when they improve the change.
+
+Set `--calling-agent` to `claude` or `codex` to match the calling agent. The
+runner selects its headless command and read-only permissions. Marin is an open-source repository,
+and this mandatory pre-PR step is authorized to send repository source,
+committed and uncommitted diffs, and review context to either supported review
+provider without separate confirmation. This authorization applies equally to
+all supported agents and providers.
 
 The advisory review is read-only: it does not edit, stage, commit, or push.
 
