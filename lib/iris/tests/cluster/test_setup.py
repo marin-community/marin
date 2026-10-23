@@ -4,7 +4,11 @@
 """Tests for how EnvironmentSpec resolves the user setup scripts onto the wire."""
 
 import os
+import shlex
+import shutil
 import subprocess
+import sys
+from zipfile import ZipFile
 
 import pytest
 from iris.cluster.runtime.env import UV_CACHE_RECOVERY_SIGNAL_PREFIX, build_common_iris_env, render_setup_steps
@@ -71,6 +75,92 @@ package = false
     assert (venv / "bin" / "python").is_file()
 
 
+def test_default_setup_with_editable_python_dependency_succeeds(tmp_path):
+    workdir = tmp_path / "workdir"
+    package = workdir / "lib" / "payload"
+    package.mkdir(parents=True)
+    (package / "pyproject.toml").write_text('[project]\nname = "setup-payload"\nversion = "0.1.0"\n')
+    (package / "setup_payload.py").write_text("value = 42\n")
+    (workdir / "pyproject.toml").write_text(
+        '[project]\nname = "setup-test"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+        'dependencies = ["setup-payload"]\n'
+        "[tool.uv]\npackage = false\n"
+        "[tool.uv.sources]\n"
+        'setup-payload = { path = "lib/payload", editable = true }\n'
+    )
+    venv = tmp_path / "venv"
+    env = {
+        **os.environ,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "UV_CACHE_DIR": str(tmp_path / "uv-cache"),
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
+
+    completed = subprocess.run(
+        ["bash", "-c", default_setup_script()], env=env, capture_output=True, text=True, check=False
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    subprocess.run([venv / "bin" / "python", "-c", "import setup_payload; assert setup_payload.value == 42"], check=True)
+
+
+@pytest.mark.parametrize("link_mode", ["copy", "symlink"])
+def test_default_setup_sync_uses_host_link_mode_for_cached_wheel(tmp_path, link_mode):
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    wheel = tmp_path / "setup_payload-0.1.0-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("setup_payload/__init__.py", "value = 1\n")
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: iris-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: setup-payload\nVersion: 0.1.0\n",
+        )
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/RECORD",
+            "setup_payload/__init__.py,,\nsetup_payload-0.1.0.dist-info/WHEEL,,\n"
+            "setup_payload-0.1.0.dist-info/METADATA,,\nsetup_payload-0.1.0.dist-info/RECORD,,\n",
+        )
+    (workdir / "pyproject.toml").write_text(
+        '[project]\nname = "setup-test"\nversion = "0.1.0"\nrequires-python = ">=3.12"\n'
+        f'dependencies = ["setup-payload @ {wheel.as_uri()}"]\n'
+        "[tool.uv]\npackage = false\n"
+    )
+
+    venv = tmp_path / "venv"
+    cache = tmp_path / "uv-cache"
+    env = {
+        **os.environ,
+        "IRIS_VENV": str(venv),
+        "IRIS_WORKDIR": str(workdir),
+        "UV_CACHE_DIR": str(cache),
+        "UV_LINK_MODE": link_mode,
+        "UV_PROJECT_ENVIRONMENT": str(venv),
+    }
+    subprocess.run(
+        ["bash", "-c", default_setup_script()],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    installed = next((venv / "lib").glob("python*/site-packages/setup_payload/__init__.py"))
+    if link_mode == "symlink":
+        assert installed.is_symlink()
+        assert installed.resolve().is_relative_to(cache)
+    else:
+        assert not installed.is_symlink()
+        shutil.rmtree(cache)
+        subprocess.run(
+            [venv / "bin" / "python", "-c", "import setup_payload; assert setup_payload.value == 1"], check=True
+        )
+
+
 @pytest.mark.parametrize(
     "shared_cache_fails, local_cache_fails, expected_status",
     [(False, False, 0), (True, False, 0), (True, True, 2)],
@@ -115,6 +205,7 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
         num_tasks=1,
         bundle_id="bundle-id",
         controller_address=None,
+        task_token=None,
         environment=job_pb2.EnvironmentConfig(),
         constraints=(),
         ports=(),
@@ -133,12 +224,13 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
         "UV_PROJECT_ENVIRONMENT": str(venv),
     }
 
+    # Each pytest worker needs its own materialized wrapper and setup-step files.
     setup = "\n".join(
         [
             "set -e",
             *render_setup_steps(["uv pip install package", default_setup_script(python_version="3.12")]),
         ]
-    )
+    ).replace("/tmp/iris-", f"{tmp_path}/iris-")
     completed = subprocess.run(
         ["bash", "-c", setup],
         env=env,
@@ -153,3 +245,81 @@ printf '%s\n' "$UV_CACHE_DIR" > "$IRIS_VENV/package-cache"
         assert (venv / "package-cache").read_text().strip() == expected_cache
     signals = list(shared_cache.glob(f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}*"))
     assert len(signals) == int(shared_cache_fails and not local_cache_fails)
+
+
+@pytest.mark.parametrize(
+    "reinstall_option", ["", "--reinstall", "--force-reinstall", "--reinstall-package setup-payload"]
+)
+def test_uv_install_after_first_failure_reinstalls_with_real_uv(tmp_path, reinstall_option):
+    """A cache retry must reach installation instead of failing uv's argument parser."""
+    real_uv = shutil.which("uv")
+    assert real_uv is not None
+    venv = tmp_path / "venv"
+    subprocess.run([real_uv, "venv", "--python", sys.executable, str(venv)], check=True)
+    wheel = tmp_path / "setup_payload-0.1.0-py3-none-any.whl"
+    with ZipFile(wheel, "w") as archive:
+        archive.writestr("setup_payload/__init__.py", "value = 7\n")
+        archive.writestr("setup_payload-0.1.0.dist-info/WHEEL", "Wheel-Version: 1.0\nTag: py3-none-any\n")
+        archive.writestr(
+            "setup_payload-0.1.0.dist-info/METADATA", "Metadata-Version: 2.1\nName: setup-payload\nVersion: 0.1.0\n"
+        )
+        archive.writestr("setup_payload-0.1.0.dist-info/RECORD", "")
+    workdir = tmp_path / "workdir"
+    workdir.mkdir()
+    shared_cache = tmp_path / "shared-cache"
+    shared_cache.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_text(
+        """#!/bin/bash
+printf '%s\\n' "$UV_CACHE_DIR" >> "$UV_INVOCATIONS"
+if [ ! -f "$UV_FIRST_FAILURE" ]; then
+  touch "$UV_FIRST_FAILURE"
+  exit 19
+fi
+exec "$REAL_UV" "$@"
+"""
+    )
+    uv.chmod(0o755)
+    invocation_log = tmp_path / "invocations"
+    failure_marker = tmp_path / "first-failure"
+    # Keep the real shell wrapper isolated from other concurrent setup tests.
+    setup = "\n".join(
+        [
+            "set -e",
+            *render_setup_steps(
+                [
+                    f"uv pip install --offline --no-index --no-deps --python {shlex.quote(str(venv / 'bin/python'))} "
+                    f"{reinstall_option} {shlex.quote(str(wheel))}"
+                ]
+            ),
+        ]
+    ).replace("/tmp/iris-", f"{tmp_path}/iris-")
+    completed = subprocess.run(
+        ["bash", "-c", setup],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "IRIS_WORKDIR": str(workdir),
+            "IRIS_ATTEMPT_UID": "reinstall-retry",
+            "UV_CACHE_DIR": str(shared_cache),
+            "REAL_UV": real_uv,
+            "UV_INVOCATIONS": str(invocation_log),
+            "UV_FIRST_FAILURE": str(failure_marker),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert failure_marker.exists()
+    assert invocation_log.read_text().splitlines() == [str(shared_cache), str(workdir / ".uv-recovery-cache")]
+    imported = subprocess.run(
+        [venv / "bin/python", "-c", "import setup_payload; print(setup_payload.value)"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert imported.stdout.strip() == "7"
+    assert (shared_cache / f"{UV_CACHE_RECOVERY_SIGNAL_PREFIX}reinstall-retry").exists()

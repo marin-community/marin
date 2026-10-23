@@ -74,13 +74,36 @@ uv run --package marin-iris --extra controller iris \
 The base `uv run iris` environment omits this dependency and can report every
 CoreWeave prerequisite as missing even when the objects exist.
 
+Tracked configs may use `principal:` references in role, admission, and budget
+policy. The `marin` Pulumi stack publishes their private directory from
+`iam_data.yaml`; apply the reviewed IAM stack before deploying those configs.
+Start and restart read the directory during preflight, before building images
+or stopping a controller. Controllers resolve identities at startup before
+checkpoint or database changes. GCP loads the Secret Manager reference at
+runtime; CoreWeave projects the directory through the controller-only
+`iris-controller-secrets` read-only volume. ConfigMaps and bootstrap configs retain IDs.
+Ordinary clients use the tracked config and do not read the directory.
+See [cluster configs](config/README.md).
+
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
-The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key in memory and uses that value when it projects `iris-controller-env`. A missing Secret Manager dependency or inaccessible secret leaves the running controller and rollout record unchanged.
+The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key and principal directory in memory and projects those values through the controller-only `iris-controller-secrets` volume. A missing Secret Manager dependency, inaccessible secret, or unresolved principal leaves the running controller and rollout record unchanged.
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
-If checkpoint times out: `iris cluster controller restart --skip-checkpoint` (restores from last periodic checkpoint; some recent state may be lost).
+If checkpoint times out, inspect controller logs for completed uploads and
+thread stacks for ongoing SQLite copies before retrying. The RPC
+timeout does not cancel the server-side copy, so retries can leave concurrent
+backups running. SQLite backups pin a read snapshot across page batches to
+avoid restarting under concurrent writes. Without that snapshot, sustained
+writes can prevent the copy from finishing. The read snapshot permits
+writes but delays WAL reclamation until the copy completes.
+
+`iris cluster controller restart --skip-checkpoint` bypasses the pre-restart
+backup. It can lose recent state if startup restores an older checkpoint.
+CoreWeave controllers using node-local storage can move nodes on restart; see
+[controller storage and placement](docs/coreweave.md#controller-state) before
+relying on the local DB.
 
 **Restart builds and deploys your local working tree.** `iris cluster controller restart` builds the images required by the configured runtime from your **current checkout — HEAD plus any staged/unstaged changes** (`get_git_sha()` is a tree-content hash), pushes them, pins the deploy to `:<hash>` in memory, and restarts the container in place. So the restart ships whatever code is in your tree; there is no separate image-rebuild step. To deploy a merged controller fix: update your checkout (`git pull`, or check out the fix) **then** restart — restarting from a stale checkout ships that stale code. Always confirm the controller is running the `:<git-short-hash>` you expect (`iris cluster status`), not just that it came back up; a stale-checkout deploy once cost ~5 red-canary days ([incident record](https://echo.oa.dev/wiki/14)).
 
@@ -217,7 +240,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 7200 \
   --job-name my-run-coord \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e IRIS_PORT_JAX 32731 \
+  -e IRIS_PORT_JAX 32731 \
   -- python -m experiments.<launcher> --run-id my-run --dp-racks 1 --run
 ```
 
@@ -230,10 +253,11 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   prints the bundle size.
 - **`IRIS_PORT_JAX` must be unique per concurrent gang.** Rank 0 binds and
   registers it for the JAX coordinator, and the default is shared cluster-wide.
-- **Only `task_env` reaches the container.** Each cluster config's `defaults.task_env`
-  carries `MARIN_PREFIX` and the object-store credentials, and nothing else.
-  `WANDB_API_KEY` is not among them: pass it, or set `WANDB_MODE=disabled` for a
-  run whose metrics do not matter.
+- **Application credentials use files.** The submitting client includes available
+  HF/W&B/CoreWeave credentials and its current secret bundle by default. CoreWeave
+  tasks require the submitter's storage keys; operator keys stay on infrastructure Pods. `defaults.task_env` carries
+  nonsecret settings such as `MARIN_PREFIX` and storage endpoints. See
+  [secret delivery](docs/secrets.md).
 - **`SchedulingGated` on every task means the gang is queued.** Kueue admits a
   gang all at once, so a busy cluster holds all of it. Same-band jobs queue
   behind each other; they do not preempt.
@@ -256,13 +280,15 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 
 ### `job run` gotchas
 
-- **Remote jobs only see env vars you put in the job spec.** The submitter's
-  shell env is not copied into the container. Pass required values explicitly:
-  `iris job run -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" -- python train.py`.
+- **Environment values must be explicit.** The submitter's shell environment is
+  not copied wholesale. HF/W&B/CoreWeave defaults use secret files automatically; pass other
+  credentials with `--secret NAME SOURCE`. `-e NAME VALUE` delivers an environment
+  value, including an explicit credential override.
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
 - **A job that dies in BUILDING with a `uv sync` error is failing setup before your command starts.** The default is `uv sync --all-packages --no-dev`. Scope it with CLI `--sync-package <member>` or SDK `EnvironmentSpec(sync_packages=[...])`; skip setup entirely with CLI `--no-sync` or SDK `EnvironmentSpec(setup_scripts=[])` for a bring-your-own image. The build log labels each step (`[iris setup] step N/M`) so you can tell which script failed. See "Task Setup" in `AGENTS.md`.
+- **Docker task setup uses the larger of one core and the task's CPU request.** The run container uses the task's CPU request. Reserved and preemptible workers enforce these values as CPU quotas; on-demand workers use them as relative CPU shares.
 - **Use `--gpu` or `--tpu` to request accelerators, instead of `--region` or `--zone`.** Let Iris handle scaling group constraints. Use `--region` or `--zone` when you are trying to pin data to a particular location.
 - **`--reserve`** is a hard zone constraint: it confines the job to a zone where the named accelerator has actually been obtained (empirically — a live, non-erroring slice in the region), and the job waits if none exists yet (an availability probe meanwhile scales the accelerator up). It does not hold capacity and does not attach accelerator devices. Use `--tpu`/`--gpu` on the task that needs hardware.
 - **`executor_main` parent jobs** (e.g., canary ferries) submit GPU sub-tasks via Fray. The parent must be CPU-only (`--cpu 1 --memory 2g`), otherwise it hogs the GPU node and deadlocks. Memory at or above 4 GB requires `--enable-extra-resources` (see "Validator opt-in" below).
@@ -286,6 +312,14 @@ days. Kubernetes `DisruptionTarget` conditions are recorded as
 `k8s/disruption` events with the pod and node identity plus a snapshot of the
 node's taints, conditions, hardware/topology labels, and CoreWeave health
 annotations.
+
+For an evaluator that retries after a `Completed` container event and a later
+`PodDeleted` worker-failure verdict, inspect its durable result archive before
+rerunning or accepting the retry. The evaluator may already have written a
+complete, sealed result even though its parent lacks a canonical record. See
+[Auditing an Evalchemy run](../../docs/tutorials/run-lm-evals.md#audit-an-evalchemy-run-before-its-record-appears)
+for the archive checks. The Iris verdict alone does not establish whether the
+application result is complete.
 
 Default timeout is 60s. Use `--timeout 300` for slow commands, `--timeout -1` for no timeout (last resort).
 
@@ -344,6 +378,11 @@ running on a worker (ASSIGNED / BUILDING / RUNNING) can be changed; pending or
 already-terminal tasks are rejected with a reason. `preempted` charges the
 preemption budget; `failed` is terminal with no retry.
 
+For federated jobs, the parent forwards task and attempt actions to the
+execution peer. The peer validates the current attempt and queues the action;
+a stale parent mirror does not determine which attempt is stopped. A successful
+reply means the action was queued. Check task status to confirm it took effect.
+
 Use `job complete` only when the workload should be recorded as successful. It
 marks the Job and every unfinished Task and Attempt `SUCCEEDED`, then stops
 their runtimes. `job cancel` records the Job as `KILLED` instead.
@@ -370,6 +409,16 @@ CoreWeave confirms the reboot completed (or process death is otherwise proven).
 
 ## Process Inspection & Profiling
 
+If controller RPCs time out while `/health` succeeds, inspect the RPC worker
+threads. Bundle uploads and waits for the same bundle's lock can exhaust that pool
+without stopping the control loop. When RPC profiling is unavailable on CoreWeave,
+use the configured Kubernetes context to run `py-spy dump --pid 1` in the controller
+pod. Repeated `BundleStore.write` stacks in S3 I/O or `_content_lock` identify this
+failure. Launch payload persistence has a 30-second deadline covering the lock
+wait, object existence check, and upload. A failed upload returns an `unavailable`
+job-creation error without inserting the new job; clients can retry after storage
+recovers.
+
 ```bash
 iris process status                         # controller resource usage
 iris process status -t /system/worker/<id>  # worker process status
@@ -385,9 +434,9 @@ iris process profile cpu -t /user/job/0     # profile a running task container
 
 Iris compares JAX compile keys across participating GPU processes before a multi-process compile enters XLA. A `GPU compile fingerprint mismatch` error lists each process index and compile key; check for rank-dependent lowering, shapes, or compiler options. A missing peer fails this check after 60 seconds with the identities that arrived. This check uses JAX's pre-compile key, so a stall caused by divergence inside XLA can still require a native thread profile (`iris process profile --native -t <task> threads`).
 
-GPU environments set `NCCL_RAS_ENABLE=1`, `NCCL_DEBUG=INFO`, and `NCCL_DEBUG_SUBSYS=INIT,BOOTSTRAP,ENV,NET,GRAPH,TUNING,RAS`. The default timestamp is `[%F %T.%3f]`. Short debug-smoke jobs may additionally select `COLL,PROXY,NVLS,REG`; do not use `TRACE` or `CALL` for normal runs.
+GPU environments set `NCCL_RAS_ENABLE=1` and `NCCL_DEBUG=WARN` by default, with no subsystem filter. The default timestamp is `[%F %T.%3f]`. Set `NCCL_DEBUG=INFO` and a focused `NCCL_DEBUG_SUBSYS` only for diagnostic jobs; the CoreWeave GPU smoke config and supervised wedge repro do this explicitly. Do not use `TRACE` or `CALL` for normal runs.
 
-GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every two minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
+GPU Levanter runs persist NCCL's job-global communicator view from JAX process 0 every ten minutes. The probe is bounded and records unavailable, failed, and timed-out polls explicitly. See [`docs/ops/training-stall-alert-contract.md`](../../docs/ops/training-stall-alert-contract.md#nccl-ras-snapshots) for metric semantics and a bounded Finelog query.
 
 For a read-only one-shot check, first confirm the target task is `RUNNING`; a `BUILDING` task has no NCCL listener. Query from the task's own container and network namespace:
 
@@ -627,6 +676,8 @@ iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
 ```
 
+See [shared budgets](docs/federation.md#shared-budgets) for federation configuration.
+
 Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
 and forwards a signed assertion the controller verifies; the controller mints **no**
 user token. `iris login` runs the browser desktop-OAuth flow once and caches the IAP
@@ -640,6 +691,34 @@ rebuilt policy resolves them to the non-admin default on their next request (no 
 revoke — the role is resolved per request). The only fleet-wide credential kill switch
 is rotating the cluster signing key (`iris cluster init-keys` + redeploy), which
 re-auths every worker.
+
+### Worker credential renewal
+
+Workers renew their controller JWT through `RenewWorkerToken` one day before
+its 30-day expiry. A background check runs every 30 seconds, including while
+idle. The RPC admits authenticated workers and admins and always issues a
+worker-role credential; expired credentials cannot renew themselves.
+
+Rigging serializes concurrent renewal requests and keeps a still-valid token
+usable during a transient issuer outage, retrying after 30 seconds. Renewed
+credentials are atomically stored with mode `0600` in
+`<worker cache_dir>/credentials/worker.jwt`. Worker and node-agent restarts use
+the cached credential when it expires later than the bootstrap token. The controller
+renews its own provisioning credential before using it for new workers.
+
+If task state advances but logs are absent, inspect worker-local Docker logs.
+`Table(log) ... UNAUTHENTICATED` can come from controller endpoint discovery,
+before any request reaches Finelog. Compare a direct Finelog RPC with
+`ListEndpoints` using the worker credential. Decode only expiry metadata when
+diagnosing; never print the bearer token. A timeout can invalidate a working
+cached endpoint and expose a credential that expired earlier.
+
+A worker whose bootstrap and cached credentials have both expired needs a fresh
+worker credential from an operator. Update `/etc/iris/worker_config.json`, then
+restart the worker and node-agent processes.
+Preserve running task containers and verify their adoption, unchanged attempts,
+and fresh Finelog rows. Restarting shared Finelog does not repair this condition.
+Deploy the controller's renewal RPC before deploying workers that call it.
 
 ### Calling the IAP endpoint with `curl`
 

@@ -18,7 +18,7 @@ from fsspec import AbstractFileSystem
 
 from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.buckets import S3UploadPolicy, filesystem_for
-from rigging.fsutil.transfer import (
+from rigging.filesystem.transfer import (
     COPY_CHUNK_BYTES,
     TransferLocation,
     _backend,

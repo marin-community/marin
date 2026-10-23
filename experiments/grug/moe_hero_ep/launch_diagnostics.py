@@ -23,11 +23,11 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    SIMULATED_EPOCHING_MAX_FLOPS,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
-    HERO_EP_BATCH_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
@@ -41,6 +41,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
     hero_grug_trainer_config,
+    hero_rack_batch_size,
     hero_trainer_config,
     validation_datasets,
     with_transport_remat_mode,
@@ -95,7 +96,7 @@ def build_diagnostic_run(
     num_steps: int,
     schedule_steps: int | None = None,
     seed: int = 0,
-    batch_size: int = HERO_EP_BATCH_SIZE,
+    batch_size: int | None = None,
     num_experts: int | None = None,
     num_experts_per_token: int | None = None,
     intermediate_dim: int | None = None,
@@ -105,8 +106,10 @@ def build_diagnostic_run(
     context_axis_size: int = 1,
     expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
     qk_mult: float | None = None,
+    qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
     moe_implementation: str | None = None,
+    ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -129,7 +132,8 @@ def build_diagnostic_run(
     comparable across a sweep. ``None`` keeps the hero value.
 
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
-    ``dp_racks``. ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
+    ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
+    ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -169,13 +173,17 @@ def build_diagnostic_run(
             ("latent_dim", latent_dim),
             ("max_seq_len", max_seq_len),
             ("qk_mult", qk_mult),
+            ("qk_mult_long_scale", qk_mult_long_scale),
             ("moe_implementation", moe_implementation),
+            ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
         if value is not None
     }
     if overrides:
         model = dataclasses.replace(model, **overrides)
     model = with_transport_remat_mode(model)
+    if batch_size is None:
+        batch_size = hero_rack_batch_size(model.max_seq_len)
     optimizer = MoeHeuristic().build_optimizer_config(
         num_train_steps=total_schedule_steps,
         batch_size=batch_size,
@@ -270,6 +278,7 @@ def build_diagnostic_run(
             load_checkpoint_path=restore_from,
             load_checkpoint=True if restore_from else None,
             tracker=WandbConfig(
+                save_code=False,
                 entity="marin-community",
                 project=wandb_project,
                 tags=[
@@ -312,7 +321,7 @@ def build_diagnostic_run(
             total_steps=total_schedule_steps,
             batch_size=batch_size,
             max_seq_len=model.max_seq_len,
-            experiment_flops=experiment_flops,
+            enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
             validation=validation,
         )
         return GrugRunConfig(
@@ -414,14 +423,22 @@ def build_diagnostic_run(
 @click.option(
     "--batch-size",
     type=click.IntRange(min=1),
-    default=HERO_EP_BATCH_SIZE,
-    show_default=True,
-    help="Global sequences per step. This value does not scale with --dp-racks.",
+    default=None,
+    help=(
+        "Global sequences per step. Defaults to one hero rack's tokens per step at the sequence length. "
+        "This value does not scale with --dp-racks."
+    ),
 )
 @click.option(
     "--moe-implementation",
     default=None,
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
+)
+@click.option(
+    "--ce-grad-in-forward-token-block-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Compute the training cross-entropy's gradients in its forward, in blocks of this many rows per rank.",
 )
 @click.option(
     "--master-params",
@@ -542,6 +559,12 @@ def build_diagnostic_run(
     default=None,
     help="Query/key attention scale multiplier. Defaults to the hero configuration.",
 )
+@click.option(
+    "--qk-mult-long-scale",
+    type=click.FloatRange(min=0, min_open=True),
+    default=None,
+    help="Extra multiplier on --qk-mult for the global (full-causal) layers only. Defaults to 1.0.",
+)
 @click.option("--restore-from", default=None, help="Checkpoint to restore; outputs use this run's own path.")
 @build_options
 def main(
@@ -550,13 +573,14 @@ def main(
     num_steps: int,
     schedule_steps: int | None,
     seed: int,
-    batch_size: int,
+    batch_size: int | None,
     num_experts: int | None,
     num_experts_per_token: int | None,
     intermediate_dim: int | None,
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
+    ce_grad_in_forward_token_block_size: int | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -574,6 +598,7 @@ def main(
     context_axis_size: int,
     expert_axis_size: int,
     qk_mult: float | None,
+    qk_mult_long_scale: float | None,
     restore_from: str | None,
 ) -> ArtifactStep[HeroThroughputResult]:
     return build_diagnostic_run(
@@ -592,8 +617,10 @@ def main(
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
         qk_mult=qk_mult,
+        qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
         moe_implementation=moe_implementation,
+        ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,

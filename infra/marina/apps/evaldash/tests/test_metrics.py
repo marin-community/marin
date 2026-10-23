@@ -4,9 +4,16 @@
 """The evaldash panel and comparison views: cross-cohort selection, coverage filtering, qualified
 aggregates, and head-to-head difference intervals."""
 
+from dataclasses import asdict
+
 import pytest
+from evaldash.app import MemoryRecordStore
 from evaldash.metrics import build_comparison, build_meta, build_model_detail, build_panel, eval_suites, panel_request
+from marin.evaluation.eval_policy import EVALCHEMY_COMMIT
+from marin.evaluation.eval_policy_sources import POLICY_SOURCE_DIGESTS
 from marin.evaluation.eval_stats import Completeness, MissingPolicy
+from marin.evaluation.model_config import GenerationConfig, ModelConfig, ServeConfig
+from marin.evaluation.model_identity import model_config_digest
 from marin.evaluation.records import (
     BenchmarkMetadataRef,
     BenchmarkMetricRef,
@@ -17,6 +24,7 @@ from marin.evaluation.records import (
     HarborRef,
     HardwareRef,
     MetricKind,
+    ModelConfigRef,
     ModelRef,
     Provenance,
     RunStatus,
@@ -159,6 +167,30 @@ def test_panel_can_be_pinned_to_one_cohort():
     (row,) = build_panel(records, panel_request(cohort_version="v1"))["rows"]
 
     assert row["cells"]["mmlu"]["value"] == pytest.approx(0.50)
+
+
+@pytest.mark.parametrize("cohort", ["v1", "v2"])
+def test_panel_rows_and_gap_explanations_stay_within_the_selected_cohort(cohort):
+    records = [
+        _record("a", "mmlu", "v1", "2026-01-01T00:00:00+00:00", 0.5),
+        _record("b", "mmlu", "v2", "2026-02-01T00:00:00+00:00", 0.7),
+        _record("failed", "drop", cohort, "2026-03-01T00:00:00+00:00", None),
+        _record("zero", "mmlu", cohort, "2026-03-01T00:00:00+00:00", 0.0),
+        _record("a", "drop", "v2", "2026-02-01T00:00:00+00:00", None),
+        _record("b", "math500", "v2", "2026-02-01T00:00:00+00:00", 0.8),
+    ]
+
+    panel = build_panel(records, panel_request(cohort_version=cohort))
+    rows = {row["model"]: row for row in panel["rows"]}
+
+    assert set(rows) == ({"a", "failed", "zero"} if cohort == "v1" else {"a", "b", "failed", "zero"})
+    assert rows["failed"]["missing"]["drop"]["reason"] == "status infra_failed"
+    assert rows["zero"]["cells"]["mmlu"]["value"] == 0.0
+    if cohort == "v1":
+        assert rows["a"]["missing"] == {}
+        assert "math500" not in panel["benchmarks"]
+        assert "math500" not in panel["protocols"]
+    assert all(cell["version"] == cohort for row in rows.values() for cell in row["cells"].values())
 
 
 def test_a_failed_run_leaves_an_explained_gap_rather_than_a_blank_cell():
@@ -699,3 +731,149 @@ def test_comparison_honours_the_benchmark_selection_it_was_asked_for():
 
     assert comparison["benchmarks"] == ["mmlu"]
     assert comparison["aggregates"]["a"]["panel"] == ["mmlu"]
+
+
+def test_policy_comparison_excludes_wrong_mode_and_groups_model_yamls():
+    def policy_run(thinking: bool, config_thinking: bool, created_at: str, name: str = "same-name") -> EvalRunRecord:
+        record = _record(name, "math500", "eval-policy-2026-09-24-verified", created_at, 0.5)
+        model_config = ModelConfigRef.model_validate(
+            asdict(
+                ModelConfig(
+                    name=name,
+                    location="org/model",
+                    generation=GenerationConfig(chat_template_kwargs={"enable_thinking": config_thinking}),
+                )
+            )
+        )
+        return record.model_copy(
+            update={
+                "model": ModelRef(name=name, location="org/model", backend="vllm", config=model_config),
+                "provenance": record.provenance.model_copy(update={"eval_runtime": EVALCHEMY_COMMIT}),
+                "evaluation": record.evaluation.model_copy(
+                    update={
+                        "source_digest": POLICY_SOURCE_DIGESTS["eval-policy-2026-09-24-verified"]["math500"],
+                        "tasks": (EvalTaskRef(name="MATH500", num_fewshot=0, generation=True),),
+                        "evalchemy": EvalchemyRef(
+                            apply_chat_template=True,
+                            max_gen_toks=None,
+                            max_eval_instances=None,
+                            num_concurrent=16,
+                            batch_size="1",
+                            seed=42,
+                            chat_template_kwargs={"enable_thinking": thinking},
+                        ),
+                    }
+                ),
+            }
+        )
+
+    first = policy_run(True, False, "2026-09-25T01:00:00+00:00")
+    second = policy_run(True, True, "2026-09-25T02:00:00+00:00")
+    invalid = policy_run(False, False, "2026-09-25T03:00:00+00:00")
+    other_invalid = policy_run(False, False, "2026-09-25T04:00:00+00:00", "other-model")
+    previous_cohort = invalid.model_copy(
+        update={"run_id": "previous-cohort", "version": "eval-policy-2026-09-16-verified"}
+    )
+    smoke = invalid.model_copy(
+        update={
+            "run_id": "smoke-run",
+            "evaluation": invalid.evaluation.model_copy(update={"name": "math500-smoke"}),
+        }
+    )
+    records = [first, second, invalid, other_invalid, previous_cohort, smoke]
+    request = panel_request(cohort_version="eval-policy-2026-09-24-verified", model_query="same-name")
+    panel = build_panel(records, request)
+
+    assert len(panel["rows"]) == 1
+    assert panel["rows"][0]["model"] == "same-name"
+    assert panel["rows"][0]["cells"]["math500"]["run_id"] == second.run_id
+    assert [(item["run_id"], item["benchmark"]) for item in panel["policy_rejections"]] == [(invalid.run_id, "math500")]
+    detail = build_model_detail([first, second, invalid], "same-name")
+    assert detail is not None
+    rejected_run = next(run for run in detail["runs"] if run["run_id"] == invalid.run_id)
+    assert rejected_run["headline"] is None
+
+
+def test_panel_groups_tau_context_override_with_other_evals_despite_archived_config_alias():
+    records = []
+    for evaluation, context, tokens in (("math500", 73728, None), ("tau3-pi", 131072, 32768)):
+        record = _record(
+            "grug",
+            evaluation,
+            "test-cohort",
+            "2026-10-21T00:00:00+00:00",
+            0.5,
+            primary_metric="accuracy",
+            metric_kind=MetricKind.BINARY,
+            coverage={
+                evaluation: TaskCoverage(
+                    n_benchmark=ITEMS,
+                    n_attempted=ITEMS,
+                    n_scored=ITEMS,
+                    n_correct=ITEMS // 2,
+                )
+            },
+        )
+        config = ModelConfigRef.model_validate(
+            asdict(
+                ModelConfig(
+                    name="grug",
+                    location="org/grug",
+                    revision="1" * 40,
+                    serve=ServeConfig(max_model_len=context),
+                    generation=GenerationConfig(max_gen_toks=tokens),
+                )
+            )
+        )
+        records.append(
+            record.model_copy(
+                update={
+                    "model": ModelRef(
+                        name="grug",
+                        location="org/grug",
+                        backend="vllm",
+                        config=config,
+                        config_digest=model_config_digest(config),
+                    )
+                }
+            )
+        )
+    store = MemoryRecordStore()
+    store.refresh(records)
+    tau_model = records[1].model
+    assert tau_model.config is not None
+    store.set_model_archived(f"grug@{model_config_digest(tau_model.config)[:12]}", True, None)
+
+    panel = store.panel(panel_request(cohort_version="test-cohort"), None, False)
+
+    assert len(panel["rows"]) == 1
+    assert panel["rows"][0]["model"] == "grug"
+    assert set(panel["rows"][0]["cells"]) == {"math500", "tau3-pi"}
+    assert {row["eval_name"] for row in store.fetch_runs(model="grug")} == {"math500", "tau3-pi"}
+    saved = store.get_record(records[1].run_id)
+    assert saved is not None
+    assert saved["model"]["config"]["serve"]["max_model_len"] == 131072
+    assert saved["model"]["config_digest"] == records[1].model.config_digest
+
+
+def test_compare_complete_panel_ignores_benchmarks_unique_to_unselected_models():
+    records = [
+        _record("a", "mmlu", "v1", "2026-09-25T01:00:00+00:00", 0.6),
+        _record("b", "mmlu", "v1", "2026-09-25T01:00:00+00:00", 0.5),
+        _record("c", "math500", "v1", "2026-09-25T01:00:00+00:00", 0.4),
+    ]
+    request = panel_request(completeness=Completeness.COMPLETE_PANEL)
+
+    comparison = build_comparison(records, request, ("a", "b"))
+
+    assert comparison["shared"] == ["mmlu"]
+    assert set(comparison["rows"][0]["cells"]) == {"a", "b"}
+
+
+def test_historical_policy_label_keeps_its_scores_for_marked_comparisons():
+    historical = _record("a", "mmlu", "eval-policy-updated", "2026-09-25T01:00:00+00:00", 0.6)
+
+    panel = build_panel([historical], panel_request(cohort_version="eval-policy-updated"))
+
+    assert panel["rows"][0]["cells"]["mmlu"]["value"] == pytest.approx(0.6)
+    assert panel["policy_rejections"] == []

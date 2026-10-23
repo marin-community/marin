@@ -7,6 +7,9 @@ name: marin
 finelog:
   config: marin
 dashboard_url: https://iris.oa.dev
+endpoints:
+  /system/zephyr-history:
+    uri: https://marina.oa.dev/zephyr/
 
 # Infrastructure-as-code provisioning (see infra/pulumi). Iris carries this as an opaque dict;
 # iac.config owns the typed schema. The GCP arm's first resources are the reserved
@@ -107,6 +110,9 @@ storage:
 # and tasks; loopback covers SSH tunnels); anything forwarded through the LB
 # carries X-Forwarded-For and never matches a CIDR.
 auth:
+  principal_directory: gcp-secret://projects/hai-gcp-models/secrets/iris-principal-directory/versions/latest
+  user_roles:
+    "principal:human-080": user
   iap:
     url: https://iris.oa.dev
     # `iris login` drives the browser edge-login flow with the Marin desktop OAuth
@@ -131,6 +137,8 @@ auth:
 # advertises, is delivered there and runs under the same job id. The peer decides
 # who it admits; the credential is this controller's short-lived aud="federation"
 # token, signed by the key above and trusted by name at the peer.
+budget_peers: [cw-rno2a, cw-us-east-02a, cw-us-east-08a]
+
 peers:
   cw-rno2a:
     controller_address: https://iris-cw-rno2a.oa.dev
@@ -346,3 +354,6 @@ user_budgets:
       - morrisy
     budget_limit: 75000
     max_band: PRIORITY_BAND_INTERACTIVE
+  - user_ids: [principal:human-080]
+    budget_limit: 0
+    max_band: PRIORITY_BAND_BATCH

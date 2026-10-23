@@ -16,7 +16,8 @@ from typing import Protocol
 
 logger = logging.getLogger(__name__)
 
-_COMPILE_FINGERPRINT_TIMEOUT_MS = 60_000
+# Large checkpoint loads can leave healthy ranks minutes apart at their first compile.
+_COMPILE_FINGERPRINT_TIMEOUT_MS = 30 * 60_000
 _COMPILE_FINGERPRINT_PREFIX = "iris/compile-fingerprint/v1"
 
 

@@ -412,6 +412,106 @@ def test_telemetry_normalizes_datetimes_and_ignores_unsuccessful_runs(engine: sq
     assert {record["ts"] for record in records} == {"2026-08-31T11:00:00Z"}
 
 
+def test_telemetry_deduplicates_reemitted_invocations_by_finelog_sequence(engine: sqlalchemy.Engine) -> None:
+    common = {
+        "invocation_id": "reemitted-run",
+        "ts": NOW - dt.timedelta(hours=1),
+        "pr_number": 8,
+        "lint_catalog_sha": "catalog-a",
+        "agent_exit_code": 0,
+        "timed_out": False,
+        "finding_count": 1,
+    }
+    review_store.store_telemetry(
+        engine,
+        REPOSITORY,
+        [
+            review_store.LintInvocationRecord.model_validate({**common, "seq": 2}),
+            review_store.LintInvocationRecord.model_validate({**common, "seq": 1}),
+        ],
+        [],
+    )
+
+    with engine.begin() as connection:
+        records = connection.execute(sqlalchemy.select(review_store.lint_invocations.c.record)).scalars().all()
+    assert len(records) == 1
+    assert records[0]["seq"] == 2
+
+
+def test_telemetry_deduplicates_findings_and_replaces_legacy_identities(engine: sqlalchemy.Engine) -> None:
+    invocation = review_store.LintInvocationRecord.model_validate(
+        {
+            "invocation_id": "run-with-reemitted-finding",
+            "ts": NOW - dt.timedelta(hours=1),
+            "pr_number": 8,
+            "agent_exit_code": 0,
+            "timed_out": False,
+            "finding_count": 1,
+        }
+    )
+    finding = {
+        "invocation_id": invocation.invocation_id,
+        "ts": invocation.ts,
+        "pr_number": 8,
+        "file": "example.py",
+        "line": 12,
+        "code": "ml-slop-test",
+        "message": "Low-value assertion",
+    }
+    latest = review_store.LintFindingRecord.model_validate({**finding, "seq": 2})
+    earlier = review_store.LintFindingRecord.model_validate({**finding, "seq": 1})
+    review_store.store_telemetry(engine, REPOSITORY, [invocation], [latest, earlier])
+
+    with engine.begin() as connection:
+        records = connection.execute(sqlalchemy.select(review_store.lint_findings.c.record)).scalars().all()
+    assert len(records) == 1
+    assert records[0]["seq"] == 2
+
+    with engine.begin() as connection:
+        connection.execute(
+            review_store.lint_findings.insert().values(
+                finding_id=review_store.record_sha(earlier.model_dump(mode="json")),
+                invocation_id=invocation.invocation_id,
+                repository=REPOSITORY,
+                ts=invocation.ts,
+                pr_number=8,
+                code="ml-slop-test",
+                record=earlier.model_dump(mode="json"),
+            )
+        )
+    review_store.store_telemetry(engine, REPOSITORY, [invocation], [latest, earlier])
+
+    with engine.begin() as connection:
+        records = connection.execute(sqlalchemy.select(review_store.lint_findings.c.record)).scalars().all()
+    assert len(records) == 1
+    assert records[0]["seq"] == 2
+
+
+def test_telemetry_rejects_conflicting_reemissions(engine: sqlalchemy.Engine) -> None:
+    common = {
+        "invocation_id": "conflicting-run",
+        "ts": NOW - dt.timedelta(hours=1),
+        "agent_exit_code": 0,
+        "timed_out": False,
+    }
+    with pytest.raises(ValueError):
+        review_store.store_telemetry(
+            engine,
+            REPOSITORY,
+            [
+                review_store.LintInvocationRecord.model_validate({**common, "seq": 1, "finding_count": 1}),
+                review_store.LintInvocationRecord.model_validate({**common, "seq": 2, "finding_count": 2}),
+            ],
+            [],
+        )
+
+    with engine.begin() as connection:
+        count = connection.execute(
+            sqlalchemy.select(sqlalchemy.func.count()).select_from(review_store.lint_invocations)
+        ).scalar_one()
+    assert count == 0
+
+
 def test_resync_reconciles_deleted_review_events(engine: sqlalchemy.Engine) -> None:
     run = _sync(engine)
     first = _bundle(9)

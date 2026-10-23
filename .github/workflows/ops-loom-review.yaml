@@ -2,10 +2,11 @@ name: "Ops - Loom Review"
 
 # This workflow runs from the trusted default branch and never checks out or
 # executes pull-request code. The Loom session starts from the immutable head
-# SHA after Loom verifies this workflow's OIDC identity.
+# SHA after Loom verifies this workflow's OIDC identity. A durable per-PR key
+# bounds this lane to one automatic session, including reopen events.
 on:
   pull_request_target:
-    types: [opened, ready_for_review, reopened, synchronize]
+    types: [opened, ready_for_review, reopened]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
@@ -44,7 +45,7 @@ jobs:
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_PR_REVIEW_PROFILE }}
-          idempotency-key: pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}
+          idempotency-key: pr-review:${{ github.event.pull_request.number }}
           title: "PR review for #${{ github.event.pull_request.number }}"
           goal: >-
             Review pull request #${{ github.event.pull_request.number }} at head

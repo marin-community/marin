@@ -32,3 +32,11 @@ def partitioning_axes(entry: str | tuple[str, ...] | None, mesh: Mesh | Abstract
         return ()
     names = (entry,) if isinstance(entry, str) else tuple(entry)
     return tuple(name for name in names if mesh.shape.get(name, 1) > 1)
+
+
+def partitioned_dims(array: jax.Array, mesh: Mesh | AbstractMesh) -> tuple[tuple[str, ...], ...]:
+    """Return the mesh axes of size greater than one that partition each dimension of ``array``."""
+    spec = partition_spec_of(array)
+    entries = tuple(spec) if spec is not None else ()
+    entries += (None,) * (array.ndim - len(entries))
+    return tuple(partitioning_axes(entry, mesh) for entry in entries)

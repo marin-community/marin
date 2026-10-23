@@ -65,8 +65,9 @@ multi-node job.
 
 ## Keep data on CoreWeave
 
-CoreWeave task pods receive `MARIN_PREFIX` and object-storage credentials from
-the cluster. Use that prefix for inputs, outputs, and caches. Use a
+CoreWeave task pods receive `MARIN_PREFIX` from the cluster and use your personal
+object-storage credentials. Export `CW_KEY_ID` and `CW_KEY_SECRET` before
+submitting; Iris delivers them as files. Use that prefix for inputs, outputs, and caches. Use a
 lifecycle-managed path for disposable data:
 
 ```python
@@ -75,15 +76,26 @@ from rigging.filesystem.cluster_config import marin_temp_bucket
 scratch = marin_temp_bucket(ttl_days=1, prefix="my-experiment")
 ```
 
-Clusters may set `MARIN_TEMP_PREFIX`; when present, `marin_temp_bucket` routes
-every temporary write to that lifecycle-managed cluster-local bucket.
+All CoreWeave clusters share the scratch bucket declared by
+`data.stores.coreweave.temp_bucket` in `config/coreweave.yaml`, so
+`marin_temp_bucket` also selects it when called on a launch host with a
+CoreWeave `source_prefix`. Paths use `tmp/ttl=Nd/` lifecycle prefixes.
+
+Permanent outputs remain under `s3://marin-us-east-02a/marin`, or the existing
+west-region prefix on `cw-us-west-04a`. `s3://hero-checkpoints` is reserved for
+hero checkpoints; the d6144 hero launcher explicitly keeps its rolling checkpoints
+there. A per-job `MARIN_TEMP_PREFIX` overrides the shared scratch default.
+Passing `temp_prefix` to `marin_temp_bucket` selects an explicit destination even
+when `MARIN_TEMP_PREFIX` is set.
 
 Do not read or copy data from GCS while running on CoreWeave without explicit
 user approval. The transfer can incur egress charges.
 
-The checkout's `.marin.yaml` supplies job-specific values such as W&B or
-Hugging Face credentials. CoreWeave object-storage access comes from the
-cluster-managed `iris-task-env` Kubernetes Secret.
+The checkout's `.marin.yaml` supplies job environment configuration. Iris forwards
+available HF/W&B/CoreWeave credentials from your client into the file-delivered secrets
+bundle. Pass other credentials through `EnvironmentSpec.secrets`; see the
+[secret-delivery reference](https://github.com/marin-community/marin/blob/main/lib/iris/docs/secrets.md).
+Iris does not supply cluster default application credentials.
 
 ## Watch the job
 

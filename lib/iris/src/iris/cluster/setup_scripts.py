@@ -24,12 +24,11 @@ from collections.abc import Sequence
 
 # cloudpickle for callable entrypoints, py-spy/memray for the profiler attach paths.
 _IRIS_RUNTIME_DEPS = ("cloudpickle", "py-spy", "memray")
-# Copied files keep an installed environment usable after `uv cache clean` removes
-# its cache entries, and they keep their file modes. On CoreWeave's node-local XFS
-# the copy shares extents with the cache, so it costs little time or space. Clone
-# mode would do the same, but the task image's uv 0.10.3 drops executable bits when
-# it makes XFS reflinks, which leaves wheel binaries such as ptxas unrunnable.
-_UV_LINK_MODE_FLAG = "--link-mode copy"
+UV_LINK_MODE_ENV = "UV_LINK_MODE"
+DEFAULT_UV_LINK_MODE = "copy"
+# The worker selects symlink mode on TPU hosts. Copy is the default for direct
+# callers and for Kubernetes, where the node agent can clean the shared cache.
+_UV_LINK_MODE_FLAG = f'--link-mode "${{{UV_LINK_MODE_ENV}:-{DEFAULT_UV_LINK_MODE}}}"'
 
 
 def _uv_sync_target(packages: Sequence[str] | None) -> str:
@@ -103,16 +102,6 @@ def default_setup_script(
         'cd "$IRIS_WORKDIR"',
         "echo 'syncing deps'",
         sync_cmd,
-        # uv sync writes .pth links for editable path sources but does not invoke
-        # the build backend, so rust-dev mode (editable = true) leaves native
-        # extensions unbuilt. Build every maturin member explicitly.
-        "if grep -q 'editable = true' pyproject.toml 2>/dev/null; then"
-        " echo 'rust-dev mode: building native extensions';"
-        " for crate in lib/*/pyproject.toml; do"
-        ' grep -q \'build-backend = "maturin"\' "$crate" 2>/dev/null &&'
-        ' uv pip install -e "$(dirname "$crate")";'
-        " done;"
-        " fi",
     ]
     if pip_packages:
         pip_args = " ".join(shlex.quote(p) for p in pip_packages)

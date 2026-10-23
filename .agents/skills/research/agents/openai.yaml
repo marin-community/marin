@@ -1,4 +1,0 @@
-interface:
-  display_name: "Research"
-  short_description: "Research Marin questions and record reusable evidence"
-  default_prompt: "Research this Marin question, assess the evidence, and maintain an appropriate durable record for multi-launch experimental work."

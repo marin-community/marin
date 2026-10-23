@@ -31,7 +31,7 @@ from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
 from marin.experiment.cli import build_options
 from marin.experiment.namespacing import user_namespaced_name
-from marin.training.training import temporary_checkpoint_base_path
+from marin.training.training import checkpoint_resume_paths, temporary_checkpoint_base_path
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.datasets.uncheatable import uncheatable_datasets
@@ -39,6 +39,7 @@ from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    SIMULATED_EPOCHING_MAX_FLOPS,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
@@ -202,6 +203,7 @@ def build_h100_ladder_run(
             profiler=ProfilerConfig(enabled=False),
             mp=jmp.get_policy(HERO_MIXED_PRECISION),
             tracker=WandbConfig(
+                save_code=False,
                 entity="marin-community",
                 project=wandb_project,
                 tags=[
@@ -229,10 +231,7 @@ def build_h100_ladder_run(
             use_explicit_mesh_axes=True,
             require_accelerator=True,
             allow_nondivisible_batch_size=False,
-            load_checkpoint_path=[
-                permanent_checkpoint_path,
-                temporary_checkpoint_path,
-            ],
+            load_checkpoint_path=checkpoint_resume_paths(ctx.output_path),
             checkpointer=CheckpointerConfig(
                 base_path=permanent_checkpoint_path,
                 temporary_base_path=temporary_checkpoint_path,
@@ -250,7 +249,7 @@ def build_h100_ladder_run(
                 total_steps=num_steps,
                 batch_size=batch_size,
                 max_seq_len=model.max_seq_len,
-                experiment_flops=run_flops,
+                enable_simulated_epoching=run_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
                 validation=validation,
             ),
             resources=ctx.runtime_arg("train_resources"),

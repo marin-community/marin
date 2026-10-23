@@ -15,6 +15,7 @@ from iris.cli.job import (
     wait,
 )
 from iris.client.client import IrisClient
+from iris.cluster.client.bundle import collect_workspace_files
 from iris.cluster.config import IrisClusterConfig, ScaleGroupConfig, WorkerSettings
 from iris.cluster.constraints import (
     CLUSTER_CONSTRAINT_KEY,
@@ -27,6 +28,7 @@ from iris.cluster.constraints import (
 )
 from iris.cluster.types import JobName
 from iris.rpc import job_pb2 as _job_pb2
+from rigging.secrets import SecretBehavior
 
 
 def _make_config_with_zones(zones: list[str]) -> IrisClusterConfig:
@@ -44,6 +46,25 @@ def _run_cli(args: list[str], *, config: IrisClusterConfig | None = None):
         [*args, "--no-wait", "--", "echo", "ok"],
         obj={"controller_url": "http://controller.test", "config": config, "credentials": None},
     )
+
+
+def test_job_run_rejects_deprecated_gvisor_choice():
+    result = _run_cli(["--container-profile", "CONTAINER_PROFILE_GVISOR"])
+    assert result.exit_code == 2
+    assert "Invalid value for '--container-profile'" in result.output
+    assert "container_profile_sandbox" in result.output
+
+
+def test_job_run_resolves_secret_reference_and_isolation(recorded_job_submissions, monkeypatch):
+    value = "private-application-value"
+    monkeypatch.setenv("APPLICATION_CREDENTIAL", value)
+    result = _run_cli(["--secret-behavior", "isolate", "--secret", "arbitrary", "env:APPLICATION_CREDENTIAL"])
+    assert result.exit_code == 0, result.output
+    environment = recorded_job_submissions[0]["environment"]
+    assert environment.secrets == {"arbitrary": value}
+    assert environment.secret_behavior == SecretBehavior.ISOLATE
+    assert "arbitrary" not in environment.env_vars
+    assert value not in result.output
 
 
 def test_validate_region_zone_valid_region(recorded_job_submissions):
@@ -140,6 +161,34 @@ def test_no_exclude_leaves_bundle_exclude_unset(recorded_bundle_exclude):
     result = _run_cli([])
     assert result.exit_code == 0, result.output
     assert recorded_bundle_exclude["bundle_exclude"] is None
+
+
+def test_job_include_options_bundle_only_selected_validation_files(tmp_path, monkeypatch):
+    for relative in ["train.py", "tests/test_model.py", "tests/conftest.py", "tests/test_other.py"]:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fixture")
+    monkeypatch.chdir(tmp_path)
+    bundled = set()
+
+    class FakeJob:
+        job_id = JobName.from_wire("/test-user/validation")
+
+    class FakeClient:
+        def submit(self, **kwargs):
+            return FakeJob()
+
+    def fake_remote(controller_url, *, workspace, credentials, bundle_exclude, extra_bundle_includes):
+        bundled.update(
+            str(path.relative_to(workspace))
+            for path in collect_workspace_files(workspace, exclude=bundle_exclude, extra_includes=extra_bundle_includes)
+        )
+        return FakeClient()
+
+    monkeypatch.setattr("iris.cli.job.IrisClient.remote", fake_remote)
+    result = _run_cli(["--include", "tests/test_model.py", "--include", "tests/conftest.py"])
+    assert result.exit_code == 0, result.output
+    assert bundled == {"train.py", "tests/test_model.py", "tests/conftest.py"}
 
 
 # ---------------------------------------------------------------------------
@@ -272,7 +321,7 @@ def test_job_run_cli_accepts_task_image_override(monkeypatch):
             captured.update(kwargs)
             return FakeJob()
 
-    def fake_remote(controller_url, *, workspace, credentials=None, bundle_exclude=None):
+    def fake_remote(controller_url, *, workspace, credentials=None, bundle_exclude=None, extra_bundle_includes=()):
         captured["controller_url"] = controller_url
         captured["workspace"] = workspace
         captured["credentials"] = credentials

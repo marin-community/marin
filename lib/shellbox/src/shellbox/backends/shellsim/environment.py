@@ -3,11 +3,16 @@
 
 """Harbor adapter for ShellSim's built-in Unix-like environment."""
 
+import asyncio
+import tempfile
 from enum import StrEnum
+from functools import cache
 from pathlib import Path
 
+import shellsim
 from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
+from rigging.filesystem.storage_path import StoragePath
 
 from shellbox.backends.shellsim.machine import (
     DEFAULT_CPU_LIMIT,
@@ -23,9 +28,21 @@ from shellbox.machine import (
     ExitReason,
     MachineSpec,
     NetworkPolicy,
+    PackageSpec,
     ShellSession,
-    ShellSimBuiltins,
 )
+
+
+@cache
+def _worker_context() -> shellsim.Context:
+    return shellsim.Context(trusted_precompiled=True)
+
+
+def _download_target(target: Path | StoragePath | str) -> Path | StoragePath:
+    path = StoragePath(str(target))
+    if path.is_local:
+        return Path("/" + path.key) if path.scheme == "file" else Path(str(path))
+    return path
 
 
 class TaskNetworkPolicy(StrEnum):
@@ -39,6 +56,8 @@ class ShellSimEnvironment(BaseEnvironment):
     def __init__(
         self,
         *args,
+        context: shellsim.Context | None = None,
+        package_spec: PackageSpec = PackageSpec(),
         network_policy: TaskNetworkPolicy = TaskNetworkPolicy.REQUIRE_OFFLINE_TASK,
         cpu_limit: int = DEFAULT_CPU_LIMIT,
         memory_mb: int = DEFAULT_MEMORY_MB,
@@ -46,11 +65,15 @@ class ShellSimEnvironment(BaseEnvironment):
         output_limit_bytes: int = DEFAULT_OUTPUT_LIMIT,
         **kwargs,
     ):
+        self.factory = ShellSimMachineFactory(
+            context=context if context is not None else _worker_context(),
+            cpu=cpu_limit,
+            disk=disk_limit_bytes,
+            output=output_limit_bytes,
+        )
+        self.package_spec = package_spec
         self.network_policy = TaskNetworkPolicy(network_policy)
-        self.cpu_limit = cpu_limit
         self.memory_mb = memory_mb
-        self.disk_limit_bytes = disk_limit_bytes
-        self.output_limit_bytes = output_limit_bytes
         self.machine: ShellSimMachine | None = None
         super().__init__(*args, **kwargs)
 
@@ -70,12 +93,8 @@ class ShellSimEnvironment(BaseEnvironment):
 
     async def start(self, force_build: bool) -> None:
         workdir = self.task_env_config.workdir or "/workspace"
-        spec = MachineSpec(ShellSimBuiltins(), workdir=workdir, network=NetworkPolicy.DENY, memory_mb=self.memory_mb)
-        self.machine = await ShellSimMachineFactory(
-            cpu=self.cpu_limit,
-            disk=self.disk_limit_bytes,
-            output=self.output_limit_bytes,
-        ).create(spec)
+        spec = MachineSpec(self.package_spec, workdir=workdir, network=NetworkPolicy.DENY, memory_mb=self.memory_mb)
+        self.machine = await self.factory.create(spec)
         try:
             if self.environment_dir.is_dir():
                 await self.machine.upload(self.environment_dir, workdir)
@@ -135,14 +154,27 @@ class ShellSimEnvironment(BaseEnvironment):
             raise RuntimeError("ShellSim environment is not running")
         await self.machine.upload(Path(source_dir), target_dir)
 
-    async def download_file(self, source_path: str, target_path: Path | str) -> None:
+    async def download_file(self, source_path: str, target_path: Path | StoragePath | str) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        await self.machine.download(source_path, Path(target_path))
+        target = _download_target(target_path)
+        if isinstance(target, Path):
+            await self.machine.download(source_path, target)
+            return
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staged = Path(staging_dir) / "download"
+            await self.machine.download(source_path, staged)
+            await asyncio.to_thread(target.upload_from, str(staged))
 
-    async def download_dir(self, source_dir: str, target_dir: Path | str) -> None:
+    async def download_dir(self, source_dir: str, target_dir: Path | StoragePath | str) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        target = Path(target_dir)
-        target.mkdir(parents=True, exist_ok=True)
-        await self.machine.download(source_dir, target)
+        target = _download_target(target_dir)
+        if isinstance(target, Path):
+            target.mkdir(parents=True, exist_ok=True)
+            await self.machine.download(source_dir, target)
+            return
+        with tempfile.TemporaryDirectory() as staging_dir:
+            staged = Path(staging_dir)
+            await self.machine.download(source_dir, staged)
+            await asyncio.to_thread(target.upload_from, str(staged), recursive=True)

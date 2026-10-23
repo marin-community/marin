@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import json
 import logging
 import os
 from collections.abc import Collection, Iterator, Mapping
@@ -27,7 +28,11 @@ from typing import Annotated, Any, ClassVar, Literal
 
 import yaml
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, PlainSerializer, field_validator, model_validator
-from rigging.secrets import as_secret_spec, is_secret_reference, resolve_secret_spec
+from rigging.secrets import (
+    as_secret_spec,
+    is_secret_reference,
+    resolve_secret_spec,
+)
 from rigging.timing import Duration
 
 from iris.cluster.platforms.k8s.coreweave_topology import TopologyMode
@@ -510,6 +515,7 @@ class CoreweaveControllerConfig(_Config):
     port: int = 0  # default: 10000
     service_name: str = ""  # K8s Service name for discovery
     scale_group: str = ""  # scale group whose NodePool runs the controller
+    hostname: str = ""  # pins node-local controller state across restarts
     # IngressClass the operator-managed federation ingress binds to; see
     # scripts/install_cw_network.py and docs/coreweave.md.
     ingress_class: str = "traefik"
@@ -545,7 +551,6 @@ class DefaultsConfig(_Config):
     autoscaler: AutoscalerConfig = Field(default_factory=AutoscalerConfig)
     worker: WorkerConfig = Field(default_factory=WorkerConfig)
     task_env: dict[str, str] = Field(default_factory=dict)  # injected into every task
-    inject_env: list[str] = Field(default_factory=list)  # operator-shell var names
 
     @model_validator(mode="after")
     def _propagate_task_env(self) -> DefaultsConfig:
@@ -560,6 +565,10 @@ class DefaultsConfig(_Config):
 # ---------------------------------------------------------------------------
 
 
+PRINCIPAL_REFERENCE_PREFIX = "principal:"
+UserRole = Literal["admin", "user", "dashboard"]
+
+
 class IapAuthConfig(_Config):
     url: str = ""
     # Desktop OAuth client the CLI drives for the browser edge-login flow.
@@ -572,10 +581,9 @@ class IapAuthConfig(_Config):
     # this only to give machine callers an `aud` distinct from the desktop client.
     programmatic_audiences: list[str] = Field(default_factory=list)
     signed_header_audience: str = ""
-    # Role granted to an IAP-verified email the role policy does not match (not in
-    # admin_users); admin_users always resolve to admin. "admin" here makes IAP's
-    # own allowlist the sole gate.
-    unprovisioned_role: Literal["admin", "user", "dashboard"] = "dashboard"
+    # Role for an IAP identity absent from user_roles and admin_users.
+    # "admin" here makes IAP's own allowlist the sole gate.
+    unprovisioned_role: UserRole = "dashboard"
 
 
 class AuthConfig(_OneofConfig):
@@ -589,6 +597,10 @@ class AuthConfig(_OneofConfig):
     # no arm selected, a non-empty list alone enables auth (provider "cidr").
     trusted_cidrs: list[str] = Field(default_factory=list)
     admin_users: list[str] = Field(default_factory=list)
+    # Exact IAP identities; overrides admin_users and the provider default.
+    user_roles: dict[str, UserRole] = Field(default_factory=dict)
+    # JSON {principal ID: email}, loaded only by controllers and deploy operators.
+    principal_directory: SecretRefSpec = ""
     # Authenticate-but-not-require: valid tokens get their identity; tokenless
     # requests fall through as anonymous admin; invalid tokens still rejected.
     optional: bool = False
@@ -625,6 +637,11 @@ class AuthConfig(_OneofConfig):
     def provider_kind(self) -> str | None:
         return self._selected_arm()
 
+    def require_resolved_identities(self) -> None:
+        identities = (*self.user_roles, *self.admin_users, *self.allowed_submitters)
+        if any(user.startswith(PRINCIPAL_REFERENCE_PREFIX) for user in identities):
+            raise ValueError("Auth config contains unresolved principal references")
+
 
 # ---------------------------------------------------------------------------
 # Providers
@@ -646,6 +663,31 @@ class KueueConfig(_Config):
     topologies: dict[str, KueueTopology] = Field(default_factory=dict)  # group_by -> topo
 
 
+class NodeStorageHealthConfig(_Config):
+    """S3 viability probe settings for the task storage path."""
+
+    scratch: str
+    environment_revision: str = ""  # populated by deployment from Secret revision and task literals
+    interval: float = Field(default=60, gt=0)
+    timeout: float = Field(default=15, gt=0)
+    failure_threshold: int = Field(default=3, ge=2)
+    minimum_healthy_nodes: int = Field(default=2, ge=1)
+
+    @field_validator("scratch")
+    @classmethod
+    def _s3_prefix(cls, value: str) -> str:
+        if not value.startswith("s3://") or not value.removeprefix("s3://").partition("/")[2].strip("/"):
+            raise ValueError("scratch must be an s3://bucket/prefix dedicated to health probes")
+        return value
+
+
+class NodeHealthConfig(_Config):
+    """Node-local checks and the shared automatic cordon budget."""
+
+    storage: NodeStorageHealthConfig | None = None
+    max_cordoned_nodes: int = Field(default=1, ge=0)
+
+
 class KubernetesProviderConfig(_Config):
     namespace: str = ""  # default: "iris"
     kubeconfig: str = ""  # empty = in-cluster auth
@@ -654,9 +696,21 @@ class KubernetesProviderConfig(_Config):
     host_network: bool = False
     cache_dir: str = ""  # hostPath base for cache mounts (default: "/cache")
     cache_max_age: DurationField | None = None  # enables cache reclamation
+    node_health: NodeHealthConfig | None = None
     controller_address: str = ""  # injected into task pods
+    # Service ClusterIP range. Only needed when it lies outside the private,
+    # carrier-grade NAT and link-local ranges, which sandbox internet egress
+    # already excludes.
+    service_cidr: str = ""
     kueue: KueueConfig = Field(default_factory=KueueConfig)
     priority_classes: dict[str, str] = Field(default_factory=dict)  # band -> PriorityClass
+
+    @field_validator("service_cidr")
+    @classmethod
+    def _valid_service_cidr(cls, value: str) -> str:
+        if value:
+            ipaddress.ip_network(value)  # ValueError on a malformed CIDR — fail at load
+        return value
 
     @field_validator("cache_max_age")
     @classmethod
@@ -787,6 +841,10 @@ class IrisClusterConfig(_OneofConfig):
     # through the parent, which relays it here. Empty keeps minted URLs on the local
     # origin. The parent recognizes the tag from its own ``peers`` map.
     federation_public_parent: str = ""
+    # Trusted parent whose policy governs direct and handed-off work.
+    budget_parent: str = ""
+    # Routing peers whose local usage counts against this cluster's budgets.
+    budget_peers: list[str] = Field(default_factory=list)
     # Infrastructure-as-code provisioning section (see infra/pulumi). Carried as an
     # opaque dict so `provisioning:` can live in the cluster config file without
     # Iris depending on the IaC schema; iac.config owns the typed validation.
@@ -1031,6 +1089,16 @@ def _validate_peers(config: IrisClusterConfig) -> None:
     peer id must stay disjoint from it and the sentinel never collides with a real
     cluster id.
     """
+    if not set(config.budget_peers) <= config.peers.keys():
+        raise ValueError("budget_peers must name configured federation peers")
+    if config.budget_parent:
+        trusted_parents = config.auth.federation_peers if config.auth is not None else {}
+        if trusted_parents and config.budget_parent not in trusted_parents:
+            raise ValueError("budget_parent must name a trusted auth.federation_peers entry")
+        if config.user_budgets:
+            raise ValueError("Configure user_budgets on the budget parent")
+        if config.peers:
+            raise ValueError("A budget child cannot also delegate to federation peers")
     for peer_id, peer in config.peers.items():
         if not peer_id.strip():
             raise ValueError("peers: peer id must be a non-empty string.")
@@ -1060,6 +1128,54 @@ def validate_config(config: IrisClusterConfig) -> None:
 # ===========================================================================
 # Secret references (SecretRefSpec fields)
 # ===========================================================================
+
+
+def resolve_principal_references(config: IrisClusterConfig) -> IrisClusterConfig:
+    """Resolve principal references in auth and budgets without mutating config.
+
+    Errors identify opaque references or fields without exposing directory contents.
+    """
+    directory = {}
+    if config.auth and config.auth.principal_directory:
+        payload = config.auth.principal_directory
+        if not isinstance(payload, str):
+            raise ValueError("auth.principal_directory must be resolved before resolving identities")
+        try:
+            directory = json.loads(payload)
+        except json.JSONDecodeError:
+            raise ValueError("auth.principal_directory must contain a JSON object of principal IDs to emails") from None
+        if not isinstance(directory, dict) or any(
+            not isinstance(email, str)
+            or email.count("@") != 1
+            or "*" in email
+            or any(char.isspace() for char in email)
+            or not all(email.split("@"))
+            for email in directory.values()
+        ):
+            raise ValueError("auth.principal_directory must contain a JSON object of principal IDs to emails")
+
+    def resolve_identity(user: str) -> str:
+        if not user.startswith(PRINCIPAL_REFERENCE_PREFIX):
+            return user
+        principal_id = user.removeprefix(PRINCIPAL_REFERENCE_PREFIX)
+        if principal_id not in directory:
+            raise ValueError(f"{user} is missing from auth.principal_directory")
+        return directory[principal_id]
+
+    resolved = config.model_copy(deep=True)
+    if resolved.auth is not None:
+        roles: dict[str, UserRole] = {}
+        for user, role in resolved.auth.user_roles.items():
+            email = resolve_identity(user)
+            if email in roles and roles[email] != role:
+                raise ValueError("auth.user_roles contains conflicting roles after principal resolution")
+            roles[email] = role
+        resolved.auth.user_roles = roles
+        resolved.auth.admin_users = [resolve_identity(user) for user in resolved.auth.admin_users]
+        resolved.auth.allowed_submitters = [resolve_identity(user) for user in resolved.auth.allowed_submitters]
+    for tier in resolved.user_budgets:
+        tier.user_ids = [resolve_identity(user) for user in tier.user_ids]
+    return resolved
 
 
 def iter_secret_ref_fields(config: BaseModel) -> Iterator[tuple[BaseModel, str]]:

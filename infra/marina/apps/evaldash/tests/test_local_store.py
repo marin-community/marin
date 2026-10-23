@@ -13,7 +13,8 @@ from collections.abc import Iterator
 import pytest
 from evaldash import app as evaldash_app
 from evaldash import fixtures, metrics, samples
-from marin.evaluation.records import list_records, write_record
+from marin.evaluation.eval_measurements import measurement_from_record
+from marin.evaluation.records import EvalRunRecord, list_records, write_record
 from marina.apps import RegisteredApi
 from starlette.testclient import TestClient
 
@@ -44,12 +45,70 @@ def _panel(store, **kwargs):
     return store.panel(metrics.panel_request(**kwargs), None, False)
 
 
+def test_metadata_tracks_replaced_snapshots_and_keeps_returned_root_request_owned(tmp_path):
+    store = evaldash_app.MemoryRecordStore()
+    assert store.meta()["models"] == []
+    fixtures.build_fixtures(str(tmp_path))
+    records = list_records(str(tmp_path))
+    store.refresh(records)
+    metadata = store.meta()
+    assert "snowball" in metadata["models"]
+    metadata["current_user"] = "previous-viewer"
+    metadata["store"] = "previous-response"
+    fresh = store.meta()
+    assert "current_user" not in fresh
+    assert "store" not in fresh
+
+    record = records[0].model_copy(
+        update={
+            "model": records[0].model.model_copy(update={"name": "replacement-model"}),
+            "user": "replacement-user",
+            "version": "replacement-cohort",
+            "hardware": records[0].hardware.model_copy(update={"accelerator": "replacement-accelerator"}),
+        }
+    )
+    store.refresh([record])
+    replaced = store.meta()
+    assert replaced["models"] == ["replacement-model"]
+    assert replaced["run_facets"]["version"] == ["replacement-cohort"]
+    assert replaced["facets"]["user"] == ["replacement-user"]
+    assert replaced["facets"]["accelerator"] == ["replacement-accelerator"]
+    assert metadata["models"] == fresh["models"]
+
+
+def test_api_defaults_to_the_current_verified_cohort(client):
+    expected = "eval-policy-2026-09-24-verified"
+    assert client.get("/panel").json()["request"]["cohort_version"] == expected
+    assert client.get("/panel", params={"cohort": ""}).json()["request"]["cohort_version"] == expected
+    assert client.get("/panel", params={"cohort": "all"}).json()["request"]["cohort_version"] is None
+
+
 def test_memory_store_panel_takes_each_benchmark_from_its_newest_run(store):
     panel = _panel(store)
     qwen = next(row for row in panel["rows"] if row["model"] == "qwen3-8b")
     # qwen3-8b has a 2026.07.19 and a 2026.07.21 launch; mmlu comes from the newer one.
     assert qwen["cells"]["mmlu"]["version"] == "2026.07.21"
     assert qwen["cells"]["mmlu"]["value"] == pytest.approx(0.719)
+
+
+def test_running_step_does_not_publish_its_recorded_score(store, tmp_path):
+    records = list_records(str(tmp_path))
+    newest = max(
+        (record for record in records if record.model.name == "qwen3-8b" and record.evaluation.name == "mmlu"),
+        key=lambda record: record.created_at,
+    )
+    running = newest.model_copy(update={"step_status": "RUNNING"})
+    assert measurement_from_record(running) is not None
+    store.refresh([running if record.run_id == newest.run_id else record for record in records])
+
+    qwen = next(row for row in _panel(store)["rows"] if row["model"] == "qwen3-8b")
+    assert qwen["cells"]["mmlu"]["run_id"] != newest.run_id
+    assert all(point["run_id"] != newest.run_id for point in store.history("qwen3-8b", "mmlu"))
+    detail = store.model_detail("qwen3-8b")
+    assert detail is not None
+    assert all(point["run_id"] != newest.run_id for point in detail["history"]["mmlu"])
+    run = next(row for row in store.fetch_runs() if row["run_id"] == newest.run_id)
+    assert run["status"] == "running"
 
 
 def test_panel_reports_coverage_of_the_selected_benchmarks(store):
@@ -130,7 +189,7 @@ def test_aime_fixture_orders_differently_by_score_and_by_lower_bound(client):
     not its lower-bound order. The panel sorts on the score and Compare ranks on the interval, and the
     SPA sort itself is not exercised here; the intervals come from the engine, not from the fixture.
     """
-    rows = client.get("/panel").json()["rows"]
+    rows = client.get("/panel", params={"cohort": "all"}).json()["rows"]
     cells = {row["model"]: row["cells"]["aime"] for row in rows if "aime" in row["cells"]}
 
     by_score = sorted(cells, key=lambda model: -cells[model]["value"])
@@ -143,7 +202,7 @@ def test_aime_fixture_orders_differently_by_score_and_by_lower_bound(client):
 def test_aime24_fixture_reads_the_evalchemy_repeat_standard_error(client):
     """aime24 records carry ``accuracy_avg`` with ``accuracy_std_err``, the Evalchemy repeated-sample
     spelling. The panel's interval comes from that standard error rather than falling to [0, 1]."""
-    rows = client.get("/panel").json()["rows"]
+    rows = client.get("/panel", params={"cohort": "all"}).json()["rows"]
     cell = next(row for row in rows if row["model"] == "snowball")["cells"]["aime24"]
 
     assert cell["metric"] == "accuracy"  # the legacy alias for accuracy_avg
@@ -155,8 +214,9 @@ def test_api_surface_over_fixtures(client):
     meta = client.get("/meta").json()
     assert meta["store"] == "memory"
     assert "snowball" in meta["models"]
+    assert meta["verified_cohorts"] == ["eval-policy-2026-09-16-verified", "eval-policy-2026-09-24-verified"]
 
-    panel = client.get("/panel").json()
+    panel = client.get("/panel", params={"cohort": "all"}).json()
     assert set(panel["benchmarks"]) >= {"mmlu", "arc-challenge", "gsm8k-0shot"}
     assert panel["request"]["min_coverage"] == pytest.approx(0.9)
 
@@ -201,8 +261,35 @@ def test_run_detail_headline_is_null_for_a_failed_run(client):
     assert detail["timing"]["finished_at"]
 
 
-def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(client):
-    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b"}).json()
+def test_unverified_policy_run_has_no_headline_in_detail_or_group(store, client):
+    record = store.get_record("snowball-2026.07.20-mmlu")
+    assert record is not None
+    invalid = EvalRunRecord.model_validate(record).model_copy(update={"version": "eval-policy-2026-09-24-verified"})
+    store.refresh([invalid])
+
+    detail = client.get(f"/runs/{invalid.run_id}").json()
+    assert detail["headline"] is None
+    assert detail["policy_violations"]
+
+    group = client.get("/groups").json()[0]
+    assert group["evals"][0]["headline"] is None
+
+
+@pytest.fixture
+def comparison_client(client, store):
+    records = [
+        EvalRunRecord.model_validate(store.get_record(f"{model}-{version}-{benchmark}")).model_copy(
+            update={"version": "2026.07.20"}
+        )
+        for model, version in (("snowball", "2026.07.20"), ("qwen3-8b", "2026.07.21"))
+        for benchmark in ("mmlu", "arc-challenge")
+    ]
+    store.refresh(records)
+    return client
+
+
+def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(comparison_client):
+    comparison = comparison_client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "2026.07.20"}).json()
 
     assert set(comparison["shared"]) >= {"mmlu", "arc-challenge"}
     mmlu = next(row for row in comparison["rows"] if row["benchmark"] == "mmlu")
@@ -213,11 +300,21 @@ def test_api_compare_reports_shared_benchmarks_and_their_difference_intervals(cl
     assert gap["low"] <= gap["high"]
 
 
-def test_api_compare_applies_the_selection_it_is_given(client):
-    comparison = client.get("/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu"}).json()
+def test_api_compare_applies_the_selection_it_is_given(comparison_client):
+    comparison = comparison_client.get(
+        "/compare", params={"models": "snowball,qwen3-8b", "benchmarks": "mmlu", "cohort": "2026.07.20"}
+    ).json()
 
     assert comparison["benchmarks"] == ["mmlu"]
     assert comparison["shared"] == ["mmlu"]
+
+
+def test_api_compare_rejects_mixed_cohorts_but_panel_can_browse_them(client):
+    response = client.get("/compare", params={"models": "snowball,qwen3-8b", "cohort": "all"})
+
+    assert response.status_code == 400
+    panel = client.get("/panel", params={"cohort": "all"}).json()
+    assert {cell["version"] for row in panel["rows"] for cell in row["cells"].values()} >= {"2026.07.20", "2026.07.21"}
 
 
 def test_api_compare_rejects_a_request_it_cannot_answer(client):
@@ -287,3 +384,45 @@ def test_api_jobs_degrade_without_a_cluster(client):
     jobs = client.get("/runs/snowball-2026.07.20-mmlu/jobs").json()
     assert jobs["roles"]
     assert all(role["reachable"] is False for role in jobs["roles"])
+
+
+@pytest.mark.parametrize("endpoint", ["/runs", "/groups"])
+def test_run_filters_find_older_models_before_limiting(client, endpoint):
+    newest = client.get(endpoint, params={"limit": 1}).json()
+    assert newest[0]["model_name"] != "snowball"
+    rows = client.get(
+        endpoint,
+        params={
+            "model": "snowball",
+            "eval": "mmlu",
+            "version": "2026.07.20",
+            "status": "succeeded",
+            "accelerator": "v6e-8",
+            "limit": 1,
+        },
+    ).json()
+    assert len(rows) == 1
+    assert rows[0]["model_name"] == "snowball"
+    assert rows[0]["version"] == "2026.07.20"
+    assert client.get(endpoint, params={"accelerator": "not-present"}).json() == []
+    assert client.get(endpoint, params={"version": "not-present"}).json() == []
+    assert client.get(endpoint, params={"eval": "not-present"}).json() == []
+
+
+def test_launch_eval_filter_preserves_siblings_and_rollup(client):
+    rows = client.get("/groups", params={"model": "tootsie-8b", "eval": "mmlu", "status": "mixed"}).json()
+    assert len(rows) == 1
+    assert rows[0]["status"] == "mixed"
+    assert rows[0]["n_evals"] == 7
+    assert {member["status"] for member in rows[0]["evals"]} == {"succeeded", "failed", "infra_failed"}
+    assert client.get("/groups", params={"model": "tootsie-8b", "eval": "mmlu", "status": "succeeded"}).json() == []
+
+
+def test_run_filter_options_include_catalog_outside_recent_window(client):
+    recent = client.get("/runs", params={"limit": 1}).json()
+    facets = client.get("/meta").json()["run_facets"]
+    assert "snowball" in facets["model"]
+    assert "snowball" != recent[0]["model_name"]
+    all_runs = client.get("/runs", params={"limit": 1000}).json()
+    assert set(facets["eval"]) == {row["eval_name"] for row in all_runs}
+    assert set(facets["version"]) == {row["version"] for row in all_runs if row["version"]}

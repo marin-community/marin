@@ -40,6 +40,7 @@ from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -134,6 +135,8 @@ def validate_single_name_config(serialized: dict, config: Any) -> None:
 
 
 _GATED_NORM_RANK = 128
+# June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
+_LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
 _EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
@@ -238,6 +241,11 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
+        if self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
+            raise ValueError(
+                f"snowball cannot use moe_implementation={self.moe_implementation!r}: it requires "
+                "pooled_transport_capacity_factor, which SnowballConfig does not set"
+            )
         _ = self.inferred_head_dim
 
     @property
@@ -645,6 +653,21 @@ class SnowballBlock(eqx.Module):
         return x + mlp_out
 
 
+def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
+    """Bool[num_layers], True where a layer runs full-causal attention instead of the sliding window."""
+    idx = jnp.arange(num_layers)
+    return ((idx % _LONG_ATTENTION_INTERVAL) == _LONG_ATTENTION_INTERVAL - 1) | (idx == num_layers - 1)
+
+
+def num_long_attention_layers(num_layers: int) -> int:
+    """Number of layers that run full-causal attention, counted without JAX for FLOP estimates."""
+    return sum(
+        1
+        for i in range(num_layers)
+        if i % _LONG_ATTENTION_INTERVAL == _LONG_ATTENTION_INTERVAL - 1 or i == num_layers - 1
+    )
+
+
 class SnowballTransformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: RMSNorm
@@ -695,8 +718,7 @@ class SnowballTransformer(eqx.Module):
         # schedule feed a single uniform scan body (June recipe: long layers = every 4th + the last).
         num_blocks = len(self.blocks)
         stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
-        idx = jnp.arange(num_blocks)
-        long_schedule = ((idx % 4) == 3) | (idx == num_blocks - 1)
+        long_schedule = long_attention_layer_mask(num_blocks)
 
         def _scan_layer(carry: Float[Array, "B S D"], layer_and_flag) -> tuple[Float[Array, "B S D"], None]:
             layer, use_long = layer_and_flag
@@ -755,7 +777,7 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
         return hax.named(hidden, out_axes)
 
     def get_lm_head(self) -> NamedArray:
-        return hax.named(self.transformer.output_proj, (self.Embed, self.Vocab))
+        return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
 
     def resize_vocab(self, new_size: int, key: Optional[PRNGKeyArray] = None) -> "SnowballLMHeadModel":
         old = self._config.vocab_size

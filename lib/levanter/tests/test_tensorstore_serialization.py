@@ -30,7 +30,6 @@ from levanter.tensorstore_serialization import (
     TensorStoreReadConfig,
     TensorStoreWriteConfig,
     _capped_chunk_shape,
-    _HostByteBudget,
     _trim_host_memory_after_commits,
     _transfer_shard_to_pageable_host,
     build_kvstore_spec,
@@ -39,6 +38,7 @@ from levanter.tensorstore_serialization import (
 )
 from levanter.testing import eight_device_checkpoints
 from levanter.testing.eight_device_checkpoints import run_on_eight_devices
+from levanter.utils.byte_budget import HostByteBudget
 
 _ASYNC_TEST_TIMEOUT = 5
 
@@ -49,6 +49,7 @@ def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
     assert spec == {"driver": "file", "path": str(tmp_path / "cache")}
 
 
+@pytest.mark.tpu
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source = jnp.arange(8, dtype=jnp.float32)
 
@@ -102,6 +103,7 @@ def test_tensorstore_checkpoint_simple():
         assert all(np.isclose(rkey, initial_key))
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
     with use_test_mesh():
         key0 = jax.random.PRNGKey(0)
@@ -119,6 +121,7 @@ def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
             assert jnp.allclose(restored["x"], arr)
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
     # Regression for #8441. A run with offload_opt_state/FP32_PINNED_HOST holds its master and
     # optimizer leaves on `pinned_host`, so the restore template (produced by eval_shape, hence an
@@ -140,6 +143,7 @@ def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
             assert jnp.allclose(on_device, arr)
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_restores_mixed_memory_kinds_in_tree_order():
     with use_test_mesh() as mesh:
         first = jnp.arange(8, dtype=jnp.float32)
@@ -308,7 +312,7 @@ def test_staged_bytes_stay_admitted_until_their_write_is_released():
     """TensorStore holds a shard snapshot until the commit, so admission must outlive the copy."""
 
     async def scenario():
-        gate = _HostByteBudget(100)
+        gate = HostByteBudget(100)
         await gate.acquire(60)
 
         queued = asyncio.create_task(gate.acquire(60))

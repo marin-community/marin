@@ -31,7 +31,7 @@ If objective is ambiguous, ask before editing.
 ### General
 - Hard launch gate: get explicit requester approval before launching any ferry job. Only exception: the requester explicitly says to launch without asking.
 - Follow the `use-iris` skill's job-monitoring workflow until the run reaches a terminal state (`SUCCEEDED`/`FAILED`/`STOPPED`); do not stop early. Full ferry monitoring often takes 4-5 hours.
-- Never restart/recreate/mutate cluster without explicit human consent in-thread. Keep cluster mutation guardrails aligned with the Iris monitoring workflow, including the **debug** exception path.
+- Never restart/recreate/mutate cluster without explicit human consent in-thread. Keep cluster mutation guardrails aligned with the Iris monitoring workflow, including its bounded code-fix recovery path.
 - Use major-event updates (not spam): launch, first eval, major incident, terminal state.
 - Seal each completed daily run with a pushed git tag pointing to the exact launch commit.
 - Canonical run-closure PR labels: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
@@ -138,7 +138,7 @@ Recommendation / victory decision: <next action>
 #### 7) Seal and open log-only PR
 - Create and push a sealing tag for the exact launch commit (the commit containing the `experiments/ferries/daily.py` used for the run).
 - Open a PR that updates only `docs/experiments/daily-ferry-log.md`, following
-  `.agents/skills/commit/SKILL.md` for commit, PR text, and monitoring.
+  `.agents/skills/manage-pr/SKILL.md` for commit, PR text, and monitoring.
 - Keep all detailed launch/retry/debug narrative in the run issue, not in the PR.
 - Apply canonical labels: `ferry`, `ferry-daily`, `ferry-log-only`, `ferry-sealed`.
 
@@ -156,7 +156,7 @@ Launch (GPU / CoreWeave):
 ```bash
 uv run iris --cluster=cw-us-east-02a \
   job run --memory=16G --disk=16G --cpu=1 --extra=cpu \
-  -e MARIN_PREFIX s3://marin-na/marin \
+  -e MARIN_PREFIX s3://marin-us-east-02a/marin \
   -e CANARY_ACCELERATOR gpu \
   -- python -m experiments.ferries.canary_ferry
 ```

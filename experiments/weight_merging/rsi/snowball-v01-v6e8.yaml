@@ -1,0 +1,34 @@
+# BF16 reference: v6e-8 / TP8, one host, no expert parallelism.
+# Validated with vLLM fb02daf and tpu-inference ae387b8; select the TPU
+# variant in the launcher. The GCS location below is the staged us-east5 copy.
+# layer_types is a workaround until the serving pin includes tpu-inference PR #34:
+# https://github.com/marin-community/tpu-inference/pull/34
+# Keep 19 sliding-window layers and 7 full-attention layers.
+name: snowball-v01-v6e8
+location: gs://marin-us-east5/scratch/karan/rsi-merge/parents-clean/v01--open-athena_Marin-Snowball-67B-A2B-v0.1@adc0078a19a4/
+identity: open-athena/Marin-Snowball-67B-A2B-v0.1@adc0078a19a4383bc998fcdb43867b3360baf5f3
+tokenizer: open-athena/Marin-Snowball-67B-A2B-v0.1
+tokenizer_revision: adc0078a19a4383bc998fcdb43867b3360baf5f3
+apply_chat_template: true
+resource_hint:
+  hbm_gb: 200
+  cpu: 32
+  memory: 400g
+  disk: 80g
+serve:
+  tensor_parallel_size: 8
+  data_parallel_size: 1
+  max_model_len: 73728
+  max_num_batched_tokens: 512
+  max_num_seqs: 16
+  auto_overrides: false
+  hf_overrides: '{"layer_types": ["sliding_attention", "sliding_attention", "sliding_attention",
+    "full_attention", "sliding_attention", "sliding_attention", "sliding_attention",
+    "full_attention", "sliding_attention", "sliding_attention", "sliding_attention",
+    "full_attention", "sliding_attention", "sliding_attention", "sliding_attention",
+    "full_attention", "sliding_attention", "sliding_attention", "sliding_attention",
+    "full_attention", "sliding_attention", "sliding_attention", "sliding_attention",
+    "full_attention", "sliding_attention", "full_attention"]}'
+generation:
+  chat_template_kwargs:
+    enable_thinking: true

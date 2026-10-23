@@ -19,8 +19,10 @@ from finelog.client import LogClient
 from finelog.rpc import logging_pb2
 from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.log_keys import worker_log_key
-from iris.cluster.runtime.docker import DockerRuntime
+from iris.cluster.runtime.docker import EGRESS_NETWORK, DockerRuntime
 from iris.cluster.runtime.types import (
+    NETWORK_MODE_HOST,
+    NETWORK_MODE_NONE,
     ContainerConfig,
     ContainerErrorKind,
     ContainerInfraError,
@@ -31,6 +33,7 @@ from iris.cluster.runtime.types import (
     MountKind,
     MountSpec,
 )
+from iris.cluster.secrets import worker_secret_root
 from iris.cluster.stats.tables import TASK_STATS_NAMESPACE, WORKER_STATS_NAMESPACE, IrisTaskStat, IrisWorkerStat
 from iris.cluster.types import Entrypoint, JobName, WellKnownAttribute
 from iris.cluster.worker.port_allocator import PortAllocator
@@ -719,6 +722,37 @@ def test_worker_region_env_uses_physical_metadata(mock_worker, mock_runtime, mon
     assert env["IRIS_WORKER_REGION"] == "us-east5"
 
 
+@pytest.mark.parametrize("tpu_host, expected_link_mode", [(True, "symlink"), (False, "copy")])
+def test_cpu_task_uses_worker_host_uv_link_mode(mock_bundle_store, mock_runtime, tmp_path, tpu_host, expected_link_mode):
+    metadata = job_pb2.WorkerMetadata()
+    if tpu_host:
+        metadata.device.tpu.CopyFrom(job_pb2.TpuDevice(variant="v4", count=4))
+    else:
+        metadata.device.cpu.CopyFrom(job_pb2.CpuDevice(variant="cpu"))
+
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+    )
+    worker = Worker(
+        config,
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+        worker_metadata=metadata,
+    )
+
+    task_id = worker.submit_task(create_run_task_request())
+    task = worker.get_task(task_id)
+    task.thread.join(timeout=15.0)
+
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
+    env = mock_runtime.create_container.call_args[0][0].env
+    assert env["UV_LINK_MODE"] == expected_link_mode
+
+
 def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     """Job env wins over task defaults without replacing attempt identity.
 
@@ -781,6 +815,138 @@ def test_env_merge_precedence(mock_bundle_store, mock_runtime, tmp_path):
     # Iris system vars are always injected.
     assert "IRIS_TASK_ID" in env
     assert env["IRIS_ATTEMPT_UID"] == "uid-env-test"
+
+
+def test_sandbox_container_gets_only_job_env_and_no_shared_cache(mock_bundle_store, mock_runtime, tmp_path):
+    """A SANDBOX task sees neither worker task_env nor the controller, and mounts no node cache."""
+    config = WorkerConfig(
+        port=0,
+        port_range=(50000, 50100),
+        poll_interval=Duration.from_seconds(0.1),
+        cache_dir=tmp_path / "cache",
+        default_task_image="mock-image",
+        controller_address="http://controller:10000",
+        task_env={"MARIN_PREFIX": "gs://bucket/prefix"},
+    )
+    w = Worker(config, bundle_store=mock_bundle_store, container_runtime=mock_runtime)
+    request = create_run_task_request()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    request.environment.env_vars["TASK_VAR"] = "1"
+
+    task = w.get_task(w.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    container_config = mock_runtime.create_container.call_args[0][0]
+    assert container_config.env["TASK_VAR"] == "1"
+    assert "MARIN_PREFIX" not in container_config.env
+    assert "IRIS_CONTROLLER_ADDRESS" not in container_config.env
+    assert not [m for m in container_config.mounts if m.kind is MountKind.CACHE]
+
+
+@pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_SANDBOX])
+def test_worker_mounts_submitted_secrets_read_only_and_cleans_them(
+    mock_bundle_store, mock_runtime, tmp_path, monkeypatch, profile
+):
+    root = tmp_path / "secret-tmpfs"
+    monkeypatch.setattr("iris.cluster.secrets.WORKER_SECRETS_ROOT", root)
+    observed = {}
+
+    def create_container(config):
+        observed["config"] = config
+        if config.secret_host_path is not None:
+            path = config.secret_host_path / "custom"
+            observed["secret"] = path.read_text()
+            observed["modes"] = (config.secret_host_path.stat().st_mode & 0o777, path.stat().st_mode & 0o777)
+        return create_mock_container_handle()
+
+    mock_runtime.create_container.side_effect = create_container
+    worker = Worker(
+        WorkerConfig(
+            port=0,
+            port_range=(50000, 50100),
+            cache_dir=tmp_path / "cache",
+            default_task_image="mock-image",
+        ),
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+    )
+    request = create_run_task_request()
+    request.container_profile = profile
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    request.environment.secrets["custom"] = "submitted-sensitive-value"
+    task = worker.get_task(worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+    assert task.status == job_pb2.TASK_STATE_SUCCEEDED, task.error
+    config = observed["config"]
+    assert "sensitive-value" not in json.dumps(config.env)
+    assert "HF_TOKEN" not in config.env
+    assert observed["secret"] == "submitted-sensitive-value"
+    assert observed["modes"] == (0o700, 0o400)
+    assert config.env["RIGGING_SECRETS_DIR"] == "/run/rigging/secrets"
+    assert any(m.kind is MountKind.SECRET and m.read_only for m in config.mounts)
+    assert not config.secret_host_path.exists()
+
+
+@pytest.mark.parametrize(
+    "profile, egress, network_mode",
+    [
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_NONE, NETWORK_MODE_NONE),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_INTERNET, EGRESS_NETWORK),
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, NETWORK_MODE_HOST),
+    ],
+)
+def test_egress_policy_selects_the_docker_network(
+    mock_worker, mock_runtime, monkeypatch, tmp_path, profile, egress, network_mode
+):
+    """Only CLUSTER uses the host network; INTERNET joins the filtered egress network once bootstrap installed it."""
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("nameserver 8.8.8.8\n")
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(resolv_conf))
+    request = create_run_task_request()
+    request.container_profile = profile
+    request.egress_policy = egress
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.call_args[0][0].network_mode == network_mode
+
+
+def test_docker_worker_refuses_internet_egress_without_the_host_filter(mock_worker, mock_runtime, monkeypatch, tmp_path):
+    """Without the bootstrap filter a bridge container reaches the VPC, so the task fails before any container starts."""
+    monkeypatch.setattr("iris.cluster.worker.task_attempt.EGRESS_RESOLV_CONF", str(tmp_path / "missing"))
+    request = create_run_task_request()
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert task.status != job_pb2.TASK_STATE_SUCCEEDED
+    assert "internet" in (task.error or "")
+    mock_runtime.create_container.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "profile, egress, expected_token",
+    [
+        (job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.EGRESS_POLICY_UNSPECIFIED, "task-token"),
+        (job_pb2.CONTAINER_PROFILE_SANDBOX, job_pb2.EGRESS_POLICY_NONE, None),
+    ],
+)
+def test_task_token_reaches_every_task_but_a_sandbox(mock_worker, mock_runtime, profile, egress, expected_token):
+    request = create_run_task_request()
+    request.container_profile = profile
+    request.egress_policy = egress
+    request.task_token = "task-token"
+    request.environment.env_vars["IRIS_TASK_TOKEN"] = "stale-token"
+
+    task = mock_worker.get_task(mock_worker.submit_task(request))
+    task.thread.join(timeout=15.0)
+
+    assert mock_runtime.create_container.call_args[0][0].env.get("IRIS_TASK_TOKEN") == expected_token
 
 
 def test_task_image_override_uses_request_value(mock_bundle_store, mock_runtime, tmp_path):
@@ -1210,6 +1376,43 @@ def test_adopt_creates_task_in_running_state(mock_worker, mock_runtime):
     task = mock_worker.get_task(container.task_id, container.attempt_id)
     assert task is not None
     assert task.status == job_pb2.TASK_STATE_RUNNING
+
+
+def test_worker_restart_removes_orphans_and_retains_adopted_secret_files(
+    mock_bundle_store, mock_runtime, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("iris.cluster.secrets.WORKER_SECRETS_ROOT", tmp_path / "tmpfs")
+    cache = tmp_path / "cache"
+    root = worker_secret_root(cache)
+    orphan = root / "orphan-attempt"
+    active = root / "adopted-attempt"
+    other_worker = worker_secret_root(tmp_path / "other-cache") / "other-attempt"
+    for directory in (orphan, active, other_worker):
+        directory.mkdir(parents=True)
+        (directory / "HF_TOKEN").write_text("sentinel-secret")
+    mock_runtime.discover_containers.return_value = [
+        _make_discovered_container(attempt_uid="adopted-attempt", workdir_host_path=str(cache / "workdirs" / "adopted"))
+    ]
+    mock_runtime.adopt_container.side_effect = lambda _id: create_mock_container_handle(
+        status_sequence=[ContainerStatus(phase=ContainerPhase.RUNNING)]
+    )
+    worker = Worker(
+        WorkerConfig(
+            cache_dir=cache,
+            default_task_image="mock-image",
+            poll_interval=Duration.from_seconds(0.01),
+        ),
+        bundle_store=mock_bundle_store,
+        container_runtime=mock_runtime,
+    )
+    try:
+        worker.start()
+        assert not orphan.exists()
+        assert (active / "HF_TOKEN").read_text() == "sentinel-secret"
+        assert other_worker.exists()
+    finally:
+        worker.stop()
+    assert not active.exists()
 
 
 def test_adopt_skips_build_phase_containers(mock_worker, mock_runtime):

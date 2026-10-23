@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from dataclasses import replace
+from pathlib import Path
 
 import pulumi
 import pytest
@@ -15,8 +18,10 @@ from infra.loom.infrastructure import (
     ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
+    OAuthClientConfig,
     ProfileConfig,
     RemoteMcpConfig,
+    WatchConfig,
     WorkloadIdentityConfig,
     _deployment_manifest,
     _deployment_profiles,
@@ -175,19 +180,85 @@ def test_loom_pr_review_launcher_starts_one_bounded_review_session() -> None:
 
     assert set(trigger) == {"pull_request_target"}
     assert job["permissions"] == {"contents": "read", "id-token": "write"}
-    checkout, launch = job["steps"]
+    checkout, author, launch = job["steps"]
     assert checkout["uses"].startswith("actions/checkout@")
     assert checkout["with"]["ref"] == "main"
-    assert checkout["with"]["sparse-checkout"] == ".github/actions/launch-loom-run"
+    assert set(checkout["with"]["sparse-checkout"].split()) == {
+        ".github/actions/launch-loom-run",
+        ".github/actions/check-write-access",
+    }
+    assert author["uses"] == "./.github/actions/check-write-access"
+    assert launch["if"] == "steps.author.outputs.allowed == 'true'"
     assert launch["uses"] == "./.github/actions/launch-loom-run"
     assert "head.repo.full_name == github.repository" in job["if"]
     assert "strategy" not in job
-    assert launch["with"]["idempotency-key"] == (
-        "pr-review:${{ github.event.pull_request.number }}:${{ github.event.pull_request.head.sha }}"
-    )
 
     review_profile = stack["config"]["marin-loom:profiles"]["pr-review"]
     assert 0 < review_profile["idleArchiveSeconds"] <= 900
+
+
+def test_loom_holistic_review_launcher_bounds_automatic_sessions_per_pr() -> None:
+    workflow_path = ROOT.parent.parent / ".github/workflows/ops-loom-holistic-review.yaml"
+    workflow = yaml.safe_load(workflow_path.read_text())
+    stack = yaml.safe_load((ROOT / "Pulumi.marin-loom.yaml").read_text())
+    trigger = workflow.get("on", workflow.get(True))
+    job = workflow["jobs"]["review"]
+
+    assert set(trigger) == {"pull_request_target"}
+    assert "synchronize" in trigger["pull_request_target"]["types"]
+    assert workflow["concurrency"]["cancel-in-progress"] is True
+    assert "head.repo.full_name == github.repository" in job["if"]
+    checkout, author, gate, launch = job["steps"]
+    assert checkout["with"]["ref"] == "main"
+    assert author["uses"] == "./.github/actions/check-write-access"
+    assert gate["if"] == "steps.author.outputs.allowed == 'true'"
+    assert launch["if"] == "steps.gate.outputs.run == 'true'"
+    assert launch["uses"] == "./.github/actions/launch-loom-run"
+
+    profile = stack["config"]["marin-loom:profiles"]["pr-holistic-review"]
+    assert 0 < profile["idleArchiveSeconds"] <= 900
+    federations = {entry["name"]: entry for entry in stack["config"]["marin-loom:githubFederations"]}
+    assert federations["pr-holistic-review"]["workflowRef"].endswith(
+        "/.github/workflows/ops-loom-holistic-review.yaml@refs/heads/main"
+    )
+    assert federations["pr-holistic-review"]["profile"] == "pr-holistic-review"
+
+
+@pytest.mark.parametrize(
+    ("changed_lines", "api_exit_code", "expected_run"),
+    [(99, 0, "false"), (100, 0, "false"), (101, 0, "true"), (0, 1, None)],
+)
+def test_holistic_synchronize_gate_checks_parent_diff(
+    tmp_path: Path, changed_lines: int, api_exit_code: int, expected_run: str | None
+) -> None:
+    workflow = yaml.safe_load((ROOT.parent.parent / ".github/workflows/ops-loom-holistic-review.yaml").read_text())
+    gate = next(step for step in workflow["jobs"]["review"]["steps"] if step.get("id") == "gate")
+    github_cli = tmp_path / "gh"
+    github_cli.write_text(f"#!/bin/sh\nprintf '%s\\n' {changed_lines}\nexit {api_exit_code}\n")
+    github_cli.chmod(0o755)
+    output = tmp_path / "output"
+    result = subprocess.run(
+        ["bash", "-c", gate["run"]],
+        env={
+            **os.environ,
+            **workflow["env"],
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_REPOSITORY": "marin-community/marin",
+            "EVENT_ACTION": "synchronize",
+            "HEAD_SHA": "a" * 40,
+            "ADDITIONS": "300",
+            "DELETIONS": "0",
+        },
+        capture_output=True,
+        text=True,
+    )
+    if expected_run is None:
+        assert result.returncode != 0
+        assert not output.exists()
+        return
+    assert result.returncode == 0, result.stderr
+    assert output.read_text().strip() == f"run={expected_run}"
 
 
 def test_loom_launch_action_uses_registered_automation_endpoint() -> None:
@@ -307,6 +378,37 @@ def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str
 
     with pytest.raises(ValueError, match="remote MCP"):
         RemoteMcpConfig.parse(value)
+
+
+def test_oauth_clients_render_in_stable_order_as_public_declarations() -> None:
+    clients = (
+        OAuthClientConfig.parse("zeta", {"name": " Zeta ", "redirectUris": ["http://[::1]/callback"]}),
+        OAuthClientConfig.parse("alpha", {"name": "Alpha", "redirectUris": ["https://alpha.example/callback"]}),
+    )
+    manifest = json.loads(_deployment_manifest(replace(deployment_config(), oauth_clients=clients), [], []))
+
+    assert manifest["oauth_clients"] == [
+        {"client_id": "alpha", "name": "Alpha", "redirect_uris": ["https://alpha.example/callback"]},
+        {"client_id": "zeta", "name": "Zeta", "redirect_uris": ["http://[::1]/callback"]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("client_id", "override"),
+    [
+        ("claude ai", {}),
+        ("claude-ai", {"name": " "}),
+        ("claude-ai", {"redirectUris": []}),
+        ("claude-ai", {"redirectUris": ["http://claude.ai/api/mcp/auth_callback"]}),
+        ("claude-ai", {"redirectUris": ["https://claude.ai/api/mcp/auth_callback#fragment"]}),
+    ],
+)
+def test_oauth_client_rejects_unstable_ids_and_unsafe_redirects(client_id: str, override: dict[str, object]) -> None:
+    value: dict[str, object] = {"name": "claude.ai", "redirectUris": ["https://claude.ai/api/mcp/auth_callback"]}
+    value.update(override)
+
+    with pytest.raises(ValueError, match="OAuth client"):
+        OAuthClientConfig.parse(client_id, value)
 
 
 @pulumi.runtime.test
@@ -467,3 +569,51 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
         assert mapping["profiles"] == ["ops"]
 
     return infrastructure.instance.id.apply(check)
+
+
+def test_agent_watch_manifest_and_profile_reference() -> None:
+    watch = WatchConfig.parse(
+        "daily",
+        {
+            "cron": "0 9 * * 1-5",
+            "timezone": "America/Los_Angeles",
+            "profile": "ops",
+            "repo": "marin-community/marin",
+            "promptFile": "watches/weekday-job-check.md",
+            "slackChannels": ["C12345"],
+        },
+    )
+    config = replace(deployment_config(), watches=(watch,))
+    manifest = json.loads(_deployment_manifest(config, [], []))
+    assert manifest["watches"][0]["agent"]["slack_channels"] == ["C12345"]
+    assert manifest["watches"][0]["agent"]["prompt"] == (ROOT / "watches/weekday-job-check.md").read_text().strip()
+    assert manifest["watches"][0]["enabled"] is False
+    with pytest.raises(ValueError, match="unknown profile"):
+        replace(config, profiles=(), workloads=())
+
+
+def test_agent_watch_prompt_file_cannot_escape_configuration_root() -> None:
+    value = {
+        "cron": "0 9 * * *",
+        "profile": "ops",
+        "repo": "marin-community/marin",
+        "promptFile": "../pulumi.md",
+    }
+    with pytest.raises(ValueError):
+        WatchConfig.parse("daily", value)
+
+
+def test_script_watch_manifest_uses_program_without_an_agent() -> None:
+    watch = WatchConfig.parse(
+        "merge-check",
+        {"every": "30m", "program": "builtin:archive-merged", "params": {"archive": False}, "runTimeoutSeconds": 60},
+    )
+    config = replace(deployment_config(), watches=(watch,))
+    manifest = json.loads(_deployment_manifest(config, [], []))
+    declared = manifest["watches"][0]
+    assert "agent" not in declared
+    assert declared["program"] == "builtin:archive-merged"
+    assert declared["params"] == {"archive": False}
+    assert declared["run_timeout_secs"] == 60
+    with pytest.raises(ValueError, match="agent fields"):
+        WatchConfig.parse("merge-check", {"every": "30m", "program": "builtin:archive-merged", "prompt": "Check merges"})

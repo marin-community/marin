@@ -25,6 +25,7 @@ import argparse
 import ast
 import json
 import subprocess
+import tomllib
 from collections import defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -42,6 +43,7 @@ SCOPES: tuple[str, ...] = (
     "finelog",
     "finestore",
     "ducky",
+    "verifyit",
     "deploy",
     "iac",
 )
@@ -61,6 +63,7 @@ SOURCE_ROOTS: tuple[SourceRoot, ...] = (
     *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
+    SourceRoot("infra/shellsim", "."),
     SourceRoot("experiments", "."),
     SourceRoot("infra/ci", "."),
     SourceRoot("infra/marina/src/marina", "infra/marina/src"),
@@ -90,6 +93,7 @@ UV_PACKAGE: dict[str, str] = {
     "finelog": "marin-finelog",
     "finestore": "marin-finestore",
     "ducky": "marin-ducky",
+    "verifyit": "marin-verifyit",
     "deploy": "marin-deploy",
     "iac": "marin-iac",
 }
@@ -97,6 +101,7 @@ UV_PACKAGE: dict[str, str] = {
 UV_EXTRAS: dict[str, list[str]] = {
     "marin": ["cpu", "dedup"],
     "iac": ["deploy"],
+    "verifyit": ["all"],
 }
 
 PYTHON_VERSION = "3.12"
@@ -119,10 +124,10 @@ TEST_DIRS: dict[str, tuple[str, ...]] = {
     "marin": ("tests", "experiments"),
 }
 
-# Levanter's suite is the only unit leg that runs long enough to be worth spreading over
-# extra runners; every other scope finishes well under the workflow's per-leg budget. A
-# sharded scope splits its selected files across this many parallel matrix legs.
-SHARD_COUNT: dict[str, int] = {"levanter": 4}
+# The Levanter and Marin suites run long enough to be worth spreading over extra runners;
+# every other scope finishes in a few minutes on one. A sharded scope splits its selected
+# files across this many parallel matrix legs.
+SHARD_COUNT: dict[str, int] = {"levanter": 4, "marin": 3}
 
 # A shard carries fixed environment-setup overhead, so stop adding runners once each would
 # hold fewer than this many files: a small selection runs faster in one leg than spread thin.
@@ -147,12 +152,90 @@ RUST_SETUP_TAG = "rust"
 SOURCE_BUILD_TIMEOUT = 30
 DEFAULT_LEG_TIMEOUT = 15
 
-# Suites that cannot be import-selected because they drive a non-Python subsystem.
-# Levanter's accelerator lanes use the ordinary import-selected Levanter files below;
-# only the browser smoke remains a directory-triggered suite.
+# Suites outside the import-selected Python matrix.
+# TaskCompendium, Shellbox, RolloutEngine and Taskforge use the root lock. Iris
+# smoke drives a browser. Harbor uses its own lock and local Marin sources.
+# Levanter's accelerator lanes use its selected files below.
 DEPENDENCY_MANIFESTS: tuple[str, ...] = ("uv.lock", "pyproject.toml")
 EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "skyrl-wheel": (
+        "vendor/skyrl/",
+        "vendor/harbor/",
+        "lib/finelog/",
+        "lib/finestore/",
+        "lib/iris/",
+        "lib/rigging/",
+        "lib/rolloutengine/",
+        "lib/shellbox/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ),
+    "evalchemy-unit": (
+        "vendor/evalchemy/",
+        "lib/finestore/",
+        "lib/rigging/",
+        "lib/marin/src/marin/evaluation/evalchemy/",
+        "experiments/evaluation/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "harbor-unit": (
+        "vendor/harbor/",
+        "lib/finestore/",
+        "lib/rigging/",
+        "lib/marin/src/marin/evaluation/harbor/",
+        "experiments/post_training/task_curation/harbor_hub.py",
+        "experiments/post_training/task_curation/tests/test_harbor_hub.py",
+        "infra/ci/select_tests.py",
+        "infra/ci/run_harbor_tests.py",
+        "infra/ci/run_tests.py",
+        ".github/workflows/unified-unit.yaml",
+    ),
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
+    "shellbox-unit": (
+        "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "taskcompendium-unit": (
+        "lib/taskcompendium/",
+        "lib/shellbox/",
+        "lib/rigging/",
+        "lib/verifyit/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "rolloutengine-unit": (
+        "lib/rolloutengine/",
+        "lib/taskcompendium/",
+        "lib/verifyit/",
+        "lib/rigging/",
+        "lib/shellbox/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
+    "taskforge-unit": (
+        "lib/taskforge/",
+        "experiments/post_training/capability_driven_envs/",
+        "experiments/post_training/glm.py",
+        "lib/rolloutengine/",
+        "lib/zephyr/",
+        "lib/fray/",
+        "lib/taskcompendium/",
+        "lib/iris/",
+        "lib/shellbox/",
+        "lib/verifyit/",
+        "lib/rigging/",
+        "infra/ci/select_tests.py",
+        ".github/workflows/unified-unit.yaml",
+        *DEPENDENCY_MANIFESTS,
+    ),
 }
 
 LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
@@ -160,21 +243,26 @@ LEVANTER_ACCELERATOR_TRIGGERS: tuple[str, ...] = (
     "lib/haliax/",
     "infra/ci/select_tests.py",
     ".github/workflows/unified-unit.yaml",
-    *DEPENDENCY_MANIFESTS,
 )
+LEVANTER_TORCH_TRIGGERS = (*LEVANTER_ACCELERATOR_TRIGGERS, *DEPENDENCY_MANIFESTS)
 
-# These files are intentionally absent from the TPU command today. Keep the selection
-# rule next to the selector so an affected-file TPU run does not start only to collect
-# zero runnable tests.
-TPU_IGNORED_TEST_PATHS: frozenset[str] = frozenset(
-    {
-        "lib/levanter/tests/test_audio.py",
-        "lib/levanter/tests/test_new_cache.py",
-        "lib/levanter/tests/test_hf_checkpoints.py",
-        "lib/levanter/tests/test_hf_gpt2_serialize.py",
-        "lib/levanter/tests/test_gdn_layer.py",
-    }
-)
+TPU_MARKER_ENVIRONMENT = {
+    "python_version": "3.12",
+    "python_full_version": "3.12.0",
+    "sys_platform": "linux",
+    "platform_machine": "x86_64",
+    "platform_system": "Linux",
+    "os_name": "posix",
+    "implementation_name": "cpython",
+    "implementation_version": "3.12.0",
+    "platform_python_implementation": "CPython",
+}
+TPU_CONFLICT_EXTRA = "extra-14-marin-levanter-tpu"
+UV_LOCK_VERSION = 1
+UV_LOCK_REVISION = 3
+PACKAGE_IDENTITY_FIELDS = ("name", "version", "source")
+LEVANTER_TORCH_SUITE = "levanter-torch"
+LEVANTER_TPU_SUITE = "levanter-tpu"
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +486,229 @@ def git_changed_files(base_ref: str, repo_root: Path) -> list[str]:
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
+def _marker_value(node: ast.expr) -> str:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name) and node.id in TPU_MARKER_ENVIRONMENT:
+        return TPU_MARKER_ENVIRONMENT[node.id]
+    if isinstance(node, ast.Name) and node.id == "extra":
+        raise ValueError("extra markers need a comparison")
+    raise ValueError("unsupported lockfile marker value")
+
+
+def _marker_matches(expression: str, active_extras: set[str]) -> bool:
+    """Evaluate uv lock markers for the Python 3.12 Linux TPU image."""
+
+    def evaluate(node: ast.expr) -> bool:
+        if isinstance(node, ast.BoolOp):
+            values = [evaluate(value) for value in node.values]
+            if isinstance(node.op, ast.And):
+                return all(values)
+            if isinstance(node.op, ast.Or):
+                return any(values)
+        if isinstance(node, ast.Compare) and len(node.ops) == len(node.comparators) == 1:
+            left, right = node.left, node.comparators[0]
+            operation = node.ops[0]
+            if (
+                isinstance(left, ast.Name)
+                and left.id == "extra"
+                and isinstance(right, ast.Constant)
+                and isinstance(right.value, str)
+            ):
+                if not right.value.startswith(("extra-", "group-")):
+                    raise ValueError("unsupported package extra marker")
+                if isinstance(operation, ast.Eq):
+                    return right.value in active_extras
+                if isinstance(operation, ast.NotEq):
+                    return right.value not in active_extras
+            left_value = _marker_value(left)
+            right_value = _marker_value(right)
+            if isinstance(left, ast.Name) and left.id in {
+                "python_version",
+                "python_full_version",
+                "implementation_version",
+            }:
+                left_release = tuple(int(part) for part in left_value.split("."))
+                right_release = tuple(int(part) for part in right_value.split("."))
+                if left.id != "python_version" and right_release[:2] == (3, 12) and len(right_release) > 2:
+                    raise ValueError("TPU image Python patch version is not pinned")
+                length = max(len(left_release), len(right_release))
+                left_value = left_release + (0,) * (length - len(left_release))
+                right_value = right_release + (0,) * (length - len(right_release))
+            if isinstance(operation, ast.Eq):
+                return left_value == right_value
+            if isinstance(operation, ast.NotEq):
+                return left_value != right_value
+            if isinstance(operation, ast.Lt):
+                return left_value < right_value
+            if isinstance(operation, ast.LtE):
+                return left_value <= right_value
+            if isinstance(operation, ast.Gt):
+                return left_value > right_value
+            if isinstance(operation, ast.GtE):
+                return left_value >= right_value
+            if isinstance(operation, ast.In):
+                return left_value in right_value
+            if isinstance(operation, ast.NotIn):
+                return left_value not in right_value
+        raise ValueError("unsupported lockfile marker expression")
+
+    return evaluate(ast.parse(expression, mode="eval").body)
+
+
+def _matching_resolution_markers(package: dict, active_extras: set[str]) -> tuple[str, ...] | None:
+    markers = package.get("resolution-markers", [])
+    if not isinstance(markers, list):
+        raise ValueError("invalid package resolution markers")
+    if not markers:
+        return ()
+    matching = tuple(marker for marker in markers if _marker_matches(marker, active_extras))
+    return matching or None
+
+
+def _package_identity(package: dict) -> str:
+    return json.dumps({key: package.get(key) for key in PACKAGE_IDENTITY_FIELDS}, sort_keys=True)
+
+
+def _lock_graph(lock: dict) -> tuple[set[str], set[str]]:
+    """Resolved package records and dependency edges installed by the TPU command."""
+    if (
+        lock.get("version") != UV_LOCK_VERSION
+        or lock.get("revision", UV_LOCK_REVISION) != UV_LOCK_REVISION
+        or not isinstance(lock.get("package"), list)
+    ):
+        raise ValueError("unsupported uv lockfile")
+    packages = lock["package"]
+    by_name: dict[str, list[dict]] = defaultdict(list)
+    for package in packages:
+        by_name[package["name"]].append(package)
+    if len(by_name["marin-levanter"]) != 1:
+        raise ValueError("ambiguous Levanter package")
+
+    active_extras = {TPU_CONFLICT_EXTRA}
+    nodes: set[str] = set()
+    edges: set[str] = set()
+    visited: set[tuple[str, tuple[str, ...]]] = set()
+    pending = [(by_name["marin-levanter"][0], ("tpu",), True)]
+    while pending:
+        package, requested_extras, is_root = pending.pop()
+        identity = _package_identity(package)
+        visit_key = identity, requested_extras
+        if visit_key in visited:
+            continue
+        visited.add(visit_key)
+
+        matching_markers = _matching_resolution_markers(package, active_extras)
+        if matching_markers is None:
+            raise ValueError("reachable package excludes the TPU environment")
+        nodes.add(
+            json.dumps(
+                {key: package.get(key) for key in ("name", "version", "source", "sdist", "wheels")}
+                | {"markers": matching_markers},
+                sort_keys=True,
+            )
+        )
+
+        dependency_lists = [package.get("dependencies", [])]
+        optional = package.get("optional-dependencies", {})
+        for extra in requested_extras:
+            if extra not in optional:
+                raise ValueError("requested extra absent from lockfile")
+            dependency_lists.append(optional[extra])
+        if is_root:
+            groups = package.get("dev-dependencies", {})
+            if "test" not in groups:
+                raise ValueError("Levanter test group absent from lockfile")
+            dependency_lists.append(groups["test"])
+
+        for dependencies in dependency_lists:
+            if not isinstance(dependencies, list):
+                raise ValueError("invalid lockfile dependencies")
+            for dependency in dependencies:
+                marker = dependency.get("marker")
+                if marker is not None and not _marker_matches(marker, active_extras):
+                    continue
+                candidates = [
+                    candidate
+                    for candidate in by_name[dependency["name"]]
+                    if all(candidate.get(key) == dependency[key] for key in ("version", "source") if key in dependency)
+                    and _matching_resolution_markers(candidate, active_extras) is not None
+                ]
+                if len(candidates) != 1:
+                    raise ValueError("ambiguous or missing dependency variant")
+                target = candidates[0]
+                target_extras = (
+                    tuple(sorted(dependency.get("extra", [])))
+                    if isinstance(dependency.get("extra"), list)
+                    else ((dependency["extra"],) if "extra" in dependency else ())
+                )
+                target_identity = _package_identity(target)
+                edges.add(json.dumps((identity, dependency, target_identity), sort_keys=True))
+                pending.append((target, target_extras, False))
+    return nodes, edges
+
+
+def _root_install_settings(manifest: dict, reachable_names: set[str], editable_paths: set[str]) -> dict:
+    """Root settings that can affect a frozen Levanter package install."""
+    uv = manifest.get("tool", {}).get("uv", {}).copy()
+    sources = uv.pop("sources", {})
+    workspace = uv.pop("workspace", {})
+    members = workspace.get("members", [])
+    return {
+        "requires-python": manifest.get("project", {}).get("requires-python"),
+        "build-system": manifest.get("build-system"),
+        "uv": uv,
+        "reachable-members": sorted(editable_paths & set(members)),
+        "sources": {name: source for name, source in sources.items() if name in reachable_names},
+    }
+
+
+def levanter_tpu_dependencies_changed(base_ref: str | None, repo_root: Path) -> bool:
+    """Conservatively detect whether a manifest diff changes the TPU install."""
+    if base_ref is None:
+        return True
+    try:
+        merge_base = subprocess.run(
+            ["git", "merge-base", base_ref, "HEAD"], cwd=repo_root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+        def base_file(path: str) -> bytes:
+            return subprocess.run(
+                ["git", "show", f"{merge_base}:{path}"], cwd=repo_root, capture_output=True, check=True
+            ).stdout
+
+        base_lock = tomllib.loads(base_file("uv.lock").decode())
+        head_lock = tomllib.loads((repo_root / "uv.lock").read_text())
+        base_manifest = tomllib.loads(base_file("pyproject.toml").decode())
+        head_manifest = tomllib.loads((repo_root / "pyproject.toml").read_text())
+        if any(
+            base_lock.get(key) != head_lock.get(key)
+            for key in base_lock.keys() | head_lock.keys()
+            if key not in {"package", "manifest"}
+        ):
+            return True
+        if {key: value for key, value in base_lock.get("manifest", {}).items() if key != "members"} != {
+            key: value for key, value in head_lock.get("manifest", {}).items() if key != "members"
+        }:
+            return True
+        base_graph = _lock_graph(base_lock)
+        head_graph = _lock_graph(head_lock)
+        if base_graph != head_graph:
+            return True
+        records = [json.loads(node) for node in base_graph[0]]
+        names = {record["name"] for record in records}
+        editable_paths = {record["source"]["editable"] for record in records if "editable" in record["source"]}
+        if (editable_paths & set(base_lock["manifest"]["members"])) != (
+            editable_paths & set(head_lock["manifest"]["members"])
+        ):
+            return True
+        return _root_install_settings(base_manifest, names, editable_paths) != _root_install_settings(
+            head_manifest, names, editable_paths
+        )
+    except (OSError, ValueError, KeyError, TypeError, SyntaxError, subprocess.CalledProcessError):
+        return True
+
+
 @dataclass(frozen=True)
 class ClassifyResult:
     """Classification of repo-root-relative changed file paths."""
@@ -507,57 +818,52 @@ def extra_suites(changed_files: list[str]) -> list[str]:
     )
 
 
-def _node_has_torch_marker(node: ast.AST) -> bool:
-    return any(
-        (isinstance(child, ast.Name) and child.id == "skip_if_no_torch")
-        or (isinstance(child, ast.Attribute) and child.attr == "torch")
-        for child in ast.walk(node)
-    )
+def _node_markers(node: ast.AST) -> set[str]:
+    markers: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and child.id == "skip_if_no_torch":
+            markers.add("torch")
+        if (
+            isinstance(child, ast.Attribute)
+            and isinstance(child.value, ast.Attribute)
+            and child.value.attr == "mark"
+            and isinstance(child.value.value, ast.Name)
+            and child.value.value.id == "pytest"
+        ):
+            markers.add(child.attr)
+    return markers
 
 
-def torch_membership_for_test_file(path: Path) -> tuple[bool, bool]:
-    """Return whether a test file contains torch and non-torch tests.
+def markers_for_test_file(path: Path) -> frozenset[str]:
+    """Return markers used to select a test file's accelerator lanes.
 
-    The Levanter helper ``skip_if_no_torch`` applies ``pytest.mark.torch``. The
-    selector cannot import test modules because its job intentionally installs no test
-    dependencies, so inspect decorators and module-level ``pytestmark`` assignments.
-    Unknown/dynamically generated test shapes conservatively enter both lanes.
+    Inspect module-level pytestmark, test/class decorators, and parameter marks
+    without importing tests. The skip_if_no_torch helper also supplies torch.
+    Unknown/generated test shapes conservatively include the Torch lane.
     """
     tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"), filename=str(path))
-    module_is_torch = any(
-        isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets)
-        and _node_has_torch_marker(node.value)
-        for node in tree.body
-    )
-
-    has_torch = module_is_torch
-    has_non_torch = False
+    markers: set[str] = set()
     found_test = False
     for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "pytestmark" for target in node.targets
+        ):
+            markers.update(_node_markers(node.value))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
             found_test = True
-            is_torch = module_is_torch or any(_node_has_torch_marker(decorator) for decorator in node.decorator_list)
-            has_torch |= is_torch
-            has_non_torch |= not is_torch
-            continue
-
+            for decorator in node.decorator_list:
+                markers.update(_node_markers(decorator))
         if isinstance(node, ast.ClassDef) and node.name.startswith("Test"):
-            class_is_torch = module_is_torch or any(
-                _node_has_torch_marker(decorator) for decorator in node.decorator_list
-            )
+            for decorator in node.decorator_list:
+                markers.update(_node_markers(decorator))
             for method in node.body:
                 if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name.startswith("test_"):
                     found_test = True
-                    is_torch = class_is_torch or any(
-                        _node_has_torch_marker(decorator) for decorator in method.decorator_list
-                    )
-                    has_torch |= is_torch
-                    has_non_torch |= not is_torch
-
+                    for decorator in method.decorator_list:
+                        markers.update(_node_markers(decorator))
     if not found_test:
-        return True, True
-    return has_torch, has_non_torch
+        markers.add("torch")
+    return frozenset(markers)
 
 
 # ---------------------------------------------------------------------------
@@ -714,17 +1020,12 @@ def selected_scope_test_paths(matrix: list[MatrixLeg], scope: str) -> list[str]:
 
 
 def accelerator_suite_test_paths(
-    changed_files: list[str],
     matrix: list[MatrixLeg],
     repo_root: Path,
-    *,
-    force: bool = False,
+    selected_lanes: set[str],
 ) -> dict[str, list[str]]:
     """Return affected Levanter tests split by accelerator lane."""
-    is_triggered = force or any(
-        filepath.startswith(prefix) for prefix in LEVANTER_ACCELERATOR_TRIGGERS for filepath in changed_files
-    )
-    if not is_triggered:
+    if not selected_lanes:
         return {}
 
     selected = selected_scope_test_paths(matrix, "levanter")
@@ -733,24 +1034,21 @@ def accelerator_suite_test_paths(
 
     torch_paths: list[str] = []
     tpu_paths: list[str] = []
+    if any(test_path in TEST_DIRS["levanter"] for test_path in selected):
+        selected = all_test_files("levanter", repo_root)
     for test_path in selected:
-        if test_path in TEST_DIRS["levanter"]:
+        markers = markers_for_test_file(repo_root / test_path)
+        # TPU coverage is opt-in, including for full-suite and scheduled runs.
+        if "torch" in markers:
             torch_paths.append(test_path)
-            tpu_paths.append(test_path)
-            continue
-
-        path = repo_root / test_path
-        has_torch, has_non_torch = torch_membership_for_test_file(path)
-        if has_torch:
-            torch_paths.append(test_path)
-        if has_non_torch and test_path not in TPU_IGNORED_TEST_PATHS:
+        if "tpu" in markers:
             tpu_paths.append(test_path)
 
     suites: dict[str, list[str]] = {}
-    if torch_paths:
-        suites["levanter-torch"] = torch_paths
-    if tpu_paths:
-        suites["levanter-tpu"] = tpu_paths
+    if LEVANTER_TORCH_SUITE in selected_lanes and torch_paths:
+        suites[LEVANTER_TORCH_SUITE] = torch_paths
+    if LEVANTER_TPU_SUITE in selected_lanes and tpu_paths:
+        suites[LEVANTER_TPU_SUITE] = tpu_paths
     return suites
 
 
@@ -770,6 +1068,7 @@ def _select_changed_tests(
     broad_triggers: frozenset[str],
     *,
     run_all_tests: bool = False,
+    base_ref: str | None = None,
 ) -> SelectionResult:
     classification = classify(changed_files, repo_root, broad_triggers)
     source_build_scopes = set(classification.native_changed)
@@ -788,8 +1087,18 @@ def _select_changed_tests(
             repo_root,
         )
 
-    suite_test_paths = accelerator_suite_test_paths(changed_files, matrix, repo_root)
-    suites = sorted((*extra_suites(changed_files), *suite_test_paths))
+    selected_lanes: set[str] = set()
+    if any(path.startswith(prefix) for prefix in LEVANTER_TORCH_TRIGGERS for path in changed_files):
+        selected_lanes.add(LEVANTER_TORCH_SUITE)
+    source_or_ci_changed = any(
+        path.startswith(prefix) for prefix in LEVANTER_ACCELERATOR_TRIGGERS for path in changed_files
+    )
+    manifest_changed = any(path in DEPENDENCY_MANIFESTS for path in changed_files)
+    if source_or_ci_changed or (manifest_changed and levanter_tpu_dependencies_changed(base_ref, repo_root)):
+        selected_lanes.add(LEVANTER_TPU_SUITE)
+    suite_test_paths = accelerator_suite_test_paths(matrix, repo_root, selected_lanes)
+    selected_extra_suites = EXTRA_SUITE_TRIGGERS if run_all_tests else extra_suites(changed_files)
+    suites = sorted((*selected_extra_suites, *suite_test_paths))
     return SelectionResult(
         reason=reason,
         matrix=matrix,
@@ -803,6 +1112,7 @@ def select_changed_tests(
     repo_root: Path,
     *,
     run_all_tests: bool = False,
+    base_ref: str | None = None,
 ) -> SelectionResult:
     """Return the CI test plan for repo-relative changed paths."""
     return _select_changed_tests(
@@ -810,6 +1120,7 @@ def select_changed_tests(
         repo_root,
         BROAD_TRIGGERS,
         run_all_tests=run_all_tests,
+        base_ref=base_ref,
     )
 
 
@@ -818,6 +1129,7 @@ def select_local_tests(
     repo_root: Path,
     *,
     run_all_tests: bool = False,
+    base_ref: str | None = None,
 ) -> SelectionResult:
     """Return affected local tests without expanding CI-only orchestration changes."""
     return _select_changed_tests(
@@ -825,6 +1137,19 @@ def select_local_tests(
         repo_root,
         LOCAL_BROAD_TRIGGERS,
         run_all_tests=run_all_tests,
+        base_ref=base_ref,
+    )
+
+
+def select_all_tests(repo_root: Path) -> SelectionResult:
+    """Return the scheduled/manual plan when no diff base is available."""
+    matrix = full_matrix(repo_root, set(NATIVE_CRATE_DIR))
+    suite_test_paths = accelerator_suite_test_paths(matrix, repo_root, {LEVANTER_TORCH_SUITE, LEVANTER_TPU_SUITE})
+    return SelectionResult(
+        reason=RUN_ALL_REASON,
+        matrix=matrix,
+        suites=sorted((*EXTRA_SUITE_TRIGGERS, *suite_test_paths)),
+        suite_test_paths=suite_test_paths,
     )
 
 
@@ -860,19 +1185,11 @@ def main() -> None:
     # Without a base ref there is no diff to inspect, so conservatively build every native
     # extension from source and run the out-of-band suites too.
     if args.base_ref is None:
-        matrix = full_matrix(repo_root, set(NATIVE_CRATE_DIR))
-        suite_test_paths = accelerator_suite_test_paths([], matrix, repo_root, force=True)
-        selection = SelectionResult(
-            reason=RUN_ALL_REASON,
-            matrix=matrix,
-            suites=sorted((*EXTRA_SUITE_TRIGGERS, *suite_test_paths)),
-            suite_test_paths=suite_test_paths,
-        )
-        print(json.dumps(selection_payload(selection), indent=2))
+        print(json.dumps(selection_payload(select_all_tests(repo_root)), indent=2))
         return
 
     changed = git_changed_files(args.base_ref, repo_root)
-    selection = select_changed_tests(changed, repo_root, run_all_tests=args.run_all_tests)
+    selection = select_changed_tests(changed, repo_root, run_all_tests=args.run_all_tests, base_ref=args.base_ref)
     print(json.dumps(selection_payload(selection), indent=2))
 
 

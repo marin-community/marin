@@ -19,7 +19,7 @@ from levanter.grug.attention import (
     gpu_fa4_cute_attention,
     reference_attention,
 )
-from levanter.grug.attention._fa4_cute import _segmented_kernel_config, _simple_causal_lower_bounds
+from levanter.grug.attention._fa4_cute import _simple_causal_lower_bounds
 from levanter.grug.attention._fa4_cute_config import SM100_GQA_RATIOS, SM100_HEAD_DIM
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.testing.cpu_devices import run_on_cpu_devices
@@ -72,6 +72,46 @@ def test_packed_segment_backward_block_sparse_indices_split_full_blocks():
         sparse_metadata.full_block_idx,
         jnp.array([[[[1, 2, 3, 0], [2, 3, 0, 0], [3, 0, 0, 0], [0, 0, 0, 0]]]], dtype=jnp.int32),
     )
+
+
+@pytest.mark.parametrize("query_offset", [0, 4])
+def test_packed_segment_backward_blocks_cover_offset_queries(query_offset):
+    # Two documents cross a query-tile boundary; the last token is padding.
+    ids = np.array([0, 0, 0, 1, 1, 1, 1, -1])
+    query_ids = ids[query_offset : query_offset + 4]
+    bounds = np.array([[0 if segment == 0 else 3 for segment in query_ids]], dtype=np.int32)
+    metadata = fa4_cute_backend._packed_segment_backward_block_sparse_indices_with_full(
+        jnp.asarray(bounds),
+        jnp.asarray(query_ids[None, :] >= 0),
+        key_sequence_length=len(ids),
+        q_offset=jnp.array([query_offset], dtype=jnp.int32),
+        tile_m=2,
+        tile_n=2,
+    )
+    fa4_cute_backend._validate_backward_block_sparse_metadata(
+        jax.ShapeDtypeStruct((1, 4, 8, 128), jnp.bfloat16),
+        jax.ShapeDtypeStruct((1, 8, 2, 128), jnp.bfloat16),
+        metadata.partial_block_cnt,
+        metadata.partial_block_idx,
+        tile_m=2,
+        tile_n=2,
+    )
+    for key_block in range(4):
+        partial = set(
+            np.asarray(metadata.partial_block_idx)[0, 0, key_block, : int(metadata.partial_block_cnt[0, 0, key_block])]
+        )
+        full = set(
+            np.asarray(metadata.full_block_idx)[0, 0, key_block, : int(metadata.full_block_cnt[0, 0, key_block])]
+        )
+        assert partial.isdisjoint(full)
+        for query_block in range(2):
+            allowed = [
+                ids[q] >= 0 and ids[q] == ids[k] and k <= q
+                for q in range(query_offset + 2 * query_block, query_offset + 2 * query_block + 2)
+                for k in range(2 * key_block, 2 * key_block + 2)
+            ]
+            assert (query_block in full) == all(allowed)
+            assert (query_block in partial) == (any(allowed) and not all(allowed))
 
 
 @pytest.mark.parametrize("direction", ["forward", "backward"])
@@ -334,6 +374,59 @@ def test_context_sharded_segment_ids_preserve_global_bounds():
     run_on_cpu_devices(_CONTEXT_METADATA_SCRIPT, device_count=8)
 
 
+_BALANCED_QUERY_BLOCKS_SCRIPT = """
+    from types import SimpleNamespace
+
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+    import levanter.grug.attention._fa4_cute as fa4_cute
+
+    def fake_forward(q, k, v, lower_bounds, valid, *, sm_scale, kernel_config, q_offset):
+        # Each output row reports the position the kernel was told it holds, then the query, bound and
+        # validity it was given, so a row that lands at another position or loses its metadata shows up.
+        positions = (q_offset[0] + jnp.arange(q.shape[1])).astype(q.dtype)
+        out = jnp.zeros_like(q).at[..., 0].set(positions[None, :, None]).at[..., 1].set(q[..., 0])
+        out = out.at[..., 2].set(lower_bounds[:, :, None].astype(q.dtype))
+        return out.at[..., 3].set(valid[:, :, None].astype(q.dtype))
+
+    fa4_cute.fa4_cute_attention_forward = fake_forward
+    # 36 positions leave an odd number of queries on each of four shards.
+    for seq_len in (36, 40):
+        position = np.arange(seq_len)
+        q = jnp.zeros((1, seq_len, 2, 8), jnp.float32).at[..., 0].set(jnp.asarray(position, jnp.float32)[None, :, None])
+        kv = jnp.zeros((1, seq_len, 1, 8), jnp.float32)
+        lower_bounds = jnp.asarray(1000 + position, jnp.int32)[None, :]
+        valid = jnp.asarray(position % 3 != 0)[None, :]
+        for mesh_shape, sequence_axes in (((8, 1), "context"), ((4, 2), "context"), ((2, 4), "context"),
+                                          ((2, 4), ("data", "context")), ((2, 4), ("context", "data"))):
+            shards = mesh_shape[1] if sequence_axes == "context" else 8
+            if seq_len % shards:
+                continue
+            mesh = Mesh(np.asarray(jax.devices()).reshape(mesh_shape), ("data", "context"),
+                        axis_types=(AxisType.Explicit,) * 2)
+            with jax.set_mesh(mesh):
+                out = jax.jit(lambda q, kv, lower_bounds, valid: fa4_cute._fa4_cute_attention_forward_sharded(
+                    q, kv, kv, lower_bounds, valid, sm_scale=1.0, kernel_config=SimpleNamespace(sm90_backward=None),
+                ))(jax.device_put(q, NamedSharding(mesh, P(None, sequence_axes))),
+                   jax.device_put(kv, NamedSharding(mesh, P())), lower_bounds, valid)
+            out = np.asarray(out)[0, :, 0]
+            case = f"seq_len={seq_len} on {mesh_shape} over {sequence_axes}"
+            np.testing.assert_array_equal(out[:, 0], position, err_msg=f"kernel positions, {case}")
+            np.testing.assert_array_equal(out[:, 1], position, err_msg=f"queries, {case}")
+            np.testing.assert_array_equal(out[:, 2], 1000 + position, err_msg=f"bounds, {case}")
+            np.testing.assert_array_equal(out[:, 3], position % 3 != 0, err_msg=f"validity, {case}")
+"""
+
+
+def test_context_sharded_query_blocks_keep_their_sequence_positions():
+    # The sharded wrapper moves half of each shard's queries to balance causal work; every query and its
+    # bounds must still reach the kernel with its own position and come back to its own row.
+    run_on_cpu_devices(_BALANCED_QUERY_BLOCKS_SCRIPT, device_count=8)
+
+
 @pytest.mark.parametrize(
     ("arch", "q_heads", "head_dim", "dtype"),
     [
@@ -493,15 +586,9 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_que
     pytest.importorskip("cutlass")
     pytest.importorskip("cutlass.cute")
     pytest.importorskip("flash_attn.cute.flash_bwd_preprocess")
-    if (
-        context_size > 1
-        and head_dim == 128
-        and q_heads != kv_heads
-        and _segmented_kernel_config(head_dim).sm90_backward is not None
-    ):
-        pytest.skip("The native SM90 GQA backward carries no context-parallel query offset.")
-    # Multiple query tiles exercise offset bounds in both forward and backward kernels.
-    seq_len = 512
+    # Each balanced query block must span multiple query tiles at CP4 to exercise offset bounds in both
+    # forward and backward kernels.
+    seq_len = 2048
     if sequence_axes == ("context",):
         mesh = compact_grug_mesh(replica_axis_size=1, context_axis_size=context_size)
         batch_axes = ("replica_dcn", "data", "expert")
@@ -524,7 +611,9 @@ def test_real_gpu_fa4_cute_attention_matches_reference_with_sequence_sharded_que
     q = jax.random.normal(q_key, (batch, seq_len, q_heads, head_dim), dtype=jnp.bfloat16)
     k = jax.random.normal(k_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
     v = jax.random.normal(v_key, (batch, seq_len, kv_heads, head_dim), dtype=jnp.bfloat16)
-    segment_ids = jnp.broadcast_to(jnp.array([[11] * 213 + [12] * 291 + [-1] * 8], dtype=jnp.int32), (batch, seq_len))
+    segment_ids = jnp.broadcast_to(
+        jnp.array([[11] * 213 + [12] * (seq_len - 221) + [-1] * 8], dtype=jnp.int32), (batch, seq_len)
+    )
     mask = AttentionMask.causal(sliding_window=129 if mask_kind != "causal" else None)
     if mask_kind == "packed":
         mask = mask.with_segment_ids(segment_ids)
@@ -615,6 +704,56 @@ def test_real_gpu_fa4_cute_zeroes_padding_tiles_before_reusing_query_storage(sli
     expected_gradients = jax.jit(jax.grad(reference_loss, argnums=(0, 1, 2)))(*short_qkv)
     for actual, expected in zip(gradients, expected_gradients, strict=True):
         np.testing.assert_allclose(actual[:1, :40], expected, atol=7e-2, rtol=7e-2)
+
+
+@pytest.mark.parametrize("mask_kind", ["causal", "window", "packed"])
+@pytest.mark.slow
+@pytest.mark.timeout(600)
+def test_real_gpu_fa4_cute_cp2_matches_cp1_sm90(mask_kind):
+    if jax.default_backend() != "gpu" or fa4_cute.gpu_compute_capability() != 90:
+        pytest.skip("Native SM90 context parity requires H100 GPUs.")
+    if jax.device_count() < 2:
+        pytest.skip("CP2 parity requires two GPUs.")
+    pytest.importorskip("cutlass.cute")
+    sequence_length = 4096
+    keys = jax.random.split(jax.random.PRNGKey(91), 4)
+    shapes = [(1, sequence_length, 8, 128), (1, sequence_length, 2, 128), (1, sequence_length, 2, 128)]
+    inputs = [np.asarray(jax.random.normal(key, shape, dtype=jnp.bfloat16)) for key, shape in zip(keys, shapes)]
+    cotangent = np.asarray(jax.random.normal(keys[3], shapes[0], dtype=jnp.bfloat16))
+    ids = np.array([[-1] * 7 + [11] * 1530 + [12] * 1536 + [13] * 1008 + [-1] * 15], dtype=np.int32)
+    if mask_kind == "packed":
+        cotangent = cotangent * (ids >= 0)[..., None, None]
+    results = []
+    for context_size in (1, 2):
+        mesh = Mesh(
+            np.asarray(jax.devices()[:context_size]).reshape(1, 1, context_size, 1, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        with jax.set_mesh(mesh):
+            query_sharding = NamedSharding(mesh, P(None, "context", None, None))
+            replicated = NamedSharding(mesh, P())
+            q = jax.device_put(inputs[0], query_sharding)
+            k, v = [jax.device_put(value, replicated) for value in inputs[1:]]
+            ct = jax.device_put(cotangent, query_sharding)
+            mask = AttentionMask.causal(sliding_window=None if mask_kind == "causal" else 2048)
+            if mask_kind == "packed":
+                mask = mask.with_segment_ids(jax.device_put(ids, NamedSharding(mesh, P(None, "context"))))
+
+            def loss_with_output(q, k, v):
+                out = attention(q, k, v, mask, implementation="gpu_fa4_cute")
+                return jnp.sum(out.astype(jnp.float32) * ct.astype(jnp.float32)), out
+
+            (_, output), gradients = jax.jit(jax.value_and_grad(loss_with_output, argnums=(0, 1, 2), has_aux=True))(
+                q, k, v
+            )
+            results.append([np.asarray(value).astype(np.float32) for value in (output, *gradients)])
+    for name, actual, expected in zip(("output", "dQ", "dK", "dV"), results[1], results[0], strict=True):
+        error = np.abs(actual - expected)
+        print(f"CP_SM90_PARITY mask={mask_kind} tensor={name} max_abs={error.max()} mean_abs={error.mean()}")
+        np.testing.assert_allclose(actual, expected, atol=7e-2, rtol=7e-2)
+        if mask_kind == "packed":
+            np.testing.assert_array_equal(actual[ids < 0], 0)
 
 
 @pytest.mark.parametrize(("query_heads", "kv_heads"), [(48, 6), (48, 12), (6, 1)])

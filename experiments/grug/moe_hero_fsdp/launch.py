@@ -125,6 +125,7 @@ def _hero_run_config(
         mp=jmp.get_policy(HERO_MIXED_PRECISION),
         tracker=(
             WandbConfig(
+                save_code=False,
                 entity="marin-community",
                 project=wandb_project,
                 tags=["grug", "moe", "hero", "fsdp", "gb200"],

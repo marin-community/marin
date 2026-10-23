@@ -17,6 +17,7 @@ from google.protobuf import json_format
 
 from iris.cluster.constraints import INHERITED_CONSTRAINT_KEYS
 from iris.cluster.runtime.types import MountKind, MountSpec
+from iris.cluster.setup_scripts import DEFAULT_UV_LINK_MODE, UV_LINK_MODE_ENV
 from iris.cluster.tpu_topology import get_tpu_topology
 from iris.rpc import job_pb2
 
@@ -25,6 +26,8 @@ logger = logging.getLogger(__name__)
 IRIS_SLICE_COUNT = "IRIS_SLICE_COUNT"
 IRIS_TASKS_PER_SLICE = "IRIS_TASKS_PER_SLICE"
 IRIS_ATTEMPT_UID_ENV = "IRIS_ATTEMPT_UID"
+# Bearer token the task's Iris client presents to the controller as the job's owner.
+IRIS_TASK_TOKEN_ENV = "IRIS_TASK_TOKEN"
 IRIS_NODE_NAME_ENV = "IRIS_NODE_NAME"
 IRIS_NAMESPACE_ENV = "IRIS_NAMESPACE"
 IRIS_WORKER_REGION_ENV = "IRIS_WORKER_REGION"
@@ -108,7 +111,17 @@ fi
 
 printf '%s\n' "${UV_CACHE_DIR:-}" > "$recovery_marker"
 echo 'uv install failed; retrying with task-local cache' >&2
-env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "$@" --reinstall
+retry_args=("$@")
+reinstall=false
+for arg in "$@"; do
+  case "$arg" in
+    --reinstall|--force-reinstall) reinstall=true; break ;;
+  esac
+done
+if [ "$reinstall" = false ]; then
+  retry_args+=(--reinstall)
+fi
+env UV_CACHE_DIR="$recovery_cache" "$IRIS_UV_EXECUTABLE" "${retry_args[@]}"
 retry_status=$?
 if [ "$retry_status" -eq 0 ] && [ -n "${IRIS_ATTEMPT_UID:-}" ]; then
   touch "$shared_cache/__UV_CACHE_RECOVERY_SIGNAL_PREFIX__${IRIS_ATTEMPT_UID}" || \
@@ -220,6 +233,7 @@ def build_common_iris_env(
     num_tasks: int,
     bundle_id: str,
     controller_address: str | None,
+    task_token: str | None,
     environment: job_pb2.EnvironmentConfig,
     constraints: Sequence[job_pb2.Constraint],
     ports: Sequence[str],
@@ -251,6 +265,8 @@ def build_common_iris_env(
     if controller_address:
         env["IRIS_CONTROLLER_ADDRESS"] = controller_address
         env["IRIS_CONTROLLER_URL"] = controller_address
+    if task_token:
+        env[IRIS_TASK_TOKEN_ENV] = task_token
 
     # Standard paths and binaries
     env["IRIS_BIND_HOST"] = "0.0.0.0"
@@ -268,6 +284,8 @@ def build_common_iris_env(
     # must not land on a node directory every other task can read. HF_HUB_CACHE
     # covers the part worth sharing -- the content-addressed model/dataset blobs.
     env["UV_CACHE_DIR"] = UV_CACHE_PATH
+    # Kubernetes may clean the shared cache while tasks run, so its venvs own copies.
+    env[UV_LINK_MODE_ENV] = DEFAULT_UV_LINK_MODE
     env["UV_PYTHON_INSTALL_DIR"] = f"{UV_CACHE_PATH}/python"
     env["HF_HUB_CACHE"] = HF_HUB_CACHE_PATH
     # CARGO_HOME moves the crate registry onto the mount; a rustup toolchain
@@ -280,10 +298,8 @@ def build_common_iris_env(
     # parent (bring-your-own image) from a top-level submission with no parent.
     env["IRIS_JOB_SETUP_SCRIPTS"] = json.dumps(list(environment.setup_scripts))
 
-    # Serialize user env vars for child job inheritance via IRIS_JOB_ENV
-    user_env_vars = dict(environment.env_vars)
-    if user_env_vars:
-        env["IRIS_JOB_ENV"] = json.dumps(user_env_vars)
+    if environment.env_vars:
+        env["IRIS_JOB_ENV"] = json.dumps(dict(environment.env_vars))
 
     # Only propagate region/zone constraints to children; device constraints
     # are re-derived from each child's own resource spec.

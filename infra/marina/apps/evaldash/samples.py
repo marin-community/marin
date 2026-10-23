@@ -17,7 +17,9 @@ run browses correctly whether or not it has been migrated.
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import threading
 import time
 from typing import Generic, TypeVar
@@ -30,13 +32,15 @@ from finestore.eval import (
     SAMPLES_PREFIX,
     SAMPLES_SUFFIX,
     EvalSample,
+    Grading,
+    SampleKind,
     sample_from_archive_row,
 )
 from finestore.layout import FormatVersionError
 from finestore.migrations import LEGACY_READ_FORMAT_VERSION, LegacyReadView
 from finestore.reader import ReadView
 from fsspec.core import url_to_fs
-from marin.evaluation.metric_selection import declared_metric, primary_filter
+from marin.evaluation.metric_selection import base_metric, declared_sample_metric, primary_filter
 from marin.evaluation.records import EvalRunRecord
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath
@@ -51,6 +55,9 @@ MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 
 # The finestore reference scheme a migrated sample uses for its trajectory.
 _ARCHIVE_URI_PREFIX = "finestore://"
+_SOTOPIA_SUMMARY_URI_PREFIX = "sotopia-summary://"
+_SOTOPIA_TASK = "sotopia-hard-harbor"
+_SOTOPIA_TRIAL_ID = re.compile(r"(?!\.\.?$)[A-Za-z0-9._-]+")
 
 
 class SampleTask(BaseModel):
@@ -86,6 +93,12 @@ class SampleCounts(BaseModel):
     ungraded: int
 
 
+class SampleRow(EvalSample):
+    """A sample page row with an optional reference to a retained SOTOPIA episode."""
+
+    summary_uri: str | None = None
+
+
 class SamplesResponse(BaseModel):
     """One page of validated samples plus task-level paging metadata."""
 
@@ -105,17 +118,16 @@ class SamplesResponse(BaseModel):
     offset: int
     limit: int
     counts: SampleCounts
-    rows: tuple[EvalSample, ...]
+    rows: tuple[SampleRow, ...]
 
 
 class ArtifactResponse(BaseModel):
-    """One sample-referenced artifact (the trajectory) resolved to text for the browser.
+    """One sample-referenced artifact resolved to text for the browser.
 
     ``available`` is False -- with a human-readable ``reason`` -- for every non-happy path (the run
     has no results directory, the reference is missing/unreadable, or it exceeds the size cap),
-    mirroring the logs endpoint's reachability degradation rather than raising. ``text`` is the decoded
-    object body when available, and ``media_type`` reflects the URI extension so the client knows
-    whether to parse JSON.
+    mirroring the logs endpoint's reachability degradation rather than raising. ``text`` is the
+    decoded object body when available, and ``media_type`` describes the resolved object.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -342,7 +354,7 @@ def declared_primary_metric(record: EvalRunRecord, sample_task: str) -> str | No
 
 def _sample_primary_metric(metric_columns: tuple[str, ...], declared: str | None) -> str | None:
     metrics = dict.fromkeys(metric_columns, 0.0)
-    picked = declared_metric(metrics, declared)
+    picked = declared_sample_metric(metrics, declared)
     return picked[0] if picked is not None else None
 
 
@@ -381,12 +393,16 @@ def fetch_samples(
     filtered = _select_extraction_filter(table, extraction_filter)
     table = filtered.rows
     columns = set(table.column_names)
-    correct_values = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
+    stored_correct = table.column("correct").to_pylist() if "correct" in columns else [None] * table.num_rows
     metric_maps = (
         table.column("metrics").to_pylist(maps_as_pydicts="strict") if "metrics" in columns else [None] * table.num_rows
     )
     metric_columns = tuple(sorted({name for row in metric_maps if row for name in row}))
     primary = _sample_primary_metric(metric_columns, primary_metric_name)
+    correct_values = [
+        value if value is not None or primary is None or not row or row.get(primary) is None else row[primary] >= 1.0
+        for value, row in zip(stored_correct, metric_maps, strict=True)
+    ]
     n_correct = sum(1 for value in correct_values if value is True)
     n_ungraded = sum(1 for value in correct_values if value is None)
     counts = SampleCounts(
@@ -405,7 +421,35 @@ def fetch_samples(
         indices = list(range(table.num_rows))
     page_indices = indices[offset : offset + limit]
     page_rows = table.take(pa.array(page_indices, type=pa.int64())).to_pylist(maps_as_pydicts="strict")
-    page = tuple(sample_from_archive_row(row) for row in page_rows)
+    page = []
+    for row in page_rows:
+        sample = SampleRow.model_validate(sample_from_archive_row(row).model_dump())
+        trial_id = row.get("trial_id") or ""
+        if (
+            task.rsplit("/", 1)[-1] == _SOTOPIA_TASK
+            and sample.kind is SampleKind.AGENTIC
+            and sample.trajectory_uri is None
+            and _SOTOPIA_TRIAL_ID.fullmatch(trial_id)
+        ):
+            sample = sample.model_copy(update={"summary_uri": f"{_SOTOPIA_SUMMARY_URI_PREFIX}{trial_id}"})
+        if sample.correct is None and primary is not None and primary in sample.metrics:
+            score = sample.metrics[primary]
+            sample = sample.model_copy(
+                update={
+                    "correct": score >= 1.0,
+                    "grading": (
+                        sample.grading
+                        or Grading(
+                            method=f"lm-eval:{base_metric(primary)}",
+                            metric=primary,
+                            filter=filtered.selected,
+                            score=score,
+                            passed=score >= 1.0,
+                        )
+                    ),
+                }
+            )
+        page.append(sample)
     return SamplesResponse(
         available=True,
         error=None,
@@ -418,7 +462,7 @@ def fetch_samples(
         offset=offset,
         limit=limit,
         counts=counts,
-        rows=page,
+        rows=tuple(page),
     )
 
 
@@ -474,18 +518,32 @@ def _resolve_archive_artifact(results_path: str, uri: str, max_bytes: int) -> Ar
     )
 
 
+def _sotopia_summary_path(results_path: str, trial_id: str) -> StoragePath | None:
+    """Find Harbor's selected summary, or None without one unambiguous trial result."""
+    results = (StoragePath(results_path) / "harbor_jobs" / "harbor_*" / trial_id / "result.json").glob()
+    if len(results) != 1:
+        return None
+    selected = json.loads(results[0].read_text()).get("trial_relpath")
+    if not isinstance(selected, str):
+        return None
+    parts = selected.split("/")
+    if len(parts) != 3 or parts[:2] != [trial_id, "attempts"] or not re.fullmatch(r"[0-9]{3,}", parts[2]):
+        return None
+    return results[0].parent.parent / selected / "agent/sotopia-summary.json"
+
+
 def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_ARTIFACT_BYTES) -> ArtifactResponse:
     """Resolve one sample-referenced artifact URI to decoded text, size-capped.
 
-    A ``finestore://`` reference resolves from the run's archive; a legacy ``gs://``/``s3://`` URI is
-    resolved in place, path-restricted to under ``results_path``. Anything missing, out of tree, or
-    oversized returns ``available=False`` with a reason instead of raising.
+    A ``finestore://`` reference resolves from the run's archive. A ``sotopia-summary://`` reference
+    resolves by trial ID under the run's Harbor job tree. Legacy ``gs://``/``s3://`` URIs are resolved
+    in place, path-restricted to under ``results_path``. Anything missing, out of tree, or oversized
+    returns ``available=False`` with a reason instead of raising.
     """
     if not results_path:
         return _unavailable_artifact(uri, "run has no results_path")
 
-    # A finestore:// URI is archive-relative, so two runs can share one (e.g. blobs/trial-1/...);
-    # key the cache by the run as well so one run's artifact never answers for another's.
+    # Relative references can repeat across runs; key the cache by the run as well.
     cache_key = f"{results_path}|{uri}"
     cached = _artifact_cache.get(cache_key)
     if cached is not None:
@@ -493,6 +551,22 @@ def fetch_artifact(results_path: str | None, uri: str, *, max_bytes: int = MAX_A
 
     if uri.startswith(_ARCHIVE_URI_PREFIX):
         response = _resolve_archive_artifact(results_path, uri, max_bytes)
+        if response.available:
+            _artifact_cache.put(cache_key, response)
+        return response
+
+    if uri.startswith(_SOTOPIA_SUMMARY_URI_PREFIX):
+        trial_id = uri.removeprefix(_SOTOPIA_SUMMARY_URI_PREFIX)
+        if not _SOTOPIA_TRIAL_ID.fullmatch(trial_id):
+            return _unavailable_artifact(uri, "invalid SOTOPIA trial ID")
+        try:
+            path = _sotopia_summary_path(results_path, trial_id)
+        except Exception as exc:
+            logger.info("SOTOPIA summary lookup failed for %s: %s", uri, exc)
+            return _unavailable_artifact(uri, f"{type(exc).__name__}: {exc}"[:400])
+        if path is None:
+            return _unavailable_artifact(uri, "SOTOPIA trial has no selected summary path")
+        response = fetch_artifact(results_path, str(path), max_bytes=max_bytes).model_copy(update={"uri": uri})
         if response.available:
             _artifact_cache.put(cache_key, response)
         return response
