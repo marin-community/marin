@@ -87,7 +87,7 @@ SESSION = MappingProxyType(
         "cleanup_timeout": 60,
         "command_timeout": 30.0,
         "max_total_tokens": None,
-        "shell_tool": {"name": "shell"},
+        "shell_tool": {"name": "shell", "command_parameter": "command"},
     }
 )
 
