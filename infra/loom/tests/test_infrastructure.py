@@ -571,6 +571,37 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
     return infrastructure.instance.id.apply(check)
 
 
+@pulumi.runtime.test
+def test_profiles_sharing_a_secret_adopt_it_once():
+    base = deployment_config()
+    shared = (
+        ProfileConfig.parse(
+            name,
+            {
+                "agent": "codex",
+                "env": {"CLAUDE_CODE_OAUTH_TOKEN": {"secretRef": f"projects/example/secrets/claude/{version}"}},
+            },
+        )
+        for name, version in (("review", "versions/latest"), ("pm", "versions/2"))
+    )
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(base, profiles=(*base.profiles, *shared)))
+
+    def check(_: object) -> None:
+        adopted = sorted(
+            (resource.inputs["secretId"], resource.resource_id)
+            for resource in mocks.resources
+            if resource.typ == "gcp:secretmanager/secret:Secret" and resource.name != "loom-dotenv"
+        )
+        assert adopted == [
+            ("claude", "projects/example/secrets/claude"),
+            ("ops-kubeconfig", "projects/example/secrets/ops-kubeconfig"),
+        ]
+
+    return infrastructure.instance.id.apply(check)
+
+
 def test_agent_watch_manifest_and_profile_reference() -> None:
     watch = WatchConfig.parse(
         "daily",

@@ -94,9 +94,15 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/user/AGENTS.md
-      env: &loomIrisUser
-        IRIS_USER:
-          value: loom
+      # Profiles that can run the claude agent authenticate it with a long-lived
+      # `claude setup-token` credential instead of the interactive login stored
+      # on the session home volume that every session shares.
+      env: &claudeSessionEnv
+        <<: &loomIrisUser
+          IRIS_USER:
+            value: loom
+        CLAUDE_CODE_OAUTH_TOKEN: &claudeOauthToken
+          secretRef: projects/hai-gcp-models/secrets/LOOM_CLAUDE_CODE_OAUTH_TOKEN/versions/latest
       githubRepositories: &interactiveGithubRepositories
         - Open-Athena/*
         - marin-community/*
@@ -131,7 +137,7 @@ config:
       idleArchiveSeconds: 3000
       prelude: weaver
       instructionsFile: profiles/marina/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       githubRepositories: *interactiveGithubRepositories
       mcpAccess:
         mode: groups
@@ -147,7 +153,7 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/github/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       githubRepositories: *interactiveGithubRepositories
       mcpAccess: *builtinMcpAccess
     fork-ferry:
@@ -193,7 +199,7 @@ config:
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -215,7 +221,7 @@ config:
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-holistic-review/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -356,6 +362,7 @@ config:
       env:
         BOARD_GITHUB_TOKEN:
           secretRef: projects/hai-gcp-models/secrets/LOOM_PM_BOARD_TOKEN/versions/latest
+        CLAUDE_CODE_OAUTH_TOKEN: *claudeOauthToken
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -372,7 +379,7 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/slack/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       githubRepositories: *interactiveGithubRepositories
       mcpAccess: *builtinMcpAccess
   marin-loom:workloads:
