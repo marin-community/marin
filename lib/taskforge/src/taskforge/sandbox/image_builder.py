@@ -30,7 +30,7 @@ never shares a container with the model-authored Dockerfile.
 A publish fails in one of two ways. ``BuildFailed`` is the build's own: the build job ran and failed,
 kaniko on the Dockerfile and its context or the job's execution timeout, which a Dockerfile change can
 fix. ``ImageJobFailed`` is the host's: a job did not schedule, its worker was lost, it was killed, the
-push job failed (it runs no code from the build), Iris kept no output archive, or the registry does not
+build bootstrap or push job failed, Iris kept no output archive, or the registry does not
 serve back what was pushed. No Dockerfile change fixes those.
 
 The builder takes the credential at construction and reads no secret store itself, so it runs on
@@ -109,6 +109,7 @@ TARGET_CLUSTER = "cw-us-east-02a"
 CONTEXT_FILE = "context.tar.gz"
 PUSH_SOURCE = Path(image_push.__file__)
 """``image_push``, shipped to the push job as a workdir file: its pinned image has no Taskforge."""
+BUILD_SETUP_FAILED_EXIT = 125
 POLL_INTERVAL = 5.0
 JOB_TIMEOUT = 3600
 SCHEDULING_TIMEOUT = 900
@@ -123,9 +124,10 @@ REGISTRY_CREDENTIAL_ENV = "TASKFORGE_REGISTRY_CREDENTIAL"
 CREDENTIAL_FIELDS = ("registry", "user", "password")
 
 # Runs under bash in BUILD_IMAGE. kaniko replaces the container's root filesystem while it builds,
-# so it is exec'd last; its exit code is the job's.
+# so it is exec'd last; its exit code is the job's. The EXIT trap marks failures before exec.
 BUILD_SCRIPT = r"""
 set -euo pipefail
+trap 'exit "$BUILD_SETUP_FAILED_EXIT"' EXIT
 K=/kaniko
 mkdir -p "$K" /tmp/kroot /app/context "$IRIS_OUTPUT_DIR"
 wget -q -O /tmp/crane.tgz "$CRANE_URL"
@@ -210,20 +212,23 @@ def manifest_readback(credential: RegistryCredential, repository: str, tag: str)
     base = f"https://{credential.registry}/v2/{repository}"
     auth = (credential.user, credential.password)
     headers = {"Accept": ", ".join(MANIFEST_TYPES)}
-    with httpx.Client(auth=auth, headers=headers, timeout=60, follow_redirects=False) as client:
-        by_tag = client.get(f"{base}/manifests/{tag}")
-        by_tag.raise_for_status()
-        digest = f"sha256:{hashlib.sha256(by_tag.content).hexdigest()}"
-        by_digest = client.get(f"{base}/manifests/{digest}")
-        by_digest.raise_for_status()
-        if by_digest.content != by_tag.content:
-            raise ImageJobFailed(f"{digest} does not resolve to the manifest bytes of tag {tag}")
-        config_digest = by_tag.json()["config"]["digest"]
-        config = client.get(f"{base}/blobs/{config_digest}", follow_redirects=True)
-        config.raise_for_status()
-        platform = (config.json()["os"], config.json()["architecture"])
-        if platform != ("linux", "amd64"):
-            raise ImageJobFailed(f"image platform is {platform}, not linux/amd64")
+    try:
+        with httpx.Client(auth=auth, headers=headers, timeout=60, follow_redirects=False) as client:
+            by_tag = client.get(f"{base}/manifests/{tag}")
+            by_tag.raise_for_status()
+            digest = f"sha256:{hashlib.sha256(by_tag.content).hexdigest()}"
+            by_digest = client.get(f"{base}/manifests/{digest}")
+            by_digest.raise_for_status()
+            if by_digest.content != by_tag.content:
+                raise ImageJobFailed(f"{digest} does not resolve to the manifest bytes of tag {tag}")
+            config_digest = by_tag.json()["config"]["digest"]
+            config = client.get(f"{base}/blobs/{config_digest}", follow_redirects=True)
+            config.raise_for_status()
+            platform = (config.json()["os"], config.json()["architecture"])
+            if platform != ("linux", "amd64"):
+                raise ImageJobFailed(f"image platform is {platform}, not linux/amd64")
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as error:
+        raise ImageJobFailed(f"registry readback failed for {credential.registry}/{repository}:{tag}") from error
     return digest
 
 
@@ -319,7 +324,8 @@ class IrisImageBuilder:
                         "CRANE_SHA256": CRANE_SHA256,
                         "KANIKO_IMAGE": KANIKO_IMAGE,
                         "CONTEXT_FILE": CONTEXT_FILE,
-                        "DOCKERFILE": build.dockerfile,
+                        "DOCKERFILE": "Dockerfile",
+                        "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
                         "DESTINATION": destination,
                     },
                     target_cluster=self.target_cluster,
@@ -372,7 +378,7 @@ def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None
     """Wait for ``job`` to succeed, raising with Iris's error, which carries the log tail, when it does not.
 
     Raises:
-        ImageJobFailed: the job ended in ``HOST_JOB_STATES``, or did not end within its deadlines.
+        ImageJobFailed: host termination, build bootstrap failure, or exceeding the wait deadline.
         BuildFailed | ImageJobFailed: ``failed``, when the job ran and ended ``FAILED``.
     """
     try:
@@ -381,5 +387,8 @@ def wait_succeeded(job: Job, failed: type[BuildFailed | ImageJobFailed]) -> None
         raise ImageJobFailed(f"job {job.job_id} did not end within its scheduling and execution timeouts") from error
     if status.state == JobState.SUCCEEDED:
         return
-    error = ImageJobFailed if status.state in HOST_JOB_STATES else failed
+    host_failed = status.state in HOST_JOB_STATES or any(
+        task.exit_code == BUILD_SETUP_FAILED_EXIT for task in status.tasks
+    )
+    error = ImageJobFailed if host_failed else failed
     raise error(f"job {job.job_id} ended {status.state}: {status.error_message}")

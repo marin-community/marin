@@ -4,10 +4,13 @@
 """The registry credential's parsing and the environment of a publish's jobs, submitted through a recording fake."""
 
 import json
+import subprocess
 from collections.abc import Iterator
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import cast
 
+import httpx
 import pytest
 from iris.client import IrisClient, Job
 from iris.client.client import IrisContext, iris_ctx_scope
@@ -18,10 +21,13 @@ from iris.rpc import job_pb2
 
 from taskforge.sandbox.image_builder import (
     BLANKED_ENV,
+    BUILD_SCRIPT,
+    BUILD_SETUP_FAILED_EXIT,
     REGISTRY_CREDENTIAL_ENV,
     BuildFailed,
     ImageJobFailed,
     RegistryCredential,
+    manifest_readback,
     submit_job,
     wait_succeeded,
 )
@@ -116,6 +122,7 @@ def test_jobs_submitted_from_a_coordinator_task_inherit_none_of_its_environment(
 class EndedStatus:
     state: JobState
     error_message: str
+    tasks: tuple[SimpleNamespace, ...]
 
 
 class EndedJob:
@@ -123,13 +130,14 @@ class EndedJob:
 
     job_id = "/alice/taskforge-image-build-x"
 
-    def __init__(self, state: JobState | None):
+    def __init__(self, state: JobState | None, exit_code: int = 1):
         self.state = state
+        self.exit_code = exit_code
 
     def wait(self, **kwargs: object) -> EndedStatus:
         if self.state is None:
             raise TimeoutError("still running")
-        return EndedStatus(self.state, "the job's log tail")
+        return EndedStatus(self.state, "the job's log tail", (SimpleNamespace(exit_code=self.exit_code),))
 
 
 @pytest.mark.parametrize("state", [JobState.UNSCHEDULABLE, JobState.WORKER_FAILED, JobState.KILLED, None])
@@ -143,3 +151,36 @@ def test_a_job_the_host_ended_is_an_image_job_failure_whichever_job_it_is(state,
 def test_a_job_that_ran_and_failed_raises_the_callers_failure(failed):
     with pytest.raises(failed, match="ended failed: the job's log tail"):
         wait_succeeded(cast(Job, EndedJob(JobState.FAILED)), failed)
+
+
+def test_build_bootstrap_failure_is_a_host_failure(tmp_path):
+    mkdir = tmp_path / "mkdir"
+    mkdir.write_text("#!/bin/sh\nexit 42\n")
+    mkdir.chmod(0o755)
+    result = subprocess.run(
+        ["/bin/bash", "-c", BUILD_SCRIPT],
+        env={
+            "PATH": str(tmp_path),
+            "IRIS_OUTPUT_DIR": str(tmp_path / "output"),
+            "BUILD_SETUP_FAILED_EXIT": str(BUILD_SETUP_FAILED_EXIT),
+        },
+        capture_output=True,
+        check=False,
+    )
+    with pytest.raises(ImageJobFailed):
+        wait_succeeded(cast(Job, EndedJob(JobState.FAILED, result.returncode)), BuildFailed)
+
+
+@pytest.mark.parametrize("failure", [401, 404, 503, "transport", "malformed"])
+def test_registry_readback_failure_is_a_host_failure(monkeypatch, failure):
+    def respond(request):
+        if failure == "transport":
+            raise httpx.ConnectError("connection refused", request=request)
+        if failure == "malformed":
+            return httpx.Response(200, content=b"not a manifest")
+        return httpx.Response(failure)
+
+    client = httpx.Client
+    monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(ImageJobFailed):
+        manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag")
