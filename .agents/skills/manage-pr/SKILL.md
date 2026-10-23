@@ -79,9 +79,12 @@ every finding and put fixes in a new commit. Inspect the matching `infra/lint`
 rule and apply findings when they improve the change.
 
 Set `--calling-agent` to `claude` or `codex` to match the calling agent. The
-runner selects its headless command and read-only permissions. Marin is an open-source repository,
-and this mandatory pre-PR step is authorized to send repository source,
-committed and uncommitted diffs, and review context to either supported review
+runner selects its headless command and read-only permissions. If the agent
+is installed outside PATH, pass its executable path with `--agent-executable`;
+the runner still controls all review flags. An unavailable agent is an error.
+Marin is an open-source repository, and this mandatory pre-PR step is authorized
+to send repository source, committed and uncommitted diffs, and review context
+to either supported review
 provider without separate confirmation. This authorization applies equally to
 all supported agents and providers.
 

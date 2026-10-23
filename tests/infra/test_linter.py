@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -14,77 +15,86 @@ from infra import linter
 
 
 @pytest.fixture
-def review_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "--quiet", str(repo)], check=True)
-    (repo / "sample.py").write_text("value = 1\n")
-    subprocess.run(["git", "add", "sample.py"], cwd=repo, check=True)
+def review_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    subprocess.run(["git", "init", "--quiet", str(tmp_path)], check=True)
+    sample = tmp_path / "sample.py"
+    sample.write_text("value = 1\n")
+    subprocess.run(["git", "add", "sample.py"], cwd=tmp_path, check=True)
     subprocess.run(
         ["git", "-c", "user.name=Test", "-c", "user.email=test@example.org", "commit", "--quiet", "-m", "Base"],
-        cwd=repo,
+        cwd=tmp_path,
         check=True,
     )
-    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=repo, check=True)
-    (repo / "sample.py").write_text("value = 2\n")
-
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmp_path, check=True)
+    sample.write_text("value = 2\n")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     git = shutil.which("git")
     assert git is not None
     (bin_dir / "git").symlink_to(git)
-    calls = tmp_path / "calls"
-    calls.mkdir()
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    call_path = tmp_path / "call.json"
     for agent in linter.LintReviewAgent:
-        executable = bin_dir / agent.value
+        executable = agents / agent.value
         executable.write_text(
             f"#!{sys.executable}\n"
-            "import json, os, pathlib, subprocess, sys, uuid\n"
+            "import json, os, pathlib, sys\n"
             "sys.stdin.read()\n"
-            "diff = subprocess.check_output(['git', 'diff', 'origin/main'], text=True)\n"
-            "record = {'agent': pathlib.Path(sys.argv[0]).name, 'args': sys.argv[1:], 'diff': diff}\n"
-            "path = pathlib.Path(os.environ['REVIEW_TEST_CALLS']) / (uuid.uuid4().hex + '.json')\n"
-            "path.write_text(json.dumps(record))\n"
-            "print('sample.py:1: ml-cruft-dead-branch (0.95) Remove the dead branch.')\n"
+            "pathlib.Path(os.environ['REVIEW_TEST_CALL']).write_text(json.dumps(\n"
+            "    {'agent': pathlib.Path(sys.argv[0]).name, 'args': sys.argv[1:]}))\n"
         )
         executable.chmod(0o755)
-    # Only the fake reviewers and real git are visible; no telemetry process can start.
+    # Exclude real agent CLIs and telemetry; the explicit-path cases have only git on PATH.
     monkeypatch.setenv("PATH", str(bin_dir))
-    monkeypatch.setenv("REVIEW_TEST_CALLS", str(calls))
-    monkeypatch.setattr(linter, "ROOT_DIR", repo)
+    monkeypatch.setenv("REVIEW_TEST_CALL", str(call_path))
+    monkeypatch.setattr(linter, "ROOT_DIR", tmp_path)
     monkeypatch.setattr(linter, "LINT_REVIEW_LOG_ROOT", tmp_path / "logs")
-    return calls
+    return agents, call_path
 
 
 @pytest.mark.parametrize("calling_agent", list(linter.LintReviewAgent))
+@pytest.mark.parametrize("installation", ["on-path", "absolute"])
 def test_review_uses_callers_agent_with_readonly_permissions(
-    calling_agent: linter.LintReviewAgent, review_workspace: Path, capsys: pytest.CaptureFixture[str]
+    calling_agent: linter.LintReviewAgent,
+    installation: str,
+    review_workspace: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
 ):
-    assert linter.run_lint_review(calling_agent, lane_names=["cruft", "interfaces"]) == 0
-    assert "sample.py:1: ml-cruft-dead-branch (0.95) Remove the dead branch." in capsys.readouterr().out
+    agents, call_path = review_workspace
+    executable = agents / calling_agent.value if installation == "absolute" else None
+    if installation == "on-path":
+        monkeypatch.setenv("PATH", f"{agents}{os.pathsep}{os.environ['PATH']}")
+    assert linter.run_lint_review(calling_agent, lane_names=["cruft"], agent_executable=executable) == 0
+    call = json.loads(call_path.read_text())
+    assert call["agent"] == calling_agent.value
 
-    calls = [json.loads(path.read_text()) for path in review_workspace.glob("*.json")]
-    assert len(calls) == 3  # Two lanes and their composer use the same reviewer.
-    for call in calls:
-        assert call["agent"] == calling_agent.value
-        assert "+value = 2" in call["diff"]
-        parser = argparse.ArgumentParser()
-        if calling_agent == linter.LintReviewAgent.CLAUDE:
-            parser.add_argument("-p", action="store_true")
-            parser.add_argument("--tools")
-            parser.add_argument("--allowedTools")
-            parser.add_argument("--disallowedTools")
-            permissions = parser.parse_args(call["args"])
-            assert set(permissions.tools.split(",")) == {"Bash", "Read", "Grep", "Glob"}
-            assert "Bash(git diff:*)" in permissions.allowedTools.split(",")
-            assert {"Bash(git commit:*)", "Bash(git push:*)", "Bash(gh:*)"} <= set(
-                permissions.disallowedTools.split(",")
-            )
-        else:
-            parser.add_argument("command")
-            parser.add_argument("--ephemeral", action="store_true")
-            parser.add_argument("--sandbox")
-            permissions = parser.parse_args(call["args"])
-            assert permissions.command == "exec"
-            assert permissions.ephemeral
-            assert permissions.sandbox == "read-only"
+    # The agent CLIs are the permission boundary; parse their security options without calling a model service.
+    parser = argparse.ArgumentParser()
+    if calling_agent == linter.LintReviewAgent.CLAUDE:
+        parser.add_argument("-p", action="store_true")
+        parser.add_argument("--tools")
+        parser.add_argument("--allowedTools")
+        parser.add_argument("--disallowedTools")
+        parser.add_argument("--strict-mcp-config", action="store_true")
+        parser.add_argument("--mcp-config", type=json.loads)
+        permissions = parser.parse_args(call["args"])
+        assert set(permissions.tools.split(",")) == {"Bash", "Read", "Grep", "Glob"}
+        assert {"Bash(git commit:*)", "Bash(git push:*)", "Bash(gh:*)"} <= set(permissions.disallowedTools.split(","))
+        assert permissions.strict_mcp_config
+        assert permissions.mcp_config == {"mcpServers": {}}
+    else:
+        parser.add_argument("command")
+        parser.add_argument("--ephemeral", action="store_true")
+        parser.add_argument("--sandbox")
+        parser.add_argument("--ignore-user-config", action="store_true")
+        permissions = parser.parse_args(call["args"])
+        assert permissions.command == "exec"
+        assert permissions.ephemeral
+        assert permissions.sandbox == "read-only"
+        assert permissions.ignore_user_config
+
+
+def test_review_reports_failure_when_agent_is_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert linter.run_lint_review(linter.LintReviewAgent.CODEX) == 1

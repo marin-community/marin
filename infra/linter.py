@@ -352,16 +352,19 @@ def _lint_review_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in LINT_REVIEW_STRIPPED_ENV}
 
 
-def _review_agent_command(calling_agent: LintReviewAgent) -> list[str]:
+def _review_agent_command(calling_agent: LintReviewAgent, executable: str) -> list[str]:
     """Build the selected reviewer's headless command with read-only permissions."""
     if calling_agent == LintReviewAgent.CODEX:
-        return ["codex", "exec", "--ephemeral", "--sandbox", "read-only"]
+        return [executable, "exec", "--ephemeral", "--sandbox", "read-only", "--ignore-user-config"]
 
     allow = ["Read", "Grep", "Glob", *(f"Bash({c}:*)" for c in LINT_REVIEW_READONLY_GIT)]
     deny = [f"Bash({c}:*)" for c in LINT_REVIEW_DENIED_COMMANDS]
     return [
-        "claude",
+        executable,
         "-p",
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
         "--tools",
         LINT_REVIEW_BUILTIN_TOOLS,
         "--allowedTools",
@@ -659,7 +662,7 @@ def _ship_review_event(
             "invocation": {
                 "variant": mode,
                 "trigger": _review_trigger(),
-                "agent_cli": agent_cmd[0],
+                "agent_cli": os.path.basename(agent_cmd[0]),
                 "git_branch": _git(["rev-parse", "--abbrev-ref", "HEAD"]),
                 "merge_base_sha": merge_base,
                 "head_sha": _review_head_sha(),
@@ -679,7 +682,13 @@ def _ship_review_event(
     )
 
 
-def run_lint_review(calling_agent: LintReviewAgent, lane_names: list[str] | None = None, compose: bool = True) -> int:
+def run_lint_review(
+    calling_agent: LintReviewAgent,
+    lane_names: list[str] | None = None,
+    compose: bool = True,
+    *,
+    agent_executable: pathlib.Path | None = None,
+) -> int:
     """Run the advisory `infra/lint/` catalog over the branch's changes via headless agents.
 
     Fans out one agent per lane (see `LINT_LANES`); each lane is handed the changed-file
@@ -690,12 +699,12 @@ def run_lint_review(calling_agent: LintReviewAgent, lane_names: list[str] | None
 
     `calling_agent` selects the caller's agent CLI. This runner owns the headless
     invocation and read-only permissions for every lane and the composer.
+    `agent_executable` selects an installation outside PATH without overriding flags.
 
     Findings are advisory and never block. Returns 0 for every outcome that fits
-    that contract (no findings, findings emitted, agent unavailable, merge-base
-    unresolved, lane/composer timeout). Returns 1 only on a usage error (unknown
-    lane) or when every lane's agent failed to run, which indicates a broken
-    agent CLI worth surfacing.
+    that contract (no findings, findings emitted, merge-base unresolved,
+    lane/composer timeout). Returns 1 on an unknown lane, an unavailable agent,
+    or when every lane's agent failed to run.
     """
     lanes = list(LINT_LANES)
     if lane_names:
@@ -706,10 +715,12 @@ def run_lint_review(calling_agent: LintReviewAgent, lane_names: list[str] | None
             return 1
         lanes = [lane for lane in LINT_LANES if lane.name in lane_names]
 
-    agent_cmd = _review_agent_command(calling_agent)
-    if shutil.which(agent_cmd[0]) is None:
-        click.echo(f"  ⚠ Lint review skipped: agent '{agent_cmd[0]}' not found on PATH")
-        return 0
+    requested_executable = str(agent_executable or calling_agent.value)
+    executable = shutil.which(requested_executable)
+    if executable is None:
+        click.echo(f"Error: review agent '{requested_executable}' is unavailable; set --agent-executable to its path")
+        return 1
+    agent_cmd = _review_agent_command(calling_agent, executable)
 
     resolved = _resolve_review_stat()
     if resolved is None:

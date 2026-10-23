@@ -961,6 +961,11 @@ def _get_check_name(check) -> str:
     ),
 )
 @click.option(
+    "--agent-executable",
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=pathlib.Path),
+    help="With --review, use this agent installation instead of looking on PATH. Review flags remain runner-controlled.",
+)
+@click.option(
     "--lint-lane",
     "lint_lanes",
     multiple=True,
@@ -984,6 +989,7 @@ def main(
     pre_commit: bool,
     review: bool,
     calling_agent: LintReviewAgent | None,
+    agent_executable: pathlib.Path | None,
     lint_lanes: tuple[str, ...],
     lint_compose: bool,
     files_opt: tuple[str, ...],
@@ -994,7 +1000,14 @@ def main(
     if review:
         if calling_agent is None:
             raise click.UsageError("--calling-agent is required with --review")
-        sys.exit(run_lint_review(calling_agent, lane_names=list(lint_lanes) or None, compose=lint_compose))
+        sys.exit(
+            run_lint_review(
+                calling_agent,
+                lane_names=list(lint_lanes) or None,
+                compose=lint_compose,
+                agent_executable=agent_executable,
+            )
+        )
 
     if skip and only:
         click.echo("Error: --only and --skip are mutually exclusive.", err=True)
