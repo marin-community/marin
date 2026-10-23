@@ -86,7 +86,7 @@ TASK_CPUS = 96
 # A synthesized task gives the solver a shell tool, and the engines refuse a chat request with tools (HTTP 400)
 # unless they parse tool calls. Qwen3 and Snowball write Hermes <tool_call> tags.
 TOOL_CALLS = MappingProxyType({"enable_auto_tools": True, "tool_parser": "hermes"})
-# The rollout limits of the Baby RSI policy (run.py POLICY_LIMITS) and the shell tool of its shell harness.
+# The rollout limits of the Baby RSI policy (evaluate.py POLICY_LIMITS) and the shell tool of its shell harness.
 SESSION = MappingProxyType(
     {
         "max_turns": 20,
