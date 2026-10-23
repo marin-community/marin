@@ -6,25 +6,25 @@ on one GPU and retains every completion and score for paired comparisons.
 
 ## Models and interpretation
 
-`models.json` pins public model revisions. The first dense experiment anchors
-on Qwen2.5-1.5B and merges Qwen2.5-1.5B-Instruct with
-Qwen2.5-Coder-1.5B-Instruct. Their model-card `base_model` fields document the
-Qwen2.5-1.5B ancestry; this does not pin the unpublished historical initializer
-revision. Coder includes extensive continued pretraining, so its vector from
-the public base is a far-donor test, rather than a small SFT update.
-The [Coder report](https://arxiv.org/html/2409.12186v3) reports over 5.5T
-pretraining tokens.
+`models.json` pins public model revisions. The main dense arm starts from
+Qwen2.5-1.5B-Instruct and trains matched math/code specialists. The limited far
+arm transfers Coder-Instruct or Math-Instruct weights into Instruct. Official
+model-card `base_model` fields document Qwen2.5-1.5B ancestry; they do not pin the
+unpublished historical initializer revision. The
+[Coder report](https://arxiv.org/html/2409.12186v3) reports over 5.5T
+continued-pretraining tokens, so Coder is a far-donor control.
 
-The second experiment adds Qwen2.5-Math-1.5B-Instruct. The
-[Math description](https://qwenlm.github.io/blog/qwen2.5-math/) documents
+The [Math description](https://qwenlm.github.io/blog/qwen2.5-math/) documents
 Qwen2.5 initialization and over 1T mathematical pretraining tokens.
-Math's native `rope_theta=10000` differs from the anchor's `1000000`.
-All merges use the anchor value; Math is evaluated alone at both values to
-measure the configuration effect. Context is capped at 4096 throughout. All
-candidates use the pinned general Instruct tokenizer, template and stop IDs;
-the runner verifies identical token-to-ID mappings in every downloaded model.
-These are comparisons under a common prompting policy, not reproductions of
-the model-card benchmark scores. Non-weight configuration choices stay fixed.
+Math's native `rope_theta=10000` differs from Instruct's `1000000`.
+All merges use the Instruct value; Math alone is evaluated at both values to
+measure the RoPE effect. The context limit is explicit (`--max-model-len`), and
+every candidate in a comparison shares one output-token budget. All candidates
+use the pinned general Instruct tokenizer, template and stop IDs; the runner
+verifies identical token-to-ID mappings in every downloaded model. These are
+comparisons under a common prompting policy, not reproductions of model-card
+benchmark scores. Non-weight configuration choices stay fixed apart from the
+explicit Math RoPE control.
 
 The MoE family is `allenai/OLMoE-1B-7B-0924` → `-SFT` → `-Instruct`
 (DPO from SFT). The [official adaptation commands](https://github.com/allenai/OLMoE#adaptation)
@@ -92,7 +92,10 @@ Downloads and the Docker pull should complete before borrowing the GPU.
 The original 256-token sweep was stopped after its baseline passes because
 Instruct truncated 32.83% of greedy GSM8K and 8.95% of greedy MBPP outputs.
 Set one output cap for the full comparison using the longest-writing donor;
-2048 is the current minimum, pending the Aristaeus length check.
+The 2048 command above is a starting configuration. Run the length probe below
+before the main comparison; raise the shared cap if the longest donor still
+truncates more than 3% of either dataset. Re-evaluate all baselines at the chosen
+cap, and freeze it before any grid candidate.
 
 ### Train matched near donors
 
@@ -139,13 +142,75 @@ training checkpoints. Training metadata records the configuration, parent path,
 data/source hashes, versions and selected checkpoint. Offline W&B and local
 Trainer state retain training metrics.
 
-After training, add `math_sft` and `code_sft` entries to both run source files.
-Use absolute `final-fp32/` paths; record the training metadata and weight-file
-SHA256 hashes in `model-sources.json`. Generate main-arm recipes with
-`recipes --arm near`. Evaluate each specialist against Instruct and inspect its
-weight distance before running the grid. Include a donor only after it improves
-its own task under the same evaluation policy. `EphAsad/Aristaeus` is an
-additional public full-SFT candidate, subject to its own gate.
+Create a separate near-arm run, then register every planned donor before the
+first evaluation. Source manifests are immutable once outputs exist. Keep the
+far and near arms in separate run directories.
+
+Register the FP32 donors and generate the main recipe file:
+
+```bash
+uv run --no-project --python /tmp/merge-eval/bin/python \
+  python -m experiments.weight_merging.playground.prepare \
+  --output /tmp/near-run --panel full --models anchor instruct
+for domain in math code; do
+  host-test-budget uv run --no-project --python /tmp/merge-train/bin/python \
+    python -m experiments.weight_merging.playground.register --run /tmp/near-run \
+    --name "${domain}_sft" --path "/tmp/${domain}-sft/final-fp32" \
+    --training-metadata "/tmp/${domain}-sft/training-metadata.json"
+done
+uv run --no-project --python /tmp/merge-eval/bin/python \
+  python -m experiments.weight_merging.playground.recipes --arm near --output /tmp/near-recipes.json
+
+gpu-borrow "weight-merging playground" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+  uv run --no-project --python /tmp/merge-eval/bin/python \
+  python -m experiments.weight_merging.playground.sweep --run /tmp/near-run \
+  --candidates /tmp/near-recipes.json --only instruct math_sft code_sft \
+  --max-new-tokens CHOSEN_CAP
+```
+
+Registration writes checkpoint paths, weight/config hashes and training metadata
+hashes into the two run manifests. The baseline command above is the donor gate:
+require a strictly larger greedy correct count than Instruct on GSM8K for math
+and MBPP for code. Report sampled accuracy and paired wins/losses as well; a
+positive point estimate alone does not establish statistical significance.
+Checkpoint selection still uses validation loss, and all test comparisons are
+exploratory. After both gates pass, rerun without `--only` to execute the grid.
+Resume retains the same source, recipes and evaluation settings.
+
+Measure model-wide relative distance `||donor - Instruct|| / ||Instruct||` with
+FP64 reductions before the grid. The helper also reports how many FP32 update
+entries disappear when the donor is rounded to BF16:
+
+```bash
+host-test-budget uv run --extra pipeline python \
+  -m experiments.weight_merging.playground.distances \
+  --anchor PARENT_SNAPSHOT --donor /tmp/math-sft/final-fp32 --output /tmp/math-distance.json
+```
+
+`EphAsad/Aristaeus` @ `f6e918c83cda9aa8ec57ab8d57e9a557b8190b00` is an
+additional math/reasoning donor, trained with full BF16 SFT on OpenThoughts3 and
+Stratos. Download that revision, register it as `aristaeus` with `--repo` and
+`--revision`, and add `{"name": "aristaeus", "source": "aristaeus"}` to a candidate
+file. It must pass the same GSM8K gate as the self-trained math donor. It does
+not replace either matched training arm.
+
+Use its pinned local snapshot and the general Instruct tokenizer for the length
+probe. This samples 128 GSM8K and 32 MBPP items with fixed seed 290:
+
+```bash
+gpu-borrow "weight-merging playground" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+  uv run --no-project --python /tmp/merge-eval/bin/python \
+  python -m experiments.weight_merging.playground.controls --mode length_probe \
+  --model ARISTAEUS_SNAPSHOT --tokenizer PARENT_SNAPSHOT \
+  --panel /tmp/merge-run/panel.json --max-new-tokens 4096 --output /tmp/length-probe.json
+```
+
+Select `CHOSEN_CAP` from these lengths, with at least 2048 tokens. Verify the
+full donor baseline's truncation after the probe; raise the cap and rerun the
+baselines if necessary. Set `--max-model-len` high enough to fit the prompt and
+output budget. The control helper also supports `--mode base_fewshot`, using
+eight fixed GSM8K training examples and plain Question/Answer prompting on all
+test items. Pass the untuned base snapshot as both `--model` and `--tokenizer`.
 
 ### Recipes and precision
 

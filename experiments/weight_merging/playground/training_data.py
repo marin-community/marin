@@ -65,7 +65,7 @@ def main() -> None:
     metamath = load_dataset(MATH_DATA, split="train", revision=revisions[MATH_DATA])
     magicoder = load_dataset(CODE_DATA, split="train", revision=revisions[CODE_DATA])
     raw_math = [("gsm8k", i, r["question"], r["answer"], r["question"]) for i, r in enumerate(gsm)]
-    # Include GSM training references first, then a fixed MetaMath supplement.
+    # Combine GSM training references with a fixed MetaMath supplement.
     metamath_indices = list(range(len(metamath)))
     random.Random(SEED).shuffle(metamath_indices)
     for index in metamath_indices:
