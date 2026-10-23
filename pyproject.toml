@@ -398,7 +398,9 @@ ignore-missing-imports = [
     # Optional extra marin-rigging[secrets]; only rigging.secrets imports it, lazily.
     "google.cloud.secretmanager",
     "google.cloud.secretmanager.*",
-    # QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
+    # The cuDNN frontend, QuACK and CUTLASS are Linux/CUDA-only optional dependencies.
+    "cudnn",
+    "cudnn.*",
     "cutlass",
     "cutlass.*",
     "jax_triton",

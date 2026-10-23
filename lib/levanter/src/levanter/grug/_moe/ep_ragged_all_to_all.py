@@ -15,7 +15,9 @@ Axis names used in the shape annotations:
     E       experts in the model
     Elocal  experts held by this shard
     Echunk  experts in one sequential chunk, Elocal / chunks
-    C       rows in one chunk's receiver buffer, the per-chunk capacity
+    C       rows one chunk accepts, the per-chunk capacity
+    R       rows in one chunk's receiver buffer: C, plus room to start each expert's rows on the
+            expert MLP's receiver alignment
     S       shards on the expert axis
     U       expert-granular transfers on the expert axis
 """
@@ -49,11 +51,13 @@ from levanter.grug._moe.sonic import (
 )
 from levanter.grug._moe.ep_common import (
     ExpertA2aParams,
+    _aligned_group_sizes,
+    _aligned_receiver_rows,
     _clip_receiver_group_sizes,
     _expert_granular_a2a_params,
     _sort_activations,
 )
-from levanter.grug.mxfp8 import ExpertMxfp8, mx_pack_rows
+from levanter.grug.mxfp8 import ExpertMxfp8, Mxfp8ExpertKernels, mx_pack_rows
 from levanter.kernels.pallas.relu2_mlp import fused_relu2
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.kernels.pallas.relu2_ragged_mlp import (
@@ -76,6 +80,10 @@ DEFAULT_RAGGED_EXPERT_CHUNKS = 2
 # fusions. The extra rows are padding the group sizes already cover; drop clipping uses the logical capacity.
 _CHUNK_CAPACITY_ROW_ALIGN = 128
 
+# The receiver alignment of an expert MLP that takes each expert's rows right after the previous
+# expert's.
+_PACKED_RECEIVER_ALIGNMENT = 1
+
 # Selects the device-initiated ragged all-to-all kernel. The second entry is scoped to that op, so
 # every other collective keeps NCCL's host-launched kernels.
 RAGGED_REQUIRED_XLA_FLAGS = (
@@ -95,33 +103,41 @@ RAGGED_NCCL_SEND_RECV_XLA_FLAGS = (
 class _ExpertMlp(Protocol):
     """Runs the expert MLP over a receiver buffer laid out expert-major, with its own backward.
 
-    Implementations take both views of the buffer's group sizes: the physical sizes, which charge
-    trailing padding to the last expert, and the active sizes, which count only received rows.
-    Rows past the active count are unspecified, and may be non-finite, in ``x_dispatch`` and in
-    the output's cotangent. Implementations keep them out of the active output rows and out of
-    the weight gradients, and leave their own output rows past the active count unspecified.
+    Each expert's rows start at a multiple of ``receiver_alignment`` rows; with alignment 1 they
+    follow the previous expert's rows directly. Implementations take both views of the buffer's
+    group sizes: the physical sizes, the rows each expert spans up to the next expert's start, with
+    the buffer's trailing rows charged to the last expert, and the active sizes, which count only
+    received rows. The active rows are a prefix of each expert's span. Every other row, an
+    alignment gap or the trailing rows, is unspecified and may be non-finite, in ``x_dispatch`` and
+    in the output's cotangent. Implementations keep those rows out of the active output rows and
+    out of the weight gradients, and leave their own output rows there unspecified.
 
     ``backward`` also returns each row's ``<y, dy>`` in fp32, the gradient of a per-row scale
     applied to the output. The routed-expert backward turns it into the routing-weight
     gradient, so it never needs the output ``y`` itself.
     """
 
+    @property
+    def receiver_alignment(self) -> int:
+        """The row multiple at which each expert's rows start in the receiver buffer this MLP takes."""
+        ...
+
     def forward(
         self,
-        x_dispatch: Float[Array, "C H"],
+        x_dispatch: Float[Array, "R H"],
         moe_w13_local: Float[Array, "Echunk H I2"],
         moe_w2_local: Float[Array, "Echunk I H"],
         physical_group_sizes: Int[Array, "Echunk"],
         active_group_sizes: Int[Array, "Echunk"],
-    ) -> tuple[Float[Array, "C H"], tuple[jax.Array, ...]]: ...
+    ) -> tuple[Float[Array, "R H"], tuple[jax.Array, ...]]: ...
 
     def backward(
-        self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "C H"]
-    ) -> tuple[Float[Array, "C H"], Float[Array, "Echunk H I2"], Float[Array, "Echunk I H"], Float[Array, "C"]]: ...
+        self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "R H"]
+    ) -> tuple[Float[Array, "R H"], Float[Array, "Echunk H I2"], Float[Array, "Echunk I H"], Float[Array, "R"]]: ...
 
     def backward_parts(
-        self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "C H"]
-    ) -> tuple[Float[Array, "C H"], Float[Array, "C"], tuple[Any, ...], Callable[..., tuple[jax.Array, jax.Array]]]:
+        self, residuals: tuple[jax.Array, ...], cotangent: Float[Array, "R H"]
+    ) -> tuple[Float[Array, "R H"], Float[Array, "R"], tuple[Any, ...], Callable[..., tuple[jax.Array, jax.Array]]]:
         """``backward`` as ``(dx, <y, dy>, wgrad_args, wgrad)`` with ``wgrad(*wgrad_args) = (dw13, dw2)``, so the
         caller can run the weight gradients after sending ``dx``. ``wgrad_args`` is a tuple of array pytrees."""
         ...
@@ -150,6 +166,10 @@ class _RaggedDotExpertMlp:
     """
 
     activation_fn: Callable[[jax.Array], jax.Array]
+
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
 
     def _apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
@@ -197,6 +217,10 @@ class _FusedRelu2ExpertMlp:
 
     implementation: Relu2RaggedImplementation
 
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
+
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
         return relu2_ragged_mlp_forward(
@@ -220,6 +244,10 @@ class _SerialPairExpertMlp:
     """
 
     inner: "_ExpertMlp"
+
+    @property
+    def receiver_alignment(self) -> int:
+        return self.inner.receiver_alignment
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         half = moe_w2_local.shape[1] // 2
@@ -259,6 +287,10 @@ class _CuteExpertMlp:
     leave trailing rows unspecified. SwiGLU is fused into the gate/up GEMM.
     """
 
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
+
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
         # QuACK and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
@@ -288,6 +320,10 @@ class _CuteRelu2ExpertMlp:
     ``d post`` GEMM. Like ``_CuteExpertMlp``, the kernels take the active sizes and leave trailing
     rows unspecified.
     """
+
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
@@ -323,6 +359,10 @@ class _CuteRelu2Mxfp8ExpertMlp:
     gradients stay bf16 (``relu2_expert_mlp_mxfp8_backward_input``).
     """
 
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
+
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
         from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_fwd  # noqa: PLC0415
@@ -354,6 +394,10 @@ class _CuteSwigluMxfp8ExpertMlp:
     XLA and ``d gu`` is quantized by the Pallas row quantizer. The weight gradients stay bf16
     (``swiglu_expert_mlp_mxfp8_backward_input``).
     """
+
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
@@ -390,6 +434,10 @@ class _CuteRelu2Mxfp8WgradExpertMlp:
     quantizes the dispatched rows along the token axis per expert and keeps that copy as the residual, and the
     backward quantizes ``dy``, ``d pre`` and ``post`` along it for the two weight-gradient GEMMs."""
 
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
+
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
         from levanter.grug._moe.quack_mxfp8 import relu2_expert_mlp_mxfp8_wgrad_fwd  # noqa: PLC0415
@@ -417,6 +465,10 @@ class _CuteRelu2Mxfp8WgradExpertMlp:
 class _CuteSwigluMxfp8WgradExpertMlp:
     """``_CuteSwigluMxfp8ExpertMlp`` with block-scaled weight gradients too (``ExpertMxfp8.ALL``), as
     ``_CuteRelu2Mxfp8WgradExpertMlp``."""
+
+    @property
+    def receiver_alignment(self) -> int:
+        return _PACKED_RECEIVER_ALIGNMENT
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         del physical_group_sizes
@@ -494,11 +546,22 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungat
     return _RaggedDotExpertMlp(activation_fn)
 
 
-def _mxfp8_expert_mlp(expert_mlp: _ExpertMlp, mxfp8: ExpertMxfp8) -> _ExpertMlp:
+def _mxfp8_expert_mlp(expert_mlp: _ExpertMlp, mxfp8: ExpertMxfp8, kernels: Mxfp8ExpertKernels) -> _ExpertMlp:
     """The MXFP8 variant (``ACTIVATIONS`` or ``ALL``) of a QuACK expert MLP: ungated ReLU^2 or gated SwiGLU.
     Anything else (the portable ``ragged_dot`` fallback, another activation, serial pairs) has no MXFP8 kernel and
-    raises."""
+    raises. ``Mxfp8ExpertKernels.CUDNN_FRONTEND`` runs only ungated ReLU^2 with ``ExpertMxfp8.ALL`` and raises for
+    anything else rather than train in another kernel's numerics."""
     wgrads = mxfp8 == ExpertMxfp8.ALL
+    if kernels == Mxfp8ExpertKernels.CUDNN_FRONTEND:
+        if type(expert_mlp) is not _CuteRelu2ExpertMlp or not wgrads:
+            raise ValueError(
+                f"cudnn_frontend mxfp8 experts need ungated ReLU^2 on SM100 with ExpertMxfp8.ALL, got {expert_mlp} "
+                f"with {mxfp8}"
+            )
+        # The cuDNN frontend and CUTLASS DSL are installed only with the CUDA 13 GPU extra.
+        from levanter.grug._moe.mxfp8.relu2_expert_mlp import _CudnnRelu2Mxfp8ExpertMlp  # noqa: PLC0415
+
+        return _CudnnRelu2Mxfp8ExpertMlp()
     if type(expert_mlp) is _CuteRelu2ExpertMlp:
         return _CuteRelu2Mxfp8WgradExpertMlp() if wgrads else _CuteRelu2Mxfp8ExpertMlp()
     if type(expert_mlp) is _CuteExpertMlp:
@@ -655,7 +718,13 @@ class _ExpertRouting(NamedTuple):
 
 @dataclasses.dataclass(frozen=True)
 class _ExpertLayout:
-    """Static shapes of the chunked expert pipeline on one shard."""
+    """Static shapes of the chunked expert pipeline on one shard.
+
+    ``chunk_capacity`` is the static bound on the rows one chunk accepts, rounded up to
+    ``_CHUNK_CAPACITY_ROW_ALIGN``; clipping and drops count against the traced logical chunk
+    capacity, which never exceeds it. Each chunk's receiver buffer has ``receiver_rows`` rows: that
+    bound plus room for every expert's rows to start on the expert MLP's ``receiver_alignment``.
+    """
 
     tokens_per_shard: int
     topk: int
@@ -674,6 +743,14 @@ class _ExpertLayout:
     @property
     def chunks(self) -> int:
         return self.local_experts // self.chunk_experts
+
+    @property
+    def receiver_alignment(self) -> int:
+        return self.expert_mlp.receiver_alignment
+
+    @property
+    def receiver_rows(self) -> int:
+        return _aligned_receiver_rows(self.chunk_capacity, self.chunk_experts, self.receiver_alignment)
 
 
 class _ChunkPlan(NamedTuple):
@@ -707,6 +784,7 @@ def _chunk_plans(routing: _ExpertRouting, layout: _ExpertLayout) -> tuple[_Chunk
                 clipped_group_sizes,
                 routing.shard_id,
                 local_expert_size=layout.local_experts,
+                receiver_alignment=layout.receiver_alignment,
             )
             active_all = jnp.sum(  # [Elocal]
                 clipped_group_sizes.reshape(layout.ep_size, layout.ep_size, layout.local_experts)[
@@ -716,18 +794,20 @@ def _chunk_plans(routing: _ExpertRouting, layout: _ExpertLayout) -> tuple[_Chunk
             )
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
             active_group_sizes = active_all[experts]  # [Echunk]
-            total_valid = jnp.sum(active_group_sizes, dtype=jnp.int32)
-            physical_group_sizes = active_group_sizes.at[-1].add(layout.chunk_capacity - total_valid)  # [Echunk]
+            # Each expert spans its aligned rows, and the last one also the buffer's unused rows.
+            spans = _aligned_group_sizes(active_group_sizes, layout.receiver_alignment)  # [Echunk]
+            spanned = jnp.sum(spans, dtype=jnp.int32)
+            physical_group_sizes = spans.at[-1].add(layout.receiver_rows - spanned)  # [Echunk]
             plans.append(_ChunkPlan(dispatch_params, return_params, physical_group_sizes, active_group_sizes))
     return tuple(plans)
 
 
-def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _ExpertLayout) -> Float[Array, "C H"]:
+def _dispatch_chunk(sorted_x: Float[Array, "TK H"], plan: _ChunkPlan, layout: _ExpertLayout) -> Float[Array, "R H"]:
     # Accepted rows are the prefix of each unclipped expert group and receiver offsets pack
-    # arrivals expert-major, so the received buffer feeds the grouped MLP directly: no sender
-    # compaction and no receiver-side permute.
-    dispatch_init = _transport_buffer(  # [C, H]
-        layout.chunk_capacity,
+    # arrivals expert-major, from each expert's aligned start, so the received buffer feeds the
+    # grouped MLP directly: no sender compaction and no receiver-side permute or padding.
+    dispatch_init = _transport_buffer(  # [R, H]
+        layout.receiver_rows,
         sorted_x.shape[1],
         sorted_x.dtype,
         plan.dispatch_params.send_sizes,
@@ -777,14 +857,14 @@ def _routed_experts_forward(
                 # Optimization barriers tie the overlap's inputs to the dispatch source and its output to the
                 # dispatched rows, so it runs while the dispatch all-to-all is in flight (as the pooled-wave path).
                 source, tokens = jax.lax.optimization_barrier((source, overlap.tokens))
-                x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+                x_dispatch = _dispatch_chunk(source, plan, layout)  # [R, H]
                 with jax.named_scope("overlap"):
                     side, side_vjp = jax.vjp(overlap.fn, tokens, overlap.params)
                 x_dispatch, side = jax.lax.optimization_barrier((x_dispatch, side))
             else:
-                x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
+                x_dispatch = _dispatch_chunk(source, plan, layout)  # [R, H]
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
-            out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
+            out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [R, H]
                 x_dispatch,
                 moe_w13_local[experts],
                 moe_w2_local[experts],
@@ -933,7 +1013,7 @@ def _routed_experts_backward(
         plan, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
             out_dispatch_init = _transport_buffer(
-                layout.chunk_capacity,
+                layout.receiver_rows,
                 out_dim,
                 out_cotangent.dtype,
                 plan.return_params.recv_sizes,
@@ -1019,6 +1099,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     overlap_weight_grads: bool = False,
     mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
+    mxfp8_kernels: Mxfp8ExpertKernels = Mxfp8ExpertKernels.QUACK,
     mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
@@ -1103,7 +1184,7 @@ def _moe_mlp_ep_ragged_a2a_local(
             raise ValueError("serial_pair needs experts that write the width they read (x + y1)")
         expert_mlp = _SerialPairExpertMlp(expert_mlp)
     if mxfp8 != ExpertMxfp8.NONE:
-        expert_mlp = _mxfp8_expert_mlp(expert_mlp, mxfp8)
+        expert_mlp = _mxfp8_expert_mlp(expert_mlp, mxfp8, mxfp8_kernels)
     layout = _ExpertLayout(
         tokens_per_shard=tokens_per_shard,
         topk=topk,
