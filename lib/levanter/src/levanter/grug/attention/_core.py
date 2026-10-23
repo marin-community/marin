@@ -35,6 +35,13 @@ GrugAttentionImplementation = Literal[
     "gpu_pallas_triton_flash",  # Pallas-Triton flash kernel with block skipping; for AMD (ROCm) GPUs.
 ]
 
+ContextAttentionLayout = Literal["zigzag", "contiguous"]
+"""How the FA4 backends assign query rows to context shards.
+
+"zigzag" swaps the late half of each shard's queries with its mirror shard so every shard does equal
+causal work; "contiguous" runs each shard's own rows. Other implementations ignore it.
+"""
+
 
 @dataclass(frozen=True)
 class RotaryConfig:
@@ -437,6 +444,7 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
+    context_layout: ContextAttentionLayout = "zigzag",
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
@@ -447,11 +455,11 @@ def attention(
     if implementation == "gpu_fa4_cute":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_attention(q, k, v, mask)
+        return gpu_fa4_cute_attention(q, k, v, mask, context_layout=context_layout)
     if implementation == "gpu_fa4_cute_sm100":
         from levanter.grug.attention._fa4_cute import gpu_fa4_cute_sm100_attention  # noqa: PLC0415
 
-        return gpu_fa4_cute_sm100_attention(q, k, v, mask)
+        return gpu_fa4_cute_sm100_attention(q, k, v, mask, context_layout=context_layout)
     if implementation == "gpu_pallas_triton_flash":
         from levanter.grug.attention._amd_pallas_triton_flash import pallas_triton_flash_attention  # noqa: PLC0415
 
@@ -474,6 +482,7 @@ def attention(
 
 __all__ = [
     "AttentionMask",
+    "ContextAttentionLayout",
     "GrugAttentionImplementation",
     "RotaryConfig",
     "align_kv_heads",

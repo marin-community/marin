@@ -38,6 +38,7 @@ from levanter.grug._moe.common import (
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
     AttentionMask,
+    ContextAttentionLayout,
     GrugAttentionImplementation,
     RotaryConfig,
     align_kv_heads,
@@ -308,6 +309,10 @@ class GrugModelConfig:
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
+    attention_context_layout: ContextAttentionLayout = "zigzag"
+    """Query-row layout for FA4 under context parallelism. "zigzag" balances causal work across
+    context shards at the cost of a query swap and a second kernel launch per call; it pays off at 262K
+    but costs 0.7% at 65K, where the hero should use "contiguous". See README "Context-length switches"."""
     moe_implementation: MoeImplementation | None = None
     expert_chunks: int = 1
     pooled_transport_capacity_factor: float | None = None
@@ -722,7 +727,14 @@ class CausalSelfAttention(eqx.Module):
             q = _reshard_sequence_axis(q, seq_axis)
             k = _reshard_sequence_axis(k, None)
             v = _reshard_sequence_axis(v, None)
-        attn_out = attention(q, k, v, mask, implementation=self.cfg.attention_implementation)
+        attn_out = attention(
+            q,
+            k,
+            v,
+            mask,
+            implementation=self.cfg.attention_implementation,
+            context_layout=self.cfg.attention_context_layout,
+        )
         if seq_axis is not None:
             attn_out = _reshard_sequence_axis(attn_out, residual_seq_axis)
         # Exclusive Self Attention (XSA): subtract the component of yᵢ parallel to vᵢ, per head.
