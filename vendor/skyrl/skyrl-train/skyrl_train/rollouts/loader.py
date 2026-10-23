@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import collections
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
@@ -94,6 +95,24 @@ class PromptLoaderState:
     retries: list[dict]
 
 
+class PromptSource(Protocol):
+    """The prompts that the training context dispatches, one at a time."""
+
+    def next_prompt(self, live: Collection[str]) -> dict | None: ...
+
+    async def refresh(self) -> None:
+        """Look for prompts that came after ``next_prompt`` last returned None."""
+        ...
+
+    def retry(self, prompt: dict) -> None: ...
+
+    def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]: ...
+
+    def state_dict(self) -> PromptLoaderState: ...
+
+    def load_state_dict(self, state: PromptLoaderState) -> None: ...
+
+
 class PromptLoader:
     """Yield one prompt at a time, re-offering prompts whose rollouts must be regenerated first.
 
@@ -143,6 +162,9 @@ class PromptLoader:
                 return self._group(index)
         return None
 
+    async def refresh(self) -> None:
+        pass
+
     def retry(self, prompt: dict) -> None:
         self._retries.append(prompt)
 
@@ -160,3 +182,61 @@ class PromptLoader:
     def _group(self, index: int) -> dict:
         (prompt,) = self._dataset.collate_fn([self._dataset[index]])
         return prompt
+
+
+class GrowingPromptDataset(PromptGroupDataset, Protocol):
+    """A dataset that a producer extends while training runs; each row has a unique, increasing sequence number."""
+
+    def poll(self) -> None:
+        """Append the rows that the producer wrote since the last poll."""
+        ...
+
+    def position(self, seq: int) -> int:
+        """The index of the first row whose sequence number is ``seq`` or more."""
+        ...
+
+    def next_seq(self, index: int) -> int:
+        """The sequence number of row ``index``, or the next sequence number for the end."""
+        ...
+
+
+class FeedPromptLoader:
+    """Offer each row of a growing dataset once, in sequence order, after the prompts to regenerate.
+
+    ``next_prompt`` returns None when no new row is available; ``refresh`` polls the dataset off the event loop.
+    The checkpoint state is the sequence number of the next row, which stays correct while the dataset grows.
+    """
+
+    def __init__(self, dataset: GrowingPromptDataset):
+        self._dataset = dataset
+        self._next = 0
+        self._retries: collections.deque[dict] = collections.deque()
+
+    def next_prompt(self, live: Collection[str]) -> dict | None:
+        for position, prompt in enumerate(self._retries):
+            if prompt["uid"] not in live:
+                del self._retries[position]
+                return prompt
+        while self._next < len(self._dataset):
+            index = self._next
+            self._next += 1
+            if self._dataset.uid(index) not in live:
+                (prompt,) = self._dataset.collate_fn([self._dataset[index]])
+                return prompt
+        return None
+
+    async def refresh(self) -> None:
+        await asyncio.to_thread(self._dataset.poll)
+
+    def retry(self, prompt: dict) -> None:
+        self._retries.append(prompt)
+
+    def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
+        return {"feed/backlog": float(len(self._dataset) - self._next)}
+
+    def state_dict(self) -> PromptLoaderState:
+        return PromptLoaderState({"next_seq": self._dataset.next_seq(self._next)}, list(self._retries))
+
+    def load_state_dict(self, state: PromptLoaderState) -> None:
+        self._next = self._dataset.position(state.order["next_seq"])
+        self._retries = collections.deque(state.retries)
