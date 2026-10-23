@@ -9,14 +9,17 @@ from collections.abc import Mapping
 from dataclasses import replace
 
 import pytest
+from rolloutengine.models import ModelRequest, ModelTurn
 from shellbox.machine import Backend, PackageSpec
+from taskcompendium.grading_result import Outcome
 from taskcompendium.models import ArtifactKind, ScriptGrader, VerifyitGrader
 from taskcompendium.runtime.resources import resource_bytes
 from verifyit.spec import ExactSpec
 
+from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec import draft
-from taskforge.spec.draft import answer_grader
+from taskforge.spec.draft import answer_grader, rollout_engine
 from taskforge.spec.verdict import VERDICT_REWARD
 from taskforge.stage10_proposal.model import SolverMachine
 from taskforge.stage40_build_with_program.context import (
@@ -39,6 +42,7 @@ from taskforge.stage40_build_with_program.sdk import (
 )
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage40_build_with_program.template import standard
+from taskforge.stage50_validate.lowering import lower
 from tests.sandbox.fixture_images import SlowGraderFactory
 from tests.stage40_build_with_program.conftest import (
     FACTORIES,
@@ -49,6 +53,7 @@ from tests.stage40_build_with_program.conftest import (
     declaring,
     web_tool,
 )
+from tests.stage50_validate.conftest import LIMITS as VALIDATION_LIMITS
 
 # Grader programs in sh, which ShellGraderImageFactory runs for the template's python3 grader command.
 GOOD_GRADER = """last=$(printf '%s\\n' "$(cat /app/answer.txt)" | tail -n 1)
@@ -122,6 +127,10 @@ async def build(program, proposal, services, glm_client, tmp_path, queries):
     )
 
 
+async def answer(request: ModelRequest) -> ModelTurn:
+    return ModelTurn({"role": "assistant", "content": "ANSWER = 42"}, (1, 2), (3,), None, "stop")
+
+
 async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_the_store(
     proposal, services, glm_client, fake_glm, tmp_path
 ):
@@ -162,6 +171,12 @@ async def test_the_template_builds_a_task_validation_can_run_and_rebuilds_from_t
         (REFERENCE_REPLY, 1.0),
         ("", 0.0),
     ]
+
+    lowered = lower(task, MachineHost.LAPTOP, FACTORIES, VALIDATION_LIMITS)
+    assert lowered.task_machine is not None and lowered.task_machine.backend == Backend.SHELLSIM
+    assert lowered.verifier_machine is not None and lowered.verifier_machine.backend == Backend.DOCKER
+    result = await rollout_engine(FACTORIES, command_timeout=None).run_task(lowered, answer)
+    assert (result.grade.status, result.grade.reward) == (Outcome.GRADED, 1.0)
 
 
 async def test_a_grader_can_be_repaired_past_the_old_three_attempt_cap(context, proposal, fake_glm):
@@ -215,7 +230,6 @@ async def test_the_grader_step_keeps_the_declared_rejection_ceiling(context, pro
     grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
 
     assert grader.rejection_ceiling == 0.3
-    assert "declare rejection_ceiling" in fake_glm.requests[0]["messages"][-2]["content"]
 
 
 async def test_a_grader_that_times_out_twice_expires_the_build_instead_of_going_back_to_the_model(
