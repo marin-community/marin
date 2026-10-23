@@ -82,7 +82,7 @@ impl CacheDiagnostics {
     }
 
     /// Counters describe the interval; gauges describe the instant of emission.
-    /// Lookups include maintenance and download rechecks, not just SQL scans.
+    /// Lookup counters include maintenance and download rechecks.
     pub fn log_if_due(
         &self,
         history: &Mutex<RequestHistory>,
