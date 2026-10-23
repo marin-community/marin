@@ -111,6 +111,17 @@ def extract_member(archive: Path, name: str, target: Path, mode: Literal["r|gz",
     raise ValueError(f"{archive} has no member {name}")
 
 
+def archive_request() -> urllib.request.Request:
+    """Read an Iris output archive using the submitter's CoreWeave credentials."""
+    return s3_get_request(
+        os.environ[ARCHIVE_URI_ENV],
+        "https://cwobject.com",
+        "auto",
+        os.environ["CW_KEY_ID"],
+        os.environ["CW_KEY_SECRET"],
+    )
+
+
 def main() -> None:
     work = Path(tempfile.mkdtemp(prefix="push-"))
     crane_archive = work / "crane.tgz"
@@ -122,13 +133,7 @@ def main() -> None:
     crane.chmod(0o700)
 
     archive = work / "outputs.tar.zst"
-    request = s3_get_request(
-        os.environ[ARCHIVE_URI_ENV],
-        os.environ["AWS_ENDPOINT_URL"],
-        os.environ["AWS_REGION"],
-        os.environ["AWS_ACCESS_KEY_ID"],
-        os.environ["AWS_SECRET_ACCESS_KEY"],
-    )
+    request = archive_request()
     archive_sha256 = download(request, archive)
     if archive_sha256 != os.environ[ARCHIVE_SHA256_ENV]:
         raise ValueError(f"build archive sha256 {archive_sha256} != the {os.environ[ARCHIVE_SHA256_ENV]} Iris recorded")
