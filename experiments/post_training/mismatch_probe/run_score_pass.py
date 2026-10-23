@@ -183,7 +183,14 @@ def exact_pass(args) -> None:
 
 
 def noise_pass(args) -> None:
-    """B against B under a different batch layout: the pre-registered floor."""
+    """B against B under changed batch layouts: the pre-registered floor.
+
+    Three rescorings are each compared with a micro-batch-1 pass in file order:
+    the same layout again (run-to-run nondeterminism), the order reversed (each
+    sequence on a different rank beside different neighbours), and the order
+    reversed at micro-batch 4 (padding shared within a micro-batch). Per-sequence
+    deltas show which change carries the floor.
+    """
     sequences = load_probe_sequences(args.sequences)
     batch = build_score_batch(
         sequences,
@@ -193,27 +200,49 @@ def noise_pass(args) -> None:
         exact_rate=0.0,
         master_seed=MASTER_SEED,
     )
-    order = np.arange(len(sequences))[::-1]
-    with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
-        reference, _duration = run_score(policy, batch, top_k=TOP_K, micro_batch_size=1)
-        rescored, duration = run_score(policy, shuffled_batch(batch, order), top_k=TOP_K, micro_batch_size=4)
-    # Undo the layout's permutation, then compare the supports position by position.
-    rescored = {key: value[order] for key, value in rescored.items()}
     mask = batch["attention_mask"].astype(bool)
     mask[:, 0] = False  # position 0's support belongs to no scored token
-    delta = (rescored["topk_logprobs"].astype(np.float64) - reference["topk_logprobs"].astype(np.float64))[mask]
-    report = {
-        "model_path": args.model_path,
-        "layout": "micro_batch 1 vs 4, order reversed",
-        "compared_values": int(delta.size),
-        "abs_max": float(np.abs(delta).max()),
-        "abs_mean": float(np.abs(delta).mean()),
-        "rms": float(np.sqrt((delta**2).mean())),
-        "seconds": duration,
+    reversed_order = np.arange(len(sequences))[::-1]
+    layouts = {
+        "same layout": (np.arange(len(sequences)), 1),
+        "order reversed": (reversed_order, 1),
+        "order reversed, micro-batch 4": (reversed_order, 4),
     }
+    report = {"model_path": args.model_path, "layouts": {}}
+    with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
+        base, _duration = run_score(policy, batch, top_k=TOP_K, micro_batch_size=1)
+        for name, (order, micro_batch_size) in layouts.items():
+            rescored, duration = run_score(
+                policy, shuffled_batch(batch, order), top_k=TOP_K, micro_batch_size=micro_batch_size
+            )
+            # order is a permutation that is its own inverse (identity or reversal).
+            rescored = {key: value[order] for key, value in rescored.items()}
+            delta = np.abs(rescored["topk_logprobs"].astype(np.float64) - base["topk_logprobs"].astype(np.float64))
+            same_ids = rescored["topk_ids"] == base["topk_ids"]
+            per_sequence = [
+                {
+                    "sample_id": sequence.sample_id,
+                    "length": len(sequence.token_ids),
+                    "abs_mean": float(delta[row][mask[row]].mean()),
+                    "abs_max": float(delta[row][mask[row]].max()),
+                    "top1_id_agreement": float(same_ids[row][mask[row]][:, 0].mean()),
+                }
+                for row, sequence in enumerate(sequences)
+            ]
+            report["layouts"][name] = {
+                "compared_values": int(delta[mask].size),
+                "abs_max": float(delta[mask].max()),
+                "abs_mean": float(delta[mask].mean()),
+                "rms": float(np.sqrt((delta[mask] ** 2).mean())),
+                "top1_id_agreement": float(same_ids[mask][:, 0].mean()),
+                "seconds": duration,
+                "per_sequence": per_sequence,
+            }
+            print(
+                name, json.dumps({key: value for key, value in report["layouts"][name].items() if key != "per_sequence"})
+            )
     with open(args.out, "w") as handle:
         json.dump(report, handle, indent=2)
-    print(json.dumps(report))
 
 
 def main() -> None:
