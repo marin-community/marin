@@ -10,7 +10,7 @@ from typing import Any, cast
 import torch
 from torch.nn.utils.rnn import pad_sequence
 
-from marinskyrl.distillation import TeacherEvidenceKind, TeacherPromptInsertion
+from marinskyrl.distillation import TeacherEvidenceKind, TeacherPromptInsertion, conditioned_teacher_prompt
 from skyrl_train.distillation import (
     ChosenTokenTeacherEvidence,
     PreparedTeacherInput,
@@ -263,18 +263,7 @@ def build_teacher_scoring_work(
     if any(length != batch_size for length in aligned_fields.values()):
         raise ValueError(f"teacher scoring fields must align with {batch_size} trajectories: {aligned_fields}")
 
-    teacher_prompts = prompt_token_ids
-    if prompt_insertions:
-        teacher_prompts = []
-        for prompt in prompt_token_ids:
-            matching = [
-                insertion
-                for insertion in prompt_insertions
-                if tuple(prompt[: len(insertion.after_prefix)]) == insertion.after_prefix
-            ]
-            if len(matching) != 1:
-                raise ValueError("teacher prompt must match exactly one insertion prefix")
-            teacher_prompts.append(matching[0].apply(prompt))
+    teacher_prompts = [conditioned_teacher_prompt(prompt, prompt_insertions) for prompt in prompt_token_ids]
     padded_prompts, prompt_mask = _pad_token_rows(teacher_prompts)
     padded_responses, response_mask = _pad_token_rows(response_token_ids)
     per_trajectory_weights = torch.tensor(route_weights, dtype=torch.float32).unsqueeze(1)
