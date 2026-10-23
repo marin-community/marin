@@ -24,11 +24,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from rigging.filesystem.storage_path import StoragePath
 from rolloutengine.models import GenerationLimitReached, ModelRequest, ModelTurn
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 logger = logging.getLogger(__name__)
 
+POLICY_ENDPOINT_FILE = "policy_endpoint.json"
+"""The file of a SkyRL task feed that holds the endpoint of the job's live policy (see ``skyrl_box``)."""
 BASE_MODEL_NAME = "base"
 """The served name of the weights."""
 TOKEN_ID_PREFIX = "token_id:"
@@ -331,3 +334,45 @@ def _tool_call(block: str) -> dict[str, Any] | None:
         "type": "function",
         "function": {"name": call["name"], "arguments": json.dumps(call.get("arguments", {}))},
     }
+
+
+@dataclass
+class LivePolicy:
+    """The live policy of the SkyRL job of ``root``, for the Taskforge gate.
+
+    It reads ``policy_endpoint.json`` at its first request, so the loop can write the feed before the job serves the
+    policy, and again after a connection error: a retried or preempted job serves at a new address.
+    """
+
+    root: StoragePath
+    tokenizer: PreTrainedTokenizerBase
+    sampling: Sampling
+    max_model_len: int
+    chat_template_kwargs: dict[str, Any]
+    _policy: VllmPolicy | None = None
+
+    async def __call__(self, request: ModelRequest) -> ModelTurn:
+        policy = self._policy or await self._connect()
+        try:
+            return await policy(request)
+        except httpx.ConnectError:
+            logger.warning("The live policy at %s does not answer; reading its endpoint again", policy.base_url)
+            return await (await self._connect()).__call__(request)
+
+    async def _connect(self) -> VllmPolicy:
+        path = self.root / POLICY_ENDPOINT_FILE
+        while not await asyncio.to_thread(path.exists):
+            logger.info("Waiting for %s", path)
+            await asyncio.sleep(30)
+        endpoint = json.loads(await asyncio.to_thread(path.read_text))
+        logger.info("The live policy is %s at %s", endpoint["model"], endpoint["base_url"])
+        base_url = endpoint["base_url"].removesuffix("/").removesuffix("/v1")
+        self._policy = VllmPolicy(
+            base_url,
+            self.tokenizer,
+            self.sampling,
+            self.max_model_len,
+            chat_template_kwargs=self.chat_template_kwargs,
+            model=endpoint["model"],
+        )
+        return self._policy
