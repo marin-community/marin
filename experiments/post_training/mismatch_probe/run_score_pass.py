@@ -120,6 +120,8 @@ def candidate_pass(args) -> None:
     )
     with scoring_worker(args.model_path, num_gpus=args.num_gpus) as policy:
         results, duration = run_score(policy, batch, top_k=None)
+    # Kept beside the rows so the reduction can be rerun without the GPU pass.
+    np.savez(args.gathered_out, gathered_logprobs=results["gathered_logprobs"], model_path=args.model_path)
     rows = kl_rows_from_passes(
         sequences,
         topk_ids,
@@ -229,6 +231,7 @@ def main() -> None:
     candidate.add_argument("--reference", required=True)
     candidate.add_argument("--sequences", required=True)
     candidate.add_argument("--out", required=True)
+    candidate.add_argument("--gathered-out", required=True, help="where to save the gathered logprobs (.npz)")
     candidate.add_argument("--candidate-step", type=int, default=0)
     candidate.add_argument("--num-gpus", type=int, default=8)
 
