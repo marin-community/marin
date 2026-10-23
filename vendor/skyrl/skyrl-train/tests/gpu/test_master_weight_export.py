@@ -3,12 +3,12 @@
 
 """FP32 master export: the gate can only pass after a real optimizer step.
 
-The weight metrics read FP32 master records out of distributed checkpoints. This
-gate takes one optimizer step on a tiny Grug policy, saves the checkpoint WITH
-optimizer state, and exports the masters through ``export_fp32_masters``. Because
-Adam has moved the masters away from the model weights, an export that silently
-upcast BF16 model weights would differ from the DCP masters somewhere and fail —
-that is the property the old save-right-after-init gate could not test.
+Weight analysis reads HF-named FP32 exports of the optimizer masters. This gate
+takes one optimizer step on a tiny Grug policy, saves a masters-only checkpoint,
+and exports it through ``save_fp32_master_hf_model`` next to an ordinary BF16 HF
+export. After Adam moves the masters, the FP32 export must round to the BF16
+export exactly yet differ from its upcast somewhere; an export that read the BF16
+model weights instead of the masters fails the second check.
 """
 
 from __future__ import annotations
@@ -18,13 +18,15 @@ from pathlib import Path
 import pytest
 import ray
 import torch
+from safetensors.torch import load_file
+from transformers import AutoTokenizer
 
 import skyrl_train.models.grug_megatron_bridge  # noqa: F401  # registers the Grug bridge
-from skyrl_train.distributed.megatron.master_export import export_fp32_masters, load_fp32_masters
+from skyrl_train.distributed.megatron.master_export import load_fp32_masters
 from skyrl_train.utils import initialize_ray
 from skyrl_train.checkpoint_schedule import OptimizerStateMode
 from tests.gpu.grug_gpu_gates import require_hoppers
-from tests.gpu.grug_tiny_checkpoint import write_tiny_checkpoint
+from tests.gpu.grug_tiny_checkpoint import TOKENIZER, write_tiny_checkpoint
 from tests.gpu.test_megatron_worker import get_test_training_batch
 from tests.gpu.utils import get_test_actor_config, init_worker_with_type
 
@@ -55,7 +57,7 @@ def _training_config(model_path: str, *, world_size: int) -> object:
 
 
 @pytest.mark.parametrize("world_size", [1], ids=["pp1"])
-def test_fp32_master_export_differs_from_upcast_bf16_after_a_step(tmp_path, world_size: int):
+def test_fp32_master_export_rounds_to_the_bf16_export_after_a_step(tmp_path, world_size: int):
     require_hoppers(world_size)
     model_path = tmp_path / "model"
     model_path.mkdir()
@@ -65,8 +67,11 @@ def test_fp32_master_export_differs_from_upcast_bf16_after_a_step(tmp_path, worl
     initialize_ray(training_cfg)
     try:
         ckpt_dir = tmp_path / "ckpt" / "policy"
+        bf16_dir = tmp_path / "hf-bf16"
+        fp32_dir = tmp_path / "hf-fp32"
         batch = get_test_training_batch(4)
         batch.metadata["global_step"] = 0
+        tokenizer = AutoTokenizer.from_pretrained(TOKENIZER)
         policy = init_worker_with_type("policy", cfg=training_cfg, num_gpus_per_node=world_size, num_nodes=1)
         try:
             ray.get(policy.async_run_ray_method("pass_through", "init_model", str(model_path)))
@@ -74,8 +79,6 @@ def test_fp32_master_export_differs_from_upcast_bf16_after_a_step(tmp_path, worl
             train_outputs = ray.get(policy.async_run_ray_method("pass_through", "ppo_train", batch))
             for output in train_outputs:
                 assert output.metadata["train_status"]["policy_update_steps"] == 1
-            bf16_dir = tmp_path / "hf-bf16"
-            ray.get(policy.async_run_ray_method("pass_through", "save_hf_model", str(bf16_dir), None))
             ray.get(
                 policy.async_run_ray_method(
                     "pass_through",
@@ -86,43 +89,36 @@ def test_fp32_master_export_differs_from_upcast_bf16_after_a_step(tmp_path, worl
                 )
             )
             ray.get(policy.async_run_ray_method("pass_through", "wait_checkpoint_upload"))
+            ray.get(policy.async_run_ray_method("pass_through", "save_hf_model", str(bf16_dir), tokenizer))
+            ray.get(
+                policy.async_run_ray_method(
+                    "pass_through", "save_fp32_master_hf_model", str(ckpt_dir), str(fp32_dir), tokenizer
+                )
+            )
         finally:
             policy.kill_actors()
 
-        # The exporter verifies master records from the checkpoint metadata; a
-        # bf16-only checkpoint would raise here, not export silently.
-        export_dir = tmp_path / "fp32-export"
-        export_fp32_masters(str(ckpt_dir), str(export_dir))
-        shards = sorted(Path(export_dir).glob("*.safetensors"))
-        assert shards, "no safetensors written by the exporter"
-        exported: dict[str, torch.Tensor] = {}
-        for shard in shards:
-            exported.update(load_shard(shard))
+        bf16 = load_dir(bf16_dir)
+        fp32 = load_dir(fp32_dir)
+        assert set(fp32) == set(bf16) and bf16, "the FP32 export must carry the HF export's tensor names"
+        assert {tensor.dtype for tensor in fp32.values()} == {torch.float32}
+        for name, tensor in fp32.items():
+            assert tensor.shape == bf16[name].shape, name
+            assert torch.equal(tensor.to(bf16[name].dtype), bf16[name]), f"{name} does not round to the BF16 export"
+        differing = [name for name, tensor in fp32.items() if not torch.equal(tensor, bf16[name].to(torch.float32))]
+        assert differing, "every FP32 tensor equals the upcast BF16 export; the export read model weights, not masters"
 
+        # Independent of Bridge: the embedding is a one-to-one mapping, so its HF tensor
+        # must be the checkpoint's master record itself.
         masters = load_fp32_masters(str(ckpt_dir))
-        assert set(exported) == set(masters)
-        for name, master in masters.items():
-            assert torch.equal(exported[name], master), name
-
-        # The step must show: at least one master differs from the upcast bf16
-        # model weight. Equal-everywhere means the export read model weights, not
-        # masters, and the gate failed.
-        bf16_shards = sorted((bf16_dir / "model").glob("*.safetensors"))
-        bf16_state: dict[str, torch.Tensor] = {}
-        for shard in bf16_shards:
-            bf16_state.update(load_shard(shard))
-        shared = sorted(set(exported) & set(bf16_state))
-        assert shared, "export and bf16 export share no tensor names"
-        differing = [name for name in shared if not torch.equal(exported[name], bf16_state[name].to(torch.float32))]
-        assert differing, (
-            f"all {len(shared)} exported masters equal the upcast bf16 weights; "
-            "the export read model weights, not optimizer masters"
-        )
+        embedding = fp32["model.embed_tokens.weight"]
+        assert torch.equal(embedding, masters["embedding.word_embeddings.weight"][: embedding.shape[0]])
     finally:
         ray.shutdown()
 
 
-def load_shard(shard: Path) -> dict[str, torch.Tensor]:
-    from safetensors.torch import load_file  # noqa: PLC0415 - optional dep guard
-
-    return load_file(str(shard))
+def load_dir(directory: Path) -> dict[str, torch.Tensor]:
+    tensors: dict[str, torch.Tensor] = {}
+    for shard in sorted(directory.glob("*.safetensors")):
+        tensors.update(load_file(str(shard)))
+    return tensors

@@ -1287,7 +1287,9 @@ class PolicyWorkerBase(Worker):
         _phase_diagnostics.log_phase(_phase_diagnostics.CollectivePhase.TRAINING_STEP_EXIT)
         return status
 
-    def save_checkpoint(self, ckpt_dir: Path, tokenizer=None):
+    def save_checkpoint(
+        self, ckpt_dir: Path, tokenizer=None, optimizer_state: OptimizerStateMode = OptimizerStateMode.FULL
+    ):
         upload = self.strategy.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,
@@ -1296,6 +1298,7 @@ class PolicyWorkerBase(Worker):
             node_local_rank=self.get_node_local_rank(),
             tokenizer=tokenizer,
             client_state={},
+            optimizer_state=optimizer_state,
         )
         self._start_checkpoint_upload(upload)
 
@@ -1506,9 +1509,7 @@ class CriticWorkerBase(Worker):
             status["raw_grad_norm"] = grad_norm
         return status
 
-    def save_checkpoint(
-        self, ckpt_dir: str, tokenizer=None, optimizer_state: OptimizerStateMode = OptimizerStateMode.FULL
-    ):
+    def save_checkpoint(self, ckpt_dir: str, tokenizer=None):
         upload = self.strategy.save_checkpoint(
             model=self.model,
             optimizer=self.optimizer,
@@ -1516,7 +1517,6 @@ class CriticWorkerBase(Worker):
             ckpt_dir=ckpt_dir,
             node_local_rank=self.get_node_local_rank(),
             tokenizer=tokenizer,
-            optimizer_state=optimizer_state,
         )
         self._start_checkpoint_upload(upload)
 
