@@ -574,8 +574,10 @@ class MegatronStrategy(DistributedStrategy):
                     continue
                 if entry.key not in master_keys:
                     raise ValueError(f"{ckpt_dir} has no FP32 master record for {entry.key}")
+                # A ShardedTensor validates its declared dtype against its data; factories carry no dtype.
+                dtype = {"dtype": torch.float32} if isinstance(entry, ShardedTensor) else {}
                 masters_sharded_state_dict[name] = replace(
-                    entry, key=master_keys[entry.key], data=torch.empty_like(entry.data, dtype=torch.float32)
+                    entry, key=master_keys[entry.key], data=torch.empty_like(entry.data, dtype=torch.float32), **dtype
                 )
                 owners[name] = parameter
             if len({id(parameter) for parameter in owners.values()}) != len(parameters):
