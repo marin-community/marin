@@ -223,7 +223,7 @@ through an isolated subprocess CLI for two calls:
 
 Runtime values do not change the source-policy digest. Policy kwargs override model-catalog kwargs;
 the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
-For a Harbor agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
+For a Harbor target or simulated user agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
 versions supplied by the policy or model configuration. Preflight includes this pin in the saved
 policy and the saved policy's digest; execution applies the same pin. Pi evaluations install
 version `0.87.0` without resolving npm's `latest` tag.
