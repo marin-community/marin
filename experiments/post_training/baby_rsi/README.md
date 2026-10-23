@@ -80,6 +80,38 @@ tasks. vLLM streams s3:// weights, so no checkpoint goes to the task's disk. Sno
 evaluation: `--vllm-arg=--data-parallel-size=8 --vllm-arg=--enable-expert-parallel` (GrugMoE serves only with
 tensor parallel size 1, and without LoRA).
 
+## Results with SkyRL (2026-10-23)
+
+One seed for each model, on cw-us-east-02a. Each step trains 32 tasks with 8 attempts. The RSI arm mixes the pool's
+tasks 50/50 with synthesized tasks; the control trains on the pool's tasks only, in the same order. In every arm,
+the strata shares of the trained pool tasks are within 0.003 of the pool's weights.
+
+- Qwen3-4B-Instruct-2507: 240 steps, learning rate 2e-6, 2 nodes of 8 H100 for each arm. The RSI arm trained 3,827
+  synthesized groups of 185 accepted tasks from 114 Taskforge sessions.
+- Marin-Snowball-67B-A2B-v0.1: 60 steps, learning rate 1e-6, 5 nodes for each arm. The RSI arm trained 897
+  synthesized groups of 39 accepted tasks from 22 sessions, with a 16k trajectory window (32k ran the policy out of
+  memory on multi-turn tasks).
+
+The probes are 8 held-out instances of each task that the RSI arm accepted by the probe snapshot (111 tasks for 4B
+after 135 steps, 27 for Snowball after 30 steps), minus instances with the content of a training instance; no probe
+id is in a feed. The pool tasks are a stratified sample of the Smartie validation file. 4 attempts each; paired
+bootstrap over tasks:
+
+| Model | Task set | Tasks | Base | Control | RSI | RSI − control (95% CI) |
+|---|---|---|---|---|---|---|
+| 4B | Held-out probes | 855 | 0.145 | 0.119 | 0.684 | +0.565 [+0.535, +0.595] |
+| 4B | Held-out pool tasks | 300 | 0.211 | 0.406 | 0.358 | −0.048 [−0.082, −0.014] |
+| Snowball | Held-out probes | 214 | 0.298 | 0.549 | 0.820 | +0.271 [+0.230, +0.314] |
+| Snowball | Held-out pool tasks | 300 | 0.374 | 0.499 | SNOWRSI | SNOWDELTA |
+
+Each RSI arm restarted once after a fix (the engines' tool parser for 4B, the trajectory window for Snowball). It
+began with the 14 and 17 tasks that its first run had accepted, so synthesized tasks entered its training from the
+first step; the controls did not restart. A second evaluation of the base differs from the first by at most 0.02 on
+every set. Of the probes that the base
+never passes, the 4B RSI arm passes 87% at least once (control 13%, second base run 14%); for Snowball, 89% (control
+67%, second base run 47%). The RSI arm loses some pool pass rate against the control: it trains on half as many pool
+tasks.
+
 ## Results of the LoRA trainer (2026-10-21)
 
 These runs used an in-process LoRA trainer beside one vLLM server, before SkyRL became the train box.
