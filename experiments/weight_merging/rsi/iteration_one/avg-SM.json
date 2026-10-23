@@ -1,0 +1,30 @@
+{
+  "anchor": {
+    "path": "gs://marin-us-central2/scratch/karan/rsi-merge/parents/S--open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02@50fe2f488aee",
+    "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+  },
+  "donors": [
+    {
+      "path": "gs://marin-us-central2/scratch/karan/rsi-merge/parents/M--marianna13_Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465@b45586996e0a",
+      "revision": "b45586996e0ab3935432fae3ab9656603e0a318a",
+      "dtype_widenings": {
+        "model\\.layers\\.(?:[0-9]|1[0-9]|2[0-5])\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ]
+      }
+    }
+  ],
+  "output": "gs://marin-us-central2/scratch/karan/rsi-merge/merges/avg-SM",
+  "parameters": {
+    "method": "average",
+    "coefficients": [
+      0.1
+    ],
+    "density": 1,
+    "scale": 1,
+    "seed": 19301
+  },
+  "preserve_rows": {},
+  "tensor_coefficients": {}
+}

@@ -1,0 +1,29 @@
+{
+  "anchor": {
+    "path": "gs://marin-us-central2/scratch/karan/rsi-merge/parents/S--open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02@50fe2f488aee",
+    "revision": "50fe2f488aee7730bbccc721024b35229075602e"
+  },
+  "donors": [
+    {
+      "path": "gs://marin-us-central2/scratch/karan/rsi-merge/parents/C--open-athena_Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12@271c4b3c6b38",
+      "revision": "271c4b3c6b38e8f645c88b8938a6ccf2b2195f2a"
+    },
+    {
+      "path": "gs://marin-us-central2/scratch/karan/rsi-merge/parents/A5--open-athena_Grug-67B-A2B-Merge-Campaign4-Adaptive-Delta-05-2026.10.14@4a19865c0ed6",
+      "revision": "4a19865c0ed69efab0bf457804d2d698fb3f72f5"
+    }
+  ],
+  "output": "gs://marin-us-central2/scratch/karan/rsi-merge/merges/ta-S-C-A5",
+  "parameters": {
+    "method": "task_arithmetic",
+    "coefficients": [
+      0.4,
+      0.3
+    ],
+    "density": 1,
+    "scale": 1,
+    "seed": 19301
+  },
+  "preserve_rows": {},
+  "tensor_coefficients": {}
+}
