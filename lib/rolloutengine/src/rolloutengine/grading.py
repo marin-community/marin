@@ -5,7 +5,7 @@
 
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from typing import Any
 
@@ -21,6 +21,7 @@ from taskcompendium.models import (
     grades_with_judge,
     verifyit_spec,
 )
+from taskcompendium.reasoning_spans import ReasoningViolation, malformed_reasoning_grade
 from taskcompendium.runtime.grading import grade_in_sandbox
 from verifyit.modes.grade_judge import API_KEY_ENV, BASE_URL_ENV, MODEL_ENV, JudgeConnection
 from verifyit.spec import JudgeSpec
@@ -61,15 +62,19 @@ async def _grade_rollout(
     resources: AsyncExitStack,
     *,
     stop_reason: str,
+    rejected_violations: Sequence[ReasoningViolation],
 ) -> GradeResult:
     """Grade in process, through the judge service, or in a fresh verifier machine that the attempt owns.
 
-    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended.
+    ``outputs`` holds the task's ``output_paths`` that the engine captured after the harness ended. Any
+    ``rejected_violations`` make the attempt a submission failure without running the grader.
     """
     task = spec.task
     grader = task.grader
     if isinstance(grader, NoGrader):
         return GradeResult(Outcome.UNAVAILABLE, None, grader.reason)
+    if rejected_violations:
+        return malformed_reasoning_grade(rejected_violations)
     conversation = chat_conversation(list(messages))
     if grades_with_judge(grader):
         attempt = GradingAttempt(conversation, outputs, stop_reason=stop_reason)

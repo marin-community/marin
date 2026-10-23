@@ -437,6 +437,11 @@ generator:
     default_error_treatment: mask
     preserve_logprobs_on_timeout: true
 
+  reasoning_spans:
+    # How task grading treats a rollout with a malformed reasoning span: `grade` scores its answer as usual,
+    # `reject` grades it as a submission failure. Tasks without a grader are always graded as usual.
+    policy: grade
+
   chat_template:
     source: "name"
     name_or_path: null

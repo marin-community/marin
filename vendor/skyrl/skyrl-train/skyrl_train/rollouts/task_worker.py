@@ -17,6 +17,7 @@ from omegaconf import DictConfig, OmegaConf
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader
+from taskcompendium.reasoning_spans import MalformedReasoning
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
@@ -61,6 +62,7 @@ from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propaga
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
+    REASONING_VIOLATIONS_KEY,
     DirectModelClient,
     GenerationBudgetExceededError,
     ModelClient,
@@ -206,6 +208,7 @@ async def _model_turn(
             },
             "generation_token_budget": (output.get("generation_token_budgets") or [None])[0],
         },
+        reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
     )
 
 
@@ -352,6 +355,7 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
+        self.malformed_reasoning = MalformedReasoning(trajectory_runner_cfg.reasoning_spans.policy)
         self.harbor = harbor
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait
@@ -446,7 +450,10 @@ class TaskRolloutWorker:
             )
             lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
             selected_harnesses.append(harnesses)
-        engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
+        engines = [
+            RolloutEngine(self.factories, harnesses, malformed_reasoning=self.malformed_reasoning)
+            for harnesses in selected_harnesses
+        ]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
             engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
