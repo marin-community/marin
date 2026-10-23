@@ -40,13 +40,10 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
 
 
 def host_python_mounts() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
-    """The read-only directories and the ``bin`` directory of the Python environment that runs this process.
+    """Read-only mounts and the bin directory needed to run the host Python in a sandbox.
 
-    The directories are the environment, the source directories of its editable installs, the uv archive that
-    its files link to (the task bootstrap runs ``uv sync --link-mode symlink``), and the base interpreter by its
-    resolved path and by the path that the environment names. The editable sources of SkyRL's own environment are Marin's ``lib`` packages outside the
-    environment, for example ``verifyit``, which the script graders import. Every sandbox sees the system
-    directories already, and mounts inside them fail; a directory inside another mount is not mounted again.
+    Include editable sources, uv archives, and both paths to the base interpreter. Omit system directories and
+    mounts already covered by a parent.
     """
     environment = Path(sys.prefix)
     candidates = (
@@ -80,8 +77,7 @@ def interpreter_home(environment: Path) -> Path:
 
 
 def linked_archives(environment: Path) -> tuple[Path, ...]:
-    """The uv ``archive-v0`` directories that the files of ``environment`` link to, so that the links resolve in a
-    sandbox. uv links every file of a package, so the first link of each site-packages directory is enough."""
+    """The uv ``archive-v0`` directories referenced by packages in ``environment``."""
     archives = []
     for site_packages in environment.glob("lib/python*/site-packages"):
         link = next((path for path in site_packages.rglob("*") if path.is_symlink()), None)
@@ -135,10 +131,7 @@ def local_machine_factory(settings: Mapping[str, Any]) -> MachineFactory:
 
 @dataclass
 class BoundedMachineFactory:
-    """A machine factory with at most as many open machines as ``slots`` permits.
-
-    A script grader that measures time can fail a correct answer while it waits for a CPU.
-    """
+    """A machine factory with at most as many open machines as ``slots`` permits."""
 
     factory: MachineFactory
     slots: asyncio.Semaphore
