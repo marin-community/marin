@@ -2,3 +2,4 @@ secretsprovider: gcpkms://projects/hai-gcp-models/locations/us-central1/keyRings
 config:
   marin-shellsim-ports:source_revision: 6ba346e6b40be777ad75264649d619dacef159d4
   marin-shellsim-ports:buckets_stack: organization/marin-buckets/marin-buckets
+encryptedkey: CiQAKk3j6fgFWPCcgAea1i+9fATXpLfTWKVf/0Uwoqmbeh4k4G4SSQCdtF6i+r1pIaIjdiHKlPDWoOv8DhNU/33uY/TvtSSVKGh5KiJiMCz+VqVuqJSdpAyB3Xf5URK+kLVtXO5C1YOANlmcgBAo6wc=
