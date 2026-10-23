@@ -28,12 +28,12 @@ from levanter.data.image import load_image
 from PIL import Image
 
 DEFAULT_DATASET = "liuhaotian/LLaVA-Pretrain"
-DEFAULT_DATA_FILES = ["blip_laion_cc_sbu_558k_meta.json"]
+DEFAULT_DATA_FILES = ("blip_laion_cc_sbu_558k_meta.json",)
 DEFAULT_IMAGE_ARCHIVE = f"hf://datasets/{DEFAULT_DATASET}/images.zip"
 ARCHIVE_BLOCK_SIZE = 1024 * 1024
 
 
-def show_images(
+def save_image_grid(
     records: list[dict[str, Any]],
     *,
     image_column: str,
@@ -61,7 +61,7 @@ def show_images(
     plt.close(figure)
 
 
-def main() -> None:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
     parser.add_argument("--config", help="Hugging Face dataset configuration name")
@@ -85,6 +85,20 @@ def main() -> None:
         raise ValueError("Choose between 1 and 16 images for this inspection example")
     if args.image_root is not None and args.image_archive is not None:
         raise ValueError("Choose either --image-root or --image-archive")
+    return args
+
+
+def _load_archive_images(records: list[dict[str, Any]], image_column: str, image_archive: str) -> None:
+    with fsspec.open(image_archive, "rb", block_size=ARCHIVE_BLOCK_SIZE) as remote:
+        with ZipFile(remote) as archive:
+            for record in records:
+                with archive.open(record[image_column]) as image_file:
+                    with Image.open(image_file) as image:
+                        record[image_column] = image.convert("RGB")
+
+
+def main() -> None:
+    args = _parse_args()
     source = datasets.load_dataset(
         args.dataset, name=args.config, data_files=args.data_files or None, split=args.split, streaming=True
     )
@@ -93,13 +107,8 @@ def main() -> None:
     if args.dataset == DEFAULT_DATASET and args.image_column == "image" and args.image_root is None:
         image_archive = image_archive or DEFAULT_IMAGE_ARCHIVE
     if image_archive is not None:
-        with fsspec.open(image_archive, "rb", block_size=ARCHIVE_BLOCK_SIZE) as remote:
-            with ZipFile(remote) as archive:
-                for record in records:
-                    with archive.open(record[args.image_column]) as image_file:
-                        with Image.open(image_file) as image:
-                            record[args.image_column] = image.convert("RGB")
-    show_images(
+        _load_archive_images(records, args.image_column, image_archive)
+    save_image_grid(
         records,
         image_column=args.image_column,
         caption_column=args.caption_column or None,

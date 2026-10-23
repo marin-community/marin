@@ -60,6 +60,8 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join  # noqa: E4
 logger = logging.getLogger("levanter.data.image")
 
 DEFAULT_IMAGE_TILE_SIZE = 384
+DEFAULT_IMAGE_TEXT_MAX_LENGTH = 2048
+PREFETCH_WAIT_TIMEOUT = 0.05
 
 
 class ImageTextUrlDataSource(UrlBackedShardedDataSource[dict]):
@@ -273,16 +275,17 @@ class ImageTextDict(TypedDict, total=False):
     unpad_indices: np.ndarray | None
 
 
-# TreeCache uses this exemplar to infer array dtypes and field structure; it is not a training example.
-IMAGE_TEXT_CACHE_EXEMPLAR: ImageTextDict = {
-    "pixel_values": np.zeros((1, 3, DEFAULT_IMAGE_TILE_SIZE, DEFAULT_IMAGE_TILE_SIZE), dtype=np.float32),
-    "input_ids": np.zeros((1,), dtype=np.int32),
-    "attention_mask": np.zeros((1,), dtype=np.int32),
-    "image_sizes": np.zeros((1, 2), dtype=np.int32),
-    "loss_mask": np.zeros((1,), dtype=np.float32),
-    "grid_mask": None,  # Always included, may be None
-    "unpad_indices": None,  # Always included, may be None
-}
+def _image_text_cache_exemplar(patch_size: int) -> ImageTextDict:
+    """Build the array schema TreeCache uses for processed image examples."""
+    return {
+        "pixel_values": np.zeros((1, 3, patch_size, patch_size), dtype=np.float32),
+        "input_ids": np.zeros((1,), dtype=np.int32),
+        "attention_mask": np.zeros((1,), dtype=np.int32),
+        "image_sizes": np.zeros((1, 2), dtype=np.int32),
+        "loss_mask": np.zeros((1,), dtype=np.float32),
+        "grid_mask": None,
+        "unpad_indices": None,
+    }
 
 
 def load_image_from_path_or_url(path_or_url: str) -> Image.Image:
@@ -453,7 +456,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
         tokenizer: Optional[PreTrainedTokenizerBase] = None,
         image_token: str | None = None,
         video_token: str | None = None,
-        max_length: int = 2048,
+        max_length: int = DEFAULT_IMAGE_TEXT_MAX_LENGTH,
         padding: bool = True,
         messages_key: str = "messages",
         images_key: str = "images",
@@ -771,10 +774,10 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
         has_pixel_values = "pixel_values" in processed
         has_image_sizes = "image_sizes" in processed
-        pv = processed["pixel_values"] if has_pixel_values else None
-        if pv is not None and pv.ndim == 4:
+        pixel_values_batch = processed["pixel_values"] if has_pixel_values else None
+        if pixel_values_batch is not None and pixel_values_batch.ndim == 4:
             # Single-crop processors return (images, channels, height, width).
-            pv = pv[:, None, ...]
+            pixel_values_batch = pixel_values_batch[:, None, ...]
         img_sizes = (
             processed["image_sizes"].astype(np.int32)
             if has_image_sizes
@@ -794,10 +797,10 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
             grid_mask = None
             unpad_indices = None
             if num_images > 0 and has_pixel_values:
-                assert pv is not None  # Guarded by has_pixel_values
+                assert pixel_values_batch is not None
                 if num_images == 1:
                     # Single image: use anyres with all patches
-                    pixel_values = pv[pv_start]
+                    pixel_values = pixel_values_batch[pv_start]
                     if self.max_num_patches is not None:
                         pixel_values, grid_mask = self._pad_pixel_values(
                             pixel_values, valid_patches=pixel_values.shape[0]
@@ -805,7 +808,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
                 else:
                     # Multiple images: only use base patch (first patch) from each image
                     # This matches HF behavior where multi-image doesn't use anyres
-                    base_patches = [pv[j][0] for j in range(pv_start, pv_end)]
+                    base_patches = [pixel_values_batch[j][0] for j in range(pv_start, pv_end)]
                     pixel_values = np.stack(base_patches, axis=0)  # (num_images, C, H, W)
                     if self.max_num_patches is not None:
                         pixel_values, grid_mask = self._pad_pixel_values(pixel_values, valid_patches=num_images)
@@ -865,7 +868,7 @@ class BatchImageProcessor(BatchProcessor[Dict[str, Any], ImageTextDict]):
 
     @property
     def output_exemplar(self) -> ImageTextDict:
-        exemplar: ImageTextDict = {**IMAGE_TEXT_CACHE_EXEMPLAR}
+        exemplar = _image_text_cache_exemplar(self.patch_size)
         if self.max_num_patches is not None:
             total_patches = self.max_num_patches + 1
             exemplar["pixel_values"] = np.zeros((total_patches, 3, self.patch_size, self.patch_size), dtype=np.float32)
@@ -1086,7 +1089,7 @@ class ImageTaskConfig(abc.ABC):
     """Base configuration for image-text tasks."""
 
     processor: str
-    max_length: int = 2048
+    max_length: int = DEFAULT_IMAGE_TEXT_MAX_LENGTH
     padding: bool = True
 
     @cached_property
@@ -1152,7 +1155,7 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
         self,
         source: ShardedDataSource[Dict[str, Any]],
         processor: ProcessorMixin,
-        max_length: int = 2048,
+        max_length: int = DEFAULT_IMAGE_TEXT_MAX_LENGTH,
         padding: bool = True,
         messages_key: str = "messages",
         images_key: str = "images",
@@ -1241,12 +1244,12 @@ class OnDemandImageDataset(AsyncDataset[ImageTextDict]):
 
             while not self._stop_prefetch.is_set():
                 if self._length is None or self._raw_data is None:
-                    self._stop_prefetch.wait(0.05)
+                    self._stop_prefetch.wait(PREFETCH_WAIT_TIMEOUT)
                     continue
 
                 cache_len = len(self._processed_cache)
                 if cache_len >= self.cache_size:
-                    self._stop_prefetch.wait(0.05)
+                    self._stop_prefetch.wait(PREFETCH_WAIT_TIMEOUT)
                     continue
 
                 if next_idx >= self._length:
@@ -1358,7 +1361,7 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
         cache_dir: str,
         source: ShardedDataSource[Dict[str, Any]],
         processor: ProcessorMixin,
-        max_length: int = 2048,
+        max_length: int = DEFAULT_IMAGE_TEXT_MAX_LENGTH,
         padding: bool = True,
         messages_key: str = "messages",
         images_key: str = "images",
@@ -1369,7 +1372,7 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
         if max_num_patches is None:
             max_num_patches = params.max_num_patches
 
-        bp = BatchImageProcessor(
+        batch_processor = BatchImageProcessor(
             processor,
             max_length=max_length,
             padding=padding,
@@ -1380,7 +1383,7 @@ class ProcessedImageCache(AsyncDataset[ImageTextDict]):
             vision_feature_height=params.vision_feature_height,
             max_num_patches=max_num_patches,
         )
-        cache = build_or_load_cache(cache_dir, source, bp, options=cache_options)
+        cache = build_or_load_cache(cache_dir, source, batch_processor, options=cache_options)
 
         if cache.is_finished:
             logger.info(f"Cache {cache_dir} is complete.")
@@ -1514,10 +1517,7 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
         Channels: Axis,
         Height: Axis,
         Width: Axis,
-        key: Optional[PRNGKeyArray] = None,
         pixel_dtype: Optional[np.dtype] = None,
-        grid_pinpoints: Optional[List[List[int]]] = None,
-        patch_size: int = DEFAULT_IMAGE_TILE_SIZE,
         NumImageTokens: Optional[Axis] = None,
     ) -> None:
         """
@@ -1528,12 +1528,9 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
             Channels: Axis for image channels
             Height: Axis for image height
             Width: Axis for image width
-            key: Optional random key
             pixel_dtype: dtype for pixel values when moving to device.
                         If None, uses the original dtype (float32).
                         Set to jnp.bfloat16 to save memory on TPU.
-            grid_pinpoints: List of grid resolutions for anyres processing.
-            patch_size: Size of each image patch (default 384).
             NumImageTokens: Axis for unpad_indices. If provided, unpad_indices
                            will be included with this size.
         """
@@ -1543,48 +1540,48 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
         self.Channels = Channels
         self.Height = Height
         self.Width = Width
-        self.key = key
         self.pixel_dtype = pixel_dtype
-        self.grid_pinpoints = grid_pinpoints
-        self.patch_size = patch_size
         self.NumImageTokens = NumImageTokens
 
         # Process on CPU with numpy, avoid jnp.asarray() which would allocate on TPU
         # Use NamedArray constructor directly instead of hax.named() to keep data as numpy
         # DataLoader will handle the conversion to JAX arrays during batching
         def _convert_example(inputs: ImageTextDict) -> ImageTextExample:
-            pv = inputs.get("pixel_values")
-            pv_dtype = np.dtype(self.pixel_dtype) if self.pixel_dtype is not None else np.float32
+            pixel_array = inputs.get("pixel_values")
+            pixel_dtype = np.dtype(self.pixel_dtype) if self.pixel_dtype is not None else np.float32
 
-            if pv is None:
+            if pixel_array is None:
                 # Text-only: zero-padded pixel_values, grid_mask will be all-False
-                pv = np.zeros(
+                pixel_array = np.zeros(
                     (self.NumPatches.size, self.Channels.size, self.Height.size, self.Width.size),
-                    dtype=pv_dtype,
+                    dtype=pixel_dtype,
                 )
-            elif pv.ndim == 4:
-                actual_num_patches = pv.shape[0]
+            elif pixel_array.ndim == 4:
+                actual_num_patches = pixel_array.shape[0]
                 target_num_patches = self.NumPatches.size
 
                 if actual_num_patches < target_num_patches:
                     pad_size = target_num_patches - actual_num_patches
-                    padding = np.zeros((pad_size,) + pv.shape[1:], dtype=pv.dtype)
-                    pv = np.concatenate([pv, padding], axis=0)
+                    padding = np.zeros((pad_size,) + pixel_array.shape[1:], dtype=pixel_array.dtype)
+                    pixel_array = np.concatenate([pixel_array, padding], axis=0)
                 elif actual_num_patches > target_num_patches:
-                    pv = pv[:target_num_patches]
+                    pixel_array = pixel_array[:target_num_patches]
 
                 if self.pixel_dtype is not None:
-                    pv = pv.astype(pv_dtype)
-            elif pv.ndim == 3:
+                    pixel_array = pixel_array.astype(pixel_dtype)
+            elif pixel_array.ndim == 3:
                 if self.pixel_dtype is not None:
-                    pv = pv.astype(pv_dtype)
+                    pixel_array = pixel_array.astype(pixel_dtype)
             else:
-                raise ValueError(f"Unexpected pixel_values shape: {pv.shape}")
+                raise ValueError(f"Unexpected pixel_values shape: {pixel_array.shape}")
 
-            if pv.ndim == 4:
-                pixel_values = NamedArray(pv, (self.NumPatches, self.Channels, self.Height, self.Width))
+            if pixel_array.ndim == 4:
+                pixel_values = NamedArray(
+                    pixel_array,
+                    (self.NumPatches, self.Channels, self.Height, self.Width),
+                )
             else:
-                pixel_values = NamedArray(pv, (self.Channels, self.Height, self.Width))
+                pixel_values = NamedArray(pixel_array, (self.Channels, self.Height, self.Width))
 
             input_ids = NamedArray(inputs["input_ids"], (self.Position,))
 
@@ -1592,33 +1589,33 @@ class ImageTextDataset(MappedAsyncDataset[ImageTextDict, ImageTextExample]):
             if "loss_mask" in inputs:
                 loss_mask = NamedArray(inputs["loss_mask"], (self.Position,))
 
-            gm_arr = inputs.get("grid_mask")
-            if gm_arr is not None:
-                grid_mask = NamedArray(gm_arr, (self.NumPatches,))
+            grid_mask_array = inputs.get("grid_mask")
+            if grid_mask_array is not None:
+                grid_mask = NamedArray(grid_mask_array, (self.NumPatches,))
             else:
                 # No grid_mask from preprocessing: all-True if image present, all-False if text-only
                 has_image = inputs.get("pixel_values") is not None
-                gm_arr = (
+                grid_mask_array = (
                     np.ones(self.NumPatches.size, dtype=np.bool_)
                     if has_image
                     else np.zeros(self.NumPatches.size, dtype=np.bool_)
                 )
-                grid_mask = NamedArray(gm_arr, (self.NumPatches,))
+                grid_mask = NamedArray(grid_mask_array, (self.NumPatches,))
 
             unpad_indices = None
             if self.NumImageTokens is not None:
-                ui_arr = inputs.get("unpad_indices")
-                if ui_arr is not None:
+                unpad_indices_array = inputs.get("unpad_indices")
+                if unpad_indices_array is not None:
                     target_size = self.NumImageTokens.size
-                    if len(ui_arr) < target_size:
+                    if len(unpad_indices_array) < target_size:
                         padded = np.zeros(target_size, dtype=np.int32)
-                        padded[: len(ui_arr)] = ui_arr
-                        ui_arr = padded
+                        padded[: len(unpad_indices_array)] = unpad_indices_array
+                        unpad_indices_array = padded
                     else:
-                        ui_arr = ui_arr[:target_size]
+                        unpad_indices_array = unpad_indices_array[:target_size]
                 else:
-                    ui_arr = np.zeros(self.NumImageTokens.size, dtype=np.int32)
-                unpad_indices = NamedArray(ui_arr, (self.NumImageTokens,))
+                    unpad_indices_array = np.zeros(self.NumImageTokens.size, dtype=np.int32)
+                unpad_indices = NamedArray(unpad_indices_array, (self.NumImageTokens,))
 
             out = ImageTextExample.init(
                 pixel_values,

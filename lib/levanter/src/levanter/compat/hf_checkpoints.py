@@ -951,7 +951,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def load_pretrained(
         self,
-        lm_model_cls: Type[LmHeadModel | ModelWithHfSerializationMixin],
+        model_cls: Type[LmHeadModel | ModelWithHfSerializationMixin],
         ref: Optional[Union[str, RepoRef]] = None,
         config: Optional[HfSerializableConfig] = None,
         axis_mapping: Optional[ResourceMapping] = None,
@@ -973,7 +973,6 @@ class HFCheckpointConverter(Generic[LevConfig]):
         hf_config = self.hf_config_from_hf_checkpoint(ref)
         if config is None:
             config = self.config_from_hf_config(hf_config)
-        lm_model_cls = config.model_type
 
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
         if isinstance(config, LmConfig):
@@ -1000,9 +999,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # However, this might miss some buffers that don't get persisted in the state dict
             # (e.g. pytorch buffers with persistent=false), so we have to reinitialize them. We then init the model
             # again, this time keeping only the (missing) buffers, and then combine the two models.
-            lev_model = _patch_missing_buffers_for_deser(
-                lev_model, lm_model_cls, Vocab, config, PRNGKey(0), axis_mapping
-            )
+            lev_model = _patch_missing_buffers_for_deser(lev_model, model_cls, Vocab, config, PRNGKey(0), axis_mapping)
 
             if Vocab.size != tokenizer_Vocab.size:
                 logger.info(
@@ -1023,7 +1020,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         load_from_state_dict = haliax.named_jit(
             load_from_state_dict, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
         )
-        lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
+        lev_model = eqx.filter_eval_shape(model_cls.init, Vocab, config, key=PRNGKey(0))
         lev_model = load_from_state_dict(lev_model, state_dict)
 
         return lev_model
@@ -1567,7 +1564,7 @@ def _convert_to_jnp(v, dtype):
         return arr
 
 
-def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key, axis_mapping):
+def _patch_missing_buffers_for_deser(lev_model, model_cls, Vocab, config, key, axis_mapping):
     """
     State dict serialization doesn't always save buffers, so when we initialize a model from a state dict, we might
     need to re-initialize the buffers. We do this by rerunning the constructor, but only save the buffers.
@@ -1583,7 +1580,7 @@ def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key
     # arrays. We're relying on jit to do all the work in eliminating the unnecessary computation/memory
     @haliax.named_jit(axis_resources=axis_mapping)
     def _init_buffers():
-        new_model = lm_model_cls.init(Vocab, config, key=key)
+        new_model = model_cls.init(Vocab, config, key=key)
 
         def select_if_missing(missing_leaf, new_value):
             if isinstance(missing_leaf, jax.ShapeDtypeStruct):
