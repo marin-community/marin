@@ -43,9 +43,9 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HeroThroughputResult,
+    validated_batch_axis_size,
 )
 from experiments.grug.moe_hero_ep.heuristic import MoeHeuristic
-from experiments.grug.moe_hero_ep.launch_diagnostics import validated_batch_axis_size
 from experiments.grug.moe_hero_ep.model import GrugModelConfig, QbEstimator
 from experiments.grug.moe_hero_ep.train import (
     GrugEvalConfig,

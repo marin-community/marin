@@ -17,10 +17,10 @@ rung predicts the d6144 hero. ``d6144`` is the hero itself.
     d6144   11     2816   390251  every 3000  every 6k       18T     23B     535B    2.7e24
 
 At 4K, train batch is 1024 x racks; longer contexts shrink it to preserve tokens per step (the d6144
-hero trained at 4K with batch 11264 until step 257553). Eval batch is 64 x racks (one sequence per
-device). Tokens/steps hold 791 tokens per active parameter (18T at d6144); FLOPs are the levanter
-analytic estimate (forward+backward, including attention and the latent-MoE correction), with the
-d6144 run counted at 4K throughout.
+hero trained at 4K with batch 11264 until step 257553). Eval batch is one sequence per batch shard:
+64 x racks, or (64 / CP) x racks with CP-way context parallelism. Tokens/steps hold 791 tokens per
+active parameter (18T at d6144); FLOPs are the levanter analytic estimate (forward+backward, including
+attention and the latent-MoE correction), with the d6144 run counted at 4K throughout.
 
 Changelog:
     2026-09-02 (#8818, PR #8833): decoupled weight decay on the attn_gate and router weights is on by
@@ -67,6 +67,8 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
+    HERO_BALANCE_ATTENTION_ROWS,
+    HERO_CONTEXT_AXIS_SIZE,
     HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
@@ -81,9 +83,12 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_TOKENS_PER_RACK,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
+    hero_expert_axis_size,
     hero_grug_trainer_config,
     hero_rack_batch_size,
     hero_trainer_config,
+    validate_model_split,
+    validated_batch_axis_size,
     validation_datasets,
     with_transport_remat_mode,
 )
@@ -198,6 +203,7 @@ def build_ladder_run(
     initialize_from_checkpoint: str | None = None,
     context_phases: Sequence[HarrierContextPhase] | None = None,
     flops_baseline_total: float | None = None,
+    context_axis_size: int | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
@@ -223,18 +229,27 @@ def build_ladder_run(
     ``LmDataConfig.prior_context_phases``). ``None`` selects the checked-in history: ``HERO_CONTEXT_PHASES``
     and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train at their context
     length from their start. Pass both to build another history.
+
+    ``context_axis_size`` splits each sequence over that many devices, and each rack's expert axis shrinks to
+    ``HERO_EP_EXPERT_AXIS_SIZE // context_axis_size`` to keep the rack full. ``None`` selects the checked-in
+    ``HERO_CONTEXT_AXIS_SIZE`` (with ``HERO_BALANCE_ATTENTION_ROWS``) for d6144, and no context parallelism for
+    the narrow rungs.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if size not in LADDER_RACKS:
         raise ValueError(f"size must be one of {sorted(LADDER_RACKS)}, got {size!r}")
 
+    hero = size == "d6144"
     if context_phases is None:
         if flops_baseline_total is not None:
             raise ValueError("flops_baseline_total requires an explicit context_phases")
-        hero = size == "d6144"
         context_phases = HERO_CONTEXT_PHASES if hero else ()
         flops_baseline_total = HERO_FLOPS_BASELINE_TOTAL if hero else None
+    if context_axis_size is None:
+        context_axis_size = HERO_CONTEXT_AXIS_SIZE if hero else 1
+    balance_attention_rows = HERO_BALANCE_ATTENTION_ROWS if hero else False
+    expert_axis_size = hero_expert_axis_size(context_axis_size)
 
     model = _ladder_model(size)
     if qk_mult is not None:
@@ -243,12 +258,22 @@ def build_ladder_run(
         model = dataclasses.replace(model, qk_mult_long_scale=qk_mult_long_scale)
     seq_len = model.max_seq_len
     flops_baseline = _hero_flops_baseline(context_phases, flops_baseline_total, seq_len)
+    validate_model_split(model, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size)
 
     dp_racks = LADDER_RACKS[size]
-    # Weak scaling holds per-rack token load constant; eval is one sequence per device.
+    # Weak scaling holds per-rack token load constant.
     global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
     batch_size = hero_rack_batch_size(seq_len) * dp_racks
-    eval_batch_size = HERO_EP_EXPERT_AXIS_SIZE * dp_racks
+    batch_axes = validated_batch_axis_size(
+        device_count=HERO_EP_EXPERT_AXIS_SIZE * dp_racks,
+        dp_racks=dp_racks,
+        batch_size=batch_size,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+    )
+    # Eval is one sequence per batch shard, so each device scores max_seq_len / context_axis_size tokens per
+    # eval batch at every context length. The README's "Scaling ladder" section explains the choice.
+    eval_batch_size = batch_axes
 
     if context_phases and num_steps is not None:
         # The prior phases' data stages are rebuilt from the schedule length, so it must stay the run's own.
@@ -290,13 +315,16 @@ def build_ladder_run(
     )
     optimizer = dataclasses.replace(optimizer, gate_router_weight_decay=gate_router_weight_decay)
 
-    # Uniform hero trainer: expert-parallel within each rack, replicated across racks, MuonH state
-    # offloaded to FP32 pinned host.
+    # Uniform hero trainer: expert- and context-parallel within each rack, replicated across racks, MuonH
+    # state offloaded to FP32 pinned host.
     grug_trainer = hero_grug_trainer_config(
         replica_axis_size=dp_racks,
         training_data_mode=TrainingDataMode.MIXTURE,
         watch_mode=WatchMode.INLINE,
         save_checkpoints=True,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+        balance_attention_rows=balance_attention_rows,
         gc_interval=100,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -373,6 +401,7 @@ def build_ladder_run(
                 delete_old_temp_checkpoints=True,
                 keep_last_temporary_checkpoints=1,
             ),
+            context_axis_size=context_axis_size,
         )
         return GrugRunConfig(
             model=model,

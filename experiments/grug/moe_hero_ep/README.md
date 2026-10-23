@@ -177,7 +177,10 @@ A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heur
 context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES` in
 `launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
 `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
-both. Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
+both. A context that needs context parallelism also sets `HERO_CONTEXT_AXIS_SIZE` in
+`hero_recipe.py`, and `HERO_BALANCE_ATTENTION_ROWS` when row balancing pays off at that context. Each
+rack's 64 GPUs then form 64 / CP expert shards of CP sequence shards each, and the eval batch follows
+(see [Scaling ladder](#scaling-ladder)). Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
 only `--qk-mult` and `--qk-mult-long-scale` on the command line. `qk_mult_long_scale` multiplies
 `qk_mult` on the global layers only. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
@@ -439,8 +442,21 @@ checkpoint policy all follow `--size`:
 | d6144 | 11 | 11264 at 4K, 2816 at 16K | 390,251 | every 3000 | every 6k |
 
 At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
-batch is 64 × racks (one sequence per device). The step budget is 791 tokens per active parameter
+batch is one sequence per batch shard: 64 × racks (704 on the hero) without context parallelism, and
+(64 / CP) × racks with CP-way context parallelism (176 at CP4). The step budget is 791 tokens per active parameter
 (18T at d6144); pass `--num-steps` to override.
+
+The eval batch follows the batch shards rather than staying at 704 because of how the dropless eval
+shards it. That eval runs on a mesh with the expert axis folded into `data`, and it keeps the
+context axis, so it splits the batch over the same 64 / CP shards per rack and each sequence over CP
+devices. One sequence per shard gives every device max_seq_len / CP tokens per eval batch: 16,384 at
+16K CP1 and again at 65K CP4. A fixed 704 at 65K CP4 would give each device four sequences, or 65,536
+tokens, which is the 16K eval's per-device load ×4 and is untested on the dropless local backend,
+which has no capacity bound. The eval sets are concatenated into one stream, so the batch size changes
+only how that stream is cut. The token-weighted `eval_dropless/*` losses do not depend on it, and
+total eval work changes only by the padding of the final batch. The 16K hero's eval takes about 19 s
+(`eval_dropless/total_time`), and the eval hook suspends the 15-minute step deadline, leaving it
+bounded by the 1-hour process-stall deadline.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every hour goes to region-local temp

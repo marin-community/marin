@@ -10,8 +10,10 @@ from levanter.callbacks.profiler import ProfilerConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointerConfig
+from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.tracker import TrackerConfig
 from levanter.trainer import TrainerConfig
+from levanter.utils.mesh import MeshConfig
 from marin.execution.artifact import Artifact
 from marin.execution.lazy import ArtifactStep
 from marin.processing.tokenize.tokenize import TokenizedCache
@@ -25,6 +27,7 @@ from experiments.grug.moe_hero_ep.train import (
     MasterParamMode,
     TrainingDataMode,
     WatchMode,
+    grug_trainer_mesh_config,
 )
 from experiments.marin_tokenizer import marin_tokenizer
 
@@ -35,7 +38,15 @@ HERO_INITIAL_SEQ_LEN = 4096
 HERO_TOKENS_PER_RACK = 1024 * HERO_INITIAL_SEQ_LEN
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
+# One rack's devices, which is the expert axis without context parallelism.
 HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
+# The hero's context-parallel degree. Each rack splits into HERO_EP_EXPERT_AXIS_SIZE // HERO_CONTEXT_AXIS_SIZE
+# expert shards of HERO_CONTEXT_AXIS_SIZE sequence shards each (see `hero_expert_axis_size`).
+HERO_CONTEXT_AXIS_SIZE = 1
+# Deal rows to batch shards by attention cost (`GrugTrainerConfig.balance_attention_rows`).
+HERO_BALANCE_ATTENTION_ROWS = False
+# The hero has no tensor parallelism.
+HERO_MODEL_AXIS_SIZE = 1
 HERO_PROCESSES_PER_TASK = HERO_GPUS_PER_NODE
 HERO_NODE_CPU = 120
 HERO_NODE_RAM = "890g"
@@ -67,6 +78,61 @@ def hero_rack_batch_size(seq_len: int) -> int:
     return HERO_TOKENS_PER_RACK // seq_len
 
 
+def hero_expert_axis_size(context_axis_size: int) -> int:
+    """The expert axis that fills one rack beside ``context_axis_size`` sequence shards."""
+    if context_axis_size <= 0 or HERO_EP_EXPERT_AXIS_SIZE % context_axis_size:
+        raise ValueError(
+            f"context_axis_size={context_axis_size} must divide the {HERO_EP_EXPERT_AXIS_SIZE} devices of a rack"
+        )
+    return HERO_EP_EXPERT_AXIS_SIZE // context_axis_size
+
+
+def validated_batch_axis_size(
+    *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
+) -> int:
+    """Validate mesh and batch divisibility; return the replica * data * expert product.
+
+    Context and model axes do not partition the batch.
+    """
+    replica, data, _context, expert, _model = _compact_grug_mesh_shape(
+        process_count=device_count,
+        local_device_count=1,
+        expert_axis_size=expert_axis_size,
+        replica_axis_size=dp_racks,
+        model_axis_size=HERO_MODEL_AXIS_SIZE,
+        context_axis_size=context_axis_size,
+    )
+    batch_axes = replica * data * expert
+    if batch_size % batch_axes != 0:
+        raise ValueError(
+            f"batch_size={batch_size} must be divisible by the batch axes replica ({replica}) * "
+            f"data ({data}) * expert ({expert}) = {batch_axes}"
+        )
+    return batch_axes
+
+
+def validate_model_split(model: GrugModelConfig, *, context_axis_size: int, expert_axis_size: int) -> None:
+    """Reject a sequence or expert-bank split that ``model`` cannot take.
+
+    Each would otherwise fail after the rack is allocated and the workspace is built: an indivisible
+    sequence in the context-sharded forward, a bank not divisible by the expert axis in `moe_mlp`, and one
+    not divisible by the (expert, context) storage split in parameter init.
+    """
+    if model.max_seq_len % context_axis_size:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide max_seq_len={model.max_seq_len}")
+    bank_shards = expert_axis_size * context_axis_size
+    if model.num_experts % bank_shards != 0:
+        raise ValueError(
+            f"num_experts={model.num_experts} must be divisible by expert ({expert_axis_size}) * "
+            f"context ({context_axis_size}) = {bank_shards}, the expert bank's storage split"
+        )
+    local_experts = model.num_experts // expert_axis_size
+    if local_experts % model.num_expert_waves != 0:
+        raise ValueError(
+            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
+        )
+
+
 def with_transport_remat_mode(model: GrugModelConfig) -> GrugModelConfig:
     if model.moe_implementation != RAGGED_MOE_IMPLEMENTATION:
         return model
@@ -83,6 +149,9 @@ def hero_grug_trainer_config(
     training_data_mode: TrainingDataMode,
     watch_mode: WatchMode,
     save_checkpoints: bool,
+    context_axis_size: int,
+    expert_axis_size: int,
+    balance_attention_rows: bool,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     gc_interval: int | None = None,
 ) -> GrugTrainerConfig:
@@ -99,8 +168,10 @@ def hero_grug_trainer_config(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
-        expert_axis_size=HERO_EP_EXPERT_AXIS_SIZE,
+        expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
+        context_axis_size=context_axis_size,
+        balance_attention_rows=balance_attention_rows,
         sharding_dump_path=None,
     )
 
@@ -115,6 +186,7 @@ def hero_trainer_config(
     tracker: TrackerConfig,
     watch: WatchConfig,
     checkpointer: CheckpointerConfig,
+    context_axis_size: int,
     progress_watchdog: ProgressWatchdogConfig = ProgressWatchdogConfig(),
     load_checkpoint_path: str | list[str] | None = None,
     load_checkpoint: bool | None = None,
@@ -131,6 +203,9 @@ def hero_trainer_config(
         tracker=tracker,
         watch=watch,
         progress_watchdog=progress_watchdog,
+        # Context shards do not hold separate batch rows, so the batch count excludes them. Without context
+        # parallelism the default mesh keeps the trainer exactly as it has always been.
+        mesh=grug_trainer_mesh_config(context_axis_size) if context_axis_size > 1 else MeshConfig(),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
         allow_nondivisible_batch_size=False,
