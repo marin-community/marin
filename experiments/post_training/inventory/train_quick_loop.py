@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Train Datakit SFT on the Snowball calendar trial and evaluate before and after RL."""
+"""Train Datakit SFT on the Snowball 100k selection and evaluate before and after RL."""
 
 from dataclasses import replace
 
@@ -34,9 +34,9 @@ MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 DEFAULT_STEPS = 25
-ARTIFACT_NAME = "checkpoints/snowball-calendar-trial"
+ARTIFACT_NAME = "checkpoints/snowball-inventory"
 SELECTION_PREFIX = "rl-data/task-selection"
-DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/calendar-trial/2026.10.23.1"
+DEFAULT_SELECTION_URI = "s3://marin-us-east-02a/marin/rl-data/task-selection/snowball-100k/2026.10.23.2"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
 REQUEST_WINDOW_TOKENS = 24_576
@@ -50,7 +50,7 @@ def training_recipe(steps: int) -> dict:
     plan = SNOWBALL_RECIPE.role_plan
     preset = replace(
         DEFAULT,
-        label="calendar-trial",
+        label="snowball-100k",
         max_steps=steps,
         eval_interval=steps,
         max_staleness_steps=0,

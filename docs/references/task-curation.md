@@ -133,6 +133,8 @@ Parquet. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
+For the current task-to-training recipe, see the [quick RL loop](../recipes/quick-rl-loop.md).
+
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:
 
@@ -171,7 +173,8 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 ```
 
 Omit `--run` to print the artifact and its dependencies. Source IDs in the recipe
-must all be present in the campaign or saved corpus. Changing quotas, the seed,
+must all be present in the campaign or saved corpus. Optional `source_limits`
+must cover every source and sum to each family quota. Changing quotas, the seed,
 source artifacts, the source allowlist or the heldout input requires a new recipe version.
 The output lives under the active artifact root at
 `rl-data/task-selection/<name>/<version>`; `--cache-dir` selects a local root.
@@ -179,8 +182,9 @@ The output lives under the active artifact root at
 Before sampling, selection removes matches against the **complete** heldout set
 by task ID, public semantics or exact conversation context. It deduplicates
 eligible training contracts with TaskCompendium's shared identity rules, retaining
-distinct private script and closure contracts. Each family is sampled without
-replacement in seeded task-ID order. Quotas must fit the eligible population;
+distinct private script and closure contracts. Each source-quota group, or family
+when source quotas are omitted, is sampled without replacement in seeded task-ID
+order. Quotas must fit the eligible population;
 a shortfall fails before publishing the training files. These rules provide
 exact overlap checks, not semantic decontamination.
 
