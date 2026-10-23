@@ -1,0 +1,9 @@
+coords.txt
+entry.json
+jobs.json
+recent_usage*.json
+inventory.json
+hlo_*/
+uvsync.log
+tests_*.txt
+loss2_*.txt
