@@ -16,7 +16,6 @@ import json
 import os
 import pathlib
 import re
-import shlex
 import shutil
 import subprocess
 import sys
@@ -25,6 +24,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from enum import StrEnum
 
 import click
 
@@ -37,18 +37,18 @@ LINT_DIR = ROOT_DIR / "infra/lint"
 LINT_CATALOG = load_catalog(LINT_DIR)
 
 
-LINT_REVIEW_AGENT_DEFAULT = "claude -p"
+class LintReviewAgent(StrEnum):
+    CLAUDE = "claude"
+    CODEX = "codex"
+
 
 LINT_REVIEW_TIMEOUT = 600
-
-CODEX_SANDBOX_BYPASS_FLAGS = frozenset(("--dangerously-bypass-approvals-and-sandbox", "--yolo"))
-CODEX_READ_ONLY_SANDBOX = "read-only"
 
 # The lint review runs fully-headless agents over the working tree. They are REVIEWERS:
 # the only job is to READ the change and emit advisory findings on stdout — never to modify
 # a file or touch git/PR state. That contract is enforced two ways: the prompt mandate
 # (READ_ONLY_MANDATE, stated to every agent) and a CLI-specific hard permission lockdown
-# (_with_readonly_access).
+# (_review_agent_command).
 
 # Built-in tools the headless `claude` agent may have AT ALL. Edit/Write/NotebookEdit are
 # absent, so the agent cannot modify a file regardless of what any inherited settings.json
@@ -352,18 +352,19 @@ def _lint_review_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k not in LINT_REVIEW_STRIPPED_ENV}
 
 
-def _readonly_agent_flags() -> list[str]:
-    """Flags that lock a headless `claude` agent to read-only review.
+def _review_agent_command(calling_agent: LintReviewAgent, executable: str) -> list[str]:
+    """Build the selected reviewer's headless command with read-only permissions."""
+    if calling_agent == LintReviewAgent.CODEX:
+        return [executable, "exec", "--ephemeral", "--sandbox", "read-only", "--ignore-user-config"]
 
-    Three layers: `--tools` removes the edit tools entirely (no Edit/Write/NotebookEdit),
-    `--allowedTools` pre-approves only read-only git plus Read/Grep/Glob, and
-    `--disallowedTools` hard-denies every mutating git/gh command so an over-permissive
-    inherited settings.json (`Bash(git:*)`, `Bash(gh:*)`, …) cannot re-open the hole —
-    `deny` wins over `allow` at every scope.
-    """
     allow = ["Read", "Grep", "Glob", *(f"Bash({c}:*)" for c in LINT_REVIEW_READONLY_GIT)]
     deny = [f"Bash({c}:*)" for c in LINT_REVIEW_DENIED_COMMANDS]
     return [
+        executable,
+        "-p",
+        "--strict-mcp-config",
+        "--mcp-config",
+        '{"mcpServers":{}}',
         "--tools",
         LINT_REVIEW_BUILTIN_TOOLS,
         "--allowedTools",
@@ -371,36 +372,6 @@ def _readonly_agent_flags() -> list[str]:
         "--disallowedTools",
         ",".join(deny),
     ]
-
-
-def _with_readonly_access(agent_cmd: list[str]) -> list[str]:
-    """Return an agent command that enforces the review's read-only contract."""
-    agent_name = os.path.basename(agent_cmd[0])
-    if agent_name == "codex" and len(agent_cmd) > 1 and agent_cmd[1] in {"exec", "e"}:
-        command = [arg for arg in agent_cmd if arg not in CODEX_SANDBOX_BYPASS_FLAGS]
-        if "--ephemeral" not in command:
-            command.append("--ephemeral")
-        sandbox_assignment = next(
-            (index for index, arg in enumerate(command) if arg.startswith(("--sandbox=", "-s="))), None
-        )
-        if sandbox_assignment is not None:
-            flag = command[sandbox_assignment].split("=", maxsplit=1)[0]
-            command[sandbox_assignment] = f"{flag}={CODEX_READ_ONLY_SANDBOX}"
-        else:
-            for flag in ("--sandbox", "-s"):
-                if flag in command:
-                    sandbox_index = command.index(flag) + 1
-                    if sandbox_index == len(command):
-                        command.append(CODEX_READ_ONLY_SANDBOX)
-                    else:
-                        command[sandbox_index] = CODEX_READ_ONLY_SANDBOX
-                    break
-            else:
-                command.extend(("--sandbox", CODEX_READ_ONLY_SANDBOX))
-        return command
-    if agent_name != "claude" or "--allowedTools" in agent_cmd:
-        return agent_cmd
-    return [*agent_cmd, *_readonly_agent_flags()]
 
 
 def _run_agent(agent_cmd: list[str], env: dict[str, str], prompt: str) -> subprocess.CompletedProcess | None:
@@ -691,7 +662,7 @@ def _ship_review_event(
             "invocation": {
                 "variant": mode,
                 "trigger": _review_trigger(),
-                "agent_cli": agent_cmd[0],
+                "agent_cli": os.path.basename(agent_cmd[0]),
                 "git_branch": _git(["rev-parse", "--abbrev-ref", "HEAD"]),
                 "merge_base_sha": merge_base,
                 "head_sha": _review_head_sha(),
@@ -711,7 +682,13 @@ def _ship_review_event(
     )
 
 
-def run_lint_review(agent_command: str, lane_names: list[str] | None = None, compose: bool = True) -> int:
+def run_lint_review(
+    calling_agent: LintReviewAgent,
+    lane_names: list[str] | None = None,
+    compose: bool = True,
+    *,
+    agent_executable: pathlib.Path | None = None,
+) -> int:
     """Run the advisory `infra/lint/` catalog over the branch's changes via headless agents.
 
     Fans out one agent per lane (see `LINT_LANES`); each lane is handed the changed-file
@@ -720,15 +697,14 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
     (`compose=True`) or a deterministic dedupe-and-concat (`compose=False`).
     `lane_names` restricts the run to a subset of lanes for debugging.
 
-    `agent_command` is the headless CLI invocation each lane/composer agent reads
-    its prompt from on stdin (e.g. `claude -p`, `codex exec`). Callers should pass
-    the command for the agent they are themselves running.
+    `calling_agent` selects the caller's agent CLI. This runner owns the headless
+    invocation and read-only permissions for every lane and the composer.
+    `agent_executable` selects an installation outside PATH without overriding flags.
 
     Findings are advisory and never block. Returns 0 for every outcome that fits
-    that contract (no findings, findings emitted, agent unavailable, merge-base
-    unresolved, lane/composer timeout). Returns 1 only on a usage error (unknown
-    lane) or when every lane's agent failed to run, which indicates a broken
-    agent CLI worth surfacing.
+    that contract (no findings, findings emitted, merge-base unresolved,
+    lane/composer timeout). Returns 1 on an unknown lane, an unavailable agent,
+    or when every lane's agent failed to run.
     """
     lanes = list(LINT_LANES)
     if lane_names:
@@ -739,12 +715,12 @@ def run_lint_review(agent_command: str, lane_names: list[str] | None = None, com
             return 1
         lanes = [lane for lane in LINT_LANES if lane.name in lane_names]
 
-    agent_cmd = shlex.split(agent_command)
-    if not agent_cmd or shutil.which(agent_cmd[0]) is None:
-        agent_name = agent_cmd[0] if agent_cmd else "(empty)"
-        click.echo(f"  ⚠ Lint review skipped: agent '{agent_name}' not found on PATH")
-        return 0
-    agent_cmd = _with_readonly_access(agent_cmd)
+    requested_executable = str(agent_executable or calling_agent.value)
+    executable = shutil.which(requested_executable)
+    if executable is None:
+        click.echo(f"Error: review agent '{requested_executable}' is unavailable; set --agent-executable to its path")
+        return 1
+    agent_cmd = _review_agent_command(calling_agent, executable)
 
     resolved = _resolve_review_stat()
     if resolved is None:

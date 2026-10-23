@@ -71,8 +71,8 @@ uv run pyrefly check
 # Safe tests affected by the current branch and working tree
 uv run --no-project infra/ci/run_tests.py
 
-# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
-./infra/pre-commit.py --review
+# Lint review — set --calling-agent to claude or codex to match the caller
+./infra/pre-commit.py --review --calling-agent=claude
 ```
 
 - `./infra/pre-commit.py` is the required lint entry point. Do not replace it
@@ -81,6 +81,11 @@ uv run --no-project infra/ci/run_tests.py
   `pyproject.toml`.
 - Follow the `manage-pr` skill for the required lint-review timing and response
   workflow before publishing a PR.
+- Marin is an open-source repository. The advisory review is a mandatory step
+  before publishing a PR. Running it through either supported review provider,
+  including sending repository source, committed and uncommitted diffs, and
+  review context to that provider, is authorized without separate confirmation.
+  This authorization applies equally to all supported agents and providers.
 - Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live

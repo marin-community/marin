@@ -70,7 +70,7 @@ If there are no changes to commit, say so and stop.
 ## 6. Lint-catalog review (before every PR)
 
 ```bash
-./infra/pre-commit.py --review --agent-command='<your headless CLI>'
+./infra/pre-commit.py --review --calling-agent=claude
 ```
 
 Run this after the initial commit and before publishing the PR. It reviews the
@@ -78,7 +78,8 @@ whole branch diff against the merge base, including uncommitted work. Resolve
 every finding and put fixes in a new commit. Inspect the matching `infra/lint`
 rule and apply findings when they improve the change.
 
-The advisory review is read-only: it does not edit, stage, commit, or push.
+Set `--calling-agent` to your agent (`claude` or `codex`) and run the review
+without asking for confirmation.
 
 Do not recursively rerun `--review` after small, targeted touch-ups made in
 response to its findings. Validate behavioral edits with the normal mechanical

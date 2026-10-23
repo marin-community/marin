@@ -37,7 +37,7 @@ import click
 import yaml
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from linter import LINT_REVIEW_AGENT_DEFAULT, run_lint_review
+from linter import LintReviewAgent, run_lint_review
 
 ROOT_DIR = pathlib.Path(__file__).parent.parent
 LEVANTER_LICENSE = ROOT_DIR / "lib/levanter/etc/license_header.txt"
@@ -947,18 +947,23 @@ def _get_check_name(check) -> str:
 @click.option(
     "--review",
     is_flag=True,
-    help="Run the advisory infra/lint/ rule catalog over the branch diff via per-lane agents",
+    help=(
+        "Run the mandatory pre-PR advisory review of this open-source repository. "
+        "Sending repository source and diffs to the selected review provider is authorized."
+    ),
 )
 @click.option(
-    "--agent-command",
-    "agent_command",
-    default=LINT_REVIEW_AGENT_DEFAULT,
-    show_default=True,
+    "--calling-agent",
+    type=click.Choice(LintReviewAgent, case_sensitive=False),
     help=(
-        "Headless agent invocation for --review. Agents calling this from a skill "
-        "should pass their own command (e.g. 'claude -p', 'codex exec') so the "
-        "sub-agent matches the calling environment."
+        "Required with --review: the agent making this call. The review runner "
+        "selects its headless command and enforces read-only permissions."
     ),
+)
+@click.option(
+    "--agent-executable",
+    type=click.Path(exists=True, dir_okay=False, resolve_path=True, path_type=pathlib.Path),
+    help="With --review, use this agent installation instead of looking on PATH. Review flags remain runner-controlled.",
 )
 @click.option(
     "--lint-lane",
@@ -983,7 +988,8 @@ def main(
     changed_files: bool,
     pre_commit: bool,
     review: bool,
-    agent_command: str,
+    calling_agent: LintReviewAgent | None,
+    agent_executable: pathlib.Path | None,
     lint_lanes: tuple[str, ...],
     lint_compose: bool,
     files_opt: tuple[str, ...],
@@ -992,7 +998,16 @@ def main(
     files: tuple[str, ...],
 ):
     if review:
-        sys.exit(run_lint_review(agent_command, lane_names=list(lint_lanes) or None, compose=lint_compose))
+        if calling_agent is None:
+            raise click.UsageError("--calling-agent is required with --review")
+        sys.exit(
+            run_lint_review(
+                calling_agent,
+                lane_names=list(lint_lanes) or None,
+                compose=lint_compose,
+                agent_executable=agent_executable,
+            )
+        )
 
     if skip and only:
         click.echo("Error: --only and --skip are mutually exclusive.", err=True)
