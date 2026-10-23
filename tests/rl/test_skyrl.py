@@ -281,6 +281,24 @@ def test_skyrl_topology_rejects_unequal_colocated_role_sizes() -> None:
         SkyRLTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
 
 
+def test_skyrl_static_dataset_plan_claims_only_the_policy_nodes() -> None:
+    plan = dataclasses.replace(
+        _role_plan(),
+        colocate_all=False,
+        policy_num_nodes=4,
+        policy_num_gpus_per_node=8,
+        num_inference_engines=0,
+        inference_engine_data_parallel_size=8,
+    )
+    assert plan.num_nodes == 4
+    SkyRLTopology(num_nodes=4, gpus_per_node=8, gpu_variant="H100", role_plan=plan)
+
+    with pytest.raises(ValueError, match="without inference engines cannot colocate"):
+        SkyRLTopology(
+            num_nodes=4, gpus_per_node=8, gpu_variant="H100", role_plan=dataclasses.replace(plan, colocate_all=True)
+        )
+
+
 def test_skyrl_spec_rejects_config_that_disagrees_with_role_plan() -> None:
     with pytest.raises(ValueError, match=r"trainer\.train_batch_size=32"):
         dataclasses.replace(
