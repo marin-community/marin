@@ -152,6 +152,12 @@ exclude confirmed missing shards from their local snapshot and omit incomplete
 chunked values, while retaining healthy hits. An expired schema can be interpreted
 from the cache tables' fixed contracts. Reads never modify storage.
 
+Shard loss also invalidates older cache history so an overwritten value cannot
+reappear. Compacted shards can contain rows from several commits; recovery uses
+their footer statistics and discards a whole shard if it could expose an older
+version. This can discard additional healthy entries, which are regenerated as
+cache misses.
+
 Before its first write, then at most daily while writing, each cache writer checks
 the live shards and schemas. It atomically removes missing shard references,
 recreates expired schemas, and refreshes objects older than half the `ttl=Nd`

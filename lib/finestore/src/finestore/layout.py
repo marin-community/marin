@@ -101,10 +101,10 @@ class TableMetadata(_FormatModel):
     on_conflict: OnConflict = OnConflict.ERROR
 
 
-BLOB_TABLE_METADATA = {
-    BlobTables.DESCRIPTORS: TableMetadata(primary_key=(BlobColumns.NAME,), on_conflict=OnConflict.SUPERSEDE),
-    BlobTables.PARTS: TableMetadata(primary_key=(BlobColumns.NAME, BlobColumns.PART), on_conflict=OnConflict.SUPERSEDE),
-}
+def blob_table_metadata(table: BlobTables) -> TableMetadata:
+    """Return the schema contract for a named-object table."""
+    primary_key = (BlobColumns.NAME, BlobColumns.PART) if table == BlobTables.PARTS else (BlobColumns.NAME,)
+    return TableMetadata(primary_key=primary_key, on_conflict=OnConflict.SUPERSEDE)
 
 
 class SealMarker(_FormatModel):

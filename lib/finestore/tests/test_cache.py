@@ -618,6 +618,49 @@ def test_cache_read_requests_repair_from_an_existing_writer(tmp_path, expired_ob
     assert ReadView(root).read_blobs(["expired", "healthy", "new"]) == expected
 
 
+@pytest.mark.parametrize("expired", ["descriptor", "parts", "later-compaction"])
+def test_cache_expiry_does_not_revive_superseded_values(archive_root, expired):
+    root = archive_root
+    old = b"a" * (129 * 1024) if expired == "parts" else b"old"
+    new = b"b" * len(old)
+    with DataStore.open(root, flush_interval=600) as store:
+        if expired == "later-compaction":
+            # Keep two older level-two runs so they can be merged after the newest
+            # value commits, without including that value in the compaction.
+            for group in range(2):
+                for item in range(2):
+                    store.write_object(f"other-{group}-{item}", b"other")
+                    if group == item == 0:
+                        store.write_object("kernel", old)
+                    store.flush()
+                    store.compact(BlobTables.DESCRIPTORS, generation=0)
+                store.compact(BlobTables.DESCRIPTORS, generation=1)
+        else:
+            store.write_object("kernel", old)
+            store.flush()
+            store.compact(BlobTables.DESCRIPTORS, generation=0)
+            if expired == "parts":
+                store.compact(BlobTables.PARTS, generation=0)
+        store.write_object("kernel", new)
+        store.flush()
+        store.compact(BlobTables.DESCRIPTORS, generation=0)
+        table = BlobTables.PARTS if expired == "parts" else BlobTables.DESCRIPTORS
+        if expired == "parts":
+            store.compact(BlobTables.PARTS, generation=0)
+        missing = max(ReadView(root).list_shards(table), key=lambda shard: shard.commit_sequence).path
+        if expired == "later-compaction":
+            store.compact(BlobTables.DESCRIPTORS, generation=2)
+        store.write_object("healthy", b"kept")
+        store.flush()
+    StoragePath(missing).rm()
+
+    cache = PersistentKvCache.at(root)
+    assert cache.load_many(["kernel", "healthy"]) == {"healthy": b"kept"}
+    cache.store("new-key", b"new")
+    cache.close()
+    assert ReadView(root).read_blobs(["kernel", "healthy", "new-key"]) == {"healthy": b"kept", "new-key": b"new"}
+
+
 @pytest.mark.parametrize("error_type", [PermissionError, TimeoutError])
 def test_cache_retention_does_not_prune_on_storage_errors(tmp_path, monkeypatch, error_type):
     root = str(tmp_path / "cache")
