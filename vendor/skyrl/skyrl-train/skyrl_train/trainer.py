@@ -72,7 +72,11 @@ from marinskyrl.distillation import (
 from skyrl_train.objective.teacher import teacher_advantages
 from skyrl_train.objective.correction import compute_correction
 from skyrl_train.objective.score_centering import collate_score_centering, collate_score_probe, hypothetical_score_probe
-from skyrl_train.config.objective_spec import score_centering_probe_unavailable_reason, score_centering_tis_cap
+from skyrl_train.config.objective_spec import (
+    SCORE_CENTERING_TOPK,
+    score_centering_probe_unavailable_reason,
+    score_centering_tis_cap,
+)
 from skyrl_train.config.objective_spec import off_policy_correction
 from skyrl_train.config.ftpo import FTPOBoundary, ftpo_config
 from skyrl_train.closure_training import (
@@ -2235,8 +2239,7 @@ class RayPPOTrainer:
                 raise ValueError("routed experts must have one row per response")
         distillation_tensors = _validated_distillation_tensors(trajectory_batch, response_masks_tensor)
         score_tensors = {}
-        score_width = self.cfg.trainer.algorithm.get("score_centering_topk", 0)
-        if score_width:
+        if self.cfg.trainer.algorithm.get("score_centering_enabled", False):
             if rollout_logprobs_tensor is None:
                 raise ValueError("score centering requires sampled behavior log probabilities on every batch")
             with Timer("score_centering_collation", self.all_timings, log_events=False):
@@ -2244,7 +2247,7 @@ class RayPPOTrainer:
                     trajectory_batch,
                     response_ids,
                     response_masks_tensor,
-                    score_width,
+                    SCORE_CENTERING_TOPK,
                     sampled_logprobs=rollout_logprobs_tensor,
                 )
             score_tensors = {"score_topk_indices": ids, "score_behavior_logprobs": scores}
@@ -2281,7 +2284,7 @@ class RayPPOTrainer:
                 probe_tensors = collate_score_probe(
                     trajectory_batch,
                     response_ids,
-                    self.cfg.trainer.algorithm.score_centering_probe.topk,
+                    SCORE_CENTERING_TOPK,
                     sampled_logprobs=rollout_logprobs_tensor,
                 )
             if probe_tensors:

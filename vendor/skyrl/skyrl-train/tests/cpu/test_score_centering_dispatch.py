@@ -15,6 +15,7 @@ from ray.actor import ActorHandle
 from omegaconf import OmegaConf
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
+from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.dynamic_sampling import GroupSelectionPolicy
 from skyrl_train.group_admission import GroupAdmissionPolicy, GroupAdvantageInvariant
 from skyrl_train.rollouts.buffer import (
@@ -165,7 +166,7 @@ def test_null_probe_preserves_ordinary_tis_training_batch():
     ):
         config = compose(config_name="ppo_base_config")
     batches = []
-    for probe in ({"interval": 0, "topk": 128, "tokens_per_response": 32}, None):
+    for probe in ({"interval": 0}, None):
         trainer = object.__new__(RayPPOTrainer)
         trainer.cfg = OmegaConf.create(config)
         trainer.cfg.trainer.algorithm.off_policy_correction = "tis"
@@ -269,10 +270,26 @@ async def test_training_task_persists_capture_costs_with_its_rollout(topk):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("interval,expected_steps", [(0, []), (2, [1, 3, 5]), (3, [1, 4])])
+@pytest.mark.parametrize(
+    "interval,centering_enabled,expected_steps",
+    [(0, False, []), (2, False, [1, 3, 5]), (3, False, [1, 4]), (2, True, [])],
+)
 async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeated_steps(
-    ray_module, start_buffer, interval, expected_steps
+    ray_module, start_buffer, interval, centering_enabled, expected_steps
 ):
+    with initialize_config_dir(
+        config_dir=str(Path(__file__).resolve().parents[2] / "skyrl_train/config"), version_base=None
+    ):
+        config = compose(config_name="ppo_base_config")
+    config.trainer.strategy = "megatron"
+    config.trainer.use_sample_packing = False
+    config.trainer.policy.sequence_parallel_size = 1
+    config.trainer.algorithm.off_policy_correction = "tis"
+    config.trainer.algorithm.score_centering_enabled = centering_enabled
+    config.trainer.algorithm.score_centering_probe.interval = interval
+    config.generator.n_samples_per_prompt = SAMPLES_PER_PROMPT
+    config.generator.sampling_params.logprobs = 0
+    validate_objective(config)
     requests = []
 
     class Workers(_Workers):
@@ -287,9 +304,7 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
         batch_size=3,
         max_in_flight=3,
         max_staleness_steps=0,
-        request_spec=RolloutRequestSpec(
-            SAMPLES_PER_PROMPT, {"logprobs": 0}, probe_interval=interval, probe_topk=128, probe_tokens=32
-        ),
+        request_spec=RolloutRequestSpec.from_config(config),
     )
     context.start()
     try:
@@ -303,7 +318,9 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
             for request in sampled
         )
         assert all(
-            request.sampling_params["logprobs"] == 0 for request in requests if not request.score_centering_probe_tokens
+            request.sampling_params["logprobs"] == (128 if centering_enabled else 0)
+            for request in requests
+            if not request.score_centering_probe_tokens
         )
     finally:
         await context.close()

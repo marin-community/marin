@@ -111,41 +111,6 @@ def ppo_tis_score_centering_correction(
     return correction.masked_fill(~loss_mask.to(torch.bool), 0)
 
 
-@torch.no_grad()
-def score_centering_diagnostics(
-    current_head: torch.Tensor,
-    old_head: torch.Tensor,
-    behavior_head: torch.Tensor,
-    current_sampled: torch.Tensor,
-    behavior_sampled: torch.Tensor,
-    correction: torch.Tensor | None,
-    loss_mask: torch.Tensor,
-    token_limit: int,
-) -> dict[str, float]:
-    """Summarize a bounded prefix of valid tokens in one microbatch.
-
-    The correction is a scalar loss diagnostic, not a parameter-gradient change.
-    Existing metric aggregation averages these microbatch samples across ranks.
-    """
-    selected = loss_mask.reshape(-1).nonzero().flatten()[:token_limit]
-    metrics = {"score_centering/sampled_tokens": float(selected.numel())}
-
-    def mean(values: torch.Tensor) -> float:
-        return values.mean().item() if selected.numel() else 0.0
-
-    for name, head in (("current", current_head), ("old", old_head), ("behavior", behavior_head)):
-        mass = head.detach().reshape(-1, head.shape[-1])[selected].float().exp().sum(-1)
-        metrics[f"score_centering/sampled_{name}_retained_mass"] = mean(mass)
-        metrics[f"score_centering/sampled_{name}_omitted_mass"] = mean((1 - mass).clamp_min(0))
-    delta = current_sampled.detach().reshape(-1)[selected] - behavior_sampled.detach().reshape(-1)[selected]
-    metrics["score_centering/sampled_current_behavior_log_ratio_mean"] = mean(delta)
-    metrics["score_centering/sampled_current_behavior_log_ratio_abs_mean"] = mean(delta.abs())
-    values = torch.zeros_like(delta) if correction is None else correction.detach().reshape(-1)[selected]
-    metrics["score_centering/sampled_loss_mean"] = mean(values)
-    metrics["score_centering/sampled_loss_abs_mean"] = mean(values.abs())
-    return metrics
-
-
 def collate_score_centering(
     trajectory_batch: TrajectoryBatch,
     response_token_ids: list[list[int]],
@@ -201,7 +166,16 @@ def collate_score_probe(
     *,
     sampled_logprobs: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
-    """Collate compact probe positions without a response-length head canvas."""
+    """Map per-response probe arrays to padded [batch, sampled-position] tensors.
+
+    ``score_probe_{positions,indices,logprobs}`` share rows and position order.
+    Positions index the full response, including masked tokens. Later loss masks
+    remove evidence; padding uses invalid candidate IDs. Sampled-token scores
+    validate the behavior head before returning ``score_topk_indices``,
+    ``score_behavior_logprobs`` and ``score_probe_positions`` (empty if none survive).
+    The trainer gathers generating-policy stamps at these returned positions,
+    using -1 for unknown sources, then recomputes ``score_old_logprobs``.
+    """
     positions = trajectory_batch["score_probe_positions"]
     index_rows = trajectory_batch["score_probe_indices"]
     score_rows = trajectory_batch["score_probe_logprobs"]

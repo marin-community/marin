@@ -728,8 +728,7 @@ def validate_generation_logprobs(cfg: DictConfig) -> None:
         return
     assert isinstance(logprobs, int)
     algorithm = cfg.get("trainer", {}).get("algorithm", {})
-    centering_width = algorithm.get("score_centering_topk", 0)
-    if logprobs > 0 and not centering_width and not ftpo_requested(algorithm):
+    if logprobs > 0 and not algorithm.get("score_centering_enabled", False) and not ftpo_requested(algorithm):
         plan = compile_distillation_plan_from_config(cfg)
         widths = {teacher.top_k for teacher in plan.teachers} if plan is not None else set()
         if (

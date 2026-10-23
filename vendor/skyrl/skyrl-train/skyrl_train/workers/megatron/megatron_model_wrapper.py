@@ -23,7 +23,7 @@ from skyrl_train.ftpo import FTPOTargets, FTPOInputs, boundary_values, compact_b
 from skyrl_train.distillation import TopKEvidence, student_topk_logprobs, INVALID_TOPK_INDEX
 from skyrl_train.models.megatron_router_replay import MegatronRouterReplay
 from skyrl_train.config.objective_spec import topk_loss_params, score_centering_tis_cap
-from skyrl_train.objective.score_centering import ppo_tis_score_centering_correction, score_centering_diagnostics
+from skyrl_train.objective.score_centering import ppo_tis_score_centering_correction
 from skyrl_train.config.ftpo import ftpo_config
 from skyrl_train.objective.objective import (
     FTPOAuxiliaryBatch,
@@ -636,34 +636,33 @@ class MegatronModelWrapper:
             if data.ftpo is None and temperature != 1.0:
                 logits.div_(temperature)
 
-            centering_width = self.cfg.trainer.algorithm.get("score_centering_topk", 0)
+            centering_enabled = self.cfg.trainer.algorithm.get("score_centering_enabled", False)
             response = self._response_logprobs(
                 logits,
                 sequences,
                 data.attention_mask,
                 num_actions,
                 packed_seq_params,
-                data.score_topk_indices if centering_width else None,
+                data.score_topk_indices if centering_enabled else None,
             )
             action_log_probs = response.scores
             score_centering = None
-            if centering_width:
+            if centering_enabled:
                 if any(
                     value is None
                     for value in (data.score_topk_indices, data.score_old_logprobs, data.score_behavior_logprobs)
                 ):
                     raise ValueError("score centering requires behavior IDs and old and behavior log probabilities")
-                if self.cfg.trainer.algorithm.get("score_centering_enabled", False):
-                    score_centering = ppo_tis_score_centering_correction(
-                        response.selected_logprobs,
-                        data.score_old_logprobs,
-                        data.score_behavior_logprobs,
-                        advantages,
-                        loss_mask,
-                        tis_cap=score_centering_tis_cap(self.cfg.trainer.algorithm),
-                        eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
-                        eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
-                    )
+                score_centering = ppo_tis_score_centering_correction(
+                    response.selected_logprobs,
+                    data.score_old_logprobs,
+                    data.score_behavior_logprobs,
+                    advantages,
+                    loss_mask,
+                    tis_cap=score_centering_tis_cap(self.cfg.trainer.algorithm),
+                    eps_clip_low=self.cfg.trainer.algorithm.eps_clip_low,
+                    eps_clip_high=self.cfg.trainer.algorithm.eps_clip_high,
+                )
 
             structural = None
             if data.ftpo is not None and data.ftpo.weights is not None:
@@ -727,20 +726,6 @@ class MegatronModelWrapper:
                 "policy_kl": objective.rows.kl.detach().item(),
             }
             metrics.update(objective.metrics)
-            diagnostic_tokens = self.cfg.trainer.algorithm.get("score_centering_diagnostic_tokens", 0)
-            if centering_width and diagnostic_tokens:
-                metrics.update(
-                    score_centering_diagnostics(
-                        response.selected_logprobs,
-                        data.score_old_logprobs,
-                        data.score_behavior_logprobs,
-                        action_log_probs,
-                        rollout_action_logprobs,
-                        score_centering,
-                        loss_mask,
-                        diagnostic_tokens,
-                    )
-                )
             if completed_microbatches == len(micro_batches):
                 # Token logprobs are already reconstructed across TP/CP, so pool across data-parallel ranks only.
                 group = (

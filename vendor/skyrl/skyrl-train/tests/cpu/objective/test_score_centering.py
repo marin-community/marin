@@ -9,7 +9,6 @@ from skyrl_train.objective.score_centering import (
     collate_score_centering,
     collate_score_probe,
     hypothetical_score_probe,
-    score_centering_diagnostics,
 )
 from skyrl_train.training_batch import TrainingBatchIterator, TrainingInputBatch
 from skyrl_train.trainer import RayPPOTrainer
@@ -68,23 +67,6 @@ def test_score_evidence_survives_collation_serialization_and_microbatching(tmp_p
             torch.testing.assert_close(
                 getattr(experience, name), expected[row : row + 1], atol=0, rtol=0, equal_nan=True
             )
-
-
-def test_sampled_loss_diagnostics_exclude_masked_tokens_and_bound_the_sample():
-    head = torch.tensor([[[0.3, 0.5], [torch.nan, torch.nan], [0.1, 0.4], [0.4, 0.5]]]).log()
-    current = torch.tensor([[-0.5, torch.nan, -1.0, -9.0]], requires_grad=True)
-    behavior = torch.tensor([[-0.7, torch.nan, -0.6, -3.0]])
-    correction = torch.tensor([[-2.0, torch.nan, 1.0, 100.0]], requires_grad=True)
-    metrics = score_centering_diagnostics(
-        head, head, head, current, behavior, correction, torch.tensor([[1, 0, 1, 1]]), 2
-    )
-    assert metrics["score_centering/sampled_tokens"] == 2
-    assert metrics["score_centering/sampled_loss_mean"] == pytest.approx(-0.5)
-    assert metrics["score_centering/sampled_loss_abs_mean"] == pytest.approx(1.5)
-    assert metrics["score_centering/sampled_current_retained_mass"] == pytest.approx(0.65)
-    assert metrics["score_centering/sampled_behavior_omitted_mass"] == pytest.approx(0.35)
-    assert metrics["score_centering/sampled_current_behavior_log_ratio_mean"] == pytest.approx(-0.1)
-    assert metrics["score_centering/sampled_current_behavior_log_ratio_abs_mean"] == pytest.approx(0.3)
 
 
 def test_hypothetical_probe_reports_nonzero_tis_correction_and_source_strata():

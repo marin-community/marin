@@ -137,10 +137,8 @@ def test_selected_response_reuses_sampled_normalizer_without_full_float_logits(
     torch.testing.assert_close(selected_gradient, expected_gradient, atol=tolerance, rtol=tolerance)
 
 
-@pytest.mark.parametrize("capture_width,centering_enabled", [(0, False), (2, False), (2, True)])
-def test_training_centering_and_capture_control_match_dense_value_and_gradient(
-    megatron_wrapper, capture_width, centering_enabled
-):
+@pytest.mark.parametrize("centering_enabled", [False, True])
+def test_training_centering_matches_dense_value_and_gradient(megatron_wrapper, centering_enabled):
     # q and o have tails proportional to p on IDs 2:, so a two-token head
     # must center the full behavior expectation for both advantage signs.
     p = torch.tensor([0.45, 0.30, 0.10, 0.09, 0.06])
@@ -183,7 +181,6 @@ def test_training_centering_and_capture_control_match_dense_value_and_gradient(
         {
             "trainer": {
                 "algorithm": {
-                    "score_centering_topk": capture_width,
                     "score_centering_enabled": centering_enabled,
                     "max_seq_len": 4,
                     "think_token_weight": 1,
