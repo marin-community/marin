@@ -265,6 +265,9 @@ trainer:
     # fills each batch in commit order and regenerates groups that miss the staleness window, so a slow rollout never
     # blocks training, but quick rollouts train more often and at lower staleness.
     batch_policy: full_batch
+    # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
+    # prompt waits until the prompt order offers it again.
+    max_stale_retries: 1
     # Cap on prompt groups generating at once; null bounds generation only by staleness.
     max_in_flight: null
     # Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then

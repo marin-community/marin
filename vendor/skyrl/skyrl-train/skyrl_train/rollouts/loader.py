@@ -88,10 +88,15 @@ class SeededPasses:
 
 @dataclass(frozen=True)
 class PromptLoaderState:
-    """The prompt order's position and the prompts awaiting regeneration."""
+    """The prompt order's position, the prompts awaiting regeneration, and how often each uid was regenerated.
+
+    ``stale_retries`` pairs each uid with the number of times its prompt was regenerated since the prompt order last
+    offered it; a checkpoint without the field restores no counts.
+    """
 
     order: dict[str, Any]
     retries: list[dict]
+    stale_retries: tuple[tuple[str, int], ...] = ()
 
 
 class PromptLoader:
@@ -101,10 +106,15 @@ class PromptLoader:
     or committed and not yet trained or discarded. A draw whose uid is live is dropped rather than generated as a
     copy the batch would reject.
 
+    A prompt whose group missed the staleness window is regenerated at most ``max_stale_retries`` times in a row;
+    after that it waits until the prompt order offers it again.
+
     The sequence never ends; the trainer decides when to stop.
     """
 
-    def __init__(self, dataset: PromptGroupDataset, order: PromptOrder, *, batch_size: int):
+    def __init__(self, dataset: PromptGroupDataset, order: PromptOrder, *, batch_size: int, max_stale_retries: int):
+        if max_stale_retries < 0:
+            raise ValueError(f"max_stale_retries must be non-negative, got {max_stale_retries}")
         self._uid_count = len({dataset.uid(index) for index in range(len(dataset))})
         if self._uid_count < batch_size:
             raise ValueError(
@@ -114,7 +124,9 @@ class PromptLoader:
         self._dataset = dataset
         self._order = order
         self._draw_limit = 2 * batch_size
+        self._max_stale_retries = max_stale_retries
         self._retries: collections.deque[dict] = collections.deque()
+        self._stale_retries: dict[str, int] = {}
         self._scan_start = 0
 
     def next_prompt(self, live: Collection[str]) -> dict | None:
@@ -134,16 +146,22 @@ class PromptLoader:
         for _ in range(self._draw_limit):
             index = self._order.next_index()
             if self._dataset.uid(index) not in live:
-                return self._group(index)
+                return self._offer(index)
         num_rows = len(self._dataset)
         for offset in range(num_rows):
             index = (self._scan_start + offset) % num_rows
             if self._dataset.uid(index) not in live:
                 self._scan_start = index + 1
-                return self._group(index)
+                return self._offer(index)
         return None
 
     def retry(self, prompt: dict) -> None:
+        """Queue a prompt whose group missed the staleness window, unless it used up its regenerations."""
+        uid = prompt["uid"]
+        count = self._stale_retries.pop(uid, 0)
+        if count >= self._max_stale_retries:
+            return
+        self._stale_retries[uid] = count + 1
         self._retries.append(prompt)
 
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
@@ -151,12 +169,14 @@ class PromptLoader:
         return self._order.observe(groups)
 
     def state_dict(self) -> PromptLoaderState:
-        return PromptLoaderState(self._order.state_dict(), list(self._retries))
+        return PromptLoaderState(self._order.state_dict(), list(self._retries), tuple(self._stale_retries.items()))
 
     def load_state_dict(self, state: PromptLoaderState) -> None:
         self._order.load_state_dict(state.order)
         self._retries = collections.deque(state.retries)
+        self._stale_retries = dict(state.stale_retries)
 
-    def _group(self, index: int) -> dict:
+    def _offer(self, index: int) -> dict:
         (prompt,) = self._dataset.collate_fn([self._dataset[index]])
+        self._stale_retries.pop(prompt["uid"], None)
         return prompt
