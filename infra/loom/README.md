@@ -99,6 +99,21 @@ authenticate with Loom, and profile permissions still apply.
 
 ## Automation identities
 
+Repository-owned task procedures live in `procedures/`:
+
+- [Lint reporting](procedures/lint-review.md), used by the `agentic-lint` profile.
+- [Canary triage](procedures/triage-canary.md), named by the canary failure action.
+- [Docs/code parity](procedures/scrub-docs-code-parity.md),
+  [experiment summaries](procedures/scrub-experiment-issue-tldrs.md), and
+  [self-improvement](procedures/scrub-reflection-self-improvement.md), for
+  explicitly assigned work. These scrubs are manual procedures; recurring
+  execution requires a Loom watch that names the procedure path. They retain
+  the harness result footer but register no schedule.
+
+The `pr-review` and `pr-holistic-review` profiles both use `review-pr`, selecting
+its correctness and holistic reporting contracts respectively. Profile
+permissions and automation behavior remain specific to each pass.
+
 Runtime profiles and workload federation mappings live in
 `Pulumi.marin-loom.yaml` and are applied through Loom's deployment API during
 activation. The deployment setting
@@ -298,3 +313,45 @@ Deploy [Loom's scheduled-watch support](https://github.com/marin-community/loom/
 before applying these declarations. See [Loom's watch documentation](https://github.com/marin-community/loom/blob/main/docs/ARCHITECTURE.md#scheduled-watches)
 for scheduling and execution behavior, and [WatchConfig](infrastructure.py) for
 the IaC fields. Custom script files must already exist on the Loom server.
+
+## claude.ai connector
+
+The `connector.enabled` setting serves Loom's claude.ai connector, a Streamable
+HTTP MCP endpoint at `https://loom.oa.dev/mcp`. Through it, claude.ai launches,
+follows, messages, and archives Loom sessions for the signed-in person. A launch
+that names no profile uses the `claude` profile
+([instructions](profiles/claude/AGENTS.md)), which inherits the `default`
+runtime policy. Loom is the connector's OAuth 2.1 authorization server.
+Open-Athena members sign in with GitHub, as in the web UI, and keep connector
+access only while the one-hour organization lease described in
+[Automation identities](#automation-identities) keeps renewing.
+
+Claude.ai calls `/mcp`, `/oauth/*`, and `/.well-known/oauth-*` from its own
+servers, so these paths must stay publicly reachable. Do not put them behind IAP
+or an IP allowlist. Caddy blocks only `/metrics`. With the setting off, Loom
+returns 404 for all of these paths.
+
+The stack declares the connector's OAuth clients under `oauthClients` in
+`Pulumi.marin-loom.yaml`, and activation registers them in Loom. Both are public
+clients that prove themselves with PKCE, so there is no secret to hand out.
+`claude-ai` accepts claude.ai's callback on both `claude.ai` and `claude.com`,
+because Anthropic says it may move. `claude-code` accepts Claude Code's loopback
+callback on any port. Never rename a client: claude.ai cannot change a
+connector's OAuth settings after it is added. Because the stack prunes, removing
+a client from it revokes every token the client was issued.
+
+An organization admin adds a custom connector in claude.ai with the URL
+`https://loom.oa.dev/mcp`, selects **Use your own OAuth client** under
+**Advanced settings**, enters the client ID `claude-ai`, and leaves the secret
+blank. A Claude Code user adds the server with:
+
+```sh
+claude mcp add --transport http --scope user --client-id claude-code loom https://loom.oa.dev/mcp
+```
+
+Activation requires a Loom build with connector support. An older build,
+including a rollback to one, rejects the unknown `connector.enabled` setting and
+activation fails. A build without declared OAuth clients ignores
+`oauthClients`, so the clients exist only once Loom has that support. Pulumi
+builds the HEAD of Loom's default branch, so that support must be on the default
+branch before this configuration deploys.

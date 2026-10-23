@@ -540,8 +540,11 @@ def _install_separate_reference_export_hooks(
 
     release_precision = _parse_hf_save_dtype(export.hf_save_dtype)
 
+    last_saved_update = None
+
     def save_policy_hf_checkpoint(step):
-        if step.step == 0:
+        nonlocal last_saved_update
+        if step.next_step == 0 or step.next_step == last_saved_update:
             return
 
         upload_to_hf = export.hf_upload or False
@@ -560,6 +563,7 @@ def _install_separate_reference_export_hooks(
             generation_config=export.generation_config,
             **hf_upload_kwargs,
         )
+        last_saved_update = step.next_step
 
     trainer.add_hook(save_policy_hf_checkpoint, every=export.hf_save_steps)
 

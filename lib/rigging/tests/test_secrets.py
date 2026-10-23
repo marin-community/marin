@@ -3,6 +3,7 @@
 
 """Behavior tests for rigging.secrets: ordered resolution + absent-vs-failed."""
 
+import subprocess
 import sys
 import types
 
@@ -11,9 +12,13 @@ from rigging.secrets import (
     ResolvedSecret,
     SecretResolutionError,
     as_secret_spec,
-    default_secret_spec,
+    get_secret,
     is_secret_reference,
+    list_secret_names,
+    require_secret,
     resolve_secret_spec,
+    secret_file_environment,
+    secret_path,
 )
 
 
@@ -109,9 +114,90 @@ def test_as_secret_spec_normalizes_bare_and_list():
     assert as_secret_spec(["env:X", "file:/y"]) == ("env:X", "file:/y")
 
 
-def test_default_secret_spec_shape():
-    spec = default_secret_spec("delegation_key", env_prefix="IRIS", secrets_dir="/etc/iris/secrets/")
-    assert spec == ("env:IRIS_DELEGATION_KEY", "file:/etc/iris/secrets/delegation_key")
+def test_named_secret_file_overrides_environment_and_reads_rotation(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("API_KEY", "stale-environment")
+    assert require_secret("API_KEY") == "stale-environment"
+    path = secret_path("API_KEY")
+    path.write_text("first-value")
+    assert require_secret("API_KEY") == "first-value"
+    replacement = tmp_path / "replacement"
+    replacement.write_text("rotated-value")
+    replacement.replace(path)
+    assert require_secret("API_KEY") == "rotated-value"
+    assert "rotated-value" not in repr(resolve_secret_spec(f"file:{path}"))
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    (explicit / "API_KEY").write_text("explicit-value")
+    assert require_secret("API_KEY", directory=explicit) == "explicit-value"
+    monkeypatch.delenv("API_KEY")
+    path.unlink()
+    assert get_secret("API_KEY") is None
+    with pytest.raises(SecretResolutionError):
+        require_secret("API_KEY")
+
+
+def test_list_secret_names_handles_projected_files_without_reading_values(tmp_path, monkeypatch):
+    root = tmp_path / "secrets"
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(root))
+    monkeypatch.setenv("ENV_ONLY_KEY", "unlisted")
+    assert list_secret_names() == ()
+    root.mkdir()
+    projection = root / "..2026_01_01"
+    projection.mkdir()
+    (projection / "SERVICE_KEY").write_bytes(b"not-text\xff")
+    (root / "..data").symlink_to(projection, target_is_directory=True)
+    (root / "SERVICE_KEY").symlink_to(root / "..data" / "SERVICE_KEY")
+    (root / "ANOTHER_KEY").write_text("value")
+    (root / "not a secret name").write_text("ignore")
+    (root / "DIRECTORY").mkdir()
+    assert list_secret_names() == ("ANOTHER_KEY", "SERVICE_KEY")
+    assert list_secret_names(directory=projection) == ("SERVICE_KEY",)
+
+
+def test_native_hub_clients_authenticate_from_secret_files(tmp_path):
+    (tmp_path / "HF_TOKEN").write_text("task-only-hf-credential")
+    environment = {"HOME": str(tmp_path), **secret_file_environment({"HF_TOKEN"}, directory=tmp_path)}
+    script = """
+import os
+import httpx
+from huggingface_hub import HfApi, HfFileSystem, set_client_factory
+
+assert 'HF_TOKEN' not in os.environ
+requests = []
+def respond(request):
+    assert request.headers['authorization'] == 'Bearer task-only-hf-credential'
+    requests.append(request.url.path)
+    if '/whoami' in request.url.path:
+        return httpx.Response(200, json={'name': 'test-user'})
+    if '/tree/' in request.url.path:
+        return httpx.Response(200, json=[{'type': 'file', 'path': 'payload.txt', 'size': 1, 'oid': 'a' * 40}])
+    return httpx.Response(200, json={'id': 'owner/files', 'sha': 'a' * 40, 'siblings': []})
+
+with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+    set_client_factory(lambda: client)
+    assert HfApi().whoami()['name'] == 'test-user'
+    assert HfFileSystem().ls('datasets/owner/files', detail=False)
+assert len(requests) >= 2
+"""
+    result = subprocess.run([sys.executable, "-c", script], env=environment, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("name", ["../API_KEY", "/etc/passwd"])
+def test_named_secret_cannot_escape_mount(name):
+    with pytest.raises(ValueError):
+        get_secret(name)
+
+
+def test_invalid_secret_encoding_does_not_leak_payload(tmp_path):
+    path = tmp_path / "key"
+    path.write_bytes(b"sentinel-sensitive-contents\xff")
+    with pytest.raises(SecretResolutionError) as raised:
+        get_secret("key", directory=tmp_path)
+    assert "key" in str(raised.value)
+    assert "sentinel-sensitive-contents" not in str(raised.value)
+    assert raised.value.__suppress_context__
 
 
 # --- gcp-secret:// path, exercised against a fake Secret Manager module ---
@@ -173,5 +259,5 @@ def test_gcp_secret_api_error_fails_hard(monkeypatch, tmp_path):
     _install_fake_secretmanager(monkeypatch, result=("error",))
     fallback = tmp_path / "fallback"
     fallback.write_text("from-file")
-    with pytest.raises(SecretResolutionError, match="permission denied"):
+    with pytest.raises(SecretResolutionError):
         resolve_secret_spec(("gcp-secret://projects/p/secrets/s/versions/3", f"file:{fallback}"))

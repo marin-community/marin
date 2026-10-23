@@ -964,39 +964,11 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
                 print(f"[rl-iris] FR-slug re-scope: {_fr_cvar} {_old} -> {_new}", flush=True)
     if args.rendezvous_dir:
         env_vars["OT_AGENT_IRIS_RENDEZVOUS_DIR"] = args.rendezvous_dir
-    # Forward the launch host's secrets (mirrors launch_eval_iris.py passthrough).
-    #
-    # IMPORTANT — do NOT forward AWS_*/R2_* here. The cw-us-east-02a cluster
-    # projects an `iris-task-env` k8s Secret into EVERY task pod via `envFrom`
-    # (because storage.remote_state_dir is an s3:// URI), and that secret already
-    # carries the correct in-cluster R2 credentials + endpoint
-    # (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_ENDPOINT_URL / AWS_REGION /
-    # FSSPEC_S3). In K8s, explicit container `env` entries take precedence over
-    # `envFrom`, so forwarding the launch host's AWS_* (which point at a
-    # DIFFERENT account and lack AWS_ENDPOINT_URL) would CLOBBER the pod's
-    # injected creds and make the s3://marin-us-east-02a rendezvous (multi-node)
-    # silently target real AWS S3 instead of the cluster store. NOTE: the default
-    # object store moved R2 (s3://marin-na) -> CW (s3://marin-us-east-02a) on
-    # 2026-07-05 (marin c7caecc95a) — pods now inject CW creds+AWS_ENDPOINT_URL and
-    # can no longer reach R2. Let the cluster-injected creds win; the
-    # fsspec rendezvous in task_runtime.py uses default credential
-    # discovery and picks them up.
-    #
-    # Daytona credentials MUST be forwarded: agentic RL (terminal_bench / Harbor)
-    # builds a Daytona sandbox per trial, and iris injects only HF/WANDB into the
-    # task pod — nothing else. Without DAYTONA_API_KEY the worker's harbor client
-    # raises DaytonaAuthenticationError on every env build, so no sandbox comes
-    # up, the verifier never runs, and EVERY trajectory finalizes as
-    # VerificationNotCompletedError with reward 0 (observed zeroing an entire
-    # reverify rollout). Mirror the base IrisLauncher passthrough set
-    # so the same creds reach the RL worker.
-    #
-    # SkyRL passes trainer.project_name directly to wandb.init but does not pass an
-    # entity. Resolve that missing dimension here: the explicit launch argument wins,
-    # followed by the launch-host value and the Marin team default.
+    # Keep launch-host AWS overrides out of cluster jobs. The read-only
+    # submitted CoreWeave files and AWS_SHARED_CREDENTIALS_FILE supply storage
+    # authentication. Iris bundles HF/W&B credentials as files; these provider
+    # clients still consume explicitly forwarded environment values.
     for k in (
-        "HF_TOKEN",
-        "WANDB_API_KEY",
         "DAYTONA_API_KEY",
         "DAYTONA_JWT_TOKEN",
         "DAYTONA_ORGANIZATION_ID",

@@ -14,6 +14,7 @@ import pytest
 from upath import UPath
 
 from harbor.agents.installed.base import (
+    AgentKilledBySignalError,
     ModelAuthenticationError,
     NonZeroAgentExitCodeError,
 )
@@ -706,6 +707,31 @@ async def test_hosted_vllm_failure_is_classified(
         await agent.run("Fix the bug", shell.environment, AgentContext())
 
     assert type(error.value) is expected_error
+
+
+@pytest.mark.asyncio
+async def test_killed_output_validator_preserves_signal_error(temp_dir, monkeypatch):
+    shell = _local_pi_shell(temp_dir, monkeypatch, "#!/bin/sh\nexit 0\n")
+    node = shutil.which("node")
+    assert node is not None
+    (temp_dir / "fake-bin/node").write_text(
+        "#!/bin/sh\n"
+        'case "$2" in *readline.createInterface*) kill -KILL $$;; esac\n'
+        f'exec {shlex.quote(node)} "$@"\n'
+    )
+    agent = Pi(
+        logs_dir=temp_dir,
+        model_name="Qwen/Qwen3.6-35B-A3B",
+        model_alias="hosted_vllm/served-model",
+        api_base="https://iris.example/proxy/t/scoped-token/eval/v1",
+        api_key="dummy-key",
+        thinking_format="qwen-chat-template",
+    )
+
+    with pytest.raises(AgentKilledBySignalError) as error:
+        await agent.run("Fix the bug", shell.environment, AgentContext())
+
+    assert error.value.signal_number == 9
 
 
 @pytest.mark.asyncio

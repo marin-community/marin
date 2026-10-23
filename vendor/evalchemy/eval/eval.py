@@ -192,6 +192,8 @@ def evaluate(
     output_sink: FineStoreOutput | None = None,
 ) -> Dict[str, Dict]:
     """Normalize every source into EvalSpec items and execute one shared flow."""
+    if args is None:
+        args = argparse.Namespace()
     run = RunSpec.from_args(args)
     robust_api.configure_generation_overrides(lm, run.generation)
     if run.seeds[0] is not None:
@@ -218,6 +220,9 @@ def evaluate(
                                          predict_only=run.predict_only, seeds=run.seeds,
                                          supports_request_seed=False,
                                          batch_sizes=local_batches, batch_size_attribute="batch_size"))
+    descriptions = {item.task: item for item in getattr(args, "resolved_benchmark_metadata", ())}
+    descriptions.update({plan.name: plan.benchmark.describe(plan.name) for plan in plans if plan.benchmark is not None})
+    args.resolved_benchmark_metadata = tuple(descriptions.values())
     results["task_preparations"] = getattr(args, "task_preparations", {})
     _attach_benchmark_metadata(results, args)
     return results

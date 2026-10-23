@@ -401,6 +401,11 @@ python infra/launch.py --tpu_name=my_tpu -- python src/levanter/main/train_lm.py
 
 ## Monitoring
 
+`Trainer.add_hook(callback, every=N)` schedules regular and JIT callbacks after every `N`
+completed optimizer updates. For example, `every=2` runs after updates 2, 4, and 6.
+`StepInfo.step` remains zero-based, so callbacks see step indices 1, 3, and 5.
+Regular callbacks also receive a forced call at training end.
+
 Levanter integrates with WandB for logging. You can view your run on the WandB website. Levanter will also log
 to the console, and write logs to `logs/$RUN_ID.log` on each machine. Logs can be pretty verbose.
 
@@ -454,3 +459,10 @@ The export gathers shards in the same order on every process. Process 0 writes a
 `max_concurrent_shards` shards at once (default 16), subject to `export_host_budget_bytes` (default 16 GiB).
 Each shard reserves twice its tensor payload while it is written and uploaded. A shard that exceeds the
 budget runs alone. Set these fields in the export config to limit host memory or upload concurrency.
+
+Set `release_precision: bf16` to cast floating-point weights for export while retaining required
+FP32 router bias; `fp32` casts floating weights to FP32, and the default `preserve` retains source dtypes.
+Use `checkpoint_subpath: model/policy` to export the policy from a DPO checkpoint.
+With `use_cpu: true`, the exporter restores the selected subtree on CPU. Host memory must hold the
+restored weights as well as the export buffers.
+Pin an explicit tokenizer with `tokenizer: model_name_or_path@revision`.

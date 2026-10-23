@@ -81,13 +81,13 @@ Start and restart read the directory during preflight, before building images
 or stopping a controller. Controllers resolve identities at startup before
 checkpoint or database changes. GCP loads the Secret Manager reference at
 runtime; CoreWeave projects the directory through the controller-only
-`iris-controller-env` Secret. ConfigMaps and bootstrap configs retain IDs.
+`iris-controller-secrets` read-only volume. ConfigMaps and bootstrap configs retain IDs.
 Ordinary clients use the tracked config and do not read the directory.
 See [cluster configs](config/README.md).
 
 Workflow: confirm the tree holds exactly the code to ship (`git status`, `git log -1`) -> capture baseline (`iris cluster status`) -> restart -> verify.
 
-The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key and principal directory in memory and projects those values through `iris-controller-env`. A missing Secret Manager dependency, inaccessible secret, or unresolved principal leaves the running controller and rollout record unchanged.
+The restart preflight resolves operator-side controller secrets before taking a checkpoint, building images, or writing a rollout record. CoreWeave keeps the resolved signing key and principal directory in memory and projects those values through the controller-only `iris-controller-secrets` volume. A missing Secret Manager dependency, inaccessible secret, or unresolved principal leaves the running controller and rollout record unchanged.
 
 `iris cluster controller serve --dry-run` is not a restart-validation step: it boots a full local controller that serves until killed (task dispatch, VM changes, and checkpoint writes suppressed) for interactive state inspection — e.g. replaying a checkpoint to debug scheduling. Rely on the unit suite / CI on the tree as the pre-restart gate.
 
@@ -240,7 +240,7 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   --enable-extra-resources --target-cluster cw-us-east-08a --priority interactive \
   --cpu 2 --memory 8GB --disk 32GB --timeout 7200 \
   --job-name my-run-coord \
-  -e WANDB_API_KEY "$WANDB_API_KEY" -e IRIS_PORT_JAX 32731 \
+  -e IRIS_PORT_JAX 32731 \
   -- python -m experiments.<launcher> --run-id my-run --dp-racks 1 --run
 ```
 
@@ -253,10 +253,11 @@ uv run iris --config lib/iris/config/marin.yaml job run --no-wait \
   prints the bundle size.
 - **`IRIS_PORT_JAX` must be unique per concurrent gang.** Rank 0 binds and
   registers it for the JAX coordinator, and the default is shared cluster-wide.
-- **Only `task_env` reaches the container.** Each cluster config's `defaults.task_env`
-  carries `MARIN_PREFIX` and the object-store credentials, and nothing else.
-  `WANDB_API_KEY` is not among them: pass it, or set `WANDB_MODE=disabled` for a
-  run whose metrics do not matter.
+- **Application credentials use files.** The submitting client includes available
+  HF/W&B/CoreWeave credentials and its current secret bundle by default. CoreWeave
+  tasks require the submitter's storage keys; operator keys stay on infrastructure Pods. `defaults.task_env` carries
+  nonsecret settings such as `MARIN_PREFIX` and storage endpoints. See
+  [secret delivery](docs/secrets.md).
 - **`SchedulingGated` on every task means the gang is queued.** Kueue admits a
   gang all at once, so a busy cluster holds all of it. Same-band jobs queue
   behind each other; they do not preempt.
@@ -279,9 +280,10 @@ For machine-readable job data, use the Iris Python client (`IrisClient`) directl
 
 ### `job run` gotchas
 
-- **Remote jobs only see env vars you put in the job spec.** The submitter's
-  shell env is not copied into the container. Pass required values explicitly:
-  `iris job run -e HF_TOKEN "$HF_TOKEN" -e WANDB_API_KEY "$WANDB_API_KEY" -- python train.py`.
+- **Environment values must be explicit.** The submitter's shell environment is
+  not copied wholesale. HF/W&B/CoreWeave defaults use secret files automatically; pass other
+  credentials with `--secret NAME SOURCE`. `-e NAME VALUE` delivers an environment
+  value, including an explicit credential override.
 - **`--memory` not `--ram`** — unrecognized flags silently pass through to the command string.
 - **`-e KEY VALUE`** uses two positional args. If `$VALUE` is unset, the parser eats the next token. Always quote: `-e KEY "${VALUE}"`.
 - **`--gpu` requests hardware; `--extra gpu` requests the Python dependency extra.** Need both for GPU JAX jobs.
@@ -673,6 +675,8 @@ iris login                            # IAP clusters: cache the IAP edge refresh
 iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
 ```
+
+See [shared budgets](docs/federation.md#shared-budgets) for federation configuration.
 
 Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
 and forwards a signed assertion the controller verifies; the controller mints **no**

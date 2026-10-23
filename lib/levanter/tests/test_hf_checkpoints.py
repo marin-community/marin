@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -33,6 +34,7 @@ from jax.experimental import multihost_utils
 from jax.random import PRNGKey
 from jax.sharding import NamedSharding, PartitionSpec as P
 from levanter.testing.helpers import skip_if_no_torch
+from rigging.filesystem.storage_path import StoragePath
 from rigging.tunnel import terminate_process_group
 from transformers import GPT2Config as HfGpt2Config
 
@@ -161,6 +163,49 @@ def test_hf_release_resolves_hub_source_without_treating_storage_as_hub(
     request = json.loads((tmp_path / "hf_release_request.json").read_text())
     assert request["source_model"] == expected_model
     assert request["source_model_commit"] == expected_commit
+
+
+@pytest.mark.parametrize("attributes", [None, "*.blob filter=lfs diff=lfs merge=lfs -text\n"])
+@pytest.mark.parametrize("max_shard_size", [4096, 10**9])
+def test_url_reference_export_copies_code_and_preserves_trained_weights(
+    tmp_path, local_gpt2_tokenizer_path, attributes, max_shard_size
+):
+    # Reference code must not replace trained weights or their shard index.
+    config = Gpt2Config(
+        hidden_dim=16, num_heads=2, num_layers=1, use_flash_attention=False, tokenizer=local_gpt2_tokenizer_path
+    )
+    reference = StoragePath("memory://hf-reference") / uuid.uuid4().hex
+    (reference / "configuration_custom.py").write_bytes(b"CUSTOM_ARCHITECTURE = True\n")
+    (reference / "nested/modeling_custom.py").write_bytes(b"CUSTOM_MODEL = True\n")
+    (reference / ".git/config").write_bytes(b"git metadata")
+    (reference / "reference-weights.safetensors").write_bytes(b"stale weights")
+    (reference / "pytorch_model.bin").write_bytes(b"stale torch weights")
+    (reference / "pytorch_model-00001-of-00002.bin").write_bytes(b"stale torch shard")
+    (reference / SAFE_TENSORS_INDEX_NAME).write_bytes(
+        json.dumps({"weight_map": {"transformer.wte.weight": "reference-weights.safetensors"}}).encode(),
+    )
+    (reference / "weights.blob").write_bytes(b"LFS weights")
+    if attributes is not None:
+        (reference / ".gitattributes").write_bytes(attributes.encode())
+
+    converter = replace(config.hf_checkpoint_converter(), reference_checkpoint=RepoRef(str(reference)))
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(23))
+        (reference / "config.json").write_bytes(config.to_hf_config(model.Vocab.size).to_json_string().encode())
+        converter.save_pretrained(model, str(tmp_path), max_shard_size=max_shard_size, save_reference_code=True)
+        restored = converter.load_pretrained(Gpt2LMHeadModel, ref=str(tmp_path), config=config)
+        assert_trees_all_equal(model, restored)
+
+    assert (tmp_path / "configuration_custom.py").read_bytes() == b"CUSTOM_ARCHITECTURE = True\n"
+    assert (tmp_path / "nested/modeling_custom.py").read_bytes() == b"CUSTOM_MODEL = True\n"
+    assert not (tmp_path / ".git/config").exists()
+    assert not (tmp_path / "reference-weights.safetensors").exists()
+    assert not (tmp_path / "pytorch_model.bin").exists()
+    assert not (tmp_path / "pytorch_model-00001-of-00002.bin").exists()
+    if max_shard_size == 10**9:
+        assert not (tmp_path / SAFE_TENSORS_INDEX_NAME).exists()
+    if attributes is not None:
+        assert not (tmp_path / "weights.blob").exists()
 
 
 def test_parallel_export_matches_serial_bytes_and_host_budget(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
