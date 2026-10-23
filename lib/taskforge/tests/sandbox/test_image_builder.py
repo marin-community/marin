@@ -18,6 +18,7 @@ from iris.client.workload import JobState
 from iris.cluster.client import ClusterClient, JobInfo, set_job_info
 from iris.cluster.types import Entrypoint, JobName
 from iris.rpc import job_pb2
+from rigging.secrets import SECRETS_DIR_ENV
 
 from taskforge.sandbox.image_builder import (
     BLANKED_ENV,
@@ -31,7 +32,7 @@ from taskforge.sandbox.image_builder import (
     submit_job,
     wait_succeeded,
 )
-from taskforge.sandbox.image_push import REGISTRY_AUTH_ENV
+from taskforge.sandbox.image_push import ARCHIVE_URI_ENV, REGISTRY_AUTH_ENV, archive_request
 
 PASSWORD = "registry-password"
 CREDENTIAL_JSON = json.dumps({"registry": "registry.example", "user": "publisher", "password": PASSWORD})
@@ -44,6 +45,7 @@ class RecordingCluster:
 
     def __init__(self):
         self.env_vars: dict[str, dict[str, str]] = {}
+        self.secrets: dict[str, dict[str, str]] = {}
 
     def submit_job(
         self,
@@ -56,16 +58,17 @@ class RecordingCluster:
     ) -> JobName:
         assert environment is not None
         self.env_vars[job_id.name] = dict(environment.env_vars)
+        self.secrets[job_id.name] = dict(environment.secrets)
         return job_id
 
 
 @pytest.fixture
-def in_a_coordinator_task() -> Iterator[None]:
+def in_a_coordinator_task(request) -> Iterator[dict[str, str]]:
     """Run as task 0 of a job submitted with ``PARENT_ENV``, as a ladder host's build child does."""
-    info = JobInfo(task_id=JobName.from_wire("/alice/ladder/0"), env=PARENT_ENV)
+    info = JobInfo(task_id=JobName.from_wire("/alice/ladder/0"), env=request.param)
     set_job_info(info)
     with iris_ctx_scope(IrisContext.from_job_info(info)):
-        yield
+        yield request.param
     set_job_info(None)
 
 
@@ -103,16 +106,30 @@ def test_a_malformed_credential_fails_without_quoting_it(text):
     assert PASSWORD not in str(error.value)
 
 
-def test_jobs_submitted_from_a_coordinator_task_inherit_none_of_its_environment(in_a_coordinator_task):
+@pytest.mark.parametrize(
+    "in_a_coordinator_task",
+    [PARENT_ENV, {"GLM_HIGH_TOKEN": GLM_TOKEN}],
+    indirect=True,
+    ids=["env-and-mounted", "mounted-only"],
+)
+def test_image_jobs_only_receive_explicit_secrets_and_storage_credentials(in_a_coordinator_task, tmp_path, monkeypatch):
+    (tmp_path / "UNRELATED_SERVICE_TOKEN").write_text("private-parent-token")
+    (tmp_path / REGISTRY_CREDENTIAL_ENV).write_text(CREDENTIAL_JSON)
+    (tmp_path / "CW_KEY_ID").write_text("storage-id")
+    (tmp_path / "CW_KEY_SECRET").write_text("storage-secret")
+    monkeypatch.setenv(SECRETS_DIR_ENV, str(tmp_path))
     cluster = RecordingCluster()
     build = submitted_env(cluster, "taskforge-image-build-x", {"DESTINATION": "registry.example/r:t"})
     push = submitted_env(cluster, "taskforge-image-push-x", {REGISTRY_AUTH_ENV: "push-auth"})
 
     for env in (build, push):
-        assert {name: env[name] for name in [*PARENT_ENV, *BLANKED_ENV]} == dict.fromkeys(
-            [*PARENT_ENV, *BLANKED_ENV], ""
+        assert {name: env[name] for name in [*in_a_coordinator_task, *BLANKED_ENV]} == dict.fromkeys(
+            [*in_a_coordinator_task, *BLANKED_ENV], ""
         )
         assert not any(PASSWORD in value or GLM_TOKEN in value for value in env.values())
+        assert env["CW_KEY_ID"] == "storage-id"
+        assert env["CW_KEY_SECRET"] == "storage-secret"
+    assert all(not secrets for secrets in cluster.secrets.values())
     assert build["DESTINATION"] == "registry.example/r:t"
     assert REGISTRY_AUTH_ENV not in build
     assert push[REGISTRY_AUTH_ENV] == "push-auth"
@@ -184,3 +201,19 @@ def test_registry_readback_failure_is_a_host_failure(monkeypatch, failure):
     monkeypatch.setattr(httpx, "Client", lambda **kwargs: client(transport=httpx.MockTransport(respond), **kwargs))
     with pytest.raises(ImageJobFailed):
         manifest_readback(RegistryCredential.from_json(CREDENTIAL_JSON), "task", "build-tag")
+
+
+def test_archive_request_uses_the_submitters_coreweave_credentials(monkeypatch):
+    monkeypatch.setenv(ARCHIVE_URI_ENV, "s3://task-bucket/build/output.tar.zst")
+    monkeypatch.setenv("CW_KEY_ID", "storage-id")
+    monkeypatch.setenv("CW_KEY_SECRET", "storage-secret")
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_ENDPOINT_URL", "AWS_REGION"):
+        monkeypatch.delenv(name, raising=False)
+
+    request = archive_request()
+
+    assert request.full_url == "https://task-bucket.cwobject.com/build/output.tar.zst"
+    authorization = request.get_header("Authorization")
+    assert authorization is not None
+    assert "Credential=storage-id/" in authorization
+    assert "/auto/s3/aws4_request" in authorization
