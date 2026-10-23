@@ -3021,7 +3021,7 @@ class MoEMLP(eqx.Module):
         if halt_routed is not None:
             out_dim = self.expert_mlp.w_down.shape[-1]
             vote = routed_flat[:, out_dim].astype(jnp.float32) / math.sqrt(halt_routed.shape[1])
-            router_stats[_HALT_Z] = rearrange(vote, "(b s) -> b s", b=b, s=s)
+            router_stats[_HALT_Z] = _batch_reshard(rearrange(vote, "(b s) -> b s", b=b, s=s))
             routed_flat = routed_flat[:, :out_dim]
         if saved_routed is not None:
             routed_flat = _saved_value(routed_flat, saved_routed.astype(routed_flat.dtype))
@@ -3236,7 +3236,7 @@ def moe_and_shared_fused(
             raise ValueError("halt_write=unit does not support the shared-expert gate")
         hidden = _shared_experts_hidden(mlp.cfg, parts[len(moe_weights) :], len(shared), gated)
         vote = _halt_vote(rearrange(hidden, "(b s) i -> b s i", b=b, s=s), halt_shared)
-        stats = {**stats, _HALT_Z: stats[_HALT_Z] + vote}
+        stats = {**stats, _HALT_Z: stats[_HALT_Z] + _batch_reshard(vote)}
     if shadow is not None:
         shared_in = part_inputs["shared"] if part_inputs and "shared" in part_inputs else x
         # The transfer and gap terms read the shared expert on a stop-gradient input so they move only it.
@@ -3678,7 +3678,7 @@ class Block(eqx.Module):
         if attn_vote is None:
             return None
         assert mlp_vote is not None
-        return attn_vote + mlp_vote
+        return _batch_reshard(attn_vote) + _batch_reshard(mlp_vote)
 
     def _attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         x = self.rms_attn(x)
@@ -4021,7 +4021,10 @@ def _run_expert_bank(
             cfg, em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1), em.w_down
         )
         if halt_routed is not None:
-            spec = P(*_padded_spec(w_down))
+            # The output axis is gathered (FSDP meshes shard it) so the vote column can join it.
+            expert_spec, unit_spec, _ = _padded_spec(w_down)
+            spec = P(expert_spec, unit_spec, None)
+            w_down = reshard(w_down, spec)
             column = reshard(halt_routed.astype(w_down.dtype)[:, :, None], spec)
             pad = jnp.zeros((*w_down.shape[:2], _HALT_COLUMN_PAD - 1), w_down.dtype, out_sharding=spec)
             w_down = jnp.concatenate([w_down, column, pad], axis=-1)
