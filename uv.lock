@@ -7767,7 +7767,7 @@ requires-dist = [
     { name = "marin-verifyit", editable = "lib/verifyit" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "openai" },
-    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pydantic", specifier = ">=2.7" },
 ]
 
 [package.metadata.requires-dev]
