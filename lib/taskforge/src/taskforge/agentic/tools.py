@@ -642,8 +642,6 @@ class ToolSession:
         return await self._load(output)
 
     async def _snapshot(self) -> bytes:
-        """A gzipped tar of the workspace without ``SNAPSHOT_EXCLUDES``. One name on each line keeps names with
-        spaces whole; ShellSim's tar has no ``--exclude``."""
         listing = await self.machine.run(Command(("ls", "-A1", str(WORKDIR))))
         entries = [name for name in listing.stdout.decode().splitlines() if name not in SNAPSHOT_EXCLUDES]
         result = await self.machine.run(

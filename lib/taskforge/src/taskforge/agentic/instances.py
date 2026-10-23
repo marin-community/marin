@@ -3,7 +3,7 @@
 
 """More tasks of the kind of an accepted task: its build program runs again with new task ids.
 
-The program runs in a fresh machine of the workspace factory, on the workspace snapshot that ``submit`` took, so it
+The program runs in a fresh machine from the supplied factory, on the workspace snapshot that ``submit`` took, so it
 finds the files that it reads, for example research that the agent saved.
 """
 
