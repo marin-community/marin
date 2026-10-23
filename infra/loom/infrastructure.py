@@ -60,6 +60,8 @@ MCP_ACCESS_ALL = "all"
 MCP_ACCESS_GROUPS = "groups"
 MCP_ACCESS_MODES = frozenset({MCP_ACCESS_NONE, MCP_ACCESS_ALL, MCP_ACCESS_GROUPS})
 REMOTE_MCP_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+OAUTH_CLIENT_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 REMOTE_MCP_AUTH_NONE = "none"
 REMOTE_MCP_AUTH_ENVIRONMENT = "environment"
 REMOTE_MCP_AUTH_IAP = "iap"
@@ -392,6 +394,44 @@ class RemoteMcpConfig:
         }
 
 
+@dataclass(frozen=True)
+class OAuthClientConfig:
+    """A public OAuth client of Loom's remote MCP connector.
+
+    People enter `client_id` in claude.ai or Claude Code, so it must stay stable
+    across deploys. Clients prove themselves with PKCE; the manifest carries no
+    secrets.
+    """
+
+    client_id: str
+    name: str
+    redirect_uris: tuple[str, ...]
+
+    @classmethod
+    def parse(cls, client_id: str, value: Mapping[str, object]) -> OAuthClientConfig:
+        if not OAUTH_CLIENT_ID.fullmatch(client_id):
+            raise ValueError(f"OAuth client id {client_id!r} must be 1 to 64 letters, digits, '.', '_', or '-'")
+        name = str(value.get("name", "")).strip()
+        if not name:
+            raise ValueError(f"OAuth client {client_id!r} requires name")
+        redirect_uris = value.get("redirectUris")
+        if not isinstance(redirect_uris, list) or not redirect_uris:
+            raise ValueError(f"OAuth client {client_id!r} requires redirectUris")
+        for uri in redirect_uris:
+            parsed = urlsplit(str(uri))
+            secure = parsed.scheme == "https" and parsed.hostname
+            loopback = parsed.scheme == "http" and parsed.hostname in LOOPBACK_HOSTS
+            if not (secure or loopback) or parsed.fragment:
+                raise ValueError(
+                    f"OAuth client {client_id!r} redirect URI {uri!r} must use HTTPS, "
+                    "or HTTP on a loopback host, without a fragment"
+                )
+        return cls(client_id=client_id, name=name, redirect_uris=tuple(str(uri) for uri in redirect_uris))
+
+    def manifest(self) -> dict[str, object]:
+        return {"client_id": self.client_id, "name": self.name, "redirect_uris": list(self.redirect_uris)}
+
+
 def _parse_profile_env(name: str, value: object, profile: str) -> ProfileEnvConfig:
     """Parse one profile environment entry, which sets either a literal or a secretRef."""
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or name.startswith(("LOOM_", "WEAVER_")):
@@ -653,6 +693,7 @@ class DeploymentConfig:
     workloads: tuple[WorkloadIdentityConfig, ...] = ()
     github_federations: tuple[GitHubFederationConfig, ...] = ()
     watches: tuple[WatchConfig, ...] = ()
+    oauth_clients: tuple[OAuthClientConfig, ...] = ()
 
     def __post_init__(self) -> None:
         if self.domain != self.domain.strip().rstrip(".") or "://" in self.domain or "/" in self.domain:
@@ -707,6 +748,7 @@ class DeploymentConfig:
             or self.workloads
             or self.github_federations
             or self.watches
+            or self.oauth_clients
         ):
             raise ValueError("pruneDeployment requires a non-empty runtime policy")
 
@@ -775,6 +817,14 @@ class DeploymentConfig:
             if not isinstance(value, dict):
                 raise ValueError("each GitHub federation must be an object")
             github_federations.append(GitHubFederationConfig.parse(value))
+        raw_oauth_clients = config.get_object("oauthClients") or {}
+        if not isinstance(raw_oauth_clients, dict):
+            raise ValueError("oauthClients must be an object")
+        oauth_clients = []
+        for client_id, value in raw_oauth_clients.items():
+            if not isinstance(value, dict):
+                raise ValueError(f"OAuth client {client_id!r} must be an object")
+            oauth_clients.append(OAuthClientConfig.parse(str(client_id), value))
         return cls(
             project=project,
             region=region,
@@ -801,6 +851,7 @@ class DeploymentConfig:
             workloads=tuple(workloads),
             github_federations=tuple(github_federations),
             watches=tuple(watches),
+            oauth_clients=tuple(oauth_clients),
         )
 
 
@@ -920,6 +971,34 @@ def _create_root_disk(config: DeploymentConfig, apis: list[gcp.projects.Service]
     )
 
 
+def _adopt_profile_secrets(config: DeploymentConfig, apis: list[gcp.projects.Service]) -> None:
+    """Manage each Secret Manager secret that a profile environment references.
+
+    An operator creates the secret and uploads its value before a profile references it, so
+    Pulumi imports the existing secret and never holds a version. Removing the last reference
+    leaves the secret and its versions in place.
+    """
+    secret_ids = {
+        environment.secret_ref.split("/")[3]
+        for profile in config.profiles
+        for environment in profile.env
+        if isinstance(environment, ProfileSecretConfig)
+    }
+    for secret_id in sorted(secret_ids):
+        # Declare no labels or annotations so operator-set ones, such as a token's expiry, persist.
+        gcp.secretmanager.Secret(
+            f"loom-profile-secret-{secret_id}",
+            project=config.project,
+            secret_id=secret_id,
+            replication={"auto": {}},
+            opts=pulumi.ResourceOptions(
+                depends_on=apis,
+                import_=f"projects/{config.project}/secrets/{secret_id}",
+                retain_on_delete=True,
+            ),
+        )
+
+
 @dataclass(frozen=True)
 class ImageResources:
     image: docker_build.Image
@@ -959,6 +1038,9 @@ def _create_image(
         build_args={"CARGO_PROFILE": "release"},
         labels={"org.opencontainers.image.source": REPOSITORY_URL},
         platforms=[docker_build.Platform.LINUX_AMD64],
+        # Resolve base image tags against the registry so a workstation's stale local
+        # base image cannot carry an outdated trust store into the release.
+        pull=True,
         tags=[image_tag],
         build_on_preview=True,
         push=True,
@@ -1015,6 +1097,9 @@ def _deployment_manifest(
             "federations": (
                 [mapping.manifest(config.public_url) for mapping in config.github_federations] + workload_values
             ),
+            "oauth_clients": [
+                client.manifest() for client in sorted(config.oauth_clients, key=lambda client: client.client_id)
+            ],
             "prune": config.prune_deployment,
         },
         ensure_ascii=False,
@@ -1206,6 +1291,7 @@ def create_infrastructure(config: DeploymentConfig) -> Infrastructure:
         replication={"auto": {}},
         opts=pulumi.ResourceOptions(depends_on=apis, protect=True),
     )
+    _adopt_profile_secrets(config, apis)
     instance = _create_instance(
         config,
         vm_account,

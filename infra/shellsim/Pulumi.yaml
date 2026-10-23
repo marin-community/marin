@@ -5,4 +5,4 @@ runtime:
   name: python
   options:
     virtualenv: ../../.venv
-description: Buildomatic worker image and read-only HTTPS proxy for guest ports.
+description: Buildomatic worker image and public R2 release locations for guest ports.

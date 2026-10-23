@@ -18,7 +18,7 @@ from torch.distributed import checkpoint
 from torch.distributed.checkpoint._fsspec_filesystem import FileSystem as FsspecFileSystem
 
 from marinskyrl.remote_io import create_s3_filesystem
-from skyrl_train.io.torch_distributed_checkpoint import StreamingFsspecWriter
+from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
 from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
 
 
@@ -37,7 +37,7 @@ class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
         )
         pytorch_state_dict = mcore_to_pyt_state_dict(sharded_state_dict, False)
         filesystem = create_s3_filesystem()
-        writer = StreamingFsspecWriter(self.checkpoint_dir, filesystem=filesystem)
+        writer = MasterWeightsWriter(self.checkpoint_dir, filesystem=filesystem)
         checkpoint.save(
             pytorch_state_dict,
             storage_writer=writer,

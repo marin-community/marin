@@ -19,9 +19,9 @@ from iris.cluster.controller.backend import (
     TaskBackend,
     dashboard_backend_descriptor,
 )
-from iris.cluster.controller.budget import budget_user_id, compute_effective_band, compute_user_spend
+from iris.cluster.controller.budget import compute_effective_band, compute_user_spend
 from iris.cluster.controller.db import ControllerDB
-from iris.cluster.controller.schema import jobs_table, tasks_table, workers_table
+from iris.cluster.controller.schema import tasks_table, workers_table
 from iris.cluster.federation.availability import AVAILABILITY_METRIC_VERSION
 from iris.cluster.types import UserBudgetDefaults
 from iris.rpc import controller_pb2, job_pb2, vm_pb2
@@ -90,13 +90,10 @@ def get_scheduler_state(
         running_rows = snapshot.execute(
             select(
                 tasks_table.c.task_id,
-                jobs_table.c.submitting_user,
                 tasks_table.c.priority_band,
                 tasks_table.c.current_worker_id.label("worker_id"),
                 tasks_table.c.backend_id,
-            )
-            .select_from(tasks_table.join(jobs_table, jobs_table.c.job_id == tasks_table.c.job_id))
-            .where(
+            ).where(
                 tasks_table.c.state == job_pb2.TASK_STATE_RUNNING,
                 tasks_table.c.current_worker_id.is_not(None),
             )
@@ -104,7 +101,7 @@ def get_scheduler_state(
 
     pending_counts: dict[tuple[int, str, str, str], int] = {}
     for row in pending_rows:
-        user_id = budget_user_id(row.job_id, row.submitting_user)
+        user_id = row.job_id.user
         band = compute_effective_band(
             requested_bands.get(row.job_id, row.priority_band),
             user_id,
@@ -118,7 +115,7 @@ def get_scheduler_state(
 
     running_counts: dict[tuple[int, str, str, str, str], int] = {}
     for row in running_rows:
-        user_id = budget_user_id(row.task_id, str(row.submitting_user))
+        user_id = row.task_id.user
         job_id = (row.task_id.parent or row.task_id).to_wire()
         key = (row.priority_band, user_id, str(row.worker_id), job_id, str(row.backend_id or ""))
         running_counts[key] = running_counts.get(key, 0) + 1

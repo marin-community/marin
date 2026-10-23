@@ -18,6 +18,7 @@ from infra.loom.infrastructure import (
     ROOT,
     DeploymentConfig,
     GitHubFederationConfig,
+    OAuthClientConfig,
     ProfileConfig,
     RemoteMcpConfig,
     WatchConfig,
@@ -379,6 +380,37 @@ def test_remote_mcp_rejects_unsafe_or_ambiguous_configuration(override: dict[str
         RemoteMcpConfig.parse(value)
 
 
+def test_oauth_clients_render_in_stable_order_as_public_declarations() -> None:
+    clients = (
+        OAuthClientConfig.parse("zeta", {"name": " Zeta ", "redirectUris": ["http://[::1]/callback"]}),
+        OAuthClientConfig.parse("alpha", {"name": "Alpha", "redirectUris": ["https://alpha.example/callback"]}),
+    )
+    manifest = json.loads(_deployment_manifest(replace(deployment_config(), oauth_clients=clients), [], []))
+
+    assert manifest["oauth_clients"] == [
+        {"client_id": "alpha", "name": "Alpha", "redirect_uris": ["https://alpha.example/callback"]},
+        {"client_id": "zeta", "name": "Zeta", "redirect_uris": ["http://[::1]/callback"]},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("client_id", "override"),
+    [
+        ("claude ai", {}),
+        ("claude-ai", {"name": " "}),
+        ("claude-ai", {"redirectUris": []}),
+        ("claude-ai", {"redirectUris": ["http://claude.ai/api/mcp/auth_callback"]}),
+        ("claude-ai", {"redirectUris": ["https://claude.ai/api/mcp/auth_callback#fragment"]}),
+    ],
+)
+def test_oauth_client_rejects_unstable_ids_and_unsafe_redirects(client_id: str, override: dict[str, object]) -> None:
+    value: dict[str, object] = {"name": "claude.ai", "redirectUris": ["https://claude.ai/api/mcp/auth_callback"]}
+    value.update(override)
+
+    with pytest.raises(ValueError, match="OAuth client"):
+        OAuthClientConfig.parse(client_id, value)
+
+
 @pulumi.runtime.test
 def test_deployment_models_durable_resources_without_secret_payloads():
     infrastructure, mocks = infrastructure_and_mocks()
@@ -535,6 +567,37 @@ def test_existing_service_account_can_be_bound_to_a_workload_profile():
         assert mapping["service_account"] == "marin-grafana@example.iam.gserviceaccount.com"
         assert mapping["subject"] == "99887766554433221100"
         assert mapping["profiles"] == ["ops"]
+
+    return infrastructure.instance.id.apply(check)
+
+
+@pulumi.runtime.test
+def test_profiles_sharing_a_secret_adopt_it_once():
+    base = deployment_config()
+    shared = (
+        ProfileConfig.parse(
+            name,
+            {
+                "agent": "codex",
+                "env": {"CLAUDE_CODE_OAUTH_TOKEN": {"secretRef": f"projects/example/secrets/claude/{version}"}},
+            },
+        )
+        for name, version in (("review", "versions/latest"), ("pm", "versions/2"))
+    )
+    mocks = RecordingMocks()
+    pulumi.runtime.set_mocks(mocks, project="marin-loom", stack="test", preview=False)
+    infrastructure = create_infrastructure(replace(base, profiles=(*base.profiles, *shared)))
+
+    def check(_: object) -> None:
+        adopted = sorted(
+            (resource.inputs["secretId"], resource.resource_id)
+            for resource in mocks.resources
+            if resource.typ == "gcp:secretmanager/secret:Secret" and resource.name != "loom-dotenv"
+        )
+        assert adopted == [
+            ("claude", "projects/example/secrets/claude"),
+            ("ops-kubeconfig", "projects/example/secrets/ops-kubeconfig"),
+        ]
 
     return infrastructure.instance.id.apply(check)
 

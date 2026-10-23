@@ -1,0 +1,90 @@
+{
+  "provenance": {
+    "what": "CatCount on-policy distillation from a synthetic expert teacher, through Megatron with pretrained Qwen2.5-0.5B-Instruct.",
+    "produced_by": "ci/marin_nightly/run_cat_count_opd_h100.sh on one Iris H100x4 task",
+    "recipe": "The async CatCount GPU recipe (64 prompts x 8 samples, two update epochs, staleness 2, DP=2, two vLLM engines) with reward_mode=replace, the uniform estimator, sampled reverse KL, lr 5e-7 and teacher-credit clip 5. Teacher: log 0.95 for an on-track token, the remaining 0.05 spread over the vocabulary otherwise, Gaussian jitter 0.5.",
+    "learning_rate": 5e-07,
+    "advantage_clip": 5,
+    "teacher_jitter": 0.5,
+    "step_cap": 30,
+    "eval_interval": 5,
+    "calibration": {
+      "healthy_seeds": [17, 23, 31, 47, 59],
+      "step0_sampled_train_score": [0.27, 0.25, 0.28, 0.23, 0.25],
+      "step30_sampled_train_score": [0.80, 0.79, 0.72, 0.77, 0.79],
+      "max_policy_entropy": [1.18, 1.18, 1.26, 1.23, 1.22],
+      "flipped_teacher_seed_17_step30": -0.53,
+      "unstable_settings": "lr 1e-6 ended below 0.65 in 1 of 5 healthy runs after a peak (0.75, then 0.48 at step 30); lr 2e-6 with the clip peaked at 0.68 and ended at 0.35; a fixed wrong-token log-probability of log 0.001 made the student learn junk tokens"
+    },
+    "sampled_score_threshold": 0.65
+  },
+  "min_train_steps": 30,
+  "max_wall_clock_seconds": 1800,
+  "required_log_patterns": {
+    "successful_head_completion": {
+      "pattern": "Training done!",
+      "minimum": 1
+    }
+  },
+  "finite_metrics": [
+    "policy/final_loss",
+    "distillation/teacher_advantage_mean",
+    "distillation/teacher_advantage_abs_mean",
+    "distillation/valid_tokens",
+    "distillation/scored_tokens",
+    "distillation/teacher_count",
+    "policy/raw_grad_norm"
+  ],
+  "metric_gates": [
+    {
+      "kind": "eval",
+      "metric": "eval/sampled/train/avg_score",
+      "min_observations": 1,
+      "bounds": {"minimum": 0.1, "maximum": 0.45},
+      "step": 0
+    },
+    {
+      "kind": "eval",
+      "metric": "eval/sampled/train/avg_score",
+      "min_observations": 1,
+      "step": 30,
+      "bounds": {"minimum": 0.65}
+    },
+    {
+      "kind": "train",
+      "metric": "distillation/teacher_count",
+      "min_observations": 30,
+      "bounds": {"minimum": 1, "maximum": 1}
+    },
+    {
+      "kind": "train",
+      "metric": "distillation/valid_tokens",
+      "min_observations": 30,
+      "bounds": {"minimum": 1, "maximum": 100000}
+    },
+    {
+      "kind": "train",
+      "metric": "distillation/teacher_advantage_abs_mean",
+      "min_observations": 30,
+      "bounds": {"minimum": 0, "inclusive_minimum": false, "maximum": 5}
+    },
+    {
+      "kind": "train",
+      "metric": "policy/raw_grad_norm",
+      "min_observations": 30,
+      "bounds": {"minimum": 0, "inclusive_minimum": false}
+    },
+    {
+      "kind": "train",
+      "metric": "async/staleness_mean",
+      "min_observations": 30,
+      "bounds": {"minimum_count": 1, "minimum": 0, "inclusive_minimum": false}
+    },
+    {
+      "kind": "train",
+      "metric": "policy/dp_weight_checksum_mismatch",
+      "min_observations": 30,
+      "bounds": {"minimum": 0, "maximum": 0}
+    }
+  ]
+}

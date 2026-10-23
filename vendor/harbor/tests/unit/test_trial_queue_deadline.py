@@ -590,12 +590,17 @@ async def test_phase_deadline_observed_first_preserves_phase_classification(
 async def test_cancellation_resistant_attempt_quarantines_capacity_until_termination(
     tmp_path: Path, monkeypatch
 ) -> None:
+    loop = asyncio.get_running_loop()
+    now = loop.time()
+    monkeypatch.setattr(loop, "time", lambda: now)
+    attempt_started = asyncio.Event()
     cancellation_seen = asyncio.Event()
     provider_terminated = asyncio.Event()
     retry_started = asyncio.Event()
     terminal_events: list[str | None] = []
 
     async def resist_cancellation(trial: FakeTrial) -> None:
+        attempt_started.set()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -606,7 +611,8 @@ async def test_cancellation_resistant_attempt_quarantines_capacity_until_termina
     async def finish_retry(trial: FakeTrial) -> None:
         retry_started.set()
 
-    config = _config(tmp_path, "retry", attempt_timeout=0.01)
+    attempt_timeout = 0.01
+    config = _config(tmp_path, "retry", attempt_timeout=attempt_timeout)
     _install_factory(
         monkeypatch,
         {
@@ -634,6 +640,9 @@ async def test_cancellation_resistant_attempt_quarantines_capacity_until_termina
 
     async with asyncio.timeout(1):
         result_task = asyncio.create_task(queue.submit(config))
+        await attempt_started.wait()
+        # Expire the first attempt without imposing a wall-clock budget on retry persistence.
+        now += attempt_timeout
         await cancellation_seen.wait()
         assert not retry_started.is_set()
         provider_terminated.set()

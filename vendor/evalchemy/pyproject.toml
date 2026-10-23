@@ -43,6 +43,7 @@ mbpp = []
 mbppplus = []
 mtbench = []
 mixeval = []
+graphwalks = []
 mrcr = ["tiktoken"]
 multiple = ["regex"]
 repobench = ["fuzzywuzzy"]
@@ -74,11 +75,14 @@ olympiadbenchdeterministic = []
 olympiadbenchfull = []
 simpleqa = []
 simpleqamini = []
-benchmarks = ["evalchemy[aime24,aime25,aiw,amc23,bigcodebench,codeelo,codeforces,cruxeval,financebench,gpqadiamond,gsm8kperturbed,hle,hmmt,humaneval,humanevalplus,ifbench,ifeval,jeebench,livebench,livecodebench,livecodebenchv5,livecodebenchv5-official,math500,mbpp,mbppplus,mmlupro,mrcr,mtbench,mixeval,multiple,nupa-loose,nupa5k-loose,olympiadbench,olympiadbenchdeterministic,olympiadbenchfull,repobench,simpleqa,simpleqamini,swebench,wildbench,alpaca-eval,zeroeval]"]
+benchmarks = ["evalchemy[aime24,aime25,aiw,amc23,bigcodebench,codeelo,codeforces,cruxeval,financebench,gpqadiamond,gsm8kperturbed,graphwalks,hle,hmmt,humaneval,humanevalplus,ifbench,ifeval,jeebench,livebench,livecodebench,livecodebenchv5,livecodebenchv5-official,math500,mbpp,mbppplus,mmlupro,mrcr,mtbench,mixeval,multiple,nupa-loose,nupa5k-loose,olympiadbench,olympiadbenchdeterministic,olympiadbenchfull,repobench,simpleqa,simpleqamini,swebench,wildbench,alpaca-eval,zeroeval]"]
 
 [dependency-groups]
 test = ["pytest>=8.3.2", "pytest-timeout", "pytest-mock", "zstandard"]
 dev = [{ include-group = "test" }]
+
+[tool.uv]
+exclude-dependencies = ["litellm"]
 
 [tool.uv.sources]
 marin-finestore = { path = "../../lib/finestore", editable = true }

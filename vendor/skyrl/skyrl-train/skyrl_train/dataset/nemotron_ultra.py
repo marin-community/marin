@@ -16,8 +16,10 @@ from transformers import PreTrainedTokenizerBase
 from skyrl_train.dataset.harbor import HARBOR_ID_PREFIX, materialize_harbor_tasks
 from skyrl_train.dataset.tasks import (
     TASK_ROLLOUT_COLUMN,
+    TASK_SPEC_COLUMN,
     PARQUET_BATCH_SIZE,
     SourceTaskDataset,
+    TaskDataset,
     source_row_task,
     task_prompt,
 )
@@ -97,6 +99,7 @@ class NemotronTaskDataset(SourceTaskDataset):
         cache_dir: Path,
         grader_override: NoGrader | None = None,
         num_workers: int = 8,
+        chat_template_kwargs: dict | None = None,
     ):
         cache_dir = cache_dir.expanduser()
         self.terminals = terminal_task_index(
@@ -113,9 +116,14 @@ class NemotronTaskDataset(SourceTaskDataset):
             max_prompt_length,
             environment_configs=environment_configs,
             num_workers=num_workers,
+            chat_template_kwargs=chat_template_kwargs,
         )
 
     def prepare_dataset(self, dataset: Dataset) -> Dataset:
+        if TASK_ROLLOUT_COLUMN in dataset.column_names:
+            return TaskDataset.prepare_dataset(self, dataset)
+        if TASK_SPEC_COLUMN in dataset.column_names:
+            return super().prepare_dataset(dataset)
         return self._map_task_rows(
             dataset,
             partial(

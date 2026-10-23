@@ -20,10 +20,23 @@ config:
   marin-loom:settings:
     auth.github_organizations: "Open-Athena:188075292"
     browser.allowed_origins: https://marina.oa.dev,https://applets.marina.oa.dev
+    connector.enabled: "true"
     github.profile: github
     github.trigger_allowed_user_ids: "306337490"
     slack.effort: agent-default
     slack.profile: slack
+  # Public OAuth clients of the connector. People enter these ids in claude.ai
+  # and Claude Code, so never rename one; see README.md.
+  marin-loom:oauthClients:
+    claude-ai:
+      name: claude.ai
+      redirectUris:
+        - https://claude.ai/api/mcp/auth_callback
+        - https://claude.com/api/mcp/auth_callback
+    claude-code:
+      name: Claude Code
+      redirectUris:
+        - http://localhost/callback
   marin-loom:remoteMcps:
     - identity: /marina/api
       label: Marina API
@@ -81,9 +94,15 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/user/AGENTS.md
-      env: &loomIrisUser
-        IRIS_USER:
-          value: loom
+      # Profiles that can run the claude agent authenticate it with a long-lived
+      # `claude setup-token` credential instead of the interactive login stored
+      # on the session home volume that every session shares.
+      env: &claudeSessionEnv
+        <<: &loomIrisUser
+          IRIS_USER:
+            value: loom
+        CLAUDE_CODE_OAUTH_TOKEN: &claudeOauthToken
+          secretRef: projects/hai-gcp-models/secrets/LOOM_CLAUDE_CODE_OAUTH_TOKEN/versions/latest
       githubRepositories: &interactiveGithubRepositories
         - Open-Athena/*
         - marin-community/*
@@ -103,6 +122,10 @@ config:
       <<: *interactiveProfile
       description: Interactive Marin work with GPT-6.1 Sol
       model: gpt-6.1-sol
+    claude:
+      <<: *interactiveProfile
+      description: Tasks handed off from claude.ai through the Loom connector
+      instructionsFile: profiles/claude/AGENTS.md
     marina:
       agent: codex
       description: Interactive questions over read-only Marina application APIs
@@ -114,7 +137,7 @@ config:
       idleArchiveSeconds: 3000
       prelude: weaver
       instructionsFile: profiles/marina/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       githubRepositories: *interactiveGithubRepositories
       mcpAccess:
         mode: groups
@@ -130,7 +153,7 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/github/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       githubRepositories: *interactiveGithubRepositories
       mcpAccess: *builtinMcpAccess
     fork-ferry:
@@ -176,7 +199,7 @@ config:
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-review/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -198,7 +221,7 @@ config:
       turnBudget: 200
       prelude: weaver
       instructionsFile: profiles/pr-holistic-review/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -250,7 +273,7 @@ config:
       mcpAccess: *builtinMcpAccess
     prose-cleanup:
       agent: codex
-      description: Rewrite agent-authored issue and PR descriptions in house style
+      description: Fix egregious prose and remove agent attribution from issue and PR descriptions
       model: *codexModel
       effort: low
       protocol: acp
@@ -339,6 +362,7 @@ config:
       env:
         BOARD_GITHUB_TOKEN:
           secretRef: projects/hai-gcp-models/secrets/LOOM_PM_BOARD_TOKEN/versions/latest
+        CLAUDE_CODE_OAUTH_TOKEN: *claudeOauthToken
       restricted: false
       githubRepositories:
         - marin-community/marin
@@ -355,7 +379,7 @@ config:
       class: interactive
       prelude: weaver
       instructionsFile: profiles/slack/AGENTS.md
-      env: *loomIrisUser
+      env: *claudeSessionEnv
       githubRepositories: *interactiveGithubRepositories
       mcpAccess: *builtinMcpAccess
   marin-loom:workloads:

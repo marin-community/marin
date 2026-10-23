@@ -10,6 +10,32 @@ GAIA, BFCL, and Aider. Trials can run in Daytona or another Harbor-supported san
 See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
 matrix. This page documents Harbor-specific configuration and output behavior.
 
+Harbor uses the OpenAI SDK for inference. In Terminus agent kwargs, set
+`llm_backend="openai"` and supply an OpenAI-compatible `api_base` for providers
+other than OpenAI. Set `model_info.max_input_tokens` and
+`model_info.max_output_tokens` for context and output limits. Optional
+`input_cost_per_token` and `output_cost_per_token` fields specify USD per token.
+Harbor does not look up limits or prices in a model registry. Agent CLI-reported
+costs and built-in prices for Cursor models remain available. Otherwise,
+CLI-agent cost estimates remain unset when `model_info` omits prices.
+
+For a proxy without `/tokenize`, set the Terminus agent kwarg
+`tokenizer_encoding` to the tiktoken encoding selected for local estimates,
+such as `cl100k_base`. This is required for model names tiktoken cannot identify,
+including Claude and Gemini names. These estimates do not reproduce the
+provider's private tokenizer; use a server token-count endpoint for exact counts.
+
+LiteLLM is excluded from installation in the workspace and standalone evaluation
+environments, including as a transitive dependency. Mini-SWE uses Harbor's OpenAI
+model adapter. The recording proxy translates Anthropic Messages and OpenAI
+Responses tool histories to the configured Chat Completions endpoint. It retains
+token IDs and log probabilities when the serving backend returns them.
+
+Aider, SWE-agent, OpenHands, and OpenHands SDK installation is blocked because
+those harnesses require LiteLLM. Use Mini-SWE or Terminus instead. NeMo's
+LiteLLM backend is also unavailable; use its OpenAI backend with a compatible
+endpoint.
+
 ## Run a benchmark
 
 Use a model and evaluation name from `experiments/evaluation/models.py` and
@@ -94,6 +120,42 @@ The generic launcher resolves declared references immediately before Iris submis
 Harbor subprocess receives the Daytona key without inheriting the orchestrator's other credentials.
 Do not put resolved credentials in model YAMLs, runner configs, or evaluation artifacts.
 
+## Sandbox environment isolation
+
+Keep provider credentials in the harness process. An actor sandbox should receive
+only its image's configuration, backend runtime defaults and explicitly declared
+task or command variables. Treat task definitions, images, build contexts and
+explicit mounts as trusted inputs: they can deliberately supply credentials.
+An explicit task environment declaration such as `API_KEY = "${HOST_KEY}"`
+resolves against the harness environment and grants that access. A `${HOST_KEY}`
+reference appearing only in a Compose file does not request host forwarding.
+Below, persistent variables are explicit `persistent_env` / `--ae` settings;
+Harbor infrastructure values name images, resource limits and log mount paths.
+
+| Backend | Environment and configuration supplied by the launcher |
+| --- | --- |
+| Shellbox local / bubblewrap | Fixed `PATH`, `HOME`, `LANG`, optional hash seed and explicit task/command variables. Task variables take effect inside bubblewrap and reach it through a private inherited descriptor, keeping values out of host process listings. Private `/etc` copies allowlisted runtime files; host startup files, password hashes, private keys, `/opt` contents and sysfs are hidden. Shared program directories and explicit mounts remain trusted inputs. |
+| Shellbox Docker / local gVisor | Image configuration and explicit task/command variables; no host directory mounts or implicit forwarding of host variables in Shellbox. Docker client configuration, including automatic proxy settings, remains an operator-controlled input. `runsc` changes the execution boundary, not credential policy. |
+| Shellbox Daytona | Image/snapshot configuration and explicit task/command variables. The Daytona client keeps its API credentials in the harness; creation forwards only `MachineSpec.env`. |
+| Shellbox Iris | The `SANDBOX` profile excludes parent environment inheritance, workspace bundles, cluster secrets, task tokens, shared caches and service-account tokens. Kubernetes service links are disabled. `secret_env` is an explicit exception for trusted graders and must never be used for actors. |
+| Shellbox QEMU | Image configuration and explicit task/command variables reach the guest over its serial protocol. The QEMU host process uses host runtime settings; these do not become guest variables. No host filesystem is shared with the guest. |
+| Shellbox ShellSim | Simulator defaults and explicit task/command variables in a private virtual filesystem. |
+| Harbor Docker Compose | Explicit task/persistent variables and Harbor infrastructure values. The local Docker client receives only allowlisted connection, login-path and OS runtime variables from the host. Other host variables are unavailable for Compose interpolation. |
+| Harbor Daytona / Modal Compose | Explicit task/persistent variables and Harbor infrastructure values. Compose references alone do not copy host variables into the remote sandbox. |
+
+Iris's legacy `CONTAINER_PROFILE_GVISOR` retains cluster credentials and is for
+trusted workloads. Model-controlled work must use `CONTAINER_PROFILE_SANDBOX`.
+See the [Iris profile reference](https://github.com/marin-community/marin/blob/main/lib/iris/docs/container-profiles.md)
+and the [Shellbox backend reference](https://github.com/marin-community/marin/blob/main/lib/shellbox/README.md).
+
+These contracts describe repository launch paths. They do not certify deployed
+images, existing snapshots, provider-side injected settings or Docker daemon
+configuration. Keep those inputs free of credentials. Local bubblewrap is for
+trusted commands; its `ALLOW` network policy shares the host network. Local
+Docker/gVisor bridge networking can also reach host or cloud metadata services.
+Use denied networking when unnecessary, or Iris's filtered sandbox egress for
+model-controlled workloads on production infrastructure.
+
 ## Endpoint lifecycle
 
 Harbor receives a candidate `RunningModel` whose base URL is an Iris link endpoint. A hosted judge
@@ -161,6 +223,10 @@ through an isolated subprocess CLI for two calls:
 
 Runtime values do not change the source-policy digest. Policy kwargs override model-catalog kwargs;
 the served endpoint/model, output paths, local source path, and explicit `--limit` override both.
+For a Harbor target or simulated user agent with `name: pi`, Marin always sets `kwargs.version` to `0.87.0`, overriding
+versions supplied by the policy or model configuration. Preflight includes this pin in the saved
+policy and the saved policy's digest; execution applies the same pin. Pi evaluations install
+version `0.87.0` without resolving npm's `latest` tag.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
 The runtime uses `vendor/harbor/uv.lock`. Its runtime descriptor records the upstream

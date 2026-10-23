@@ -12,7 +12,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from marin.evaluation.eval_policy import source_config_digest
-from marin.evaluation.evalchemy.config import EvalchemyConfig
+from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig
 from marin.evaluation.evalchemy.runner import (
     DEFAULT_NUM_CONCURRENT,
     EvalchemyRunConfig,
@@ -88,6 +88,7 @@ class EvalchemyDefinition:
                 apply_chat_template=config.apply_chat_template,
                 chat_tokenizer_backend=config.chat_tokenizer_backend,
                 debug=config.debug,
+                prompt_budget_preflight=config.prompt_budget_preflight,
                 max_gen_toks=config.max_gen_toks,
                 max_eval_instances=config.max_eval_instances,
                 num_concurrent=config.num_concurrent,
@@ -145,6 +146,15 @@ class EvalchemyDefinition:
                 **model.generation.extra_gen_kwargs,
             },
             chat_template_kwargs=chat_template_kwargs,
+            extra_model_args={
+                **config.extra_model_args,
+                **(
+                    {"revision": model.effective_tokenizer_revision}
+                    if config.chat_tokenizer_backend == ChatTokenizerBackend.HUGGING_FACE
+                    and model.effective_tokenizer_revision is not None
+                    else {}
+                ),
+            },
         )
 
 
@@ -270,6 +280,7 @@ def evalchemy_run_config(name: str, config: EvalchemyConfig) -> EvalchemyRunConf
         apply_chat_template=config.apply_chat_template or False,
         chat_tokenizer_backend=config.chat_tokenizer_backend,
         debug=config.debug,
+        prompt_budget_preflight=config.prompt_budget_preflight,
         max_gen_toks=config.max_tokens,
         max_eval_instances=config.limit,
         num_concurrent=num_concurrent,
@@ -323,6 +334,7 @@ _STANDARD_EVALCHEMY_EVALS: tuple[str, ...] = (
     "ifeval",
     "ifbench",
     "mrcr",
+    "graphwalks",
 )
 
 EVALS: dict[str, EvaluationDefinition] = {

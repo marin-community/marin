@@ -298,6 +298,7 @@ class EvalchemyRef(BaseModel):
     apply_chat_template: bool
     chat_tokenizer_backend: str = "none"
     debug: bool = False
+    prompt_budget_preflight: bool = Field(default=False, exclude_if=lambda value: not value)
     max_gen_toks: int | None
     max_eval_instances: int | None
     num_concurrent: int

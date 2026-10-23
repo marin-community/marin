@@ -710,6 +710,138 @@ def test_packaged_sotopia_agent_resolves_in_vendored_runtime():
 
 
 @pytest.mark.parametrize(
+    ("agent_name", "policy_kwargs", "expected_policy_version", "expected_runtime_version", "user_agent", "user_version"),
+    [
+        ("pi", {}, "0.87.0", "0.87.0", None, None),
+        ("pi", {"version": "1.3.0"}, "0.87.0", "0.87.0", None, None),
+        ("pi", {"version": "0.87.0"}, "0.87.0", "0.87.0", None, None),
+        ("terminus-2", {"version": "1.3.0"}, "1.3.0", "1.3.0", None, None),
+        ("terminus-2", {}, None, "9.9.9", None, None),
+        ("acp:pi-acp@0.0.33", {}, None, "9.9.9", None, None),
+        ("pi", {}, "0.87.0", "0.87.0", {"name": "pi", "kwargs": {}}, "0.87.0"),
+        ("pi", {"version": "1.3.0"}, "0.87.0", "0.87.0", {"name": "pi", "kwargs": {"version": "1.3.0"}}, "0.87.0"),
+        (
+            "pi",
+            {"version": "1.3.0"},
+            "0.87.0",
+            "0.87.0",
+            {"name": "gemini-cli", "kwargs": {"version": "1.3.0"}},
+            "1.3.0",
+        ),
+        ("terminus-2", {"version": "1.3.0"}, "1.3.0", "1.3.0", {"name": "pi", "kwargs": {"version": "1.3.0"}}, "0.87.0"),
+    ],
+)
+def test_agent_version_survives_preflight_and_runtime_overlay(
+    tmp_path, agent_name, policy_kwargs, expected_policy_version, expected_runtime_version, user_agent, user_version
+):
+    task = tmp_path / "dataset" / "task"
+    task.mkdir(parents=True)
+    (task / "task.toml").write_text('[task]\nname = "test/version-pin"\n')
+    (task / "instruction.md").write_text("Complete the task.\n")
+    (task / "environment").mkdir()
+    (task / "environment" / "Dockerfile").write_text("FROM ubuntu:22.04\n")
+    (task / "tests").mkdir()
+    (task / "tests" / "test.sh").write_text("#!/bin/sh\nexit 0\n")
+    if user_agent is not None:
+        user_agent = {
+            **user_agent,
+            "model_name": "openai/user-model",
+            "kwargs": {**user_agent["kwargs"], "temperature": 0.4},
+            "bridge": {"kind": "acp"},
+        }
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "docker"},
+                "agents": [{"name": agent_name, "kwargs": policy_kwargs}],
+                "datasets": [{"path": "dataset"}],
+                "user_agent": user_agent,
+            }
+        )
+    )
+    model_kwargs = {
+        "version": "9.9.9",
+        "thinking_format": "chat-template",
+        "model_info": {"max_input_tokens": 65536, "max_output_tokens": 16384},
+    }
+    requests = tmp_path / "requests.json"
+    requests.write_text(json.dumps([{"path": str(source), "model_agent_kwargs": model_kwargs}]))
+    policy = tmp_path / "policy.json"
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text(
+        json.dumps(
+            {
+                "job_name": "version-pin",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": str(task.parent),
+                "endpoint_url": "https://model.example/v1",
+                "served_model": "test-model",
+                "task_limit": 1,
+                "model_agent_kwargs": model_kwargs,
+                "verifier_env": {},
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "dataset",
+            }
+        )
+    )
+    script = textwrap.dedent(
+        """
+        import io
+        import json
+        import sys
+        from contextlib import redirect_stdout
+        from pathlib import Path
+
+        from harbor.trial.simulated_user import validate_user_agent_version_pin
+        from marin.evaluation.harbor.trial_driver import effective_job_config, main
+
+        driver, requests, source, policy, overlay = sys.argv[1:]
+        sys.argv = [driver, "preflight", requests]
+        output = io.StringIO()
+        with redirect_stdout(output):
+            main()
+        (validated,) = json.loads(output.getvalue())
+        Path(policy).write_text(validated["stable_policy_json"])
+        effective = effective_job_config(Path(policy), Path(overlay))
+        raw_effective = effective_job_config(Path(source), Path(overlay))
+        # Exercise the same shared-container version check as trial startup.
+        for config in (effective, raw_effective):
+            if config.user_agent is not None:
+                validate_user_agent_version_pin(
+                    config.agents[0].name, config.agents[0].kwargs.get("version"),
+                    config.user_agent.name, config.user_agent.kwargs.get("version"),
+                )
+        print(json.dumps({
+            "stable": json.loads(validated["stable_policy_json"]),
+            "effective": effective.model_dump(mode="json"),
+            "raw_effective": raw_effective.model_dump(mode="json"),
+        }))
+        """
+    )
+    rendered = _external_python("-c", script, str(_DRIVER), str(requests), str(source), str(policy), str(overlay))
+    result = json.loads(rendered.stdout)
+    stable = result["stable"]
+    assert stable["agents"][0]["name"] == agent_name
+    assert stable["agents"][0]["kwargs"].get("version") == expected_policy_version
+    for config in (result["effective"], result["raw_effective"]):
+        agent = config["agents"][0]
+        assert agent["name"] == agent_name
+        assert agent["kwargs"]["version"] == expected_runtime_version
+        assert agent["kwargs"]["thinking_format"] == "chat-template"
+        assert agent["kwargs"]["model_info"]["max_output_tokens"] == 16384
+    for config in (stable, result["effective"], result["raw_effective"]):
+        if user_agent is None:
+            assert config["user_agent"] is None
+        else:
+            user = config["user_agent"]
+            assert user["name"] == user_agent["name"]
+            assert user["kwargs"] == {**user_agent["kwargs"], "version": user_version}
+            assert user["model_name"] == "openai/user-model"
+            assert user["bridge"]["kind"] == "acp"
+
+
+@pytest.mark.parametrize(
     ("model_kwargs", "policy_kwargs", "expected_format"),
     [
         ({"thinking_format": "chat-template"}, {}, "chat-template"),

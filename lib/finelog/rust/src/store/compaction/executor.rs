@@ -1,24 +1,10 @@
-//! Apply a `CompactionJob`: produce the merged/bumped segment on disk and a
-//! `PlannedSwap` for the caller to commit.
+//! Execute a compaction plan through a supplied batch reader and return a
+//! [`PlannedSwap`] for the caller to commit under the query-visibility lock.
 //!
-//! The executor performs the heavy, lock-free work — parquet read, merge, write,
-//! and (for a multi-input merge) the staging-file rename to the distinctly-named
-//! output. It returns a [`PlannedSwap`] describing the deque/catalog mutation;
-//! the *commit* of that swap (deque splice + catalog `replace_segments` + the
-//! single-input bump rename + input unlink) is done by the caller under the
-//! query-visibility write lock (`commit_swap`). This keeps the destructive
-//! visibility-affecting step on the locked path while the CPU/IO runs free.
-//!
-//! Single-input job  => `apply_level_bump`: NO rewrite. The output file does not
-//! exist yet; the rename `seg_L{n}_{min}` -> `seg_L{n+1}_{min}` is deferred to
-//! the commit (`PlannedSwap::bump_rename`), preserving `created_at_ms` + bounds.
-//!
-//! Multi-input job   => `apply_merge`: read each input's batches via
-//! `ParquetRecordBatchReaderBuilder` (sync) under `spawn_blocking`, project each
-//! onto the namespace schema (additive null-fill), k-way merge by
-//! the namespace's configured columns plus `seq`, write via `ArrowWriter` to a
-//! `.parquet.tmp`, then rename to the final distinctly-named output. The inputs
-//! stay on disk until the commit unlinks them.
+//! Merges consume a prefix of inputs bounded by decoded Arrow size, project
+//! and sort their batches, and write staged Parquet outputs. Inputs remain live
+//! until commit. A level promotion reuses an immutable object or defers a local
+//! file rename to the caller, without decoding its rows.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -41,6 +27,8 @@ use crate::store::compaction::merge::{
 use crate::store::segment::{read_segment_footer, segment_writer_properties_with_partition};
 use crate::store::table_state::LocalArtifacts;
 use crate::store::types::{seg_filename, LocalSegment, SegmentLocation, SegmentRow};
+
+pub const READ_BATCH_ROWS: usize = 65_536;
 
 fn now_ms() -> i64 {
     SystemTime::now()
@@ -87,6 +75,9 @@ pub enum OutputPolicy {
     /// rename, and an unreadable run head is promoted or dropped so a corrupt
     /// file cannot wedge a level.
     PromoteWhenUnchanged,
+    /// Immutable inputs are promoted by reference, including uncached objects.
+    /// A failed read aborts the merge instead of dropping or bypassing an input.
+    ReuseImmutable,
     /// Every input is decoded and rewritten under the requested layout, and an
     /// unreadable input fails the job. A definition migration uses this: an
     /// object that reaches the target version without being rewritten would
@@ -132,7 +123,14 @@ fn run_job(
         max_merge_arrow_bytes,
         output: OutputPolicy::PromoteWhenUnchanged,
     };
-    run_job_with_partition_policy(job, dir, arrow_schema, execution, input_key_bounds)
+    run_job_with_partition_policy(
+        job,
+        dir,
+        arrow_schema,
+        execution,
+        input_key_bounds,
+        |path| read_segment_projected(Path::new(path), None),
+    )
 }
 
 /// Run one merge on a dedicated thread instead of the shared blocking pool.
@@ -173,6 +171,7 @@ pub fn run_job_with_partition_policy(
     arrow_schema: &SchemaRef,
     execution: CompactionExecution<'_>,
     input_key_bounds: impl Fn(&str) -> (Option<String>, Option<String>),
+    mut read_input: impl FnMut(&str) -> Result<Vec<RecordBatch>, StatsError>,
 ) -> Result<PlannedSwap, StatsError> {
     let job_partition = job
         .inputs
@@ -185,13 +184,14 @@ pub fn run_job_with_partition_policy(
     });
     if job.inputs.len() == 1
         && !needs_repartition
-        && execution.output == OutputPolicy::PromoteWhenUnchanged
+        && execution.output != OutputPolicy::AlwaysRewrite
     {
         apply_level_bump(
             &job.inputs[0],
             job.output_level,
             dir,
             execution.partition_policy,
+            execution.output,
             &input_key_bounds,
         )
     } else {
@@ -202,16 +202,18 @@ pub fn run_job_with_partition_policy(
             execution,
             needs_repartition,
             &input_key_bounds,
+            &mut read_input,
         )
     }
 }
 
-/// Single-input promotion: a rename, no rewrite. The output `LocalSegment`
+/// Single-input promotion: a local rename or immutable reference reuse. The output `LocalSegment`
 /// carries the new level + path but PRESERVES the input's `created_at_ms`,
 /// row_count, seq window, and typed key bounds. The rename itself is deferred to
 /// the commit via `PlannedSwap::bump_rename`.
 ///
-/// A bump can only rename a file that exists. When the input's file is gone — a
+/// Immutable objects need no local file check. A local rename requires a file.
+/// When the input's local file is gone — a
 /// dangling deque/catalog reference to a segment an earlier merge already
 /// consumed and unlinked — there is nothing to rename and no recoverable rows, so
 /// the stale reference is dropped instead. This guards BOTH callers: the
@@ -224,9 +226,10 @@ fn apply_level_bump(
     output_level: i32,
     dir: &Path,
     partition_policy: Option<&dyn PhysicalPartitionPolicy>,
+    output: OutputPolicy,
     input_key_bounds: &impl Fn(&str) -> (Option<String>, Option<String>),
 ) -> Result<PlannedSwap, StatsError> {
-    if !Path::new(&old.path).exists() {
+    if output == OutputPolicy::PromoteWhenUnchanged && !Path::new(&old.path).exists() {
         tracing::warn!(
             path = %old.path,
             "level-bump input file missing; dropping the stale segment reference"
@@ -299,6 +302,7 @@ fn apply_merge(
     execution: CompactionExecution<'_>,
     needs_repartition: bool,
     input_key_bounds: &impl Fn(&str) -> (Option<String>, Option<String>),
+    read_input: &mut impl FnMut(&str) -> Result<Vec<RecordBatch>, StatsError>,
 ) -> Result<PlannedSwap, StatsError> {
     let job_partition = job
         .inputs
@@ -342,10 +346,10 @@ fn apply_merge(
         // corrupt file past the merge by rename and drops a missing one. Only the
         // READ is forgiven — a projection or sort failure is a schema bug and still
         // propagates.
-        let raw = match read_segment_projected(Path::new(&inp.path), None) {
+        let raw = match read_input(&inp.path) {
             Ok(raw) => raw,
             Err(e) => {
-                if must_rewrite {
+                if must_rewrite || execution.output == OutputPolicy::ReuseImmutable {
                     return Err(e);
                 }
                 if consumed.is_empty() {
@@ -359,6 +363,7 @@ fn apply_merge(
                         job.output_level,
                         dir,
                         execution.partition_policy,
+                        execution.output,
                         input_key_bounds,
                     );
                 }
@@ -403,6 +408,7 @@ fn apply_merge(
             job.output_level,
             dir,
             execution.partition_policy,
+            execution.output,
             input_key_bounds,
         );
     }
@@ -522,7 +528,6 @@ pub fn read_segment_projected(
     // into ~45 batches and multiplied the k-way merge's fan-in and per-chunk
     // interleave setup by the same factor. Bounded so one batch's decoded Utf8
     // stays well under the 2^31 offset ceiling even for high-ratio log text.
-    const READ_BATCH_ROWS: usize = 65_536;
     let file = std::fs::File::open(path)
         .map_err(|e| StatsError::Internal(format!("open merge input {}: {e}", path.display())))?;
     let builder = ParquetRecordBatchReaderBuilder::try_new(file)
@@ -717,6 +722,47 @@ mod tests {
             partition: None,
             location: SegmentLocation::Local,
         }
+    }
+
+    #[test]
+    fn immutable_level_promotion_needs_no_local_file_or_reader() {
+        let dir = tempdir("immutable_promotion");
+        let input = row_for("remote-only.parquet", 0, 10, 12, 128);
+        let job = CompactionJob {
+            inputs: vec![input.clone()],
+            output_level: 1,
+            output_min_seq: input.min_seq,
+        };
+        let swap = run_job_with_partition_policy(
+            &job,
+            &dir,
+            &schema(),
+            CompactionExecution {
+                layout: default_layout(&[]),
+                index_config: &SegmentIndexConfig {
+                    indexes: Vec::new(),
+                    key_column: None,
+                },
+                partition_policy: None,
+                max_merge_arrow_bytes: i64::MAX,
+                output: OutputPolicy::ReuseImmutable,
+            },
+            |_| (None, None),
+            |_| {
+                Err(StatsError::Internal(
+                    "promotion opened an input".to_string(),
+                ))
+            },
+        )
+        .unwrap();
+        assert_eq!(swap.removed, vec![input.path]);
+        let promoted = added_seg(&swap);
+        assert_eq!(
+            (promoted.level, promoted.min_seq, promoted.max_seq),
+            (1, 10, 12)
+        );
+        assert_eq!(promoted.row_count, input.row_count);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
