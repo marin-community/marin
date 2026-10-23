@@ -3421,8 +3421,8 @@ class RayPPOTrainer:
         export_step = selected_export_step(
             self.cfg.trainer.ckpt_path, self.cfg.trainer.hf_export_checkpoint, self.global_step
         )
-        checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{export_step}")
-        trainer_state_path = os.path.join(checkpoint_path, TRAINER_STATE_FILENAME)
+        checkpoint_path = join_resource_path(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{export_step}")
+        trainer_state_path = join_resource_path(checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):
             raise RuntimeError(
                 f"Cannot request HF export for global_step_{export_step}: "
