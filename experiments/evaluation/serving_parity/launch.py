@@ -47,6 +47,9 @@ class Arm:
     weights: str
     workaround: bool
 
+    def entrypoint(self) -> Entrypoint:
+        return Entrypoint.from_callable(run_arm, self)
+
     def resources(self) -> ResourceConfig:
         if self.hardware == "h100":
             return ResourceConfig.with_gpu("H100", count=8, cpu=32, ram="512g", disk="200g", target_cluster="cw-rno2a")
@@ -224,7 +227,7 @@ def main() -> None:
         with IrisClient.remote(endpoint.url, workspace=Path.cwd(), credentials=endpoint.credentials) as client:
             job = client.submit(
                 name=arm.name,
-                entrypoint=Entrypoint.from_callable(run_arm, args=(arm,)),
+                entrypoint=arm.entrypoint(),
                 resources=convert_resources(resource),
                 constraints=convert_constraints(resource),
                 replicas=resource.replicas,
