@@ -34,7 +34,7 @@ async def test_token_count_recovers_without_local_tokenizer(monkeypatch, failure
     assert requests[0].content == requests[1].content
 
 
-@pytest.mark.parametrize(("status", "attempts"), [(503, 3), (400, 1)])
+@pytest.mark.parametrize(("status", "attempts"), [(503, 3), (400, 1), (404, 1)])
 async def test_tokenizer_failure_preserves_http_cause(monkeypatch, status, attempts):
     requests = []
 

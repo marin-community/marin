@@ -990,10 +990,18 @@ class Terminus2(BaseAgent):
             try:
                 return await _server_token_count(url, payload)
             except httpx.HTTPStatusError as error:
-                if error.response.status_code != 404:
-                    raise ContextManagementInfrastructureError(
-                        "Could not count prompt tokens through /tokenize"
-                    ) from error
+                if error.response.status_code == 404:
+                    try:
+                        return await asyncio.to_thread(
+                            self._token_counter_fallback, chat, extra_messages
+                        )
+                    except Exception as fallback_error:
+                        raise ContextManagementInfrastructureError(
+                            f"Could not count prompt tokens through /tokenize; local fallback failed: {fallback_error}"
+                        ) from error
+                raise ContextManagementInfrastructureError(
+                    "Could not count prompt tokens through /tokenize"
+                ) from error
             except Exception as error:
                 raise ContextManagementInfrastructureError(
                     "Could not count prompt tokens through /tokenize"
