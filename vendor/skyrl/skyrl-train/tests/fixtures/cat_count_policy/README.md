@@ -52,3 +52,21 @@ Run it by hand on a local policy directory, with any teacher noise:
 PYTHONPATH=skyrl-train:skyrl-gym uv run --frozen --no-sync python -m tests.cpu.tiny_training.cat_count_opd \
   --model /tmp/cat-count-policy --root /tmp/cat-count-opd --steps 20 --jitter 0.5 --error-rate 0.1
 ```
+
+### Multiple teachers (MOPD)
+
+The same test file runs MOPD with a `cat` expert and a `dog` expert. Every count
+has one row per word, and each row's `teacher_route` is its word, so the two
+experts score different rows of every batch. The CatCount reward reads the
+row's word from `extra_info.word`. Each expert teaches its own word whatever
+the prompt asks, so a row routed to the wrong expert learns the wrong word.
+
+The policy already counts dogs from pretraining, so on CPU only the cat route
+has to learn. PR CI runs 30 steps and requires greedy train and held-out scores
+of at least 0.9 for both words, two teachers, and rows on both routes on every
+step. Nightly swaps the routes and requires both words to fall below 0.5.
+
+```bash
+PYTHONPATH=skyrl-train:skyrl-gym uv run --frozen --no-sync python -m tests.cpu.tiny_training.cat_count_opd \
+  --model /tmp/cat-count-policy --root /tmp/cat-count-mopd --steps 30 --jitter 0.5 --words cat dog [--swap-routes]
+```
