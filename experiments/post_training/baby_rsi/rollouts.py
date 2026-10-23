@@ -53,6 +53,7 @@ logger = logging.getLogger(__name__)
 
 SHELL_HARNESS = "shell"
 PREFILL_HARNESS = "prefill"
+UV_ARCHIVE_DIRECTORY = "archive-v0"
 MACHINE_BACKENDS = {CommandSemantics.LINUX_PROCESS: Backend.LOCAL, CommandSemantics.SHELL_SIMULATOR: Backend.SHELLSIM}
 """The solver machine of a task with a shell, from its command semantics: bubblewrap or ShellSim."""
 PROGRESS_EVERY = 50
@@ -75,12 +76,26 @@ def machine_factories(grader_slots: int) -> dict[str, MachineFactory]:
         if any(Path(sys.base_prefix).is_relative_to(path) for path in SYSTEM_DIRECTORIES)
         else (Path(sys.base_prefix),)
     )
-    mounts = (venv, venv.parent / "lib", *interpreter)
+    mounts = (venv, venv.parent / "lib", *interpreter, *linked_archives(venv))
     graders = LocalMachineFactory(read_only=mounts, bin_dirs=(venv / "bin",))
     return {
         Backend.LOCAL: BoundedFactory(graders, asyncio.Semaphore(grader_slots)),
         Backend.SHELLSIM: ShellSimMachineFactory(),
     }
+
+
+def linked_archives(environment: Path) -> tuple[Path, ...]:
+    """The uv ``archive-v0`` directories that the package files of ``environment`` link to, if uv linked them: the
+    links do not resolve in a sandbox that does not mount their targets."""
+    archives = []
+    for site_packages in environment.glob("lib/python*/site-packages"):
+        link = next((path for path in site_packages.rglob("*") if path.is_symlink()), None)
+        if link is None:
+            continue
+        archive = next((parent for parent in link.resolve().parents if parent.name == UV_ARCHIVE_DIRECTORY), None)
+        if archive is not None:
+            archives.append(archive)
+    return tuple(archives)
 
 
 @dataclass
