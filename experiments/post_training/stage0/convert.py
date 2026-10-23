@@ -22,13 +22,17 @@ import functools
 import hashlib
 import itertools
 import json
+import logging
 import multiprocessing
+import os
+import tempfile
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
 import fsspec
-from datasets import load_dataset
+import pyarrow.parquet as pq
+from huggingface_hub import HfApi, hf_hub_download
 from transformers import AutoTokenizer
 
 from experiments.post_training.chat_template import (
@@ -37,6 +41,8 @@ from experiments.post_training.chat_template import (
     shared_template,
     template_sha256,
 )
+
+logger = logging.getLogger(__name__)
 
 Message = dict[str, Any]
 MAX_RENDERED_TOKENS = 32768
@@ -49,6 +55,38 @@ THINK_STYLES: tuple[tuple[str, str], ...] = (
 
 class UnclosedThinkError(ValueError):
     """A message opens a think block that never closes."""
+
+
+# Nemotron-Terminal's parquet row groups hold >2 GB of nested data, which the datasets
+# streaming reader cannot convert; reading in small record batches can.
+_PARQUET_BATCH_ROWS = 64
+_PROGRESS_ROWS = 20_000
+
+
+def hub_parquet_rows(repo: str, config: str | None, *, revision: str, split: str, streaming: bool) -> Iterator[dict]:
+    """Rows of one dataset config at a pinned revision, file by file in sorted order.
+
+    ``config`` names the repo directory holding the config's parquet files (``data``
+    for the default config), as in all three Stage 0 sources' README configs. Only the
+    ``train`` split exists for them. Files download one at a time and are deleted after
+    reading. Matches ``datasets.load_dataset``'s call shape so tests can inject either.
+    """
+    if split != "train" or not streaming:
+        raise ValueError("the Stage 0 sources have one streamed train split")
+    prefix = f"{config or 'data'}/"
+    files = sorted(
+        path
+        for path in HfApi().list_repo_files(repo, repo_type="dataset", revision=revision)
+        if path.startswith(prefix) and path.endswith(".parquet")
+    )
+    if not files:
+        raise ValueError(f"{repo}@{revision} has no parquet files under {prefix}")
+    for path in files:
+        with tempfile.TemporaryDirectory() as directory:
+            local = hf_hub_download(repo, path, repo_type="dataset", revision=revision, local_dir=directory)
+            for batch in pq.ParquetFile(local).iter_batches(batch_size=_PARQUET_BATCH_ROWS):
+                yield from batch.to_pylist()
+            os.remove(local)
 
 
 @dataclass(frozen=True)
@@ -230,7 +268,7 @@ def convert_source(
     output_dir: str,
     *,
     max_rows: int | None = None,
-    load_dataset: Callable = load_dataset,
+    load_dataset: Callable = hub_parquet_rows,
     render_lengths: Callable[[list[Message]], dict[str, int]] = rendered_lengths,
     num_workers: int = 1,
 ) -> dict[str, Any]:
@@ -255,6 +293,8 @@ def convert_source(
     with fsspec.open(output_path, "wt", compression="gzip") as handle:
         for prepared in _prepared_rows(prepare, dataset, num_workers):
             rows_seen += 1
+            if rows_seen % _PROGRESS_ROWS == 0:
+                logger.info("%s: %d rows seen, %d kept", spec.name, rows_seen, rows_written)
             if prepared.unclosed_think:
                 unclosed_ids.append(prepared.identity)
                 continue
@@ -337,7 +377,7 @@ def build_manifest(
     output_dir: str,
     *,
     max_rows: int | None = None,
-    load_dataset: Callable = load_dataset,
+    load_dataset: Callable = hub_parquet_rows,
     render_lengths: Callable[[list[Message]], dict[str, int]] = rendered_lengths,
     num_workers: int = 1,
     check_tokens: bool = True,
