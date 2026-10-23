@@ -183,6 +183,47 @@ def no_override(tokens: int) -> RoutingOverride:
     )
 
 
+class UnitEdit(NamedTuple):
+    """Per-position unit edits for the document study (every field optional; None leaves that site untouched).
+
+    ``routed_keep [L, T, K, I]`` / ``shared_keep [L, T, I]`` multiply the ``Ablation`` keep of each token's routed
+    (per top-k slot, in selection order) and shared units, so a 0 replaces that unit's activation by its
+    ``Ablation`` mean at that position only. The taps are zeros added at each site, for gradients of a loss with
+    respect to the intermediate: ``routed_tap [L, T * K, I]`` in the dispatch's expert-sorted order (as
+    ``expert_act``), ``shared_tap [L, T, I]``, ``head_tap [L, B, S, H, D]`` (each head's contribution as ``head_out``),
+    ``v_tap [L, B, S, H, head_dim]`` (the KDA value, the MLA projected value), ``ve_tap`` (the MLA gated value
+    embedding) and ``embed_tap [B, S, D]``.
+    """
+
+    routed_keep: jax.Array | None = None
+    shared_keep: jax.Array | None = None
+    routed_tap: jax.Array | None = None
+    shared_tap: jax.Array | None = None
+    head_tap: jax.Array | None = None
+    v_tap: jax.Array | None = None
+    ve_tap: jax.Array | None = None
+    embed_tap: jax.Array | None = None
+
+
+def _plus(x: jax.Array, tap: jax.Array | None) -> jax.Array:
+    return x if tap is None else (x + tap).astype(x.dtype)
+
+
+def _local_conv(y: jax.Array, x: jax.Array, conv, local: bool) -> jax.Array:
+    """``y = conv(x)``; with ``local`` the same value with the gradient through the current-position tap only (the
+    lagged taps' cross-position paths are cut)."""
+    if not local:
+        return y
+    w0 = reshard(conv.weight, P(None, None))[0].astype(jnp.float32)
+    return (
+        jax.lax.stop_gradient(y).astype(jnp.float32) + w0 * (x - jax.lax.stop_gradient(x)).astype(jnp.float32)
+    ).astype(y.dtype)
+
+
+def _sg(x: jax.Array, local: bool) -> jax.Array:
+    return jax.lax.stop_gradient(x) if local else x
+
+
 def position_in_document(seg: jax.Array) -> jax.Array:
     """``[B, S]`` each token's offset from its document's first token."""
     idx = jnp.broadcast_to(jnp.arange(seg.shape[1]), seg.shape)
@@ -227,11 +268,24 @@ def _heads_through(conv, contrib: jax.Array, seg: jax.Array) -> jax.Array:
     return _bspec(rearrange(out, "(h b) s d -> b s h d", h=h))
 
 
-def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mult, head_mean, abl: Ablation, out: dict):
-    """KDA (as ``KimiDeltaAttention.__call__``) with per-head outputs; records q, k, v, log-decay g and beta."""
+def _kda_branch(
+    attn: KimiDeltaAttention,
+    x,
+    seg,
+    cfg: GrugModelConfig,
+    head_mult,
+    head_mean,
+    abl: Ablation,
+    out: dict,
+    v_tap: jax.Array | None = None,
+    local: bool = False,
+):
+    """KDA (as ``KimiDeltaAttention.__call__``) with per-head outputs; records q, k, v, log-decay g and beta. With
+    ``local`` the keys, values, decays and betas (the cross-position paths) carry no gradient."""
 
     def project(w, conv):
-        y = jax.nn.silu(conv(jnp.einsum("bsd,de->bse", x, w), seg))
+        pre = jnp.einsum("bsd,de->bse", x, w)
+        y = jax.nn.silu(_local_conv(conv(pre, seg), pre, conv, local))
         return rearrange(y, "... (n d) -> ... n d", d=HEAD_DIM)
 
     q = project(attn.w_q, attn.sconv_q)
@@ -247,7 +301,8 @@ def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mul
     early = (position_in_document(seg) < abl.kda_early_tokens)[..., None]  # [B, S, 1]
     beta = jnp.where(early & (abl.kda_early_mode == 1), 0.0, beta)
     mean_v = jnp.mean(v.astype(jnp.float32), axis=(0, 1), keepdims=True).astype(v.dtype)
-    v = jnp.where(early[..., None] & (abl.kda_early_mode == 2), mean_v, v)
+    v = _plus(jnp.where(early[..., None] & (abl.kda_early_mode == 2), mean_v, v), v_tap)
+    k_in, v_in, a_in, beta_in = _sg(k, local), _sg(v, local), _sg(a, local), _sg(beta, local)
     options = KdaKernelOptions(
         cfg.kda_chunk_size,
         False,
@@ -262,7 +317,7 @@ def _kda_branch(attn: KimiDeltaAttention, x, seg, cfg: GrugModelConfig, head_mul
     spec4, spec3, head_spec = P(_BATCH, None, "model", None), P(_BATCH, None, "model"), P("model", None)
     extras = {"gate_p": reshard(gate_p, head_spec), "gate_bias": reshard(gate_bias, head_spec), "segment_ids": seg}
     extra_specs = {"gate_p": head_spec, "gate_bias": head_spec, "segment_ids": P(_BATCH, None)}
-    args = (*(reshard(t, spec4) for t in (q, k, v, a)), reshard(beta, spec3), extras)
+    args = (*(reshard(t, spec4) for t in (q, k_in, v_in, a_in)), reshard(beta_in, spec3), extras)
     # As the model: the Pallas custom VJPs are not vma-annotated.
     kernel = jax.shard_map(
         functools.partial(_kda_kernel, options=options),
@@ -319,14 +374,32 @@ def _xsa(y: jax.Array, v: jax.Array) -> jax.Array:
     return (dot / (jnp.sum(v * v, axis=-1, keepdims=True) + 1e-6)) * v
 
 
-def _mla_branch(attn: CausalSelfAttention, x, seg, token_ids, mask, head_mult, head_mean, ve_mult, ve_mean, out: dict):
+def _mla_branch(
+    attn: CausalSelfAttention,
+    x,
+    seg,
+    token_ids,
+    mask,
+    head_mult,
+    head_mean,
+    ve_mult,
+    ve_mean,
+    out: dict,
+    v_tap: jax.Array | None = None,
+    ve_tap: jax.Array | None = None,
+    local: bool = False,
+):
     """MLA (as ``CausalSelfAttention.__call__``) with per-head outputs split into the projected-value and the
-    value-embedding parts (XSA, the output gate and ``w_o`` are linear in the attended value)."""
+    value-embedding parts (XSA, the output gate and ``w_o`` are linear in the attended value). With ``local`` the
+    attended keys and values carry no gradient (XSA's own-position value keeps it)."""
     q, k, v_proj, ve, rel_bias, ve_w = mla_qkv(attn, x, seg, token_ids, ve_mult, ve_mean)
+    v_proj = _plus(v_proj, v_tap)
+    ve = _plus(ve, ve_tap)
     v = v_proj + ve
     impl = attn.cfg.gpu_attention if jax.default_backend() == "gpu" else None
-    y_proj = _bspec(attention(q, k, v_proj, mask, implementation=impl, rel_bias=rel_bias)[..., :HEAD_DIM])
-    y_ve = _bspec(attention(q, k, ve, mask, implementation=impl, rel_bias=rel_bias)[..., :HEAD_DIM])
+    k_in = _sg(k, local)
+    y_proj = _bspec(attention(q, k_in, _sg(v_proj, local), mask, implementation=impl, rel_bias=rel_bias)[..., :HEAD_DIM])
+    y_ve = _bspec(attention(q, k_in, _sg(ve, local), mask, implementation=impl, rel_bias=rel_bias)[..., :HEAD_DIM])
     v = _bspec(v)
     y_proj = y_proj - _xsa(y_proj, v)
     y_ve = y_ve - _xsa(y_ve, v)
@@ -367,7 +440,9 @@ def _local_ragged_dot(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) ->
     )(lhs, rhs, group_sizes)
 
 
-def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, routing: RoutingOverride, out: dict):
+def _moe_branch(
+    block: Block, x, seg, layer: int, abl: Ablation, routing: RoutingOverride, out: dict, edit: UnitEdit | None = None
+):
     """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless)."""
     mlp = block.mlp
     shared = block.shared[0]
@@ -394,8 +469,14 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, routing: Routin
     em = mlp.expert_mlp
     # haliax's ragged_dot: the Triton grouped GEMM on GPU (XLA's ragged_dot_general lowers to a dense masked product).
     pre = _local_ragged_dot(routed_input[token_sorted], em.w_up, counts).astype(jnp.float32)
+    edit = UnitEdit() if edit is None else edit
     keep = abl.neuron_mult[layer][expert_sorted]
+    if edit.routed_keep is not None:
+        flat_keep = edit.routed_keep[layer].reshape(t * TOP_K, -1)
+        keep = keep * flat_keep[token_sorted * TOP_K + slot_sorted].astype(jnp.float32)
     act = keep * jnp.square(jax.nn.relu(pre)) + (1.0 - keep) * abl.neuron_mean[layer][expert_sorted]
+    if edit.routed_tap is not None:
+        act = act + edit.routed_tap[layer]
     y = _local_ragged_dot(act.astype(x.dtype), em.w_down, counts).astype(jnp.float32)  # [TK, R]
     per_slot = jnp.zeros((t, TOP_K, LATENT), jnp.float32).at[token_sorted, slot_sorted].set(y)
     routed_latent = jnp.einsum("tk,tko->to", used, per_slot) + routing.latent_delta[layer]
@@ -403,7 +484,11 @@ def _moe_branch(block: Block, x, seg, layer: int, abl: Ablation, routing: Routin
 
     shared_pre = jnp.einsum("td,di->ti", x_flat, shared.w_up, preferred_element_type=jnp.float32)
     s_keep = abl.shared_mult[layer][None, :]
+    if edit.shared_keep is not None:
+        s_keep = s_keep * edit.shared_keep[layer].astype(jnp.float32)
     shared_act = s_keep * jnp.square(jax.nn.relu(shared_pre)) + (1.0 - s_keep) * abl.shared_mean[layer][None, :]
+    if edit.shared_tap is not None:
+        shared_act = shared_act + edit.shared_tap[layer]
     shared_out = jnp.einsum("ti,id->td", shared_act.astype(x.dtype), shared.w_down, preferred_element_type=jnp.float32)
 
     routed = _mix(abl.sub_mult[layer, SUB_ROUTED], routed, abl.sub_mean[layer, SUB_ROUTED]).reshape(b, s, d)
@@ -454,16 +539,27 @@ def trace_forward(
     segment_ids: jax.Array,
     abl: Ablation,
     routing: RoutingOverride | None = None,
+    edit: UnitEdit | None = None,
+    local_grad: bool = False,
 ) -> dict:
     """The forward of ``model`` (compute dtype) on ``[B, S]`` tokens, returning every intermediate: ``layers[i]`` holds
     layer ``i``'s gate weights, attention internals, MoE internals and branch outputs, and the top level the final
     gate, the normed hidden state, the capped logits' loss, top-1 and the label. ``routing`` edits the MoE routing
-    (``no_override`` when None)."""
+    (``no_override`` when None), ``edit`` the units per position and taps the sites (``UnitEdit``). With
+    ``local_grad`` the values are unchanged but gradients flow only along each position's own residual stream: the
+    attention keys/values/decays and the lagged SConv taps are cut, so the gradient of a sum of per-position losses
+    with respect to a position's intermediates is that position's own loss's gradient (less the attention-to-self
+    path)."""
     cfg = model.config
     eps = cfg.layer_norm_eps
     b, s = tokens.shape
     if routing is None:
         routing = no_override(b * s)
+    edit = UnitEdit() if edit is None else edit
+
+    def at(tap, i):
+        return None if tap is None else tap[i]
+
     model = replicate(model)
     seg = reshard(segment_ids, P(_BATCH, None))
     long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=(seg, seg))
@@ -473,6 +569,7 @@ def trace_forward(
     embed = _gated_rms_norm(
         model.embed_norm, None, _embedding_gather(model.token_embed, tokens), cfg.gated_norm_implementation
     )
+    embed = _plus(embed, edit.embed_tap)
     blocks = [embed]
     layers_out = []
     for i, layer in enumerate(model.layers()):
@@ -480,7 +577,18 @@ def trace_forward(
         w_attn, h = _gate(blocks, layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum)
         attn_in = layer._attn_input(h)
         if i in KDA_LAYERS:
-            _, contrib = _kda_branch(layer.attn, attn_in, seg, cfg, abl.head_mult[i], abl.head_mean[i], abl, out)
+            _, contrib = _kda_branch(
+                layer.attn,
+                attn_in,
+                seg,
+                cfg,
+                abl.head_mult[i],
+                abl.head_mean[i],
+                abl,
+                out,
+                v_tap=at(edit.v_tap, i),
+                local=local_grad,
+            )
             ve_contrib = jnp.zeros_like(contrib)
         else:
             contrib, ve_contrib = _mla_branch(
@@ -494,18 +602,23 @@ def trace_forward(
                 abl.sub_mult[i, SUB_VE] * abl.ve_head_mult[i],
                 abl.ve_mean[i],
                 out,
+                v_tap=at(edit.v_tap, i),
+                ve_tap=at(edit.ve_tap, i),
+                local=local_grad,
             )
             # The branch-output SConv (MLA only) is linear and channelwise: per-head parts go through it alone.
-            contrib = _heads_through(layer.sconv_attn, contrib, seg)
+            contrib = _local_conv(_heads_through(layer.sconv_attn, contrib, seg), contrib, layer.sconv_attn, local_grad)
             ve_contrib = _heads_through(layer.sconv_attn, ve_contrib, seg)
+        contrib = _plus(contrib, at(edit.head_tap, i))
         attn_out = jnp.sum(contrib.astype(jnp.float32), axis=2)
         attn_out = _mix(abl.sub_mult[i, SUB_ATTN], attn_out, abl.sub_mean[i, SUB_ATTN]).astype(embed.dtype)
         w_mlp, h2 = _gate([*blocks, attn_out], layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum)
         mlp_in = layer._mlp_input(h2)
-        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out)
+        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out, edit)
         routed_sc = layer.sconv_mlp(routed, seg)
         shared_sc = layer.sconv_mlp(shared_out, seg)
-        mlp_out = layer.sconv_mlp(routed + shared_out, seg)
+        mlp_sum = routed + shared_out
+        mlp_out = _local_conv(layer.sconv_mlp(mlp_sum, seg), mlp_sum, layer.sconv_mlp, local_grad)
         block_out = attn_out + mlp_out
         out.update(
             w_attn=w_attn,
