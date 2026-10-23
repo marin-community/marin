@@ -24,7 +24,7 @@ src/taskforge/
   sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
-  stage10_proposal/            model.py: the TaskProposal document and its generation schema;
+  stage10_proposal/            model.py: the TaskProposal JSON document and generation schema;
                                source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
                                protocol, `proposal_batch`, `propose_all`
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
