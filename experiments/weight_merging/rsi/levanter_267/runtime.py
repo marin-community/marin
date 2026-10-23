@@ -39,6 +39,13 @@ class ProbeEngine(MultiHostInferenceEngine):
     def generate(self, requests, step_callback=None):
         result = super().generate(requests, step_callback=step_callback)
         self.last_generated_tokens = result.tokens
+        counts = getattr(self, "batch_counts", {})
+        key = str(len(requests))
+        counts[key] = counts.get(key, 0) + 1
+        self.batch_counts = counts
+        print(
+            "PRODUCTION_BATCH", json.dumps(dict(size=len(requests), total_generated=result.total_generated)), flush=True
+        )
         return result
 
 
@@ -192,7 +199,7 @@ def _probe_long_decode(engine, tokenizer, tokens, next_token_logprobs, output, c
         raise RuntimeError("Long-prompt decode failed continuation count, EOS, or cached-first-token consistency")
 
 
-def _server_config(trainer, model_path, max_seq_len):
+def _server_config(trainer, model_path, max_seq_len, max_seqs):
     info = get_job_info()
     page_size = 128
     pages = (max_seq_len + page_size - 1) // page_size
@@ -209,12 +216,12 @@ def _server_config(trainer, model_path, max_seq_len):
         service=InferenceEngineConfig(
             max_seq_len=max_seq_len,
             page_size=page_size,
-            max_pages=pages + 2,
+            max_pages=(pages + 2) * max_seqs,
             max_stop_seqs=8,
-            max_seqs=1,
-            max_seqs_in_prefill=1,
+            max_seqs=max_seqs,
+            max_seqs_in_prefill=max_seqs,
             max_prefill_size=256,
-            max_queued_tokens=max_seq_len,
+            max_queued_tokens=max_seq_len * max_seqs,
             max_tokens_per_round=16,
             max_rounds=8,
         ),
@@ -233,12 +240,15 @@ def _serve_and_probe(engine, config, model_path, output, item, mode, source_comm
         model_path=model_path,
         model_revision=model_path.rstrip("/").rsplit("@", 1)[-1],
         inference_source_sha256=inference_source_digest(),
+        max_seq_len=config.service.max_seq_len,
+        max_seqs=config.service.max_seqs,
+        max_pages=config.service.max_pages,
     )
     _save(output, "run-provenance.json", provenance)
 
     @app.get(RUN_PROVENANCE_PATH)
     async def run_provenance():
-        return provenance
+        return dict(provenance, batch_counts=dict(getattr(engine, "batch_counts", {})))
 
     server = InferenceServer(config, context, app)
     context.start()
@@ -298,7 +308,7 @@ def _serve_and_probe(engine, config, model_path, output, item, mode, source_comm
         engine.shutdown_workers()
 
 
-def run(mode, model_path, output, item, max_seq_len, source_commit):
+def run(mode, model_path, output, item, max_seq_len, source_commit, max_seqs=1):
     logging.basicConfig(level=logging.INFO)
     initialize_jax()
     if jax.process_count() != 4 or jax.device_count() != 16:
@@ -333,7 +343,7 @@ def run(mode, model_path, output, item, max_seq_len, source_commit):
             flush=True,
         )
         _record_memory(output, "model-loaded")
-        config = _server_config(trainer, model_path, max_seq_len)
+        config = _server_config(trainer, model_path, max_seq_len, max_seqs)
         instrument_prefill(output)
         engine = ProbeEngine.from_model_with_config(model, tokenizer, config.service, axis_resources={})
         if jax.process_index() != 0:

@@ -376,7 +376,7 @@ def _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_sample_indices):
     Boundary when absolute pos_id equals the post-allocation seq_len - 1 for that sequence.
     """
     seq_lens_per_seq = seq_lens["seq", slot_ids]
-    boundary_mask = pos_ids == (seq_lens_per_seq - 1)
+    boundary_mask = (slot_ids != INVALID) & (pos_ids >= 0) & (pos_ids == (seq_lens_per_seq - 1))
     # jax.debug.print("pos_ids={pos} seq_lens={lens} boundary={b}", pos=pos_ids.array, lens=seq_lens_per_seq.array, b=boundary_mask.array)
     sample_indices = hax.where(
         boundary_mask,
@@ -392,6 +392,7 @@ def _prefill_kernel(
     sampler: Sampler,
     queue: TokenQueue,
     max_seqs_in_prefill: int,  # static
+    sample_seq_lens: NamedArray | None = None,
 ) -> tuple[GenState, _DecodeOutputs]:
     """Run prefill using a fresh, local token queue. Newly sampled tokens are enqueued to the main decode queue via update_tokens."""
 
@@ -403,7 +404,11 @@ def _prefill_kernel(
 
     seq_lens = decode_state.seq_lens
 
-    sample_indices = _compute_sample_indices(pos_ids, slot_ids, seq_lens, max_seqs_in_prefill)
+    # Chunked admission samples a sequence only at its original prompt end,
+    # even when this packed chunk contains a shorter, computed prefix.
+    sample_indices = _compute_sample_indices(
+        pos_ids, slot_ids, seq_lens if sample_seq_lens is None else sample_seq_lens, max_seqs_in_prefill
+    )
 
     # jax.debug.print(
     #     "[_run_prefill] tokens={tokens} slots={slots} pos={pos} seq_lens={lens}",

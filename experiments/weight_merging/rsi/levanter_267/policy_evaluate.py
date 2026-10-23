@@ -23,14 +23,14 @@ POLICIES = ("math500", "gsm8k-0shot", "boolq", "piqa", "humanevalplus", "aime24"
 CAMPAIGN = Path("experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs")
 
 
-def policy_plan(key, policy_dir, endpoint, output, concurrency):
+def policy_plan(key, policy_dir, endpoint, output, concurrency, max_length=32704):
     path = policy_dir / f"{key}.yaml"
     source = load_evalchemy_config(path)
     config = replace(
         evalchemy_run_config(key, source),
         apply_chat_template=True,
         num_concurrent=concurrency,
-        max_length=32704,
+        max_length=max_length,
     )
     if any(not task.generation for task in config.tasks) and (
         config.max_gen_toks is not None or config.extra_gen_kwargs
@@ -44,10 +44,10 @@ def policy_plan(key, policy_dir, endpoint, output, concurrency):
         yaml=path.read_text(),
         reference_server_context=73728,
         reference_effective_context=73664,
-        evaluated_context_cap=32704,
+        evaluated_context_cap=max_length,
         reference_concurrency=16,
         evaluated_concurrency=concurrency,
-        serving_max_seqs=1,
+        serving_max_seqs="recorded from live process provenance",
         tokenizer_revision=None,
         numerical_validation="Step12 architecture/code gate; no independent v0.1 item303 oracle exists",
     )
@@ -99,9 +99,10 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--name")
     parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--max-length", type=int, default=32704)
     parser.add_argument("--runtime-minutes", type=int, default=200)
     args = parser.parse_args()
-    if not 2 <= args.runtime_minutes <= 240 or args.concurrency < 1:
+    if not 2 <= args.runtime_minutes <= 240 or args.concurrency < 1 or args.max_length < 1:
         parser.error("Require a 2-240-minute bound and positive concurrency")
     if not args.output.startswith("gs://marin-us-central2/"):
         parser.error("Place archives alongside the central2 serving slice")
@@ -111,7 +112,7 @@ def main():
             validate_gate(gate, args.endpoint)
         except ValueError as error:
             parser.error(str(error))
-    plan = policy_plan(args.policy, args.policy_dir, args.endpoint, args.output, args.concurrency)
+    plan = policy_plan(args.policy, args.policy_dir, args.endpoint, args.output, args.concurrency, args.max_length)
     source = args.client_file.read_text()
     plan.update(client_sha256=hashlib.sha256(source.encode()).hexdigest(), runtime_minutes=args.runtime_minutes)
     print(json.dumps(plan, indent=2), flush=True)

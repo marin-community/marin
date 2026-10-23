@@ -40,6 +40,88 @@ def test_stacked_cache_copy_and_reset_preserve_layer_and_head_order():
     np.testing.assert_array_equal(reset.dropped_assignments, [0, 0])
 
 
+@pytest.mark.parametrize("batch_size", [4, 8])
+@pytest.mark.timeout(240)
+def test_batched_chunked_prefill_preserves_sequences_and_page_budget_across_reuse(batch_size):
+    if jax.device_count() != 1:
+        pytest.skip("single-device reference test")
+    cfg = SnowballConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=8,
+        shared_expert_intermediate_dim=8,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        sliding_window=32,
+        max_seq_len=2060,
+        attention_implementation="reference",
+        moe_implementation="ring",
+    )
+    mesh = compact_grug_mesh(replica_axis_size=1)
+    with jax.set_mesh(mesh), hax.axis_mapping({}):
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), cfg, key=jax.random.key(913))
+        config = InferenceEngineConfig(
+            max_seq_len=2060,
+            page_size=16,
+            max_pages=batch_size * 130,
+            max_seqs=batch_size,
+            max_seqs_in_prefill=batch_size,
+            max_prefill_size=512,
+            max_queued_tokens=batch_size * 2060,
+            max_tokens_per_round=batch_size,
+            max_rounds=2,
+            max_stop_seqs=1,
+            max_stop_tokens=1,
+        )
+        engine = MultiHostInferenceEngine.from_model_with_config(model, None, config, axis_resources={})
+        lengths = [3, 17, 2047, 2050, 8, 259, 2049, 33][:batch_size]
+        prompts = [(1 + (np.arange(n) + idx * 3) % 31).tolist() for idx, n in enumerate(lengths)]
+        expected = []
+        for prompt in prompts:
+            first = int(jnp.argmax(model(hax.named(jnp.array(prompt, jnp.int32), "position")).array[-1]))
+            second = int(jnp.argmax(model(hax.named(jnp.array([*prompt, first], jnp.int32), "position")).array[-1]))
+            expected.append([first, second])
+
+        def request(idx, stop_first=False):
+            stop = expected[idx][0] if stop_first else -1
+            return Request(
+                request_id=idx,
+                prompt_tokens=prompts[idx],
+                n_generations=1,
+                decode_params=SeqDecodingParams(
+                    max_num_tokens=np.array(len(prompts[idx]) + 2, np.int32),
+                    temperature=np.array(0, np.float32),
+                    top_p=np.array(1, np.float32),
+                    key=np.array([0, 19311 + idx], np.uint32),
+                    stop_tokens=hax.NamedArray(np.array([[stop]], np.int32), ("stop_seq", "position")),
+                ),
+            )
+
+        result = engine.generate([request(idx, stop_first=idx == 0) for idx in range(batch_size)])
+        assert result.tokens == [expected[0][:1], *expected[1:]]
+        np.testing.assert_array_equal(engine.gen_state.cache.dropped_assignments, [0, 0])
+        # This engine retains finished pages until the next generation reset.
+        # Only the first continuation is cached; the second is the final sample.
+        expected_pages = sum((length + (idx != 0) + 15) // 16 for idx, length in enumerate(lengths))
+        assert (
+            np.count_nonzero(np.asarray(engine.gen_state.decode_state.page_table.page_ref_counts.array))
+            == expected_pages
+        )
+        # Fewer requests than available slots exercises invalid padding after a
+        # prior full batch, with a different input order on the same engine.
+        repeated = engine.generate([request(batch_size - 1), request(1)])
+        assert repeated.tokens == [expected[-1], expected[1]]
+        repeated_pages = sum((lengths[idx] + 1 + 15) // 16 for idx in (batch_size - 1, 1))
+        assert (
+            np.count_nonzero(np.asarray(engine.gen_state.decode_state.page_table.page_ref_counts.array))
+            == repeated_pages
+        )
+
+
 @pytest.mark.timeout(180)
 def test_packed_chunked_snowball_decode_matches_full_forward():
     cfg = SnowballConfig(

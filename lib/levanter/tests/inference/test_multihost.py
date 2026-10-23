@@ -39,8 +39,8 @@ def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutd
                     num_heads=2, num_kv_heads=1, num_experts_per_token=2, head_dim=8,
                     max_seq_len=16, attention_implementation="reference")
                 model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), cfg, key=jax.random.key(17))
-                config = InferenceEngineConfig(max_seq_len=24, page_size=4, max_pages=12,
-                    max_seqs=2, max_seqs_in_prefill=1, max_prefill_size=2,
+                config = InferenceEngineConfig(max_seq_len=24, page_size=4, max_pages=11,
+                    max_seqs=2, max_seqs_in_prefill=2, max_prefill_size=2,
                     max_queued_tokens=16, max_rounds=1)
                 class FailingEngine(MultiHostInferenceEngine):
                     def _dispatch(self, command):
@@ -57,7 +57,7 @@ def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutd
                                     lambda: engine.score_token_logprobs([0] * 25, 1),
                                     lambda: engine.generate([Request([0] * 17, 0, params, 1)]),
                                     lambda: engine.generate([Request([0], 0, params, 2)]),
-                                    lambda: engine.generate([Request([0], 0, params, 1), Request([1], 1, params, 1)])):
+                                    lambda: engine.generate([Request([0], 0, params, 1), Request([1], 1, params, 1), Request([2], 2, params, 1)])):
                         try:
                             invalid()
                         except ValueError:
@@ -73,6 +73,19 @@ def test_malformed_requests_do_not_strand_workers_before_valid_scoring_and_shutd
                         key=np.array([0, 19311], np.uint32)), 1)
                     result = engine.generate([request])
                     assert result.total_generated > 0
+                    second = Request([2, 3], 1, request.decode_params, 1)
+                    second_result = engine.generate([second])
+                    try:
+                        engine.generate([request, second])
+                    except ValueError as exc:
+                        assert "physical page capacity" in str(exc)
+                    else:
+                        raise AssertionError("Undersized physical cache accepted")
+                    # One-sequence calls remain usable after deterministic rejection.
+                    assert engine.generate([request]).tokens == result.tokens
+                    engine.config = __import__("dataclasses").replace(engine.config, max_seq_len=20)
+                    batched = engine.generate([request, second])
+                    assert batched.tokens == [result.tokens[0], second_result.tokens[0]]
                     engine.shutdown_workers()
                 else:
                     engine.worker_loop()

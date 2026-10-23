@@ -34,7 +34,7 @@ def _resolve(resolver, name):
         return ResolveResult(name=name)
 
 
-def run_host(mode, model, output, item, max_seq_len, source_commit):
+def run_host(mode, model, output, item, max_seq_len, source_commit, max_seqs):
     info = get_job_info()
     ctx = iris_ctx()
     slice_id, variant, _, worker_id, _ = _probe_tpu_metadata()
@@ -58,7 +58,7 @@ def run_host(mode, model, output, item, max_seq_len, source_commit):
         if {m["slice"] for m in metadata} != {slice_id} or len({m["worker"] for m in metadata}) != 4:
             raise RuntimeError(f"Gang is not one slice with four distinct hosts: {metadata}")
         print("SINGLE_SLICE_VERIFIED", json.dumps(metadata), flush=True)
-        run(mode, model, output, item, max_seq_len, source_commit)
+        run(mode, model, output, item, max_seq_len, source_commit, max_seqs)
     finally:
         ctx.registry.unregister(registration)
 
@@ -75,6 +75,7 @@ def main():
     parser.add_argument("--item", type=Path)
     parser.add_argument("--oracle", type=Path, help="Pinned item303 oracle artifact for hash/token validation")
     parser.add_argument("--max-seq-len", type=int, default=6144)
+    parser.add_argument("--max-seqs", type=int, choices=(1, 4, 8), default=1)
     parser.add_argument("--runtime-minutes", type=int, default=90)
     parser.add_argument("--name", default="levanter267-v4-32-tiny")
     args = parser.parse_args()
@@ -118,6 +119,8 @@ def main():
                 expert=16,
                 model_parallel=1,
                 max_seq_len=args.max_seq_len,
+                max_seqs=args.max_seqs,
+                max_pages=((args.max_seq_len + 127) // 128 + 2) * args.max_seqs,
                 runtime_minutes=args.runtime_minutes,
                 model=args.model,
                 output=args.output,
@@ -134,7 +137,7 @@ def main():
             job = client.submit(
                 name=args.name,
                 entrypoint=Entrypoint.from_callable(
-                    run_host, args.mode, args.model, args.output, item, args.max_seq_len, source_commit
+                    run_host, args.mode, args.model, args.output, item, args.max_seq_len, source_commit, args.max_seqs
                 ),
                 resources=convert_resources(resource),
                 constraints=convert_constraints(resource),

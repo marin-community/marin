@@ -118,8 +118,18 @@ class MultiHostInferenceEngine(InferenceEngine):
             raise RuntimeError("Only process zero may submit inference batches")
         if not requests:
             raise ValueError("Generation batch must not be empty")
-        if isinstance(self.gen_state.cache, SnowballCache) and (len(requests) != 1 or requests[0].n_generations != 1):
-            raise ValueError("Snowball cached generation supports one sequence per batch without clones")
+        if isinstance(self.gen_state.cache, SnowballCache) and (
+            len(requests) > min(self.config.max_seqs, self.config.max_seqs_in_prefill)
+            or any(r.n_generations != 1 for r in requests)
+            or sum(len(r.prompt_tokens) for r in requests) > self.config.max_queued_tokens
+        ):
+            raise ValueError("Snowball batch exceeds sequence/admission capacity or requests unsupported clones")
+        if isinstance(self.gen_state.cache, SnowballCache):
+            # Reserve worst-case sequence growth before broadcasting. This also
+            # rejects auto-sized caches that cannot support this batch safely.
+            pages_per_seq = (self.config.max_seq_len + self.config.page_size - 1) // self.config.page_size
+            if len(requests) * pages_per_seq > self.gen_state.decode_state.page_table.num_pages:
+                raise ValueError("Snowball batch exceeds physical page capacity at configured context")
         if len({r.request_id for r in requests}) != len(requests):
             raise ValueError("Request IDs must be unique within a batch")
         for request in requests:

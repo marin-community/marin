@@ -18,12 +18,14 @@ from fray.types import ResourceConfig
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient, iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec
+from marin.evaluation.evalchemy.client import completed_result
 from marin.evaluation.evalchemy.runner import EvalchemyRunConfig, _run_config_json
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.inference.types import OpenAIEndpoint, RunningModel
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import Duration
 
+from experiments.weight_merging.rsi.levanter_267 import checkpoint_entrypoint
 from experiments.weight_merging.rsi.levanter_267.protocol import RUN_PROVENANCE_PATH
 
 STEP12_REPO = "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
@@ -47,8 +49,9 @@ def run_eval(
     with urllib.request.urlopen(config["base_url"] + "/models", timeout=30) as response:
         cards = json.load(response)["data"]
     context = next(int(card["max_model_len"]) for card in cards if card["id"] == config["model_id"])
-    if context < 32768:
-        raise ValueError(f"Matched MATH500 requires server context>=32768; got {context}")
+    required_context = int(config["max_length"]) + 64
+    if context < required_context:
+        raise ValueError(f"Explicit evaluator cap requires server context>={required_context}; got {context}")
     with urllib.request.urlopen(config["base_url"].removesuffix("/v1") + RUN_PROVENANCE_PATH, timeout=30) as response:
         provenance = json.load(response)
     keys = ("run_id", "source_commit", "serve_job", "model_path")
@@ -62,6 +65,8 @@ def run_eval(
     if gate.get("model_revision") != model_revision or not model_revision.startswith(provenance["model_revision"]):
         raise ValueError("Gate report does not identify the pinned model")
     client_sha = hashlib.sha256(source.encode()).hexdigest()
+    effective_source = checkpoint_entrypoint.checkpoint_client_source(source)
+    checkpoint_source = Path(checkpoint_entrypoint.__file__).read_text()
     chat_route = config["apply_chat_template"] and all(
         task["generation"] and not task["completion_only"] for task in config["tasks"]
     )
@@ -81,8 +86,16 @@ def run_eval(
         numerical_gate=gate,
         evalchemy_commit=commit,
         client_sha256=client_sha,
+        effective_client_sha256=hashlib.sha256(effective_source.encode()).hexdigest(),
+        checkpoint_patch=dict(
+            sha256=hashlib.sha256(checkpoint_source.encode()).hexdigest(),
+            upstream_task_sha256=checkpoint_entrypoint.PINNED_SOURCES[commit],
+            chunk_size=8,
+            note="Checkpoint chunks8 plus selected-prefix MATH500 bookkeeping; grader remains unchanged.",
+        ),
         config={**config, "base_url": "<resolved inside Iris; omitted>"},
         server_context=context,
+        server_settings={key: provenance.get(key) for key in ("max_seq_len", "max_seqs", "max_pages")},
         client_tokenizer_revision=None,
         client_tokenizer_backend=tokenizer_backend,
         tokenizer_note="Historical client uses an unrevisioned repository string; backend is recorded per route.",
@@ -92,7 +105,9 @@ def run_eval(
         started_epoch=time.time(),
     )
     root = StoragePath(output)
-    (root / "client.py").write_text(source)
+    (root / "historical-client.py").write_text(source)
+    (root / "client.py").write_text(effective_source)
+    (root / "checkpoint_entrypoint.py").write_text(checkpoint_source)
     (root / "settings.json").write_text(json.dumps(metadata, indent=2))
     env = dict(os.environ)
     for key in ("PYTHONPATH", "UV_PROJECT_ENVIRONMENT"):
@@ -107,15 +122,19 @@ def run_eval(
     )
     with tempfile.TemporaryDirectory() as directory:
         client_path = Path(directory) / "evalchemy_client.py"
-        client_path.write_text(source)
+        client_path.write_text(effective_source)
+        entrypoint = Path(directory) / "checkpoint_entrypoint.py"
+        entrypoint.write_text(checkpoint_source)
+        env.update(LEVANTER267_EVAL_ENTRYPOINT=str(entrypoint), LEVANTER267_EVALCHEMY_COMMIT=commit)
         result = subprocess.run(
             [*command, "python", str(client_path)], env=env, timeout=runtime_minutes * 60 - 60, check=False
         )
-    metadata.update(elapsed_seconds=time.time() - metadata["started_epoch"], returncode=result.returncode)
+    scored = {task["name"]: completed_result(output, task["dir"]) for task in config["tasks"]}
+    metadata.update(elapsed_seconds=time.time() - metadata["started_epoch"], returncode=result.returncode, scored=scored)
     (root / "client-summary.json").write_text(json.dumps(metadata, indent=2))
     print(json.dumps(metadata), flush=True)
-    if result.returncode:
-        raise RuntimeError(f"Pinned Evalchemy client exited {result.returncode}; inspect {output}")
+    if result.returncode or not all(scored.values()):
+        raise RuntimeError(f"Pinned evaluator exited {result.returncode}, scored={scored}; inspect {output}")
 
 
 def main():
@@ -127,7 +146,11 @@ def main():
     parser.add_argument("--client-file", type=Path, required=True, help="Exact historical Marin client source to bundle")
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--limit", type=int, help="Diagnostic subset only; use a separate archive")
+    parser.add_argument("--limit", type=int, help="First N examples by dataset order; use a separate archive")
+    parser.add_argument("--selection-file", type=Path, help="Frozen source IDs/seed shared before scoring")
+    parser.add_argument(
+        "--max-length", type=int, default=32704, help="Explicit effective context cap; server needs 64 more"
+    )
     parser.add_argument("--name", default="levanter267-step12-math500")
     parser.add_argument("--runtime-minutes", type=int, default=240)
     args = parser.parse_args()
@@ -137,6 +160,15 @@ def main():
         parser.error("Place evaluator archives in us-central2 with the serving job")
     if args.limit is not None and args.limit < 1:
         parser.error("Diagnostic limit must be positive")
+    if args.max_length < 1:
+        parser.error("Effective context cap must be positive")
+    selection = json.loads(args.selection_file.read_text()) if args.selection_file else None
+    if args.submit and args.limit is not None and selection is None:
+        parser.error("Subset submission requires the frozen source IDs and seed")
+    if selection is not None and (
+        selection.get("ids") != list(range(args.limit or 500)) or selection.get("seed") != 19311
+    ):
+        parser.error("Selection must match the declared dataset prefix and seed19311")
     gate = json.loads(args.gate_report.read_text()) if args.gate_report else None
     if args.submit and (
         not gate
@@ -169,10 +201,12 @@ def main():
         num_concurrent=8,
         max_eval_instances=args.limit,
         # The H100/vLLM reference client saw server32768 minus its64-token margin.
-        max_length=32704,
+        max_length=args.max_length,
     )
     model = RunningModel(OpenAIEndpoint("http://resolved-inside-iris/v1", "snowball-levanter"), tokenizer=STEP12_REPO)
     payload = json.loads(_run_config_json(model, config, args.output))
+    if selection is not None:
+        payload["selection_provenance"] = selection
     plan = dict(
         numerical_gate=gate,
         endpoint=args.endpoint,
