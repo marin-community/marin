@@ -80,11 +80,9 @@ def _invoke(q_arg, kv_arg, lens_arg, indices_arg, cu_arg, num_arg, *, window, co
     return call(q_arg.array, window)[None]
 
 
-_compiled_invoke = jax.jit(_invoke, static_argnames=("window", "conditional"))
-
-
 def run(family, output, q_tile, source_commit):
     initialize_jax()
+    compiled_invoke = jax.jit(_invoke, static_argnames=("window", "conditional"))
     slice_id, variant, _, worker_id, _ = _probe_tpu_metadata()
     if variant != "v4-32" or jax.process_count() != 4 or jax.device_count() != 16:
         raise ValueError("Expected one four-host v4-32")
@@ -175,7 +173,7 @@ def run(family, output, q_tile, source_commit):
                         print("KERNEL_CASE_START", name, json.dumps(report), flush=True)
 
                     start = time.monotonic()
-                    lowered = _compiled_invoke.lower(
+                    lowered = compiled_invoke.lower(
                         q, kv, lens, indices, cu_q, num, window=window, conditional=conditional
                     )
                     lowered_text = lowered.compiler_ir("hlo").as_hlo_text()
@@ -194,7 +192,7 @@ def run(family, output, q_tile, source_commit):
                         and report["optimized_has_conditional"]
                         and report["optimized_has_while"]
                     )
-                    result = _compiled_invoke(q, kv, lens, indices, cu_q, num, window=window, conditional=conditional)
+                    result = compiled_invoke(q, kv, lens, indices, cu_q, num, window=window, conditional=conditional)
                     jax.block_until_ready(result)
                     valid = np.asarray(result[:, : int(cu[-1])])
                     if not np.isfinite(valid).all():
