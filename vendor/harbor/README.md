@@ -44,5 +44,7 @@ from their recorded Marin checkout.
 Pi installs Python 3 and uses a Linux child subreaper to enforce its agent
 deadline and reap tools that start detached process groups or outlive their
 parents. Background tools are also reaped after ordinary Pi completion. Daytona
-cancellation signals that supervisor through a separate control session. Unconfirmed cleanup raises
+cancellation signals that supervisor through a separate control session, inside
+the main container for Compose tasks. Cleanup uses `/proc/<pid>/stat` and does
+not require the optional procfs `children` entry. Unconfirmed cleanup raises
 `PhaseCancellationError` and prevents verification against a live agent.

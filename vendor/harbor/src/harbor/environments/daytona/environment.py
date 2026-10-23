@@ -472,6 +472,9 @@ class _DaytonaStrategy:
         env._exec_session_id = None
 
     @abstractmethod
+    def cancellation_command(self, command: str) -> str: ...
+
+    @abstractmethod
     async def start(self, force_build: bool) -> None: ...
 
     @abstractmethod
@@ -513,6 +516,9 @@ class _DaytonaStrategy:
 
 class _DaytonaDirect(_DaytonaStrategy):
     """Direct sandbox strategy — the original single-container behavior."""
+
+    def cancellation_command(self, command: str) -> str:
+        return f"bash -c {shlex.quote(command)}"
 
     async def start(self, force_build: bool) -> None:
         env = self._env
@@ -623,6 +629,13 @@ class _DaytonaDinD(_DaytonaStrategy):
         self._resolved_task_env: dict[str, str] = {}
         if self._env.task_env_config.env:
             self._resolved_task_env = resolve_env_vars(self._env.task_env_config.env)
+
+    def cancellation_command(self, command: str) -> str:
+        compose = self._compose_cmd(["exec", "-T", "main", "bash", "-c", command])
+        assignments = shlex.join(
+            [f"{key}={value}" for key, value in self._compose_env_vars().items()]
+        )
+        return f"env {assignments} {compose}"
 
     async def _vm_exec(
         self,
@@ -2017,7 +2030,7 @@ class DaytonaEnvironment(BaseEnvironment):
             await self._sandbox.process.create_session(reap_session)
             request = SessionExecuteRequest(
                 command=(
-                    f"bash -c {shlex.quote(self.exec_cancel_command)}"
+                    self._strategy.cancellation_command(self.exec_cancel_command)
                     if self.exec_cancel_command is not None
                     else "pkill -9 -f opencode || true"
                 ),
