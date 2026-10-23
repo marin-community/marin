@@ -4,18 +4,22 @@
 import logging
 import subprocess
 import threading
+from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
-from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec
+from rolloutengine.cleanup import _Cleanup
+from rolloutengine.machines import _machine_spec, _prepare_machine
+from rolloutengine.models import MachineRuntimeSpec, TaskRolloutSpec
 from shellbox.backends.docker.machine import DockerMachineFactory
 from shellbox.backends.iris.machine import IrisMachineFactory
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import (
     Backend,
+    Command,
     ExecutionRequirements,
     MachineSpec,
     NetworkPolicy,
@@ -48,14 +52,12 @@ from taskforge.sandbox.factories import (
     task_refusals,
     warm_local_python,
 )
+from taskforge.spec import draft
 
 IMAGE = "registry.example/task@sha256:" + "0" * 64
 SHELL = ("shell", "filesystem")
-HARNESS = "shellbox"
-"""The harness every Taskforge spec selects; ``task_refusals`` reads only its machines."""
-LIMITS = RolloutLimits(
+LIMITS = draft.rollout_limits(
     max_turns=1,
-    max_total_tokens=None,
     model_turn_timeout=None,
     tool_turn_timeout=2,
     total_turn_timeout=None,
@@ -141,7 +143,7 @@ def lowered(
     )
     return TaskRolloutSpec(
         task=task,
-        harness=HARNESS,
+        harness=draft.TOOL_HARNESS,
         task_machine=task_machine,
         verifier_machine=verifier_machine,
         limits=LIMITS,
@@ -297,3 +299,35 @@ def test_without_a_local_factory_there_is_nothing_to_warm(monkeypatch):
 
     assert warm_local_python({Backend.SHELLSIM.value: SHELLSIM}) is None
     assert warm_local_python(IRIS) is None
+
+
+@pytest.mark.manual
+async def test_a_taskforge_shellsim_machine_runs_the_catalogs_cpython():
+    """Fetches ``SHELLSIM_CATALOG``'s CPython, which the unit suite leaves to ShellSim's own tests."""
+    factory = machine_factories((Backend.SHELLSIM,), controller_url=None)[Backend.SHELLSIM.value]
+    spec = _machine_spec(draft.requirements(image=None), selection(Backend.SHELLSIM))
+    machine = await factory.create(spec)
+    try:
+        result = await machine.run(
+            Command(argv=("python3", "-c", "import sys; print(6 * 7, sys.implementation.name)"), timeout=120)
+        )
+    finally:
+        await machine.close()
+
+    assert (result.exit_code, result.stdout) == (0, b"42 cpython\n")
+
+
+@pytest.mark.manual
+async def test_a_grader_base_machine_runs_cpython_312_on_the_local_backend():
+    """Needs bubblewrap (Linux, as root or with user namespaces) and uv; installs CPython into the package cache."""
+    built = machine_factories((Backend.LOCAL,), controller_url=None)
+    requirements = draft.host_requirements(draft.grader_environment(None), built)
+    runtime = draft.machine_runtime(draft.machine(startup_timeout=600), requirements, MachineHost.IRIS)
+    async with AsyncExitStack() as owned:
+        machine = await _prepare_machine(requirements, runtime, (), built, _Cleanup(60), owned)
+        assert machine is not None
+        result = await machine.run(
+            Command(argv=("python3", "-c", "import sys; print(*sys.version_info[:2])"), cwd="/app", timeout=60)
+        )
+
+    assert (runtime.backend, result.exit_code, result.stdout) == (Backend.LOCAL.value, 0, b"3 12\n")
