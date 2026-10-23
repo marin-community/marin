@@ -106,7 +106,8 @@ def candidate_pass(args) -> None:
     padded_len = topk_ids.shape[1]
     gather = np.stack(
         [
-            candidate_gather_ids(sequence, topk_ids[row, padded_len - len(sequence.token_ids) :], padded_len)
+            # The last position predicts no token, so the support covers len - 1 positions.
+            candidate_gather_ids(sequence, topk_ids[row, padded_len - len(sequence.token_ids) : -1], padded_len)
             for row, sequence in enumerate(sequences)
         ]
     )
