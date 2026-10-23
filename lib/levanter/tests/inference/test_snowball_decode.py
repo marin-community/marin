@@ -361,6 +361,24 @@ def test_packed_teacher_forcing_matches_serial_and_full_forward_with_independent
         assert layout["per_sequence_chunk"] == 32
         assert any(step["starts"][0] == 32 and step["physical_query_width"] == 2 for step in layout["steps"])
         assert any(step["valid_lengths"][0] == 0 and step["valid_lengths"][1] > 0 for step in layout["steps"])
+        for step in layout["steps"]:
+            expected_active = [i for i, length in enumerate(step["valid_lengths"]) if length > 0]
+            assert step["active_slots"] == expected_active
+            assert step["num_active_sequences"] == len(expected_active)
+            assert step["metadata_slot_ids"][: len(expected_active)] == expected_active
+            assert (
+                step["metadata_cu_q_lens"]
+                == np.cumsum(
+                    [0, *[step["valid_lengths"][i] for i in expected_active], *[0] * (2 - len(expected_active))]
+                ).tolist()
+            )
+            if expected_active == [1]:
+                assert (
+                    step["metadata_page_indices"][0][0] == 8
+                )  # preserve pages after the shorter sequence's eight pages
+                assert step["metadata_slot_ids"][1] == -1
+                assert all(page == -1 for page in step["metadata_page_indices"][1])
+        assert any(step["active_slots"] == [1] for step in layout["steps"])
         for i, sequence in enumerate(sequences):
             assert serial[i].token_logprobs == repeat[i].token_logprobs
             np.testing.assert_allclose(packed[i].token_logprobs, serial[i].token_logprobs, atol=1e-5, rtol=1e-5)

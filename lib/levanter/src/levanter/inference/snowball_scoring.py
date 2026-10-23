@@ -176,12 +176,33 @@ def score_cached_packed(engine: InferenceEngine, sequences, top_k: int):
             targets[dest] = tokens[i][start + 1 : end + 1]
             positions[dest] = np.arange(start, end)
             destinations[dest] = page_offsets[i] * page_size + positions[dest]
+        # Match the production scheduler: only sequences with queries are active
+        # metadata rows. Keep physical page IDs, packed queries and output slices
+        # unchanged; removing a zero-length row does not move any real query.
+        active = np.flatnonzero(np.asarray(lengths) > 0)
+        metadata_pages = np.full_like(page_indices, -1)
+        metadata_pages[: len(active)] = page_indices[active]
+        metadata_ends = np.full(n, -1, np.int32)
+        metadata_ends[: len(active)] = ends[active]
+        metadata_slots = np.full(n, -1, np.int32)
+        metadata_slots[: len(active)] = active
+        metadata_lengths = np.zeros(n, np.int32)
+        metadata_lengths[: len(active)] = np.asarray(lengths)[active]
+        metadata_cu = np.cumsum([0, *metadata_lengths], dtype=np.int32)
+        layout_steps[-1].update(
+            active_slots=active.tolist(),
+            num_active_sequences=len(active),
+            metadata_slot_ids=metadata_slots.tolist(),
+            metadata_cu_q_lens=metadata_cu.tolist(),
+            metadata_seq_lens=metadata_ends.tolist(),
+            metadata_page_indices=metadata_pages.tolist(),
+        )
         info = PageBatchInfo(
-            slot_ids=hax.named(jnp.arange(n, dtype=jnp.int32), "seq"),
-            page_indices=hax.named(jnp.asarray(page_indices), ("seq", "page")),
-            seq_lens=hax.named(jnp.asarray(ends), "seq"),
-            cu_q_lens=hax.named(jnp.asarray(cu_q_lens), "seq"),
-            num_seqs=jnp.asarray(n, jnp.int32),
+            slot_ids=hax.named(jnp.asarray(metadata_slots), "seq"),
+            page_indices=hax.named(jnp.asarray(metadata_pages), ("seq", "page")),
+            seq_lens=hax.named(jnp.asarray(metadata_ends), "seq"),
+            cu_q_lens=hax.named(jnp.asarray(metadata_cu), "seq"),
+            num_seqs=jnp.asarray(len(active), jnp.int32),
             new_token_dests=hax.named(jnp.asarray(destinations), "position"),
             page_size=page_size,
         )
