@@ -212,6 +212,8 @@ trainer:
       beta: 0.1
       label_smoothing: 0.0
     loss_reduction: "token_mean"
+    # Removes direct loss contributions, not attention context or embedding updates.
+    excluded_response_token_ids: []
     grpo_norm_by_std: true
     rloo_n_filter_zero_reward_groups: true
     lambd: 1.0

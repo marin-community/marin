@@ -105,3 +105,22 @@ Require successful training and export jobs, evidence that the fresh job
 loads step two and advances to step four, a complete final export, and a
 successful evaluation artifact. This smoke checks pipeline handoffs. Use
 the nightly learning gates to assess learning behavior.
+
+## Restricting response loss
+
+Set `trainer.algorithm.excluded_response_token_ids` to token IDs whose direct loss
+contributions should be removed (for example, selected template delimiters).
+The default empty list leaves the objective unchanged. Exclusions are applied
+after teacher evidence is attached and before training preparation, so both
+policy loss and distillation weights are restricted.
+
+External annotation code can call `apply_response_loss_mask(batch, keep)` from
+`skyrl_train.response_loss_mask` at the same boundary. `keep` must be a boolean
+tensor with exactly the shape and device of `batch["loss_mask"]`. Coordinates
+cover the response suffix, including tool observations and padding; existing
+excluded positions cannot be restored. Convert character spans to exact rollout
+token offsets before constructing the mask. A broadcastable mask is rejected.
+
+Masking keeps token IDs and attention context intact. It removes direct loss
+terms but does not freeze embedding rows, prevent gradients through context,
+or guarantee that learned behavioral changes remain confined to those spans.
