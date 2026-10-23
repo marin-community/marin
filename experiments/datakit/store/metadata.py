@@ -51,6 +51,7 @@ class ShardManifest:
     harrier_embedding_provenance: HarrierEmbeddingProvenance | None = None
 
 
+# Nullable fixed-size lists can fail a Parquet round trip; use variable lists on disk.
 METADATA_SCHEMA = pa.schema(
     [
         ("marin_source", pa.string()),
@@ -182,8 +183,7 @@ def export_metadata_shard(
     Each call needs a separate output directory. Memory is bounded by
     ``max_rows`` plus one batch. Sparse embeddings join by ID within a compressed
     byte budget that excludes footers and filesystem read-ahead. Output vectors
-    use nullable lists because Arrow's nullable fixed-size lists can fail a
-    Parquet round trip; present vectors contain exactly 1024 int8 coordinates.
+    contain exactly 1024 int8 coordinates when present.
     """
     if max_rows <= 0 or batch_size <= 0 or max_embedding_bytes <= 0:
         raise ValueError("Row, batch and embedding read limits must be positive")
