@@ -46,7 +46,6 @@ MODEL_SETTINGS = (
     "kda_chunk_size=32",
     "kda_onchip_decay_gate=true",
     "moe_implementation=ragged_all_to_all",
-    "moe_drop_renorm=false",
     "capacity_factor=1.05",
 )
 OPTIMIZER_SETTINGS = (

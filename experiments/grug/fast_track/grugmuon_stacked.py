@@ -25,7 +25,6 @@ The optimizer config (routing, LR groups, the MuonH hyperball step) lives in ``o
 """
 
 import math
-import re
 from importlib import import_module
 
 import jax
@@ -35,7 +34,6 @@ from jax import shard_map
 from jax.sharding import NamedSharding, PartitionSpec, reshard
 from levanter.optim.muon import ScaleByMuonState
 from levanter.optim.util import NEWTON_SCHULZ_COEFFICIENTS, CoefficientType
-from levanter.utils.jax_utils import leaf_key_paths
 from optax import tree_utils as otu
 
 
@@ -59,54 +57,6 @@ def _target_named_sharding(array) -> NamedSharding | None:
     return sharding if isinstance(sharding, NamedSharding) else None
 
 
-# Stacked attention projections whose last (``_HEAD_OUT_LEAVES``) or second-to-last (``_HEAD_IN_LEAVES``)
-# axis is ``num_heads * head_dim``, for per-head orthogonalization.
-_HEAD_OUT_LEAVES = re.compile(
-    r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.(w_q|w_k|w_v|w_g|w_uk|w_uv|w_q2|w_uk2)"
-)
-_HEAD_IN_LEAVES = re.compile(r"(stacked_blocks|kda_blocks)(_tail)?\.stacked\.attn\.w_o")
-
-
-def _head_axis(path: str) -> int | None:
-    """Axis of a stacked ``[L, a, b]`` leaf that holds ``num_heads * head_dim``, or None."""
-    if _HEAD_OUT_LEAVES.fullmatch(path):
-        return 2
-    if _HEAD_IN_LEAVES.fullmatch(path):
-        return 1
-    return None
-
-
-def _split_heads(x: jax.Array, axis: int, head_dim: int) -> jax.Array:
-    """``[L, a, b]`` -> ``[L * num_heads, ...]``: one matrix per (layer, head)."""
-    layers, rows, cols = x.shape
-    if not jax.sharding.get_abstract_mesh().empty:
-        # Head-sharded layouts do not survive the reshape; the per-head stack is replicated anyway.
-        x = reshard(x, PartitionSpec(None, None, None))
-    if axis == 2:
-        heads = cols // head_dim
-        x = jnp.reshape(x, (layers, rows, heads, head_dim))
-        return jnp.reshape(jnp.moveaxis(x, 2, 1), (layers * heads, rows, head_dim))
-    heads = rows // head_dim
-    return jnp.reshape(x, (layers * heads, head_dim, cols))
-
-
-def _merge_heads(x: jax.Array, like: jax.Array, axis: int) -> jax.Array:
-    layers, rows, cols = like.shape
-    if not jax.sharding.get_abstract_mesh().empty:
-        x = reshard(x, PartitionSpec(None, None, None))
-    if axis == 2:
-        heads = x.shape[0] // layers
-        x = jnp.reshape(x, (layers, heads, rows, cols // heads))
-        merged = jnp.reshape(jnp.moveaxis(x, 1, 2), like.shape)
-    else:
-        merged = jnp.reshape(x, like.shape)
-    target = _target_named_sharding(like)
-    return reshard(merged, target) if target is not None else merged
-
-
-_POWER_ITERS = 3
-
-
 def _is_matrix_stack(x) -> bool:
     return x is not None and hasattr(x, "ndim") and x.ndim in (2, 3, 4)
 
@@ -121,151 +71,36 @@ def _pre_normalize(x, mode: str):
     return (x32 / (jnp.sqrt(jnp.sum(jnp.square(x32), axis=axis, keepdims=True)) + 1e-8)).astype(x.dtype)
 
 
-def _shrink_top_direction(direction, m, amount: float):
-    """``direction - amount * u1 v1^T`` per matrix, with ``(u1, v1)`` the top singular pair of ``m``."""
-    if not _is_matrix_stack(direction):
-        return direction
-    # Broadcast-multiply + sum rather than einsum: under explicit sharding a dot_general contracting a
-    # sharded axis needs an out_sharding, while a reduction over it lowers to a plain all-reduce.
-    m32 = m.astype(jnp.float32)
-    v = jnp.sum(m32, axis=-2, keepdims=True)
-    for _ in range(_POWER_ITERS):
-        u = jnp.sum(m32 * v, axis=-1, keepdims=True)
-        u = u / (jnp.sqrt(jnp.sum(jnp.square(u), axis=-2, keepdims=True)) + 1e-12)
-        v = jnp.sum(m32 * u, axis=-2, keepdims=True)
-        v = v / (jnp.sqrt(jnp.sum(jnp.square(v), axis=-1, keepdims=True)) + 1e-12)
-    shrunk = direction.astype(jnp.float32) - amount * (u * v)
-    target = _target_named_sharding(direction)
-    if target is not None:
-        shrunk = reshard(shrunk, target.spec)
-    return shrunk.astype(direction.dtype)
-
-
-def _truncate_bottom_directions(direction, m, frac: float):
-    """Zero the bottom ``frac`` of ``direction``'s singular directions, ranked by the Newton-Schulz input ``m``.
-
-    Newton-Schulz is an odd polynomial in ``m``, so its output shares ``m``'s singular vectors; projecting it onto the
-    span of ``m``'s top ``(1 - frac) min(rows, cols)`` singular vectors (from ``eigh`` of the Gram on the smaller side)
-    removes exactly the weakest directions and leaves the others' Newton-Schulz values unchanged."""
-    if not _is_matrix_stack(direction):
-        return direction
-    rows, cols = m.shape[-2:]
-    rank = min(rows, cols)
-    keep = rank - round(frac * rank)
-    if keep <= 0:
-        raise ValueError(f"truncate_frac {frac} keeps no direction of a rank-{rank} matrix")
-    target = _target_named_sharding(direction)
-    m32, d32 = m.astype(jnp.float32), direction.astype(jnp.float32)
-    if target is not None:
-        spec = tuple(target.spec) + (None,) * (direction.ndim - len(target.spec))
-        # eigh and the projections need each matrix whole; stacked (layer, expert) axes stay sharded.
-        whole = PartitionSpec(*spec[:-2], None, None)
-        m32, d32 = reshard(m32, whole), reshard(d32, whole)
-    if cols <= rows:
-        basis = jnp.linalg.eigh(jnp.swapaxes(m32, -1, -2) @ m32)[1][..., -keep:]
-        out = (d32 @ basis) @ jnp.swapaxes(basis, -1, -2)
-    else:
-        basis = jnp.linalg.eigh(m32 @ jnp.swapaxes(m32, -1, -2))[1][..., -keep:]
-        out = basis @ (jnp.swapaxes(basis, -1, -2) @ d32)
-    if target is not None:
-        out = reshard(out, target.spec)
-    return out.astype(direction.dtype)
-
-
-def _blend_back(ortho: jax.Array | None, matrix: jax.Array | None, alpha: float) -> jax.Array | None:
-    """``(1 - alpha) ortho + alpha matrix ||ortho|| / ||matrix||`` per trailing matrix (``post_blend``)."""
-    if ortho is None or not hasattr(ortho, "ndim") or ortho.ndim < 2:
-        return ortho
-    o = ortho.astype(jnp.float32)
-    m = matrix.astype(jnp.float32)
-    o_norm = jnp.sqrt(jnp.sum(jnp.square(o), axis=(-2, -1), keepdims=True))
-    m_norm = jnp.sqrt(jnp.sum(jnp.square(m), axis=(-2, -1), keepdims=True))
-    return ((1.0 - alpha) * o + alpha * m * (o_norm / jnp.maximum(m_norm, 1e-12))).astype(ortho.dtype)
-
-
 def _grug_scale_with_muon(
-    momentum=0.95,
-    nesterov=True,
-    steps=5,
-    muon_eps=1e-8,
-    coefficient_type="quintic",
-    head_dim: int | None = None,
-    pre_norm: str = "none",
-    top_shrink: float = 0.0,
-    precond_beta2: float | None = None,
-    truncate_frac: float = 0.0,
-    post_blend: float = 0.0,
+    momentum=0.95, nesterov=True, steps=5, muon_eps=1e-8, coefficient_type="quintic", pre_norm="none"
 ):
     """Muon gradient transformation for the stacked model (2D/3D/4D leaves).
 
     ``pre_norm`` normalizes the momentum before Newton-Schulz (MuonEq, arXiv 2603.28254): ``"out"`` gives
-    every output unit's column unit norm, ``"in"`` every input unit's row. ``top_shrink`` (SAMuon-lite,
-    arXiv 2608.25990) subtracts ``top_shrink * u1 v1^T`` from the orthogonalized direction, with ``(u1, v1)``
-    the momentum's top singular pair from ``_POWER_ITERS`` power iterations. ``1 - 1/gamma`` matches
-    SAMuon's ``gamma * NS(M) - (gamma - 1) u1 v1^T`` once the hyperball step fixes the overall scale.
-    ``precond_beta2`` (Muon2, arXiv 2604.09967) divides the momentum elementwise by the root of a
-    bias-corrected EMA of the squared gradient before Newton-Schulz; the state is then
-    ``(ScaleByMuonState, count, second_moment)``. ``truncate_frac`` zeroes the weakest fraction of each
-    matrix's singular directions after Newton-Schulz (``_truncate_bottom_directions``). ``post_blend`` mixes the
-    orthogonalized matrix ``U V^T`` with the matrix it came from, rescaled to the same Frobenius norm:
-    ``(1 - a) U V^T + a M ||U V^T|| / ||M||``, which gives the strong singular directions back some weight.
-
-    With ``head_dim``, the stacked attention projections (``_head_axis``) are orthogonalized per head:
-    each ``[D, head_dim]`` (or ``[head_dim, D]``) block of every layer is its own Newton-Schulz matrix.
+    every output unit's column unit norm, ``"in"`` every input unit's row.
     """
     steps = int(steps)
     _newton_schulz_coefficients(coefficient_type, steps)
-    if precond_beta2 is not None and head_dim is not None:
-        raise ValueError("precond_beta2 does not support per-head orthogonalization (head_dim)")
 
     def init_fn(params):
-        muon_state = ScaleByMuonState(momentum_buffer=otu.tree_zeros_like(params))
-        if precond_beta2 is None:
-            return muon_state
-        second_moment = jax.tree.map(
-            lambda p: jnp.zeros_like(p, dtype=jnp.float32) if _is_matrix_stack(p) else None, params
-        )
-        return muon_state, jnp.zeros([], jnp.int32), second_moment
+        return ScaleByMuonState(momentum_buffer=otu.tree_zeros_like(params))
 
     def update_fn(updates, state, params=None):
-        if precond_beta2 is None:
-            return muon_update(updates, state, params)
-        muon_state, count, second_moment = state
-        count = count + 1
-        second_moment = jax.tree.map(
-            lambda v, g: v if v is None else precond_beta2 * v + (1 - precond_beta2) * jnp.square(g.astype(jnp.float32)),
-            second_moment,
+        buf = jax.tree.map(
+            lambda m, g: None if g is None else momentum * m + g,
+            state.momentum_buffer,
             updates,
             is_leaf=lambda x: x is None,
         )
-        correction = 1 - precond_beta2 ** count.astype(jnp.float32)
-        denoms = jax.tree.map(
-            lambda v: v if v is None else jnp.sqrt(v / correction) + 1e-8, second_moment, is_leaf=lambda x: x is None
-        )
-        new_updates, muon_state = muon_update(updates, muon_state, params, denoms)
-        return new_updates, (muon_state, count, second_moment)
-
-    def muon_update(updates, state, params=None, denoms=None):
-        if momentum == 0.0:
-            # A caller-side momentum (e.g. Bi-Maxwell) already mixed the direction; leave the buffer untouched so
-            # the donated state aliases through instead of costing a parameter-sized read and write per step.
-            buf = state.momentum_buffer
-        else:
-            buf = jax.tree.map(
+        if nesterov:
+            updates = jax.tree.map(
                 lambda m, g: None if g is None else momentum * m + g,
-                state.momentum_buffer,
+                buf,
                 updates,
                 is_leaf=lambda x: x is None,
             )
-            if nesterov:
-                updates = jax.tree.map(
-                    lambda m, g: None if g is None else momentum * m + g,
-                    buf,
-                    updates,
-                    is_leaf=lambda x: x is None,
-                )
-            else:
-                updates = buf
+        else:
+            updates = buf
 
         def transform_array(path, x, param):
             if not hasattr(x, "ndim") or x.ndim not in (2, 3, 4):
@@ -287,37 +122,8 @@ def _grug_scale_with_muon(
             scale = jnp.sqrt(jnp.maximum(1, fan_out / fan_in))
             return updated * scale
 
-        head_axes = None
-        if head_dim is not None:
-            if params is None:
-                raise ValueError("per-head Muon needs params to identify the attention projections")
-            paths = jax.tree.map(
-                lambda p: ".".join(p) if isinstance(p, (list, tuple)) else str(p), leaf_key_paths(params)
-            )
-            head_axes = jax.tree.map(_head_axis, paths)
-            original = updates
-            split = jax.tree.map(
-                lambda u, a: u if u is None or a is None else _split_heads(u, a, head_dim),
-                updates,
-                head_axes,
-                is_leaf=lambda x: x is None,
-            )
-            # Split leaves have no parameter sharding to restore; their own layout stands in.
-            params = jax.tree.map(
-                lambda p, u, a: p if a is None else u, params, split, head_axes, is_leaf=lambda x: x is None
-            )
-            updates = split
-
-        if denoms is not None:
-            updates = jax.tree.map(
-                lambda d, u: u if d is None else (u.astype(jnp.float32) / d).astype(u.dtype),
-                denoms,
-                updates,
-                is_leaf=lambda x: x is None,
-            )
         if pre_norm != "none":
             updates = jax.tree.map(lambda x: _pre_normalize(x, pre_norm), updates, is_leaf=lambda x: x is None)
-        momentum_dirs = updates
         mesh = jax.sharding.get_abstract_mesh()
         if mesh.empty or not _intra_rack_axes(mesh):
             updates = jax.tree_util.tree_map_with_path(
@@ -328,29 +134,6 @@ def _grug_scale_with_muon(
             )
         else:
             updates = _bucketed_newton_schulz(updates, params, mesh, steps, muon_eps, coefficient_type)
-        if top_shrink:
-            updates = jax.tree.map(
-                lambda o, m: _shrink_top_direction(o, m, top_shrink), updates, momentum_dirs, is_leaf=lambda x: x is None
-            )
-        if not (isinstance(post_blend, (int, float)) and post_blend == 0):  # a float, or a traced schedule value
-            updates = jax.tree.map(
-                lambda o, m: _blend_back(o, m, post_blend), updates, momentum_dirs, is_leaf=lambda x: x is None
-            )
-        if truncate_frac:
-            updates = jax.tree.map(
-                lambda o, m: _truncate_bottom_directions(o, m, truncate_frac),
-                updates,
-                momentum_dirs,
-                is_leaf=lambda x: x is None,
-            )
-        if head_axes is not None:
-            updates = jax.tree.map(
-                lambda u, o, a: u if u is None or a is None else _merge_heads(u, o, a),
-                updates,
-                original,
-                head_axes,
-                is_leaf=lambda x: x is None,
-            )
         return updates, ScaleByMuonState(momentum_buffer=buf)
 
     return optax.GradientTransformation(init_fn, update_fn)

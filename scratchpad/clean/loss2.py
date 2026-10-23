@@ -54,6 +54,11 @@ TINY = dict(
 )
 
 
+def _train_step_fn(built):
+    """``_build_train_step``'s train step: it returned ``(step, diagnostic_watch_step)`` before the cleanup."""
+    return built[0] if isinstance(built, tuple) else built
+
+
 def tiny_configs() -> dict[str, tuple[GrugModelConfig, dict[str, str]]]:
     base = GrugModelConfig(**TINY)
     kma = launch._kma_model(base)
@@ -84,7 +89,7 @@ def two_losses(model_cfg: GrugModelConfig, opt_settings: dict[str, str]) -> list
         trainer=ft_train.GrugTrainerConfig(trainer=trainer, expert_axis_size=2, replica_axis_size=1),
     )
     optimizer = optimizer_cfg.build(10)
-    step_fn, _ = ft_train._build_train_step(config, optimizer)
+    step_fn = _train_step_fn(ft_train._build_train_step(config, optimizer))
     mesh = compact_grug_mesh(expert_axis_size=2, replica_axis_size=1)
     rng = np.random.default_rng(0)
     losses = []

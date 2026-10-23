@@ -6,3 +6,5 @@
 - 2026-10-23 14:45:08 baseline tests: 5 failed (4 stale _apply_runtime_defaults calls in tests/grug/test_fast_track_ragged_moe.py; test_latent_out_tail worker crash), 59 passed, 1 skipped
 - 2026-10-23 14:55:42 model.py rewritten (scratchpad/clean/model_new.py, 2407 lines); commit order: GB200 removal (launcher/trainer/recipe) first, then dead flags incl. now-unreachable GB200 model fields
 - 2026-10-23 15:00:52 pass 1 (GB200/MFU launcher+trainer+recipe removal): 20 HLO cases identical to hlo_before
+- 2026-10-23 15:06:58 pass 2 model rewrite: all 20 HLO cases identical (fixed: final-gate z order, per-pass stack order)
+- 2026-10-23 15:15:08 pass 2 (dead flags): 19/19 HLO cases identical, tiny 2-step losses identical, fast_track+grug tests 46 passed 1 skipped (test_kda_local erase-gate options dropped)

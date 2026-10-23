@@ -19,7 +19,7 @@ import threading
 import time
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 import equinox as eqx
@@ -93,7 +93,8 @@ RUNTIME_ENV = {
 XLA_COLLECTIVE_OVERLAP_FLAG = "--xla_gpu_experimental_parallel_collective_overlap_limit"
 XLA_FUSION_AUTOTUNER_FLAG = "--xla_gpu_experimental_enable_fusion_autotuner"
 DEFAULT_COLLECTIVE_OVERLAP_LIMIT = 4
-DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic_cute"
+# The dropless local MoE kernel of the evals: ``sonic`` is the Hopper Triton path.
+DEFAULT_DROPLESS_MOE_IMPLEMENTATION: MoeImplementation = "sonic"
 # Full inline norm watch failed with overlap 4. Overlap 1 completed the selected full-watch gate.
 INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT = 1
 # XLA's default command-buffer (CUDA graph) set with collectives left eager: the hang in
@@ -131,13 +132,6 @@ _RAGGED_TRANSPORT_FLAG_NAMES = frozenset(
 )
 
 
-class WatchMode(StrEnum):
-    """Where a watched training step computes gradient and parameter statistics."""
-
-    INLINE = "inline"
-    DIAGNOSTIC = "diagnostic"
-
-
 def restore_template_from(state):
     """ShapeDtypeStructs carrying each leaf's concrete sharding, releasing the leaves (the restore target)."""
     template = jax.tree.map(
@@ -155,17 +149,13 @@ def _apply_runtime_defaults(
     *,
     inline_watch_enabled: bool,
     ragged_transport: RaggedTransport | None,
-    collective_overlap_limit: int | None,
     processes_per_task: int,
 ) -> None:
-    """Set the runtime env and XLA flag defaults; ``ragged_transport`` is None unless the MoE is ragged, and
-    ``collective_overlap_limit`` (None: by mode) overrides the concurrent-collective limit."""
+    """Set the runtime env and XLA flag defaults; ``ragged_transport`` is None unless the MoE is ragged."""
     for name, value in RUNTIME_ENV.items():
         os.environ.setdefault(name, value)
     xla_flags = os.environ.get("XLA_FLAGS", "").split()
-    if collective_overlap_limit is not None:
-        overlap_limit = collective_overlap_limit
-    elif ragged_transport is not None:
+    if ragged_transport is not None:
         overlap_limit = RAGGED_COLLECTIVE_OVERLAP_LIMIT
     elif inline_watch_enabled:
         overlap_limit = INLINE_WATCH_COLLECTIVE_OVERLAP_LIMIT
@@ -223,13 +213,8 @@ class GrugTrainerConfig:
     """Runtime knobs for grug training."""
 
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig(use_explicit_mesh_axes=True))
-    data_seed: int | None = None
     log_every: int = 1
     z_loss_weight: float = 1e-4  # Weight on final-logit logsumexp z-loss stabilization term.
-    # Inline watch computes statistics on every step and uses the watch interval only for logging.
-    # This keeps one training executable resident. A diagnostic watch repeats forward and backward
-    # in a separate executable, which costs compute but shortens gradient liveness.
-    watch_mode: WatchMode = WatchMode.INLINE
     # A short throughput gate leaves this off. A compute-optimal run needs it: the loop already
     # restores from the latest committed checkpoint, so without a writer an interrupted run
     # restarts at step 0.
@@ -244,10 +229,6 @@ class GrugTrainerConfig:
     # With ``lm_head_grad_dump_every``: write the train batch's per-token lm_head input-gradient norms and token ids
     # to ``<lm_head_grad_dump_dir>/step-<step>.npz`` on the ``lm_head_grad_dump_due`` steps.
     lm_head_grad_dump_dir: str | None = None
-    # After these steps, run ``ROUTING_DUMP_SEQUENCES`` fixed held-out sequences and write their routing and routed
-    # neuron activity to ``<routing_dump_dir>/step-<step>.npz`` (``write_routing_dump``).
-    routing_dump_dir: str | None = None
-    routing_dump_steps: tuple[int, ...] = ()
     # Train (and eval) with these tokens skipping some layers (``LayerSkipRule``); None: every token runs every layer.
     layer_skip: LayerSkipRule | None = None
     # When the extra_mlp_layers MLPs switch on, as a fraction of training (0: from the start).
@@ -257,11 +238,6 @@ class GrugTrainerConfig:
     # Dump XLA's buffer assignment and memory-usage report for the train step and upload them here (process 0),
     # also when the step fails, e.g. with an out-of-memory error: attributes the temp buffer to HLO values.
     xla_memory_report_path: str | None = None
-    # Weight EMA over the last ``ema_last_steps`` steps (the whole run when None): until then the EMA
-    # tracks the params, afterwards ``ema <- ema_beta * ema + (1 - ema_beta) * params``. Evals from the
-    # EMA start on score the EMA. None: no EMA.
-    ema_beta: float | None = None
-    ema_last_steps: int | None = None
     # Written by process 0 once the final eval has run; a restarted job that finds it exits instead of retraining
     # (a preemption during the post-training blend evals otherwise reran the whole run).
     completion_marker_path: str | None = None
@@ -316,8 +292,6 @@ class GrugRunConfig:
     processes_per_task: int = 1
     # XLA kernel behind the ragged all-to-all; read only when `model.moe_implementation` is ragged.
     ragged_transport: RaggedTransport = RaggedTransport.ONE_SHOT
-    # XLA's concurrent-collective limit; None takes the mode default (ragged 1, inline watch 1, otherwise 4).
-    collective_overlap_limit: int | None = None
     # Retry budgets for the training job. The two are separate gates and the job fails when either
     # one trips, thus raise them together. The defaults make a failure terminal, which is what a run
     # that cannot resume wants: a retry would repeat it from step 0. Only a run that both saves and
@@ -419,14 +393,6 @@ def _reshard_tree_to_mesh(tree, mesh: Mesh):
     return jax.tree.map(move, tree)
 
 
-def dropless_moe_implementation(cfg: GrugModelConfig) -> MoeImplementation:
-    """The dropless MoE kernel for evals and probes: sonic needs equal expert read and write widths; scatter also
-    handles ``latent_out_dim`` and the full-width tail layers of ``latent_out_full_layers``."""
-    if cfg.expert_in_dim == cfg.expert_out_dim and not cfg.latent_out_full_layers:
-        return "sonic"
-    return "scatter"
-
-
 def _to_dropless_local(
     model: Transformer, *, implementation: MoeImplementation = DEFAULT_DROPLESS_MOE_IMPLEMENTATION
 ) -> Transformer:
@@ -446,30 +412,14 @@ def _to_dropless_local(
         return banks
 
     dropless = [
-        dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1, fp8_dispatch=False)
+        dataclasses.replace(expert_mlp, implementation=implementation, expert_chunks=1)
         for expert_mlp in stack_expert_mlps(model)
     ]
     return eqx.tree_at(stack_expert_mlps, model, dropless)
 
 
-def _layer_stacks(model: Transformer):
-    return (
-        model.stacked_blocks,
-        model.kda_blocks,
-        model.stacked_blocks_rest,
-        model.kda_blocks_rest,
-        model.stacked_blocks_tail,
-        model.kda_blocks_tail,
-    )
-
-
 def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
-    """The compute-dtype model. Under ``scan_layers`` the layer stacks stay in the param dtype: the scan casts one
-    unit's weights at a time, so the step never holds a compute copy (or its gradient) of every layer's weights."""
-    compute = mp.cast_to_compute(model)
-    if not model.config.scan_layers:
-        return compute
-    return eqx.tree_at(_layer_stacks, compute, replace=_layer_stacks(model), is_leaf=lambda x: x is None)
+    return mp.cast_to_compute(model)
 
 
 def build_tagged_evaluator(
@@ -604,22 +554,14 @@ def _compute_match_flops(
             global_kv_heads=model_config.global_kv_heads,
         )
         # `lm_flops_per_token` prices every matmul at `hidden_dim`. Under LatentMoE the routed experts
-        # read `expert_in_dim` and write `expert_out_dim` instead, plus the latent projections, so correct
-        # both terms or MFU is overstated by roughly the compression ratio.
-        if model_config.latent_dim is not None or model_config.latent_out_dim is not None:
-            hidden = model_config.hidden_dim
-            read, write = model_config.expert_in_dim, model_config.expert_out_dim
+        # read and write the latent instead, plus the latent projections, so correct both terms or MFU is
+        # overstated by roughly the compression ratio.
+        if model_config.latent_dim is not None:
+            hidden, latent = model_config.hidden_dim, model_config.latent_dim
             # Matches the routed term in `lm_flops_per_token`: 2 * (gate + up + down) * intermediate * top_k.
-            routed_delta = (
-                2
-                * model_config.intermediate_dim
-                * model_config.num_experts_per_token
-                * (2 * (read - hidden) + (write - hidden))
-            )
-            # W_latent_down (hidden -> read) and W_latent_up (write -> hidden), once per token each.
-            down = read if model_config.latent_dim is not None else 0
-            up = write if model_config.has_latent_up else 0
-            projection = 2 * hidden * (down + up)
+            routed_delta = 2 * model_config.intermediate_dim * model_config.num_experts_per_token * 3 * (latent - hidden)
+            # W_latent_down (hidden -> latent) and W_latent_up (latent -> hidden), once per token each.
+            projection = 2 * hidden * 2 * latent
             flops_per_token += model_config.num_layers * (routed_delta + projection)
 
     # The last layer is forced global even when depth is not a multiple of `global_every`; add the one
@@ -677,7 +619,6 @@ def _make_mixture_stage_callback(train_dataset: MixtureDataset, batch_schedule: 
 class GrugTrainState:
     step: jax.Array
     params: Transformer
-    ema_params: Transformer | None  # EMA of params for eval/checkpoint; None unless ema_beta is set.
     opt_state: optax.OptState
     pending_qb_betas: jax.Array
 
@@ -704,16 +645,14 @@ def initial_state(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     key: PRNGKeyArray,
-    ema_beta: float | None = None,
 ) -> GrugTrainState:
     params = mp.cast_to_param(Transformer.init(model_config, key=key))
     opt_state = optimizer.init(params)
     return GrugTrainState(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
-        ema_params=params if ema_beta is not None else None,
         opt_state=opt_state,
-        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.qb_num_experts)),
+        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
     )
 
 
@@ -1007,47 +946,11 @@ def _accumulated_loss_and_grads(
     return (loss / num_microbatches, jax.tree.map(mean, metrics)), jax.tree.map(mean, grads)
 
 
-def _compute_diagnostic_watch_stats(params, batch, mp: jmp.Policy, z_loss: float | None, watch_config: WatchConfig):
-    (_, _), grads = _loss_and_grads(params, batch, mp, z_loss)
-    return compute_watch_stats(
-        watch_targets=watch_config.watch_targets,
-        include_norms=watch_config.include_norms,
-        include_per_parameter_norms=watch_config.include_per_parameter_norms,
-        include_histogram=watch_config.include_histograms,
-        split_scan_layers=watch_config.split_scan_layers,
-        params=params,
-        grads=grads,
-        model_tree_type=type(params),
-    )
-
-
-def _make_diagnostic_watch_step(mp: jmp.Policy, *, z_loss_weight: float, watch_config: WatchConfig):
-    watch_targets = (
-        tuple(t.strip() for t in watch_config.watch_targets.split(","))
-        if isinstance(watch_config.watch_targets, str)
-        else tuple(watch_config.watch_targets)
-    )
-    unsupported_targets = set(watch_targets) - {"grads", "params"}
-    if unsupported_targets:
-        raise ValueError(f"diagnostic watch does not support targets {sorted(unsupported_targets)}")
-    diagnostic_watch_config = replace(watch_config, watch_targets=list(watch_targets))
-    z_loss = z_loss_weight if z_loss_weight > 0 else None
-
-    @jax.jit
-    def diagnostic_watch_step(params: Transformer, batch, pending_qb_betas: jax.Array):
-        params = _apply_qb_betas(params, pending_qb_betas)
-        return _compute_diagnostic_watch_stats(params, batch, mp, z_loss, diagnostic_watch_config)
-
-    return diagnostic_watch_step
-
-
 def _make_train_step(
     optimizer: optax.GradientTransformation,
     mp: jmp.Policy,
     *,
     z_loss_weight: float,
-    ema_beta: float | None = None,
-    ema_start_step: int = 0,
     watch_config: WatchConfig | None = None,
     grad_accum_microbatches: int = 1,
     layer_skip: LayerSkipRule | None = None,
@@ -1096,19 +999,6 @@ def _make_train_step(
         if token_embed_stats:
             metrics.update(_token_embed_stats(qb_params.token_embed, params.token_embed))
 
-        if ema_beta is None:
-            ema_params = None
-        else:
-            # EMA tracks the QB-biased params, so re-apply the pending betas before blending.
-            with jax.named_scope("ema"):
-                qb_ema_params = _apply_qb_betas(state.ema_params, state.pending_qb_betas)
-                ema_active = state.step >= ema_start_step
-                ema_params = jax.tree_util.tree_map(
-                    lambda old, new: jnp.where(ema_active, ema_beta * old + (1.0 - ema_beta) * new, new),
-                    qb_ema_params,
-                    params,
-                )
-
         watch_stats = None
         if watch_config is not None:
             watch_stats = compute_watch_stats(
@@ -1128,7 +1018,6 @@ def _make_train_step(
             state,
             step=state.step + one,
             params=params,
-            ema_params=ema_params,
             opt_state=opt_state,
             # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
             # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
@@ -1209,12 +1098,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
 
     optimizer = config.optimizer.build(trainer.num_train_steps)
     watch_config = trainer.watch
-    train_step_fn, diagnostic_watch_step = _build_train_step(config, optimizer)
-    ema_start_step = _ema_start_step(config)
+    train_step_fn = _build_train_step(config, optimizer)
 
     data_key, model_key = jax.random.split(jax.random.PRNGKey(trainer.seed), 2)
-    if config.trainer.data_seed is not None:
-        data_key = jax.random.PRNGKey(config.trainer.data_seed)
 
     # Grug uses raw PartitionSpecs rather than Trainer's logical axis mapping.
     # Keep the mesh compact so the batch pspec derived by `_batch_spec()` spans slices directly.
@@ -1243,7 +1129,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 optimizer=optimizer,
                 mp=trainer.mp,
                 key=model_rng,
-                ema_beta=config.trainer.ema_beta,
             )
 
         state = _init_state(model_key)
@@ -1347,10 +1232,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
-            # From the EMA start on, evals score the EMA weights.
-            eval_model_getter=lambda s: (
-                s.ema_params if s.ema_params is not None and int(s.step) > ema_start_step else s.params
-            ),
             opt_state_getter=lambda s: s.opt_state,
         )
         if progress_watchdog is not None:
@@ -1426,7 +1307,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc.freeze()
         gc.disable()
         hlo_written = False
-        routing_dump = None
 
         # The step runs on the state's flat leaves (``_flat_train_step``); ``state`` is rebuilt from them each step.
         state_leaves, state_treedef = jax.tree.flatten(state)
@@ -1540,15 +1420,6 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         and watch_config.interval > 0
                         and current_step % watch_config.interval == 0
                     )
-                    if watch_due and diagnostic_watch_step is not None:
-                        watch_stats = diagnostic_watch_step(
-                            state.params,
-                            batch,
-                            state.pending_qb_betas,
-                        )
-                        jax.block_until_ready(watch_stats)
-                    else:
-                        watch_stats = None
                     step_start = time.perf_counter()
                     if host_gap_start is not None and step_start - host_gap_start > HOST_GAP_WARN:
                         logger.warning(
@@ -1574,17 +1445,9 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                     dispatch_start = time.perf_counter()
                     state_leaves, metrics, inline_watch_stats = train_step(state_leaves, batch)
                     state = jax.tree.unflatten(state_treedef, state_leaves)
-                    if (
-                        config.trainer.routing_dump_dir is not None
-                        and current_step + 1 in config.trainer.routing_dump_steps
-                    ):
-                        if routing_dump is None:
-                            routing_dump = _routing_dump_runner(config, mesh)
-                        routing_dump(state)
                     # Host time to hand the step to the devices (rebuilding the state tree, launch).
                     dispatch_time = time.perf_counter() - dispatch_start
-                    if inline_watch_stats is not None and watch_due:
-                        watch_stats = inline_watch_stats
+                    watch_stats = inline_watch_stats if watch_due else None
                     host_step += 1
                     pending = _PendingStep(
                         step=current_step,
@@ -1660,20 +1523,9 @@ def _held_out_sequences(data_config: LmDataConfig, *, seq_len: int, num_sequence
     return tokens, segments
 
 
-def _token_dump_step(
-    mp: jmp.Policy,
-    num_real_experts: int,
-    null_layers: bool,
-    skip_layers: tuple[int, ...],
-    mid_head: bool,
-    final_conf: bool,
-    skip_probe: bool,
-):
-    """Jitted ``(params, qb_betas, tokens, segment_ids) -> dict`` of per-token ``[B, S]`` arrays (``[L, B, S]`` for
-    ``null_slots``): ``next_token_loss``, with ``null_layers`` each token's ``null_slots`` per layer, with
-    ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers, and the ``Transformer``
-    diagnostics: ``mid_head_diagnostics`` with ``mid_head``, ``final_conf_diagnostics`` with ``final_conf``, and
-    ``skip_probe_diagnostics`` with ``skip_probe`` (over ``skip_layers``)."""
+def _token_dump_step(mp: jmp.Policy, skip_layers: tuple[int, ...]):
+    """Jitted ``(params, qb_betas, tokens, segment_ids) -> dict`` of per-token ``[B, S]`` arrays: ``next_token_loss``,
+    and with ``skip_layers`` ``skipped_loss``, the loss with every token skipping those layers."""
 
     @jax.jit
     def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
@@ -1681,18 +1533,9 @@ def _token_dump_step(
         mask = AttentionMask.causal().with_segment_ids(segment_ids)
         weight = jnp.ones(tokens.shape, jnp.float32)
         out = {"next_token_loss": model.next_token_loss(tokens, weight, mask=mask, reduction="none")}
-        if null_layers:
-            selected, _ = model.routing_assignments(tokens, mask)
-            out["null_slots"] = jnp.sum(selected >= num_real_experts, axis=-1).astype(jnp.uint8)
         if skip_layers:
             skip = LayerSkip(skip_layers, jnp.zeros(tokens.shape, jnp.bool_))
             out["skipped_loss"] = model.next_token_loss(tokens, weight, mask=mask, reduction="none", layer_skip=skip)
-        if mid_head:
-            out.update(model.mid_head_diagnostics(tokens, mask))
-        if final_conf:
-            out.update(model.final_conf_diagnostics(tokens, mask))
-        if skip_probe:
-            out.update(model.skip_probe_diagnostics(tokens, mask, skip_layers))
         return out
 
     return run
@@ -1700,7 +1543,7 @@ def _token_dump_step(
 
 def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, batch_size: int, path: str) -> None:
     """Run held-out batches and write ``tokens``, ``segment_ids``, ``next_token_loss`` ``[N, S]`` (the loss of
-    predicting token s+1 at s), and per ``_token_dump_step`` ``null_slots`` ``[L, N, S]`` and ``skipped_loss``."""
+    predicting token s+1 at s), and with ``token_dump_skip_layers`` ``skipped_loss``."""
     cfg = config.model
     num_sequences = TOKEN_DUMP_BATCHES * batch_size
     # The dataset's per-example jit pins its output to a CPU device; JAX's mesh context is thread-local, so fetch
@@ -1711,15 +1554,7 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
         ).result()
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
     skip_layers = config.trainer.token_dump_skip_layers
-    step = _token_dump_step(
-        config.trainer.trainer.mp,
-        cfg.num_experts,
-        bool(cfg.moe_null_layers),
-        skip_layers,
-        cfg.mid_head_layer is not None,
-        bool(cfg.final_conf_layers),
-        cfg.skip_probe_layer is not None,
-    )
+    step = _token_dump_step(config.trainer.trainer.mp, skip_layers)
     parts: list[dict[str, np.ndarray]] = []
     for start in range(0, num_sequences, batch_size):
         batch = [
@@ -1732,16 +1567,11 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
     if jax.process_index() != 0:
         return
     buffer = io.BytesIO()
-    arrays = {k: np.concatenate([p[k] for p in parts], axis=1 if k == "null_slots" else 0) for k in parts[0]}
-    for k, v in arrays.items():
-        if v.dtype == np.float32:
-            arrays[k] = v.astype(np.float16)
+    arrays = {k: np.concatenate([p[k] for p in parts]).astype(np.float16) for k in parts[0]}
     np.savez(
         buffer,
         tokens=tokens,
         segment_ids=segments,
-        null_layers=np.asarray(cfg.moe_null_layers, np.int32),
-        slots_per_token=np.asarray(2 * cfg.num_experts_per_token),
         skip_layers=np.asarray(skip_layers, np.int32),
         step=np.asarray(int(state.step)),
         **arrays,
@@ -1751,73 +1581,14 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
     logger.info("Wrote the token dump to %s", path)
 
 
-ROUTING_DUMP_SEQUENCES = 8
-ROUTING_DUMP_TOP_NEURONS = 8
-ROUTING_DUMP_CHUNK = 128
-
-
-def _routing_dump_runner(config: GrugRunConfig, mesh: Mesh):
-    """``state -> None``: writes the routing dump of ``state`` for the same held-out sequences every call."""
-    cfg = config.model
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        tokens, segments = pool.submit(
-            _held_out_sequences, config.data, seq_len=cfg.max_seq_len, num_sequences=ROUTING_DUMP_SEQUENCES
-        ).result()
-    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
-    batch = [jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index]) for x in (tokens, segments)]
-    mp = config.trainer.trainer.mp
-
-    @jax.jit
-    def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
-        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
-        mask = AttentionMask.causal().with_segment_ids(segment_ids)
-        return model.routing_neuron_dump(tokens, mask, ROUTING_DUMP_TOP_NEURONS, ROUTING_DUMP_CHUNK)
-
-    def write(state: GrugTrainState) -> None:
-        outputs = multihost_utils.process_allgather(run(state.params, state.pending_qb_betas, *batch), tiled=True)
-        if jax.process_index() != 0:
-            return
-        buffer = io.BytesIO()
-        np.savez(
-            buffer,
-            tokens=tokens,
-            segment_ids=segments,
-            step=np.asarray(int(state.step)),
-            **{k: np.asarray(v) for k, v in outputs.items()},
-        )
-        path = f"{config.trainer.routing_dump_dir}/step-{int(state.step)}.npz"
-        with fsspec.open(path, "wb") as f:
-            f.write(buffer.getvalue())
-        logger.info("Wrote the routing dump to %s", path)
-
-    return write
-
-
-def _ema_start_step(config: GrugRunConfig) -> int:
-    num_steps, last = config.trainer.trainer.num_train_steps, config.trainer.ema_last_steps
-    return 0 if last is None else max(0, num_steps - last)
-
-
 def _build_train_step(config: GrugRunConfig, optimizer):
-    """The train step and the optional diagnostic watch step."""
+    """The train step (``_make_train_step``) of ``config``."""
     trainer = config.trainer.trainer
-    watch_config = trainer.watch
-    diagnostic_watch_step = None
-    inline_watch_config = watch_config if watch_config.is_enabled else None
-    if watch_config.is_enabled and config.trainer.watch_mode == WatchMode.DIAGNOSTIC:
-        diagnostic_watch_step = _make_diagnostic_watch_step(
-            trainer.mp,
-            z_loss_weight=config.trainer.z_loss_weight,
-            watch_config=watch_config,
-        )
-        inline_watch_config = None
-    train_step_fn = _make_train_step(
+    return _make_train_step(
         optimizer,
         trainer.mp,
         z_loss_weight=config.trainer.z_loss_weight,
-        ema_beta=config.trainer.ema_beta,
-        ema_start_step=_ema_start_step(config),
-        watch_config=inline_watch_config,
+        watch_config=trainer.watch if trainer.watch.is_enabled else None,
         grad_accum_microbatches=config.trainer.grad_accum_microbatches,
         layer_skip=config.trainer.layer_skip,
         # Late by default, once the entropy head has learned something.
@@ -1826,7 +1597,6 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         lm_head_grad_clip=config.model.lm_head_grad_clip,
         token_embed_stats=config.model.token_embed_stats,
     )
-    return train_step_fn, diagnostic_watch_step
 
 
 # Every rank logs host-side stalls longer than this: a late rank stalls every other rank's collectives.
@@ -1926,12 +1696,10 @@ def run_grug(config: GrugRunConfig) -> None:
         raise ValueError("trainer.id must be set before dispatching grug training.")
 
     # Dispatch snapshots os.environ for the child task, so apply the runtime defaults first.
-    inline_watch_enabled = trainer.watch.is_enabled and config.trainer.watch_mode == WatchMode.INLINE
     ragged = config.model.moe_implementation == RAGGED_MOE_IMPLEMENTATION
     _apply_runtime_defaults(
-        inline_watch_enabled=inline_watch_enabled,
+        inline_watch_enabled=trainer.watch.is_enabled,
         ragged_transport=config.ragged_transport if ragged else None,
-        collective_overlap_limit=config.collective_overlap_limit,
         processes_per_task=config.processes_per_task,
     )
     local_entrypoint = _run_grug_local

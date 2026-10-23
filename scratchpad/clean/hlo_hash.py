@@ -62,6 +62,11 @@ _SYNTH = {
 }
 
 
+def _train_step_fn(built):
+    """``_build_train_step``'s train step: it returned ``(step, diagnostic_watch_step)`` before the cleanup."""
+    return built[0] if isinstance(built, tuple) else built
+
+
 def _args(case: str) -> list[str]:
     if case.startswith("run:"):
         return ["--run-id", "hlo-run", *_strip_run_id(_RESEARCH[case.removeprefix("run:")])]
@@ -85,9 +90,20 @@ def _args(case: str) -> list[str]:
     raise ValueError(case)
 
 
+# Settings of deleted fields that the recorded runs set to the field's default.
+_DELETED_DEFAULT_SETTINGS = ("moe_drop_renorm=false",)
+
+
 def _strip_run_id(argv: list[str]) -> list[str]:
     i = argv.index("--run-id")
-    return argv[:i] + argv[i + 2 :]
+    argv = argv[:i] + argv[i + 2 :]
+    out = []
+    for a in argv:
+        if a in _DELETED_DEFAULT_SETTINGS and out and out[-1] == "--model-set":
+            out.pop()
+            continue
+        out.append(a)
+    return out
 
 
 def run_config(case: str):
@@ -106,7 +122,7 @@ def lowered_text(case: str) -> str:
     config = run_config(case)
     trainer = config.trainer.trainer
     optimizer = config.optimizer.build(trainer.num_train_steps)
-    train_step_fn, _ = ft_train._build_train_step(config, optimizer)
+    train_step_fn = _train_step_fn(ft_train._build_train_step(config, optimizer))
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size, replica_axis_size=config.trainer.replica_axis_size
     )
@@ -114,9 +130,7 @@ def lowered_text(case: str) -> str:
     seq = config.model.max_seq_len
     with set_mesh(mesh):
         state = jax.eval_shape(
-            lambda key: ft_train.initial_state(
-                config.model, optimizer=optimizer, mp=trainer.mp, key=key, ema_beta=config.trainer.ema_beta
-            ),
+            lambda key: ft_train.initial_state(config.model, optimizer=optimizer, mp=trainer.mp, key=key),
             jax.random.PRNGKey(0),
         )
         leaves, treedef = jax.tree.flatten(state)

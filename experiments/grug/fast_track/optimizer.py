@@ -4,7 +4,6 @@
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -101,17 +100,13 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate)
 
 
 # KDA-layer leaves (``kda_blocks.stacked.attn.<leaf>``) and their update rules. The q/k/v/o and
-# output-gate matrices and the random-init ``kda_dd_rope`` angle projections (w_rot_down/w_rot_up) take the
-# MuonH catch-all, the ShortConv kernels and output-norm scale are ``.weight`` leaves (Adam), and the zero-init
-# angle amplitude ``rot_scale`` is on the generic Adam list.
-_KDA_ATTN_LEAF = re.compile(r"kda_blocks(?:_tail|_rest)?\.stacked\.attn\.(\w+)")
-# Low-rank forget gate, per-head A_log, per-channel dt_bias and the zero-init push / erase-gate
-# projections (MuonH cannot move a zero matrix): Adam (no weight decay).
-_KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias", "push_decay", "w_push", "w_erase", "beta_scale"})
-# Write-strength projection: MuonH at ``kda_beta_lr_mult`` x the MuonH LR.
+# output-gate matrices take the MuonH catch-all, and the ShortConv kernels and output-norm scale are ``.weight``
+# leaves (Adam).
+_KDA_ATTN_LEAF = re.compile(r"kda_blocks\.stacked\.attn\.(\w+)")
+# Low-rank forget gate, per-head A_log and per-channel dt_bias: Adam (no weight decay).
+_KDA_ADAM_LEAVES = frozenset({"w_a_down", "w_a_up", "a_log", "dt_bias"})
+# Write-strength projection: MuonH at ``KDA_BETA_LR_MULT`` x the MuonH LR, or Adam (``kda_beta_group``).
 _KDA_BETA_LEAF = "w_beta"
-# Low-rank write-strength MLP (``kda_beta_rank``): LR group chosen by ``kda_beta_mlp_group``.
-_KDA_BETA_MLP_LEAVES = frozenset({"w_beta_down", "w_beta_up"})
 
 
 def _kda_leaf(path_lower: str) -> str | None:
@@ -120,53 +115,26 @@ def _kda_leaf(path_lower: str) -> str | None:
 
 
 def _is_gate_or_router_weight(path_lower: str) -> bool:
-    """True for exactly the ``attn_gate``, MoE ``router`` and SwitchHead gate weight leaves.
+    """True for exactly the ``attn_gate`` and MoE ``router`` weight leaves.
 
     Matches the leaf attribute name at the end of the path, so it selects ``...attn.attn_gate`` and
     ``...mlp.router`` but not the separate ``...mlp.router_bias`` leaf.
     """
-    return path_lower.endswith(
-        (
-            ".attn_gate",
-            ".attn_gate_up",
-            ".router",
-            ".router_down",
-            ".router_up",
-            ".switch_v_gate",
-            ".switch_o_gate",
-            ".mix_gate",
-            ".kv_mix_gate",
-            ".latent_up_gate",
-            ".latent_width_gate",
-            ".latent_mix_in_gate",
-            ".latent_mix_out_gate",
-        )
-    )
+    return path_lower.endswith((".attn_gate", ".router"))
 
 
 def _is_router_weight(path_lower: str) -> bool:
-    """True for the MoE router weight leaves (full-rank ``router`` or low-rank ``router_down`` / ``router_up``)."""
-    return path_lower.endswith((".mlp.router", ".mlp.router_down", ".mlp.router_up"))
+    return path_lower.endswith(".mlp.router")
 
 
-def _is_zero_centered_gain(path_lower: str) -> bool:
-    """True for the ``gamma`` leaves of zero-centered RMSNorms (``zero_centered_gains``)."""
-    return path_lower.endswith(".gamma")
-
-
-def _adam_decay_coefficients(params, gate_router_weight_decay: float, gain_weight_decay: float):
+def _adam_decay_coefficients(params, gate_router_weight_decay: float):
     """Per-leaf decoupled weight decay of the ``adam`` group: ``gate_router_weight_decay`` on the
-    ``attn_gate`` and ``router`` weight leaves, ``gain_weight_decay`` on the zero-centered norm gains
-    (decaying ``gamma`` pulls the gain ``1 + gamma`` toward 1), 0 everywhere else."""
+    ``attn_gate`` and ``router`` weight leaves, 0 everywhere else."""
     paths = leaf_key_paths(params)
 
     def coefficient(_, path):
         path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
-        if _is_gate_or_router_weight(path_lower):
-            return gate_router_weight_decay
-        if _is_zero_centered_gain(path_lower):
-            return gain_weight_decay
-        return 0.0
+        return gate_router_weight_decay if _is_gate_or_router_weight(path_lower) else 0.0
 
     return jax.tree.map(coefficient, params, paths)
 
@@ -183,16 +151,12 @@ def _ademamix_beta3_schedule(beta1: float, beta3: float, total_steps: int):
 
 
 def _scale_by_adam_decoupled_decay(
-    adam: optax.GradientTransformation, weight_decay: float, gain_weight_decay: float, total_steps: int
+    adam: optax.GradientTransformation, weight_decay: float, total_steps: int
 ) -> optax.GradientTransformation:
-    """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight (and
-    ``gain_weight_decay`` on the zero-centered norm gains), annealed linearly to 0 over ``total_steps``.
-    The coefficient reads the Adam ``count`` and the state stays ``ScaleByAdamState``, so a checkpoint
-    written without decay resumes at the right step with its moments intact.
-
-    ``cautious_decay`` (arXiv 2510.12402, Algorithm 1): decay only the coordinates where the Adam update
-    ``u`` and the parameter agree in sign, ``u + lambda I(u x >= 0) x``, i.e. where the update already
-    shrinks the magnitude."""
+    """``scale_by_adam`` plus decoupled weight decay on ``attn_gate`` and the ``router`` weight, annealed
+    linearly to 0 over ``total_steps``. The coefficient reads the Adam ``count`` and the state stays
+    ``ScaleByAdamState``, so a checkpoint written without decay resumes at the right step with its moments
+    intact."""
 
     def init_fn(params):
         return adam.init(params)
@@ -203,7 +167,7 @@ def _scale_by_adam_decoupled_decay(
         step = optax.tree_utils.tree_get(state, "count")
         updates, next_state = adam.update(updates, state, params)
         anneal = jnp.clip(1.0 - step / total_steps, 0.0, None)
-        coefficients = _adam_decay_coefficients(params, weight_decay, gain_weight_decay)
+        coefficients = _adam_decay_coefficients(params, weight_decay)
 
         def decay(u, p, c):
             if not c:
@@ -287,79 +251,6 @@ def _power_decay_schedule(peak: float, floor: float, warmup_steps: int, total_st
     return schedule
 
 
-BIMAXWELL_FAST_RATE = 0.15
-BIMAXWELL_SLOW_RATE = 0.02
-BIMAXWELL_SLOW_WEIGHT = 0.5615
-"""Bi-Maxwell's twin rails (ANVIL II): EMA rates of the fast and slow rail, and the slow rail's blend weight."""
-
-
-class MuonMomentumState(NamedTuple):
-    count: jax.Array
-    buf: optax.Updates
-    fast: optax.Updates | None
-    slow: optax.Updates | None
-
-
-def scale_by_muon_momentum(momentum: float, nesterov: bool, switch_step: int) -> optax.GradientTransformation:
-    """MuonH momentum outside Newton-Schulz with Bi-Maxwell (modded-nanogpt #339) from ``switch_step`` on.
-
-    Before ``switch_step`` it is (Nesterov) momentum: ``buf = m buf + g``, out ``m buf + g`` (``buf`` without
-    ``nesterov``). From ``switch_step`` on, a fast and a slow EMA of the gradient (rates ``BIMAXWELL_FAST_RATE``
-    and ``BIMAXWELL_SLOW_RATE``), both started from ``(1 - m) buf``, mix as ``M = (1 - w) fast + w slow``
-    (``w = BIMAXWELL_SLOW_WEIGHT``, mean age about 30 steps) and the output is ``g + m (M - g)``. Newton-Schulz is
-    scale-invariant per matrix, so the two regimes' different scales don't matter."""
-
-    def init(params):
-        zeros = lambda: jax.tree.map(jnp.zeros_like, params)  # noqa: E731
-        return MuonMomentumState(jnp.zeros([], jnp.int32), zeros(), zeros(), zeros())
-
-    def update(updates, state, params=None):
-        count = state.count + 1
-
-        def early(args):
-            g_tree, buf_tree, fast_tree, slow_tree = args
-            new_buf = jax.tree.map(lambda g, b: (momentum * b + g).astype(b.dtype), g_tree, buf_tree)
-            if not nesterov:
-                return new_buf, new_buf, fast_tree, slow_tree
-            out = jax.tree.map(lambda g, b: momentum * b + g, g_tree, new_buf)
-            return out, new_buf, fast_tree, slow_tree
-
-        def late(args):
-            g_tree, buf_tree, fast_tree, slow_tree = args
-            # At the switch step, start both EMAs from the Nesterov buffer's EMA-scale value.
-            first = count == switch_step + 1
-
-            def leaf(g, buf, fast, slow):
-                start = (1.0 - momentum) * buf
-                fast = jnp.where(first, start, fast)
-                slow = jnp.where(first, start, slow)
-                fast = fast + BIMAXWELL_FAST_RATE * (g - fast)
-                slow = slow + BIMAXWELL_SLOW_RATE * (g - slow)
-                mix = (1.0 - BIMAXWELL_SLOW_WEIGHT) * fast + BIMAXWELL_SLOW_WEIGHT * slow
-                return (g + momentum * (mix - g)).astype(g.dtype), fast.astype(buf.dtype), slow.astype(buf.dtype)
-
-            res = jax.tree.map(leaf, g_tree, buf_tree, fast_tree, slow_tree)
-
-            def pick(i):
-                return jax.tree.map(lambda _, r: r[i], g_tree, res)
-
-            return pick(0), buf_tree, pick(1), pick(2)
-
-        out, buf, fast, slow = jax.lax.cond(
-            count > switch_step, late, early, (updates, state.buf, state.fast, state.slow)
-        )
-        return out, MuonMomentumState(count, buf, fast, slow)
-
-    return optax.GradientTransformation(init, update)
-
-
-class MuonHState(NamedTuple):
-    """MuonH state when the momentum runs outside Newton-Schulz (Bi-Maxwell)."""
-
-    momentum: MuonMomentumState
-    core: optax.OptState
-
-
 def scale_with_grug_muonh(
     momentum: float,
     nesterov: bool,
@@ -368,62 +259,35 @@ def scale_with_grug_muonh(
     learning_rate,
     coefficient_type: CoefficientType,
     pre_norm: str,
-    bimaxwell_switch_step: int | None,
 ) -> optax.GradientTransformation:
-    """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step.
-
-    ``bimaxwell_switch_step`` (Bi-Maxwell from that step) moves the momentum to ``scale_by_muon_momentum`` ahead
-    of Newton-Schulz (Nesterov momentum there equals the in-Muon one).
-    """
-    external_momentum = bimaxwell_switch_step is not None
+    """MuonH transform for the stacked model: Newton-Schulz direction + Frobenius hyperball step."""
     muon_transform = _grug_scale_with_muon(
-        momentum=0.0 if external_momentum else momentum,
+        momentum=momentum,
         nesterov=nesterov,
         steps=steps,
         muon_eps=muon_eps,
         coefficient_type=coefficient_type,
-        head_dim=None,
         pre_norm=pre_norm,
-        top_shrink=0.0,
-        precond_beta2=None,
-        truncate_frac=0.0,
-        post_blend=0.0,
     )
-    momentum_stage = scale_by_muon_momentum(momentum, nesterov, bimaxwell_switch_step) if external_momentum else None
-
-    def init_fn(params):
-        if momentum_stage is None:
-            return muon_transform.init(params)
-        return MuonHState(momentum_stage.init(params), muon_transform.init(params))
 
     def update_fn(updates, state, params=None):
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
-        if momentum_stage is None:
-            directions, core_state = muon_transform.update(updates, state, params)
-            return _scale_invariant_hyperball_updates(params, directions, learning_rate), core_state
-        mixed, momentum_state = momentum_stage.update(updates, state.momentum, params)
-        directions, core_state = muon_transform.update(mixed, state.core, params)
-        return _scale_invariant_hyperball_updates(params, directions, learning_rate), MuonHState(
-            momentum_state, core_state
-        )
+        directions, core_state = muon_transform.update(updates, state, params)
+        return _scale_invariant_hyperball_updates(params, directions, learning_rate), core_state
 
-    return optax.GradientTransformation(init_fn, update_fn)
+    return optax.GradientTransformation(muon_transform.init, update_fn)
 
 
 def _is_matrix_stack(x) -> bool:
     return hasattr(x, "ndim") and x.ndim >= 2
 
 
-BIMAXWELL_START_FRAC = 1 / 3
-"""Fraction of training after which Bi-Maxwell's two-timescale momentum replaces Nesterov momentum."""
 ATTN_RES_QUERY_LR_SCALE = 0.1
 """Adam LR of the AttnRes pseudo-queries as a multiple of ``adam_lr``."""
 KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
-_ADAM_LEAVES = re.compile(
-    r"(?:^|\.)(value_embed|ve_lambda|ve_gate|bigram_gate_[wb]|bigram_gate_[ab]_lr|qk_mult|attn_res_partial_scale)$"
-)
+_ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult)$")
 
 
 @OptimizerConfig.register_subclass("grug_fast_track_muonh_v1")
@@ -451,20 +315,14 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     beta2: float = 0.95
     epsilon: float = 1e-8
     muon_epsilon: float = 1e-8
-    max_grad_norm: float | None = None
     coefficient_type: CoefficientType = "quintic"
     gate_router_weight_decay: float = 0.02
     kda_beta_group: str = "kda_beta"
-    embed2_lr_mult: float = 1.0
-    """Adam LR multiplier of the second (e.g. bigram) embedding table alone."""
-    embed2_beta2: float = 0.95
-    """Second-moment decay of ``embed2_row_sparse_adam``."""
     muon_pre_norm: str = "none"
     """MuonH momentum normalization before Newton-Schulz: ``none``, ``out`` or ``in`` (MuonEq)."""
     muonh_decay_power: float | None = None
     """Decay shape of the MuonH LR after warmup: ``floor + (peak - floor) * (1 - p**power)`` over training
     progress ``p`` (modded-nanogpt MuonH records #345/#351). None keeps the shared schedule (linear = 1)."""
-    muon_bimaxwell: bool = False
     adam_ademamix_alpha: float = 0.0
     """AdEMAMix (arXiv 2409.03152) on the plain-Adam groups: weight of a slow gradient EMA added to Adam's
     first moment, warmed up linearly over the run (0: off; the paper uses 5-8)."""
@@ -489,15 +347,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 self.muonh_decay_power,
             )
         adam_lr_schedule = self.lr_scheduler(num_train_steps, override_lr=self.adam_lr)
-        bimaxwell_switch = int(BIMAXWELL_START_FRAC * num_train_steps) if self.muon_bimaxwell else None
-
-        def clipped(*components):
-            if self.max_grad_norm:
-                components = (optax.clip_by_global_norm(self.max_grad_norm), *components)
-            return optax.chain(*components)
 
         def muonh_at(lr):
-            return clipped(
+            return optax.chain(
                 scale_with_grug_muonh(
                     momentum=self.momentum,
                     nesterov=self.nesterov,
@@ -506,7 +358,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                     learning_rate=lr,
                     coefficient_type=self.coefficient_type,
                     pre_norm=self.muon_pre_norm,
-                    bimaxwell_switch_step=bimaxwell_switch,
                 ),
                 _match_named_update_sharding(),
             )
@@ -532,31 +383,32 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             """Adam at ``lr``; ``decay`` adds the annealed decoupled ``gate_router_weight_decay``."""
             adam = adam_moments(self.beta1, self.beta2)
             if decay and self.gate_router_weight_decay > 0.0:
-                adam = _scale_by_adam_decoupled_decay(adam, self.gate_router_weight_decay, 0.0, num_train_steps)
-            return clipped(adam, optax.scale(-lr))
+                adam = _scale_by_adam_decoupled_decay(adam, self.gate_router_weight_decay, num_train_steps)
+            return optax.chain(adam, optax.scale(-lr))
 
         def embed_at(lr):
             if self.embed_optimizer == EmbedOptimizer.ROW_ADAMH:
-                return clipped(scale_by_row_sphere_adam(self.beta1, self.beta2, self.epsilon, lr))
+                return optax.chain(scale_by_row_sphere_adam(self.beta1, self.beta2, self.epsilon, lr))
             if self.embed_optimizer == EmbedOptimizer.ADAM:
                 moments = optax.scale_by_adam(self.beta1, self.beta2, self.epsilon)
             else:
                 moments = adam_moments(self.beta1, self.beta2)
             decay = (_fixed_decoupled_decay(self.embed_weight_decay),) if self.embed_weight_decay else ()
-            return clipped(moments, *decay, optax.scale(-lr))
+            return optax.chain(moments, *decay, optax.scale(-lr))
 
         def optimizer(learning_rate, adam_lr):
             transforms = {
                 "muonh": muonh_at(learning_rate),
-                "adamh": clipped(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate)),
+                "adamh": optax.chain(scale_by_adamh(self.beta1, self.beta2, self.epsilon, learning_rate)),
                 "adam": adam_at(adam_lr, decay=True),
                 "attn_res_query": adam_at(adam_lr * ATTN_RES_QUERY_LR_SCALE),
                 "kda_beta": muonh_at(learning_rate * KDA_BETA_LR_MULT),
                 "kda_beta_adam": adam_at(adam_lr, decay=True),
                 "kda_decay": adam_at(adam_lr),
-                # Learned output gains (moe_null_learned_gain, extra_mlp_gain) and the entropy head: no decay pull.
+                # The entropy head and the skip router: no decay pull. (Group names stay as the checkpoints
+                # of earlier runs store them; "embed2" holds no parameter.)
                 "null_gain": adam_at(adam_lr),
-                "embed2": adam_at(adam_lr * self.embed2_lr_mult),
+                "embed2": adam_at(adam_lr),
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
                 "embed": embed_at(adam_lr),
             }
@@ -580,13 +432,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
                 return "kda_beta_adam" if self.kda_beta_group == "adam" else self.kda_beta_group
-            if kda_leaf in _KDA_BETA_MLP_LEAVES:
-                return "kda_beta"
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
-            if re.search(
-                r"null_gain|extra_mlp_gain|entropy_head|mid_conf|final_conf|skip_probe|skip_router", path_lower
-            ):
+            if re.search(r"entropy_head|skip_router", path_lower):
                 return "null_gain"
             # AttnRes pseudo-queries are per-layer vectors (2D once stacked, which would route to MuonH).
             if "attn_res_query" in path_lower:
@@ -594,8 +442,6 @@ class GrugMoeMuonHConfig(OptimizerConfig):
             # Inkling rel-pos weights; value embeddings and their mixing weights; small per-layer gates.
             if ".rel_pos." in path_lower or _ADAM_LEAVES.search(path_lower):
                 return "adam"
-            if re.search(r"token_embed(2|3)", path_lower) and self.embed2_lr_mult != 1.0:
-                return "embed2"
             if _TOKEN_EMBED.search(path_lower) and self.embed_optimizer != EmbedOptimizer.ADAM_GROUP:
                 return "embed"
             if "token_embed" in path_lower:

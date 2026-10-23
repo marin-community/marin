@@ -57,15 +57,13 @@ from experiments.grug.fast_track.train import (
     GrugTrainerConfig,
     LayerSkipRule,
     RaggedTransport,
-    WatchMode,
     _compute_match_flops,
-    dropless_moe_implementation,
     run_grug,
 )
 from experiments.grug.moe.launch_datakit_moe_mix import _val_component
 
 # Run defaults.
-LADDER_SIZES = ("d512", "d768", "d1024", "d1280", "d1536")
+LADDER_SIZES = ("d512", "d768", "d1024", "d1280")
 DEFAULT_WANDB_PROJECT = "marin_moe"
 # Default tokens-per-active-param budgets defining each variant's baseline: dense compute-optimal, MoE 3x.
 DENSE_TPP = 20
@@ -232,9 +230,6 @@ def _h100_ladder_rung(size: str) -> H100LadderRung:
             baseline_batch=256,
             attn_res_remat_attention=True,  # KMA d1280 OOMs without it
         )
-    if size == "d1536":
-        # 24 layers, 12 heads x 128, GQA 3:1; no recorded baseline budget (pass --num-steps).
-        return H100LadderRung(SmallShape(1536, 24, 12, 4, 4), gpus_per_task=8, baseline_batch=256)
     raise ValueError(f"size must be one of {list(LADDER_SIZES)}, got {size!r}")
 
 
@@ -305,11 +300,10 @@ def _active_params(cfg: GrugModelConfig) -> int:
     attn = 2 * d * cfg.num_heads * cfg.head_dim + 2 * d * cfg.num_kv_heads * cfg.head_dim
     if cfg.dense_mlp:
         return cfg.num_layers * (attn + 3 * d * cfg.intermediate_dim)
-    routed = cfg.num_experts_per_token * (2 * cfg.expert_in_dim + cfg.expert_out_dim) * cfg.intermediate_dim
-    latent_down = 0 if cfg.latent_dim is None else d * cfg.latent_dim
-    latent_proj = latent_down + (d * cfg.expert_out_dim if cfg.has_latent_up else 0)
+    routed = cfg.num_experts_per_token * 3 * cfg.expert_in_dim * cfg.intermediate_dim
+    latent_proj = 0 if cfg.latent_dim is None else 2 * d * cfg.latent_dim
     shared = cfg.num_shared_experts * 3 * d * cfg.shared_expert_intermediate_dim
-    router = d * (cfg.num_experts + cfg.num_null_experts)
+    router = d * cfg.num_experts
     return cfg.num_layers * (attn + router + routed + latent_proj + shared)
 
 
@@ -370,27 +364,22 @@ def build_h100_ladder_run(
     temporary_checkpoints_only: bool = False,
     recipe: Recipe = Recipe.BASELINE,
     optimizer_kind: OptimizerKind = OptimizerKind.MUONH,
-    attn_res_remat_attention: bool = False,
     seed: int = 0,
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
     token_dump: bool = False,
     watch_interval: int = WATCH_INTERVAL,
     token_dump_skip_layers: tuple[int, ...] = (),
-    routing_dump_steps: tuple[int, ...] = (),
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_frac: float = 0.5,
     resume_from: str | None = None,
     xla_memory_report: bool = False,
     loader_buffer_batches: int = TRAIN_LOADER_BUFFER_SIZE,
-    ema_beta: float | None = None,
-    ema_last_steps: int | None = None,
     max_retries_failure: int = MAX_RETRIES_FAILURE,
     model_settings: Mapping[str, str] | None = None,
     optimizer_settings: Mapping[str, str] | None = None,
     z_loss_weight: float = Z_LOSS_WEIGHT,
     ragged_transport: RaggedTransport = RaggedTransport.ONE_SHOT,
-    collective_overlap_limit: int | None = None,
     single_process: bool = False,
     grad_accum_microbatches: int = 1,
     checkpoint_keep: tuple[tuple[int, int | None], ...] = (),
@@ -402,12 +391,9 @@ def build_h100_ladder_run(
 
     Budget resolution (see ``MatchMode``): ``batch_size`` defaults to the rung's baseline batch;
     ``num_steps`` overrides the step count directly, else it is derived to data- or compute-match the
-    variant's baseline at that batch. ``recipe`` picks the architecture; ``attn_res_remat_attention``
-    forces the KMA attention-branch remat on rungs that do not default to it. Evaluation runs at the
-    end only. Permanent checkpoints
-    default to the final step, with one rolling checkpoint every ``RESUME_SAVE_INTERVAL`` on region-local
-    temporary storage.
-    ``collective_overlap_limit`` overrides XLA's concurrent-collective limit (None: the mode default).
+    variant's baseline at that batch. ``recipe`` picks the architecture. Evaluation runs at the end only.
+    Permanent checkpoints default to the final step, with one rolling checkpoint every ``RESUME_SAVE_INTERVAL``
+    on region-local temporary storage.
     ``ragged_transport`` picks the XLA kernel when ``model_settings`` select ``moe_implementation=ragged_all_to_all``;
     ``single_process`` runs one JAX process owning every GPU of the task, which its peer-writing kernels need.
     ``nodes`` overrides the rung's node count. ``expert_axis_size`` (default: every device) shards the experts over
@@ -425,10 +411,6 @@ def build_h100_ladder_run(
     model = dataclasses.replace(_h100_ladder_model(rung, dense=dense), vocab_size=vocab_size)
     if recipe is Recipe.KMA:
         model = _kma_model(model)
-    if attn_res_remat_attention:
-        if not model.attn_res:
-            raise ValueError("attn_res_remat_attention requires the kma recipe")
-        model = dataclasses.replace(model, attn_res_remat_attention=True)
     model = _apply_settings(model, model_settings or {})
     if expert_axis_size is None:
         expert_axis_size = 1 if dense else rung.global_device_count
@@ -487,15 +469,11 @@ def build_h100_ladder_run(
         )
     optimizer = _apply_settings(optimizer, optimizer_settings or {})
     grug_trainer = GrugTrainerConfig(
-        data_seed=None,
         log_every=1,
         z_loss_weight=z_loss_weight,
-        watch_mode=WatchMode.INLINE,
         save_checkpoints=save_checkpoints or temporary_checkpoints_only,
         expert_axis_size=expert_axis_size,
         replica_axis_size=replica_axis_size,
-        ema_beta=ema_beta,
-        ema_last_steps=ema_last_steps,
         grad_accum_microbatches=grad_accum_microbatches,
     )
     train_resources = ResourceConfig.with_gpu(
@@ -577,11 +555,9 @@ def build_h100_ladder_run(
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 token_dump_path=(prefix_join(ctx.output_path, "token_dump.npz") if token_dump else None),
                 token_dump_skip_layers=token_dump_skip_layers,
-                routing_dump_dir=prefix_join(ctx.output_path, "routing_dump") if routing_dump_steps else None,
                 lm_head_grad_dump_dir=(
                     prefix_join(ctx.output_path, "lm_head_grad") if model.lm_head_grad_dump_every else None
                 ),
-                routing_dump_steps=routing_dump_steps,
                 layer_skip=layer_skip,
                 extra_mlp_start_frac=extra_mlp_start_frac,
                 completion_marker_path=prefix_join(ctx.output_path, "final_eval_done.json"),
@@ -596,13 +572,11 @@ def build_h100_ladder_run(
                     eval_batch_size=rung.global_device_count,
                     compute_bpb=True,
                     dropless_eval=True,
-                    dropless_eval_moe_implementation=dropless_moe_implementation(model),
                 )
             ),
             stop_after_steps=num_steps if stop_after_steps is None else stop_after_steps,
             processes_per_task=1 if single_process else rung.gpus_per_task,
             ragged_transport=ragged_transport,
-            collective_overlap_limit=collective_overlap_limit,
             max_retries_failure=max_retries_failure,
             max_task_failures=MAX_TASK_FAILURES,
         )
@@ -747,12 +721,6 @@ def _layer_skip_rule(
     help="Architecture: the baseline, or KMA (KDA local + MLA/Inkling global layers + Block AttnRes).",
 )
 @click.option(
-    "--attn-res-remat-attention",
-    is_flag=True,
-    help="KMA: recompute the attention branch in each AttnRes layer's backward (lower peak memory, one "
-    "extra attention forward per layer; always on at d1280).",
-)
-@click.option(
     "--seed",
     type=int,
     default=0,
@@ -789,12 +757,6 @@ def _layer_skip_rule(
     help="Steps between logged parameter/gradient watch statistics; 0 turns the watch off.",
 )
 @click.option(
-    "--routing-dump-steps",
-    default=None,
-    help="Comma-separated steps: after each, write the routing and routed neuron activity of fixed held-out "
-    "sequences to <output>/routing_dump/step-<step>.npz.",
-)
-@click.option(
     "--token-dump-skip-layers",
     default=None,
     help="Comma-separated layers: the token dump also records each token's loss with every token skipping them.",
@@ -815,8 +777,6 @@ def _layer_skip_rule(
     default=TRAIN_LOADER_BUFFER_SIZE,
     help="Batches the train loader keeps on the devices ahead of the step.",
 )
-@click.option("--ema-beta", type=float, default=None, help="Weight-EMA decay; evals after the EMA start score the EMA.")
-@click.option("--ema-last-steps", type=int, default=None, help="Run the weight EMA over only the last N steps.")
 @click.option(
     "--max-retries",
     type=click.IntRange(min=0),
@@ -837,12 +797,6 @@ def _layer_skip_rule(
     default=RaggedTransport.ONE_SHOT.value,
     show_default=True,
     help="XLA kernel for --model-set moe_implementation=ragged_all_to_all. one_shot needs --single-process.",
-)
-@click.option(
-    "--collective-overlap-limit",
-    type=int,
-    default=None,
-    help="XLA's concurrent-collective limit (default: 1 for ragged MoE or inline watch, else 4).",
 )
 @click.option(
     "--single-process",
@@ -927,14 +881,12 @@ def main(
     temporary_checkpoints_only: bool,
     recipe: str,
     optimizer_kind: str,
-    attn_res_remat_attention: bool,
     seed: int,
     profile_start_step: int | None,
     dump_hlo: bool,
     token_dump: bool,
     watch_interval: int,
     token_dump_skip_layers: str | None,
-    routing_dump_steps: str | None,
     extra_mlp_start_frac: float,
     layer_skip_layers: str | None,
     layer_skip_rate: float,
@@ -943,12 +895,9 @@ def main(
     resume_from: str | None,
     xla_memory_report: bool,
     loader_buffer_batches: int,
-    ema_beta: float | None,
-    ema_last_steps: int | None,
     max_retries: int,
     z_loss_weight: float,
     ragged_transport: str,
-    collective_overlap_limit: int | None,
     single_process: bool,
     grad_accum_microbatches: int,
     checkpoint_keep: str,
@@ -976,13 +925,11 @@ def main(
         temporary_checkpoints_only=temporary_checkpoints_only,
         recipe=Recipe(recipe),
         optimizer_kind=OptimizerKind(optimizer_kind),
-        attn_res_remat_attention=attn_res_remat_attention,
         seed=seed,
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
         token_dump=token_dump,
         watch_interval=watch_interval,
-        routing_dump_steps=tuple(int(x) for x in routing_dump_steps.split(",")) if routing_dump_steps else (),
         token_dump_skip_layers=(
             tuple(int(x) for x in token_dump_skip_layers.split(",")) if token_dump_skip_layers else ()
         ),
@@ -991,14 +938,11 @@ def main(
         resume_from=resume_from,
         xla_memory_report=xla_memory_report,
         loader_buffer_batches=loader_buffer_batches,
-        ema_beta=ema_beta,
-        ema_last_steps=ema_last_steps,
         max_retries_failure=max_retries,
         model_settings=_parse_settings(model_set),
         optimizer_settings=_parse_settings(opt_set),
         z_loss_weight=z_loss_weight,
         ragged_transport=RaggedTransport(ragged_transport),
-        collective_overlap_limit=collective_overlap_limit,
         single_process=single_process,
         grad_accum_microbatches=grad_accum_microbatches,
         checkpoint_keep=tuple(_keep_policy(entry) for entry in checkpoint_keep.split(",") if entry),

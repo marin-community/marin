@@ -134,20 +134,18 @@ def test_router_stats_and_qb_biases_follow_layer_order():
 
 
 def test_kda_kernel_options_keep_the_loss_and_gradients():
-    """The KDA speed options (longer fused chunks, on-chip decay / erase gates, fused state cotangents)
-    are the same math: loss and gradients match the default model."""
+    """The KDA speed options (longer fused chunks, the on-chip decay gate, fused state cotangents) are the same
+    math: loss and gradients match the default model."""
     tokens = jax.random.randint(jax.random.PRNGKey(3), (2, _SEQ), 0, _VOCAB)
     weights = jnp.ones(tokens.shape, jnp.float32)
 
     def loss_and_grads(**overrides):
-        mesh, model = _model(kda_erase_gate=True, **overrides)
+        mesh, model = _model(**overrides)
         with jax.set_mesh(mesh):
             return eqx.filter_jit(eqx.filter_value_and_grad(lambda m: m.next_token_loss(tokens, weights)))(model)
 
     loss_ref, grads_ref = loss_and_grads()
-    loss, grads = loss_and_grads(
-        kda_chunk_size=32, kda_onchip_decay_gate=True, kda_onchip_erase_gate=True, kda_state_grads=StateGrads.PALLAS
-    )
+    loss, grads = loss_and_grads(kda_chunk_size=32, kda_onchip_decay_gate=True, kda_state_grads=StateGrads.PALLAS)
     np.testing.assert_allclose(float(loss), float(loss_ref), rtol=1e-6)
     for got, want in zip(jax.tree.leaves(grads), jax.tree.leaves(grads_ref), strict=True):
         np.testing.assert_allclose(np.asarray(got, np.float32), np.asarray(want, np.float32), rtol=1e-5, atol=1e-6)
