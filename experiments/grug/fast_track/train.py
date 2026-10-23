@@ -965,13 +965,13 @@ def _lm_head_grad_metrics(
     The loss is a mean over the loss-weighted tokens, so ``raw_norms`` carry a factor 1 / sum(loss_weight); the
     norms here are scaled by that sum: each is the gradient norm of the token's own loss term (its cross-entropy
     plus its z-loss share), comparable across batch sizes. Tokens with zero loss weight are excluded from the stats
-    (``masked_max`` checks they are 0). With ``clip`` (``lm_head_grad_clip``), the post-norm ``frac_clipped`` is
-    the fraction of loss tokens whose pre-clip norm exceeds it."""
+    (``masked_max`` checks they are 0). With ``clip`` (``lm_head_grad_clip``, which needs a single site), that
+    site's ``frac_clipped`` is the fraction of loss tokens whose pre-clip norm exceeds it."""
     loss_tokens = jnp.sum(batch.loss_weight.astype(jnp.float32))
     out: dict[str, jax.Array] = {}
     sites = {
         GradProbeSite.POST_NORM: (LM_HEAD_GRAD_PREFIX, LM_HEAD_GRAD_NORM_KEY, clip),
-        GradProbeSite.PRE_NORM: (LM_HEAD_GRAD_PRE_PREFIX, LM_HEAD_GRAD_PRE_NORM_KEY, None),
+        GradProbeSite.PRE_NORM: (LM_HEAD_GRAD_PRE_PREFIX, LM_HEAD_GRAD_PRE_NORM_KEY, clip),
     }
     for site, raw in raw_norms.items():
         prefix, key, site_clip = sites[site]

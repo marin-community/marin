@@ -955,6 +955,14 @@ class GrugModelConfig:
     """GatedNorm after the embedding RMSNorm (else the RMSNorm alone)."""
     final_gated_norm: bool = True
     """GatedNorm after the final RMSNorm, before the lm_head (else the RMSNorm alone)."""
+    final_norm_eps: float | None = None
+    """Epsilon of the final RMSNorm, ``x / sqrt(mean(x^2) + eps)`` (the RMSNorm part only, not
+    ``final_gated_norm``); None: ``layer_norm_eps``."""
+    final_norm_eps_max: float | None = None
+    """Learn the final RMSNorm's epsilon (``LearnedEpsRMSNorm``): ``eps = exp(lo + (hi - lo) clip(v, 0, 1))`` with
+    ``lo`` the log of the fixed epsilon above, ``hi = log(final_norm_eps_max)`` and ``v`` a learned scalar (init 0,
+    so training starts at the fixed epsilon; Adam, no decay; the clip passes its gradient straight through).
+    Logs ``train/aux/final_norm_eps``. None: fixed."""
     mla_k_norm: bool = False
     """Weightless per-head RMSNorm on the MLA keys only, no query norm (DeepSeek-V4.1's setup)."""
     mla_q_norm: bool = False
@@ -979,8 +987,9 @@ class GrugModelConfig:
     """Log ``token_embed``'s Frobenius norm, row-norm min / p1 / p50 / max and relative update every train step
     (``train/embed/``). Logging only."""
     lm_head_grad_clip: float | None = None
-    """With ``lm_head_grad_probe``: clip each training token's gradient w.r.t. the lm_head input to this norm, in
-    the probe's per-token units (the gradient of the token's own loss term), ``g * min(1, c / ||g||)``. The probe
+    """With ``lm_head_grad_probe``: clip each training token's gradient at the probe site (the lm_head input, or
+    with ``lm_head_grad_probe_site=pre_norm`` the residual stream entering ``final_norm``) to this norm, in the
+    probe's per-token units (the gradient of the token's own loss term), ``g * min(1, c / ||g||)``. The probe
     still reports the pre-clip norms. None: no clipping."""
     init_std_mult_gates: float = 1.0
     """Init-std multiplier of the MuonH-trained sigmoid gate matrices (KDA ``w_g`` / ``w_beta``, MoE gates)."""
@@ -1071,13 +1080,22 @@ class GrugModelConfig:
     embedding with ``vocab_size`` hashed rows (the previous token is a sentinel at document starts)."""
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
+    @property
+    def final_norm_epsilon(self) -> float:
+        """The final RMSNorm's fixed (or, when learned, initial) epsilon."""
+        return self.layer_norm_eps if self.final_norm_eps is None else self.final_norm_eps
+
     def __post_init__(self) -> None:
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
             raise ValueError("lm_head_grad_dump_every needs lm_head_grad_probe")
         if self.lm_head_grad_clip is not None and (not self.lm_head_grad_probe or self.lm_head_grad_clip <= 0):
             raise ValueError("lm_head_grad_clip needs lm_head_grad_probe and a positive threshold")
-        if self.lm_head_grad_clip is not None and self.lm_head_grad_probe_site == GradProbeSite.PRE_NORM:
-            raise ValueError("lm_head_grad_clip clips at the post-norm probe site")
+        if self.lm_head_grad_clip is not None and self.lm_head_grad_probe_site == GradProbeSite.BOTH:
+            raise ValueError("lm_head_grad_clip clips at one probe site, not both")
+        if self.final_norm_eps is not None and self.final_norm_eps <= 0:
+            raise ValueError(f"final_norm_eps must be positive, got {self.final_norm_eps}")
+        if self.final_norm_eps_max is not None and self.final_norm_eps_max <= self.final_norm_epsilon:
+            raise ValueError(f"final_norm_eps_max must exceed the final norm's epsilon {self.final_norm_epsilon}")
         if self.moe_k_layers and (
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
@@ -2301,6 +2319,49 @@ class ZeroCenteredRMSNorm(eqx.Module):
 
 
 LearnedRMSNorm = RMSNorm | ZeroCenteredRMSNorm
+
+
+class LearnedEpsRMSNorm(eqx.Module):
+    """RMSNorm with a learned epsilon ``exp(lo + (hi - lo) clip(eps_frac, 0, 1))`` (``final_norm_eps_max``).
+
+    ``eps_frac`` starts at 0, where the epsilon is exactly ``eps_min``. The clip passes its gradient straight
+    through, so a ``eps_frac`` pushed past a bound keeps a gradient and can come back."""
+
+    weight: jax.Array
+    eps_frac: jax.Array
+    eps_min: float = eqx.field(static=True)
+    eps_max: float = eqx.field(static=True)
+
+    @staticmethod
+    def init(dim: int, eps_min: float, eps_max: float) -> "LearnedEpsRMSNorm":
+        return LearnedEpsRMSNorm(
+            weight=jnp.ones((dim,), dtype=jnp.float32),
+            eps_frac=jnp.zeros((), dtype=jnp.float32),
+            eps_min=eps_min,
+            eps_max=eps_max,
+        )
+
+    def epsilon(self) -> jax.Array:
+        frac = self.eps_frac.astype(jnp.float32)
+        frac = frac + jax.lax.stop_gradient(jnp.clip(frac, 0.0, 1.0) - frac)
+        # eps_min * exp(0) is exactly eps_min at init.
+        return self.eps_min * jnp.exp(math.log(self.eps_max / self.eps_min) * frac)
+
+    @named_call
+    def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        dtype = x.dtype
+        x = x.astype(jnp.float32)
+        variance = jnp.mean(jnp.square(x), axis=-1, keepdims=True)
+        normed = x * jax.lax.rsqrt(variance + self.epsilon())
+        return (normed * unshard(self.weight)).astype(dtype)
+
+
+def _final_rms_norm(cfg: "GrugModelConfig") -> "LearnedRMSNorm | LearnedEpsRMSNorm":
+    if cfg.final_norm_eps_max is None:
+        return _learned_rms_norm(cfg, cfg.hidden_dim, cfg.final_norm_epsilon, role="final")
+    if _norm_gain_overrides(cfg).get("final", NormGainFn.LINEAR) != NormGainFn.LINEAR:
+        raise ValueError("final_norm_eps_max needs the linear final-norm gain")
+    return LearnedEpsRMSNorm.init(cfg.hidden_dim, cfg.final_norm_epsilon, cfg.final_norm_eps_max)
 
 
 def _learned_rms_norm(cfg: GrugModelConfig, dim: int, eps: float, role: str | None = None) -> LearnedRMSNorm:
@@ -5441,7 +5502,7 @@ class Transformer(eqx.Module):
     """Softmax-attention layers of ``_rest_layers`` (``scan_layers`` only)."""
     kda_blocks_rest: ArrayStacked[Block] | None
     """KDA layers of ``_rest_layers`` (``scan_layers`` only)."""
-    final_norm: LearnedRMSNorm
+    final_norm: LearnedRMSNorm | LearnedEpsRMSNorm
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
     """Pseudo-query of the final AttnRes gate, whose mix feeds the final norms and the lm_head."""
@@ -5547,7 +5608,7 @@ class Transformer(eqx.Module):
             kda_blocks_tail=stack(kda_tail, True, tail_cfg) if kda_tail else None,
             stacked_blocks_rest=stack(softmax_rest, False, body_cfg) if softmax_rest else None,
             kda_blocks_rest=stack(kda_rest, True, body_cfg) if kda_rest else None,
-            final_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps, role="final"),
+            final_norm=_final_rms_norm(cfg),
             final_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
             ),
@@ -5695,12 +5756,14 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
+        pre_norm_grad_raw_clip: jax.Array | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``layer_gates`` (``layer_onset_gates`` at the train step) masks or ramps the delayed layers' AttnRes
         sources; None runs every layer fully on.
         ``extra_mlp_active`` (traced bool) turns on the ``extra_mlp_layers`` MLPs (off: no token reaches them).
         ``pre_norm_grad_probe`` (zeros ``[B, S]``) passes the stream entering ``final_norm`` through
-        ``lm_head_grad_probe`` and adds each token's RMS of it as ``FINAL_NORM_INPUT_RMS_KEY``.
+        ``lm_head_grad_probe`` and adds each token's RMS of it as ``FINAL_NORM_INPUT_RMS_KEY``;
+        ``pre_norm_grad_raw_clip`` clips that per-token gradient there (raw units; None: no clip).
         ``layer_skip`` (an eval ablation, AttnRes only) drops the listed layers' attention and MLP outputs for
         the tokens it marks.
         ``loop_active`` (static, with ``loop_grow_step``) selects one pass (False) or all ``loop_passes``
@@ -5863,7 +5926,8 @@ class Transformer(eqx.Module):
         if pre_norm_grad_probe is not None:
             rms = jnp.sqrt(jnp.mean(jnp.square(jax.lax.stop_gradient(hidden).astype(jnp.float32)), axis=-1))
             router_metrics[FINAL_NORM_INPUT_RMS_KEY] = rms
-            hidden = lm_head_grad_probe(hidden, pre_norm_grad_probe, jnp.asarray(jnp.inf, jnp.float32))
+            raw_clip = jnp.inf if pre_norm_grad_raw_clip is None else pre_norm_grad_raw_clip
+            hidden = lm_head_grad_probe(hidden, pre_norm_grad_probe, jnp.asarray(raw_clip, jnp.float32))
         hidden = self.final_norm(hidden)
         if self.final_gated_norm is not None:
             hidden = self.final_gated_norm(hidden)
@@ -6616,7 +6680,14 @@ class Transformer(eqx.Module):
         so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
         cross-entropy's input through ``lm_head_grad_probe``: its gradient is each token's input-gradient norm, and
         ``lm_head_grad_clip`` clips that gradient per token. ``pre_norm_grad_probe`` does the same at the stream
-        entering ``final_norm`` (``Transformer.__call__``)."""
+        entering ``final_norm`` (``Transformer.__call__``); ``lm_head_grad_clip`` clips at whichever site
+        ``lm_head_grad_probe_site`` names."""
+        clip = self.config.lm_head_grad_clip
+        # The loss is a mean over loss tokens, so the raw per-token gradient is the per-token one / N.
+        raw_clip = (
+            None if clip is None else jnp.asarray(clip / jnp.maximum(jnp.sum(loss_weight.astype(jnp.float32)), 1.0))
+        )
+        pre_norm_clip = raw_clip if self.config.lm_head_grad_probe_site == GradProbeSite.PRE_NORM else None
         hidden, router_metrics = self(
             token_ids,
             mask=mask,
@@ -6627,9 +6698,13 @@ class Transformer(eqx.Module):
             extra_mlp_active=extra_mlp_active,
             pre_norm_grad_probe=pre_norm_grad_probe,
             layer_gates=layer_gates,
+            pre_norm_grad_raw_clip=pre_norm_clip,
         )
         final_norm_rms = router_metrics.pop(FINAL_NORM_INPUT_RMS_KEY, None)
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
+        if isinstance(self.final_norm, LearnedEpsRMSNorm):
+            probe_metrics["train/aux/final_norm_eps"] = jax.lax.stop_gradient(self.final_norm.epsilon())
+            probe_metrics["train/aux/final_norm_eps_frac"] = jax.lax.stop_gradient(self.final_norm.eps_frac)
         mid_hidden = router_metrics.pop(_MID_HIDDEN, None)
         final_conf_logits = router_metrics.pop(_FINAL_CONF_LOGITS, None)
         skip_probe_logits = router_metrics.pop(_SKIP_PROBE_LOGITS, None)
@@ -6661,10 +6736,8 @@ class Transformer(eqx.Module):
 
         head_in = hidden
         if head_grad_probe is not None:
-            clip = self.config.lm_head_grad_clip
-            # The loss is a mean over loss tokens, so the raw per-token gradient is the per-token one / N.
-            raw_clip = jnp.inf if clip is None else clip / jnp.maximum(jnp.sum(loss_weight.astype(jnp.float32)), 1.0)
-            head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
+            post_norm_clip = jnp.inf if raw_clip is None or pre_norm_clip is not None else raw_clip
+            head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(post_norm_clip, jnp.float32))
         cross_entropy_loss = lm_loss(head_in)
         replay_loss = None
         if head_replay is not None:
