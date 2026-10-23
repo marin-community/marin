@@ -16,7 +16,6 @@ Two conversions make the rows run on any policy and without Daytona:
   bubblewrap sandbox (see ``rollouts.machine_factories``).
 """
 
-import hashlib
 import json
 import random
 from collections import Counter
@@ -134,8 +133,3 @@ def host_graded(task: TaskSpec) -> TaskSpec:
         return task
     environment = grader.environment.model_copy(update={"docker_image": None, "package_spec": PackageSpec()})
     return task.model_copy(update={"grader": grader.model_copy(update={"environment": environment})})
-
-
-def task_digest(task_id: str) -> str:
-    """A short stable digest of a task ID, for file names."""
-    return hashlib.sha256(task_id.encode()).hexdigest()[:16]

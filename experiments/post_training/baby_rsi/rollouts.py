@@ -4,8 +4,8 @@
 """Run a policy on tasks: the rollout spec of each task, the machines, and groups of graded attempts.
 
 Every task of the loop runs on the same ``RolloutEngine``: a pool task without tools answers in one turn, a
-structural-closure task continues its assistant prefix, and a synthesized task gets a shell on a ShellSim machine.
-Script graders run in a bubblewrap sandbox with the host's Python environment.
+structural-closure task continues its assistant prefix, and a task with a shell gets a bubblewrap (``linux_process``)
+or ShellSim machine. Script graders run in a bubblewrap sandbox with the host's Python environment.
 """
 
 import asyncio
@@ -61,7 +61,7 @@ PASS_REWARD = 1.0
 
 
 def machine_factories(grader_slots: int) -> dict[str, MachineFactory]:
-    """ShellSim for synthesized tasks, and bubblewrap with this Python environment for script graders.
+    """Bubblewrap with this Python environment for script graders and synthesized tasks, and ShellSim.
 
     The grader sandbox sees the virtual environment, the workspace's editable library sources and the base
     interpreter, read-only. It does not mount the whole checkout, because a script grader writes the answer to

@@ -237,8 +237,6 @@ def _prefill_request(
     )
     if isinstance(encoded, Mapping):
         encoded = encoded["input_ids"]
-    if hasattr(encoded, "tolist"):
-        encoded = encoded.tolist()
     if encoded and isinstance(encoded[0], list):
         (encoded,) = encoded
     sampling = {
