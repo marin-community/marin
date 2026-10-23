@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from finestore.commit import write_schema
 from finestore.compaction import CompactionResult, compact_table
-from finestore.layout import FineStoreLayout, TableMetadata
+from finestore.layout import BlobTables, FineStoreLayout, TableMetadata
 from finestore.reader import ReadView
 from finestore.store import DataStore, OnConflict
 from finestore.testing.simulated_s3 import Request, SimulatedConditionalObject, simulated_s3
@@ -179,6 +179,27 @@ def test_point_lookup_reads_only_shards_whose_bounds_match(simulated_bucket):
     assert delta.requests[Request.HEAD] == 0
     assert delta.total() <= 3, dict(delta.requests)
     assert view.point("samples", id=999) is None
+
+
+def test_point_lookups_skip_old_rows_in_a_later_compaction(simulated_bucket):
+    store = DataStore.open(ROOT, flush_interval=3600)
+    for value in (b"oldest", b"old"):
+        store.write_object("kernel", value)
+        store.flush()
+        store.compact(BlobTables.DESCRIPTORS, generation=0)
+    store.write_object("kernel", b"new")
+    store.flush()
+    store.compact(BlobTables.DESCRIPTORS, generation=1)
+    store.request_stop()
+    later_compaction = max(ReadView(ROOT).list_shards(BlobTables.DESCRIPTORS), key=lambda shard: shard.commit_sequence)
+    StoragePath(later_compaction.path).rm()
+
+    view = ReadView(ROOT)
+    assert view.read_blob("kernel") == b"new"
+    assert view.point(BlobTables.DESCRIPTORS, name="kernel")["data"] == b"new"
+    # A scan still requires the entire committed table; only a resolved point lookup can stop early.
+    with pytest.raises(FileNotFoundError):
+        view.scan(BlobTables.DESCRIPTORS)
 
 
 def test_concurrent_writers_publish_every_row_through_conflicts():

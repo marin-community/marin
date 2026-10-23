@@ -87,6 +87,8 @@ def _write_output_shards(
         rows = decoded_bytes = 0
         min_seq: int | None = None
         max_seq: int | None = None
+        min_row_commit: int | None = None
+        max_row_commit: int | None = None
         with ShardWriter(path, unified) as writer:
             while group is not None and (rows == 0 or decoded_bytes + group.nbytes <= target_bytes):
                 writer.write_table(group)
@@ -94,6 +96,10 @@ def _write_output_shards(
                 low, high = pc.min(sequences).as_py(), pc.max(sequences).as_py()
                 min_seq = low if min_seq is None else min(min_seq, low)
                 max_seq = high if max_seq is None else max(max_seq, high)
+                low_commit = pc.min(group[SystemColumns.COMMIT]).as_py()
+                high_commit = pc.max(group[SystemColumns.COMMIT]).as_py()
+                min_row_commit = low_commit if min_row_commit is None else min(min_row_commit, low_commit)
+                max_row_commit = high_commit if max_row_commit is None else max(max_row_commit, high_commit)
                 rows += group.num_rows
                 decoded_bytes += group.nbytes
                 last = group
@@ -107,6 +113,8 @@ def _write_output_shards(
                 rows=rows,
                 min_seq=min_seq,
                 max_seq=max_seq,
+                min_row_commit=min_row_commit,
+                max_row_commit=max_row_commit,
                 size_bytes=writer.result.size_bytes,
                 content_sha256=writer.result.content_sha256,
                 primary_key_sorted=True,
@@ -232,12 +240,18 @@ def _compact_shards(
 
     with ExitStack() as stack:
         runs = [stack.enter_context(closing(_sorted_run(shard, unified, pa_fs, primary_key))) for shard in shards]
-        groups = shard_writer.table_row_groups(table, merge_sorted_runs(runs, primary_key))
+        merged = merge_sorted_runs(runs, primary_key)
+        if snapshot.manifest.cache_history_floor:
+            merged = (
+                group.filter(pc.greater(group[SystemColumns.COMMIT], snapshot.manifest.cache_history_floor))
+                for group in merged
+            )
+        groups = shard_writer.table_row_groups(table, merged)
         outputs = _write_output_shards(layout, table, next_generation, unified, primary_key, groups, target_bytes)
     written = sum(shard.rows for shard in outputs)
     superseded = input_rows - written
 
-    if not outputs:
+    if not outputs and not snapshot.manifest.cache_history_floor:
         raise ValueError(f"FineStore table {table!r} has {len(shards)} non-empty shard descriptors but no rows")
     try:
         coordinator.commit(

@@ -10,7 +10,6 @@ from collections.abc import Sequence
 from datetime import datetime
 from functools import partial
 
-import pyarrow.parquet as pq
 import rigging.filesystem.factory as factory
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import retry_with_backoff
@@ -24,7 +23,7 @@ from finestore.commit import (
     read_snapshot,
     write_schema,
 )
-from finestore.layout import BlobTables, FineStoreLayout, Shard, SystemColumns, TableMetadata, blob_table_metadata
+from finestore.layout import BlobTables, FineStoreLayout, TableMetadata, blob_table_metadata
 from finestore.reader import BlobCorruptionError, ReadView
 
 logger = logging.getLogger(__name__)
@@ -62,60 +61,26 @@ class CacheReadView(ReadView):
             return values
 
 
-def _oldest_commit(shard: Shard) -> int | None:
-    """Return the oldest row commit, or None when footer statistics cannot prove it."""
-    fs, path = factory.url_to_fs(shard.path)
-    with fs.open(path, "rb", cache_type="none") as source:
-        metadata = pq.read_metadata(source)
-    if SystemColumns.COMMIT not in metadata.schema.names:
-        return shard.commit_sequence
-    column = metadata.schema.names.index(SystemColumns.COMMIT)
-    minima = []
-    for group in range(metadata.num_row_groups):
-        statistics = metadata.row_group(group).column(column).statistics
-        if statistics is None or not statistics.has_min_max:
-            return None
-        minima.append(int(statistics.min))
-    return min(minima, default=shard.commit_sequence)
-
-
 def _discard_cache_history(snapshot: ArchiveSnapshot, missing: set[str]) -> ArchiveSnapshot:
-    if not missing:
-        return snapshot
-    discarded = set(missing)
-    by_path = {shard.path: shard for table in snapshot.manifest.tables.values() for shard in table.shards}
-    oldest: dict[str, int | None] = {}
-    while True:
-        cutoff = max(by_path[path].commit_sequence for path in discarded)
-        additional = set()
-        tables = {}
-        for name, table in snapshot.manifest.tables.items():
-            survivors = []
-            for shard in table.shards:
-                if shard.path in discarded:
-                    continue
-                if shard.commit_sequence <= cutoff:
-                    additional.add(shard.path)
-                    continue
-                try:
-                    if shard.path not in oldest:
-                        oldest[shard.path] = _oldest_commit(shard)
-                except FileNotFoundError:
-                    additional.add(shard.path)
-                    continue
-                minimum = oldest[shard.path]
-                if minimum is None or minimum <= cutoff:
-                    additional.add(shard.path)
-                else:
-                    survivors.append(shard)
-            tables[name] = table.model_copy(update={"shards": tuple(survivors)})
-        if not additional:
-            return ArchiveSnapshot(
-                manifest=snapshot.manifest.model_copy(update={"tables": tables}), token=snapshot.token
-            )
-        # Dropping a mixed-age compacted shard can itself expose overwritten rows in
-        # another shard. Extend the cutoff until no discarded version can reappear.
-        discarded.update(additional)
+    floor = snapshot.manifest.cache_history_floor
+    for table in snapshot.manifest.tables.values():
+        for shard in table.shards:
+            if shard.path in missing:
+                floor = max(floor, shard.row_commit_upper_bound)
+    tables = {
+        name: table.model_copy(
+            update={
+                "shards": tuple(
+                    shard for shard in table.shards if shard.path not in missing and shard.row_commit_upper_bound > floor
+                )
+            }
+        )
+        for name, table in snapshot.manifest.tables.items()
+    }
+    return ArchiveSnapshot(
+        manifest=snapshot.manifest.model_copy(update={"tables": tables, "cache_history_floor": floor}),
+        token=snapshot.token,
+    )
 
 
 def available_cache_snapshot(root: str) -> ArchiveSnapshot:
@@ -143,8 +108,8 @@ def _refresh_object(path: str, refresh_before: datetime | None) -> None:
     if location.is_local:
         fs.touch(key, truncate=False)
     elif location.scheme == "s3":
-        # S3 requires metadata replacement when copying an object onto itself. FineStore
-        # stores its integrity and table metadata in the manifest, not S3 user metadata.
+        # S3 requires metadata replacement for self-copies. FineStore's integrity and
+        # table contracts live in the manifest, so replacing object metadata preserves them.
         fs.cp_file(key, key, MetadataDirective="REPLACE")
     elif location.scheme == _GCS_SCHEME:
         fs.cp_file(key, key)
@@ -193,7 +158,9 @@ def _maintain_cache_once(root: str, *, refresh_before: datetime | None) -> None:
             replacements[name] = TableReplacement(input_paths=discarded, output_shards=())
     if not replacements:
         return
-    commits.commit(CommitDelta(replacements=replacements), base=snapshot)
+    commits.commit(
+        CommitDelta(replacements=replacements, cache_history_floor=available.manifest.cache_history_floor), base=snapshot
+    )
     logger.warning(
         "FineStore cache discarded %d shard references after object loss at %s",
         sum(len(replacement.input_paths) for replacement in replacements.values()),

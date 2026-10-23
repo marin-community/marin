@@ -20,8 +20,8 @@ from finestore import shard_writer
 from finestore.admin import drop_table
 from finestore.cache import PersistentKvCache
 from finestore.cache_storage import maintain_cache
-from finestore.commit import read_snapshot
-from finestore.compaction import compact_table
+from finestore.commit import CommitCoordinator, read_snapshot
+from finestore.compaction import COMPACTION_TARGET_BYTES, _compact_shards, compact_table
 from finestore.layout import BlobTables, FineStoreLayout, OnConflict
 from finestore.reader import ReadView
 from finestore.store import OBJECT_PART_BYTES, DataStore
@@ -659,6 +659,46 @@ def test_cache_expiry_does_not_revive_superseded_values(archive_root, expired):
     cache.store("new-key", b"new")
     cache.close()
     assert ReadView(root).read_blobs(["kernel", "healthy", "new-key"]) == {"healthy": b"kept", "new-key": b"new"}
+
+
+def test_cache_history_floor_preserves_new_rows_in_a_mixed_shard(archive_root):
+    root = archive_root
+    with DataStore.open(root, flush_interval=600) as store:
+        store.write_object("kernel", b"old")
+        store.write_object("before", b"old unrelated value")
+        store.flush()
+        old = ReadView(root).list_shards(BlobTables.DESCRIPTORS)[0]
+        store.write_object("kernel", b"new")
+        store.flush()
+        missing = max(ReadView(root).list_shards(BlobTables.DESCRIPTORS), key=lambda shard: shard.commit_sequence)
+        store.write_object("healthy", b"kept")
+        store.flush()
+        healthy = max(ReadView(root).list_shards(BlobTables.DESCRIPTORS), key=lambda shard: shard.commit_sequence)
+        commits = CommitCoordinator(FineStoreLayout(root))
+        # Compact overlapping history while the overwritten value remains in another run.
+        _compact_shards(
+            root,
+            BlobTables.DESCRIPTORS,
+            (old, healthy),
+            snapshot=commits.snapshot(),
+            coordinator=commits,
+            target_bytes=COMPACTION_TARGET_BYTES,
+        )
+    StoragePath(missing.path).rm()
+
+    cache = PersistentKvCache.at(root)
+    names = ["kernel", "before", "healthy"]
+    assert cache.load_many(names) == {"healthy": b"kept"}
+    cache.store("after", b"new entry")
+    cache.close()
+    expected = {"healthy": b"kept", "after": b"new entry"}
+    assert ReadView(root).read_blobs([*names, "after"]) == expected
+    assert "cache-history-floor-v1" in read_snapshot(FineStoreLayout(root)).manifest.required_features
+    assert ReadView(root).point(BlobTables.DESCRIPTORS, name="kernel") is None
+    assert {row["name"] for row in ReadView(root).iter_rows(BlobTables.DESCRIPTORS)} == set(expected)
+    compact_table(root, BlobTables.DESCRIPTORS)
+    assert {row["name"] for row in ReadView(root).scan(BlobTables.DESCRIPTORS).to_pylist()} == set(expected)
+    assert PersistentKvCache.at(root).load_many([*names, "after"]) == expected
 
 
 @pytest.mark.parametrize("error_type", [PermissionError, TimeoutError])

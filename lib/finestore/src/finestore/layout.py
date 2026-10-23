@@ -28,6 +28,7 @@ SCHEMAS_DIR = "schemas"
 
 URI_SCHEME = "finestore"
 CHUNKED_BLOBS_FEATURE = "chunked-blobs-v1"
+CACHE_HISTORY_FLOOR_FEATURE = "cache-history-floor-v1"
 
 
 class SystemColumns(StrEnum):
@@ -58,7 +59,7 @@ class BlobColumns(StrEnum):
 
 
 RESERVED_COLUMNS = frozenset(SystemColumns)
-SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset({CHUNKED_BLOBS_FEATURE})
+SUPPORTED_MANIFEST_FEATURES: frozenset[str] = frozenset({CHUNKED_BLOBS_FEATURE, CACHE_HISTORY_FLOOR_FEATURE})
 
 
 class FormatVersionError(ValueError):
@@ -172,6 +173,8 @@ class Shard(_FormatModel):
 
     ``min_key`` and ``max_key`` bound the primary keys stored in the shard when they are
     strings and integers; a reader skips the shard for lookups outside ``key_range``.
+    Row-commit bounds retain the original versions through compaction; ``commit_sequence``
+    records publication of this file.
     """
 
     path: str
@@ -183,9 +186,16 @@ class Shard(_FormatModel):
     size_bytes: int = Field(ge=0)
     content_sha256: str = Field(min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$")
     commit_sequence: int = 0
+    min_row_commit: int | None = None
+    max_row_commit: int | None = None
     primary_key_sorted: bool = False
     min_key: KeyBound | None = None
     max_key: KeyBound | None = None
+
+    @property
+    def row_commit_upper_bound(self) -> int:
+        # Older manifests lack row bounds. Publication is always at or after every row's commit.
+        return self.commit_sequence if self.max_row_commit is None else self.max_row_commit
 
     @property
     def key_range(self) -> KeyRange | None:
@@ -214,6 +224,8 @@ class Manifest(_FormatModel):
     # Advanced by each writer that acquires the maintenance lease. A compaction prepared under
     # an older epoch cannot be published after a takeover.
     maintainer_epoch: int = 0
+    # Disposable-cache recovery invalidates these commits across descriptor and chunk tables.
+    cache_history_floor: int = 0
 
 
 class HeadMetadata(_FormatModel):

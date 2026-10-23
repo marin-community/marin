@@ -40,7 +40,7 @@ from finestore.layout import (
     TableMetadata,
     parse_uri,
 )
-from finestore.merge import merge_sorted_runs, newest_indices, sorted_by_key
+from finestore.merge import key_values, merge_sorted_runs, newest_indices, sorted_by_key
 
 _SUPPORTED_OPS = frozenset({"==", "!=", "in"})
 MAX_DESCRIPTOR_READS = 4
@@ -319,6 +319,9 @@ class _ReadableShard(Protocol):
     def commit_sequence(self) -> int: ...
 
     @property
+    def row_commit_upper_bound(self) -> int: ...
+
+    @property
     def primary_key_sorted(self) -> bool: ...
 
     @property
@@ -541,7 +544,13 @@ def _read_plan(
     )
 
 
-def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: _ScanProfile | None = None) -> pa.Table:
+def _scan_plan(
+    plan: _ReadPlan,
+    columns: Sequence[str] | None,
+    *,
+    scan_profile: _ScanProfile | None = None,
+    history_floor: int = 0,
+) -> pa.Table:
     by_version: dict[tuple[int, int], list[str]] = defaultdict(list)
     for shard in plan.shards:
         by_version[(shard.commit_sequence, shard.generation)].append(shard.path)
@@ -566,6 +575,8 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
         parts.append(_resolved_version_columns(part, commit_sequence, generation))
 
     combined = parts[0] if len(parts) == 1 else pa.concat_tables(parts, promote_options="permissive")
+    if history_floor:
+        combined = combined.filter(pc.greater(combined[SystemColumns.COMMIT], history_floor))
     combined = _deduplicate(combined, plan.primary_key)
     if plan.post_dedup_where:
         combined = pds.dataset(combined).to_table(filter=_build_filter(plan.post_dedup_where))
@@ -574,12 +585,18 @@ def _scan_plan(plan: _ReadPlan, columns: Sequence[str] | None, *, scan_profile: 
     return combined
 
 
-def _blob_shard_descriptors(
-    filesystem: PyFileSystem, primary_key: tuple[str, ...], names: Sequence[str], shard: _ReadableShard
+def _lookup_shard(
+    shard: _ReadableShard,
+    *,
+    filesystem: PyFileSystem,
+    primary_key: tuple[str, ...],
+    where: list[tuple[str, str, object]],
+    scan_profile: _ScanProfile,
+    history_floor: int,
 ) -> pa.Table:
-    plan = _read_plan(filesystem, (shard,), primary_key, None, [(BlobColumns.NAME, "in", list(names))])
+    plan = _read_plan(filesystem, (shard,), primary_key, None, where)
     assert plan is not None
-    return _scan_plan(plan, None, scan_profile=_BLOB_DESCRIPTOR_SCAN_PROFILE)
+    return _scan_plan(plan, None, scan_profile=scan_profile, history_floor=history_floor)
 
 
 class _ReadOperations:
@@ -607,6 +624,10 @@ class _ReadOperations:
         _BLOB_SELECTED_SHARDS.record(diagnostics.selected_shards)
 
     root: str
+
+    @property
+    def _history_floor(self) -> int:
+        return 0
 
     def primary_key(self, table: str) -> tuple[str, ...]:
         raise NotImplementedError
@@ -641,7 +662,7 @@ class _ReadOperations:
         plan = self._read_plan(table, columns, where)
         if plan is None:
             return None
-        return _scan_plan(plan, columns)
+        return _scan_plan(plan, columns, history_floor=self._history_floor)
 
     def iter_rows(
         self,
@@ -672,6 +693,8 @@ class _ReadOperations:
         with ExitStack() as stack:
             runs = [stack.enter_context(closing(_sorted_shard_run(shard, plan, scan_profile))) for shard in plan.shards]
             for rows in merge_sorted_runs(runs, plan.primary_key):
+                if self._history_floor:
+                    rows = rows.filter(pc.greater(rows[SystemColumns.COMMIT], self._history_floor))
                 if plan.post_dedup_where:
                     rows = rows.filter(_build_filter(plan.post_dedup_where))
                 if columns is None:
@@ -681,10 +704,66 @@ class _ReadOperations:
                 yield from rows.to_pylist()
 
     def point(self, table: str, **keys) -> dict | None:
-        result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
+        if not self.list_shards(table):
+            return None
+        primary_key = self.primary_key(table)
+        if set(keys) == set(primary_key):
+            result = self._lookup_rows(table, [tuple(keys[column] for column in primary_key)], _TABLE_SCAN_PROFILE)
+        else:
+            result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
         if result is None or result.num_rows == 0:
             return None
         return result.slice(0, 1).to_pylist()[0]
+
+    def _lookup_rows(
+        self,
+        table: str,
+        keys: Sequence[tuple],
+        scan_profile: _ScanProfile,
+        diagnostics: BlobReadDiagnostics | None = None,
+    ) -> pa.Table | None:
+        shards = sorted(self.list_shards(table), key=lambda shard: shard.row_commit_upper_bound, reverse=True)
+        if not shards:
+            return None
+        primary_key = self.primary_key(table)
+        filesystem = self._filesystem(table)
+        winners: pa.Table | None = None
+        versions: dict[tuple, int] = {}
+        for upper_bound, candidates in itertools.groupby(shards, key=lambda shard: shard.row_commit_upper_bound):
+            # Equality is insufficient: another shard can hold a later sequence in the same commit.
+            unresolved = [key for key in keys if key not in versions or versions[key] <= upper_bound]
+            if not unresolved:
+                break
+            where: list[tuple[str, str, object]] = (
+                [(column, "==", unresolved[0][index]) for index, column in enumerate(primary_key)]
+                if len(unresolved) == 1
+                else [(primary_key[0], "in", [key[0] for key in unresolved])]
+            )
+            clauses = [FilterClause.parse(clause) for clause in where]
+            selected = [shard for shard in candidates if shard_may_contain(shard, primary_key, clauses)]
+            if not selected:
+                continue
+            if diagnostics is not None:
+                diagnostics.selected_shards += len(selected)
+
+            read = functools.partial(
+                _lookup_shard,
+                filesystem=filesystem,
+                primary_key=primary_key,
+                where=where,
+                scan_profile=scan_profile,
+                history_floor=self._history_floor,
+            )
+            with ThreadPoolExecutor(max_workers=min(MAX_DESCRIPTOR_READS, len(selected))) as executor:
+                parts = list(executor.map(read, selected))
+            if winners is not None:
+                parts.append(winners)
+            winners = _deduplicate(pa.concat_tables(parts, promote_options="permissive"), primary_key)
+            versions = {
+                key_values(winners, index, primary_key): int(winners[SystemColumns.COMMIT][index].as_py())
+                for index in range(winners.num_rows)
+            }
+        return winners
 
     def keys(self, table: str) -> set[tuple]:
         if not self.list_shards(table):
@@ -748,27 +827,12 @@ class _ReadOperations:
         if diagnostics is not None:
             diagnostics.descriptor_lookups += 1
         try:
-            if not self.list_shards(BlobTables.DESCRIPTORS):
-                return None
-            primary_key = self.primary_key(BlobTables.DESCRIPTORS)
-            membership = [FilterClause(BlobColumns.NAME, "in", list(names))]
-            shards = tuple(
-                shard
-                for shard in self.list_shards(BlobTables.DESCRIPTORS)
-                if shard_may_contain(shard, primary_key, membership)
+            return self._lookup_rows(
+                BlobTables.DESCRIPTORS,
+                [(name,) for name in dict.fromkeys(names)],
+                _BLOB_DESCRIPTOR_SCAN_PROFILE,
+                diagnostics,
             )
-            if not shards:
-                return None
-            if diagnostics is not None:
-                diagnostics.selected_shards += len(shards)
-            filesystem = self._filesystem(BlobTables.DESCRIPTORS)
-            # Read footers and matching rows together, with bounded concurrent decoding.
-            # Version resolution spans every shard whose key bounds can hold a requested name.
-            with ThreadPoolExecutor(max_workers=min(MAX_DESCRIPTOR_READS, len(shards))) as executor:
-                parts = list(
-                    executor.map(lambda shard: _blob_shard_descriptors(filesystem, primary_key, names, shard), shards)
-                )
-            return _deduplicate(pa.concat_tables(parts, promote_options="permissive"), primary_key)
         finally:
             if diagnostics is not None:
                 diagnostics.descriptor_seconds += time.monotonic() - started
@@ -844,6 +908,10 @@ class ReadView(_ReadOperations):
     def primary_key(self, table: str) -> tuple[str, ...]:
         return self._meta(table).primary_key
 
+    @property
+    def _history_floor(self) -> int:
+        return self._snapshot.manifest.cache_history_floor
+
     def table_metadata(self, table: str) -> TableMetadata:
         """Return the logical metadata pinned for ``table`` in this view."""
         return self._meta(table)
@@ -889,7 +957,13 @@ class ReadView(_ReadOperations):
 
     def list_shards(self, table: str) -> list[Shard]:
         state = self._snapshot.manifest.tables.get(table)
-        return [] if state is None else list(state.shards)
+        if state is None:
+            return []
+        return [
+            shard
+            for shard in state.shards
+            if not self._history_floor or shard.row_commit_upper_bound > self._history_floor
+        ]
 
 
 def _deduplicate(table: pa.Table, primary_key: tuple[str, ...]) -> pa.Table:

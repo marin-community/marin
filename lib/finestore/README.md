@@ -81,6 +81,13 @@ Each shard records the range of primary keys it holds when the key columns are
 strings and integers. A lookup with `==` on a prefix of the primary key, or `in` on its
 first column, skips shards whose range excludes the value.
 
+Shard metadata also records the minimum and maximum original row commits. Exact
+primary-key lookups and named-object descriptor lookups visit candidates by
+descending maximum row commit. Once a key's winning row is newer than every unread
+candidate, its lookup stops. A compacted file's publication age does not determine its
+rows' precedence. Shards without row-commit bounds use publication as a conservative
+upper bound.
+
 ## Named objects and caches
 
 `DataStore.write_object(name, data, metadata)` writes bytes into the reserved `blobs`
@@ -152,16 +159,17 @@ exclude confirmed missing shards from their local snapshot and omit incomplete
 chunked values, while retaining healthy hits. An expired schema can be interpreted
 from the cache tables' fixed contracts. Reads never modify storage.
 
-Shard loss also invalidates older cache history so an overwritten value cannot
-reappear. Compacted shards can contain rows from several commits; recovery uses
-their footer statistics and discards a whole shard if it could expose an older
-version. This can discard additional healthy entries, which are regenerated as
-cache misses.
+Shard loss advances a cache history floor to the greatest row-commit upper bound
+of the missing shards. Reads ignore rows at or below the floor in both descriptor
+and chunk tables, preventing overwritten values from reappearing. Newer rows remain
+usable, including those sharing a file with older rows. This also invalidates
+unrelated older entries, which are regenerated as cache misses.
 
 Before its first write, then at most daily while writing, each cache writer checks
-the live shards and schemas. It atomically removes missing shard references,
-recreates expired schemas, and refreshes objects older than half the `ttl=Nd`
-period in the root path. S3 and GCS refreshes use server-side copies of the same
+the live shards and schemas. It atomically publishes the history floor and removes
+missing or wholly invalidated shard references. It recreates expired schemas and
+refreshes objects older than half the `ttl=Nd` period in the root path.
+S3 and GCS refreshes use server-side copies of the same
 bytes; local storage updates modification times. Shorter TTLs shorten the check
 interval to one quarter of the TTL. A read that encounters a missing shard requests
 another check on the next write. A writer whose maintenance failed because an
@@ -170,6 +178,9 @@ object expired is replaced after repair.
 Permission and transport errors do not remove references. These recovery rules
 apply only to the disposable key/value cache; ordinary archives remain strict.
 An idle cache can still expire, and its next write repairs the remaining manifest.
+Recovered caches declare the required `cache-history-floor-v1` feature; readers
+that do not support it reject the archive. The floor persists across subsequent
+writes and compactions, and compaction drops invalidated rows from mixed shards.
 
 ## Compaction
 

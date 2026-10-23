@@ -16,6 +16,7 @@ from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
 
 from finestore.layout import (
+    CACHE_HISTORY_FLOOR_FEATURE,
     FORMAT_VERSION,
     SUPPORTED_MANIFEST_FEATURES,
     ArchiveMetadata,
@@ -95,6 +96,7 @@ class CommitDelta:
     # taken over; ``epoch_update`` is how a new maintainer announces itself.
     expected_epoch: int | None = None
     epoch_update: int | None = None
+    cache_history_floor: int = 0
 
 
 def _empty_manifest() -> Manifest:
@@ -212,7 +214,9 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         prior = current.shards if current is not None else ()
         paths = {shard.path for shard in prior}
         added = tuple(
-            shard.model_copy(update={"commit_sequence": sequence})
+            shard.model_copy(
+                update={"commit_sequence": sequence, "min_row_commit": sequence, "max_row_commit": sequence}
+            )
             for shard in addition.shards
             if shard.path not in paths
         )
@@ -246,12 +250,17 @@ def _apply_delta(base: Manifest, delta: CommitDelta) -> Manifest:
         sealed = None
     elif delta.seal_update is not None:
         sealed = delta.seal_update
+    history_floor = max(base.cache_history_floor, delta.cache_history_floor)
+    required_features = set(base.required_features) | delta.required_features
+    if history_floor:
+        required_features.add(CACHE_HISTORY_FLOOR_FEATURE)
     return base.model_copy(
         update={
             "commit_id": uuid.uuid4().hex,
             "parent_commit_id": None if base.commit_id == _ROOT_COMMIT_ID else base.commit_id,
             "sequence": sequence,
-            "required_features": tuple(sorted(set(base.required_features) | delta.required_features)),
+            "required_features": tuple(sorted(required_features)),
+            "cache_history_floor": history_floor,
             "tables": tables,
             "sealed": sealed,
             "maintainer_epoch": base.maintainer_epoch if delta.epoch_update is None else delta.epoch_update,
