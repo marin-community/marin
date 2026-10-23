@@ -4,11 +4,13 @@
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
+from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 import pytest
 
-import haliax as hax
-import haliax.nn.array_stacked as array_stacked_module
-from haliax.nn import ArrayStacked
+from levanter.layers.stacked import ArrayStacked
+from levanter.layers.scan_checkpoint import ScanCheckpointPolicy
+from levanter.utils.tree_utils import scan_aware_tree_map
 
 
 def test_array_stacked_fold_scan_and_layer_access_parity():
@@ -108,7 +110,7 @@ def test_scan_aware_tree_map_updates_array_stacked_leaves():
     bias = jnp.arange(num_layers, dtype=jnp.float32)
     stacked = ArrayStacked.init(num_layers, Module)(weight=weight, bias=bias)
 
-    mapped = hax.tree_util.scan_aware_tree_map(
+    mapped = scan_aware_tree_map(
         lambda x: x + 1 if isinstance(x, jax.Array) else x,
         stacked,
     )
@@ -116,22 +118,6 @@ def test_scan_aware_tree_map_updates_array_stacked_leaves():
     assert isinstance(mapped, ArrayStacked)
     assert jnp.allclose(mapped.get_layer(0).weight, stacked.get_layer(0).weight + 1)
     assert jnp.allclose(mapped.get_layer(1).bias, stacked.get_layer(1).bias + 1)
-
-
-def test_array_stacked_rejects_named_array_module_leaves():
-    class Module(eqx.Module):
-        weight: hax.NamedArray
-
-        @staticmethod
-        def init(weight):
-            return Module(weight=weight)
-
-    Layers = hax.Axis("Layers", 2)
-    Hidden = hax.Axis("Hidden", 3)
-    weight = hax.random.normal(jax.random.PRNGKey(0), (Layers, Hidden))
-
-    with pytest.raises(TypeError, match="does not support NamedArray leaves"):
-        ArrayStacked.init(Layers.size, Module)(weight=weight)
 
 
 def test_array_stacked_init_keeps_non_array_module_leaves_unbatched():
@@ -212,86 +198,6 @@ def test_array_stacked_init_slices_layer_batched_inputs_under_eval_shape():
     assert stacked_shape.stacked.value.shape == (num_layers, width)
 
 
-def test_array_stacked_nested_checkpointing_uses_multilevel_scan(monkeypatch):
-    class Module(eqx.Module):
-        weight: jax.Array
-
-        @staticmethod
-        def init(weight):
-            return Module(weight=weight)
-
-        def step(self, carry: jax.Array) -> jax.Array:
-            return carry + self.weight
-
-    num_layers = 4
-    width = 2
-    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
-    stacked = ArrayStacked.init(num_layers, Module, gradient_checkpointing="nested")(weight=weights)
-
-    call_count = 0
-    original = array_stacked_module.multilevel_scan
-
-    def wrapped_multilevel_scan(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(array_stacked_module, "multilevel_scan", wrapped_multilevel_scan)
-    _ = stacked.fold_via(Module.step)(jnp.zeros((width,), dtype=jnp.float32))
-    assert call_count == 1
-
-
-def test_array_stacked_scan_tags_carry_and_inputs_for_checkpoint_policy(monkeypatch):
-    class Module(eqx.Module):
-        weight: jax.Array
-
-        @staticmethod
-        def init(weight):
-            return Module(weight=weight)
-
-        def step(self, carry: jax.Array, scale: jax.Array) -> jax.Array:
-            return carry + self.weight * scale
-
-    num_layers = 2
-    width = 3
-    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
-    scale = jnp.array([1.0, 2.0], dtype=jnp.float32)
-    stacked = ArrayStacked.init(num_layers, Module, gradient_checkpointing=False)(weight=weights)
-
-    names: list[str] = []
-    original = array_stacked_module.tree_checkpoint_name
-
-    def wrapped_tree_checkpoint_name(x, name):
-        names.append(name)
-        return original(x, name)
-
-    monkeypatch.setattr(array_stacked_module, "tree_checkpoint_name", wrapped_tree_checkpoint_name)
-    _ = stacked.fold_via(Module.step, in_axes=(0,))(jnp.zeros((width,), dtype=jnp.float32), scale)
-
-    assert stacked._carry_ckpt_name in names
-    assert stacked._input_ckpt_name in names
-
-
-def test_array_stacked_init_treats_named_array_inputs_as_leaves():
-    class Module(eqx.Module):
-        weight: jax.Array
-
-        @staticmethod
-        def init(weight, template):
-            assert isinstance(template, hax.NamedArray)
-            return Module(weight=weight + template.array.sum())
-
-    num_layers = 2
-    width = 3
-    weights = jax.random.normal(jax.random.PRNGKey(0), (num_layers, width))
-    TemplateBatch = hax.Axis("TemplateBatch", num_layers)
-    TemplateHidden = hax.Axis("TemplateHidden", width)
-    template = hax.random.normal(jax.random.PRNGKey(1), (TemplateBatch, TemplateHidden))
-
-    stacked = ArrayStacked.init(num_layers, Module)(weight=weights, template=template)
-    assert stacked.stacked.weight.shape == (num_layers, width)
-
-
 def test_array_stacked_state_dict_is_devectorized_for_export():
     class Module(eqx.Module):
         weight: jax.Array
@@ -312,3 +218,104 @@ def test_array_stacked_state_dict_is_devectorized_for_export():
 
     reloaded = stacked.from_state_dict(state_dict, "layers")
     assert jnp.allclose(reloaded.stacked.weight, stacked.stacked.weight)
+    template = eqx.filter_eval_shape(
+        ArrayStacked.init(num_layers, Module), weight=jax.ShapeDtypeStruct(weights.shape, weights.dtype)
+    )
+    restored_template = template.from_state_dict(state_dict, "layers")
+    assert jnp.allclose(restored_template.stacked.weight, weights)
+
+
+@pytest.mark.parametrize("policy", [False, True, "full", "save_all", "nested", ScanCheckpointPolicy(nested=2)])
+def test_array_stacked_checkpointing_matches_unrolled_values_and_gradients(policy):
+    class Layer(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight):
+            return Layer(weight)
+
+        def __call__(self, x, scale):
+            y = jnp.tanh(x * self.weight + scale)
+            return y, jnp.square(y)
+
+    weights = jnp.linspace(0.2, 0.8, 12).reshape(4, 3)
+    scales = jnp.arange(4, dtype=jnp.float32)[:, None] * 0.1
+    x = jnp.ones(3)
+    stack = ArrayStacked.init(4, Layer, gradient_checkpointing=policy)(weights)
+
+    def scanned(weight):
+        model = eqx.tree_at(lambda m: m.stacked.weight, stack, weight)
+        carry, outputs = model.scan(x, scales, in_axes=0)
+        return carry.sum() + outputs.sum()
+
+    def unrolled(weight):
+        carry = x
+        loss = jnp.zeros(())
+        for index in range(4):
+            carry = jnp.tanh(carry * weight[index] + scales[index])
+            loss = loss + jnp.square(carry).sum()
+        return carry.sum() + loss
+
+    actual, actual_grad = jax.jit(jax.value_and_grad(scanned))(weights)
+    expected, expected_grad = jax.value_and_grad(unrolled)(weights)
+    assert jnp.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+    assert jnp.allclose(actual_grad, expected_grad, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.parametrize("policy", [True, "nested"])
+def test_array_stacked_explicit_sharding_preserves_forward_and_gradients(policy):
+    class Layer(eqx.Module):
+        weight: jax.Array
+
+        @staticmethod
+        def init(weight):
+            return Layer(weight)
+
+        def __call__(self, x, scale):
+            return jnp.tanh(x * self.weight + scale)
+
+    width = 3 * jax.device_count()
+    mesh = Mesh(np.asarray(jax.devices()), ("model",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh):
+        weights = jax.device_put(
+            jnp.linspace(0.2, 0.8, 4 * width).reshape(4, width), NamedSharding(mesh, P(None, "model"))
+        )
+        scales = jax.device_put(jnp.arange(4, dtype=jnp.float32)[:, None], NamedSharding(mesh, P(None, None)))
+        x = jax.device_put(jnp.ones(width), NamedSharding(mesh, P("model")))
+        stack = ArrayStacked.init(4, Layer, gradient_checkpointing=policy)(weights)
+
+        def scanned(weight):
+            model = eqx.tree_at(lambda m: m.stacked.weight, stack, weight)
+            return model.fold(x, scales, in_axes=0).sum()
+
+        def unrolled(weight):
+            carry = x
+            for index in range(4):
+                carry = jnp.tanh(carry * weight[index] + scales[index])
+            return carry.sum()
+
+        actual, actual_grad = jax.jit(jax.value_and_grad(scanned))(weights)
+        expected, expected_grad = jax.value_and_grad(unrolled)(weights)
+        assert jnp.allclose(actual, expected, atol=1e-5, rtol=1e-5)
+        assert jnp.allclose(actual_grad, expected_grad, atol=1e-5, rtol=1e-5)
+        assert actual_grad.sharding == weights.sharding
+
+
+def test_array_stacked_state_dict_round_trips_nested_modules_and_shared_leaves():
+    class Layer(eqx.Module):
+        linear: eqx.nn.Linear
+        repeats: int
+
+        @staticmethod
+        def init(key):
+            return Layer(eqx.nn.Linear(3, 2, key=key), repeats=3)
+
+    stack = ArrayStacked.init(2, Layer)(key=jax.random.split(jax.random.key(0), 2))
+    state = stack.to_state_dict("layers")
+    assert state["layers.repeats"] == 3
+    assert jnp.array_equal(state["layers.1.linear.weight"], stack.get_layer(1).linear.weight)
+    modified = {**state, "layers.1.linear.weight": state["layers.1.linear.weight"] + 1}
+    reloaded = stack.from_state_dict(modified, "layers")
+    assert jnp.array_equal(reloaded.get_layer(0).linear.weight, stack.get_layer(0).linear.weight)
+    assert jnp.array_equal(reloaded.get_layer(1).linear.weight, stack.get_layer(1).linear.weight + 1)
+    assert reloaded.get_layer(1).repeats == 3

@@ -1,25 +1,32 @@
 # Copyright The Levanter Authors
-#
 # SPDX-License-Identifier: Apache-2.0
 
+import dataclasses
 import functools
-from typing import Any, Callable, Generic, Self, Sequence, TypeVar
+from typing import Any, Callable, Generic, Protocol, Self, Sequence, TypeVar
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
+import numpy as np
+from jax.ad_checkpoint import checkpoint_name
 
-from haliax._src.scan import ScanCheckpointPolicy, ScanCheckpointSpec, find_closest_divisible_int_to_sqrt
-from haliax._src.state_dict import ModuleWithStateDictSerialization, StateDict
-from haliax.jax_utils import is_jax_array_like, multilevel_scan, tree_checkpoint_name
-from haliax.util import is_named_array
-from .scan import ModuleInit, _stack_state_dict, _unstack_state_dict
+from levanter.layers.scan_checkpoint import ScanCheckpointPolicy, ScanCheckpointSpec
 
 M = TypeVar("M", bound=eqx.Module)
 CarryT = TypeVar("CarryT")
 OutputT_co = TypeVar("OutputT_co", covariant=True)
 AxisSpec = int | None
+StateDict = dict[str, Any]
 InAxesSpec = AxisSpec | tuple[Any, Any]
+
+
+class ModuleInit(Protocol[M]):
+    def __call__(self, *args, **kwargs) -> M: ...
+
+
+def _is_array_like(value: Any) -> bool:
+    return isinstance(value, (jax.Array, np.ndarray, jax.ShapeDtypeStruct))
 
 
 def _normalize_unroll(unroll: int | bool | None, num_layers: int) -> int | bool:
@@ -36,7 +43,7 @@ def _normalize_unroll(unroll: int | bool | None, num_layers: int) -> int | bool:
 
 
 def _is_layer_batched_leaf(x: Any, num_layers: int) -> bool:
-    return is_jax_array_like(x) and not is_named_array(x) and x.ndim > 0 and x.shape[0] == num_layers
+    return _is_array_like(x) and x.ndim > 0 and x.shape[0] == num_layers
 
 
 def _slice_layer(x: Any, index: int, num_layers: int) -> Any:
@@ -45,17 +52,14 @@ def _slice_layer(x: Any, index: int, num_layers: int) -> Any:
     return x
 
 
-def _reject_named_arrays(stacked: Any) -> None:
-    for leaf in jax.tree_util.tree_leaves(stacked, is_leaf=is_named_array):
-        if is_named_array(leaf):
-            raise TypeError(
-                "ArrayStacked does not support NamedArray leaves. "
-                "Use haliax.nn.Stacked for modules with named-array parameters."
-            )
+class ArrayStacked(eqx.Module, Generic[M]):
+    """Equinox layers stored as one pytree with a leading layer axis on arrays.
 
-
-class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
-    """Array-native stack container with leading layer dimensions in array leaves."""
+    Initialization vmaps inputs whose leading dimension equals ``num_layers``;
+    other inputs are shared. ``fold`` and ``scan`` share extra arguments unless
+    ``in_axes`` explicitly marks them as layer-batched. Python and static leaves
+    remain shared, and parameter paths retain the ``stacked`` field.
+    """
 
     stacked: M
     num_layers: int = eqx.field(static=True)
@@ -80,7 +84,6 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
             batched, shared = eqx.partition(
                 (args, kwargs),
                 lambda x: _is_layer_batched_leaf(x, num_layers),
-                is_leaf=is_named_array,
             )
 
             def init_layer(layer_batched):
@@ -90,7 +93,6 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
             # `filter_vmap` over `jax.vmap`: a non-array leaf has to come back as the value it
             # was. `axis_size` covers arguments that carry no layer axis.
             stacked = eqx.filter_vmap(init_layer, axis_size=num_layers)(batched)
-            _reject_named_arrays(stacked)
             return cls(stacked=stacked, num_layers=num_layers, gradient_checkpointing=gradient_checkpointing)
 
         return init_fn
@@ -153,8 +155,8 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
                     key: _slice_with_axis(kwargs[key], axis, layer_index, self.num_layers, context=f"fold_via[{key}]")
                     for key, axis in kwargs_axes.items()
                 }
-                carry = tree_checkpoint_name(carry, self._carry_ckpt_name)
-                layer_args, layer_kwargs = tree_checkpoint_name((layer_args, layer_kwargs), self._input_ckpt_name)
+                carry = _tree_checkpoint_name(carry, self._carry_ckpt_name)
+                layer_args, layer_kwargs = _tree_checkpoint_name((layer_args, layer_kwargs), self._input_ckpt_name)
                 carry = fn(layer, carry, *layer_args, **layer_kwargs)
                 return carry, None
 
@@ -196,8 +198,8 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
                     key: _slice_with_axis(kwargs[key], axis, layer_index, self.num_layers, context=f"scan_via[{key}]")
                     for key, axis in kwargs_axes.items()
                 }
-                carry = tree_checkpoint_name(carry, self._carry_ckpt_name)
-                layer_args, layer_kwargs = tree_checkpoint_name((layer_args, layer_kwargs), self._input_ckpt_name)
+                carry = _tree_checkpoint_name(carry, self._carry_ckpt_name)
+                layer_args, layer_kwargs = _tree_checkpoint_name((layer_args, layer_kwargs), self._input_ckpt_name)
                 carry, out = fn(layer, carry, *layer_args, **layer_kwargs)
                 return carry, out
 
@@ -260,16 +262,36 @@ class ArrayStacked(ModuleWithStateDictSerialization, Generic[M]):
             for layer_leaves in zip(*unstacked_leaves, strict=True)
         )
 
-    def _state_dict_key_map(self) -> dict[str, str | None]:
-        return {"stacked": None}
-
     def to_state_dict(self, prefix: str | None = None) -> StateDict:
-        state_dict: StateDict = super().to_state_dict(prefix)
-        return _unstack_state_dict(state_dict, prefix)
+        """Export arrays under ``<prefix>.<layer>.<parameter>`` keys.
+
+        Shared Python leaves retain their unindexed keys.
+        """
+        state: StateDict = {}
+        path_prefix = "" if prefix is None else prefix + "."
+        for key, value in _to_state_dict(self.stacked, prefix).items():
+            if _is_array_like(value):
+                for index, layer_value in enumerate(value):
+                    state[f"{path_prefix}{index}.{key[len(path_prefix) :]}"] = layer_value
+            else:
+                state[key] = value
+        return state
 
     def from_state_dict(self, state_dict: StateDict, prefix: str | None = None) -> Self:
-        stacked = _stack_state_dict(state_dict, prefix=prefix)
-        return super().from_state_dict(stacked, prefix=prefix)  # type: ignore
+        """Load a devectorized state dict into real arrays or a shape template."""
+        state: StateDict = {}
+        grouped: dict[str, dict[int, Any]] = {}
+        path_prefix = "" if prefix is None else prefix + "."
+        for key, value in state_dict.items():
+            if key.startswith(path_prefix):
+                index, separator, suffix = key[len(path_prefix) :].partition(".")
+                if separator and index.isdigit():
+                    grouped.setdefault(path_prefix + suffix, {})[int(index)] = value
+                    continue
+            state[key] = value
+        for key, values in grouped.items():
+            state[key] = jnp.stack([values[index] for index in range(self.num_layers)])
+        return dataclasses.replace(self, stacked=_from_state_dict(self.stacked, state, prefix))
 
 
 def _normalize_axis(axis: int, ndim: int) -> int:
@@ -285,7 +307,7 @@ def _slice_with_axis(x: Any, axis: AxisSpec, layer_index: int, num_layers: int, 
         return x
     if not isinstance(axis, int):
         raise TypeError(f"{context}: in_axes leaves must be int or None, got {type(axis)}.")
-    if not is_jax_array_like(x):
+    if not _is_array_like(x):
         raise TypeError(f"{context}: in_axes={axis} requires an array-like input, got {type(x)}.")
 
     resolved_axis = _normalize_axis(axis, x.ndim)
@@ -300,7 +322,6 @@ def _layer_in_axes(tree: Any, num_layers: int) -> Any:
     return jax.tree.map(
         lambda leaf: 0 if _is_layer_batched_leaf(leaf, num_layers) else None,
         tree,
-        is_leaf=is_named_array,
     )
 
 
@@ -316,12 +337,15 @@ def _scan_layers(
     outer_block_size = _nested_scan_outer_block_size(nested, num_layers)
     if outer_block_size is None:
         return jax.lax.scan(fn, init, indices, unroll=unroll)
-    return multilevel_scan(fn, init, indices, outer_block_size, length=num_layers, unroll=unroll)
+    return _multilevel_scan(fn, init, indices, outer_block_size, length=num_layers, unroll=unroll)
 
 
 def _nested_scan_outer_block_size(nested: bool | int, num_layers: int) -> int | None:
     if nested is True:
-        return find_closest_divisible_int_to_sqrt(num_layers)
+        for size in range(int(num_layers**0.5), 0, -1):
+            if num_layers % size == 0:
+                return size
+        return 1
     if nested is False:
         return None
     if nested < 1:
@@ -360,3 +384,86 @@ def _resolve_in_axes(
         resolved_kwargs_axes = kwargs_axes
 
     return resolved_args_axes, resolved_kwargs_axes
+
+
+def _tree_checkpoint_name(tree: Any, name: str) -> Any:
+    return jax.tree.map(lambda leaf: checkpoint_name(leaf, name) if _is_array_like(leaf) else leaf, tree)
+
+
+def _multilevel_scan(fn, carry, xs, outer_size: int, length: int, *, unroll: int | bool):
+    """Checkpoint groups of scan steps while retaining the flat output layout."""
+    if length % outer_size:
+        raise ValueError(f"Length {length} must be divisible by outer_size {outer_size}")
+    inner_size = length // outer_size
+    grouped = xs.reshape(outer_size, inner_size)
+    carry, outputs = jax.lax.scan(
+        jax.checkpoint(functools.partial(jax.lax.scan, fn, unroll=unroll)), carry, grouped, unroll=True
+    )
+    return carry, jax.tree.map(lambda x: x.reshape(length, *x.shape[2:]), outputs)
+
+
+def _with_prefix(prefix: str | None, key: str | None) -> str | None:
+    if prefix is None:
+        return key
+    return prefix if key is None else f"{prefix}.{key}"
+
+
+def _to_state_dict(tree: Any, prefix: str | None) -> StateDict:
+    if tree is None:
+        return {}
+    if hasattr(tree, "to_state_dict"):
+        return tree.to_state_dict(prefix)
+    if isinstance(tree, eqx.Module):
+        key_map = getattr(tree, "_state_dict_key_map", lambda: {})()
+        state: StateDict = {}
+        for field in dataclasses.fields(tree):
+            if not field.metadata.get("static", False):
+                state.update(
+                    _to_state_dict(
+                        getattr(tree, field.name), _with_prefix(prefix, key_map.get(field.name, field.name))
+                    )
+                )
+        return state
+    if isinstance(tree, (list, tuple, dict)):
+        items = tree.items() if isinstance(tree, dict) else enumerate(tree)
+        return {
+            key: value
+            for index, child in items
+            for key, value in _to_state_dict(child, _with_prefix(prefix, str(index))).items()
+        }
+    if prefix is None:
+        raise ValueError("A state-dict leaf requires a prefix")
+    return {prefix: tree}
+
+
+def _from_state_dict(tree: Any, state: StateDict, prefix: str | None) -> Any:
+    if tree is None:
+        return None
+    if hasattr(tree, "from_state_dict"):
+        return tree.from_state_dict(state, prefix)
+    if isinstance(tree, eqx.Module):
+        key_map = getattr(tree, "_state_dict_key_map", lambda: {})()
+        values = {
+            field.name: _from_state_dict(
+                getattr(tree, field.name), state, _with_prefix(prefix, key_map.get(field.name, field.name))
+            )
+            for field in dataclasses.fields(tree)
+            if not field.metadata.get("static", False)
+        }
+        return eqx.tree_at(
+            lambda module: tuple(getattr(module, name) for name in values),
+            tree,
+            tuple(values.values()),
+            is_leaf=lambda value: value is None,
+        )
+    if isinstance(tree, dict):
+        return {key: _from_state_dict(value, state, _with_prefix(prefix, str(key))) for key, value in tree.items()}
+    if isinstance(tree, (list, tuple)):
+        return type(tree)(
+            _from_state_dict(value, state, _with_prefix(prefix, str(index))) for index, value in enumerate(tree)
+        )
+    if _is_array_like(tree):
+        if prefix is None:
+            raise ValueError("A state-dict leaf requires a prefix")
+        return jnp.asarray(state[prefix])
+    return state.get(prefix, tree)

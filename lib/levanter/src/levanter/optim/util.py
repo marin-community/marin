@@ -16,10 +16,10 @@ from optax._src.base import init_empty_state
 
 import haliax as hax
 from haliax.nn import Linear
-from haliax.tree_util import scan_aware_tree_map
 
 from levanter.models.linear import has_linear_like_marker
 import levanter.tracker
+from levanter.utils.tree_utils import scan_aware_tree_map
 
 
 T = TypeVar("T")

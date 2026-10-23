@@ -17,10 +17,10 @@ import jax.numpy as jnp
 from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
-from haliax.nn import ArrayStacked
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
+from levanter.layers.stacked import ArrayStacked
 
 try:
     from jax.shard_map import shard_map

@@ -19,7 +19,7 @@ from levanter.inference.page_table import PageBatchInfo, PageTable
 from levanter.inference.jit_scheduler import SequenceTable
 from levanter.inference.utils import INVALID
 import levanter.layers.attention as attention_module
-from levanter.layers import AttentionConfig, AttentionBackend, Attention
+from levanter.layers.attention import AttentionConfig, AttentionBackend, Attention
 from levanter.layers.attention import AttentionMask, ragged_paged_attention, simple_attention_with_dropout
 from levanter.layers.kv_cache import KvPageCache
 from levanter.testing.helpers import use_test_mesh
