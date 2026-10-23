@@ -21,6 +21,7 @@ from taskforge.agentic.tools import AcceptedTask, TaskReview
 from taskforge.capability import CapabilityIdea
 
 from experiments.post_training.baby_rsi.feedback import (
+    HELD_OUT_MARKER,
     INSTANCE_TIMEOUT,
     synthesized,
     synthesized_id,
@@ -39,9 +40,12 @@ def known_ideas(output: StoragePath) -> frozenset[str]:
 async def untrained_instances(
     output: StoragePath, trained: Iterable[str], instances_per_task: int, factory: MachineFactory
 ) -> AsyncIterator[TaskSpec]:
-    """The accepted tasks of the finished sessions and their training instances that the run did not train on."""
+    """The accepted tasks of the finished sessions and their training instances that the run did not train on; the
+    tasks of a held-out idea are never trained on."""
     done = set(trained)
     for saved in accepted_tasks(output):
+        if saved.held_out:
+            continue
         idea, accepted = saved.idea, saved.accepted
         untrained = [
             task_id
@@ -62,6 +66,8 @@ class SavedTask:
     idea: CapabilityIdea
     accepted: AcceptedTask
     directory: StoragePath
+    held_out: bool
+    """Whether the idea is held out: its tasks are only probes."""
 
 
 def accepted_tasks(output: StoragePath) -> Iterator[SavedTask]:
@@ -80,4 +86,4 @@ def accepted_tasks(output: StoragePath) -> Iterator[SavedTask]:
                 program=(directory / "program.txt").read_text(),
                 workspace=(directory / "workspace.tgz").read_bytes(),
             )
-            yield SavedTask(idea, accepted, directory)
+            yield SavedTask(idea, accepted, directory, (idea_path.parent / HELD_OUT_MARKER).exists())

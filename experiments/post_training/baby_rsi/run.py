@@ -11,6 +11,7 @@
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -19,8 +20,10 @@ from collections.abc import AsyncIterable, AsyncIterator, Callable, Collection, 
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
 
 import click
+from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
 from rolloutengine.models import Model, RolloutLimits
@@ -47,7 +50,14 @@ from experiments.post_training.baby_rsi.feedback import (
     training_ids,
 )
 from experiments.post_training.baby_rsi.loop import Boxes, LoopConfig, rsi_loop
-from experiments.post_training.baby_rsi.policy import BASE_MODEL_NAME, LivePolicy, Sampling, VllmPolicy, VllmServer
+from experiments.post_training.baby_rsi.policy import (
+    BASE_MODEL_NAME,
+    OBJECT_STORE_SCHEMES,
+    LivePolicy,
+    Sampling,
+    VllmPolicy,
+    VllmServer,
+)
 from experiments.post_training.baby_rsi.resume import (
     SavedTask,
     accepted_tasks,
@@ -75,6 +85,9 @@ logger = logging.getLogger(__name__)
 
 VLLM_ENV = "BABY_RSI_VLLM"
 MAX_MODEL_LEN = 16384
+WEIGHTS_STREAM = "stream"
+WEIGHTS_DOWNLOAD = "download"
+WEIGHTS_DIR = "/tmp/baby-rsi-weights"
 POLICY_LIMITS = RolloutLimits(
     max_turns=20,
     max_total_tokens=None,
@@ -107,6 +120,7 @@ class PolicyOptions:
     concurrency: int
     grader_slots: int
     vllm_args: tuple[str, ...]
+    weight_transfer: str
 
 
 def policy_options(function):
@@ -121,6 +135,13 @@ def policy_options(function):
             click.option("--concurrency", type=int, default=128, show_default=True, help="Attempts at a time."),
             click.option("--grader-slots", type=int, default=16, show_default=True, help="Script graders at a time."),
             click.option("--vllm-arg", "vllm_args", multiple=True, help="An argument of vllm serve; repeatable."),
+            click.option(
+                "--weight-transfer",
+                type=click.Choice([WEIGHTS_STREAM, WEIGHTS_DOWNLOAD]),
+                default=WEIGHTS_STREAM,
+                show_default=True,
+                help="Stream object-store weights into vLLM, or download them to the task's disk first.",
+            ),
         ]
     ):
         function = option(function)
@@ -149,8 +170,11 @@ class Served:
 
 def serve(options: PolicyOptions, weights: str | None = None):
     """A vLLM server of the base weights, or of ``weights`` (a trained checkpoint) with the same tokenizer."""
+    model = weights or options.weights or options.model
+    if options.weight_transfer == WEIGHTS_DOWNLOAD and model.startswith(OBJECT_STORE_SCHEMES):
+        model = _download_weights(model)
     return VllmServer.start(
-        weights or options.weights or options.model,
+        model,
         executable=os.environ[VLLM_ENV],
         max_model_len=options.max_model_len,
         gpu_memory_utilization=options.gpu_memory_utilization,
@@ -214,6 +238,13 @@ def feedback_options(function):
             click.option("--probes-per-task", type=int, default=8, show_default=True),
             click.option("--sessions", type=int, default=6, show_default=True, help="Agent sessions at a time."),
             click.option("--agent-turns", type=int, default=300, show_default=True),
+            click.option(
+                "--held-out-idea-share",
+                type=click.FloatRange(0, 1),
+                default=0.0,
+                show_default=True,
+                help="Ideas whose tasks are only probes, to measure transfer to families that the policy never trains on.",
+            ),
         ]
     ):
         function = option(function)
@@ -238,6 +269,7 @@ class FeedbackOptions:
     probes_per_task: int
     sessions: int
     agent_turns: int
+    held_out_idea_share: float
 
 
 def _remember_stratum(stream, strata: dict[str, str], *, written: Collection[str] = ()):
@@ -295,6 +327,7 @@ async def _feedback_boxes(
         probes_per_task=feedback.probes_per_task,
         concurrency=feedback.sessions,
         output=output,
+        held_out_idea_share=feedback.held_out_idea_share,
     )
     resumed = untrained_instances(output, trained_ids, feedback.instances_per_task, agentic.workspace_factory)
 
@@ -467,9 +500,10 @@ async def _evaluate(
     validation = TaskPool.read(f"{POOL_URL}/{VALIDATION_FILE}").sample(pool_tasks, seed)
     tasks = [task.task for task in validation]
     labels = {task.task.id: f"pool:{task.stratum}" for task in validation}
-    for probe in await read_probes(probe_roots, instances_per_task):
+    for probe, unseen in await read_probes(probe_roots, instances_per_task):
         tasks.append(probe)
-        labels[probe.id] = f"probe:{capability_of(probe)}"
+        # The probes of a held-out idea measure transfer: the policy never trained on any task of its family.
+        labels[probe.id] = f"{'probe-heldout' if unseen else 'probe'}:{capability_of(probe)}"
     logger.info("Evaluation tasks: %s", Counter(label.split(":")[0] for label in labels.values()))
     results = {}
     # A second evaluation of the base weights measures how often a task that the base never passes passes by chance
@@ -487,12 +521,22 @@ async def _evaluate(
     write_evaluation(output, options.model, results)
 
 
-async def read_probes(roots: Sequence[str], instances_per_task: int) -> list[TaskSpec]:
-    """The held-out probes of the accepted tasks in ``roots``; a probe equal to a training instance is dropped."""
+def _download_weights(url: str) -> str:
+    """A local copy of the weights at ``url``; the Run:ai stream of a 67B export sometimes fails on S3 errors."""
+    local = Path(WEIGHTS_DIR) / hashlib.sha256(url.encode()).hexdigest()[:16]
+    fs, path = url_to_fs(url)
+    logger.info("Downloading %s to %s", url, local)
+    fs.get(path.rstrip("/") + "/", str(local), recursive=True)
+    return str(local)
+
+
+async def read_probes(roots: Sequence[str], instances_per_task: int) -> list[tuple[TaskSpec, bool]]:
+    """The held-out probes of the accepted tasks in ``roots``, each with whether its idea is held out; a probe equal
+    to a training instance is dropped."""
     factory = workspace_factory()
     slots = asyncio.Semaphore(PROBE_BUILD_SLOTS)
 
-    async def held_out_probes(saved: SavedTask) -> list[TaskSpec]:
+    async def held_out_probes(saved: SavedTask) -> list[tuple[TaskSpec, bool]]:
         ids = training_ids(saved.accepted, instances_per_task)
         async with slots:
             training = await task_instances(saved.accepted, ids, factory, timeout=INSTANCE_TIMEOUT)
@@ -500,7 +544,7 @@ async def read_probes(roots: Sequence[str], instances_per_task: int) -> list[Tas
         stored = [TaskSpec.model_validate_json(line) for line in lines if line]
         kept = held_out(stored, saved.accepted, training)
         logger.info("%s: %d of %d probes are held out", saved.accepted.task.id, len(kept), len(stored))
-        return kept
+        return [(probe, saved.held_out) for probe in kept]
 
     saved_tasks = [saved for root in roots for saved in accepted_tasks(StoragePath(root))]
     return [probe for kept in await asyncio.gather(*map(held_out_probes, saved_tasks)) for probe in kept]
