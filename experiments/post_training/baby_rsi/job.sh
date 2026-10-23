@@ -42,7 +42,7 @@ CUDA_TOOLCHAIN=13.2.86
   uv pip install --quiet --python "$VLLM_VENV/bin/python" --index-strategy unsafe-best-match \
     --index https://download.pytorch.org/whl/cu132 --index https://download.pytorch.org/whl/cpu \
     "vllm @ $VLLM_WHEEL" torch==2.13.0+cu132 transformers==5.16.1 "runai-model-streamer[s3]==0.16.1" \
-    "nvidia-cuda-nvcc==$CUDA_TOOLCHAIN" "nvidia-cuda-crt==$CUDA_TOOLCHAIN" "nvidia-nvvm==$CUDA_TOOLCHAIN"
+    "nvidia-cuda-nvcc==$CUDA_TOOLCHAIN" "nvidia-cuda-crt==$CUDA_TOOLCHAIN" "nvidia-nvvm==$CUDA_TOOLCHAIN" ninja
   # The policy's tokenizer, and pandas for the script graders of the pool tasks.
   uv pip install --quiet --python "$TASK_PYTHON" transformers==4.57.1 pandas==2.3.3
 )
@@ -64,7 +64,8 @@ printf '[default]\ns3 =\n    addressing_style = virtual\n' > "$VLLM_VENV/aws-con
 # Only the vLLM process gets these settings.
 cat > "$VLLM_VENV/bin/baby-rsi-vllm" <<EOF
 #!/usr/bin/env bash
-export CUDA_HOME="$cuda_home" PATH="$cuda_home/bin:\$PATH" LIBRARY_PATH="$cuda_home/lib\${LIBRARY_PATH:+:\$LIBRARY_PATH}"
+# The JIT runs ninja and the compiler by name.
+export CUDA_HOME="$cuda_home" PATH="$cuda_home/bin:$VLLM_VENV/bin:\$PATH" LIBRARY_PATH="$cuda_home/lib\${LIBRARY_PATH:+:\$LIBRARY_PATH}"
 export AWS_CONFIG_FILE="$VLLM_VENV/aws-config"
 exec "$VLLM_VENV/bin/vllm" "\$@"
 EOF
