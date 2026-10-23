@@ -733,6 +733,13 @@ def main() -> None:
         print(f"per-tensor check passed for {len(rows) // 4} tensors x {len(models)} models")
         return
 
+    if args.tensors:
+        # The summaries compare whole-model totals, which a tensor subset cannot match;
+        # the overlap multiples are still per component.
+        print_overlap_report(reports, args.reference)
+        if args.csv:
+            write_csv(rows, args.csv)
+        return
     summary, summary_failures = summary_rows(models, args.reference, their, reports)
     rows.extend(summary)
     print_overlap_report(reports, args.reference)
