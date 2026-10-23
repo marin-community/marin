@@ -1232,6 +1232,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         state_callbacks = StateCallbackRunner[GrugTrainState](
             step_getter=lambda s: s.step,
             model_getter=lambda s: s.params,
+            eval_model_getter=lambda s: s.params,
             opt_state_getter=lambda s: s.opt_state,
         )
         if progress_watchdog is not None:
