@@ -109,7 +109,7 @@ def session_build(root: Path, model: ScriptedModel, services: RLEnvBuildServices
             verification_change=verification_change,
         )
 
-    return SessionBuild(builder, store, model, SAMPLING, services, ledger.path_for(WORKPIECE), in_process_loader)
+    return SessionBuild(builder, store, services, ledger.path_for(WORKPIECE), in_process_loader)
 
 
 async def author_call(
@@ -239,8 +239,10 @@ async def test_a_task_with_or_without_a_machine_grades_in_its_build_and_through_
 ):
     """The program's grader step and ``run_grade_candidate`` both pass the task's requirements as they are."""
     declared = declaring(proposal, machine)
-    program = PROGRAM.replace("grade_candidate(context, None,", f"grade_candidate(context, {environment},").replace(
-        "environment=draft.requirements(image=None)", f"environment={environment}"
+    program = PROGRAM.replace("context, draft.NO_MACHINE,", f"context, {environment},").replace(
+        "environment=draft.requirements(image=None).model_copy(\n"
+        '            update={"package_spec": replace(draft.SHELLSIM_CPYTHON, pypi_packages=None)}\n        )',
+        f"environment={environment}",
     )
     assert program.count(environment) == 2
     model = ScriptedModel(
@@ -354,11 +356,13 @@ async def test_a_grader_crediting_the_empty_answer_fails_the_build_in_the_grader
     """The program grades nothing but its reference; the library's empty-answer grade still fails the build."""
     graded = (Outcome.GRADED, 1.0)
 
-    async def credit_everything(context, requirements, package, answer_type, answer_format, instruction, reply, **kw):
+    async def credit_everything(
+        services, workpiece_id, requirements, package, answer_type, answer_format, instruction, reply, **kw
+    ):
         status, reward = graded if reply == "" else (Outcome.GRADED, 1.0 if reply == "42" else 0.0)
         return GradeResult(status=status, reward=reward)
 
-    monkeypatch.setattr(aa, "grade_candidate", credit_everything)
+    monkeypatch.setattr(aa, "grade_candidate_on_host", credit_everything)
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
@@ -517,19 +521,19 @@ async def test_a_grade_the_host_keeps_failing_ends_the_round_unseen_by_the_autho
 ):
     monkeypatch.setattr(aa, "HOST_RETRY_BACKOFF", 0.0)
     graded: list[str] = []
-    grade_candidate = aa.grade_candidate
+    grade_candidate = aa.grade_candidate_on_host
 
     async def host_down_for_candidates(
-        context, requirements, grader, answer_type, answer_format, instruction, reply, **kw
+        services, workpiece_id, requirements, grader, answer_type, answer_format, instruction, reply, **kw
     ):
         if not reply:  # the library's own empty-answer grade after the build
             return await grade_candidate(
-                context, requirements, grader, answer_type, answer_format, instruction, reply, **kw
+                services, workpiece_id, requirements, grader, answer_type, answer_format, instruction, reply, **kw
             )
         graded.append(reply)
         raise BuildInfrastructureFailure(InfrastructureCause.HOST_UNREACHABLE, "machine controller RPC failed")
 
-    monkeypatch.setattr(aa, "grade_candidate", host_down_for_candidates)
+    monkeypatch.setattr(aa, "grade_candidate_on_host", host_down_for_candidates)
     model = ScriptedModel(
         turn(("write_file", {"path": "program.py", "content": PROGRAM})),
         turn(("run_build", {"path": "program.py"})),
@@ -840,7 +844,7 @@ async def test_a_session_answering_findings_swaps_the_verifier_kind_and_builds_a
         "reason": TO_ANSWER_IN_BOX.reason,
     }
     session = agentic(workpiece, 1, 0)
-    assert "verification: answer_in_box" in (session / "workspace" / "proposal.md").read_text()
+    assert json.loads((session / "workspace" / "proposal.json").read_text())["header"]["verification"] == "answer_in_box"
     provenance = load_draft(session / "runs" / "1" / DRAFT_DIR).provenance
     assert (provenance.verification, provenance.verification_change) == (Verification.ANSWER_IN_BOX, TO_ANSWER_IN_BOX)
 

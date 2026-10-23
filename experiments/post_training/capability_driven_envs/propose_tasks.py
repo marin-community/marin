@@ -22,7 +22,7 @@ driver still writes the run's outputs:
 
 * ``OUTPUT_DIR/<capability id>/`` with ``plan.request.json`` and ``plan.completions.json`` (the
   invalid plan replies when the plan stays invalid, and none when the planning call fails), and per
-  slot ``slot-NN.request.json``, ``slot-NN.completions.json``, then ``slot-NN.md`` and
+  slot ``slot-NN.request.json``, ``slot-NN.completions.json``, then ``slot-NN.json`` and
   ``slot-NN.verdict.json`` for a proposal, or ``slot-NN.failure.txt`` for a slot failure.
 * ``OUTPUT_DIR/summary.json``, mapping each capability id to its failure or to the decision or
   failure of each slot.
@@ -150,7 +150,7 @@ def write_outputs(output_dir: Path, proposed: Sequence[ProposedCapability]) -> N
             (directory / f"{name}.request.json").write_text(json.dumps(list(outcome.request), indent=2))
             (directory / f"{name}.completions.json").write_text(pretty_json(outcome.completions))
             if isinstance(outcome, SlotProposal):
-                (directory / f"{name}.md").write_text(render(outcome.proposal))
+                (directory / f"{name}.json").write_text(render(outcome.proposal))
                 (directory / f"{name}.verdict.json").write_text(capability.verdicts[outcome.slot].to_json())
             else:
                 (directory / f"{name}.failure.txt").write_text(outcome.error)

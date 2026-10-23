@@ -7745,7 +7745,6 @@ dependencies = [
     { name = "marin-zephyr" },
     { name = "openai" },
     { name = "pydantic" },
-    { name = "pyyaml" },
     { name = "tokenizers" },
 ]
 
@@ -7771,8 +7770,7 @@ requires-dist = [
     { name = "marin-verifyit", editable = "lib/verifyit" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "openai" },
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "pydantic", specifier = ">=2.7" },
     { name = "tokenizers", specifier = ">=0.22" },
 ]
 

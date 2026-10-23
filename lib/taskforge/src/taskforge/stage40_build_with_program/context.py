@@ -63,8 +63,8 @@ class BuildExpired(Exception):
     """A build, step or grader ran past its clock.
 
     Whether Taskforge was slow or the program was is unknown until someone reads the record, so this is
-    neither the program's failure nor the host's: a driver holds the workpiece as abandoned, spends no revision
-    and does not rebuild it on its own. A step raises ``BuildExpired(message, clock)`` and the runner
+    neither the program's failure nor the host's: the coordinator marks the workpiece failed at its current
+    stage and spends no revision. A step raises ``BuildExpired(message, clock)`` and the runner
     re-raises it with ``step`` set to that step's name; ``str()`` is ``message``.
     """
 
@@ -103,5 +103,5 @@ class RLEnvBuildContext:
 def call_ledger(context: RLEnvBuildContext) -> CallLedger:
     """Where the running step records its model and tool calls: its workpiece, round and step name."""
     return CallLedger(
-        ledger=context.services.recording, workpiece_id=context.workpiece_id, round=context.round, step=context.step
+        ledger=context.services.ledger, workpiece_id=context.workpiece_id, round=context.round, step=context.step
     )

@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Self
 
 import pytest
-from rolloutengine.models import ModelRequest, ModelTurn, TaskRolloutSpec, TokenUsage
+from rolloutengine.models import ModelRequest, ModelTurn, TaskRolloutSpec, TokenUsage, TraceMode
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineSpec, MachineTerminated, Result
 from taskcompendium.grading_result import Outcome
@@ -60,10 +60,10 @@ NUMBERS_SUM = 60
 FACTORIES = {Backend.SHELLSIM.value: PortlessShellSimFactory(), Backend.DOCKER.value: FixtureImageFactory()}
 LIMITS = rollout_limits(
     max_turns=4,
-    model_turn_timeout=None,
+    model_turn_timeout=30,
     tool_turn_timeout=20,
-    total_turn_timeout=None,
-    attempt_timeout=None,
+    total_turn_timeout=30,
+    attempt_timeout=60,
     verifier_timeout=30,
     cleanup_timeout=10,
 )
@@ -96,7 +96,7 @@ def lowered(task: TaskSpec) -> TaskRolloutSpec:
         verifier_machine=None if grading_environment(task) is None else SHELLSIM,
         limits=LIMITS,
         factories=FACTORIES,
-    )
+    ).model_copy(update={"trace": TraceMode.MESSAGES})
 
 
 @pytest.fixture

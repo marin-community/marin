@@ -7,11 +7,9 @@ from collections import Counter
 from collections.abc import Sequence
 
 import pytest
-from taskcompendium.grading_result import Outcome as GradeStatus
 
 from taskforge.sandbox.factories import MachineRole, Refusal, RefusalReason
 from taskforge.spec.controls import ControlKind
-from taskforge.stage50_validate.adversary import AdversaryMode, Claim, ClaimKind
 from taskforge.stage50_validate.controls import ControlVerdict
 from taskforge.stage50_validate.evidence import RewardStats
 from taskforge.stage50_validate.outcome import Cause
@@ -22,13 +20,12 @@ from taskforge.stage50_validate.round import (
     Lowering,
     LoweringStatus,
     SolverEvidence,
-    SubmissionResult,
     TrialResult,
     TrialStatus,
     ValidationResult,
 )
 from taskforge.stage60_review.decision import Accept, BandOutcome, Modify, Reject, RejectKind, Retry
-from taskforge.stage60_review.rules import BandRules, ReviewContext, default_review
+from taskforge.stage60_review.rules import BandRules, default_review
 
 BAND = BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_HARD}))
 LOWERED = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
@@ -76,10 +73,6 @@ def result(
     return ValidationResult("workpiece", 0, lowering, evidence, controls, adversary, early)
 
 
-def context(modify_rounds_left: int = 1) -> ReviewContext:
-    return ReviewContext(round=0, modify_rounds_left=modify_rounds_left, band=BAND)
-
-
 @pytest.mark.parametrize(
     "rejected",
     [
@@ -93,26 +86,16 @@ def context(modify_rounds_left: int = 1) -> ReviewContext:
     ids=["refused", "rejected"],
 )
 async def test_a_refused_or_rejected_lowering_rejects_on_the_host_before_any_other_rule(rejected):
-    decision = await default_review(rejected, context())
+    decision = await default_review(rejected, band=BAND)
 
     assert isinstance(decision, Reject) and decision.kind is RejectKind.HOST
 
 
-@pytest.mark.parametrize(
-    ("modify_rounds_left", "decided"),
-    [(1, Modify), (0, Reject)],
-    ids=["a modify round left", "no modify round left"],
-)
-async def test_a_violated_control_asks_for_a_modify_round_while_one_remains_and_rejects_the_task_after(
-    modify_rounds_left, decided
-):
-    decision = await default_review(result(controls=(MET, VIOLATED)), context(modify_rounds_left))
+async def test_a_violated_control_asks_for_a_modify_round():
+    decision = await default_review(result(controls=(MET, VIOLATED)), band=BAND)
 
-    assert isinstance(decision, decided)
-    findings = decision.findings if isinstance(decision, Modify) else decision.reasons
-    assert len(findings) == 1 and VIOLATED.id in findings[0]
-    if isinstance(decision, Reject):
-        assert decision.kind is RejectKind.TASK
+    assert isinstance(decision, Modify)
+    assert len(decision.findings) == 1 and VIOLATED.id in decision.findings[0]
 
 
 async def test_a_violated_control_decides_before_incomplete_evidence():
@@ -121,15 +104,12 @@ async def test_a_violated_control_decides_before_incomplete_evidence():
         controls=(VIOLATED, control("N3", ControlVerdict.UNGRADED, Cause.GRADER_TIMEOUT)),
     )
 
-    decision = await default_review(incomplete, context())
+    decision = await default_review(incomplete, band=BAND)
 
     assert isinstance(decision, Modify) and len(decision.findings) == 1
 
 
-@pytest.mark.parametrize(("modify_rounds_left", "decided"), [(1, Modify), (0, Reject)])
-async def test_a_round_decided_early_is_decided_by_its_violated_control_never_as_incomplete_evidence(
-    modify_rounds_left, decided
-):
+async def test_a_round_decided_early_is_decided_by_its_violated_control_never_as_incomplete_evidence():
     """The round cancelled three of four solver trials, so the solver evidence alone is no measurement."""
     early = result(
         evidence=solver(1, 0),
@@ -137,7 +117,7 @@ async def test_a_round_decided_early_is_decided_by_its_violated_control_never_as
         early=EarlyDecision(VIOLATED.id, ("solver/1", "solver/2", "solver/3", "adversary/0")),
     )
 
-    assert isinstance(await default_review(early, context(modify_rounds_left)), decided)
+    assert isinstance(await default_review(early, band=BAND), Modify)
 
 
 async def test_incomplete_evidence_retries_for_the_cause_that_left_the_most_solver_trials_and_controls_ungraded():
@@ -146,11 +126,11 @@ async def test_incomplete_evidence_retries_for_the_cause_that_left_the_most_solv
         controls=(MET, control("N3", ControlVerdict.UNGRADED, Cause.GRADER_TIMEOUT)),
     )
 
-    assert await default_review(incomplete, context()) == Retry(Cause.GRADER_TIMEOUT, 2)
+    assert await default_review(incomplete, band=BAND) == Retry(Cause.GRADER_TIMEOUT, 2)
 
 
 async def test_a_solve_rate_in_a_place_the_band_rules_refuse_rejects_the_task():
-    decision = await default_review(result(evidence=solver(4, 0)), context())
+    decision = await default_review(result(evidence=solver(4, 0)), band=BAND)
 
     assert isinstance(decision, Reject) and decision.kind is RejectKind.TASK
 
@@ -161,18 +141,29 @@ async def test_a_solve_rate_in_a_place_the_band_rules_refuse_rejects_the_task():
     ids=["in band", "at the low edge", "too hard and accepted"],
 )
 async def test_complete_evidence_is_accepted_in_the_place_the_callers_band_gives_it(solved, band):
-    assert await default_review(result(evidence=solver(solved, 4 - solved)), context()) == Accept(band)
+    assert await default_review(result(evidence=solver(solved, 4 - solved)), band=BAND) == Accept(band)
 
 
-async def test_an_adversary_shortcut_claim_decides_nothing():
-    shortcut = AdversaryResult(
-        trial="0",
-        mode=AdversaryMode.WHITEBOX,
-        status=TrialStatus.GRADED,
-        cause=None,
-        claim=Claim(ClaimKind.SHORTCUT, "the grader accepts 6 * 7", "expected 42"),
-        submissions=(SubmissionResult(1, GradeStatus.GRADED, 1.0, True, "adversary/0/submissions/0/control/s1"),),
-        attempt_file="adversary/0/attempt-0.json",
+@pytest.mark.parametrize(
+    "cause,kind",
+    [
+        (Cause.GRADER_REWARD_RANGE, RejectKind.TASK),
+        (Cause.MODEL_REJECTED, RejectKind.TASK),
+        (Cause.MACHINE_UNSUPPORTED, RejectKind.HOST),
+    ],
+)
+@pytest.mark.parametrize("retryable", [(), (Cause.MODEL_TIMEOUT,) * 3], ids=["permanent-only", "mixed"])
+async def test_a_permanent_ungraded_cause_rejects_without_spending_retries(cause, kind, retryable):
+    decision = await default_review(result(evidence=solver(2, 0, [cause, *retryable])), band=BAND)
+
+    assert decision == Reject(kind, (f"1 ungraded trial(s): {cause}",))
+
+
+async def test_a_permanent_control_failure_rejects_before_retryable_solver_failures():
+    incomplete = result(
+        evidence=solver(2, 0, [Cause.MODEL_TIMEOUT]),
+        controls=(control("N3", ControlVerdict.UNGRADED, Cause.GRADER_INVALID_REWARD),),
     )
+    decision = await default_review(incomplete, band=BAND)
 
-    assert await default_review(result(adversary=(shortcut,)), context()) == Accept(BandOutcome.IN_BAND)
+    assert decision == Reject(RejectKind.TASK, (f"1 ungraded trial(s): {Cause.GRADER_INVALID_REWARD}",))

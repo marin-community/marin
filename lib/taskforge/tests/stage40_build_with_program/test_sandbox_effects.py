@@ -77,15 +77,13 @@ async def test_a_grader_timeout_is_graded_once_more_on_fresh_machines(context, t
     slow = SlowGraderFactory(timeouts)
     on_host = context(factories={**FACTORIES, Backend.DOCKER.value: slow})
 
-    grade = await grade_candidate(on_host, None, FULL_CREDIT, AnswerType.TEXT, PLAIN, "question", "42")
+    grade = await grade_candidate(on_host, draft.NO_MACHINE, FULL_CREDIT, AnswerType.TEXT, PLAIN, "question", "42")
 
     assert (grade.status, grade.reward, grade.failure) == (status, reward, failure)
     assert (slow.machines, slow.grader_runs) == (2, 2)
 
 
-@pytest.mark.parametrize(
-    "requirements", [SHELLSIM, draft.NO_MACHINE, None], ids=["shellsim", "no-machine", "no-requirements"]
-)
+@pytest.mark.parametrize("requirements", [SHELLSIM, draft.NO_MACHINE], ids=["shellsim", "no-machine"])
 @pytest.mark.parametrize(
     ("grader", "answer_type", "answer_format", "right", "wrong"),
     [
@@ -110,7 +108,7 @@ async def test_a_grader_timeout_is_graded_once_more_on_fresh_machines(context, t
 )
 async def test_grade_candidate_grades_answers_through_the_answer_format(
     context,
-    requirements: EnvironmentRequirements | None,
+    requirements: EnvironmentRequirements,
     grader: GraderPackage,
     answer_type: AnswerType,
     answer_format: AnswerFormat,
