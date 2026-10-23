@@ -8,8 +8,8 @@ Held-out and extrapolation results do not determine the learning verdict.
 
 The canary uses two Megatron data-parallel ranks on one H100 host and two
 vLLM engines on another. Each task requests two H100s and 65 CPUs; the CPU
-request places tasks on separate 128-CPU hosts. Four task rollout workers
-on the policy host reserve 32 CPUs and use token requests. The model HTTP
+request places tasks on separate 128-CPU hosts. Four task rollout workers,
+two on each host, reserve 32 CPUs and use token requests. The model HTTP
 endpoint is off in this recipe. Training metrics and
 policy-training and rollout spans are enabled explicitly.
 

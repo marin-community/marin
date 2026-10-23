@@ -17,6 +17,7 @@ from ray.actor import ActorHandle
 from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
 
 from marinskyrl.environment_contract import TrainingType
+from marinskyrl.resource_locator import is_cloud_uri
 from marinskyrl.runtime_options import PolicyLossType
 from marinskyrl.distillation import DistillationObjectiveKind, compile_distillation_plan_from_config
 from skyrl_train.curriculum import CurriculumConfig, CurriculumOrder, SamplingKind
@@ -44,7 +45,7 @@ from skyrl_train.rollouts.buffer import (
 from skyrl_train.rollouts.loader import PromptLoader, PromptLoaderState, PromptGroupDataset, PromptOrder, SeededPasses
 from skyrl_train.rollouts.payloads import MemoryPayloads, ObjectStorePayloads, PayloadStore
 from skyrl_train.rollout_observability import dispatch_wait, observe_rollout_call, record_group_disposition
-from skyrl_train.rollouts.workers import RolloutWorkers
+from skyrl_train.rollouts.workers import RolloutWorkerPool, RolloutWorkers, live_ray_nodes
 from skyrl_train.telemetry import GeneratedWork, record_generated_work, record_rollout_buffer
 from skyrl_train.trajectory_runners.trajectory_processing import prepare_trajectory_request
 from skyrl_train.trajectory_runners.types import TrajectoryRequestBatch
@@ -112,6 +113,22 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
         return DomainWeightedOrder(dataset.dataframe, sampling.domain_weights, seed=seed, window_size=batch_size)
     curriculum = CurriculumConfig.from_dict_config(sampling, group_size=config.generator.n_samples_per_prompt)
     return CurriculumOrder(dataset, curriculum, seed=seed, window_size=batch_size)
+
+
+def payload_store(object_store_root: str | None, workers: RolloutWorkers) -> PayloadStore:
+    """The payload store for ``trainer.rollout_buffer.object_store_root``.
+
+    A rollout worker pool writes payloads on the nodes its workers run on, so with a pool a local directory serves
+    only a one-node cluster. Other runners write from the trainer process.
+    """
+    if object_store_root is None:
+        return MemoryPayloads()
+    if isinstance(workers, RolloutWorkerPool) and not is_cloud_uri(object_store_root) and len(live_ray_nodes()) > 1:
+        raise ValueError(
+            f"trainer.rollout_buffer.object_store_root={object_store_root!r} is a local directory, but rollout "
+            "workers run on every node of this multi-node Ray cluster; use an object-store URI"
+        )
+    return ObjectStorePayloads(object_store_root)
 
 
 def start_rollout_buffer(config: RolloutBufferConfig) -> ActorHandle:
@@ -201,7 +218,6 @@ class TrainingContext:
                 else None
             ),
         )
-        object_store_root = config.trainer.rollout_buffer.object_store_root
         return cls(
             PromptLoader(dataset, prompt_order_from_config(config, dataset), batch_size=batch_size),
             buffer_config,
@@ -209,7 +225,7 @@ class TrainingContext:
             RolloutContentPolicy(admission, selection),
             RolloutRequestSpec.from_config(config),
             workers,
-            ObjectStorePayloads(object_store_root) if object_store_root is not None else MemoryPayloads(),
+            payload_store(config.trainer.rollout_buffer.object_store_root, workers),
             rollout_spans=config.trainer.rollout_spans,
         )
 
