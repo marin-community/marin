@@ -401,6 +401,11 @@ python infra/launch.py --tpu_name=my_tpu -- python src/levanter/main/train_lm.py
 
 ## Monitoring
 
+`Trainer.add_hook(callback, every=N)` schedules regular and JIT callbacks after every `N`
+completed optimizer updates. For example, `every=2` runs after updates 2, 4, and 6.
+`StepInfo.step` remains zero-based, so callbacks see step indices 1, 3, and 5.
+Regular callbacks also receive a forced call at training end.
+
 Levanter integrates with WandB for logging. You can view your run on the WandB website. Levanter will also log
 to the console, and write logs to `logs/$RUN_ID.log` on each machine. Logs can be pretty verbose.
 

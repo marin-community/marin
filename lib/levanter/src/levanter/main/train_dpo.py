@@ -566,7 +566,7 @@ def _install_separate_reference_export_hooks(
         )
         last_saved_update = step.next_step
 
-    trainer.add_completed_step_hook(save_policy_hf_checkpoint, every=export.hf_save_steps)
+    trainer.add_hook(save_policy_hf_checkpoint, every=export.hf_save_steps)
 
 
 def main(config: TrainDpoConfig):

@@ -725,9 +725,6 @@ class _CapturingTrainer:
     def __init__(self):
         self.hooks = []
 
-    def add_completed_step_hook(self, hook, *, every: int):
-        self.hooks.append((hook, every))
-
     def add_hook(self, hook, *, every: int):
         self.hooks.append((hook, every))
 
@@ -822,7 +819,7 @@ def test_dpo_exports_completed_update_intervals_and_final_checkpoint(tmp_path, u
     class ExportTrainer:
         config = SimpleNamespace(checkpointer=None)
         run_id = "export-cadence"
-        add_completed_step_hook = Trainer.add_completed_step_hook
+        add_hook = Trainer.add_hook
 
         def __init__(self):
             self.hooks = TrainerHooks()

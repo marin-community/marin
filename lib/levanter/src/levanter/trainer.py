@@ -64,7 +64,6 @@ from levanter.callbacks import (
 )
 from levanter.callbacks.profiler import ProfilerConfig, XlaDumpUploadConfig
 from levanter.callbacks.progress_watchdog import ProgressWatchdogConfig
-from levanter.callbacks.state_adapter import StateCallbackRunner
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import (
     Checkpointer,
@@ -144,27 +143,19 @@ class TrainerHooks:
     def __init__(self):
         self.hooks = []
         self.jit_hooks = []
-        self.completed_step_hooks = StateCallbackRunner[TrainerState](
-            step_getter=lambda state: state.step,
-            model_getter=lambda state: state.model,
-            eval_model_getter=lambda state: state.eval_model,
-            opt_state_getter=lambda state: state.opt_state,
-        )
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         for hook in self.hooks:
-            if force or (info.step > 1 and info.step % hook.every == 0):
+            if force or (info.next_step > 0 and info.next_step % hook.every == 0):
                 hook.fn.on_step(info, force=force)
-        self.completed_step_hooks.run(info.state, loss=info.loss, step_duration=info.step_duration, force=force)
 
     def emit_event(self, event: ProgressEvent) -> None:
         for hook in self.hooks:
             hook.fn.on_event(event)
-        self.completed_step_hooks.emit_event(event)
 
     def run_jit_hooks_outside_step(self, info: StepInfo, cb_infos: Sequence[PyTree], force: bool = False):
         for s_hook, cb_info in zip(self.jit_hooks, cb_infos):
-            if force or (info.step > 1 and info.step % s_hook.every == 0):
+            if force or (info.next_step > 0 and info.next_step % s_hook.every == 0):
                 s_hook.fn.on_step(info, cb_info)
 
     def run_jit_hooks(self, state: TrainerState, jit_info: InsideJitInfo, force: bool = False) -> tuple[PyTree, ...]:
@@ -172,7 +163,7 @@ class TrainerHooks:
         hook_infos = []
         for hook in self.jit_hooks:
             hook_shape = eqx.filter_eval_shape(hook.fn.inside_step, state, jit_info)
-            fires = (state.step > 1) & (state.step % hook.every == 0)
+            fires = (state.step + 1) % hook.every == 0
             new_s = jax.lax.cond(
                 force or fires,
                 lambda: hook.fn.inside_step(state, jit_info),
@@ -370,22 +361,17 @@ class Trainer:
     def add_hook(self, *, every: int = 1): ...
 
     def add_hook(self, fn: Optional[Callable[[StepInfo], Any] | Callback | JitCallback] = None, *, every: int = 1):
+        """Schedule a callback every ``every`` completed optimizer updates.
+
+        ``every=2`` runs after updates 2, 4, and 6. Callback ``StepInfo.step``
+        remains zero-based, so those updates have step indices 1, 3, and 5.
+        """
         return self.hooks.add_hook(fn, every=every)
 
     def run_hooks(self, info: StepInfo, force: bool = False):
         self.hooks.run_hooks(info, force=force)
         if self._xla_dump_upload is not None:
             self._xla_dump_upload(info)
-
-    def add_completed_step_hook(self, fn: Callable[[StepInfo], Any] | Callback, *, every: int = 1) -> None:
-        """Schedule callbacks by completed optimizer updates (``state.step``).
-
-        With ``every=2``, this runs after updates 2, 4, and 6. Legacy hooks
-        schedule on zero-based ``StepInfo.step`` and skip indices 0 and 1,
-        so the same interval first runs after update 3. Both invoke ``on_step``;
-        this API changes the schedule, not the callback interface.
-        """
-        self.hooks.completed_step_hooks.add_hook(fn, every=every)
 
     def request_checkpoint(self, retention: CheckpointRetention) -> None:
         """Request a checkpoint after the current step with the given retention."""
@@ -556,7 +542,7 @@ class Trainer:
         # jit hooks impose a nontrivial cost even when they're not run (since they defeat some compiler optimizations)
         # so we avoid running them when they're not needed
         # this results in two compiles, but the cost of the second compile is worth it
-        hooks_this_time = any(state.step % h.every == 0 for h in self.hooks.jit_hooks)
+        hooks_this_time = any((state.step + 1) % h.every == 0 for h in self.hooks.jit_hooks)
 
         self.hooks.emit_event(ProgressEvent.TRAIN_STEP_STARTED)
         with capture_time() as step_time:
