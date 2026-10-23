@@ -41,12 +41,56 @@ from levanter.utils.mesh import MeshConfig
 from marin.execution.lazy import StepContext
 from marin.testing.moe import ragged_ep
 
-from experiments.grug.checkpointing import LEGACY_STATE_KEY, restore_grug_state_from_checkpoint
+from experiments.grug.checkpointing import LEGACY_STATE_KEY, checkpoint_stores_master, restore_grug_state_from_checkpoint
 from experiments.grug.moe_hero_ep import grugmuon_hero, model, train
 from experiments.grug.moe_hero_ep import launch_diagnostics as launch
 from experiments.grug.moe_hero_ep import small_scale_abl_launch as abl
+from experiments.grug.moe_hero_ep.optimizer import ExpertNormalization, GrugMoeMuonHConfig
 
 GPU_EXTRA_PYPROJECT = Path(__file__).resolve().parents[1] / "lib/marin/pyproject.toml"
+
+
+@pytest.mark.parametrize("normalization", tuple(ExpertNormalization))
+def test_muon_expert_normalization_matches_stacked_and_pipeline_layouts(normalization):
+    mesh = Mesh(np.asarray(jax.devices()[:1]), ("expert",), axis_types=(AxisType.Explicit,))
+    with jax.set_mesh(mesh):
+        values = np.random.default_rng(18).normal(size=(3, 8, 4)).astype(np.float32)
+        values *= np.asarray([0.2, 3.0, 5.0], dtype=np.float32)[:, None, None]
+        gradients = jnp.asarray(np.random.default_rng(19).normal(size=values.shape).astype(np.float32))
+        bank = jax.device_put(jnp.asarray(values), NamedSharding(mesh, P("expert", None, None)))
+        pipeline_params = {"blocks": ({"mlp": {"expert_mlp": {"w_up": bank}}},)}
+        stacked_params = {"stacked_blocks": {"stacked": {"mlp": {"expert_mlp": {"w_up": bank[None]}}}}}
+        pipeline_grads = jax.tree.map(lambda _: gradients, pipeline_params)
+        stacked_grads = jax.tree.map(lambda _: gradients[None], stacked_params)
+        optimizer = GrugMoeMuonHConfig(
+            learning_rate=0.1,
+            warmup=0,
+            lr_schedule="constant",
+            use_syrk=False,
+            expert_normalization=normalization,
+        ).build(3)
+
+        @jax.jit
+        def step(params, state, grads):
+            updates, state = optimizer.update(grads, state, params)
+            return optax.apply_updates(params, updates), state
+
+        pipeline_state = optimizer.init(pipeline_params)
+        stacked_state = optimizer.init(stacked_params)
+        for _ in range(2):
+            pipeline_params, pipeline_state = step(pipeline_params, pipeline_state, pipeline_grads)
+            stacked_params, stacked_state = step(stacked_params, stacked_state, stacked_grads)
+            actual = pipeline_params["blocks"][0]["mlp"]["expert_mlp"]["w_up"]
+            expected = stacked_params["stacked_blocks"]["stacked"]["mlp"]["expert_mlp"]["w_up"][0]
+            np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+
+        initial_norms = np.linalg.norm(values, axis=(1, 2))
+        final_norms = np.linalg.norm(np.asarray(actual), axis=(1, 2))
+        if normalization == ExpertNormalization.PER_EXPERT:
+            np.testing.assert_allclose(final_norms, initial_norms, rtol=1e-5, atol=1e-5)
+        else:
+            np.testing.assert_allclose(np.linalg.norm(final_norms), np.linalg.norm(initial_norms), rtol=1e-5, atol=1e-5)
+            assert np.max(np.abs(final_norms - initial_norms)) > 1e-3
 
 
 def test_muon_expert_stack_preserves_sharding_and_updates():
@@ -127,8 +171,8 @@ def test_diagnostic_run_without_shape_overrides_uses_the_selected_model():
         "ragged_all_to_all",
         model.QbEstimator.HIST,
         10_000,
-        1024,
-        4096,
+        256,
+        16384,
         4,
         10,
         1_000_000_000,
@@ -201,7 +245,7 @@ def test_hero_batch_validation_matches_default_mesh():
         default_mesh_trainer._validate_and_set_defaults()
 
     assert data_axis_size == default_mesh_trainer.data_axis_size == 64
-    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 16
+    assert trainer.per_device_parallelism == default_mesh_trainer.per_device_parallelism == 4
     assert trainer.per_device_eval_parallelism == default_mesh_trainer.per_device_eval_parallelism
 
 
@@ -272,11 +316,13 @@ def test_profile_window_must_fall_inside_the_run(profile_steps, profile_start_st
 
 
 def test_data_parallel_racks_keep_the_global_batch_explicit():
+    one_rack = launch.build_diagnostic_run(run_id="one-rack", dp_racks=1, num_steps=1, version="dev")
     step = launch.build_diagnostic_run(run_id="two-racks", dp_racks=2, num_steps=1, version="dev")
+    one_rack_config = one_rack.build_config(StepContext.for_fingerprint(one_rack.runtime_args, one_rack.deps))
     config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
 
     assert config.trainer.replica_axis_size == 2
-    assert config.trainer.trainer.train_batch_size == launch.HERO_EP_BATCH_SIZE
+    assert config.trainer.trainer.train_batch_size == one_rack_config.trainer.trainer.train_batch_size
     assert step.runtime_args["train_resources"].replicas == 2 * launch.HERO_EP_NODES
 
 
@@ -313,6 +359,80 @@ def test_synthetic_training_data_builds_a_reusable_global_batch():
     np.testing.assert_array_equal(batch.loss_weight[:, :-1], 1)
     np.testing.assert_array_equal(batch.loss_weight[:, -1], 0)
     assert batch.tokens.sharding == NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+
+@pytest.mark.parametrize("context_size", [1, 2])
+def test_balance_attention_rows_spreads_long_documents_across_shards(context_size):
+    # Two whole-row documents land on the last shard as loaded; balancing gives them separate shards,
+    # moves every row's tokens, loss weights, and segment ids together, and keeps loaded order within a shard.
+    # Context ranks share rows, so a context axis must not change the placement. With one row per shard,
+    # placement cannot change any shard's work, so the rows stay where they were loaded.
+    script = f"""
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+        from levanter.data.text.examples import GrugLmExample
+        from levanter.grug.attention import AttentionMask
+
+        from experiments.grug.moe_hero_ep import train
+
+        rows, seq_len, shards, context = 8, 16, 4, {context_size}
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape(1, 1, context, shards, 1),
+            ("replica_dcn", "data", "context", "expert", "model"),
+            axis_types=(AxisType.Explicit,) * 5,
+        )
+        segment_ids = np.repeat(np.arange(seq_len // 2)[None, :], rows, axis=0).repeat(2, axis=1)
+        segment_ids[-2:] = 0
+        # Row 0 is two 2-token documents followed by padding.
+        segment_ids[0, 4:] = -1
+        tokens = np.arange(rows)[:, None] * 100 + np.arange(seq_len)[None, :]
+        loss_weight = np.repeat(np.arange(rows, dtype=np.float32)[:, None], seq_len, axis=1)
+        sharding = NamedSharding(mesh, P(train._BATCH_AXES, None))
+
+        def balance(select):
+            batch = jax.device_put(
+                GrugLmExample(
+                    tokens=jnp.asarray(tokens[select], dtype=jnp.int32),
+                    loss_weight=jnp.asarray(loss_weight[select]),
+                    attn_mask=AttentionMask.causal().with_segment_ids(
+                        jnp.asarray(segment_ids[select], dtype=jnp.int32)
+                    ),
+                ),
+                sharding,
+            )
+            with jax.set_mesh(mesh):
+                return jax.jit(train.balance_attention_rows)(batch)
+
+        out = balance(slice(None))
+
+        assert out.tokens.sharding == sharding
+        source = np.asarray(out.tokens)[:, 0] // 100
+        assert sorted(source.tolist()) == list(range(rows))
+        np.testing.assert_array_equal(np.asarray(out.tokens), tokens[source])
+        np.testing.assert_array_equal(np.asarray(out.loss_weight), loss_weight[source])
+        for ids in out.attn_mask.segment_ids:
+            np.testing.assert_array_equal(np.asarray(ids), segment_ids[source])
+        long_rows_per_shard = np.isin(source, [rows - 2, rows - 1]).reshape(shards, rows // shards).sum(axis=1)
+        assert long_rows_per_shard.max() == 1, long_rows_per_shard
+        # Padding adds no cost, so row 0 is the cheapest row and the snake deal pairs it with the costliest.
+        # A full receiver keeps earlier senders' tokens first, so the deal starts at the costliest row's
+        # loaded shard instead of always giving that row shard 0.
+        by_shard = source.reshape(shards, rows // shards)
+        assert sorted(by_shard[(rows - 2) // (rows // shards)].tolist()) == [0, rows - 2], source
+        reversed_out = balance(slice(None, None, -1))
+        reversed_by_shard = (np.asarray(reversed_out.tokens)[:, 0] // 100).reshape(shards, rows // shards)
+        assert sorted(reversed_by_shard[0].tolist()) == [0, rows - 1], reversed_by_shard
+        # Expert capacity drops a shard's later tokens first, so a shard keeps its rows in loaded order.
+        assert (np.diff(source.reshape(shards, rows // shards), axis=1) > 0).all(), source
+
+        # The last rows hold both long documents, so a deal would move them.
+        one_per_shard = balance(slice(rows - shards, None))
+        np.testing.assert_array_equal(np.asarray(one_per_shard.tokens), tokens[rows - shards :])
+    """
+
+    run_on_cpu_devices(script, device_count=4 * context_size)
 
 
 def test_expert_bank_override_must_be_divisible_by_the_expert_axis():
@@ -493,7 +613,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     state = _tiny_state(jnp.zeros(4), None)
     master_less = str(tmp_path / "step-1")
     save_checkpoint({"params": jnp.zeros(4)}, step=1, checkpoint_path=master_less)
-    assert not train.checkpoint_stores_master(master_less)
+    assert not checkpoint_stores_master(master_less)
     assert train.template_for_candidate_layout(state, master_less, train.MasterParamMode.DEVICE) is state
     with pytest.raises(ValueError, match="Synthesizing a master"):
         train.template_for_candidate_layout(state, master_less, train.MasterParamMode.FP32_PINNED_HOST)
@@ -502,7 +622,7 @@ def test_master_layout_detection_and_the_synthesize_refusal(tmp_path):
     save_checkpoint(
         {"params": jnp.zeros(4, jnp.bfloat16), "master_params": jnp.zeros(4)}, step=2, checkpoint_path=master_bearing
     )
-    assert train.checkpoint_stores_master(master_bearing)
+    assert checkpoint_stores_master(master_bearing)
     assert train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.FP32_PINNED_HOST) is state
     migrating = train.template_for_candidate_layout(state, master_bearing, train.MasterParamMode.DEVICE)
     assert migrating.params is None and migrating.master_params is state.params
@@ -518,7 +638,7 @@ def test_a_master_is_detected_through_the_legacy_wrapped_checkpoint_layout(tmp_p
         checkpoint_path=checkpoint,
     )
 
-    assert train.checkpoint_stores_master(checkpoint)
+    assert checkpoint_stores_master(checkpoint)
 
 
 def test_a_master_bearing_checkpoint_migrates_in_process_into_a_master_less_restore(tmp_path, monkeypatch):
@@ -1175,7 +1295,7 @@ def test_diagnostic_watch_stats_match_direct_gradient_and_parameter_norms():
     batch = SimpleNamespace(
         tokens=jnp.array([1, 3], dtype=jnp.int32),
         loss_weight=jnp.array([0.5, 1.0]),
-        attn_mask=None,
+        attn_mask=AttentionMask.causal(),
     )
     mp = jmp.get_policy("params=float32,compute=float32,output=float32")
     watch = WatchConfig(interval=1)
@@ -1226,7 +1346,7 @@ def test_inline_watch_computes_stats_on_every_train_step(monkeypatch):
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
         return (loss, metrics), grads
 
-    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
     monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
     train_step = train._make_train_step(
         optimizer,
@@ -1329,7 +1449,7 @@ def test_fp32_host_master_accumulates_updates_before_bfloat16_cast(monkeypatch):
         metrics = {"qb_beta_per_layer": jnp.zeros((1, 1))}
         return (loss, metrics), grads
 
-    monkeypatch.setattr(train, "_apply_qb_betas", lambda model, qb_betas: model)
+    monkeypatch.setattr(train, "apply_qb_betas", lambda model, qb_betas: model)
     monkeypatch.setattr(train, "_loss_and_grads", loss_and_grads)
     train_step = train._make_train_step(
         optimizer,

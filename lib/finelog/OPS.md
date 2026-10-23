@@ -64,6 +64,22 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
+Start with the server's stage timings when unrelated log and SQL requests slow
+down together. For the GCE hub:
+
+```bash
+gcloud compute ssh finelog-marin --project hai-gcp-models --zone us-central1-a \
+  --tunnel-through-iap \
+  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "slow FetchLogs RPC stage|slow Query RPC stage|object cache evicted"'
+```
+
+Large `visibility_wait_ms` means the request waited for shared storage
+maintenance before it could query. Compare the timestamps with cache eviction
+and object cleanup. Cache removals release this lock between small batches so
+queued readers can proceed. Background warming uses only immediately available
+download slots; a broad query cannot leave an unbounded queue of cache fills
+after its deadline. Required local reads still wait for a download slot.
+
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
 correct key with many segments points to a different problem than a
@@ -95,6 +111,16 @@ one as a place to look, not as a measured cost.
 wall time with plain `EXPLAIN` before tuning Parquet reads. For predicates on
 several indexed columns, Finelog checks range-constrained columns first and
 stops reading a segment's other index sections once its span mask is empty.
+Before loading trigram sections, bounded integer predicates also exclude cached
+local segments using complete Parquet min/max statistics. Missing source files
+or statistics retain the segment for the ordinary scan. The planner retains
+each segment's computed span mask through source planning, so a cache eviction
+does not cause a second index load for the same query.
+
+For log searches, `epoch_ms` is not the catalog key: `log` is keyed by task
+`key`. A time bound can therefore still require footer reads for old segments.
+When a known sequence window is available, bound `seq` as well to exclude
+segments from catalog metadata before either footer or index reads.
 
 An unbounded substring query (`col LIKE '%…%'`) prunes only when that column
 carries a trigram index; otherwise it decodes the column for every row in the
@@ -550,10 +576,12 @@ Interpret the pair as follows:
 - Rows absent from both Finelog stores and the container runtime: the task did
   not emit the expected output or its runtime logs are already unavailable.
 
-The forwarder gives every live namespace one batch-sized turn per round and
-starts another round immediately while work remains. A large telemetry backlog
-therefore does not monopolize forwarding ahead of new log rows. Hub or network
-failures get three attempts, then leave the affected cursor in place and yield to
+The forwarder gives every live namespace one batch-sized turn per round, runs
+up to four namespace turns concurrently, and starts another round immediately
+while work remains. A log turn reads up to one million rows; other tables read
+up to 200,000. Requests retain their byte limit, and log chunks ship serially
+to preserve order. Independent tables can overlap their durable hub writes.
+Hub or network failures get three attempts, then leave the affected cursor in place and yield to
 the next namespace. The same batch is retried on the next sweep; exhaustion does
 not discard it.
 
@@ -609,6 +637,16 @@ settlement, and total milliseconds. A settlement line also reports removed
 segment, row, and byte counts. Maintenance lines report resource class, queue
 wait, run time, and the requested follow-up class. Object-backed relays use the
 `RelayIo` class; `SpecMigration` and `QueryServing` have independent limits.
+
+`slow batch stage breakdown` reports `read_ms`, `chunk_encode_ms`, and `push_ms`
+for one turn, with its source cursor range, row count, chunk count, and encoded
+bytes. `push_ms` includes RPC compression, transport, retries, and the hub's
+durable acknowledgement; it is not hub CPU time. Durations are wall time and can
+include scheduling delays while another namespace encodes. Match the namespace
+and `previous_cursor` to `slow namespace turn completed` for settlement and total
+duration. Its final cursor can also cover trailing foreign-origin rows skipped
+after the batch timing line. A cold-read explanation requires a large `read_ms`;
+total turn time alone cannot establish it.
 
 The forwarding cursor and fully covered object-segment removals share one
 catalog transaction and one HEAD publication. Covered segments stop appearing
@@ -708,6 +746,26 @@ A shadow boot over a copy of a deployment's catalog also re-runs that
 deployment's registrations, so a schema this binary can no longer merge shows
 up in `/health` as `degraded: <namespace>: registration failed: ...` with the
 per-namespace detail under `/api/server`.
+
+The dashboard benchmark extracts inline SQL from Grafana dashboard JSON.
+For bridge dataset endpoints, export the `SourceQuery` SQL from the matching
+builder in `infra/grafana/src/` as a JSON array of `{"name": "...", "sql": "..."}`
+objects. Pass that file with `--query-file`; its SQL runs verbatim, so freeze
+its time bounds before comparing servers. `--address` measures an existing
+server, including a loopback SSH tunnel, instead of starting a shadow process:
+
+```bash
+uv run python -m finelog.benchmarks.grafana_dashboard_bench \
+  --query-file queries.json --address http://127.0.0.1:19001 \
+  --warmup 1 --iterations 5 --output timings.json
+```
+
+Results include result digests, plain `EXPLAIN` wall time and plan, and
+`EXPLAIN ANALYZE` wall time and scan counters under `workloads`. Each workload
+records its rendered dashboard `window`; literal query files record `window: null`
+because their bounds come from their SQL. RPC wall time includes queueing;
+it does not isolate planner CPU. Keep the original Parquet files for the
+baseline and compare result digests before interpreting a sampled speedup.
 
 ## Diagnosing Kubernetes mirror readiness
 

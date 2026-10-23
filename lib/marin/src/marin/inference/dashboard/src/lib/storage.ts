@@ -16,6 +16,23 @@ export function newId(): string {
   return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
+export function newConversation(model: string): Conversation {
+  const now = Date.now()
+  return {
+    id: newId(),
+    title: '',
+    model,
+    system: '',
+    pythonTools: '',
+    shellWorkspace: null,
+    thinkingMode: ThinkingMode.TemplateDefault,
+    customInstructions: '',
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  }
+}
+
 export function loadConversations(): Conversation[] {
   try {
     const raw = localStorage.getItem(CONVERSATIONS_KEY)

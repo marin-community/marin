@@ -16,6 +16,10 @@ uv run pytest <test path>
 uv run --no-project infra/ci/run_tests.py
 ```
 
+The affected-test runner checks Harbor's standalone lock and runs its offline
+runtime suite when vendored Harbor or its local Rigging or FineStore dependencies
+change. Run those checks directly with `uv run --no-project infra/ci/run_harbor_tests.py`.
+
 The repository defaults exclude `slow`, `integration`, `data_integration`,
 `cluster`, `requires_cluster`, `docker`, and `manual` tests. Do not pass a
 partial marker expression such as `-m "not slow"`; pytest replaces the default
@@ -41,6 +45,31 @@ When adding a new `lib/<name>/` package, run its unit tests through
 `lib/<name>/tests` by default; update `TEST_DIRS` if its tests live elsewhere.
 These registrations include the library in pull request, push, and full-suite
 runs.
+
+`vendor/evalchemy` is excluded from the workspace and uses its own `uv.lock`.
+Its dedicated `evalchemy-unit` lane checks that lock and runs the retained tests
+in the independent evaluator environment. Run them locally with
+`uv run --directory vendor/evalchemy --frozen --all-extras --group test pytest`.
+
+Root `pyproject.toml` and `uv.lock` changes run the broad CPU matrix. The
+Levanter TPU lane runs for those changes when the resolved dependencies of
+`marin-levanter` with its `tpu` extra and `test` group change, including
+transitive dependencies. If the selector cannot compare the base and head
+lockfiles, it runs the TPU lane. Levanter or Haliax source changes also select
+the lane. The Levanter Torch lane retains its root manifest trigger. Scheduled
+or manual runs without a base ref run every suite.
+
+The Levanter TPU lane selects affected files containing `pytest.mark.tpu`,
+then runs only marked cases, including scheduled and full-suite runs. Mark
+tests when they exercise real accelerator kernels, TPU numerical behavior, or
+device transfers and collectives that CPU coverage cannot validate. Use
+`@pytest.mark.tpu` on individual tests, `pytest.param(..., marks=pytest.mark.tpu)`
+for selected parameters, or `pytestmark = pytest.mark.tpu` for an entire module.
+Keep markers literal so [select_tests.py](infra/ci/select_tests.py) can find them
+without importing test dependencies. The marker also works on test classes.
+CPU CI continues to run these tests when supported; `tpu` opts into hardware
+coverage and does not imply a CPU skip. The TPU lane retains all default safety
+exclusions and excludes Torch tests.
 
 ## Core Rule
 
@@ -99,6 +128,8 @@ Delete or rewrite tests with negative value:
   and assert that construction raises. Keep one only for a reported regression
   or a compatibility-critical public contract.
 - Tests for Python language semantics.
+- Shellsim guest interpreter or ports acceptance tests. Keep that coverage in Shellsim;
+  Marin CI should exercise caller contracts with shell-only fixtures or existing machine fakes.
 - Registration tests: Tests that check that specific items are registered in global registries.
 - Configuration projections: assertions that a lowered or constructed field equals the same value
   supplied by the test or checked-in config. Test validation, merge conflicts, observable behavior,
@@ -178,6 +209,10 @@ the implementation is not useful.
 ## Pytest Style
 
 - Prefer top-level `def test_*` functions with fixtures over test classes.
+- Do not import helpers or constants from another `test_*.py` module. Put shared
+  pytest fixtures in the nearest `conftest.py`, and shared importable helpers in
+  a named support module. Its import must work in package-only and repository-wide
+  runs without adding test directories to the root pytest configuration.
 - Name tests as `test_<subject>_<scenario>_<expected_outcome>`.
 - Use parameterization for meaningful behavior variation.
 - Extend existing test files before creating new ones.

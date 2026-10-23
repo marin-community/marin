@@ -76,6 +76,7 @@ from iris.cluster.controller.dashboard import ControllerDashboard
 from iris.cluster.controller.db import ControllerDB, Tx
 from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.endpoints import ProxyMappingDelta, ProxyRegistryReset
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.federation_proxy import FederatedEndpointHandoff
 from iris.cluster.controller.federation_store import ControllerFederationStore, build_queued_candidates
 from iris.cluster.controller.log_stack import LogStack
@@ -120,6 +121,7 @@ from iris.cluster.federation.manager import (
 from iris.cluster.federation.peer import FederationPeer, build_peers
 from iris.cluster.log_keys import CONTROLLER_LOG_KEY
 from iris.cluster.platforms.types import resolve_external_host
+from iris.cluster.runtime.sandbox import task_isolation
 from iris.cluster.types import (
     JobName,
     PendingTask,
@@ -206,6 +208,27 @@ class _SchedulingInputs:
     context: SchedulingContext | None
     queued_federation: list[QueuedCandidate]
     expired_queued_federation: list[JobName]
+
+
+def with_task_token(
+    request: job_pb2.RunTaskRequest,
+    job_id: JobName,
+    auth: ControllerAuth | None,
+) -> job_pb2.RunTaskRequest:
+    """Return a copy of ``request`` carrying a task token for ``job_id``'s owner.
+
+    Only an enforcing controller mints one: under null auth every caller is
+    already admitted, and a token would only lower the task's role. A profile
+    that withholds the token (SANDBOX) gets ``request`` back unchanged.
+    """
+    if auth is None or not auth.provider or auth.jwt_manager is None:
+        return request
+    if not task_isolation(request.container_profile, request.egress_policy).include_task_token:
+        return request
+    stamped = job_pb2.RunTaskRequest()
+    stamped.CopyFrom(request)
+    stamped.task_token = auth.jwt_manager.create_task_token(job_id)
+    return stamped
 
 
 def backend_observation_request(
@@ -336,6 +359,12 @@ class ControllerConfig:
     a minted capability URL is then tagged with ``cluster_id`` and points at the parent,
     which relays it back here."""
 
+    budget_parent: str = ""
+    """Trusted parent that owns budget policy; empty makes this controller the authority."""
+
+    budget_peers: tuple[str, ...] = ()
+    """Routing peers whose locally executed usage belongs to this budget authority."""
+
     peers: dict[str, PeerConfig] = field(default_factory=dict)
     """Federation peers (peer id -> declaration). Empty leaves federation inert:
     no peer connections, no heartbeat, an empty ListPeers view."""
@@ -434,6 +463,13 @@ class Controller:
             if federation_peers is not None
             else build_peers(config.peers, federation_token_provider=federation_token_provider)
         )
+        self._budgets = FederationBudgets(
+            self._db,
+            config.user_budget_defaults,
+            cluster_id=config.cluster_id,
+            parent_id=config.budget_parent,
+            peers=config.budget_peers,
+        )
         self._federation = FederationManager(
             peers,
             threads=self._threads,
@@ -442,6 +478,7 @@ class Controller:
             ),
             bundles=self._bundle_store,
             cluster_id=config.cluster_id,
+            budgets=self._budgets,
             heartbeat_interval=config.federation_heartbeat_interval,
             max_handoffs_per_cycle=config.max_federation_handoffs_per_cycle,
         )
@@ -479,6 +516,7 @@ class Controller:
             endpoint_service=self._endpoint_service,
             auth=config.auth,
             user_budget_defaults=config.user_budget_defaults,
+            budgets=self._budgets,
             capability_url_config=CapabilityUrlConfig(
                 cluster_name=config.cluster_id,
                 local_origin=config.dashboard_url,
@@ -824,6 +862,7 @@ class Controller:
             iap_audience=auth.iap_audience if auth is not None else None,
             federation_keys=auth.federation_keys if auth is not None else {},
             admin_users=tuple(sorted(auth.role_policy.admins)) if auth is not None and auth.role_policy else (),
+            user_roles=dict(auth.role_policy.user_roles) if auth is not None and auth.role_policy else {},
             default_user_role=(
                 auth.role_policy.default_role if auth is not None and auth.role_policy else DEFAULT_USER_ROLE
             ),
@@ -1109,19 +1148,25 @@ class Controller:
 
     def _direct_reconcile_request(self) -> DirectReconcileRequest:
         drain = self._drain_dispatch_snapshot()
-        return DirectReconcileRequest(tasks_to_run=drain.tasks_to_run, running_tasks=drain.running_tasks)
+        tasks_to_run = [
+            with_task_token(request, JobName.from_wire(request.task_id).require_task()[0], self._config.auth)
+            for request in drain.tasks_to_run
+        ]
+        return DirectReconcileRequest(tasks_to_run=tasks_to_run, running_tasks=drain.running_tasks)
 
     def _scheduling_inputs(self, snap: Tx, now: Timestamp) -> _SchedulingInputs:
+        budget_context = self._budgets.context(snap)
         context = build_scheduling_context(
             snap,
             self._worker_health,
             snap.caches[WorkerAttrsProjection],
             self._config.user_budget_defaults,
+            budget_context=budget_context,
         )
         queued: list[QueuedCandidate] = []
         expired: list[JobName] = []
         if self._config.peers:
-            queued = build_queued_candidates(snap)
+            queued = build_queued_candidates(snap, budget_context=budget_context)
             expired = reads.expired_queued_handoffs(snap, now.epoch_ms())
         return _SchedulingInputs(
             context=context if context.pending_task_rows else None,
@@ -1136,7 +1181,10 @@ class Controller:
             if row.task_state != job_pb2.TASK_STATE_ASSIGNED:
                 continue
             if row.job_id not in templates:
-                templates[row.job_id] = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
+                template = snap.caches[RunTemplatesProjection].get(snap, row.job_id)
+                templates[row.job_id] = (
+                    with_task_token(template, row.job_id, self._config.auth) if template is not None else None
+                )
         worker_snapshot = reads.ControlSnapshot(
             worker_addresses=control.worker_addresses,
             reconcile_rows=control.reconcile_rows,
@@ -1462,10 +1510,11 @@ class Controller:
         """
         max_promotions = self._promotion_bucket.available
         with self._db.transaction() as cur:
+            budget_context = self._budgets.context(cur)
             batch = dispatch.drain_for_dispatch(
                 cur,
                 max_promotions=max_promotions,
-                defaults=self._config.user_budget_defaults,
+                budget_context=budget_context,
             )
         if batch.tasks_to_run:
             self._promotion_bucket.try_acquire(len(batch.tasks_to_run))

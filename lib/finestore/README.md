@@ -42,6 +42,13 @@ only that table. If writing or publication fails, claimed store buffers are rest
 for retry. Immutable files written before a failed publication are harmless orphans
 and can be collected later.
 
+A flush uploads each new shard, writes a manifest, and publishes it with one
+compare-and-swap of `HEAD`. A writer that loses the compare-and-swap rebases its change
+onto the new `HEAD` and retries with backoff. Every writer to a root shares its `HEAD`,
+so commits to one root are serialized; writers that need more aggregate commit
+throughput should write to separate roots. A flush raises `CommitConflict` only after
+losing the compare-and-swap for an hour.
+
 ## Reads
 
 ```python
@@ -56,11 +63,23 @@ token = view.token
 A view pins one manifest. Commits and compactions that happen afterward do not change
 its results. Create a new view to observe a newer token.
 
+Each view caches the immutable byte ranges requested by Parquet, including footers
+and selected row-group columns, across all shard handles. The cache shares a
+64 MiB budget across tables and evicts the least recently used ranges when full.
+It reads only the requested ranges, regardless of table or shard size. Reads larger
+than the budget bypass the cache. `ReadView(root, cache_bytes=...)` sets the budget;
+zero disables it. Cached bytes remain compressed, and blob readers retain their
+row-batch limits.
+
 `scan` supports column projection and `==`, `!=`, and `in` filters. FineStore unifies
 compatible Parquet schemas across active shards and keeps the row from the latest
 user commit for each primary key before applying filters on non-key columns. Compaction
 preserves each row's original commit sequence, so reorganizing files never makes an
 older value outrank a concurrent write.
+
+Each shard records the range of primary keys it holds when the key columns are
+strings and integers. A lookup with `==` on a prefix of the primary key, or `in` on its
+first column, skips shards whose range excludes the value.
 
 ## Named objects and caches
 
@@ -68,13 +87,13 @@ older value outrank a concurrent write.
 table and returns `finestore://blobs/<name>`. Named objects participate in the same
 transaction and commit token as ordinary table rows.
 
-Objects up to 8 MiB remain inline in the `blobs` row. Larger objects use an inline
-descriptor plus 8 MiB rows in the internal `_finestore_blob_parts` table. The
+Objects up to 128 KiB remain inline in the `blobs` row. Larger objects use a
+descriptor and up to 8 MiB rows in the internal `_finestore_blob_parts` table. The
 descriptor and parts become visible in one manifest commit, and `ReadView.open_blob`
 streams either encoding through one file interface. The first chunked-object commit adds the
 `chunked-blobs-v1` required manifest feature, so an older reader fails closed instead
 of returning a descriptor as an empty payload. Existing inline objects and archives
-need no migration.
+need no migration. Existing larger inline values remain readable.
 
 `write_object` still accepts a complete `bytes` value. `read_blob` remains the
 convenience API that returns a complete `bytes` value, while `open_blob` returns a
@@ -86,6 +105,29 @@ all of an object's parts. File-set materialization streams committed parts into 
 destination file to avoid another complete copy. A transaction's `max_bytes` limit
 still applies; `FineStoreDirectory` treats its byte limit as a multi-file batch target
 and admits one larger file.
+
+Blob descriptor shards use at most 1024 rows per row group; ordinary tables retain
+their 16,384-row limit. Named-object lookups scan descriptors in 64-row batches
+with one batch and one fragment of readahead per shard, single-threaded decoding,
+and no Parquet pre-buffering. This bounds decoding of unrequested inline values after compaction. Descriptor and part
+files also disable fsspec read-ahead so a small column read does not fetch adjacent
+blob payloads. Ordinary table reads keep their filesystem caching behavior. Returned values
+still occupy memory, and dispersed keys can require reading most row groups;
+bounded decoding does not remove row-group read amplification. `read_blobs` reads
+all requested descriptors together and gathers chunked parts in one parts scan.
+Descriptor shards are read with at most four threads per lookup; version resolution
+uses the whole committed snapshot. Blob reads keep their bounded decoding and
+disable whole-fragment prefetch.
+
+`ReadView.read_diagnostics()` returns a snapshot of cumulative `read_blobs`
+work, including single-value `read_blob` calls. It reports requested and found
+names, descriptor-scan and payload-assembly seconds, descriptor lookups,
+selected descriptor shards, and returned value bytes. Returned bytes measure
+decoded output, not physical storage traffic. `PersistentKvCache.read_diagnostics()`
+also reports unique requested keys, memory hits, storage hits, and misses across
+`load` and `load_many` calls. These totals are recorded automatically. Finelog
+telemetry exports counters for reads, names, bytes, and cache outcomes, plus
+histograms for descriptor time, payload time, and descriptor-shard fanout.
 
 Two adapters build cache behavior on this primitive:
 
@@ -114,9 +156,51 @@ pass performs at most three compactions per table. `store.maintain()` exposes th
 operation for deterministic callers. `compact_table(root, table)` compacts all active shards
 for explicit materialization and sealing.
 
-Compaction pins a manifest, streams an ordered merge of its exact input shards, writes
-one shard at the next level, and replaces those paths through the same `HEAD` compare
-and swap. If another compactor removes an input first, the losing output remains
+One writer per archive compacts at a time. Maintenance holds a lease, the
+`_maintenance` object under the root, while it compacts; a writer that cannot take the
+lease flushes and leaves compaction to the holder. A holder that stops without releasing
+the lease loses it once the lease goes stale. Each new holder publishes a higher
+`maintainer_epoch` in the manifest, and a compaction prepared under an older epoch is
+rejected rather than rebased, so a stalled maintainer cannot overwrite its successor's
+work. `seal()` compacts even while another writer holds the lease; the epoch check still
+protects it. Lease, commit, conflict, and compaction events are exported as
+`finestore_*` telemetry counters.
+
+`close()` also runs a best-effort level-zero merge after its final flush. A closing
+writer that holds the maintenance lease, or can take it, merges the level-zero shards of
+each registered table from every writer within a bounded input budget; otherwise it
+leaves them to the current maintainer. A wave of closing writers therefore elects one
+merger instead of racing replacement commits. Concurrent writers must use distinct
+writer IDs (the default IDs are unique). Transient storage failures are retried a
+bounded number of times before propagating. The merge adds close latency; its budget
+bounds stored input, not wall time or decoded memory.
+
+`PersistentKvCache.close()` performs this pass during explicit shutdown. Its process-exit
+handler only requests maintenance shutdown after the bounded cache-write drain, so
+compaction or another flush cannot block interpreter exit.
+
+Close-time compaction does not repair archives left by terminated writers or guarantee
+one shard across repeated writer sessions. Ordinary leveled maintenance still handles
+larger groups; explicit compaction remains available across all active shards.
+
+Compaction pins a manifest and merges its input shards as sorted runs, reading one
+Parquet row group at a time from each. Flushed and compacted shards are already sorted
+by primary key. An unsorted input, such as a flush with a row missing a key column or a
+shard migrated from format 1, is sorted whole in memory, and a compaction holds all of
+its unsorted inputs at once. The merge keeps only the newest version of each key, so
+the output shards of one compaction hold disjoint, ascending key ranges, and the seal
+records the superseded rows it removed. Otherwise memory holds about one decoded row
+group per input plus the rows at the merge frontier; Parquet pre-buffering is disabled
+and a small fsspec file buffer limits speculative byte reads. When the compressed inputs
+total at most 16 MiB, compaction prefetches whole shards with up to 16 concurrent reads
+and caches them for both schema and row reads. Larger compactions retain bounded streaming
+reads. Output shards are cut at about `compaction_target_bytes` of decoded data, configurable on `DataStore` or as
+`target_bytes` on `compact_table`; one row group always fits, so a single large row
+group or row can exceed it. Reads apply the same newest-version rule: `iter_rows`
+streams the merge across a view's shards in primary-key order, and `scan` resolves
+versions in one vectorised pass.
+The manifest replaces the input paths with the output shards through the same `HEAD`
+compare and swap. If another compactor removes an input first, the losing output remains
 unreferenced and the operation is a benign no-op. If another writer adds a shard,
 the replacement can rebase while preserving the new shard.
 
@@ -130,6 +214,7 @@ archive retention or reader leases; it is outside the current API.
 {root}/
     _archive.json                         format marker changed only by migrations
     HEAD                                  conditional commit pointer
+    _maintenance                          compaction lease, present while held
     manifests/{commit_id}.json            immutable complete snapshots
     schemas/{content_hash}.json            immutable table contracts
     data/{table}/w={writer}/g={level}/... immutable Parquet shards
@@ -137,9 +222,10 @@ archive retention or reader leases; it is outside the current API.
 
 Only `HEAD` is mutable. The `HEAD` document names a manifest, commit id, and logical
 sequence. A manifest names every active shard, its writer and compaction generation,
-row and sequence bounds, byte size, SHA-256 digest, each table's metadata object, and
-optional seal state. Writers compute shard integrity metadata while streaming Parquet,
-so it does not require another object-store read.
+row, sequence, and primary-key bounds, byte size, SHA-256 digest, each table's metadata
+object, the current maintainer epoch, and optional seal state. Writers compute shard
+integrity metadata while streaming Parquet, so it does not require another object-store
+read.
 
 Manifest models preserve unknown optional JSON fields when an older writer rebases a
 commit. A manifest can also name `required_features`; readers reject features they do
@@ -164,7 +250,11 @@ an equivalent compare-and-swap primitive.
 - A cache writer may stop at either point. The named value is absent or fully committed;
   a partial transaction is never visible.
 - A compare-and-swap loss reloads `HEAD` and rebases disjoint additions. A compaction
-  rebases only while all of its exact inputs remain active.
+  rebases only while all of its exact inputs remain active and the maintainer epoch it
+  was prepared under is still current.
+- A maintainer that stops without releasing its lease blocks compaction by other
+  writers, including close-time merges, until the lease goes stale. Flushes never wait
+  on it.
 - Opening a sealed archive for writing publishes a commit that clears its seal.
   `store.seal()` flushes, compacts, and records seal metadata in a final manifest.
 
@@ -206,3 +296,9 @@ for the current schema version.
 Evaldash reads the same schemas. Marin separately records each evaluation or RL attempt in Finelog's
 `marin.rollout_runs` discovery table, with a URI pointing back to its rollout store. FineStore
 contains no evaluator conversion policy, Finelog integration, or Marin pipeline dependency.
+
+`finestore.rl.mismatch_probe` defines the frozen-response, scorer and manifest tables
+shared by MarinSkyRL producers and Marin's mismatch reports. Tokenizer identity,
+relative updates and absolute trainer steps are typed provenance fields. This
+contract sits next to `finestore.eval` so producers need only `marin-finestore`
+and CPU report readers need no trainer or inference-engine dependencies.

@@ -1,7 +1,14 @@
 # EvalDash
 
 A benchmark panel and browsable run log over every Marin eval run, served by the Marina kernel at
-`/evaldash/`.
+`/evaldash/` on `marina.oa.dev`. The legacy `evaldash.oa.dev` hostname routes to
+the same Marina service.
+
+Cloud Run has a `marina` web service and a separate `marina-evaldash` job.
+The job is the scheduled ingestion worker; it scans evaluation records and
+updates the serving catalog. It serves no web traffic. Both use the Marina
+base image, while the released EvalDash package supplies the UI, API and
+ingestion module.
 
 Eval runs write one canonical JSON record per run under `gs://marin-eval-metadata/evals` for GCP or
 `s3://marin-us-east-02a/marin/evals` for CoreWeave. The run directory also holds the evaluator's
@@ -9,8 +16,17 @@ results and per-sample artifacts. The app's own Postgres schema is the serving c
 full validated record snapshot before answering, and object storage stays the durable producer and
 recovery input. The EvalDash Marina runner scans object storage and commits catalog changes; serving
 instances do no background reconciliation work.
+The runner writes through the database engine without loading a serving snapshot. Catalog
+materialization reads and writes at most 128 run IDs per batch within the prefix transaction.
+Source verification updates and upserts also use batches of at most 128 rows; PostgreSQL applies
+each verification batch in one statement rather than sending an update for each record.
+Object checks finish before that transaction begins; parsed records from those checks remain in
+memory until commit.
 Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
-value as `None`. Current writers include the field.
+value as `None`. Current writers include the field. For runs with a per-eval StepSpec, EvalDash also
+reads `{run_id}/.executor_status`. A score is eligible only after that step reaches `SUCCESS`; runs
+without a step status retain the record's historical behavior. Run lists show the step state when it
+is still running or has failed, and run detail shows both the evaluator result and the step state.
 
 The default scan also includes the former flat `gs://marin-eval-metadata/runs` and
 `s3://marin-us-east-02a/marin/eval-metadata/runs` roots because older CLI checkouts still write there.
@@ -19,9 +35,11 @@ Canonical `evals` roots have precedence when the same migrated `run_id` exists i
 Record discovery runs every 10 minutes using a delimiter-based directory listing and checks only
 `*/record.json`. It does not recursively enumerate results, samples, trajectories, or other evaluator
 payloads. New record bodies are read with up to 16 concurrent requests. Known objects carry a GCS
-generation, S3 ETag, or local content hash in the PostgreSQL source inventory; their first recheck is
-spread across the first day, then each is HEADed once per 24 hours and reread only when its version
-changes. A missing object must be absent on two successful checks before its source is removed. A
+generation, S3 ETag, or local content hash plus the StepSpec state in the PostgreSQL source inventory.
+Running or failed steps, and recent runs still waiting for a status file, are checked on each scan.
+Completed steps and older records are checked once per 24 hours after their first recheck is spread
+across the first day. The record body is reread only when its version or step state changes. A missing
+object must be absent on two successful checks before its source is removed. A
 failed prefix listing leaves that prefix's last committed rows untouched, and an invalid rewrite keeps
 the last valid record while surfacing the error on the Debug page. Failures in a serving instance's
 generation check or the scheduled reconciliation pass remain visible there until a later check or
@@ -31,8 +49,11 @@ Each source change and its selected `eval_catalog_runs`/`eval_catalog_metrics` p
 transaction. The lowest configured prefix priority wins duplicate run IDs, so a removed canonical
 record promotes its legacy copy without rereading it. The transaction advances
 `eval_catalog_state.generation`. Each serving instance checks that generation at most once every 10
-seconds and swaps its in-memory aggregate views only after a newer generation commits. A failed check
-serves the last good snapshot and retries after the same interval. `marina migrate` applies the
+seconds and swaps its in-memory record snapshot only after a newer generation commits. A failed check
+serves the last good snapshot and retries after the same interval. Snapshot loads read the generation
+and records in one read-only `REPEATABLE READ` transaction, so a writer can commit during a load
+without blocking it or mixing records from different generations.
+`marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
 pending numbered migrations from `migrations/` under a
 PostgreSQL advisory lock and rejects a database whose migration ledger is newer than the running
 binary; mounting the app only verifies the schema, and never writes. The initial migration adopts the
@@ -47,6 +68,21 @@ selector, an opt-in qualified aggregate, and archive controls), runs (a "by laun
 expanding each serve group to its evals, plus a flat filterable table), run detail (grade with its
 interval and ungraded-item breakdown, metrics, version + description, live iris job/attempt status,
 live finelog logs, a per-sample browser, and group siblings), and status (per-prefix ingest probes).
+
+Run filters search the full catalog before applying the result limit. Model and eval pickers
+search the catalog's names by case-insensitive word fragments and support arrow keys, Enter,
+and Escape. Filters, result limit, and launch/flat view are carried in the run-log URL.
+Runs span all cohorts; the cohort carried by the shell navigation applies to scored views.
+Filtering launches by eval retains all their sibling runs and the full launch's status.
+`/meta` returns `run_facets` over all records, including smoke runs, separately from panel facets.
+Its model, benchmark, cohort, and filter lists are computed when a catalog snapshot loads or refreshes.
+Requests reuse those lists and read current archive flags independently; archiving does not require a
+new catalog generation. Synchronous metadata work runs in a worker thread so database waits leave the
+async event loop available to other requests.
+
+Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
+so reopening a link restores the same runs and scores. Links without a cohort resolve to the
+dashboard's default cohort and add it to the URL.
 
 The per-sample browser shows how each prediction was graded (the grader method, headline metric,
 score, and verbatim grader detail) and highlights the picked-versus-gold answer. Agentic (Harbor)
@@ -78,8 +114,8 @@ The kernel is the only access gate; there is no application auth. Handlers read 
 The kernel mounts these under `/evaldash/api/`.
 
 ```
-GET  /runs?model=&eval=&user=&status=&group=&limit=   filtered run rows
-GET  /groups?model=&user=&limit=   runs collapsed into launches (one row per group_id) with per-eval members
+GET  /runs?model=&eval=&user=&status=&version=&accelerator=&group=&limit=   filtered run rows
+GET  /groups?model=&eval=&user=&status=&version=&accelerator=&limit=   runs collapsed into launches (one row per group_id) with per-eval members
 GET  /runs/{run_id}     the full record.json for one run (404 if absent)
 GET  /runs/{run_id}/jobs           live iris job + per-task attempt status for each role
 GET  /runs/{run_id}/logs?role=&tail=&substring=   live finelog log lines for one role
@@ -88,7 +124,7 @@ GET  /runs/{run_id}/samples?task=&offset=&limit=&correct=   paged sample rows
 GET  /runs/{run_id}/samples/artifact?uri=   one run-local sample artifact (the trajectory) as text
 POST /runs/{run_id}/samples/review   LLM failure-mode review of up to n sampled task rows ({task, filter, n})
 GET  /runs/{run_id}/group          sibling runs sharing the run's group_id
-GET  /models/{model}    one model's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
+GET  /models/{model}    one model configuration's aggregated detail (identity, version cohorts, current cohort cells, per-eval history, all runs; 404 if absent)
 GET  /panel?benchmarks=&cohort=&complete=&min_coverage=&aggregate=&model=&<facet>=&include_archived=   the model x benchmark panel: per-cell measurements with intervals, explained gaps, the benchmark families its columns group into, and an optional qualified aggregate
 GET  /compare?models=a,b[,c,d]&<panel filters>   head-to-head: per-benchmark cells, each model's difference interval against that benchmark's leader, and each model's aggregate over the shared benchmarks
 GET  /history?model=&task=   every run's headline score for one cell, over time
@@ -130,20 +166,43 @@ and aggregation. `benchmarks` and `cells` retain every admitted variant under it
 The SPA stores its panel selection locally. The Compare route carries the selected variants in its
 URL, and `/meta` lists siblings omitted from a narrowed panel so the picker can restore them.
 
+The Panel and Models views order models by mean reciprocal rank (MRR) across their admitted results
+on the selected benchmark columns. Each benchmark ranks its completed results by score, breaking score
+ties with the interval lower bound; identical results share a rank. A model's MRR is the mean of
+`1 / rank` over benchmarks it completed. Missing results do not enter its mean, so read the adjacent
+coverage count when comparing models. Models with no admitted result sort last. Use the qualified
+panel aggregate or interval-based head-to-head view for score comparisons.
+
 The evaluator names each task's primary metric, its canonical spelling, and whether its observations
 are binary or continuous. A column's protocol comes from the newest record with evaluator metadata;
 a cell whose metric or kind differs is rejected rather than ranked against unlike numbers. Records
 written before this metadata existed use their prior metric-selection rules and canonical aliases so
 their columns remain populated while benchmarks are rerun.
 
-By default each benchmark is taken from the newest run that clears the request's admission rules
+The scored `/panel` and `/compare` APIs default to `cohort=eval-policy-2026-09-24-verified`.
+The home screen reads and writes `cohort` in the URL, including the resolved default. Navigation
+and model-detail links preserve it. Model rows, benchmark protocols, and missing-cell explanations
+belong to the selected cohort. Compare offers only models with at least one admitted non-zero score
+in the selected cohort and benchmarks. Compare's searchable Add model dropdown supports up to four
+selections, with controls to remove one model or clear the set. Model names wrap in the picker,
+comparison results, and model cards; config digests remain visible on a separate line.
+
+Historical cohort labels remain selectable. `cohort=all` selects the newest admissible run per
+benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
+it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
+are not verified as comparable. A named verified cohort admits only records with its approved
+benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
+the selected cohort, including benchmark-specific serving overrides. Each run retains its source
+configuration and digest.
+
+Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
 of the benchmark the run set out to grade; a capped run whose benchmark size is unrecorded is never
 admitted. The corresponding rejection reasons report low benchmark coverage, an unreported benchmark
-size for a capped run, or a metric protocol mismatch. A cohort that re-ran only part of a model's
-benchmark set does not hide results that are still the newest available for their own benchmark;
-`cohort=<version>` pins every column to one launch instead. A `(model, benchmark)` with no admitted
-cell is reported in `missing` with the reason and the offending run, so an empty cell is explained.
+size for a capped run, or a metric protocol mismatch. A cohort may contain only a subset of
+its benchmarks. A `(model, benchmark)` with no admitted cell is reported in `missing` with the reason
+and the offending run. Policy-rejected runs are reported separately with their model, benchmark,
+run ID, and reasons, scoped to the selected cohort and filters.
 `complete=1` keeps only models covering every selected benchmark. No cross-benchmark aggregate is
 produced unless `aggregate=` names a missing-data policy (`require_complete` or `bound`), and one that
 is produced carries its panel, per-benchmark metrics, and policy. An unusable query value (an unknown
@@ -171,11 +230,20 @@ finelog hub by internal IP over Direct VPC egress. GCE instance discovery requir
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
 
-The `samples/artifact` endpoint resolves a sample's `trajectory_uri` through fsspec,
-restricted to URIs under the run's own `results_path` -- a `..` segment or an out-of-tree URI is
-refused, so the endpoint cannot fetch arbitrary object storage. It size-caps each read and, like the
-logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable, or oversized
-object rather than a 500. Reads are cached briefly, as sample tables are.
+The `samples/artifact` endpoint resolves a sample's `trajectory_uri` or `summary_uri` from the
+FineStore archive or the run's results tree. Direct object-store URIs must be under the run's own
+`results_path`: a `..` segment or an out-of-tree URI is refused. The endpoint size-caps each read
+and, like the logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable,
+or oversized object rather than a 500. Reads are cached briefly, as sample tables are.
+
+For SOTOPIA-hard Harbor samples without an archived ATIF trajectory, the sample reader returns a
+`summary_uri` with a `sotopia-summary://<trial>` reference from the archived trial ID. The artifact
+endpoint reads `harbor_jobs/<job>/<trial>/result.json` and resolves its selected `trial_relpath`
+under the same results path. It displays `agent/sotopia-summary.json` only from that attempt. The
+viewer renders the ordered conversation, evaluator reasoning, dimension scores, and context-budget
+data.
+If no summary is available, the endpoint reports that status. This fallback does not change the
+archived sample or its reward.
 
 `/models/{model}` aggregates in one call everything the Model view needs: the model's identity from
 its newest record, one cohort entry per distinct version (newest first), each eval's score-over-time
@@ -227,35 +295,60 @@ tests/                  unit tests; journeys/ walks the app in a browser
 
 ## Develop
 
-Serve the fixture records with no database, no CoreWeave credentials and no Iris/finelog access --
-the fastest way to iterate on the UI. The live job and log panels degrade to "unreachable" exactly as
-they do off-VPC.
+Serve synthetic fixture records locally without cloud credentials. The preview uses a
+disposable Postgres package registry, while EvalDash reads the local fixture records.
+Docker is required. Live job and log panels show "unreachable".
+
+Run from the repository root:
 
 ```bash
 cd infra/marina
 uv run marina build --only evaldash
-uv run python -c "from apps.evaldash import fixtures; fixtures.build_fixtures('/tmp/evaldash-fixtures')"
-EVALDASH_STORE=local RECORDS_PREFIXES=/tmp/evaldash-fixtures uv run marina dev
+preview_records=$(mktemp -d /tmp/evaldash-records.XXXXXX)
+uv run python -m apps.evaldash.fixtures "$preview_records"
+EVALDASH_STORE=local RECORDS_PREFIXES="$preview_records" \
+  uv run marina release apps/evaldash --local
 # -> http://127.0.0.1:8080/evaldash/
 ```
 
-Against a real Postgres, point the kernel at one and migrate first:
+Click `Rescan` to load the records. Fixture cohorts predate verified policies; select
+`Newest per benchmark (all cohorts)*` to view them. To inspect real
+runs, point `RECORDS_PREFIXES` at a local copy of their run directories. Keep dev storage
+local to avoid production writes. After edits, stop the preview with Ctrl-C and
+rerun the `release --local` command to build and install the new package.
 
-```bash
-cd infra/marina
-export MARINA_DATABASE_URL=postgresql+pg8000://postgres:marina@127.0.0.1:5432/marina
-uv run marina migrate --only evaldash
-RECORDS_PREFIXES=/tmp/evaldash-fixtures uv run marina dev
-```
+The browser journeys below exercise the Postgres serving catalog. Their fixtures
+install the schema and ingest local records before opening the browser. A plain
+Postgres `release --local` starts with an empty catalog; it does not start an
+ingestion worker, and `Rescan` returns 503 without a configured job.
 
 ## Test
 
 ```bash
 cd infra/marina
 uv run pytest apps/evaldash                          # unit tests; starts a throwaway pgvector container
-MARINA_DATABASE_URL=... uv run marina journey evaldash   # the browser walk, screenshots under journeys-out/
+uv run marina journey evaldash                          # disposable DB; screenshots under journeys-out/
 ```
 
 The image needs more than the kernel: `marin.evaluation`'s four record and statistics modules, the
 generated `iris.rpc`/`finelog.rpc` packages, and `lib/finestore`. `infra/marina/Dockerfile` copies
 them and `Dockerfile.dockerignore` allows them into the build context.
+
+## Release
+
+EvalDash's frontend, backend and ingestion module are one Postgres package:
+
+```bash
+uv run marina release-status infra/marina/apps/evaldash --json
+uv run marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION
+```
+
+Release from clean current main by default. The release transaction applies application
+migrations before selecting the package. `/evaldash/`, the `evaldash` schema and
+`EVALDASH_INGEST_JOB` stay stable. The scheduled base-image runner snapshots and
+executes the package's `ingest` module; running jobs keep their selected code.
+Marina deployment and restart do not publish EvalDash or run its migrations.
+
+Pass `--allow-dirty` to explicitly release branch or uncommitted source
+without verified Git provenance; `release-status` then reports `unrecorded` from a clean checkout.
+Use `--local` to preview in a disposable stack.

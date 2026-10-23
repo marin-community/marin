@@ -1,0 +1,24 @@
+FROM docker.io/verlai/verl@sha256:3ce56ff018516b28ab9c4f4fc09d3aa67589074495ace75e2674b720aa4d0e5d
+
+ARG GITSHA
+
+LABEL org.opencontainers.image.source="https://github.com/marin-community/MarinSkyRL" \
+      org.opencontainers.image.revision="${GITSHA}" \
+      org.opencontainers.image.title="Open-MOPD fidelity runtime"
+
+# The pinned base fixes the CUDA closure, not its trust stores or uv. Refresh the
+# OS store and certifi, which requests and huggingface_hub read, point gRPC at the
+# OS store instead of its bundled roots, and replace the base's uv.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --no-cache-dir "certifi>=2026.10.18"
+ENV GRPC_DEFAULT_SSL_ROOTS_FILE_PATH=/etc/ssl/certs/ca-certificates.crt
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/
+
+# Preserve the authors' native CUDA closure while resolving and validating the
+# pure-Python corrections from the same manifest used by the runtime preflight.
+COPY cloud/iris/configs/open_mopd_fidelity.json /opt/open-mopd/fidelity.json
+COPY open_mopd_versions.py /opt/open-mopd/open_mopd_versions.py
+COPY docker/install_open_mopd_runtime.py /opt/open-mopd/install_runtime.py
+RUN python3 /opt/open-mopd/install_runtime.py /opt/open-mopd/fidelity.json

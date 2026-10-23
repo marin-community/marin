@@ -31,6 +31,7 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.grug._moe.common import (
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
+    _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS,
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     CapacityDrops,
@@ -42,6 +43,7 @@ from levanter.grug._moe.common import (
     PspecAxis,
     resolve_moe_implementation,
     split_moe_w13_output,
+    validate_moe_implementation,
 )
 from levanter.grug._moe.ep_common import (
     _clip_receiver_group_sizes as _clip_receiver_group_sizes,
@@ -51,7 +53,12 @@ from levanter.grug._moe.ep_deepep import _moe_mlp_ep_deepep_local
 from levanter.grug._moe.ep_fixed_all_to_all import _moe_mlp_ep_fixed_a2a_local
 from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import _moe_mlp_ep_fixed_pooled_wave_a2a_local
 from levanter.grug._moe.ep_ragged_all_to_all import _moe_mlp_ep_ragged_a2a_local
-from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
+from levanter.grug._moe.ep_ring import (
+    _gather_dispatch_combine,
+    _moe_mlp_ep_ring_local,
+    _scatter_add_dispatch_combine,
+)
+from levanter.grug._moe.ep_ring_filtered import _moe_mlp_ep_ring_filtered_local
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _axis_names,
@@ -454,6 +461,20 @@ def moe_mlp(
     `token_valid` excludes invalid positions from dispatch, capacity accounting,
     and expert gradients. Omitted validity treats every token as valid.
 
+    `implementation=None` picks `ring_gather_combine` on GPUs and `ring` on other backends. Expert-parallel
+    implementations such as these run only on an expert axis of size two or more. Without one they fall back to the
+    local `scatter` path, so a single-device call never reaches them.
+
+    With `implementation="ragged_all_to_all"` on an expert axis of size two or
+    more, SiLU experts with bfloat16 or float32 tokens on an SM100 GPU with
+    QuACK installed take the combine-weight gradient on the expert side, from
+    the expert MLP's own backward, so the backward keeps neither the expert
+    outputs nor their return transport. That gradient is zero at a zero weight,
+    and zero or inexact wherever `|w * dout|` falls below the cotangent dtype's
+    smallest normal number, 2^-126, which only output cotangents near underflow
+    reach. Every other path, float16 included, differentiates the combine
+    weights exactly.
+
     Set `report_capacity_overflow=True` to also return sender and receiver
     capacity drops plus padding-skipped assignment counts.
 
@@ -461,7 +482,8 @@ def moe_mlp(
     greater than one split the expert bank into equal, statically sized chunks.
 
     `pooled_transport_capacity_factor` sets the sender capacity for each
-    destination pool. `num_expert_waves` sets the static wave count for the
+    destination pool (`fixed_pooled_wave_all_to_all`) or destination shard
+    (`ring_filtered`). `num_expert_waves` sets the static wave count for the
     fixed pooled-wave implementation.
     """
     resolved_implementation = resolve_moe_implementation(implementation)
@@ -553,16 +575,26 @@ def moe_mlp(
             )
         if num_experts % expert_axis_size != 0:
             raise ValueError(f"num_experts={num_experts} must be divisible by expert axis size={expert_axis_size}")
+        if (
+            resolved_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
+            and pooled_transport_capacity_factor is None
+        ):
+            raise ValueError(f"{resolved_implementation} requires pooled_transport_capacity_factor")
 
         if resolved_implementation == "ring":
-            shard_local_fn = _moe_mlp_ep_ring_local
+            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_scatter_add_dispatch_combine)
+        elif resolved_implementation == "ring_gather_combine":
+            shard_local_fn = partial(_moe_mlp_ep_ring_local, make_dispatch_combine=_gather_dispatch_combine)
+        elif resolved_implementation == "ring_filtered":
+            shard_local_fn = partial(
+                _moe_mlp_ep_ring_filtered_local,
+                transport_capacity_factor=pooled_transport_capacity_factor,
+            )
         elif resolved_implementation == "ragged_all_to_all":
             shard_local_fn = _moe_mlp_ep_ragged_a2a_local
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
         elif resolved_implementation == "fixed_pooled_wave_all_to_all":
-            if pooled_transport_capacity_factor is None:
-                raise ValueError("fixed_pooled_wave_all_to_all requires pooled_transport_capacity_factor")
             shard_local_fn = partial(
                 _moe_mlp_ep_fixed_pooled_wave_a2a_local,
                 transport_capacity_factor=pooled_transport_capacity_factor,
@@ -701,4 +733,5 @@ __all__ = [
     "qb_topk_physical_count",
     "resolve_moe_implementation",
     "split_moe_w13_output",
+    "validate_moe_implementation",
 ]

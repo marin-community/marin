@@ -4,6 +4,7 @@
 import asyncio
 import json
 import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from typing import Any
@@ -49,6 +50,42 @@ def test_build_kvstore_spec_normalizes_file_uri(tmp_path):
     assert spec == {"driver": "file", "path": str(tmp_path / "cache")}
 
 
+def test_tensorstore_s3_reads_with_mounted_credentials(tmp_path, monkeypatch):
+    credentials = tmp_path / "credentials"
+    credentials.write_text("[default]\naws_access_key_id = test-key\naws_secret_access_key = test-secret\n")
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_CONFIG_FILE", "AWS_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+
+    authorized_request = threading.Event()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if "Credential=test-key/" in self.headers.get("Authorization", ""):
+                authorized_request.set()
+            self.send_response(404)
+            self.end_headers()
+
+        def log_message(self, _format, *_args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            monkeypatch.setenv("AWS_ENDPOINT_URL", f"http://127.0.0.1:{server.server_port}")
+            spec = build_kvstore_spec("s3://bucket/cache")
+            # The local server has no bucket subdomain; only credential delivery is under test.
+            spec["endpoint"] = f"http://127.0.0.1:{server.server_port}"
+            store = ts.KvStore.open(spec).result(timeout=_ASYNC_TEST_TIMEOUT)
+            assert store.read("missing").result(timeout=_ASYNC_TEST_TIMEOUT).state == "missing"
+            assert authorized_request.is_set()
+        finally:
+            server.shutdown()
+            thread.join()
+
+
+@pytest.mark.tpu
 def test_pageable_checkpoint_staging_detaches_from_donated_jax_buffer():
     source = jnp.arange(8, dtype=jnp.float32)
 
@@ -102,6 +139,7 @@ def test_tensorstore_checkpoint_simple():
         assert all(np.isclose(rkey, initial_key))
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
     with use_test_mesh():
         key0 = jax.random.PRNGKey(0)
@@ -119,6 +157,7 @@ def test_tensorstore_checkpoint_eval_shape_concretizes_named_sharding_mesh():
             assert jnp.allclose(restored["x"], arr)
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
     # Regression for #8441. A run with offload_opt_state/FP32_PINNED_HOST holds its master and
     # optimizer leaves on `pinned_host`, so the restore template (produced by eval_shape, hence an
@@ -140,6 +179,7 @@ def test_tensorstore_checkpoint_restores_pinned_host_memory_kind():
             assert jnp.allclose(on_device, arr)
 
 
+@pytest.mark.tpu
 def test_tensorstore_checkpoint_restores_mixed_memory_kinds_in_tree_order():
     with use_test_mesh() as mesh:
         first = jnp.arange(8, dtype=jnp.float32)

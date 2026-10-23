@@ -7,8 +7,11 @@ import json
 
 from finestore.eval import (
     ARCHIVE_ROLLOUTS_TABLE,
+    ARCHIVE_SAMPLES_TABLE,
     ROLLOUT_SCHEMA_VERSION,
     ROLLOUTS_MERGE_KEY,
+    SAMPLES_MERGE_KEY,
+    SCHEMA_VERSION,
     Choice,
     EvalSample,
     EvaluationStore,
@@ -16,9 +19,35 @@ from finestore.eval import (
     Message,
     SampleKind,
     StepRecord,
+    sample_to_archive_row,
+    samples_schema,
 )
+from finestore.layout import OnConflict
 from finestore.reader import ReadView
+from finestore.store import DataStore
 from marin.evaluation.rollouts import normalize_rollouts
+
+
+def test_rollouts_preserve_evalchemy_superseding_sample_table(tmp_path):
+    root = str(tmp_path / "evalchemy")
+    sample = EvalSample(task="gsm8k", doc_id="0", kind=SampleKind.GENERATION, prompt_text="2+2?", output="4")
+    with DataStore.open(root, writer_id="evalchemy") as store:
+        table = store.table(
+            ARCHIVE_SAMPLES_TABLE,
+            primary_key=SAMPLES_MERGE_KEY,
+            schema=samples_schema(),
+            schema_version=SCHEMA_VERSION,
+            on_conflict=OnConflict.SUPERSEDE,
+        )
+        table.append(sample_to_archive_row(sample))
+        store.seal()
+    original = list(ReadView(root).iter_rows(ARCHIVE_SAMPLES_TABLE))
+
+    normalize_rollouts(root, writer_id="marin-rollouts")
+
+    reader = ReadView(root)
+    assert list(reader.iter_rows(ARCHIVE_SAMPLES_TABLE)) == original
+    assert [row["content"] for row in reader.iter_rows(ARCHIVE_ROLLOUTS_TABLE)] == ["2+2?", "4"]
 
 
 def test_evalchemy_samples_normalize_to_one_conversation_across_grading_filters(tmp_path):

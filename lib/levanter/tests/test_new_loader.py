@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+import weakref
+from contextlib import closing
 from typing import Sequence
 
 import jax
@@ -25,6 +27,7 @@ def _small_dataset(seq_len=128, num_sequences=200) -> AsyncDataset[Sequence[int]
     return ListAsyncDataset(sequences)
 
 
+@pytest.mark.tpu
 @skip_if_not_enough_devices(2)
 def test_local_batched_data_loading_model_axis_2():
     devices = jax.devices()
@@ -61,6 +64,24 @@ def test_loader_rejects_empty_finite_dataset():
         dataset = ListAsyncDataset([])
         with pytest.raises(ValueError, match="finite but has length 0"):
             DataLoader(dataset, 1, max_buffered_batches=0, mesh=mesh, axis_resources=None)
+
+
+@pytest.mark.parametrize("buffered_batches", [-1, 0, 2])
+def test_loader_close_releases_prefetch_iterator_and_preserves_resume(buffered_batches):
+    with use_test_mesh(tensor_parallelism=1) as mesh, haliax.axis_mapping({"batch": ResourceAxis.DATA}):
+        batch_size = len(jax.devices())
+        dataset = ListAsyncDataset([np.asarray([i]) for i in range(1000 * batch_size)])
+        loader = DataLoader(dataset, batch_size, max_buffered_batches=buffered_batches, fetch_batch_size=1, mesh=mesh)
+        with closing(loader.iter_from_step(0)) as iterator:
+            iterator_ref = weakref.ref(iterator)
+            np.testing.assert_array_equal(next(iterator).reshape(-1), np.arange(batch_size))
+        with pytest.raises(StopIteration):
+            next(iterator)
+        del iterator
+        # The producer thread used to retain the iterator after a sample was dropped.
+        assert iterator_ref() is None
+        with closing(loader.iter_from_step(2)) as resumed:
+            np.testing.assert_array_equal(next(resumed).reshape(-1), np.arange(2 * batch_size, 3 * batch_size))
 
 
 class StructuredDataset(AsyncDataset):
@@ -107,6 +128,7 @@ def test_structured_batches_model_axis_1():
             check_sharded_consistency(batch, check_disjoint_indices_are_different=True)
 
 
+@pytest.mark.tpu
 @skip_if_not_enough_devices(2)
 def test_structured_batches_model_axis_2():
     devices = jax.devices()

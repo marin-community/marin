@@ -2339,7 +2339,14 @@ mod tests {
         )
         .expect("prepared store should boot");
         let provider_names = store
-            .query_providers()
+            .query_providers(
+                &store
+                    .list_namespaces_with_stats()
+                    .unwrap()
+                    .into_iter()
+                    .map(|(name, _, _, _)| name)
+                    .collect::<Vec<_>>(),
+            )
             .expect("prepared store should build query providers")
             .into_iter()
             .map(|provider| provider.name)
@@ -2377,7 +2384,14 @@ mod tests {
         )
         .expect("retired store should boot");
         let provider_names = store
-            .query_providers()
+            .query_providers(
+                &store
+                    .list_namespaces_with_stats()
+                    .unwrap()
+                    .into_iter()
+                    .map(|(name, _, _, _)| name)
+                    .collect::<Vec<_>>(),
+            )
             .unwrap()
             .into_iter()
             .map(|provider| provider.name)

@@ -2,7 +2,7 @@
 
 Treat the Actions goal as the task assignment: rewrite one issue or pull
 request description under the repository writing-style guide in
-`.agents/skills/writing-style/`. Read that guide and
+`docs/dev-guide/writing-style/index.md`. Read that guide and
 `scripts/ci/github_prose_cleanup.py` before editing. Do nothing else in the
 repository.
 

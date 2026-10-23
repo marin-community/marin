@@ -14,7 +14,7 @@
 # Build the Vue SPA. Output is consumed by the runtime stage at
 # /app/dashboard/dist; the Rust server resolves and serves it from there (see
 # `DOCKER_VUE_DIST_DIR` in lib/finelog/rust/src/server/spa.rs).
-FROM node:22-slim AS dashboard
+FROM node:24-slim AS dashboard
 
 WORKDIR /build/dashboard
 

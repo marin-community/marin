@@ -48,6 +48,12 @@ HALIAX_BLACK_CONFIG = ROOT_DIR / "lib/haliax/pyproject.toml"
 MARIN_RUFF_CONFIG = ROOT_DIR / "lib/marin/pyproject.toml"
 
 EXCLUDE_PATTERNS = [
+    # Vendored runtimes retain upstream formatting and license notices.
+    "vendor/skyrl/**",
+    "vendor/evalchemy/**",
+    "vendor/harbor/**",
+    # Upstream scorers are vendored byte for byte; see each family's scorers/VENDORED.md.
+    "experiments/post_training/task_curation/datasets/*/scorers/**",
     ".git/**",
     ".github/**",
     "tests/snapshots/**",
@@ -479,6 +485,9 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     buf = io.StringIO()
 
     for file_path in files:
+        # Unified diff context must preserve the source's literal whitespace.
+        if file_path.suffix == ".patch":
+            continue
         try:
             with open(file_path) as f:
                 lines = f.readlines()

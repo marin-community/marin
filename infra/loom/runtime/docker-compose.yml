@@ -30,9 +30,10 @@ services:
     environment:
       RUST_BACKTRACE: "1"
       CLAUDE_CODE_VERSION: "2.1.280"
-      CODEX_CLI_VERSION: "0.156.1"
+      CODEX_CLI_VERSION: "0.163.0"
       CLAUDE_ACP_VERSION: "0.81.1"
       CODEX_ACP_VERSION: "1.13.1"
+      WEAVER_CODEX_ACP_CMD: CODEX_PATH=/home/app/.local/bin/codex exec codex-acp
       LOOM_RUNNER: docker
       LOOM_SESSION_IMAGE: ${LOOM_IMAGE:?LOOM_IMAGE is required}
       LOOM_SESSION_HOME_VOLUME: *session-home-volume
@@ -67,7 +68,7 @@ services:
       - uv:/opt/uv
 
   caddy:
-    image: caddy:2.11.4@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
+    image: caddy:2.11.7@sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489
     restart: unless-stopped
     environment:
       LOOM_DOMAIN: ${LOOM_DOMAIN:?LOOM_DOMAIN is required}
