@@ -23,6 +23,7 @@ from cloud.iris.rl_config_translation import (
 )
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 from skyrl_train.dataset.tasks import source_row_task
+from skyrl_train.rollouts.training_record import ReasoningSpanPolicy, ReasoningSpanSettings
 from marinskyrl.runtime_options import reference_model_required
 
 
@@ -238,6 +239,22 @@ def test_auxiliary_ftpo_launch_retains_task_objective_and_topk(tmp_path: Path) -
     assert config.skyrl.trainer.algorithm.policy_loss_type == "regular"
     assert config.skyrl.generator.sampling_params.logprobs == 32
     assert reference_model_required(config.skyrl.trainer.algorithm)
+
+
+def test_a_recipe_opts_out_of_reasoning_span_handling(tmp_path: Path) -> None:
+    raw = _raw_config()
+    raw["skyrl"]["generator"]["reasoning_spans"] = {
+        "policy": "ignore",
+        "agent_policies": {"code_gen_simple_agent": "ignore", "calendar_simple_agent": "ignore"},
+    }
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+
+    settings = ReasoningSpanSettings.from_config(load_launch_config(path).skyrl.generator.reasoning_spans)
+
+    assert {settings.policy_for(agent) for agent in (None, "code_gen_simple_agent", "calendar_simple_agent")} == {
+        ReasoningSpanPolicy.IGNORE
+    }
 
 
 @pytest.mark.parametrize("switch", ["use_abs_kl", "use_kl_estimator_k3"])

@@ -438,12 +438,14 @@ generator:
     preserve_logprobs_on_timeout: true
 
   reasoning_spans:
-    policy: ignore
-    penalty: 0.0
-    # Per-agent overrides for Nemotron Ultra tasks, e.g. `code_gen_simple_agent: reject`.
-    agent_policies: {}
+    policy: penalize
+    penalty: 0.1
+    # NVIDIA's Nemotron Ultra recipe zeroes reasoning-format violations in code and calendar tasks.
+    agent_policies:
+      code_gen_simple_agent: reject
+      calendar_simple_agent: reject
     # "rollout" subtracts the penalty from the reward; "marker" charges it to the token where the span goes wrong.
-    penalty_target: rollout
+    penalty_target: marker
 
   chat_template:
     source: "name"
