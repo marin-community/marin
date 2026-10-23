@@ -24,7 +24,8 @@ IGNORE = -100
 
 
 def main() -> None:
-    payload = json.load(open(sys.argv[1]))
+    with open(sys.argv[1]) as handle:
+        payload = json.load(handle)
     data_path = sys.argv[2]
     rows = int(sys.argv[3]) if len(sys.argv) > 3 else 50
     config = payload["config"]
@@ -54,14 +55,13 @@ def main() -> None:
                 if mismatches <= 3:
                     ids = expected["input_ids"]
                     extra = tokenizer.decode(
-                        [i for i, t, m in zip(ids, trained, expected["assistant_masks"]) if t and not m]
+                        [i for i, t, m in zip(ids, trained, expected["assistant_masks"], strict=False) if t and not m]
                     )
                     missing = tokenizer.decode(
-                        [i for i, t, m in zip(ids, trained, expected["assistant_masks"]) if m and not t]
+                        [i for i, t, m in zip(ids, trained, expected["assistant_masks"], strict=False) if m and not t]
                     )
-                    print(
-                        f"row {row['row_id']}: trained-not-expected {extra[:300]!r} expected-not-trained {missing[:300]!r}"
-                    )
+                    print(f"row {row['row_id']}: trained-not-expected {extra[:300]!r}")
+                    print(f"row {row['row_id']}: expected-not-trained {missing[:300]!r}")
     print(json.dumps({"base": config["base_model"], "rows": rows, "mismatches": mismatches}))
     sys.exit(1 if mismatches else 0)
 
