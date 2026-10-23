@@ -12,7 +12,8 @@ Control C8: deltas are taken against the fp32 view of ``B``. A checkpoint must
 be stored in F32. ``B`` may be stored in BF16 (it is upcast on read) or in F32,
 but every F32 value must survive a bf16 round trip, since ``B`` is the upcast
 bf16 Stage 0 output. The selection bias is exempt: HF releases keep Grug's router
-bias in fp32 in every precision mode, so B's copy is a true fp32 value. A checkpoint whose every tensor is bf16-representable is a
+bias in fp32 in every precision mode, so B's copy is a true fp32 value. A
+checkpoint whose every tensor is bf16-representable is a
 bf16 export mislabelled as fp32, and raises.
 
 Deltas are ``checkpoint - B`` in fp32. Sterbenz's lemma makes the subtraction
