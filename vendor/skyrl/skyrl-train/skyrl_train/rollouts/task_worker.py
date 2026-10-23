@@ -638,7 +638,6 @@ class TaskRolloutWorker:
             return await write_trajectory_batch(task, writer, batch)
 
     async def _run_feed_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
-        """Write the graded group of a feed row before batch selection; skip a row that fails, not training."""
         assert self.feed_root is not None
         uid = task.prompt["uid"]
         try:

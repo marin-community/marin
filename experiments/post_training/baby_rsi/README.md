@@ -75,7 +75,8 @@ synthesized instances that are not in the feed, and does not synthesize the same
 `evaluate` runs in an Iris GPU task through `job.sh`, which installs the Marin vLLM wheel of the SkyRL engines in
 its own environment and selects the task's own GPUs. It takes `--checkpoint NAME=URL` for each HF export and
 `--probes` for each RSI output directory, and `report.py` compares the policies with paired bootstrap intervals over
-tasks. vLLM streams s3:// weights, so no checkpoint goes to the task's disk. Snowball needs a whole 8×H100 node
+tasks. By default, vLLM streams s3:// weights. `--weight-transfer download` copies them to the task's disk before
+vLLM starts. Snowball needs a whole 8×H100 node
 (`--gpu H100x8`, about 512 GB of memory), `--weights` with its s3:// copy, and the vLLM arguments of the Marin
 evaluation: `--vllm-arg=--data-parallel-size=8 --vllm-arg=--enable-expert-parallel` (GrugMoE serves only with
 tensor parallel size 1, and without LoRA).

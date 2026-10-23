@@ -106,7 +106,6 @@ ANALYSIS_POLICY = LLMPolicy(reasoning_effort=ReasoningEffort.LOW, max_tokens=327
 FEED_POLL_SECONDS = 10.0
 UPLOAD_EVERY_GROUPS = 8
 PROBE_BUILD_SLOTS = 16
-"""Accepted tasks whose training instances the evaluation builds at a time, to find the held-out probes."""
 
 
 @dataclass(frozen=True)
@@ -243,7 +242,10 @@ def feedback_options(function):
                 type=click.FloatRange(0, 1),
                 default=0.0,
                 show_default=True,
-                help="Ideas whose tasks are only probes, to measure transfer to families that the policy never trains on.",
+                help=(
+                    "Ideas whose tasks are only probes, to measure transfer to families that the policy never "
+                    "trains on."
+                ),
             ),
         ]
     ):
@@ -515,7 +517,6 @@ async def _evaluate(
             for name in base_names:
                 results[name] = await eval_policy(runner, tasks, labels, samples)
     for name, url in checkpoints.items():
-        # vLLM streams the weights of an s3:// URL, so no copy goes to the task's disk.
         with serve(options, url) as server:
             results[name] = await eval_policy(Served(options, server).runner, tasks, labels, samples)
     write_evaluation(output, options.model, results)
