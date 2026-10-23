@@ -443,7 +443,7 @@ def ledger_steps(path: Path, offset: int) -> list[dict]:
     with path.open("rb") as f:
         f.seek(offset)
         entries = [LedgerEntry.from_json(json.loads(line)) for line in f if line.strip()]
-    # Spans arrive in completion order (independent steps run at once since #10081); a step cancelled because
+    # Spans arrive in completion order (independent steps run at once); a step cancelled because
     # another failed first has cause CancelledError and no cache attribute.
     return [
         {

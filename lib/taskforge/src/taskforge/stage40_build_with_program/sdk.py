@@ -3,10 +3,8 @@
 
 """The functions, constants and structured-call schemas a build program's steps call.
 
-An authored program defines only steps, output models and ``PROGRAM`` at module level, because a
-step's memo key covers its own source alone. Everything else a step needs comes from here,
-injected into the program's namespace by ``loader.compile_program`` (``SDK_EXPORTS``). A change to
-this module that alters what an unchanged step returns comes with an ``SDK_VERSION`` bump.
+Authored steps import the SDK names they use. A change to this module that alters what an
+unchanged step returns comes with an ``SDK_VERSION`` bump.
 
 Model calls go through ``structured``, ``structured_until`` and ``agent``, which record each call
 under the running step (``context.call_ledger``). ``structured_until`` feeds a failed check back to
