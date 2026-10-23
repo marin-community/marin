@@ -370,7 +370,8 @@ def main() -> None:
         sig0, _ = probe_batch(model, *common.device_batch(b0, mesh)[:2], tuned_dev, heads)
         probes = init_probes(sig0.shape[-1], jax.random.PRNGKey(0))
         probe_opt = optax.adamw(
-            optax.warmup_cosine_decay_schedule(0.0, args.lr_probe, 100, args.probe_steps), weight_decay=1e-2
+            optax.warmup_cosine_decay_schedule(0.0, args.lr_probe, min(100, args.probe_steps // 10), args.probe_steps),
+            weight_decay=1e-2,
         )
         probe_state = probe_opt.init(probes)
 
