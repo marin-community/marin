@@ -177,7 +177,10 @@ A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heur
 context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES` in
 `launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
 `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
-both. Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
+both. A context that needs context parallelism also sets `HERO_CONTEXT_AXIS_SIZE` in
+`hero_recipe.py`, and `HERO_BALANCE_ATTENTION_ROWS` when row balancing pays off at that context. Each
+rack's 64 GPUs then form 64 / CP expert shards of CP sequence shards each, and the eval batch follows
+(see [Scaling ladder](#scaling-ladder)). Trial arms run from a branch that sets the same `HERO_MODEL` fields and history, and override
 only `--qk-mult` and `--qk-mult-long-scale` on the command line. `qk_mult_long_scale` multiplies
 `qk_mult` on the global layers only. Each Harrier bucket skips the unread rest of the shuffle window
 it was reading at each switch, about 52B tokens at a 216000 handoff, so no data repeats. Keep the
@@ -439,8 +442,14 @@ checkpoint policy all follow `--size`:
 | d6144 | 11 | 11264 at 4K, 2816 at 16K | 390,251 | every 3000 | every 6k |
 
 At 4K, train batch is 1024 × racks; longer contexts shrink it to keep the tokens per step. Eval
-batch is 64 × racks (one sequence per device). The step budget is 791 tokens per active parameter
+batch is one sequence per batch shard: 64 × racks (704 on the hero) without context parallelism, and
+(64 / CP) × racks with CP-way context parallelism (176 at CP4). The step budget is 791 tokens per active parameter
 (18T at d6144); pass `--num-steps` to override.
+
+The dropless eval folds the expert axis into `data` and keeps the context axis, so one sequence per
+batch shard gives every device max_seq_len / CP tokens per eval batch at any context. A batch held at
+its CP1 size would multiply that load by CP. The eval sets are read as one stream, so the batch size
+does not change the `eval_dropless/*` losses.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every hour goes to region-local temp

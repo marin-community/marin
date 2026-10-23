@@ -12,7 +12,6 @@ from fray.cluster import ResourceConfig
 from levanter.callbacks.profiler import ProfileOptionsConfig, ProfilerConfig
 from levanter.callbacks.watch import WatchConfig
 from levanter.checkpoint import CheckpointDebugConfig, CheckpointerConfig
-from levanter.grug.sharding import _compact_grug_mesh_shape
 from levanter.tracker.wandb import WandbConfig
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -28,7 +27,8 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
-    HERO_EP_EXPERT_AXIS_SIZE,
+    HERO_BALANCE_ATTENTION_ROWS,
+    HERO_CONTEXT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
@@ -37,12 +37,16 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
+    HERO_RACK_GPUS,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
+    hero_expert_axis_size,
     hero_grug_trainer_config,
     hero_rack_batch_size,
     hero_trainer_config,
+    validate_model_split,
+    validated_batch_axis_size,
     validation_datasets,
     with_transport_remat_mode,
 )
@@ -55,38 +59,11 @@ from experiments.grug.moe_hero_ep.train import (
     TrainingDataMode,
     WatchMode,
     _compute_flops,
-    grug_trainer_mesh_config,
     run_grug,
 )
 
 DEFAULT_HERO_STEPS = 25
 HERO_CHECKPOINT_INTERVAL = timedelta(minutes=15)
-# The hero has no tensor parallelism.
-HERO_MODEL_AXIS_SIZE = 1
-
-
-def validated_batch_axis_size(
-    *, device_count: int, dp_racks: int, batch_size: int, context_axis_size: int, expert_axis_size: int
-) -> int:
-    """Validate mesh and batch divisibility; return the replica * data * expert product.
-
-    Context and model axes do not partition the batch.
-    """
-    replica, data, _context, expert, _model = _compact_grug_mesh_shape(
-        process_count=device_count,
-        local_device_count=1,
-        expert_axis_size=expert_axis_size,
-        replica_axis_size=dp_racks,
-        model_axis_size=HERO_MODEL_AXIS_SIZE,
-        context_axis_size=context_axis_size,
-    )
-    batch_axes = replica * data * expert
-    if batch_size % batch_axes != 0:
-        raise ValueError(
-            f"batch_size={batch_size} must be divisible by the batch axes replica ({replica}) * "
-            f"data ({data}) * expert ({expert}) = {batch_axes}"
-        )
-    return batch_axes
 
 
 def build_diagnostic_run(
@@ -103,9 +80,9 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     max_seq_len: int | None = None,
-    context_axis_size: int = 1,
-    expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
-    balance_attention_rows: bool = False,
+    context_axis_size: int = HERO_CONTEXT_AXIS_SIZE,
+    expert_axis_size: int | None = None,
+    balance_attention_rows: bool = HERO_BALANCE_ATTENTION_ROWS,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
@@ -132,10 +109,15 @@ def build_diagnostic_run(
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
     comparable across a sweep. ``None`` keeps the hero value.
 
+    The context axis and row balancing default to the hero's, and ``expert_axis_size=None`` fills the rest
+    of each rack (``hero_expert_axis_size``).
+
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
     """
+    if expert_axis_size is None:
+        expert_axis_size = hero_expert_axis_size(context_axis_size)
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if dp_racks <= 0:
@@ -192,28 +174,13 @@ def build_diagnostic_run(
         seq_len=model.max_seq_len,
     )
     batch_axes = validated_batch_axis_size(
-        device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
+        device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
         batch_size=batch_size,
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
     )
-    if model.max_seq_len % context_axis_size:
-        raise ValueError(f"context_axis_size={context_axis_size} must divide max_seq_len={model.max_seq_len}")
-    # A bank that is not divisible by the expert axis fails inside `moe_mlp`, and one not divisible by
-    # the (expert, context) storage split fails in parameter init; both are after the rack is already
-    # allocated and the workspace is built. Reject them here instead.
-    bank_shards = expert_axis_size * context_axis_size
-    if model.num_experts % bank_shards != 0:
-        raise ValueError(
-            f"num_experts={model.num_experts} must be divisible by expert ({expert_axis_size}) * "
-            f"context ({context_axis_size}) = {bank_shards}, the expert bank's storage split"
-        )
-    local_experts = model.num_experts // expert_axis_size
-    if local_experts % model.num_expert_waves != 0:
-        raise ValueError(
-            f"local expert count={local_experts} must be divisible by num_expert_waves={model.num_expert_waves}"
-        )
+    validate_model_split(model, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size)
     # The ragged transport requires one GPU per process; fail fast if this is not satisfied.
     if model.moe_implementation == RAGGED_MOE_IMPLEMENTATION and processes_per_task != HERO_GPUS_PER_NODE:
         raise ValueError(
@@ -235,14 +202,11 @@ def build_diagnostic_run(
         training_data_mode=training_data_mode,
         watch_mode=watch_mode,
         save_checkpoints=save_checkpoints,
-        gc_interval=gc_interval,
-        master_param_mode=master_param_mode,
-    )
-    grug_trainer = dataclasses.replace(
-        grug_trainer,
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
         balance_attention_rows=balance_attention_rows,
+        gc_interval=gc_interval,
+        master_param_mode=master_param_mode,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -317,9 +281,8 @@ def build_diagnostic_run(
                 keep_last_temporary_checkpoints=1,
                 debug=checkpoint_debug or CheckpointDebugConfig(),
             ),
+            context_axis_size=context_axis_size,
         )
-        if context_axis_size > 1:
-            trainer = dataclasses.replace(trainer, mesh=grug_trainer_mesh_config(context_axis_size))
         data = harrier_mix_2026_08_18_data_config(
             ctx=ctx,
             total_steps=total_schedule_steps,
@@ -552,14 +515,19 @@ def build_diagnostic_run(
 @click.option(
     "--context-axis-size",
     type=click.IntRange(min=1),
-    default=1,
+    default=HERO_CONTEXT_AXIS_SIZE,
     show_default=True,
     help="Context-parallel axis width. Partitions sequence positions across devices.",
 )
-@click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_EP_EXPERT_AXIS_SIZE, show_default=True)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help=f"Expert axis width. Defaults to the rest of the rack: {HERO_RACK_GPUS} / --context-axis-size.",
+)
 @click.option(
     "--balance-attention-rows/--no-balance-attention-rows",
-    default=False,
+    default=HERO_BALANCE_ATTENTION_ROWS,
     show_default=True,
     help="Deal rows to batch shards by attention cost.",
 )
@@ -606,7 +574,7 @@ def main(
     training_data: str,
     seq_len: int | None,
     context_axis_size: int,
-    expert_axis_size: int,
+    expert_axis_size: int | None,
     balance_attention_rows: bool,
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
