@@ -447,9 +447,9 @@ batch is one sequence per batch shard: 64 × racks (704 on the hero) without con
 (18T at d6144); pass `--num-steps` to override.
 
 The dropless eval folds the expert axis into `data` and keeps the context axis, so one sequence per
-batch shard gives every device max_seq_len / CP tokens per eval batch at any context. A batch held at its CP1 size would
-multiply that load by CP. The eval sets are read as one stream, so the batch size does not change the
-`eval_dropless/*` losses.
+batch shard gives every device max_seq_len / CP tokens per eval batch at any context. A batch held at
+its CP1 size would multiply that load by CP. The eval sets are read as one stream, so the batch size
+does not change the `eval_dropless/*` losses.
 
 A rung resumes from the newest checkpoint it finds. The permanent checkpoints above go to the
 durable output root, and a rolling temporary checkpoint every hour goes to region-local temp
