@@ -144,9 +144,10 @@ class VllmPolicy:
             add_generation_prompt=generation_prompt,
             continue_final_message=continue_final,
             tokenize=True,
+            # The token IDs of one conversation; transformers 5 returns a mapping by default.
+            return_dict=False,
             **self.chat_template_kwargs,
         )
-        # tokenize=True without return_dict renders the token IDs of one conversation.
         return [int(token) for token in rendered]
 
     def _continuation(
