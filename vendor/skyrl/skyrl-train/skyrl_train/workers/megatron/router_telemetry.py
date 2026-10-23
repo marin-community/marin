@@ -503,23 +503,22 @@ def router_telemetry_enabled(config) -> bool:
     return bool(OmegaConf.select(config, "trainer.router_telemetry.enabled") or False)
 
 
-def response_row_mask(attention_mask: torch.Tensor, loss_mask: torch.Tensor, num_actions: int) -> torch.Tensor:
-    """Router-row mask of one unpacked micro-batch: True where a row is a supervised response token.
+def response_positions(loss_mask: torch.Tensor, seq_len: int, num_actions: int) -> torch.Tensor:
+    """``[batch, seq]`` mask of the supervised response tokens of one padded micro-batch.
 
-    Megatron routes hidden states laid out sequence-major (``[s, b]`` flattened), so
-    the ``[b, s]`` position mask is transposed before flattening.
+    The response occupies the last ``num_actions`` positions; ``loss_mask`` marks
+    which of them train. The caller lays the mask out in router-row order.
     """
-    batch, seq_len = attention_mask.shape
-    positions = torch.zeros(batch, seq_len, dtype=torch.bool, device=loss_mask.device)
-    positions[:, seq_len - num_actions :] = loss_mask.to(torch.bool)
-    return positions.transpose(0, 1).reshape(-1)
+    positions = torch.zeros(loss_mask.shape[0], seq_len, dtype=torch.long, device=loss_mask.device)
+    positions[:, seq_len - num_actions :] = loss_mask.to(torch.long)
+    return positions
 
 
 class RouterTelemetryStep:
     """One mini-batch of router telemetry: load counts, per-task collision mass, and the sidecar write.
 
-    Supports unpacked micro-batches without sequence or context parallelism, where a
-    router's rows map one-to-one onto the micro-batch's positions; other layouts raise.
+    The caller supplies each micro-batch's response mask already in router-row
+    order. Context parallelism and virtual pipelines raise.
     """
 
     def __init__(self, model_chunks: list[nn.Module], config, *, gradient_checkpointing: bool):
@@ -527,8 +526,8 @@ class RouterTelemetryStep:
 
         if len(model_chunks) != 1:
             raise ValueError("router telemetry does not support virtual pipeline parallelism")
-        if config.sequence_parallel or mpu.get_context_parallel_world_size() > 1:
-            raise ValueError("router telemetry requires sequence_parallel off and context parallel size 1")
+        if mpu.get_context_parallel_world_size() > 1:
+            raise ValueError("router telemetry requires context parallel size 1")
         layer_map: dict[int, int] = {}
         for chunk in model_chunks:
             layer_map.update(build_router_layer_map(chunk))
@@ -544,9 +543,9 @@ class RouterTelemetryStep:
         self._row_mask: torch.Tensor | None = None
         self._micro_batches = 0
 
-    def begin_micro_batch(self, micro_batch, data_source_names: list[str] | None) -> None:
-        """Set the response mask for this micro-batch's forward and queue its task mix for backward."""
-        self._row_mask = response_row_mask(micro_batch.attention_mask, micro_batch.loss_mask, micro_batch.num_actions)
+    def begin_micro_batch(self, row_mask: torch.Tensor, micro_batch, data_source_names: list[str] | None) -> None:
+        """Set this micro-batch's router-row response mask and queue its task mix for backward."""
+        self._row_mask = row_mask
         response_tokens = micro_batch.loss_mask.to(torch.bool).sum(dim=1)
         task_tokens: dict[str, int] = {}
         ids = micro_batch.data_source_ids
