@@ -21,10 +21,12 @@ import hashlib
 import json
 import random
 import re
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from datasets import load_dataset as hf_load_dataset
 from verifyit.modes.extract import extract_boxed
 
 from experiments.post_training.curriculum_sft.code_tasks import (
@@ -356,6 +358,38 @@ def grade_x_task(task: dict[str, Any], completion: str) -> bool:
         value, _ = trace_value(task["code"], call, timeout=TRACE_TIMEOUT_SECONDS)
         return value is not None and literals_equal(answer, value)
     raise ValueError(f"unknown X direction {direction!r}")
+
+
+# The public CruxEval test split whose prompts may not appear in X, at a pinned revision.
+CRUXEVAL_REPO = "cruxeval-org/cruxeval"
+CRUXEVAL_REVISION = "b96af0450242eb4da433032b90998f25588a5d0f"
+
+
+def write_cruxeval_prompts(
+    output_path: str | Path,
+    *,
+    repo: str = CRUXEVAL_REPO,
+    revision: str = CRUXEVAL_REVISION,
+    load_dataset: Callable = hf_load_dataset,
+) -> int:
+    """Write one ``{"prompt": <code>}`` row per public CruxEval test problem.
+
+    The file feeds :func:`exclude_public_cruxeval`, which checks containment of a
+    task's normalized function code inside a prompt's normalized text. Returns the
+    row count for the build manifest.
+    """
+    dataset = load_dataset(repo, revision=revision, split="test")
+    count = 0
+    with open(output_path, "w") as handle:
+        for row in dataset:
+            code = str(row["code"]).strip()
+            if not code:
+                raise ValueError(f"{repo}@{revision} split test: a row carries no code to exclude by")
+            handle.write(json.dumps({"prompt": code}) + "\n")
+            count += 1
+    if count == 0:
+        raise ValueError(f"{repo}@{revision} split test: no rows")
+    return count
 
 
 def exclude_public_cruxeval(tasks: list[XTask], cruxeval_prompts_path: str | Path) -> tuple[list[XTask], int]:

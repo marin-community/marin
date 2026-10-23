@@ -26,6 +26,7 @@ from experiments.post_training.task_data.code_x import (
     function_split,
     grade_x_task,
     synthesize_x_tasks,
+    write_cruxeval_prompts,
 )
 from experiments.post_training.task_data.code_x import (
     write_split as write_x_split,
@@ -161,6 +162,25 @@ def test_cruxeval_exclusion_requires_the_file_and_compares_code_inside_prompts(t
     same_function = [task for task in tasks if task.code == tasks[0].code]
     assert excluded == len(same_function)
     assert [task.task_id for task in kept] == [task.task_id for task in tasks if task.code != tasks[0].code]
+
+
+def test_write_cruxeval_prompts_writes_one_code_row_per_dataset_row(tmp_path):
+    """The exclusion file holds exactly the dataset's code field, one prompt per row."""
+    rows = [
+        {"code": "def f(x):\n    return x + 1\n", "id": "1", "input": "3", "output": "4"},
+        {"code": "def g(x):\n    return [x]\n", "id": "2", "input": "5", "output": "[5]"},
+    ]
+
+    def fake_load_dataset(repo, revision, split):
+        assert repo == "cruxeval-org/cruxeval" and split == "test"
+        assert revision == "b96af0450242eb4da433032b90998f25588a5d0f"
+        return iter(rows)
+
+    output = tmp_path / "cruxeval_prompts.jsonl"
+    count = write_cruxeval_prompts(output, load_dataset=fake_load_dataset)
+    assert count == 2
+    written = [json.loads(line) for line in output.read_text().splitlines()]
+    assert written == [{"prompt": row["code"].strip()} for row in rows]
 
 
 # --- X grading: direction dispatch, extraction, no echo rewards ---
