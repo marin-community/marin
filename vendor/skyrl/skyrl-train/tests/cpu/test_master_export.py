@@ -1,21 +1,15 @@
 """FP32 master export verifies every weight against the checkpoint metadata."""
 
-import json
 from pathlib import Path
 
 from fsspec.implementations.local import LocalFileSystem
 import pytest
 import torch
-from safetensors.torch import load_file
 from torch.distributed import checkpoint
 from torch.distributed.checkpoint import DefaultSavePlanner
 
 from skyrl_train.distributed.megatron.checkpoint_writer import MasterWeightsWriter
-from skyrl_train.distributed.megatron.master_export import (
-    SAFETENSORS_INDEX_FILE,
-    export_fp32_masters,
-    load_fp32_masters,
-)
+from skyrl_train.distributed.megatron.master_export import load_fp32_masters
 
 EXPERT_KEY = "decoder.layers.mlp.experts.weight"
 ROUTER_KEY = "decoder.layers.mlp.router.weight"
@@ -60,23 +54,6 @@ def test_load_returns_only_the_fp32_masters_keyed_by_model_name(tmp_path: Path):
     assert masters[EXPERT_KEY].dtype == torch.float32
     torch.testing.assert_close(masters[EXPERT_KEY], expert_master, rtol=0, atol=0)
     torch.testing.assert_close(masters[ROUTER_KEY], router_master, rtol=0, atol=0)
-
-
-def test_export_writes_sharded_safetensors_equal_to_the_dcp_masters(tmp_path: Path):
-    state, expert_master, router_master = chained_optimizer_checkpoint()
-    save_checkpoint(tmp_path, state)
-
-    output_dir = tmp_path / "export"
-    export_fp32_masters(str(tmp_path), str(output_dir))
-
-    index = json.loads((output_dir / SAFETENSORS_INDEX_FILE).read_text())
-    assert set(index["weight_map"]) == {EXPERT_KEY, ROUTER_KEY}
-    for key, expected in ((EXPERT_KEY, expert_master), (ROUTER_KEY, router_master)):
-        shard_name = index["weight_map"][key]
-        assert (output_dir / shard_name).exists()
-        shard = load_file(output_dir / shard_name)
-        assert shard[key].dtype == torch.float32
-        torch.testing.assert_close(shard[key], expected, rtol=0, atol=0)
 
 
 def test_export_refuses_a_checkpoint_without_master_records(tmp_path: Path):

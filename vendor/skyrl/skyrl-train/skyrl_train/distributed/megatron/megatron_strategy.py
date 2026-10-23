@@ -3,7 +3,8 @@ import os
 import math
 import random
 import tempfile
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import timedelta
 from typing import List, Union, Optional
 from loguru import logger
@@ -39,6 +40,7 @@ from skyrl_train.distributed.megatron.direct_checkpoint import (
     MasterWeightsSaveShardedStrategy,
 )
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
+from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
 from skyrl_train.distributed.megatron.checkpoint_restore import (
     defer_model_weights_to_optimizer,
     restore_model_weights_from_optimizer,
@@ -48,6 +50,8 @@ from marinskyrl.remote_io import abort_multipart_uploads
 from megatron.core.dist_checkpointing.strategies import base as ckpt_base
 from megatron.core.dist_checkpointing.strategies.async_utils import AsyncCallsQueue
 from megatron.core import dist_checkpointing
+from megatron.core.dist_checkpointing.mapping import ShardedTensor, ShardedTensorFactory
+from torch.distributed.checkpoint import FileSystemReader
 from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelLoadStrategyWrapper,
     FullyParallelSaveStrategyWrapper,
@@ -536,7 +540,63 @@ class MegatronStrategy(DistributedStrategy):
 
         return ckpt_dir, states
 
-    def save_hf_model(self, bridge, model: MegatronModelWrapper, output_dir: str, tokenizer=None, **kwargs) -> None:
+    def save_fp32_master_hf_model(
+        self, bridge, model: MegatronModelWrapper, ckpt_dir: str, output_dir: str, tokenizer=None
+    ) -> None:
+        """Export a checkpoint's FP32 optimizer masters as an HF model in float32.
+
+        Each rank loads the FP32 master slices of its own parameters from ``ckpt_dir``,
+        swaps them into the live parameters for one Bridge export, and restores the
+        model weights afterwards. The export therefore has the HF names and layout of
+        ``save_hf_model`` with master values. A parameter without an FP32 master
+        record raises, so a BF16-only checkpoint cannot export as FP32. Buffers such
+        as Grug's router bias are not optimizer state and export as stored.
+        """
+        modules: List[nn.Module] = model.actor_module
+        materialize_megatron_params(modules)
+        assert len(modules) == 1, "Megatron virtual pipeline parallel is not yet supported"
+        unwrapped = modules[0].module if hasattr(modules[0], "module") else modules[0]
+        parameters = {parameter.data_ptr(): parameter for parameter in unwrapped.parameters()}
+        model_sharded_state_dict = unwrapped.sharded_state_dict()
+        with remote_checkpoint_metadata(ckpt_dir) as read_dir:
+            master_keys = {}
+            for key in FileSystemReader(read_dir).read_metadata().state_dict_metadata:
+                model_key = model_key_for_master(key)
+                if model_key is not None:
+                    master_keys[model_key] = key
+            masters_sharded_state_dict = {}
+            owners: dict[str, nn.Parameter] = {}
+            for name, entry in model_sharded_state_dict.items():
+                if not isinstance(entry, (ShardedTensor, ShardedTensorFactory)):
+                    continue
+                parameter = parameters.get(entry.data.data_ptr())
+                if parameter is None:
+                    continue
+                if entry.key not in master_keys:
+                    raise ValueError(f"{ckpt_dir} has no FP32 master record for {entry.key}")
+                masters_sharded_state_dict[name] = replace(
+                    entry, key=master_keys[entry.key], data=torch.empty_like(entry.data, dtype=torch.float32)
+                )
+                owners[name] = parameter
+            if len({id(parameter) for parameter in owners.values()}) != len(parameters):
+                raise ValueError("FP32 master export could not match every parameter to a checkpoint record")
+            masters = dist_checkpointing.load(
+                sharded_state_dict=masters_sharded_state_dict,
+                checkpoint_dir=read_dir,
+                sharded_strategy=DirectS3TorchDistLoadShardedStrategy(ckpt_dir),
+            )
+        with _parameters_replaced(owners, masters):
+            self.save_hf_model(bridge, model, output_dir, tokenizer, weight_dtype=torch.float32)
+
+    def save_hf_model(
+        self,
+        bridge,
+        model: MegatronModelWrapper,
+        output_dir: str,
+        tokenizer=None,
+        weight_dtype: torch.dtype | None = None,
+        **kwargs,
+    ) -> None:
         materialize_megatron_params(model.actor_module)
         # Create checkpoint directory if it doesn't exist.
         rank_zero = self.is_rank_0()
@@ -553,7 +613,7 @@ class MegatronStrategy(DistributedStrategy):
         else:
             model_dir = nullcontext(output_dir)
         with model_dir as work_dir:
-            bridge.save_hf_weights(model.actor_module, work_dir)
+            bridge.save_hf_weights(model.actor_module, work_dir, weight_dtype=weight_dtype)
             self.log(f"Successfully saved HF safetensors model to {output_dir}")
 
             # Only rank 0 saves the Huggingface config and tokenizer.
@@ -562,3 +622,19 @@ class MegatronStrategy(DistributedStrategy):
                 self.log(f"Successfully saved HF config and tokenizer to {output_dir}")
 
         # The Ray caller waits for every rank result; no collective needs to span artifact publication.
+
+
+@contextmanager
+def _parameters_replaced(owners: dict[str, nn.Parameter], values: dict[str, torch.Tensor]):
+    """Point each parameter at a replacement tensor, then restore its original storage."""
+    originals = {name: parameter.data for name, parameter in owners.items()}
+    try:
+        for name, parameter in owners.items():
+            replacement = values[name]
+            if replacement.shape != parameter.shape:
+                raise ValueError(f"FP32 master for {name} has shape {tuple(replacement.shape)}, not {tuple(parameter.shape)}")
+            parameter.data = replacement.to(parameter.device)
+        yield
+    finally:
+        for name, parameter in owners.items():
+            parameter.data = originals[name]
