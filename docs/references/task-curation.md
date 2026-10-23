@@ -178,7 +178,7 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 
 Omit `--run` to print the artifact and its dependencies. Source IDs in the recipe
 must all be present in the campaign or saved corpus. Changing quotas, the seed,
-the source allowlist or the heldout input requires a new recipe version.
+source artifacts, the source allowlist or the heldout input requires a new recipe version.
 The output lives under the active artifact root at
 `rl-data/task-selection/<name>/<version>`; `--cache-dir` selects a local root.
 

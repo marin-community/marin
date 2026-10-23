@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import MappingProxyType
 from typing import Any
 
 import pyarrow as pa
@@ -30,14 +31,18 @@ TRAIN_FILENAME = "train.parquet"
 VALIDATION_FILENAME = "validation.parquet"
 FULL_VALIDATION_FILENAME = "full_validation.parquet"
 TASK_SPEC_COLUMN = "task_spec"
+TASK_JSON_COLUMN = "task_json"
 TASK_SCHEMA = pa.schema([pa.field(TASK_SPEC_COLUMN, pa.string(), nullable=False)])
 HELDOUT_SCHEMA_VERSION = "0.27"
-HELDOUT_FAMILIES = {
-    "ultra_sft_step3200_calendar_v2": "calendar",
-    "ultra_sft_step3200_comp_coding": "competitive_coding",
-    "ultra_sft_step3200_reasoning_gym": "reasoning_gym",
-    "ultra_sft_step3200_stem_mcqa": "stem",
-}
+STRUCTURE_CLOSURE_DATASET = "structure-closure"
+HELDOUT_FAMILIES = MappingProxyType(
+    {
+        "ultra_sft_step3200_calendar_v2": "calendar",
+        "ultra_sft_step3200_comp_coding": "competitive_coding",
+        "ultra_sft_step3200_reasoning_gym": "reasoning_gym",
+        "ultra_sft_step3200_stem_mcqa": "stem",
+    }
+)
 
 
 class HeldoutSource(BaseModel):
@@ -107,7 +112,7 @@ def validation_task(row: dict[str, Any]) -> TaskSpec:
     original = document["task"]
     if original["schema_version"] != HELDOUT_SCHEMA_VERSION:
         raise ValueError("The pinned heldout TaskSpec version changed")
-    if original["source"]["dataset"] == "structure-closure":
+    if original["source"]["dataset"] == STRUCTURE_CLOSURE_DATASET:
         converted = structure_closure_task(
             RawRow(original["id"], Source.model_validate(original["source"]), {"lowered_task_spec": raw})
         )
@@ -123,7 +128,7 @@ def validation_task(row: dict[str, Any]) -> TaskSpec:
 
 
 def validation_family(task: TaskSpec) -> str:
-    if task.source.dataset == "structure-closure":
+    if task.source.dataset == STRUCTURE_CLOSURE_DATASET:
         return "structural"
     config = next(resource for resource in task.resources.verifier if resource.path == "config.json")
     contract = json.loads(resource_bytes(config), object_pairs_hook=unique_object)["contract"]
@@ -179,9 +184,9 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
                 raise ValueError(f"Selection source is not a training population: {source.source_id}")
             for path in sorted((root / "final" / "*.parquet").glob(), key=str):
                 with path.open("rb") as stream:
-                    for batch in pq.ParquetFile(stream).iter_batches(batch_size=256, columns=["task_json"]):
+                    for batch in pq.ParquetFile(stream).iter_batches(batch_size=256, columns=[TASK_JSON_COLUMN]):
                         for row in batch.to_pylist():
-                            task = TaskSpec.model_validate_json(row["task_json"])
+                            task = TaskSpec.model_validate_json(row[TASK_JSON_COLUMN])
                             source_counts = counts[source.source_id]
                             source_counts.input += 1
                             if (
@@ -198,7 +203,7 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
                             seen_ids.add(task.id)
                             seen_contracts.add(contract)
                             source_counts.eligible += 1
-                            yield Candidate(task.id, row["task_json"], source.source_id)
+                            yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id)
 
     def selected_records() -> Iterator[dict[str, str]]:
         for family, limit in sorted(config.recipe.family_limits.items()):

@@ -76,6 +76,7 @@ WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
 CANONICAL_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin"
+TASK_SELECTION_KEY = "task_selection"
 EMBEDDING_STAGES = (
     "inputs",
     "descriptions",
@@ -243,14 +244,22 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
     return _CorpusSources(roots, inventory, document["population"])
 
 
-def _corpus_selection(corpus: _CorpusSources, recipe: SelectionRecipe) -> ArtifactStep:
+def _selection_pass(corpus: _CorpusSources, recipe: SelectionRecipe, *, cache_dir: Path | None, do_run: bool) -> None:
     if corpus.population != "admitted":
         raise click.UsageError("Task selection requires an admitted corpus from FULL curation")
     curated = {
         source_id: ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/source-{index}", recipe.version, root)
         for index, (source_id, root) in enumerate(sorted(corpus.roots.items()))
     }
-    return task_selection_step(curated, recipe)
+    with ExitStack() as scope:
+        if cache_dir is not None:
+            scope.enter_context(artifact_prefix(str(cache_dir)))
+        step = task_selection_step(curated, recipe)
+        if do_run:
+            result = run(step, max_concurrent=1)[0]
+            click.echo(json.dumps({TASK_SELECTION_KEY: result.path}, indent=2))
+        else:
+            click.echo(json.dumps({TASK_SELECTION_KEY: _selection_plan(step)}, indent=2))
 
 
 def _selection_plan(step: ArtifactStep) -> dict[str, object]:
@@ -541,15 +550,7 @@ def main(
         raise click.UsageError("Local input options require local execution")
     if corpus is not None and embed is None:
         assert selection_recipe is not None
-        with ExitStack() as scope:
-            if cache_dir is not None:
-                scope.enter_context(artifact_prefix(str(cache_dir)))
-            step = _corpus_selection(_corpus_sources(corpus), selection_recipe)
-            if not do_run:
-                click.echo(json.dumps({"task_selection": _selection_plan(step)}, indent=2))
-                return
-            result = run(step, max_concurrent=1)[0]
-            click.echo(json.dumps({"task_selection": result.path}, indent=2))
+        _selection_pass(_corpus_sources(corpus), selection_recipe, cache_dir=cache_dir, do_run=do_run)
         return
     if embed is not None:
         review_cache = review_cache or (str(cache_dir / "review-cache") if cache_dir else None)
@@ -613,15 +614,7 @@ def main(
         assert embedding is not None
         embedding(restored.roots, inventory=restored.inventory, population=restored.population, do_run=do_run)
         if selection_recipe is not None:
-            with ExitStack() as scope:
-                if cache_dir is not None:
-                    scope.enter_context(artifact_prefix(str(cache_dir)))
-                step = _corpus_selection(restored, selection_recipe)
-                if do_run:
-                    result = run(step, max_concurrent=1)[0]
-                    click.echo(json.dumps({"task_selection": result.path}, indent=2))
-                else:
-                    click.echo(json.dumps({"task_selection": _selection_plan(step)}, indent=2))
+            _selection_pass(restored, selection_recipe, cache_dir=cache_dir, do_run=do_run)
         return
     if input_root is not None and local_files:
         raise click.UsageError("Choose either --input-root or --input-file")
@@ -758,7 +751,7 @@ def main(
             plan["publication_catalog"] = publication_root
             plan["quality_policy"] = {"sample_size": quality_sample_size, "seed": seed}
             plan["embedding_stage"] = embed
-            plan["task_selection"] = _selection_plan(selection_step) if selection_step is not None else None
+            plan[TASK_SELECTION_KEY] = _selection_plan(selection_step) if selection_step is not None else None
             click.echo(json.dumps(plan, indent=2))
             return
         if cache_dir is not None:
@@ -789,7 +782,7 @@ def main(
             _write_corpus(roots, inventory, report_path, "admitted")
         if selection_step is not None:
             result = run(selection_step, max_concurrent=1)[0]
-            click.echo(json.dumps({"task_selection": result.path}, indent=2))
+            click.echo(json.dumps({TASK_SELECTION_KEY: result.path}, indent=2))
         if embedding is not None:
             embedding(roots, inventory=inventory, population="admitted", do_run=True)
 

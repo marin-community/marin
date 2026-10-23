@@ -27,7 +27,7 @@ class LocalAdmissionFactory:
         check_local_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> Machine:
-        raise AssertionError("Admission must not acquire a machine")
+        raise AssertionError(f"Admission must not acquire a machine: {spec}")
 
 
 def test_canonical_rows_lower_at_load_and_admit_image_and_package_graders(tmp_path: Path):
