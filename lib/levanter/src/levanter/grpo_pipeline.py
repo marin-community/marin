@@ -8,6 +8,8 @@ from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 import numpy as np
+from haliax import NamedArray
+from jaxtyping import Array, Float, Int, Shaped
 
 from levanter.data.packing import pack_documents
 from levanter.grpo_model import GrpoExample
@@ -17,24 +19,26 @@ from levanter.pipeline import reshape_batch_into_microbatches
 @jax.tree_util.register_dataclass
 @dataclass(frozen=True)
 class PipelineBatch:
-    tokens: jax.Array
-    attention_mask: jax.Array
-    segment_ids: jax.Array
-    position_ids: jax.Array
-    advantages: jax.Array
-    policy_weights: jax.Array
-    kl_weights: jax.Array
-    old_logprobs: jax.Array
-    reference_logprobs: jax.Array | None
+    """Sequence and objective tensors with an optional leading microbatch axis."""
+
+    tokens: Int[Array, "*microbatch batch position"]
+    attention_mask: Shaped[Array, "*microbatch batch position"]
+    segment_ids: Int[Array, "*microbatch batch position"]
+    position_ids: Int[Array, "*microbatch batch position"]
+    advantages: Float[Array, "*microbatch batch response"]
+    policy_weights: Float[Array, "*microbatch batch response"]
+    kl_weights: Float[Array, "*microbatch batch response"]
+    old_logprobs: Float[Array, "*microbatch batch response"]
+    reference_logprobs: Float[Array, "*microbatch batch response"] | None
 
 
 def pipeline_batch(example: GrpoExample, *, microbatches: int) -> PipelineBatch:
     """Convert named examples once, then add an explicit temporal batch axis."""
 
-    def sequence(value):
+    def sequence(value: NamedArray) -> Shaped[Array, "batch position"]:
         return value.rearrange(("batch", "position")).array
 
-    def response(value):
+    def response(value: NamedArray) -> Float[Array, "batch response"]:
         return value.rearrange(("batch", "response")).array
 
     batch = PipelineBatch(
