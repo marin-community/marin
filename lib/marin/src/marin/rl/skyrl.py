@@ -82,6 +82,9 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
 class SkyRLRolePlan:
     """Explicit policy, rollout, and reference settings that bear experiment identity.
 
+    A run that trains on a static dataset (fixed completions or preference pairs)
+    generates nothing and plans zero inference engines on separate roles.
+
     The reference role reuses the policy's GPUs-per-node width: the vendored
     launcher requires a single GPUs-per-node value across all Iris bundles, so a
     distinct reference width is not representable downstream.
@@ -117,7 +120,7 @@ class SkyRLRolePlan:
         engines_per_node = self.policy_num_gpus_per_node // engine_gpus
         if not engines_per_node:
             raise ValueError("each SkyRL inference engine must fit on one node")
-        rollout_nodes = (self.num_inference_engines + engines_per_node - 1) // engines_per_node
+        rollout_nodes = -(-self.num_inference_engines // engines_per_node)
         return self.policy_num_nodes + (self.reference_num_nodes or 0) + rollout_nodes
 
 
@@ -139,7 +142,6 @@ class SkyRLTopology:
         positive_fields = (
             "policy_num_nodes",
             "policy_num_gpus_per_node",
-            "num_inference_engines",
             "inference_engine_tensor_parallel_size",
             "inference_engine_pipeline_parallel_size",
             "inference_engine_data_parallel_size",
@@ -153,6 +155,10 @@ class SkyRLTopology:
             if getattr(plan, field_name) <= 0:
                 raise ValueError(f"SkyRL role plan {field_name} must be positive")
 
+        if plan.num_inference_engines < 0:
+            raise ValueError("SkyRL role plan num_inference_engines cannot be negative")
+        if plan.num_inference_engines == 0 and plan.colocate_all:
+            raise ValueError("a SkyRL role plan without inference engines cannot colocate policy and rollout roles")
         if plan.policy_num_nodes > self.num_nodes:
             raise ValueError("SkyRL policy_num_nodes exceeds the allocated topology")
         if plan.policy_num_gpus_per_node > self.gpus_per_node:
