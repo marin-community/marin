@@ -14,11 +14,7 @@ from megatron.core.distributed import finalize_model_grads
 from megatron.core.transformer.module import Float16Module
 
 from skyrl_train.models.router_instrumentation import observe_router_forwards
-from skyrl_train.workers.megatron.router_telemetry import (
-    RouterLoadStats,
-    merge_router_telemetry_metrics,
-    router_telemetry_enabled,
-)
+from skyrl_train.workers.megatron.router_telemetry import RouterTelemetryStep, router_telemetry_enabled
 
 from skyrl_train.distributed.megatron.model_utils import (
     from_parallel_logits_to_logprobs,
@@ -489,6 +485,7 @@ class MegatronModelWrapper:
         timings: PhaseBreakdown | None = None,
         profiler: Profiler | None = None,
         data_source_names: Optional[List[str]] = None,
+        global_step: int | None = None,
     ) -> List[dict]:
         """
         Run forward-backward over a full mini-batch consisting of multiple micro-batches.
@@ -508,8 +505,17 @@ class MegatronModelWrapper:
         forward_backward_func = get_forward_backward_func()
         log_ratio_monitor = None
         completed_microbatches = 0
-        telemetry = router_telemetry_enabled(self.cfg)
-        load_stats = RouterLoadStats() if telemetry else None
+        telemetry = None
+        if router_telemetry_enabled(self.cfg):
+            if self.use_sample_packing:
+                raise ValueError("router telemetry requires trainer.use_sample_packing=false")
+            if global_step is None:
+                raise ValueError("router telemetry needs the global step for its sidecar record")
+            telemetry = RouterTelemetryStep(
+                self.actor_module,
+                get_model_config(self.actor_module[0]),
+                gradient_checkpointing=bool(self.cfg.trainer.gradient_checkpointing),
+            )
 
         def sum_data_parallel(value):
             torch.distributed.all_reduce(value, group=mpu.get_data_parallel_group(with_context_parallel=False))
@@ -645,6 +651,8 @@ class MegatronModelWrapper:
 
         def forward_step(batch_iter, model):
             batch = next(batch_iter)
+            if telemetry is not None:
+                telemetry.begin_micro_batch(batch, data_source_names)
 
             with profiler.capture_forward() if profiler is not None else nullcontext():
                 outputs, packed_seq_params = self._forward_micro_batch(
@@ -662,8 +670,7 @@ class MegatronModelWrapper:
         batch_generator = make_batch_generator(micro_batches, vpp_size=len(self.actor_module))
 
         timing = timings or PhaseBreakdown("ppo_train", enabled=False)
-        observer = load_stats.observe if load_stats is not None else None
-        with observe_router_forwards(observer) if observer else nullcontext():
+        with observe_router_forwards(telemetry.observe) if telemetry is not None else nullcontext():
             with timing.span("megatron_forward_backward_scheduler"):
                 metrics_list = forward_backward_func(
                     forward_step_func=forward_step,
@@ -689,14 +696,8 @@ class MegatronModelWrapper:
                 metrics_list[-1]["router_replay/hit_fraction"] = replay_metrics["hit_fraction"]
                 metrics_list[-1]["router_replay/sentinel_fraction"] = replay_metrics["sentinel_fraction"]
 
-        if load_stats is not None:
-            merge_router_telemetry_metrics(
-                self.actor_module,
-                load_stats,
-                [micro.data_source_ids for micro in micro_batches],
-                data_source_names,
-                metrics_list,
-            )
+        if telemetry is not None:
+            telemetry.finish(metrics_list, step=global_step, export_path=str(self.cfg.trainer.export_path))
 
         # broadcast metrics to all pp ranks
         if not mpu.is_pipeline_last_stage(ignore_virtual=True):

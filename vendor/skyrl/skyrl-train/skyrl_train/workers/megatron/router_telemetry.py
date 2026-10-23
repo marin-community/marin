@@ -179,24 +179,28 @@ class RouterLoadStats:
 
     def metrics(self, counts: torch.Tensor) -> dict[str, float]:
         """Per-layer load summary for the given (reduced) counts tensor."""
-        if self._num_experts is None:
-            return {}
-        metrics: dict[str, float] = {}
-        for position, layer in enumerate(self.layers):
-            layer_counts = counts[position]
-            total = float(layer_counts.sum())
-            if total == 0:
-                continue
-            prefix = f"{ROUTER_LOAD_METRIC_PREFIX}/layer{layer}"
-            load = layer_counts / total
-            metrics[f"{prefix}/entropy"] = float(-(load * load.clamp_min(1e-12).log()).sum())
-            metrics[f"{prefix}/max_over_mean"] = float(layer_counts.max()) / (total / self._num_experts)
-            metrics[f"{prefix}/min_load"] = float(load.min())
-            # The Stage 0 routing-health gate counts experts below 10% of the MEAN load.
-            metrics[f"{prefix}/experts_below_10pct_of_mean"] = float(
-                (layer_counts < 0.1 * total / self._num_experts).sum()
-            )
-        return metrics
+        return load_metrics(self.layers, counts)
+
+
+def load_metrics(layers: list[int], counts: torch.Tensor) -> dict[str, float]:
+    """Per-layer load summary; row ``i`` of ``counts`` belongs to ``layers[i]``."""
+    num_experts = counts.shape[-1]
+    metrics: dict[str, float] = {}
+    for position, layer in enumerate(layers):
+        layer_counts = counts[position]
+        total = float(layer_counts.sum())
+        if total == 0:
+            continue
+        prefix = f"{ROUTER_LOAD_METRIC_PREFIX}/layer{layer}"
+        load = layer_counts / total
+        metrics[f"{prefix}/entropy"] = float(-(load * load.clamp_min(1e-12).log()).sum())
+        metrics[f"{prefix}/max_over_mean"] = float(layer_counts.max()) / (total / num_experts)
+        metrics[f"{prefix}/min_load"] = float(load.min())
+        # The Stage 0 routing-health gate counts experts below 10% of the MEAN load.
+        metrics[f"{prefix}/experts_below_10pct_of_mean"] = float(
+            (layer_counts < 0.1 * total / num_experts).sum()
+        )
+    return metrics
 
 
 class RouterCollisionTracker:
@@ -236,6 +240,7 @@ class RouterCollisionTracker:
         self._task_sos: dict[tuple[str, int, int], float] = {}
         self._waves_flushed = 0
         self._hook_holders: list[Any] = []
+        self._handles: list[Any] = []
         for row in routed_expert_parameters(model):
             parameter = row.parameter
             if not parameter.requires_grad:
@@ -247,7 +252,7 @@ class RouterCollisionTracker:
             def hook(*_unused, parameter=parameter):
                 self._on_gradient_accumulated(parameter)
 
-            grad_acc.register_hook(hook)
+            self._handles.append(grad_acc.register_hook(hook))
             self._hook_holders.append(grad_acc)
 
     def begin_micro_batch(self, task_token_counts: Mapping[str, int]) -> None:
@@ -287,7 +292,10 @@ class RouterCollisionTracker:
         self._waves_flushed += 1
 
     def finish(self, num_micro_batches: int) -> None:
-        """Raise unless every queued micro-batch produced exactly one gradient wave."""
+        """Remove the gradient hooks; raise unless every queued micro-batch produced exactly one wave."""
+        for handle in self._handles:
+            handle.remove()
+        self._handles = []
         if self._waves_flushed != num_micro_batches or self._pending_task_tokens:
             raise ValueError(
                 f"router collision telemetry flushed {self._waves_flushed} gradient waves for "
@@ -403,26 +411,25 @@ def merge_router_telemetry_metrics(
     if not mpu.is_pipeline_last_stage(ignore_virtual=True):
         return
 
-    merged_counts = torch.zeros(len(load_stats.layers), num_experts, dtype=torch.float64)
+    # Stages own disjoint layers: the record covers the union, in layer order.
+    layers = sorted({layer for stage_layers, _, _ in gathered for layer in stage_layers})
+    row_of = {layer: row for row, layer in enumerate(layers)}
+    merged_counts = torch.zeros(len(layers), num_experts, dtype=torch.float64)
     merged_task_sos: dict[tuple[str, int, int], float] = {}
     for stage_layers, stage_counts, stage_task_sos in gathered:
-        if stage_layers is None:
-            continue
-        position = {layer: index for index, layer in enumerate(stage_layers)}
-        for row, layer in enumerate(load_stats.layers):
-            if layer in position:
-                merged_counts[row] += stage_counts[position[layer]]
+        for index, layer in enumerate(stage_layers):
+            merged_counts[row_of[layer]] += stage_counts[index]
         for key, value in stage_task_sos.items():
             merged_task_sos[key] = merged_task_sos.get(key, 0.0) + value
 
-    metrics_list[-1].update(load_stats.metrics(merged_counts))
+    metrics_list[-1].update(load_metrics(layers, merged_counts))
     metrics_list[-1].update(collision_summary_metrics(merged_task_sos))
 
     if is_telemetry_writer_rank(mpu):
         write_router_telemetry_record(
             export_path,
             router_telemetry_record(
-                step, load_stats.layers, merged_counts, collision_norms(merged_task_sos, num_experts)
+                step, layers, merged_counts, collision_norms(merged_task_sos, num_experts)
             ),
         )
 
@@ -494,3 +501,69 @@ def router_policy_manifest(
 def router_telemetry_enabled(config) -> bool:
     """Whether training collects router load statistics and collision mass."""
     return bool(OmegaConf.select(config, "trainer.router_telemetry.enabled") or False)
+
+
+def response_row_mask(attention_mask: torch.Tensor, loss_mask: torch.Tensor, num_actions: int) -> torch.Tensor:
+    """Router-row mask of one unpacked micro-batch: True where a row is a supervised response token.
+
+    Megatron routes hidden states laid out sequence-major (``[s, b]`` flattened), so
+    the ``[b, s]`` position mask is transposed before flattening.
+    """
+    batch, seq_len = attention_mask.shape
+    positions = torch.zeros(batch, seq_len, dtype=torch.bool, device=loss_mask.device)
+    positions[:, seq_len - num_actions :] = loss_mask.to(torch.bool)
+    return positions.transpose(0, 1).reshape(-1)
+
+
+class RouterTelemetryStep:
+    """One mini-batch of router telemetry: load counts, per-task collision mass, and the sidecar write.
+
+    Supports unpacked micro-batches without sequence or context parallelism, where a
+    router's rows map one-to-one onto the micro-batch's positions; other layouts raise.
+    """
+
+    def __init__(self, model_chunks: list[nn.Module], config, *, gradient_checkpointing: bool):
+        import megatron.core.parallel_state as mpu  # guarded: telemetry runs only inside the Megatron worker
+
+        if len(model_chunks) != 1:
+            raise ValueError("router telemetry does not support virtual pipeline parallelism")
+        if config.sequence_parallel or mpu.get_context_parallel_world_size() > 1:
+            raise ValueError("router telemetry requires sequence_parallel off and context parallel size 1")
+        layer_map: dict[int, int] = {}
+        for chunk in model_chunks:
+            layer_map.update(build_router_layer_map(chunk))
+        if not layer_map:
+            raise ValueError("router telemetry found no routers in the model")
+        num_global = int(config.num_moe_experts)
+        local = num_global // mpu.get_expert_model_parallel_world_size()
+        self.load_stats = RouterLoadStats(layer_map)
+        self.collision = RouterCollisionTracker(
+            model_chunks[0], expert_offset=mpu.get_expert_model_parallel_rank() * local, num_global_experts=num_global
+        )
+        self._gradient_checkpointing = gradient_checkpointing
+        self._row_mask: torch.Tensor | None = None
+        self._micro_batches = 0
+
+    def begin_micro_batch(self, micro_batch, data_source_names: list[str] | None) -> None:
+        """Set the response mask for this micro-batch's forward and queue its task mix for backward."""
+        self._row_mask = response_row_mask(micro_batch.attention_mask, micro_batch.loss_mask, micro_batch.num_actions)
+        response_tokens = micro_batch.loss_mask.to(torch.bool).sum(dim=1)
+        task_tokens: dict[str, int] = {}
+        ids = micro_batch.data_source_ids
+        for row, tokens in enumerate(response_tokens.tolist()):
+            source = int(ids[row]) if ids is not None else -1
+            tag = data_source_names[source] if source >= 0 and data_source_names else "untagged"
+            task_tokens[tag] = task_tokens.get(tag, 0) + int(tokens)
+        self.collision.begin_micro_batch(task_tokens)
+        self._micro_batches += 1
+
+    def observe(self, observation: RouterObservation) -> None:
+        if not should_count_router_forward(
+            grad_enabled=torch.is_grad_enabled(), gradient_checkpointing=self._gradient_checkpointing
+        ):
+            return
+        self.load_stats.observe(observation, row_mask=self._row_mask)
+
+    def finish(self, metrics_list: list[dict], *, step: int, export_path: str) -> None:
+        self.collision.finish(self._micro_batches)
+        merge_router_telemetry_metrics(self.load_stats, self.collision, metrics_list, step=step, export_path=export_path)

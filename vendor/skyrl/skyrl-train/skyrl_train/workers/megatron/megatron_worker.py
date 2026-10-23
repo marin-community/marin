@@ -713,6 +713,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         timings=timing,
                         profiler=profiler,
                         data_source_names=self._data_source_names,
+                        global_step=int(train_data.metadata["global_step"]),
                     )
 
                     if self.empty_cuda_cache:
