@@ -775,8 +775,9 @@ async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cau
         built_draft(tmp_path / "store"), retried, settings, solver, UncalledClient(), UncalledClient()
     )
 
-    assert solver.steps == ["solver/0/2", "solver/0/3"]
-    assert again.solver is not None and again.solver.trials[1:] == first.solver.trials[1:]
+    assert sorted(solver.steps) == ["solver/0/2", "solver/0/3", "solver/2/1"]
+    assert again.solver is not None and again.solver.trials[1] == first.solver.trials[1]
+    assert again.solver.trials[2].status is TrialStatus.GRADED
     assert again.solver.trials[0].attempt_file.endswith("solver/0/attempt-3.json")
     trial_dir = retried.round_dir / Path(again.solver.trials[0].attempt_file).parent
     assert sorted(path.name for path in trial_dir.iterdir()) == [f"attempt-{n}.json" for n in range(4)]
@@ -805,7 +806,7 @@ async def test_a_review_retry_reruns_only_the_trial_ungraded_for_a_retryable_cau
         UncalledClient(),
     )
     assert relaunched.steps == ["solver/0/4", "solver/0/5"]
-    assert third.solver is not None and third.solver.trials[1:] == first.solver.trials[1:]
+    assert third.solver is not None and third.solver.trials[1:] == again.solver.trials[1:]
     assert sorted(path.name for path in trial_dir.iterdir()) == [f"attempt-{n}.json" for n in range(6)]
 
 

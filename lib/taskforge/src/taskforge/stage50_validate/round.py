@@ -97,7 +97,7 @@ from taskforge.stage50_validate.adversary import (
 from taskforge.stage50_validate.control_drafts import CONTROLS_FILE, CONTROLS_STEP, load_controls, write_controls
 from taskforge.stage50_validate.controls import ControlVerdict, check_replayable, control_outcome, replay_control
 from taskforge.stage50_validate.evidence import Evidence, RewardStats
-from taskforge.stage50_validate.outcome import Cause, Graded, Outcome, TrialKind
+from taskforge.stage50_validate.outcome import TASK_DEFECTS, Cause, Graded, Outcome, TrialKind
 from taskforge.stage50_validate.preflight import BackendFallback, preflight
 from taskforge.stage50_validate.trials import (
     ATTEMPT_PREFIX,
@@ -547,7 +547,7 @@ def _resumed_plan(
     allowed = (settings.max_retries + 1) * context.validation_pass
     if spent:
         last = attempt_outcome(payloads[attempts[-1]])
-        if isinstance(last, Graded) or not last.retryable or spent >= allowed:
+        if isinstance(last, Graded) or last.cause in TASK_DEFECTS or spent >= allowed:
             return None
     return TrialPlan(
         workpiece_id=context.workpiece_id,

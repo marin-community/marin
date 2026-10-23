@@ -18,15 +18,14 @@ from taskcompendium.models import AnswerType, GradingAttempt, PlainText, Source,
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
 from taskforge.llm.clef import budget
-from taskforge.llm.clef.budget import MAX_LENGTH, ClefTokenizer, input_tokens
+from taskforge.llm.clef.budget import ClefTokenizer
 from taskforge.llm.clef.decision_client import (
-    WINDOW_HEADER,
     ClefDecisionClient,
     ClefDecisionConfig,
     DecisionRequestError,
     open_clef_decision_client,
 )
-from taskforge.llm.clef.schema import ScoreQuestion, SystemOneRequest
+from taskforge.llm.clef.schema import ScoreQuestion
 from taskforge.spec import decision, draft
 from taskforge.spec.decision import (
     LEVELS,
@@ -242,26 +241,20 @@ class Recording:
 
 
 @pytest.mark.parametrize(("window", "reply_bytes"), [(16384, 40_000), (None, 200_000)], ids=["pinned-16k", "cap-128k"])
-async def test_the_state_is_fitted_to_the_window_by_cutting_the_solver_output(window, reply_bytes):
+async def test_oversized_state_holds_without_grading_a_truncated_answer(window, reply_bytes):
     long_reply = "The approved total is 1,234.56 USD. " + "x" * reply_bytes + " Final: 1,234.56 USD."
     recording = Recording()
     async with client(recording.handle, window) as clef:
-        await graded(calibrated(None), [TRANSCRIPT[0], {"role": "assistant", "content": long_reply}], clef, timeout=30)
-
-    (request,) = recording.fake.seen
-    state = request.state
-    assert isinstance(state, dict)
-    candidate = state["z_candidate_answer"]
-    assert isinstance(candidate, str)
-    assert "tokens truncated by the Clef state budget" in candidate and candidate.endswith("Final: 1,234.56 USD.")
-    assert state["y_reference_answer"] == REFERENCE
-    assert input_tokens(TOKENIZER, SystemOneRequest(request.state, request.questions)) <= (window or MAX_LENGTH)
-    assert recording.headers[0].get(WINDOW_HEADER) == (None if window is None else str(window))
+        with pytest.raises(DecisionUnavailable):
+            await graded(
+                calibrated(None), [TRANSCRIPT[0], {"role": "assistant", "content": long_reply}], clef, timeout=30
+            )
+    assert not recording.fake.seen
 
 
 async def test_the_token_is_never_logged_or_shown(caplog, monkeypatch):
     caplog.set_level(logging.DEBUG)
-    long_reply = "x" * 40_000
+    long_reply = "x" * 40
     async with client(FakeClef(token="another-token").handle, 16384) as clef:
         assert TOKEN not in repr(clef)
         with pytest.raises(DecisionRequestError) as refused:

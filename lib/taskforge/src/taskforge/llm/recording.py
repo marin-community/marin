@@ -35,7 +35,7 @@ from taskforge.llm.client import (
     Usage,
 )
 from taskforge.llm.policy import LLMPolicy, Message
-from taskforge.llm.structured import StructuredOutputError
+from taskforge.llm.structured import IncompleteOutput, StructuredOutputError
 
 
 @dataclass(frozen=True)
@@ -146,7 +146,7 @@ async def recorded_structured[T: BaseModel](
         started = time.monotonic()
         try:
             result = await client.complete_structured(messages, output_type, policy)
-        except StructuredOutputError as error:
+        except (IncompleteOutput, StructuredOutputError) as error:
             record_completions(fields, error.completions)
             fields.attrs["requests"] = str(len(error.completions))
             raise

@@ -8,13 +8,13 @@
 The model replies with a ``ProgramSubmission``, whose validator loads the source with
 ``program_sdk.load_program``, so a program the loader refuses goes back to the model in the client's
 structured repair request, with the loader's message. A reply cut off by the output limit gets no
-repair: the call raises ``StructuredOutputError`` at once.
+repair: the call raises ``IncompleteOutput`` and preserves the partial completion.
 
 The author lives with the build stage because its prompt documents the build SDK and the template.
 It keeps each request as sent, ending with the field instruction ``complete_structured``
 appends, and its completions under ``author/<n>/`` in the workpiece's directory
 (``AuthorContext.workpiece_dir``), including the completions of a call that raised
-``StructuredOutputError``. It writes the accepted source to ``program.py`` in that directory
+``StructuredOutputError`` or ``IncompleteOutput``. It writes the accepted source to ``program.py`` in that directory
 before it loads the program from it. For a revision it reads that file back, since a ``Revision`` carries
 no source, and continues the conversation with the previous program as the model's turn and the
 revision as the next user turn (``revision_prompt``), which names a verification change the revision carries.
@@ -43,7 +43,7 @@ from taskforge.llm.agent import shell_tool
 from taskforge.llm.client import Completion, ModelClient
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.recording import CallLedger, recorded_structured
-from taskforge.llm.structured import StructuredOutputError, schema_instruction
+from taskforge.llm.structured import IncompleteOutput, StructuredOutputError, schema_instruction
 from taskforge.sandbox.images import GRADER_BASE_IMAGE, DockerBuild
 from taskforge.spec import decision, draft, rubric, verdict
 from taskforge.stage10_proposal.model import TaskProposal, render
@@ -320,7 +320,6 @@ REFERENCE_SECTIONS: tuple[tuple[str, ModuleType, tuple[str, ...]], ...] = (
             "WORKSPACE",
             "FULL_CREDIT",
             "EQUIVALENT_VARIANTS",
-            "ATTEMPTS",
             "INSTRUCTION_WORD_LIMIT",
             "GRADER_TIMEOUT",
             "ANSWER_FORMAT",
@@ -487,8 +486,8 @@ class GlmAuthor:
 
         Raises:
             FileNotFoundError: ``revision`` is given and the workpiece has no ``program.py`` to revise.
-            StructuredOutputError: the output limit cut a reply off, or every submission, repairs
-                included, failed to load.
+            IncompleteOutput: Generation reached its physical context/output boundary.
+            StructuredOutputError: Every explicitly configured repair failed to load.
         """
         workpiece_dir = context.workpiece_dir
         change = None if revision is None else revision.verification_change
@@ -515,7 +514,7 @@ class GlmAuthor:
                 CallLedger(self.ledger, context.workpiece_id, context.round, AUTHOR_STEP),
                 {"revision": "none" if revision is None else str(revision.kind)},
             )
-        except StructuredOutputError as error:
+        except (IncompleteOutput, StructuredOutputError) as error:
             write_bytes_atomic(str(record_dir / COMPLETIONS_FILE), _COMPLETIONS.dump_json(error.completions, indent=2))
             raise
         write_bytes_atomic(str(record_dir / COMPLETIONS_FILE), _COMPLETIONS.dump_json(result.completions, indent=2))

@@ -27,6 +27,7 @@ own host and reads any step's stored output, such as the grader's reference answ
 """
 
 import asyncio
+import inspect
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
@@ -55,7 +56,14 @@ from taskforge.stage40_build_with_program.context import (
     ExpiredClock,
     RLEnvBuildContext,
 )
-from taskforge.stage40_build_with_program.infrastructure import infrastructure_failure, machine_available
+from taskforge.stage40_build_with_program.infrastructure import (
+    InfrastructureCause,
+    authored_failure,
+    exception_chain,
+    infrastructure_failure,
+    machine_available,
+    storage_fault,
+)
 from taskforge.stage40_build_with_program.outputs import SOURCES_STEP, Sources
 from taskforge.stage40_build_with_program.sdk import fooling_problem, solver_machine
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
@@ -167,11 +175,11 @@ class _BudgetedModel:
 
     Every path a step has to the model goes through ``context.model``: the SDK's structured calls,
     its agent loops and a direct call alike. Each call spends one of the step's ``max_calls``, and
-    the first call past the limit fails the build as the program's; ``run_program`` names the step.
+    the first call past an explicit limit reports ``BUDGET_EXHAUSTED``. None leaves calls unbounded.
     """
 
     client: ModelClient
-    limit: int
+    limit: int | None
     spent: int = 0
 
     @property
@@ -179,8 +187,10 @@ class _BudgetedModel:
         return self.client.model
 
     def _spend(self) -> None:
-        if self.spent >= self.limit:
-            raise BuildFailure(f"more than {self.limit} model calls in one step; keep retries within the step's budget")
+        if self.limit is not None and self.spent >= self.limit:
+            raise BuildInfrastructureFailure(
+                InfrastructureCause.BUDGET_EXHAUSTED, f"more than {self.limit} model calls in one step"
+            )
         self.spent += 1
 
     async def complete(
@@ -233,6 +243,7 @@ async def run_program(
     digests: dict[str, str] = {PROPOSAL_INPUT: digest(proposal)}
     outcomes: dict[str, RLEnvBuildStepOutcome] = {}
     raised: dict[BaseException, TracebackType | None] = {}
+    program_files = {inspect.getfile(node.fn) for node in (*program.steps.values(), program.sink)}
 
     async def run[T](step: RLEnvBuildStep | RLEnvBuildSink, output_type: type[T]) -> T:
         name = step.name
@@ -273,8 +284,14 @@ async def run_program(
                     raise infrastructure from error
                 if isinstance(error, BuildFailure) and error.step is None:
                     raise BuildFailure(error.message, name) from error
-                if isinstance(error, BuildExpired) and error.step is None:
-                    raise BuildExpired(error.message, error.clock, name) from error
+                if isinstance(error, BuildExpired):
+                    if error.step is None:
+                        raise BuildExpired(error.message, error.clock, name) from error
+                    raise
+                if storage_fault(error, program_files):
+                    raise
+                if not authored_failure(error, program_files):
+                    raise BuildInfrastructureFailure("unclassified_build_failure", str(error)) from error
                 raise
             fields.attrs["cache"] = status
             fields.output_hash = memo.output_digest
@@ -302,6 +319,20 @@ async def run_program(
         # would, with its own cause chain and without the group as context. Each step awaiting the
         # failed one re-raised the same exception object, which can leave its traceback holding only
         # that await, so it is raised with the traceback its own step left it with.
+        for error in exception_chain(failures):
+            if error in raised:
+                error.with_traceback(raised[error])
+        infrastructure = infrastructure_failure(failures)
+        if infrastructure is not None:
+            raise infrastructure from failures
+        expired = next((error for error in exception_chain(failures) if isinstance(error, BuildExpired)), None)
+        if expired is not None:
+            raise expired from failures
+        storage = next((error for error in exception_chain(failures) if storage_fault(error, program_files)), None)
+        if storage is not None:
+            raise storage from failures
+        if not authored_failure(failures, program_files):
+            raise BuildInfrastructureFailure("unclassified_build_failure", str(failures)) from failures
         failure = failures.exceptions[0]
         raise failure.with_traceback(raised.get(failure, failure.__traceback__)) from failure.__cause__
     return sink.result(), tuple(outcomes[name] for name in program.order)

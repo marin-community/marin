@@ -3,7 +3,7 @@
 
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import httpx
@@ -233,3 +233,12 @@ async def test_prefill_rejects_reasoning_parsed_by_a_chat_endpoint(channel):
     finally:
         await model.client.close()
     assert caught.value.rollout.failure.exception_type == "ValueError"
+
+
+async def test_an_uncapped_chat_request_omits_both_output_limit_fields():
+    server = ChatServer([completion({"content": "12"})])
+    model = replace(server.model(), max_tokens=None)
+    async with model.client:
+        result = await model(ModelRequest(messages=({"role": "user", "content": "Return 12"},), options={}))
+    assert result.message["content"] == "12"
+    assert "max_tokens" not in server.requests[0] and "max_completion_tokens" not in server.requests[0]

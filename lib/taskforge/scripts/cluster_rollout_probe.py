@@ -114,7 +114,7 @@ ENV_NAMES_SCRIPT = (
 # SECRET_WORDS or it ends with one of SECRET_SUFFIXES (so GPG_KEY and TOKENIZERS_* are not).
 SECRET_WORDS = frozenset({"SECRET", "TOKEN", "PASSWORD"})
 SECRET_SUFFIXES = ("KEY_ID", "API_KEY", "ACCESS_KEY")
-POLICY = LLMPolicy(max_continuations=0)
+POLICY = LLMPolicy(max_tokens=None, max_continuations=None)
 PROVIDER = LLMProviderConfig(
     model=GLM_MODEL,
     max_attempts=8,
@@ -124,16 +124,16 @@ PROVIDER = LLMProviderConfig(
     backoff_factor=2.0,
     stall_timeout=600.0,
     max_connections=512,
-    structured_repairs=1,
+    structured_repairs=None,
+    context_window=262144,
 )
-MAX_TURNS = 12
 COMMAND_TIMEOUT = 120
 TOOL_TURN_TIMEOUT = 240
 MODEL_TURN_TIMEOUT = 600
 CLEANUP_TIMEOUT = 120
 VERIFIER_TIMEOUT = 300
 LIMITS = rollout_limits(
-    max_turns=MAX_TURNS,
+    max_turns=None,
     model_turn_timeout=MODEL_TURN_TIMEOUT,
     tool_turn_timeout=TOOL_TURN_TIMEOUT,
     total_turn_timeout=1800,

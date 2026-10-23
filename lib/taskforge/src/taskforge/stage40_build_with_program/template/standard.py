@@ -29,8 +29,8 @@ The steps, in run order:
    which no build has, so it is not prototyped. For the other kinds, before it returns,
    the step grades its reference answer and the empty answer with ``grade_candidate``. A reference below
    ``FULL_CREDIT``, a reward outside the grader's score range, or an empty answer above the grader's
-   declared ``rejection_ceiling`` goes back to the model, and after ``ATTEMPTS`` requests the build
-   fails. A reference whose grader timed out raises ``BuildExpired`` at once: ``grade_candidate`` has
+   declared ``rejection_ceiling`` goes back to the model until repaired. A reference whose grader timed out
+   raises ``BuildExpired`` at once: ``grade_candidate`` has
    already graded it a second time on fresh machines, so the grader command was slow twice. Whether
    the grader or Taskforge was slow is unknown until someone reads the record, so the workpiece is held
    rather than sent back for a rewritten grader. The returned ``Grader`` holds the reference answer,

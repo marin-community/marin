@@ -90,7 +90,8 @@ GLM_PROVIDER = LLMProviderConfig(
     backoff_factor=2.0,
     stall_timeout=600.0,
     max_connections=512,
-    structured_repairs=1,
+    structured_repairs=None,
+    context_window=262144,
 )
 
 

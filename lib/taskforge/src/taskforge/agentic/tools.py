@@ -62,10 +62,10 @@ from taskforge.agentic.prompts import ADVERSARY_PROMPT, BLIND_SOLVE_PROMPT, REVI
 from taskforge.capability import FILE_SAFE_ID, CapabilityIdea, capability_idea_record
 from taskforge.content_hash import digest, pretty_json
 from taskforge.llm.agent import clip_tool_output
-from taskforge.llm.client import ContextExhausted
 from taskforge.llm.policy import Message
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.spec.controls import ScriptedModel, context_assistant_turns
+from taskforge.stage40_build_with_program.context import BuildInfrastructureFailure
 
 logger = logging.getLogger(__name__)
 
@@ -336,7 +336,7 @@ class ToolSession:
                 spec, ScriptedModel(({"role": "assistant", "content": answer},), context_assistant_turns(spec.task))
             )
         except RolloutInterrupted as error:
-            raise ToolError(f"The grade failed; check the task: {_failure(error.rollout)}") from error
+            raise BuildInfrastructureFailure("grading_interrupted", _failure(error.rollout)) from error
         except (ValueError, NotImplementedError) as error:
             raise ToolError(f"The grade failed; check the task: {error}") from error
         status = result.grade.status
@@ -353,7 +353,7 @@ class ToolSession:
                 }
             )
         if status != Outcome.GRADED:
-            raise ToolError(f"The grade failed ({status}); check the task: {result.grade.error}")
+            raise BuildInfrastructureFailure("grading_unavailable", f"{status}: {result.grade.error}")
         passed = _passed(result.grade)
         self.tools.evidence[_task_digest(task)].controls.append((expect == "pass", passed))
         return _result(
@@ -382,7 +382,8 @@ class ToolSession:
         results = await asyncio.gather(
             *(self._rollouts(task, spec, n, role) for task, spec in zip(tasks, specs, strict=True))
         )
-        left = self.config.budget.solver_rollouts - self.tools.spend.solver_rollouts
+        budget = self.config.budget.solver_rollouts
+        left = None if budget is None else budget - self.tools.spend.solver_rollouts
         return _result({"results": dict(zip(paths, results, strict=True)), "solver_rollouts_left": left})
 
     async def _rollouts(
@@ -401,6 +402,9 @@ class ToolSession:
             rollout = outcome.rollout
             grade = outcome.grade if isinstance(outcome, GradedRollout) else None
             await self._write(f"{directory}/{role}-{first + index}.txt", _transcript(rollout, grade).encode())
+            if rollout.stop_reason in RAN_OUT_STOP_REASONS:
+                ungraded[f"incomplete: {rollout.stop_reason}"] += 1
+                continue
             if grade is None or grade.status not in (Outcome.GRADED, Outcome.SUBMISSION_FAILURE):
                 reason = f"{grade.status}: {grade.error}" if grade is not None else f"interrupted: {_failure(rollout)}"
                 ungraded[clip_tool_output(reason, limit=300)] += 1
@@ -430,6 +434,8 @@ class ToolSession:
                     "commands": _commands(rollout),
                 }
                 self.tools.adversary_runs[key].append(record)
+        if ungraded:
+            raise BuildInfrastructureFailure("validation_incomplete", json.dumps(dict(ungraded), sort_keys=True))
         graded = [answer for answer in answers if not answer["format_failure"]]
         passes = sum(answer["passed"] for answer in graded)
         return {
@@ -484,12 +490,21 @@ class ToolSession:
 
     async def finish(self, report: str) -> ToolCallResult:
         budget = self.config.budget.solver_rollouts
-        left = budget - self.tools.spend.solver_rollouts
+        left = None if budget is None else budget - self.tools.spend.solver_rollouts
         accepted = len(self.tools.accepted)
-        if accepted < self.tools.n and left > EARLY_FINISH_BUDGET_SHARE * budget and not self.tools.early_finish_refused:
+        if (
+            accepted < self.tools.n
+            and (budget is None or (left is not None and left > EARLY_FINISH_BUDGET_SHARE * budget))
+            and not self.tools.early_finish_refused
+        ):
             self.tools.early_finish_refused = True
+            remaining = (
+                "validation calls have no separate cap"
+                if budget is None
+                else f"{left} of {budget} solver rollouts are left"
+            )
             return _error(
-                f"{accepted} of {self.tools.n} tasks are accepted and {left} of {budget} solver rollouts are left. "
+                f"{accepted} of {self.tools.n} tasks are accepted and {remaining}. "
                 "Use them: make the task harder with more steps or more data, or make a different task. "
                 "Call finish again only if the capability cannot give tasks in the band."
             )
@@ -514,10 +529,6 @@ class ToolSession:
             result = await self.config.judge.complete_structured(messages, output_type, self.config.judge_policy)
         except StructuredOutputError as error:
             raise ToolError(f"The reviewer gave no valid reply; try again: {error}") from error
-        except ContextExhausted as error:
-            raise ToolError(
-                "The reviewer cannot read this task: its prompt and files are too long. Make them shorter."
-            ) from error
         self.tools.spend.judge_tokens += sum(
             completion.usage.prompt_tokens + completion.usage.completion_tokens for completion in result.completions
         )
@@ -528,11 +539,11 @@ class ToolSession:
         await self._write(path, json.dumps(response, indent=1).encode())
         return path
 
-    def _spend(self, name: str, limit: int, count: int) -> None:
+    def _spend(self, name: str, limit: int | None, count: int) -> None:
         used = getattr(self.tools.spend, name)
-        if used >= limit:
+        if limit is not None and used >= limit:
             raise BudgetExhausted(f"The budget has no {name.replace('_', ' ')} left")
-        if used + count > limit:
+        if limit is not None and used + count > limit:
             raise ToolError(f"The budget has {limit - used} {name.replace('_', ' ')} left")
         setattr(self.tools.spend, name, used + count)
 
