@@ -42,6 +42,26 @@ def test_get_reads_stored_bytes(store):
     assert store.get(bundle_id) == blob
 
 
+def test_get_rejects_corrupt_stored_bytes_without_controller(store, tmp_path):
+    blob = b"expected bundle data"
+    bundle_id = hashlib.sha256(blob).hexdigest()
+    (tmp_path / "bundles" / bundle_id).write_bytes(b"corrupt bundle data")
+
+    with pytest.raises(ValueError, match="Hash mismatch for stored content"):
+        store.get(bundle_id)
+
+
+def test_write_repairs_corrupt_preexisting_object(store, tmp_path):
+    blob = b"canonical bundle data"
+    bundle_id = hashlib.sha256(blob).hexdigest()
+    path = tmp_path / "bundles" / bundle_id
+    path.write_bytes(b"corrupt bundle data")
+
+    assert store.write(blob) == bundle_id
+    assert path.read_bytes() == blob
+    assert store.get(bundle_id) == blob
+
+
 def test_get_missing_raises_not_found(store):
     with pytest.raises(FileNotFoundError, match="not found and no controller configured"):
         store.get("a" * 64)

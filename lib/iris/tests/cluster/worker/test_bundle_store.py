@@ -111,6 +111,21 @@ def test_get_fetches_on_demand(monkeypatch, store):
     assert result == data
 
 
+def test_get_refetches_corrupt_stored_bytes(monkeypatch, store, tmp_path):
+    data = b"canonical remote data"
+    blob_id = hashlib.sha256(data).hexdigest()
+    (tmp_path / "bundles" / blob_id).write_bytes(b"corrupt local data")
+
+    def fake_urlopen(url: str, timeout: int):
+        assert url == f"http://controller.internal/blobs/{blob_id}"
+        return _FakeResponse(data)
+
+    monkeypatch.setattr("iris.cluster.bundle.urlopen", fake_urlopen)
+
+    assert store.get(blob_id) == data
+    assert (tmp_path / "bundles" / blob_id).read_bytes() == data
+
+
 def test_get_uses_cache_on_hit(store):
     """get should return cached data without hitting the network."""
     data = b"cached blob"

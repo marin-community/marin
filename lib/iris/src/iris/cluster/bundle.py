@@ -97,11 +97,22 @@ class BundleStore:
     def _cache_put(self, cid: str, data: bytes) -> None:
         """Insert into in-memory cache and evict if needed. Caller must hold ``_cache_lock``."""
         if cid in self._cache:
+            previous = self._cache.pop(cid)
+            self._cache_bytes -= len(previous)
+            self._cache[cid] = data
+            self._cache_bytes += len(data)
             self._cache.move_to_end(cid)
+            self._evict_if_needed_locked()
             return
         self._cache[cid] = data
         self._cache_bytes += len(data)
         self._evict_if_needed_locked()
+
+    def _cache_remove(self, cid: str) -> None:
+        with self._cache_lock:
+            data = self._cache.pop(cid, None)
+            if data is not None:
+                self._cache_bytes -= len(data)
 
     def _evict_if_needed_locked(self) -> None:
         while (self._max_cache_items > 0 and len(self._cache) > self._max_cache_items) or (
@@ -115,9 +126,15 @@ class BundleStore:
         cid = content_id(data)
         path = self._path_for(cid)
         with self._content_lock(cid):
-            # Always ensure disk has the bytes: a cache hit without disk write
-            # would leave workers unable to fetch this id after a restart.
-            if not self._fs.exists(path):
+            # Always verify disk: a corrupt pre-existing object must not remain
+            # trusted merely because its name is the requested content id.
+            if self._fs.exists(path):
+                with self._fs.open(path, "rb") as f:
+                    stored = f.read()
+                if content_id(stored) != cid:
+                    with self._fs.open(path, "wb") as f:
+                        f.write(data)
+            else:
                 with self._fs.open(path, "wb") as f:
                     f.write(data)
             with self._cache_lock:
@@ -129,17 +146,25 @@ class BundleStore:
         path = self._path_for(cid)
         cached = self._cache_get(cid)
         if cached is not None:
-            return cached
+            if content_id(cached) == cid:
+                return cached
+            self._cache_remove(cid)
         with self._content_lock(cid):
             cached = self._cache_get(cid)
             if cached is not None:
-                return cached
+                if content_id(cached) == cid:
+                    return cached
+                self._cache_remove(cid)
             if self._fs.exists(path):
                 with self._fs.open(path, "rb") as f:
                     data = f.read()
-                with self._cache_lock:
-                    self._cache_put(cid, data)
-                return data
+                if content_id(data) == cid:
+                    with self._cache_lock:
+                        self._cache_put(cid, data)
+                    return data
+                if not self._controller_address:
+                    raise ValueError(f"Hash mismatch for stored content {cid}: got {content_id(data)}")
+                self._fs.rm(path)
             data = self._fetch_from_controller(cid)
             self.write(data)
             return data
