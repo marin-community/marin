@@ -15,8 +15,10 @@ from rigging.timing import ExponentialBackoff, Timer
 
 from marin.inference.http_proxy import forwardable_response_headers
 from marin.inference.types import (
+    METADATA_REQUEST_SLOTS,
     WORKER_HEARTBEAT_SECONDS,
     InferenceRequest,
+    InferenceRequestKind,
     InferenceRequestProvider,
     InferenceResponse,
     LeasedInferenceRequest,
@@ -60,7 +62,9 @@ class InferenceWorker:
         if stop_event is None:
             stop_event = threading.Event()
         backoff = ExponentialBackoff() if backoff is None else backoff.copy()
-        in_flight: set[Future[LeasedInferenceResponse | None]] = set()
+        in_flight: dict[Future[LeasedInferenceResponse | None], InferenceRequestKind] = {}
+        limits = {InferenceRequestKind.METADATA: METADATA_REQUEST_SLOTS, InferenceRequestKind.GENERATION: max_in_flight}
+        total_slots = sum(limits.values())
         heartbeat = Timer()
         heartbeat_at = -WORKER_HEARTBEAT_SECONDS
         logger.info(
@@ -72,25 +76,32 @@ class InferenceWorker:
         )
         try:
             with (
-                httpx.Client(timeout=self._request_timeout_seconds) as client,
-                ThreadPoolExecutor(max_workers=max_in_flight, thread_name_prefix="inference-worker-request") as pool,
+                httpx.Client(
+                    timeout=self._request_timeout_seconds,
+                    limits=httpx.Limits(max_connections=total_slots, max_keepalive_connections=total_slots),
+                ) as client,
+                ThreadPoolExecutor(max_workers=total_slots, thread_name_prefix="inference-worker-request") as pool,
             ):
                 while not stop_event.is_set():
                     if heartbeat.elapsed_seconds() - heartbeat_at >= WORKER_HEARTBEAT_SECONDS:
                         self._broker.heartbeat(self._worker_id)
                         heartbeat_at = heartbeat.elapsed_seconds()
-                    available_slots = max_in_flight - len(in_flight)
-                    if available_slots:
+                    counts = Counter(in_flight.values())
+                    for kind, limit in limits.items():
+                        available_slots = limit - counts[kind]
+                        if not available_slots:
+                            continue
                         # `max_in_flight` counts individual HTTP requests; vLLM does its own continuous batching.
-                        leased_requests = self._broker.fetch_requests(max_items=available_slots)
-                        for leased_request in leased_requests:
-                            in_flight.add(pool.submit(self._forward_one, client, leased_request))
+                        leased_requests = self._broker.fetch_requests(max_items=available_slots, kind=kind)
+                        in_flight.update(
+                            (pool.submit(self._forward_one, client, request), kind) for request in leased_requests
+                        )
                         if leased_requests:
                             logger.info(
                                 "InferenceWorker fetched requests count=%d in_flight=%d/%d request_ids=%s",
                                 len(leased_requests),
                                 len(in_flight),
-                                max_in_flight,
+                                total_slots,
                                 format_request_ids(
                                     [leased_request.request.request_id for leased_request in leased_requests]
                                 ),
@@ -106,7 +117,7 @@ class InferenceWorker:
                         timeout=min(WORKER_HEARTBEAT_SECONDS, backoff.next_interval()),
                         return_when=FIRST_COMPLETED,
                     )
-                    in_flight.difference_update(done)
+                    in_flight = {future: kind for future, kind in in_flight.items() if future not in done}
                     if done:
                         responses = [response for future in done if (response := future.result()) is not None]
                         self._broker.submit_responses(responses)
@@ -114,7 +125,7 @@ class InferenceWorker:
                             "InferenceWorker submitted responses count=%d in_flight=%d/%d statuses=%s request_ids=%s",
                             len(responses),
                             len(in_flight),
-                            max_in_flight,
+                            total_slots,
                             dict(Counter(response.response.status_code for response in responses)),
                             format_request_ids([response.response.request_id for response in responses]),
                         )
