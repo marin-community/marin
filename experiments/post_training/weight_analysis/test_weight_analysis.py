@@ -183,6 +183,30 @@ def test_c8_violations_raise(tmp_path, grug_base):
         list(paired_blocks(bf16_export, base))
 
 
+def test_fp32_selection_bias_in_b_is_not_a_c8_violation(tmp_path, grug_base):
+    """Releases keep Grug's router bias in fp32, so B's bias need not be bf16-exact."""
+    base = dict(grug_base)
+    bias = "model.layers.0.mlp.router.bias"
+    base[bias] = base[bias] + np.float32(1e-5)
+    assert not np.array_equal(base[bias], base[bias].astype(ml_dtypes.bfloat16).astype(np.float32))
+    delta = random_delta(base, seed=3)
+    checkpoint = write({name: base[name] + delta[name] for name in base}, str(tmp_path / "ckpt"))
+    base_path = write(base, str(tmp_path / "base"))
+    pairs = list(paired_blocks(checkpoint, base_path))
+    np.testing.assert_array_equal(next(b.array for b, _ in pairs if b.name == bias), base[bias])
+    hybrid = str(tmp_path / "hybrid")
+    serving = write_serving_files(tmp_path / "release")
+    graft_checkpoint(
+        base_path,
+        checkpoint,
+        frozenset({Component.ATTENTION}),
+        hybrid,
+        serving_files_dir=serving,
+        shard_size_bytes=SHARD_BYTES,
+    )
+    np.testing.assert_array_equal(read_all(hybrid)[bias], base[bias])
+
+
 def test_mismatched_checkpoints_raise(tmp_path, grug_base):
     base = write(grug_base, str(tmp_path / "base"))
     missing = write(
