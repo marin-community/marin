@@ -9,6 +9,11 @@ For an ordinary feature or bug fix without a domain skill, implement under
 root and scoped repository instructions, then use `manage-pr` when the change
 is ready to publish. No general implementation skill is required.
 
+For PR preparation, `manage-pr` overlaps advisory review with affected tests
+and docs checks after formatting and the initial commit. Draft PR text while
+checks run, then collect all results and resolve findings before pushing or
+publishing. Reuse passing checks while their inputs remain unchanged.
+
 ## Changes and knowledge
 
 | Skill | Owns | Boundary |

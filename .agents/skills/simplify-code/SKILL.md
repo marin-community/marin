@@ -106,7 +106,11 @@ dependency, compatibility path, and public API:
 When edits are authorized, make the cleanup. Do not stop at a findings table
 while safe fixes remain.
 
-Run the narrow affected tests, then:
+For PR preparation, follow `manage-pr`'s validation schedule: finish formatting
+and the initial commit, then overlap advisory review with affected tests and
+docs checks. Carry forward passing checks whose inputs remain unchanged.
+
+For cleanup without PR preparation, run the narrow affected tests and:
 
 ```bash
 ./infra/pre-commit.py --changed-files --fix
@@ -114,6 +118,7 @@ Run the narrow affected tests, then:
 
 Run `./infra/pre-commit.py --review` with `--calling-agent` set to `claude` or
 `codex` to match the caller, only at the point required by the `manage-pr`
+workflow. Do not add a separate advisory pass before handing off to that
 workflow. Do not claim a clean pass while known findings remain.
 
 ## Report
