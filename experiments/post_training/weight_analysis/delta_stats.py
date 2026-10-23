@@ -11,7 +11,8 @@ all weights, per :class:`Component`, and per (layer, expert)
 Control C8: deltas are taken against the fp32 view of ``B``. A checkpoint must
 be stored in F32. ``B`` may be stored in BF16 (it is upcast on read) or in F32,
 but every F32 value must survive a bf16 round trip, since ``B`` is the upcast
-bf16 Stage 0 output. A checkpoint whose every tensor is bf16-representable is a
+bf16 Stage 0 output. The selection bias is exempt: HF releases keep Grug's router
+bias in fp32 in every precision mode, so B's copy is a true fp32 value. A checkpoint whose every tensor is bf16-representable is a
 bf16 export mislabelled as fp32, and raises.
 
 Deltas are ``checkpoint - B`` in fp32. Sterbenz's lemma makes the subtraction
@@ -109,7 +110,11 @@ def paired_blocks(checkpoint_path: str, base_path: str) -> Iterator[tuple[Block,
     every_tensor_bf16_exact = True
     for base_block, checkpoint_block in aligned(checkpoint_blocks(base), checkpoint_blocks(checkpoint)):
         base_array = base_block.array.astype(np.float32)
-        if base_block.array.dtype == np.float32 and not _is_bf16_exact(base_array):
+        if (
+            base_block.array.dtype == np.float32
+            and base_block.component is not Component.SELECTION_BIAS
+            and not _is_bf16_exact(base_array)
+        ):
             raise ValueError(f"{base_block.name!r} in {base_path} is not the fp32 upcast of a bf16 tensor (C8)")
         every_tensor_bf16_exact = every_tensor_bf16_exact and _is_bf16_exact(checkpoint_block.array)
         yield Block(base_block.name, base_block.component, base_block.expert, base_array), checkpoint_block

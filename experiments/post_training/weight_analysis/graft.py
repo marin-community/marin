@@ -13,7 +13,8 @@ safetensors checkpoint with its index plus B's config, generation config and
 tokenizer, so vLLM can serve it, casting to its serving dtype at load. Both
 inputs pass the C8 checks of
 :func:`~experiments.post_training.weight_analysis.delta_stats.paired_blocks`
-on the tensors read: θ in fp32, B bf16 or its exact fp32 upcast.
+on the tensors read: θ in fp32, B bf16 or its exact fp32 upcast, except the
+selection bias, which releases keep in fp32.
 """
 
 from collections.abc import Iterator
@@ -58,7 +59,8 @@ def _validated_plan(base: SafetensorsCheckpoint, checkpoint: SafetensorsCheckpoi
 def _base_tensor(base: SafetensorsCheckpoint, name: str) -> np.ndarray:
     stored = base.read(name)
     upcast = stored.astype(np.float32)
-    if stored.dtype == _FP32 and not np.array_equal(upcast, upcast.astype(_BF16).astype(np.float32)):
+    native_fp32 = component_of(name) is Component.SELECTION_BIAS
+    if stored.dtype == _FP32 and not native_fp32 and not np.array_equal(upcast, upcast.astype(_BF16).astype(np.float32)):
         raise ValueError(f"{name!r} in {base.path} is not the fp32 upcast of a bf16 tensor (C8)")
     return upcast
 
