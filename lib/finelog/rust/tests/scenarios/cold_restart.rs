@@ -5,10 +5,42 @@ use std::time::Duration;
 
 use crate::support::{
     assert_metadata_only_bootstrap, cached_data_objects, live_levels, live_objects,
-    localized_data_objects, register_v1, run_sql, seq_column, wait_for_cache_fill, write_row,
-    Cluster, Invariants, TABLE,
+    localized_data_objects, register_v1, retargeted_spec, run_sql, seq_column, wait_for_cache_fill,
+    write_row, Cluster, Invariants, TABLE,
 };
 use finelog::test_support::ObjectOp;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn migration_reads_cold_inputs_without_caching_them() {
+    let cluster = Cluster::new("migration_scan_sources");
+    let (store, faults) = cluster.open();
+    register_v1(&store).await;
+    for (worker, bytes) in [("w-1", 10), ("w-2", 20), ("w-3", 30)] {
+        write_row(&store, worker, bytes).await;
+    }
+    let state = cluster.states().load(TABLE).await.unwrap().unwrap();
+    let inputs = live_objects(&state.catalog);
+    for id in &inputs {
+        std::fs::remove_file(cluster.data_dir.join(id)).unwrap();
+    }
+    faults.clear_calls();
+    store
+        .register_versioned_table(TABLE, retargeted_spec(2))
+        .unwrap();
+    for _ in 0..4 {
+        store.maintain_namespace(TABLE, false).await.unwrap();
+        if store.spec_lifecycle(TABLE).unwrap().active_version() == 2 {
+            break;
+        }
+    }
+    assert_eq!(store.spec_lifecycle(TABLE).unwrap().active_version(), 2);
+    assert!(localized_data_objects(&faults).is_empty());
+    assert!(cached_data_objects(&cluster.data_dir).is_disjoint(&inputs));
+    let after = Invariants::new(&cluster.remote_dir).check(&store).await;
+    assert_eq!(after.seqs, vec![1, 2, 3]);
+    store.shutdown(Duration::from_secs(1)).await;
+    cluster.cleanup();
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn compaction_reads_cold_and_mixed_inputs_without_caching_them() {

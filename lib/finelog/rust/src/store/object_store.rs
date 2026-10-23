@@ -63,6 +63,7 @@ pub struct ObjectReference {
 }
 
 /// A cached file or the backing object's scan location.
+#[derive(Clone)]
 pub enum ScanSource {
     Local(PathBuf),
     Remote(String),

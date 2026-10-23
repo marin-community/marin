@@ -29,16 +29,17 @@ use tokio::sync::RwLock;
 use crate::errors::StatsError;
 use crate::partition_policy::{PartitionedBatches, PhysicalPartitionPolicy, SegmentPartition};
 use crate::proto::finelog::stats::{MigrationPhase, SourceLayout, TableMigrationStatus};
+use crate::query::file_scan::{open_cached_parquet, open_parquet};
 use crate::store::catalog::{
     Catalog, ObjectSegmentRecord, SpecLifecycle, MIGRATION_SOURCE_ID_SEPARATOR,
 };
 use crate::store::compaction::config::CompactionJob;
 use crate::store::compaction::executor::{
-    read_segment_projected, run_job_with_partition_policy, run_merge_thread, CompactionExecution,
-    CompactionLayout, OutputPolicy,
+    run_job_with_partition_policy, run_merge_thread, CompactionExecution, CompactionLayout,
+    OutputPolicy, READ_BATCH_ROWS,
 };
 use crate::store::compaction::staging::StagingDir;
-use crate::store::object_store::OBJECTS_PREFIX;
+use crate::store::object_store::{ObjectReference, ScanSource, OBJECTS_PREFIX};
 use crate::store::table::controller::TableController;
 use crate::store::table::flush::partition_object_batch;
 use crate::store::table::index_artifacts::publish_segment_artifacts;
@@ -49,7 +50,7 @@ use crate::store::types::{segment_to_row, LocalSegment, SegmentLocation, Segment
 
 /// Floor for the batch's compressed-input byte cap; the working cap is the
 /// larger of this and a quarter of the merge's decoded-bytes budget, so batch
-/// assembly does not localize far more than one job can consume.
+/// assembly does not select far more than one job can consume.
 const MIN_BATCH_SOURCE_BYTES: i64 = 64 << 20;
 
 /// Directory fan-out for a rewrite's staged partition outputs. The uploaded
@@ -362,7 +363,17 @@ async fn backfill(
             if covered.contains(&source_id) {
                 continue;
             }
-            let Some(localized) = migration.controller.localize_source(row, record).await? else {
+            let source = match record {
+                Some(record) => Some(MigrationInput::Object(ObjectReference::try_from(
+                    &record.source,
+                )?)),
+                None => migration
+                    .controller
+                    .legacy_source(row)
+                    .await?
+                    .map(MigrationInput::Legacy),
+            };
+            let Some(source) = source else {
                 // The row's bytes exist neither locally nor in the archive: no
                 // reader can serve them and no source can supply them. Drop the
                 // row so the restated universe stops owing rows nothing holds.
@@ -378,7 +389,7 @@ async fn backfill(
             batch_bytes += row.byte_size;
             batch.push(BatchSource {
                 row: row.clone(),
-                localized,
+                source,
                 source_id,
             });
         }
@@ -446,11 +457,17 @@ async fn backfill(
     Ok(true)
 }
 
-/// One localized, metadata-identified, uncovered source awaiting rewrite.
+/// One metadata-identified, uncovered source awaiting rewrite.
 struct BatchSource {
     row: SegmentRow,
-    localized: PathBuf,
+    source: MigrationInput,
     source_id: String,
+}
+
+#[derive(Clone)]
+enum MigrationInput {
+    Object(ObjectReference),
+    Legacy(ScanSource),
 }
 
 /// Deterministic source groups for one migration target.
@@ -518,18 +535,12 @@ async fn rewrite_batch(
     target_layout: Option<&SourceLayout>,
     to_version: u64,
 ) -> Result<usize, StatsError> {
-    let by_localized: HashMap<String, &BatchSource> = batch
+    let by_path: HashMap<String, &BatchSource> = batch
         .iter()
-        .map(|source| (source.localized.to_string_lossy().into_owned(), source))
+        .map(|source| (source.row.path.clone(), source))
         .collect();
     let job = CompactionJob {
-        inputs: batch
-            .iter()
-            .map(|source| SegmentRow {
-                path: source.localized.to_string_lossy().into_owned(),
-                ..source.row.clone()
-            })
-            .collect(),
+        inputs: batch.iter().map(|source| source.row.clone()).collect(),
         output_level: MIGRATION_OUTPUT_LEVEL,
         output_min_seq: batch
             .iter()
@@ -554,11 +565,28 @@ async fn rewrite_batch(
         .iter()
         .map(|source| {
             (
-                source.localized.to_string_lossy().into_owned(),
+                source.row.path.clone(),
                 migration.segments.key_bounds(&source.row.path),
             )
         })
         .collect();
+    let inputs: HashMap<_, _> = batch
+        .iter()
+        .map(|source| {
+            (
+                source.row.path.clone(),
+                (source.source.clone(), source.row.byte_size as u64),
+            )
+        })
+        .collect();
+    let objects = Arc::clone(
+        migration
+            .controller
+            .object_store()
+            .expect("migration has an object store"),
+    );
+    let visibility = Arc::clone(migration.query_visibility);
+    let runtime = tokio::runtime::Handle::current();
     let staging_dir = staging.path().to_path_buf();
     // One dedicated thread at normal priority: the single thread caps the
     // rewrite at one core, which is the pacing, while a fair share of that
@@ -584,7 +612,25 @@ async fn rewrite_batch(
                 output: OutputPolicy::AlwaysRewrite,
             },
             move |path| bounds_by_path.get(path).cloned().unwrap_or((None, None)),
-            |path| read_segment_projected(Path::new(path), None),
+            |path| {
+                let (source, size) = inputs.get(path).ok_or_else(|| {
+                    StatsError::Internal(format!("migration reader lost input {path}"))
+                })?;
+                runtime.block_on(async {
+                    let input = match source {
+                        MigrationInput::Object(reference) => {
+                            open_cached_parquet(objects.as_ref(), reference, &visibility).await?
+                        }
+                        MigrationInput::Legacy(ScanSource::Local(path)) => {
+                            open_parquet(&path.to_string_lossy(), *size).await?
+                        }
+                        MigrationInput::Legacy(ScanSource::Remote(url)) => {
+                            open_parquet(url, *size).await?
+                        }
+                    };
+                    input.read_batches(READ_BATCH_ROWS, None).await
+                })
+            },
         )
     })
     .await??;
@@ -594,7 +640,7 @@ async fn rewrite_batch(
         .removed
         .iter()
         .map(|path| {
-            by_localized.get(path.as_str()).copied().ok_or_else(|| {
+            by_path.get(path.as_str()).copied().ok_or_else(|| {
                 StatsError::Internal(format!("migration job consumed unknown input {path:?}"))
             })
         })
@@ -622,8 +668,7 @@ async fn rewrite_batch(
             .write_staged_object(OBJECTS_PREFIX, "parquet", &staged_path)
             .await?;
         let (references, local) =
-            publish_segment_artifacts(migration.controller, migration.table, &staged_path, &stored)
-                .await?;
+            publish_segment_artifacts(migration.controller, migration.table, &staged_path).await?;
         let segment = LocalSegment {
             path: stored.path.to_string_lossy().into_owned(),
             size_bytes: stored.byte_size,

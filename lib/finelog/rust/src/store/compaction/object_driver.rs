@@ -21,7 +21,7 @@ use tokio::sync::RwLock;
 
 use crate::errors::StatsError;
 use crate::indices::SegmentIndexConfig;
-use crate::query::file_scan::read_parquet_batches;
+use crate::query::file_scan::open_cached_parquet;
 use crate::store::catalog::Catalog;
 use crate::store::compaction::config::{CompactionConfig, CompactionJob};
 use crate::store::compaction::executor::{
@@ -30,7 +30,7 @@ use crate::store::compaction::executor::{
 };
 use crate::store::compaction::planner::{plan, plan_forced_l0, UnpartitionedRunPolicy};
 use crate::store::compaction::staging::StagingDir;
-use crate::store::object_store::{CacheMode, ObjectReference, ScanSource, OBJECTS_PREFIX};
+use crate::store::object_store::{ObjectReference, OBJECTS_PREFIX};
 use crate::store::table::controller::{MaintenanceLease, TableController};
 use crate::store::table::index_artifacts::publish_segment_artifacts;
 use crate::store::table::segment_format::SegmentFormat;
@@ -236,24 +236,14 @@ async fn run(
                     StatsError::Internal(format!("compaction reader lost input {path}"))
                 })?;
                 runtime.block_on(async {
-                    let guard = visibility.read().await;
-                    match objects.scan_source(reference, CacheMode::Disabled).await? {
-                        ScanSource::Local(path) => {
-                            cached_inputs += 1;
-                            read_parquet_batches(
-                                &path.to_string_lossy(),
-                                reference.version.byte_size,
-                                READ_BATCH_ROWS,
-                            )
-                            .await
-                        }
-                        ScanSource::Remote(url) => {
-                            drop(guard);
-                            remote_inputs += 1;
-                            read_parquet_batches(&url, reference.version.byte_size, READ_BATCH_ROWS)
-                                .await
-                        }
+                    let input =
+                        open_cached_parquet(objects.as_ref(), reference, &visibility).await?;
+                    if input.is_cached() {
+                        cached_inputs += 1;
+                    } else {
+                        remote_inputs += 1;
                     }
+                    input.read_batches(READ_BATCH_ROWS, None).await
                 })
             },
         )?;
@@ -290,13 +280,9 @@ async fn run(
             .controller
             .write_staged_object(OBJECTS_PREFIX, "parquet", &staged_path)
             .await?;
-        let (references, local) = publish_segment_artifacts(
-            compaction.controller,
-            compaction.table,
-            &staged_path,
-            &stored,
-        )
-        .await?;
+        let (references, local) =
+            publish_segment_artifacts(compaction.controller, compaction.table, &staged_path)
+                .await?;
         let segment = LocalSegment {
             path: stored.path.to_string_lossy().into_owned(),
             size_bytes: stored.byte_size,
