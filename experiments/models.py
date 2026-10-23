@@ -278,12 +278,6 @@ qwen3_8b = download_model(
 )
 
 # The Smartie RL run 2026.10.15.32 at step 14, as a MarinSkyRL HF export (GrugMoeForCausalLM, ~134 GB).
-marin_snowball_67b_a2b_v0_1 = download_model(
-    ModelConfig(
-        hf_repo_id="open-athena/Marin-Snowball-67B-A2B-v0.1",
-        hf_revision="adc0078a19a4383bc998fcdb43867b3360baf5f3",
-    )
-)
 
 qwen3_0_6b_base = download_model(
     ModelConfig(
