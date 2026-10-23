@@ -17,12 +17,15 @@ def apply_response_loss_mask(batch: TrainingInputBatch, keep: torch.Tensor) -> d
     before = batch["loss_mask"]
     if keep.dtype != torch.bool or keep.shape != before.shape or keep.device != before.device:
         raise ValueError("Response loss mask must be boolean and match loss_mask shape and device")
-    teacher_weights = batch.get("distillation_loss_weights")
-    if teacher_weights is not None and teacher_weights.shape != keep.shape:
-        raise ValueError("Teacher loss weights must align with the response loss mask")
+    for name in ("distillation_loss_weights", "ftpo_weights"):
+        weights = batch.get(name)
+        if weights is not None and (weights.shape != keep.shape or weights.device != keep.device):
+            raise ValueError(f"{name} must align with the response loss mask")
     batch["loss_mask"] = before * keep
-    if teacher_weights is not None:
-        batch["distillation_loss_weights"] = teacher_weights * keep
+    for name in ("distillation_loss_weights", "ftpo_weights"):
+        weights = batch.get(name)
+        if weights is not None:
+            batch[name] = weights * keep
     return {
         "response_mask/tokens_before": float((before > 0).sum()),
         "response_mask/tokens_after": float((batch["loss_mask"] > 0).sum()),

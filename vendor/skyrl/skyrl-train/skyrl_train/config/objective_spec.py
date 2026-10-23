@@ -209,6 +209,8 @@ def rollout_logprobs_required(algorithm: DictConfig, *, loss_spec: LossSpec | No
 def validate_dpo(cfg: DictConfig) -> None:
     """Reject configurations that would break chosen/rejected pair adjacency or the frozen reference."""
     algorithm = cfg.trainer.algorithm
+    if algorithm.get("excluded_response_token_ids"):
+        raise ValueError("dpo does not support excluded_response_token_ids: exclusions can empty one side of a pair")
     beta = float(algorithm.dpo.beta)
     label_smoothing = float(algorithm.dpo.label_smoothing)
     if not math.isfinite(beta) or beta <= 0:

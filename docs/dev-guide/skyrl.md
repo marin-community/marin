@@ -124,3 +124,5 @@ token offsets before constructing the mask. A broadcastable mask is rejected.
 Masking keeps token IDs and attention context intact. It removes direct loss
 terms but does not freeze embedding rows, prevent gradients through context,
 or guarantee that learned behavioral changes remain confined to those spans.
+
+Token exclusions are rejected for DPO because they can empty one side of a preference pair. The generic mask also intersects auxiliary FTPO weights.
