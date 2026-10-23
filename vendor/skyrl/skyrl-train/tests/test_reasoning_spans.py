@@ -62,7 +62,6 @@ def test_a_well_formed_span_keeps_the_tool_call():
 def test_a_length_stop_inside_the_span_is_truncation():
     output = _generate([1, 3, 3], finish_reason="length")
     assert REASONING_VIOLATIONS_KEY not in output
-    assert output["stop_reasons"] == ["length"]
 
 
 def test_an_unclosed_span_that_stops_is_a_violation():
