@@ -27,7 +27,6 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
-    HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
@@ -36,6 +35,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_DISK,
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
+    HERO_RACK_GPUS,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
@@ -78,7 +78,7 @@ def build_diagnostic_run(
     latent_dim: int | None = None,
     max_seq_len: int | None = None,
     context_axis_size: int = 1,
-    expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
+    expert_axis_size: int = HERO_RACK_GPUS,
     balance_attention_rows: bool = False,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
@@ -511,7 +511,7 @@ def build_diagnostic_run(
     show_default=True,
     help="Context-parallel axis width. Partitions sequence positions across devices.",
 )
-@click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_EP_EXPERT_AXIS_SIZE, show_default=True)
+@click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_RACK_GPUS, show_default=True)
 @click.option(
     "--balance-attention-rows/--no-balance-attention-rows",
     default=False,

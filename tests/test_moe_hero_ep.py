@@ -976,7 +976,7 @@ def test_eval_every_adds_the_held_out_suites_as_dependencies():
     assert off_config.eval is None
     assert on_config.eval is not None
     assert on_config.eval.steps_per_eval == 50
-    assert on_config.eval.eval_batch_size == launch.HERO_EP_EXPERT_AXIS_SIZE
+    assert on_config.eval.eval_batch_size == launch.HERO_RACK_GPUS
     assert on_config.eval.dropless_eval is True
 
 

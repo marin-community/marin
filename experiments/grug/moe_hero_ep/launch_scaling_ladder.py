@@ -69,7 +69,6 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
     HERO_BALANCE_ATTENTION_ROWS,
     HERO_CONTEXT_AXIS_SIZE,
-    HERO_EP_EXPERT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_INITIAL_SEQ_LEN,
@@ -79,6 +78,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_NODE_RAM,
     HERO_PROCESSES_PER_TASK,
     HERO_QB_HIST_BINS,
+    HERO_RACK_GPUS,
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_TOKENS_PER_RACK,
     HERO_WATCH_INTERVAL,
@@ -231,7 +231,7 @@ def build_ladder_run(
     length from their start. Pass both to build another history.
 
     ``context_axis_size`` splits each sequence over that many devices, and each rack's expert axis shrinks to
-    ``HERO_EP_EXPERT_AXIS_SIZE // context_axis_size`` to keep the rack full. ``None`` selects the checked-in
+    ``HERO_RACK_GPUS // context_axis_size`` to keep the rack full. ``None`` selects the checked-in
     ``HERO_CONTEXT_AXIS_SIZE`` (with ``HERO_BALANCE_ATTENTION_ROWS``) for d6144, and no context parallelism for
     the narrow rungs.
     """
@@ -265,7 +265,7 @@ def build_ladder_run(
     global_tokens_per_step = HERO_TOKENS_PER_RACK * dp_racks
     batch_size = hero_rack_batch_size(seq_len) * dp_racks
     batch_axes = validated_batch_axis_size(
-        device_count=HERO_EP_EXPERT_AXIS_SIZE * dp_racks,
+        device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
         batch_size=batch_size,
         context_axis_size=context_axis_size,

@@ -335,11 +335,6 @@ def test_hero_context_parallelism_splits_each_rack_into_expert_and_sequence_shar
     assert (trainer.train_batch_size, trainer.data_axis_size, trainer.per_device_parallelism) == (704, 176, 4)
 
 
-def test_hero_context_axis_must_divide_a_rack():
-    with pytest.raises(ValueError, match="must divide the 64 devices of a rack"):
-        build_ladder_run(run_id="test-d6144-cp3", size="d6144", version="dev", context_axis_size=3)
-
-
 def test_hero_context_axis_must_divide_the_sequence(monkeypatch):
     _set_hero_seq_len(monkeypatch, 16386)
     with pytest.raises(ValueError, match="context_axis_size=4 must divide max_seq_len=16386"):

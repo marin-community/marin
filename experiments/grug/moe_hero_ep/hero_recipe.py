@@ -38,10 +38,10 @@ HERO_INITIAL_SEQ_LEN = 4096
 HERO_TOKENS_PER_RACK = 1024 * HERO_INITIAL_SEQ_LEN
 HERO_EP_NODES = 16
 HERO_GPUS_PER_NODE = 4
-# One rack's devices, which is the expert axis without context parallelism.
-HERO_EP_EXPERT_AXIS_SIZE = HERO_EP_NODES * HERO_GPUS_PER_NODE
-# The hero's context-parallel degree. Each rack splits into HERO_EP_EXPERT_AXIS_SIZE // HERO_CONTEXT_AXIS_SIZE
-# expert shards of HERO_CONTEXT_AXIS_SIZE sequence shards each (see `hero_expert_axis_size`).
+# One rack's GPUs. Without context parallelism they all form the expert axis.
+HERO_RACK_GPUS = HERO_EP_NODES * HERO_GPUS_PER_NODE
+# The hero's context-parallel degree. Each rack splits into HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE expert
+# shards of HERO_CONTEXT_AXIS_SIZE sequence shards each (see `hero_expert_axis_size`).
 HERO_CONTEXT_AXIS_SIZE = 1
 # Deal rows to batch shards by attention cost (`GrugTrainerConfig.balance_attention_rows`).
 HERO_BALANCE_ATTENTION_ROWS = False
@@ -80,11 +80,9 @@ def hero_rack_batch_size(seq_len: int) -> int:
 
 def hero_expert_axis_size(context_axis_size: int) -> int:
     """The expert axis that fills one rack beside ``context_axis_size`` sequence shards."""
-    if context_axis_size <= 0 or HERO_EP_EXPERT_AXIS_SIZE % context_axis_size:
-        raise ValueError(
-            f"context_axis_size={context_axis_size} must divide the {HERO_EP_EXPERT_AXIS_SIZE} devices of a rack"
-        )
-    return HERO_EP_EXPERT_AXIS_SIZE // context_axis_size
+    if context_axis_size <= 0 or HERO_RACK_GPUS % context_axis_size:
+        raise ValueError(f"context_axis_size={context_axis_size} must divide the {HERO_RACK_GPUS} devices of a rack")
+    return HERO_RACK_GPUS // context_axis_size
 
 
 def validated_batch_axis_size(
@@ -204,7 +202,7 @@ def hero_trainer_config(
         watch=watch,
         progress_watchdog=progress_watchdog,
         # Context shards do not hold separate batch rows, so the batch count excludes them. Without context
-        # parallelism the default mesh keeps the trainer exactly as it has always been.
+        # parallelism every device is a batch shard, which the default mesh already counts.
         mesh=grug_trainer_mesh_config(context_axis_size) if context_axis_size > 1 else MeshConfig(),
         use_explicit_mesh_axes=True,
         require_accelerator=True,
