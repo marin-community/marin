@@ -11,6 +11,7 @@ from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import NoGrader
 
 REASONING_VIOLATION_METADATA_KEY = "reasoning_violation"
+REASONING_VIOLATION_TOKEN_METADATA_KEY = "reasoning_violation_token"
 REASONING_VIOLATIONS_DIAGNOSTIC = "reasoning_violations"
 
 
@@ -25,6 +26,16 @@ class ReasoningSpanPolicy(StrEnum):
     REJECT = "reject"
 
 
+class ReasoningPenaltyTarget(StrEnum):
+    """Where PENALIZE charges its penalty: the rollout's reward, or the token where the span goes wrong.
+
+    A token penalty is added to the advantages after normalization, so no estimator rescales it.
+    """
+
+    ROLLOUT = "rollout"
+    MARKER = "marker"
+
+
 @dataclass(frozen=True)
 class ReasoningSpanSettings:
     """A default reasoning-span policy with per-agent overrides for Nemotron Ultra tasks."""
@@ -32,11 +43,12 @@ class ReasoningSpanSettings:
     policy: ReasoningSpanPolicy
     penalty: float = 0.0
     agent_policies: Mapping[str, ReasoningSpanPolicy] = field(default_factory=dict)
+    penalty_target: ReasoningPenaltyTarget = ReasoningPenaltyTarget.ROLLOUT
 
     def __post_init__(self):
-        penalized = ReasoningSpanPolicy.PENALIZE in {self.policy, *self.agent_policies.values()}
-        if penalized != (self.penalty > 0):
-            raise ValueError("reasoning_spans.penalty must be positive exactly when some policy is penalize")
+        # A recipe that drops "penalize" keeps the inherited penalty, which then goes unused.
+        if self.penalizes and self.penalty <= 0:
+            raise ValueError("reasoning_spans.penalty must be positive when a policy is penalize")
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> "ReasoningSpanSettings":
@@ -44,7 +56,12 @@ class ReasoningSpanSettings:
             ReasoningSpanPolicy(config["policy"]),
             float(config["penalty"]),
             {agent: ReasoningSpanPolicy(policy) for agent, policy in config["agent_policies"].items()},
+            ReasoningPenaltyTarget(config["penalty_target"]),
         )
+
+    @property
+    def penalizes(self) -> bool:
+        return ReasoningSpanPolicy.PENALIZE in {self.policy, *self.agent_policies.values()}
 
     def policy_for(self, agent: str | None) -> ReasoningSpanPolicy:
         return self.policy if agent is None else self.agent_policies.get(agent, self.policy)
@@ -55,6 +72,7 @@ class TurnReasoningViolation:
     conversation: int
     turn: int
     violation: str
+    token: int | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +82,7 @@ class TrainingTransition:
     reward: float | None = None
     token_rewards: tuple[float, ...] | None = None
     token_credit: tuple[float, ...] | None = None
+    reasoning_span_penalties: tuple[float, ...] | None = None
     reward_components: dict[str, float] = field(default_factory=dict)
     grade: GradeResult | None = None
     task_grade: GradeResult | None = None
@@ -150,7 +169,7 @@ def training_rollout(result: GradedRollout, spec: TaskRolloutSpec) -> TrainingRo
 
 def _reasoning_violations(rollout: TrainingRollout) -> list[TurnReasoningViolation]:
     return [
-        TurnReasoningViolation(index, turn, violation)
+        TurnReasoningViolation(index, turn, violation, step.turn.metadata.get(REASONING_VIOLATION_TOKEN_METADATA_KEY))
         for index, conversation in enumerate(rollout.conversations)
         for turn, step in enumerate(conversation.steps)
         if (violation := step.turn.metadata.get(REASONING_VIOLATION_METADATA_KEY)) is not None
@@ -197,3 +216,36 @@ def penalize_malformed_reasoning(rollout: TrainingRollout, penalty: float) -> Tr
         },
     )
     return replace(rollout, grade=grade, reasoning_span_penalty=penalty)
+
+
+def penalize_malformed_reasoning_tokens(rollout: TrainingRollout, penalty: float) -> TrainingRollout:
+    """Charge ``penalty`` to the token where each malformed reasoning span goes wrong.
+
+    Finalization adds it to the advantages after normalization, as it does loop credit. Falls back to
+    ``penalize_malformed_reasoning`` when a violation has no token in the optimized conversation, as with
+    literal-text markers or an earlier conversation.
+    """
+    violations = _reasoning_violations(rollout)
+    if not violations or rollout.grade.reward is None:
+        return rollout
+    optimized = len(rollout.conversations) - 1
+    if any(violation.conversation != optimized or violation.token is None for violation in violations):
+        return penalize_malformed_reasoning(rollout, penalty)
+    steps = list(rollout.steps)
+    for violation in violations:
+        assert violation.token is not None
+        step = steps[violation.turn]
+        penalties = [0.0] * len(step.turn.response_token_ids)
+        penalties[violation.token] = penalty
+        steps[violation.turn] = replace(
+            step, transition=replace(step.transition, reasoning_span_penalties=tuple(penalties))
+        )
+    grade = replace(
+        rollout.grade,
+        diagnostics={
+            **rollout.grade.diagnostics,
+            REASONING_VIOLATIONS_DIAGNOSTIC: [asdict(violation) for violation in violations],
+            "reasoning_span_token_penalty": penalty,
+        },
+    )
+    return replace(rollout, grade=grade, steps=tuple(steps))

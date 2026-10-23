@@ -25,9 +25,11 @@ from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.config.query_bias import resolve_grug_query_bias_update
 from skyrl_train.config.weight_sync_pause import resolve_weight_sync_pause_policy
 from skyrl_train.config.behavior_logprobs import configure_behavior_logprob_sampling
+from skyrl_train.config.ftpo import ftpo_config
 from skyrl_train.config.mismatch_probe import validate_mismatch_probe_config
 from skyrl_train.config.objective_spec import rollout_logprobs_required, validate_objective
 from skyrl_train.debug_mode import apply_debug_mode
+from skyrl_train.rollouts.training_record import ReasoningPenaltyTarget, ReasoningSpanSettings
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import parse_trajectory_reward_shaping_config
 from skyrl_train.trajectory_runners.trajectory_retention_config import parse_trajectory_retention_config
 from skyrl_train.numa_policy import NUMA_AFFINITY_ENV
@@ -665,6 +667,18 @@ def validate_generator_cfg(cfg: DictConfig):
 
     parse_trajectory_reward_shaping_config(cfg.generator.get("trajectory_reward_shaping"))
     parse_trajectory_retention_config(cfg.generator.get("trajectory_retention"))
+    reasoning_spans = ReasoningSpanSettings.from_config(cfg.generator.reasoning_spans)
+    ftpo = ftpo_config(cfg.trainer.algorithm)
+    if (
+        reasoning_spans.penalizes
+        and reasoning_spans.penalty_target == ReasoningPenaltyTarget.MARKER
+        and ftpo is not None
+        and ftpo.boundary.uses_verified_boundaries
+    ):
+        raise ValueError(
+            "generator.reasoning_spans.penalty_target=marker adds per-token advantages, which closure-repair "
+            "training does not support; use penalty_target=rollout"
+        )
 
     if cfg.generator.max_turns == 1:
         assert cfg.generator.max_input_length == cfg.trainer.max_prompt_length, (

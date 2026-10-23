@@ -63,6 +63,7 @@ from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
     DirectModelClient,
+    REASONING_VIOLATION_TOKENS_KEY,
     REASONING_VIOLATIONS_KEY,
     GenerationBudgetExceededError,
     ModelClient,
@@ -75,10 +76,13 @@ from skyrl_train.rollouts.task_projections import (
 )
 from skyrl_train.rollouts.training_record import (
     REASONING_VIOLATION_METADATA_KEY,
+    REASONING_VIOLATION_TOKEN_METADATA_KEY,
+    ReasoningPenaltyTarget,
     ReasoningSpanPolicy,
     ReasoningSpanSettings,
     TrainingRollout,
     penalize_malformed_reasoning,
+    penalize_malformed_reasoning_tokens,
     reject_malformed_reasoning,
     training_rollout,
 )
@@ -216,6 +220,7 @@ async def _model_turn(
             },
             "generation_token_budget": (output.get("generation_token_budgets") or [None])[0],
             REASONING_VIOLATION_METADATA_KEY: (output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
+            REASONING_VIOLATION_TOKEN_METADATA_KEY: (output.get(REASONING_VIOLATION_TOKENS_KEY) or [None])[0],
         },
     )
 
@@ -545,8 +550,13 @@ class TaskRolloutWorker:
             )
             if phase == "train":
                 # Eval rewards stay unpenalized.
+                penalize = (
+                    penalize_malformed_reasoning_tokens
+                    if self.reasoning_spans.penalty_target == ReasoningPenaltyTarget.MARKER
+                    else penalize_malformed_reasoning
+                )
                 rollouts = [
-                    penalize_malformed_reasoning(rollout, self.reasoning_spans.penalty)
+                    penalize(rollout, self.reasoning_spans.penalty)
                     if policy == ReasoningSpanPolicy.PENALIZE
                     else rollout
                     for rollout, policy in zip(rollouts, span_policies, strict=True)

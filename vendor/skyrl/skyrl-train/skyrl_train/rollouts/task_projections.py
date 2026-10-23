@@ -151,6 +151,17 @@ def _rollout_rewards(rollout: TrainingRollout) -> RewardResult:
     )
 
 
+def _reasoning_span_token_penalties(rollout: TrainingRollout) -> list[float] | None:
+    if all(step.transition.reasoning_span_penalties is None for step in rollout.steps):
+        return None
+    row = [0.0] * len(rollout.response_token_ids)
+    for step in rollout.steps:
+        if step.transition.reasoning_span_penalties is not None:
+            start = step.response_end + 1 - len(step.turn.response_token_ids)
+            row[start : step.response_end + 1] = step.transition.reasoning_span_penalties
+    return row
+
+
 def _student_topk(rollout: TrainingRollout) -> AlignedStudentTopK | None:
     candidates = [step.turn.metadata.get("student_topk_indices") for step in rollout.steps]
     scores = [step.turn.metadata.get("behavior_topk_logprobs") for step in rollout.steps]
@@ -358,6 +369,12 @@ def _training_batch(
     _attach_reward_channels(batch, decisions)
     if any(rollout.reasoning_span_penalty for rollout in rollouts):
         batch["reasoning_span_penalties"] = [rollout.reasoning_span_penalty for rollout in rollouts]
+    token_penalties = [_reasoning_span_token_penalties(rollout) for rollout in rollouts]
+    if any(row is not None for row in token_penalties):
+        batch["reasoning_span_token_penalties"] = [
+            [0.0] * len(response) if row is None else row
+            for row, response in zip(token_penalties, responses, strict=True)
+        ]
     _attach_failure_channels(batch, decisions)
     _attach_student_topk(batch, rollouts)
     _attach_routed_experts(batch, rollouts)

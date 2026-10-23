@@ -3,7 +3,8 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
-from collections.abc import Awaitable, Callable
+from enum import StrEnum
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
@@ -50,6 +51,14 @@ _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 REASONING_VIOLATIONS_KEY = "reasoning_violations"
 
+REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
+
+
+class _SpanState(StrEnum):
+    BEFORE = "before"
+    INSIDE = "inside"
+    AFTER = "after"
+
 
 class ModelClientOutput(InferenceEngineOutput):
     """Normalized model output with explicit token provenance."""
@@ -57,6 +66,7 @@ class ModelClientOutput(InferenceEngineOutput):
     token_provenance: TokenProvenance
     generation_token_budgets: NotRequired[list[int | None]]
     reasoning_violations: NotRequired[list[ReasoningViolation | None]]
+    reasoning_violation_tokens: NotRequired[list[int | None]]
 
 
 class ModelClient(Protocol):
@@ -123,6 +133,7 @@ class _ChatResult:
     routed_experts: np.ndarray | None = None
     policy_steps: list[int] | None = None
     reasoning_violation: ReasoningViolation | None = None
+    reasoning_violation_token: int | None = None
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -150,6 +161,7 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
     )
     if any(result.reasoning_violation is not None for result in results):
         output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
+        output[REASONING_VIOLATION_TOKENS_KEY] = [result.reasoning_violation_token for result in results]
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
         output["behavior_topk_logprobs"] = selected_scores
@@ -216,6 +228,37 @@ def _reasoning_violation(decoded: str, stop_reason: str) -> ReasoningViolation |
         # Truncation, not a format error: the turn has no answer and keeps the length stop's handling.
         return None
     return violation
+
+
+def _reasoning_marker_tokens(tokenizer: Any) -> dict[int, bool]:
+    """Map each reasoning marker that is one token to whether it opens a span."""
+    markers = {}
+    for opening, closing in REASONING_DELIMITERS:
+        for marker, opens in ((opening, True), (closing, False)):
+            token_ids = tokenizer.encode(marker, add_special_tokens=False)
+            if len(token_ids) == 1:
+                markers[token_ids[0]] = opens
+    return markers
+
+
+def _reasoning_violation_token(response_ids: Sequence[int], markers: Mapping[int, bool]) -> int | None:
+    """Index of the first second-opening or stray-closing marker, or the last token of an unclosed span.
+
+    ``None`` when the one-token markers are well formed, i.e. the violation is in literal marker text.
+    """
+    state = _SpanState.BEFORE
+    for index, token in enumerate(response_ids):
+        opens = markers.get(token)
+        if opens is None:
+            continue
+        if opens and state == _SpanState.BEFORE:
+            state = _SpanState.INSIDE
+        elif not opens and state != _SpanState.AFTER:
+            # A closing marker first closes a span that the chat template opened in the prompt.
+            state = _SpanState.AFTER
+        else:
+            return index
+    return len(response_ids) - 1 if state == _SpanState.INSIDE else None
 
 
 class DirectModelClient:
@@ -401,6 +444,11 @@ class DirectModelClient:
                 if not message.get("tool_calls"):
                     message = {**message, "content": text}
             reasoning_violation = _reasoning_violation(decoded, stop_reason)
+            reasoning_violation_token = (
+                None
+                if reasoning_violation is None
+                else _reasoning_violation_token(response_ids, _reasoning_marker_tokens(tokenizer))
+            )
             logprob_items = (choice.get("logprobs") or {}).get("content")
             response_logprobs = (
                 [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
@@ -425,6 +473,7 @@ class DirectModelClient:
                 _choice_routed_experts(choice, prompt_ids, response_ids),
                 choice.get(CHOICE_POLICY_STEPS_KEY),
                 reasoning_violation,
+                reasoning_violation_token,
             )
 
         results = await asyncio.gather(

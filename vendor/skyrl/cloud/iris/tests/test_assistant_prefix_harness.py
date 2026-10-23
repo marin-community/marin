@@ -64,7 +64,7 @@ def task_inputs():
             "max_turns": 2,
             "max_input_length": 100,
             "apply_overlong_filtering": False,
-            "reasoning_spans": {"policy": "ignore", "penalty": 0.0, "agent_policies": {}},
+            "reasoning_spans": {"policy": "ignore", "penalty": 0.0, "agent_policies": {}, "penalty_target": "rollout"},
             "sampling_params": {
                 "max_generate_length": 10,
                 "temperature": 1.0,

@@ -476,10 +476,19 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
 
 
 def apply_reasoning_span_penalties(output: TrajectoryBatch) -> None:
-    """Subtract each trajectory's reasoning-span penalty from its optimization reward, like the length penalties.
+    """Apply the reasoning-span penalties that the projection recorded.
 
-    The penalty lands on the trajectory's final row and leaves ``unshaped_rewards`` unchanged.
+    A rollout penalty comes off the trajectory's optimization reward like the length penalties, at its final
+    row, and leaves ``unshaped_rewards`` unchanged. Token penalties join the loop credit, which the trainer adds
+    to the advantages after normalization.
     """
+    token_penalties = output.pop("reasoning_span_token_penalties", None)
+    if token_penalties is not None:
+        loop_advantages = output.get("loop_advantages") or [[0.0] * len(response) for response in output["response_ids"]]
+        output["loop_advantages"] = [
+            [credit - penalty for credit, penalty in zip(row, penalties, strict=True)]
+            for row, penalties in zip(loop_advantages, token_penalties, strict=True)
+        ]
     penalties = output.pop("reasoning_span_penalties", None)
     if penalties is None:
         return

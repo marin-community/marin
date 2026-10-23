@@ -442,6 +442,8 @@ generator:
     penalty: 0.0
     # Per-agent overrides for Nemotron Ultra tasks, e.g. `code_gen_simple_agent: reject`.
     agent_policies: {}
+    # "rollout" subtracts the penalty from the reward; "marker" charges it to the token where the span goes wrong.
+    penalty_target: rollout
 
   chat_template:
     source: "name"
