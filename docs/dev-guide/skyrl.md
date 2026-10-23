@@ -116,7 +116,9 @@ and nonthinking headers. Ambiguous or unmatched prefixes fail before scoring.
 
 Student prompts, rollout response IDs, response masks, and route weights are
 unchanged. Teacher capability validation includes the inserted tokens when
-checking the context window. Tokenize insertions for the teacher's verified
+checking the context window. Local teacher engines reserve the largest insertion
+plus one scoring token beyond the configured student window. Conditioning requires
+an explicit student `max_model_len` and sufficient teacher model capacity. Tokenize insertions for the teacher's verified
 shared tokenizer and include valid native role delimiters yourself; the runtime
 does not synthesize or repair a chat template. Check the concatenated token
 sequence against the intended full-template rendering before training.
