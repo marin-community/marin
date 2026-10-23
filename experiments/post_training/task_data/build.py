@@ -5,7 +5,9 @@
 
     uv run python -m experiments.post_training.task_data.build x --out DIR --cruxeval-prompts FILE
     uv run python -m experiments.post_training.task_data.build r --out DIR --reserved-pool FILE
+    uv run python -m experiments.post_training.task_data.build chunk --tasks DIR/r_train.jsonl --rows 1000 --out DIR/chunks
     uv run python -m experiments.post_training.task_data.build traces --task R --tasks DIR/r_train.jsonl ...
+    uv run python -m experiments.post_training.task_data.build grade --task R --tasks DIR/r_train.jsonl --traces ...
     uv run python -m experiments.post_training.task_data.build m1 --task R --tasks DIR/r_train.jsonl ...
 
 Every command writes a JSON manifest beside its outputs with the inputs, seed,
@@ -81,6 +83,54 @@ def r(output_dir: Path, reserved_pool: str, seed: int, limit: int | None) -> Non
     """Draw the R splits from the pinned pool, excluding the P_think-reserved benchmarks."""
     output_dir.mkdir(parents=True, exist_ok=True)
     build_r_tasks(output_dir, seed=seed, reserved_pool_path=reserved_pool, limit=limit)
+
+
+@cli.command()
+@click.option("--tasks", "tasks_path", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--rows", "rows_per_chunk", required=True, type=int)
+@click.option("--chunks", "chunk_count", default=None, type=int, help="write only the first N chunks")
+@click.option("--out", "output_dir", required=True, type=click.Path(file_okay=False, path_type=Path))
+def chunk(tasks_path: str, rows_per_chunk: int, chunk_count: int | None, output_dir: Path) -> None:
+    """Write a split's leading rows as fixed-size chunk files, leaving the split untouched."""
+    lines = [line for line in Path(tasks_path).read_text().splitlines() if line.strip()]
+    starts = range(0, len(lines), rows_per_chunk)
+    if chunk_count is not None:
+        starts = starts[:chunk_count]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stem = Path(tasks_path).stem
+    for index, start in enumerate(starts):
+        chunk_lines = lines[start : start + rows_per_chunk]
+        (output_dir / f"{stem}.chunk{index:02d}.jsonl").write_text("\n".join(chunk_lines) + "\n")
+        print(f"{stem}.chunk{index:02d}.jsonl: rows {start}..{start + len(chunk_lines) - 1}")
+
+
+@cli.command()
+@click.option("--task", "task_name", required=True, type=click.Choice(sorted(GRADERS)))
+@click.option("--tasks", "tasks_path", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--traces", "traces_paths", required=True, multiple=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--out", "output_path", required=True, type=click.Path(dir_okay=False))
+def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output_path: str) -> None:
+    """Keep the graded-correct teacher traces: the expert training set."""
+    tasks = {task["task_id"]: task for task in _read_tasks(tasks_path)}
+    traces = [trace for path in traces_paths for trace in _read_tasks(path)]
+    correct = [trace for trace in traces if GRADERS[task_name](tasks[trace["task_id"]], trace["content"])]
+    with open(output_path, "w") as handle:
+        for trace in correct:
+            handle.write(json.dumps(trace, sort_keys=True) + "\n")
+    tokens = sorted(trace["completion_tokens"] for trace in traces)
+    report = {
+        "tasks": tasks_path,
+        "traces": list(traces_paths),
+        "kept_under_cap": len(traces),
+        "graded_correct": len(correct),
+        "pass_rate": len(correct) / len(traces) if traces else 0.0,
+        "with_reasoning": sum(bool(trace["reasoning"]) for trace in traces),
+        "completion_tokens_p50": tokens[len(tokens) // 2] if tokens else None,
+        "completion_tokens_p90": tokens[int(len(tokens) * 0.9)] if tokens else None,
+        "completion_tokens_max": tokens[-1] if tokens else None,
+    }
+    _write_manifest(Path(output_path).with_suffix(".manifest.json"), report)
+    print(json.dumps(report))
 
 
 @cli.command()

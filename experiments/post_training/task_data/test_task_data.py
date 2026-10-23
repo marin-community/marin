@@ -9,10 +9,12 @@ import json
 import os
 
 import pytest
+from click.testing import CliRunner
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.chat_template import GRUG_TOKENS, QWEN_TOKENS
+from experiments.post_training.task_data.build import cli
 from experiments.post_training.task_data.code_x import (
     DIRECTION_INPUT,
     DIRECTION_OUTPUT,
@@ -459,3 +461,24 @@ def test_m1_writer_keeps_graded_rows_with_prompt_ids_and_tokens(tmp_path):
     assert line["task_id"] == "r-1" and line["prompt"] == prompt
     assert line["data_source"] == "task_R" and line["teacher_route"] == "E_R"
     assert len(line["input_ids"]) == len(line["assistant_masks"]) and any(line["assistant_masks"])
+
+
+def test_grade_keeps_only_the_graded_correct_traces(tmp_path):
+    task = {**OUTPUT_TASK, "task_id": "x-0"}
+    tasks = tmp_path / "x_train.jsonl"
+    tasks.write_text(json.dumps(task) + "\n")
+    traces = tmp_path / "x_traces.jsonl"
+    rows = [
+        {"task_id": task["task_id"], "reasoning": "trace the loop", "content": c, "completion_tokens": n}
+        for c, n in ((r"It returns $\boxed{42}$.", 30), (r"It returns $\boxed{43}$.", 40))
+    ]
+    traces.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    out = tmp_path / "x_graded.jsonl"
+    result = CliRunner().invoke(
+        cli, ["grade", "--task", "X", "--tasks", str(tasks), "--traces", str(traces), "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    kept = [json.loads(line) for line in out.read_text().splitlines()]
+    assert [row["completion_tokens"] for row in kept] == [30]
+    manifest = json.loads(out.with_suffix(".manifest.json").read_text())
+    assert (manifest["kept_under_cap"], manifest["graded_correct"]) == (2, 1)
