@@ -550,6 +550,7 @@ class TrainingBatchIterator(Iterator[Experience]):
             rollout_routed_experts=batch.routed_experts_tensor(),
             response_span_tags=batch.get("response_span_tags"),
             pair_roles=batch.get("pair_roles"),
+            data_source_ids=batch.get("data_source_ids"),
             info={},
             metadata=batch.metadata,
         )

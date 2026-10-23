@@ -39,6 +39,7 @@ from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_train
 from skyrl_train.timing_observability import PhaseBreakdown
 from skyrl_train.workers.megatron.router_telemetry import (
     assert_bias_unchanged,
+    named_expert_bias_buffers,
     router_policy_manifest,
     snapshot_expert_bias,
 )
@@ -104,14 +105,31 @@ ROUTER_POLICY_MANIFEST_FILENAME = "router_policy.json"
 _BIAS_GUARD_MODEL_TYPES = ("grug_moe",)
 
 
-def _write_router_policy_manifest(cfg, model_type: str) -> None:
-    """Record the run's router policy (weights trained, bias frozen, no aux loss) beside its exports."""
+def _write_router_policy_manifest(
+    cfg, model_type: str, model_chunks: list[nn.Module], *, bias_guarded: bool
+) -> None:
+    """Record the router policy this rank's live model trains under, beside the run's exports."""
+    router_weights = [
+        parameter
+        for chunk in model_chunks
+        for name, parameter in chunk.named_parameters()
+        if name.endswith("router.weight")
+    ]
+    if not router_weights:
+        raise ValueError("router policy manifest found no router weights in the model")
+    has_bias = any(named_expert_bias_buffers(chunk) for chunk in model_chunks)
+    manifest = router_policy_manifest(
+        model_type,
+        router_weights="trained" if any(parameter.requires_grad for parameter in router_weights) else "frozen",
+        selection_bias=("frozen" if bias_guarded else "updated") if has_bias else "absent",
+        aux_loss_coeff=float(get_model_config(model_chunks[0]).moe_aux_loss_coeff or 0.0),
+    )
     export_root = str(cfg.trainer.export_path)
     io.makedirs(export_root, exist_ok=True)
     separator = "/" if io.is_cloud_path(export_root) else os.sep
     manifest_path = export_root.rstrip("/\\") + separator + ROUTER_POLICY_MANIFEST_FILENAME
     with io.open_file(manifest_path, "w") as handle:
-        json.dump(router_policy_manifest(model_type), handle, indent=2, sort_keys=True)
+        json.dump(manifest, handle, indent=2, sort_keys=True)
 
 
 class _MegatronInitMode(StrEnum):
@@ -536,7 +554,12 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
             snapshot_expert_bias(self.actor_module[0]) if self._bias_guard_active else {}
         )
         if self.strategy.is_rank_0():
-            _write_router_policy_manifest(self.cfg, self.strategy.hf_config.model_type, self.actor_module)
+            _write_router_policy_manifest(
+                self.cfg,
+                self.strategy.hf_config.model_type,
+                self.actor_module,
+                bias_guarded=self._bias_guard_active,
+            )
         # create profiler
         if self.cfg.trainer.policy.megatron_config.torch_profiler_config.enable:
             self.profiler = Profiler(self.cfg.trainer.policy.megatron_config.torch_profiler_config)
@@ -654,7 +677,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         ftpo=experience.ftpo,
                         rollout_routed_experts=experience.rollout_routed_experts,
                         pair_roles=experience.pair_roles,
-                        data_source_ids=experience.get("data_source_ids"),
+                        data_source_ids=experience.data_source_ids,
                     )
                 )
 
