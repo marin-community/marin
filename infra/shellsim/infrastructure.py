@@ -29,7 +29,6 @@ def deploy(source_revision: str) -> pulumi.Output[str]:
             )
         ),
         platforms=[docker_build.Platform.LINUX_AMD64],
-        pull=True,
         tags=[IMAGE_TAG],
         build_on_preview=False,
         push=True,

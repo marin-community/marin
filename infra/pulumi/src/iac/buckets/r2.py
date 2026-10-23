@@ -165,6 +165,7 @@ class R2PublicBucket(pulumi.ComponentResource):
                     expression=f'(http.host eq "{hostname}")',
                     action_parameters=cloudflare.RulesetRuleActionParametersArgs(
                         cache=True,
+                        browser_ttl=cloudflare.RulesetRuleActionParametersBrowserTtlArgs(mode="respect_origin"),
                         origin_cache_control=True,
                         respect_strong_etags=True,
                         edge_ttl=cloudflare.RulesetRuleActionParametersEdgeTtlArgs(mode="respect_origin"),
