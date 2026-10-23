@@ -156,6 +156,10 @@ cleanup does not acknowledge persistence or return a commit token. Use
 `DataStore.transaction()` when a write must become visible before the caller continues.
 The core `DataStore` and `ReadView` APIs propagate storage and commit errors.
 
+`PersistentKvCache` appends `/v2` to its supplied root, including roots resolved by
+`for_prefix`. `location()` returns this versioned archive path. Older unversioned
+caches remain untouched; the new cache fills as callers regenerate missing values.
+
 `PersistentKvCache` tolerates expired objects on lifecycle-managed storage. Reads
 exclude confirmed missing shards from their local snapshot and omit incomplete
 chunked values, while retaining healthy hits. An expired schema can be interpreted

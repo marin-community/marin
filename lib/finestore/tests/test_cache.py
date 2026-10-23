@@ -32,7 +32,7 @@ from pyarrow.fs import FSSpecHandler, PyFileSystem
 from rigging.filesystem import factory
 from rigging.filesystem.conditional_object import LocalConditionalObject
 from rigging.filesystem.cross_region import MARIN_CROSS_REGION_OVERRIDE_ENV, CrossRegionGuardedFS, TransferBudget
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 _BLOB_URI_SCHEME = "blobread"
 _RANGE_DEFAULT_BLOCK_BYTES = 50 * 1024 * 1024
@@ -98,6 +98,7 @@ _CACHE_EXIT_COMPACTION_PROCESS = textwrap.dedent(
 
     LocalConditionalObject.write = observe_commit
     cache = PersistentKvCache.at(root)
+    root = cache.location()
     for index in range(2):
         committed.clear()
         cache.store(str(index), b"object-code")
@@ -398,40 +399,43 @@ def test_compaction_buffers_compressed_file_reads(tmp_path, monkeypatch):
 
 
 def test_persistent_cache_round_trips_and_supersedes_named_bytes(tmp_path):
-    root = str(tmp_path / "cache")
-    cache = PersistentKvCache.at(root)
+    base_root = str(tmp_path / "cache")
+    root = prefix_join(base_root, "v2")
+    cache = PersistentKvCache.at(base_root)
     cache.store("kernel", b"first")
     cache.store("kernel", b"second")
     cache.close()
     assert len(ReadView(root).list_shards(BlobTables.DESCRIPTORS)) == 1
 
-    reader = PersistentKvCache.at(root)
+    reader = PersistentKvCache.at(base_root)
     assert reader.load("kernel") == b"second"
     assert reader.load("missing") is None
     reader.close()
 
 
 def test_persistent_cache_keeps_a_loaded_value_in_memory(tmp_path):
-    root = str(tmp_path / "cache")
-    writer = PersistentKvCache.at(root)
+    base_root = str(tmp_path / "cache")
+    root = prefix_join(base_root, "v2")
+    writer = PersistentKvCache.at(base_root)
     writer.store("kernel", b"object-code")
     writer.close()
 
-    reader = PersistentKvCache.at(root)
+    reader = PersistentKvCache.at(base_root)
     assert reader.load("kernel") == b"object-code"
     drop_table(root, BlobTables.DESCRIPTORS)
     assert reader.load("kernel") == b"object-code"
 
 
 def test_batch_cache_reads_latest_persisted_values_and_preserves_memory_hits(tmp_path):
-    root = str(tmp_path / "cache")
-    writer = PersistentKvCache.at(root)
+    base_root = str(tmp_path / "cache")
+    root = prefix_join(base_root, "v2")
+    writer = PersistentKvCache.at(base_root)
     writer.store("first", b"old")
     writer.store("first", b"new")
     writer.store("second", b"other")
     writer.close()
 
-    reader = PersistentKvCache.at(root)
+    reader = PersistentKvCache.at(base_root)
     assert reader.load_many(["first", "second", "missing", "first"]) == {"first": b"new", "second": b"other"}
     first_read = reader.read_diagnostics()
     assert (first_read.requested_keys, first_read.memory_hits, first_read.storage_hits, first_read.misses) == (
@@ -457,14 +461,15 @@ def test_batch_cache_reads_latest_persisted_values_and_preserves_memory_hits(tmp
 
 
 def test_batch_cache_lookup_bounds_decoding_of_unrequested_inline_values(tmp_path):
-    root = str(tmp_path / "cache")
+    base_root = str(tmp_path / "cache")
+    root = prefix_join(base_root, "v2")
     # A compacted review cache has large inline values spread across row groups.
     # Requesting a few keys must not decode the whole shard at once.
     with DataStore.open(root, max_buffer_bytes=512 * 1024 * 1024, flush_interval=600) as store:
         for index in range(8192):
             store.write_object(f"{index:08d}", index.to_bytes(8, "little") + b"x" * (8192 - 8))
 
-    cache = PersistentKvCache.at(root)
+    cache = PersistentKvCache.at(base_root)
     default_pool = pa.default_memory_pool()
     pool = pa.proxy_memory_pool(default_pool)
     pa.set_memory_pool(pool)
@@ -484,19 +489,20 @@ def test_batch_cache_lookup_bounds_decoding_of_unrequested_inline_values(tmp_pat
 def test_cache_reads_an_archive_without_its_format_marker_and_the_next_store_recreates_it(tmp_path):
     # A TTL prefix expires the write-once marker while HEAD survives. Reads keep hitting, and
     # the writer open behind the next store puts the marker back.
-    root = tmp_path / "cache"
-    writer = PersistentKvCache.at(str(root))
+    base_root = tmp_path / "cache"
+    root = base_root / "v2"
+    writer = PersistentKvCache.at(str(base_root))
     writer.store("kernel", b"object-code")
     writer.close()
     (root / "_archive.json").unlink()
 
-    cache = PersistentKvCache.at(str(root))
+    cache = PersistentKvCache.at(str(base_root))
     assert cache.load("kernel") == b"object-code"
     cache.store("other", b"more-code")
     cache.close()
 
     assert (root / "_archive.json").exists()
-    assert PersistentKvCache.at(str(root)).load("other") == b"more-code"
+    assert PersistentKvCache.at(str(base_root)).load("other") == b"more-code"
 
 
 def test_in_memory_cache_never_resolves_storage():
@@ -519,15 +525,24 @@ def test_cache_root_resolves_lazily():
 
 def test_prefix_cache_uses_region_local_fine_store(tmp_path, monkeypatch):
     monkeypatch.setattr(cache_module, "marin_temp_bucket", lambda _ttl, prefix: str(tmp_path / prefix))
+    legacy_root = str(tmp_path / "cutlass-kernels")
+    with DataStore.open(legacy_root) as store:
+        store.write_object("kernel", b"legacy")
+    legacy = ReadView(legacy_root)
     cache = PersistentKvCache.for_prefix("cutlass-kernels")
+    assert cache.load("kernel") is None
     cache.store("kernel", b"value")
     cache.close()
+    assert ReadView(legacy_root).token == legacy.token
+    assert ReadView(legacy_root).read_blob("kernel") == b"legacy"
+    assert ReadView(str(tmp_path / "cutlass-kernels" / "v2")).read_blob("kernel") == b"value"
     assert PersistentKvCache.for_prefix("cutlass-kernels").load("kernel") == b"value"
 
 
 @pytest.mark.parametrize("expired", ["descriptor", "parts", "schema"])
 def test_cache_reads_survivors_and_repairs_expired_objects_on_write(archive_root, expired):
-    root = archive_root
+    base_root = archive_root
+    root = prefix_join(base_root, "v2")
     payload = b"x" * (129 * 1024)
     with DataStore.open(root, flush_interval=600) as store:
         store.write_object("lost", payload)
@@ -547,7 +562,7 @@ def test_cache_reads_survivors_and_repairs_expired_objects_on_write(archive_root
         ReadView(root).read_blob("lost")
 
     token = ReadView(root).token
-    cache = PersistentKvCache.at(root)
+    cache = PersistentKvCache.at(base_root)
     expected = {"healthy": b"kept"}
     if expired == "schema":
         expected["lost"] = payload
@@ -564,7 +579,7 @@ def test_cache_reads_survivors_and_repairs_expired_objects_on_write(archive_root
     }
     compact_table(root, BlobTables.DESCRIPTORS)
     compact_table(root, BlobTables.PARTS)
-    assert PersistentKvCache.at(root).load("healthy") == b"kept"
+    assert PersistentKvCache.at(base_root).load("healthy") == b"kept"
 
 
 def test_cache_repair_preserves_a_concurrent_commit(tmp_path, monkeypatch):
@@ -593,7 +608,8 @@ def test_cache_repair_preserves_a_concurrent_commit(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("expired_object", ["shard", "schema"])
 def test_cache_read_requests_repair_from_an_existing_writer(tmp_path, expired_object):
-    root = str(tmp_path / "cache")
+    base_root = str(tmp_path / "cache")
+    root = prefix_join(base_root, "v2")
     with DataStore.open(root) as store:
         store.write_object("expired", b"old")
         store.flush()
@@ -604,7 +620,7 @@ def test_cache_read_requests_repair_from_an_existing_writer(tmp_path, expired_ob
         else view.table_metadata_path(BlobTables.DESCRIPTORS)
     )
     assert expired is not None
-    cache = PersistentKvCache.at(root)
+    cache = PersistentKvCache.at(base_root)
     cache.store("healthy", b"kept")
     StoragePath(expired).rm()
 
@@ -620,7 +636,8 @@ def test_cache_read_requests_repair_from_an_existing_writer(tmp_path, expired_ob
 
 @pytest.mark.parametrize("expired", ["descriptor", "parts", "later-compaction"])
 def test_cache_expiry_does_not_revive_superseded_values(archive_root, expired):
-    root = archive_root
+    base_root = archive_root
+    root = prefix_join(base_root, "v2")
     old = b"a" * (129 * 1024) if expired == "parts" else b"old"
     new = b"b" * len(old)
     with DataStore.open(root, flush_interval=600) as store:
@@ -654,7 +671,7 @@ def test_cache_expiry_does_not_revive_superseded_values(archive_root, expired):
         store.flush()
     StoragePath(missing).rm()
 
-    cache = PersistentKvCache.at(root)
+    cache = PersistentKvCache.at(base_root)
     assert cache.load_many(["kernel", "healthy"]) == {"healthy": b"kept"}
     cache.store("new-key", b"new")
     cache.close()
@@ -662,7 +679,8 @@ def test_cache_expiry_does_not_revive_superseded_values(archive_root, expired):
 
 
 def test_cache_history_floor_preserves_new_rows_in_a_mixed_shard(archive_root):
-    root = archive_root
+    base_root = archive_root
+    root = prefix_join(base_root, "v2")
     with DataStore.open(root, flush_interval=600) as store:
         store.write_object("kernel", b"old")
         store.write_object("before", b"old unrelated value")
@@ -686,7 +704,7 @@ def test_cache_history_floor_preserves_new_rows_in_a_mixed_shard(archive_root):
         )
     StoragePath(missing.path).rm()
 
-    cache = PersistentKvCache.at(root)
+    cache = PersistentKvCache.at(base_root)
     names = ["kernel", "before", "healthy"]
     assert cache.load_many(names) == {"healthy": b"kept"}
     cache.store("after", b"new entry")
@@ -698,7 +716,7 @@ def test_cache_history_floor_preserves_new_rows_in_a_mixed_shard(archive_root):
     assert {row["name"] for row in ReadView(root).iter_rows(BlobTables.DESCRIPTORS)} == set(expected)
     compact_table(root, BlobTables.DESCRIPTORS)
     assert {row["name"] for row in ReadView(root).scan(BlobTables.DESCRIPTORS).to_pylist()} == set(expected)
-    assert PersistentKvCache.at(root).load_many([*names, "after"]) == expected
+    assert PersistentKvCache.at(base_root).load_many([*names, "after"]) == expected
 
 
 @pytest.mark.parametrize("error_type", [PermissionError, TimeoutError])
@@ -724,7 +742,8 @@ def test_cache_retention_does_not_prune_on_storage_errors(tmp_path, monkeypatch,
 
 
 def test_cache_write_refreshes_aging_objects_and_preserves_versions(tmp_path):
-    root = str(tmp_path / "ttl=30d" / "cache")
+    base_root = str(tmp_path / "ttl=30d" / "cache")
+    root = prefix_join(base_root, "v2")
     with DataStore.open(root) as store:
         store.write_object("kernel", b"old")
         store.flush()
@@ -739,9 +758,9 @@ def test_cache_write_refreshes_aging_objects_and_preserves_versions(tmp_path):
         os.utime(path, (aged.timestamp(), aged.timestamp()))
     before = datetime.now(UTC)
 
-    assert PersistentKvCache.at(root).load("kernel") == b"latest"
+    assert PersistentKvCache.at(base_root).load("kernel") == b"latest"
     assert all(StoragePath(path).mtime() < before for path in paths)
-    with_cache = PersistentKvCache.at(root)
+    with_cache = PersistentKvCache.at(base_root)
     with_cache.store("another", b"new")
     with_cache.close()
 
@@ -751,8 +770,9 @@ def test_cache_write_refreshes_aging_objects_and_preserves_versions(tmp_path):
 
 
 def test_cache_retention_copies_remote_payloads_only_when_aging(simulated_bucket):
-    root = "s3://finestore-tests/ttl=30d/cache"
-    cache = PersistentKvCache.at(root)
+    base_root = "s3://finestore-tests/ttl=30d/cache"
+    root = prefix_join(base_root, "v2")
+    cache = PersistentKvCache.at(base_root)
     cache.store("kernel", b"code")
     cache.close()
     before = simulated_bucket.log.snapshot()
@@ -778,7 +798,8 @@ def test_non_writer_cache_keeps_value_in_memory_without_persisting(tmp_path, mon
 
 
 def test_remote_cache_can_commit_object_larger_than_store_buffer(tmp_path, monkeypatch):
-    root = str(tmp_path / "cache")
+    base_root = str(tmp_path / "cache")
+    root = prefix_join(base_root, "v2")
     open_store = DataStore.open
     monkeypatch.setattr(StoragePath, "is_remote", property(lambda _self: True))
     monkeypatch.setattr(cache_module, "_MAX_BATCH_DATA_BYTES", 64)
@@ -788,7 +809,7 @@ def test_remote_cache_can_commit_object_larger_than_store_buffer(tmp_path, monke
         classmethod(lambda _cls, path: open_store(path, max_buffer_bytes=64)),
     )
 
-    cache = PersistentKvCache.at(root)
+    cache = PersistentKvCache.at(base_root)
     cache.store("kernel", b"x" * 40)
     cache.close()
 
@@ -800,7 +821,7 @@ def test_cache_normal_process_exit_drains_pending_remote_commit(tmp_path):
 
     subprocess.run([sys.executable, "-c", _CACHE_PROCESS, root, "slow"], check=True, timeout=10)
 
-    assert ReadView(root).read_blob("kernel") == b"object-code"
+    assert ReadView(prefix_join(root, "v2")).read_blob("kernel") == b"object-code"
 
 
 def test_cache_process_exit_abandons_stalled_remote_commit(tmp_path):
@@ -814,6 +835,6 @@ def test_cache_process_exit_abandons_stalled_remote_commit(tmp_path):
 def test_cache_process_exit_does_not_start_remote_compaction(tmp_path):
     root = str(tmp_path / "cache")
     subprocess.run([sys.executable, "-c", _CACHE_EXIT_COMPACTION_PROCESS, root], check=True, timeout=10)
-    view = ReadView(root)
+    view = ReadView(prefix_join(root, "v2"))
     assert view.read_blobs(["0", "1"]) == {"0": b"object-code", "1": b"object-code"}
     assert len(view.list_shards(BlobTables.DESCRIPTORS)) == 2

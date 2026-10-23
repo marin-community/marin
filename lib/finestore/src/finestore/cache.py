@@ -15,13 +15,15 @@ from datetime import UTC, datetime, timedelta
 
 from rigging import telemetry
 from rigging.filesystem.cluster_config import marin_temp_bucket
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from finestore.cache_storage import CacheReadView, available_cache_snapshot, maintain_cache
 from finestore.reader import BlobReadDiagnostics
 from finestore.store import DataStore
 
 _CACHE_TTL_DAYS = 30
+# Separate manifests requiring cache-history-floor-v1 from older cache writers.
+_CACHE_VERSION = "v2"
 _EXIT_FLUSH_TIMEOUT = 10.0
 _MAX_BATCH_DATA_BYTES = 100 * 1024 * 1024
 _MAX_BATCH_OBJECTS = 65_536
@@ -90,7 +92,7 @@ class PersistentKvCache:
         return cls(lambda: marin_temp_bucket(_CACHE_TTL_DAYS, prefix), is_writer=is_writer)
 
     def location(self) -> str | None:
-        return self._resolve_root() if self._resolve_root is not None else None
+        return self._storage_root() if self._resolve_root is not None else None
 
     def load(self, key: str) -> bytes | None:
         """Return ``key`` from memory or the latest committed FineStore view."""
@@ -247,7 +249,7 @@ class PersistentKvCache:
     def _storage_root_unlocked(self) -> str:
         if self._root is None:
             assert self._resolve_root is not None
-            self._root = self._resolve_root()
+            self._root = prefix_join(self._resolve_root(), _CACHE_VERSION)
         return self._root
 
     def _write(self, key: str, value: bytes) -> None:
