@@ -47,14 +47,14 @@ class Recipe:
 
 
 def keep_largest(update: torch.Tensor, density: float) -> torch.Tensor:
-    """Retain ceil(density * size) entries, with Torch's top-k tie behavior."""
+    """Trim an owned update in place, with Torch's top-k tie behavior."""
     if density == 1:
         return update
     count = max(1, math.ceil(density * update.numel()))
     indices = update.flatten().abs().topk(count, sorted=False).indices
     mask = torch.zeros(update.numel(), dtype=torch.bool)
     mask[indices] = True
-    return update * mask.reshape(update.shape)
+    return update.mul_(mask.reshape(update.shape))
 
 
 def merge(anchor: torch.Tensor, donors: list[torch.Tensor], recipe: Recipe, name: str) -> torch.Tensor:
@@ -83,11 +83,11 @@ def merge(anchor: torch.Tensor, donors: list[torch.Tensor], recipe: Recipe, name
                 digest = hashlib.sha256(f"{recipe.seed}:{name}:{position}".encode()).digest()
                 rng = torch.Generator().manual_seed(int.from_bytes(digest[:8], "little"))
                 retained = torch.rand(update.shape, generator=rng) < recipe.density
-                update = update * retained / recipe.density
+                update.mul_(retained).div_(recipe.density)
             density = recipe.density if recipe.method == Method.TIES else recipe.ties_density
             if recipe.method in (Method.TIES, Method.DARE_TIES):
                 update = keep_largest(update, density)
-            updates.append(update * coefficient)
+            updates.append(update.mul_(coefficient))
         total = torch.zeros_like(base)
         for update in updates:
             total += update
@@ -99,8 +99,8 @@ def merge(anchor: torch.Tensor, donors: list[torch.Tensor], recipe: Recipe, name
                 agrees = (update.sign() == elected) & (update != 0)
                 total += update * agrees
                 mass.add_(agrees, alpha=coefficient)
-            total /= mass.masked_fill(mass == 0, 1)
-        result = total * recipe.scale + base
+            total.div_(mass.masked_fill_(mass == 0, 1))
+        result = total.mul_(recipe.scale).add_(base)
     result = result.to(anchor.dtype)
     if not torch.isfinite(result).all():
         raise ValueError(f"Merge overflow: {name}")

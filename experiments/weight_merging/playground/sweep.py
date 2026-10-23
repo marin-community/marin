@@ -11,6 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 
 import torch
@@ -22,11 +23,15 @@ from vllm import LLM, SamplingParams
 from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 
 from experiments.weight_merging.playground.arithmetic import Method, Recipe, merge
+from experiments.weight_merging.playground.checkpoints import checkpoint_map
 from experiments.weight_merging.playground.evaluation import GSM_SMOKE_IDS, paired_summary, prompt, read_rows, score
 
-DENSITIES = (0.1, 0.3, 0.5, 0.7)
-SCALES = (0.5, 1.0)
 DECODE_SEEDS = (17, 29)
+
+
+class DonorPrecision(StrEnum):
+    FP32 = "float32"
+    BF16_ROUNDED = "bfloat16_rounded"
 
 
 @dataclass(frozen=True)
@@ -36,64 +41,36 @@ class Candidate:
     donors: tuple[str, ...] = ()
     recipe: Recipe | None = None
     rope_theta: float = 1_000_000
+    donor_precision: DonorPrecision = DonorPrecision.FP32
 
 
-def candidates() -> list[Candidate]:
-    result = [Candidate(name, name) for name in ("anchor", "instruct", "coder")]
-    for coefficient in (0.25, 0.5):
+def read_candidates(path: Path) -> list[Candidate]:
+    result = []
+    for value in json.loads(path.read_text()):
+        recipe = value.get("recipe")
+        if recipe is not None:
+            recipe = Recipe(
+                **{**recipe, "method": Method(recipe["method"]), "coefficients": tuple(recipe["coefficients"])}
+            )
         result.append(
             Candidate(
-                f"average-c{coefficient}",
-                "anchor",
-                ("instruct", "coder"),
-                Recipe(Method.AVERAGE, (coefficient, coefficient)),
+                name=value["name"],
+                source=value["source"],
+                donors=tuple(value.get("donors", [])),
+                recipe=recipe,
+                rope_theta=value.get("rope_theta", 1_000_000),
+                donor_precision=DonorPrecision(value.get("donor_precision", "float32")),
             )
         )
-    for scale in SCALES:
-        result.append(
-            Candidate(
-                f"task_arithmetic-s{scale}",
-                "anchor",
-                ("instruct", "coder"),
-                Recipe(Method.TASK_ARITHMETIC, (0.5, 0.5), scale=scale),
-            )
-        )
-    for method in (Method.TIES, Method.DARE_LINEAR, Method.DARE_TIES):
-        for density in DENSITIES:
-            for scale in SCALES:
-                result.append(
-                    Candidate(
-                        f"{method.value}-d{density}-s{scale}",
-                        "anchor",
-                        ("instruct", "coder"),
-                        Recipe(method, (0.5, 0.5), density=density, scale=scale),
-                    )
-                )
-    result.extend([Candidate("math-native", "math", rope_theta=10_000), Candidate("math-anchor-rope", "math")])
-    for method in (Method.AVERAGE, Method.TIES):
-        result.append(
-            Candidate(
-                f"math-{method.value}",
-                "anchor",
-                ("instruct", "math"),
-                Recipe(method, (0.5, 0.5), density=0.3 if method == Method.TIES else 1),
-            )
-        )
+    if len({candidate.name for candidate in result}) != len(result):
+        raise ValueError("Duplicate candidate names")
     return result
-
-
-def weight_map(directory: Path) -> dict[str, str]:
-    index = directory / "model.safetensors.index.json"
-    if index.exists():
-        return json.loads(index.read_text())["weight_map"]
-    with safe_open(directory / "model.safetensors", framework="pt", device="cpu") as reader:
-        return dict.fromkeys(reader.keys(), "model.safetensors")
 
 
 def merged_weights(paths: dict[str, Path], candidate: Candidate):
     """Yield merged CPU tensors to vLLM's architecture-aware weight loader."""
     sources = [candidate.source, *candidate.donors]
-    maps = {name: weight_map(paths[name]) for name in sources}
+    maps = {name: checkpoint_map(paths[name]) for name in sources}
     expected_keys = set(maps[sources[0]])
     if any(set(mapping) != expected_keys for mapping in maps.values()):
         raise ValueError("Source checkpoint keys differ")
@@ -102,7 +79,13 @@ def merged_weights(paths: dict[str, Path], candidate: Candidate):
             tensors = []
             for source in sources:
                 reader = stack.enter_context(safe_open(paths[source] / maps[source][name], framework="pt"))
-                tensors.append(reader.get_tensor(name))
+                tensor = reader.get_tensor(name)
+                if tensor.is_floating_point():
+                    if source != sources[0] and candidate.donor_precision == DonorPrecision.BF16_ROUNDED:
+                        tensor = tensor.bfloat16()
+                    tensor = tensor.float()
+                tensors.append(tensor)
+                del tensor
             value = merge(tensors[0], tensors[1:], candidate.recipe, name) if candidate.recipe else tensors[0]
             yield name, value
             del value, tensors
@@ -159,7 +142,7 @@ def engine(paths: dict[str, Path], source: str, rope_theta: float, args):
         model=str(paths[source]),
         tokenizer=str(paths["instruct"]),
         dtype="bfloat16",
-        max_model_len=4096,
+        max_model_len=args.max_model_len,
         max_num_seqs=args.max_num_seqs,
         gpu_memory_utilization=0.8,
         swap_space=0,
@@ -196,7 +179,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--max-num-seqs", type=int, default=64)
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--max-new-tokens", type=int, default=2048)
+    parser.add_argument("--max-model-len", type=int, default=8192)
+    parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--only", nargs="+")
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--reload-check-every", type=int, default=16)
@@ -214,12 +199,14 @@ def main() -> None:
         other = AutoTokenizer.from_pretrained(path, local_files_only=True)
         if other.get_vocab() != expected_vocab:
             raise ValueError(f"Vocabulary token IDs differ: {name}")
-    selected = [candidate for candidate in candidates() if args.only is None or candidate.name in args.only]
+    selected = [
+        candidate for candidate in read_candidates(args.candidates) if args.only is None or candidate.name in args.only
+    ]
     if args.only is not None and {c.name for c in selected} != set(args.only):
         raise ValueError("Unknown candidate in --only")
     metadata = {
         "panel_sha256": hashlib.sha256(panel_path.read_bytes()).hexdigest(),
-        "models": json.loads(Path(__file__).with_name("models.json").read_text()),
+        "models": json.loads((args.run / "model-sources.json").read_text()),
         "git_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "torch": torch.__version__,
         "transformers": transformers.__version__,
@@ -227,6 +214,7 @@ def main() -> None:
         "vllm": vllm.__version__,
         "max_num_seqs": args.max_num_seqs,
         "max_new_tokens": args.max_new_tokens,
+        "max_model_len": args.max_model_len,
         "decode_seeds": DECODE_SEEDS,
         "prompt_policy": "all use pinned Instruct tokenizer and template",
         "source_sha256": {
@@ -247,15 +235,21 @@ def main() -> None:
             "vllm",
             "max_num_seqs",
             "max_new_tokens",
+            "max_model_len",
             "source_sha256",
         ):
             if previous[field] != metadata[field]:
                 raise ValueError(f"Cannot resume with different {field}")
         known = {c["name"]: c for c in previous["candidates"]}
+        for candidate in metadata["candidates"]:
+            if candidate["name"] in known and known[candidate["name"]] != candidate:
+                raise ValueError(f"Cannot resume with a changed recipe: {candidate['name']}")
         known.update({c["name"]: c for c in metadata["candidates"]})
         metadata["candidates"] = list(known.values())
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     expected_count = len(panel["items"]) * 3
+    expected_keys = {(item["id"], "greedy", 0) for item in panel["items"]}
+    expected_keys.update((item["id"], "sample", seed) for item in panel["items"] for seed in DECODE_SEEDS)
     keys = [(r["candidate"], r["item_id"], r["mode"], r["seed"]) for r in existing]
     if len(keys) != len(set(keys)):
         raise ValueError("Duplicate item/decoding keys in existing output")
@@ -278,6 +272,9 @@ def main() -> None:
     for candidate_index, candidate in enumerate(selected):
         count = sum(r["candidate"] == candidate.name for r in existing)
         if count == expected_count:
+            observed = {(r["item_id"], r["mode"], r["seed"]) for r in existing if r["candidate"] == candidate.name}
+            if observed != expected_keys:
+                raise ValueError(f"Candidate output has different item/decoding keys: {candidate.name}")
             print(f"skip completed {candidate.name}", flush=True)
             continue
         if count:
