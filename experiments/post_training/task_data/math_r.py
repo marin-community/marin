@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import re
 from collections.abc import Callable
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -168,12 +170,29 @@ def _json_row(line: str) -> dict | None:
     return json.loads(line) if line else None
 
 
+def answer_verdicts(pool_rows: list[dict[str, str]], *, workers: int) -> dict[str, bool]:
+    """:func:`answer_is_verifier_parsable` of every distinct answer in the pool.
+
+    The verifier screen dominates the build, and short answers repeat across the pool,
+    so each distinct answer is screened once, over ``workers`` processes. Workers are
+    spawned rather than forked: the verifier's deadline is a SIGALRM in each worker's
+    main thread, and forking a parent that loaded JAX is unsafe.
+    """
+    answers = sorted({str(row.get("answer", "")).strip() for row in pool_rows} - {""})
+    if workers == 1:
+        return {answer: answer_is_verifier_parsable(answer) for answer in answers}
+    with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
+        verdicts = pool.map(answer_is_verifier_parsable, answers, chunksize=64)
+        return dict(zip(answers, verdicts, strict=True))
+
+
 def draw_r_tasks(
     pool_rows: list[dict[str, str]],
     *,
     seed: int,
     reserved_pool_path: str | Path,
     probe_fraction: float = 0.1,
+    workers: int = 1,
 ) -> tuple[list[RTask], dict[str, int]]:
     """Draw verified R tasks from pool rows of ``{problem, answer, source}``.
 
@@ -202,6 +221,7 @@ def draw_r_tasks(
         "dropped_duplicate": 0,
         "dropped_unparsable_answer": 0,
     }
+    parsable = answer_verdicts(pool_rows, workers=workers)
     tasks: list[RTask] = []
     seen: set[str] = set()
     for row in pool_rows:
@@ -221,7 +241,7 @@ def draw_r_tasks(
         if normalized in seen:
             counts["dropped_duplicate"] += 1
             continue
-        if not answer_is_verifier_parsable(answer):
+        if not parsable[answer]:
             counts["dropped_unparsable_answer"] += 1
             continue
         seen.add(normalized)
@@ -272,6 +292,7 @@ def build_r_tasks(
     spec: RPoolSpec = R_POOL_SPEC,
     limit: int | None = None,
     load_dataset: Callable = hf_load_dataset,
+    workers: int = 1,
 ) -> dict[str, Any]:
     """Load the pinned pool, draw the R tasks, write both splits and ``manifest.json``.
 
@@ -281,7 +302,7 @@ def build_r_tasks(
     output_path = Path(output_dir)
     pool_rows, pool_entry = load_r_pool(spec, limit=limit, load_dataset=load_dataset)
     tasks, counts = draw_r_tasks(
-        pool_rows, seed=seed, reserved_pool_path=reserved_pool_path, probe_fraction=probe_fraction
+        pool_rows, seed=seed, reserved_pool_path=reserved_pool_path, probe_fraction=probe_fraction, workers=workers
     )
     split_counts = write_split(tasks, output_path)
     manifest = {

@@ -486,3 +486,13 @@ def test_grade_keeps_only_the_graded_correct_traces(tmp_path):
     assert [row["completion_tokens"] for row in kept] == [30]
     manifest = json.loads(out.with_suffix(".manifest.json").read_text())
     assert (manifest["kept_under_cap"], manifest["graded_correct"]) == (2, 1)
+
+
+def test_parallel_answer_screening_draws_the_same_tasks():
+    pool = [
+        {"problem": f"Compute problem number {index} with care.", "answer": answer, "source": "math"}
+        for index, answer in enumerate(["2", "\\frac{1}{2}", "2", "x^2", "", "1<x<3", "\\frac{1}{2}"])
+    ]
+    serial = draw_r_tasks(pool, seed=5, reserved_pool_path=os.devnull, workers=1)
+    parallel = draw_r_tasks(pool, seed=5, reserved_pool_path=os.devnull, workers=2)
+    assert parallel == serial

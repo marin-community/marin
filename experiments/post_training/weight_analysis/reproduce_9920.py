@@ -60,6 +60,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import fsspec
 import numpy as np
@@ -315,6 +316,25 @@ def tensor_blocks(array: np.ndarray, name: str, component: Component) -> list[tu
     return [(None, array)]
 
 
+class BasisSide(StrEnum):
+    """Which singular directions span a matrix's subspace.
+
+    ``RIGHT`` uses the input-side (column) directions of every matrix, WP9's
+    definition. ``MIN`` uses the smaller side's directions, transposing wide
+    matrices; for a tall matrix the two coincide.
+    """
+
+    RIGHT = "right"
+    MIN = "min"
+
+
+def oriented(matrix: np.ndarray, side: BasisSide) -> np.ndarray:
+    """``matrix`` laid out so its subspace is spanned by right singular directions."""
+    if side is BasisSide.MIN and matrix.shape[0] < matrix.shape[1]:
+        return matrix.T
+    return matrix
+
+
 @dataclass(frozen=True)
 class TensorBases:
     """One tensor's reference bases: one per block (expert slice or whole matrix), plus the stacked matrix's."""
@@ -330,6 +350,7 @@ def tensor_reference_bases(
     reference_array: np.ndarray,
     *,
     seed: int,
+    side: BasisSide,
     pool: ThreadPoolExecutor,
 ) -> TensorBases | None:
     """The reference delta's bases for every matrix of one tensor, computed once for all compared models.
@@ -352,10 +373,16 @@ def tensor_reference_bases(
     if component is Component.ROUTED_EXPERTS:
         stacked_reference = (reference_array - base_array).reshape(-1, reference_array.shape[-1])
         stacked = pool.submit(
-            reference_bases, stacked_reference, generator=matrix_generator(seed, f"{name}:stacked", None)
+            reference_bases,
+            oriented(stacked_reference, side),
+            generator=matrix_generator(seed, f"{name}:stacked", None),
         )
     blocks = [
-        pool.submit(reference_bases, reference_slice - base_slice, generator=matrix_generator(seed, name, expert))
+        pool.submit(
+            reference_bases,
+            oriented(reference_slice - base_slice, side),
+            generator=matrix_generator(seed, name, expert),
+        )
         for (expert, base_slice), (_expert, reference_slice) in pairs
     ]
     return TensorBases(
@@ -373,6 +400,7 @@ def fold_tensor(
     model_array: np.ndarray,
     reference_array: np.ndarray | None,
     bases: TensorBases | None,
+    side: BasisSide,
 ) -> tuple[DeltaSummary, float]:
     """Fold one tensor of one model into ``report``.
 
@@ -408,7 +436,7 @@ def fold_tensor(
         report.comparison.merge(comparison)
         report.group_comparison(group).merge(comparison)
         if delta.ndim == 2:
-            record = overlap_against(delta, bases.blocks[index])
+            record = overlap_against(oriented(delta, side), bases.blocks[index])
             # A plain 2-D tensor is one matrix under both conventions; only fused
             # expert tensors differ (per-expert slices here, one stacked matrix
             # below).
@@ -419,7 +447,7 @@ def fold_tensor(
 
     if reference_blocks is not None and component is Component.ROUTED_EXPERTS:
         stacked_delta = (model_array - base_array).reshape(-1, model_array.shape[-1])
-        record = overlap_against(stacked_delta, bases.stacked)
+        record = overlap_against(oriented(stacked_delta, side), bases.stacked)
         report.overlap_shares("stacked", group).add(record)
         report.overlap_shares("stacked", "ALL").add(record)
     return tensor_summary, tensor_max
@@ -465,6 +493,7 @@ def run_pass(
     full_stage: bool,
     seed: int,
     workers: int,
+    side: BasisSide = BasisSide.RIGHT,
 ) -> tuple[list[ComparisonRow], list[str], dict[str, ModelReport]]:
     """Stream every checkpoint once and compare per-tensor metrics with the JSONs.
 
@@ -499,7 +528,9 @@ def run_pass(
             base_array = base_checkpoint.read(name).astype(np.float32)
             arrays = {label: checkpoints[label].read(name).astype(np.float32) for label in models}
             bases = (
-                tensor_reference_bases(name, component, base_array, arrays[reference_label], seed=seed, pool=pool)
+                tensor_reference_bases(
+                    name, component, base_array, arrays[reference_label], seed=seed, side=side, pool=pool
+                )
                 if full_stage
                 else None
             )
@@ -514,6 +545,7 @@ def run_pass(
                     model_array=arrays[label],
                     reference_array=reference_array,
                     bases=bases if reference_array is not None else None,
+                    side=side,
                 )
                 reports[label].per_tensor[name] = tensor_summary
                 reports[label].max_abs_delta[name] = tensor_max
@@ -635,6 +667,8 @@ def print_overlap_report(reports: dict[str, ModelReport], reference_label: str) 
         print(f"\n{label}: overlap multiples over the random null, published value in parens")
         print(f"{'component':>15}" + "".join(f"  {kind}/{pooling:>16}" for kind, pooling in OVERLAP_CONVENTIONS))
         for component, table in PUBLISHED_OVERLAP_MULTIPLE.items():
+            if ("matrix", component) not in report.overlaps:
+                continue  # a --tensors subset scored no matrix of this component
             cells = []
             for kind, pooling in OVERLAP_CONVENTIONS:
                 overlap, null = report.overlap_shares(kind, component).pooled(pooling)
@@ -663,6 +697,12 @@ def main() -> None:
     parser.add_argument("--stage", choices=("per-tensor", "full"), default="full")
     parser.add_argument("--seed", type=int, default=0, help="seed of the overlap nulls")
     parser.add_argument("--workers", type=int, default=8, help="threads computing one tensor's reference bases")
+    parser.add_argument(
+        "--basis-side",
+        choices=[side.value for side in BasisSide],
+        default=BasisSide.RIGHT.value,
+        help="singular directions spanning each matrix's subspace",
+    )
     parser.add_argument("--csv", default=None, help="where to write the comparison CSV")
     args = parser.parse_args()
 
@@ -680,6 +720,7 @@ def main() -> None:
         full_stage=args.stage == "full",
         seed=args.seed,
         workers=args.workers,
+        side=BasisSide(args.basis_side),
     )
     if failures:
         if args.csv:
@@ -694,6 +735,13 @@ def main() -> None:
         print(f"per-tensor check passed for {len(rows) // 4} tensors x {len(models)} models")
         return
 
+    if args.tensors:
+        # The summaries compare whole-model totals, which a tensor subset cannot match;
+        # the overlap multiples are still per component.
+        print_overlap_report(reports, args.reference)
+        if args.csv:
+            write_csv(rows, args.csv)
+        return
     summary, summary_failures = summary_rows(models, args.reference, their, reports)
     rows.extend(summary)
     print_overlap_report(reports, args.reference)
