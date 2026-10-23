@@ -253,7 +253,7 @@ def test_requested_local_backend_propagates_its_availability_failure(monkeypatch
 def test_factories_construct_exactly_the_selected_backends(monkeypatch, backends):
     monkeypatch.setattr(factories, "docker_unavailable_reason", lambda: None)
     monkeypatch.setattr(factories, "local_factory", lambda: FakeFactory(Backend.LOCAL))
-    controller = "http://controller.example:10000" if Backend.GVISOR in backends else None
+    controller = "http://controller.example:10000"
     built = machine_factories(backends, controller_url=controller)
 
     assert set(built) == {backend.value for backend in backends}
