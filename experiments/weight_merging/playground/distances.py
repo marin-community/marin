@@ -68,11 +68,8 @@ def main() -> None:
     }
     hashes = {}
     for filename in sorted(set(donor_map.values())):
-        digest = hashlib.sha256()
         with (args.donor / filename).open("rb") as stream:
-            for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-                digest.update(block)
-        hashes[filename] = digest.hexdigest()
+            hashes[filename] = hashlib.file_digest(stream, "sha256").hexdigest()
     result["donor_sha256"] = hashes
     args.output.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
