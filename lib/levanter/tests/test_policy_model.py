@@ -10,8 +10,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.grpo import GrpoConfig, KlGradient, grpo_loss
-from levanter.grpo_model import GrpoExample, grpo_model_loss, pack_grpo_examples, response_logprobs
+from levanter.policy import ClippedPolicyConfig, KlGradient, clipped_policy_loss
+from levanter.policy_model import PolicyBatch, policy_model_loss, pack_policy_batch, response_logprobs
 from levanter.layers.attention import AttentionBackend, AttentionMask
 from levanter.models.llama import LlamaConfig
 from levanter.models.qwen import QwenConfig
@@ -35,7 +35,7 @@ def model_batch(request):
     mask = np.tile([[1, 1, 1, 1, 1, 1, 1, 1], [0, 0, 1, 1, 1, 1, 1, 0]], (len(jax.devices()), 1))
     response_mask = hax.named(mask[:, -3:].astype(np.float32), (B, T))
     weights = response_mask / response_mask.sum(T) / B.size
-    batch = GrpoExample(
+    batch = PolicyBatch(
         tokens=hax.named(tokens, (B, S)),
         attention_mask=hax.named(mask, (B, S)),
         position_ids=hax.named(np.maximum(mask.cumsum(-1) - 1, 0), (B, S)),
@@ -92,19 +92,19 @@ def test_response_scores_match_full_softmax_and_unpadded_context(model_batch, bl
     np.testing.assert_allclose(actual.array[1, :2], without_padding.array[0, :2], atol=1e-5, rtol=1e-5)
 
 
-def test_grpo_model_value_and_gradients_match_full_softmax(model_batch):
+def test_policy_model_value_and_gradients_match_full_softmax(model_batch):
     model, batch = model_batch
     old = response_logprobs(model, batch, block_size=8)
     batch = dataclasses.replace(batch, old_logprobs=old)
-    config = GrpoConfig(0.2, 0.2, 0.0, KlGradient.DETACHED)
+    config = ClippedPolicyConfig(0.2, 0.2, 0.0, KlGradient.DETACHED)
 
     def fused_loss(model):
-        return grpo_model_loss(
+        return policy_model_loss(
             model, batch, key=jax.random.PRNGKey(9), config=config, accumulation_steps=1, block_size=8
         )[0]
 
     def reference_loss(model):
-        return grpo_loss(
+        return clipped_policy_loss(
             full_softmax_scores(model, batch),
             batch.old_logprobs,
             None,
@@ -131,7 +131,7 @@ def test_packed_response_scores_preserve_context_positions_and_objectives(model_
     batch = dataclasses.replace(
         batch, reference_logprobs=hax.full(batch.response_mask.axes, -3.2) if with_reference else None
     )
-    packed = pack_grpo_examples(batch, sequence_length=13, pad_token_id=0, batch_size_multiple=2, minimum_rows=3)
+    packed = pack_policy_batch(batch, sequence_length=13, pad_token_id=0, batch_size_multiple=2, minimum_rows=3)
     expected_rows = ((max(3, len(jax.devices())) + 1) // 2) * 2
     assert packed.tokens.array.shape == (expected_rows, 13)
     assert packed.response_mask.array.shape == (expected_rows, 12)
@@ -168,13 +168,13 @@ def test_packed_response_scores_preserve_context_positions_and_objectives(model_
     if expected_rows > len(jax.devices()):
         assert np.all(segments[len(jax.devices()) :] == -1)
     with pytest.raises(ValueError, match="exceeds"):
-        pack_grpo_examples(batch, sequence_length=7, pad_token_id=0)
+        pack_policy_batch(batch, sequence_length=7, pad_token_id=0)
     with pytest.raises(ValueError, match="unpacked trajectories"):
-        pack_grpo_examples(packed, sequence_length=13, pad_token_id=0)
+        pack_policy_batch(packed, sequence_length=13, pad_token_id=0)
 
 
 @pytest.mark.parametrize("with_reference", [False, True])
-def test_packed_grpo_value_and_gradients_match_unpacked_full_softmax(model_batch, with_reference):
+def test_packed_policy_value_and_gradients_match_unpacked_full_softmax(model_batch, with_reference):
     model, batch = model_batch
     old = full_softmax_scores(model, batch)
     Batch = batch.tokens.resolve_axis("batch")
@@ -185,14 +185,14 @@ def test_packed_grpo_value_and_gradients_match_unpacked_full_softmax(model_batch
         old_logprobs=old + 0.03,
         reference_logprobs=old - 0.2 if with_reference else None,
     )
-    packed = pack_grpo_examples(batch, sequence_length=13, pad_token_id=0)
-    config = GrpoConfig(0.2, 0.2, 0.15 if with_reference else 0.0, KlGradient.DIFFERENTIABLE)
+    packed = pack_policy_batch(batch, sequence_length=13, pad_token_id=0)
+    config = ClippedPolicyConfig(0.2, 0.2, 0.15 if with_reference else 0.0, KlGradient.DIFFERENTIABLE)
 
     def packed_loss(model):
-        return grpo_model_loss(model, packed, key=None, config=config, accumulation_steps=1, block_size=8)[0]
+        return policy_model_loss(model, packed, key=None, config=config, accumulation_steps=1, block_size=8)[0]
 
     def reference_loss(model):
-        return grpo_loss(
+        return clipped_policy_loss(
             full_softmax_scores(model, batch),
             batch.old_logprobs,
             batch.reference_logprobs,

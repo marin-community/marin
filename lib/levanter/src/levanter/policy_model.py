@@ -1,7 +1,7 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Model-facing scoring and loss for persisted synchronous GRPO examples."""
+"""Model-facing scoring and loss for persisted synchronous policy examples."""
 
 import equinox as eqx
 import haliax as hax
@@ -11,7 +11,7 @@ import numpy as np
 from haliax import NamedArray
 
 from levanter.data.packing import pack_documents
-from levanter.grpo import GrpoConfig, grpo_loss
+from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
 from levanter.layers.attention import AttentionMask
 from levanter.metrics import Metric
 from levanter.models.lm_model import LmHeadModel, split_activations
@@ -19,7 +19,7 @@ from levanter.models.loss import fused_cross_entropy_loss_and_logsumexp_penalty
 from levanter.utils.tree_utils import inference_mode
 
 
-class GrpoExample(eqx.Module):
+class PolicyBatch(eqx.Module):
     """A learner batch with complete sequences and aligned response objectives.
 
     Full sequences use axes (batch, position); objective arrays use
@@ -43,14 +43,14 @@ class GrpoExample(eqx.Module):
     segment_ids: NamedArray | None = None
 
 
-def pack_grpo_examples(
-    example: GrpoExample,
+def pack_policy_batch(
+    example: PolicyBatch,
     *,
     sequence_length: int,
     pad_token_id: int,
     batch_size_multiple: int = 1,
     minimum_rows: int = 1,
-) -> GrpoExample:
+) -> PolicyBatch:
     """Pack complete trajectories on the host while preserving their objectives.
 
     Masked input padding is removed, source position IDs are retained, and
@@ -118,7 +118,7 @@ def pack_grpo_examples(
     def response(name: str) -> NamedArray:
         return hax.named(jnp.asarray(objective[name]), (Batch, Response))
 
-    return GrpoExample(
+    return PolicyBatch(
         tokens=hax.named(jnp.asarray(tokens), (Batch, Position)),
         attention_mask=hax.named(jnp.asarray((segments >= 0).astype(np.int32)), (Batch, Position)),
         position_ids=hax.named(jnp.asarray(positions), (Batch, Position)),
@@ -134,7 +134,7 @@ def pack_grpo_examples(
 
 def response_logprobs(
     model: LmHeadModel,
-    batch: GrpoExample,
+    batch: PolicyBatch,
     *,
     key: jax.Array | None = None,
     block_size: int = 1024,
@@ -176,18 +176,18 @@ def response_logprobs(
     return -loss.rearrange(("batch", "response"))
 
 
-def grpo_model_loss(
+def policy_model_loss(
     model: LmHeadModel,
-    batch: GrpoExample,
+    batch: PolicyBatch,
     *,
     key: jax.Array | None,
-    config: GrpoConfig,
+    config: ClippedPolicyConfig,
     accumulation_steps: int,
     block_size: int,
 ) -> tuple[jax.Array, dict[str, Metric]]:
-    """Return GRPO loss and metrics for a complete model batch."""
+    """Return policy loss and metrics for a complete model batch."""
     current = response_logprobs(model, batch, key=key, block_size=block_size)
-    return grpo_loss(
+    return clipped_policy_loss(
         current,
         batch.old_logprobs,
         batch.reference_logprobs,

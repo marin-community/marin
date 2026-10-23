@@ -13,7 +13,8 @@ import pytest
 from haliax.partitioning import ResourceAxis
 
 from levanter.grad_accum import microbatched
-from levanter.grpo import GrpoConfig, KlGradient, grpo_advantages, grpo_loss, grpo_objective_weights
+from levanter.grpo import grpo_advantages, grpo_objective_weights
+from levanter.policy import ClippedPolicyConfig, KlGradient, clipped_policy_loss
 from levanter.testing.helpers import skip_if_no_torch, use_test_mesh
 
 
@@ -30,7 +31,7 @@ class Rollout:
     partitions: np.ndarray
 
 
-CONFIG = GrpoConfig(eps_clip_low=0.2, eps_clip_high=0.2, kl_loss_coef=0.001, kl_gradient=KlGradient.DETACHED)
+CONFIG = ClippedPolicyConfig(eps_clip_low=0.2, eps_clip_high=0.2, kl_loss_coef=0.001, kl_gradient=KlGradient.DETACHED)
 
 
 @pytest.fixture
@@ -147,7 +148,7 @@ def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_gradient
     # A shared scalar perturbation permits real microbatched parameter gradients;
     # per-token gradients are also checked below against Torch autograd.
     def loss(offset, current, old, reference, advantages, pw, kw):
-        return grpo_loss(
+        return clipped_policy_loss(
             current + offset,
             old,
             reference if kl_coef else None,
@@ -204,7 +205,7 @@ def test_grpo_value_gradient_and_execution_partition_parity(rollout, kl_gradient
     )
 
     def full_loss(values):
-        return grpo_loss(
+        return clipped_policy_loss(
             hax.named(values, (B, P)), *inputs, policy_weights, kl_weights, config=config, accumulation_steps=1
         )[0]
 
@@ -259,7 +260,7 @@ def test_grpo_tiny_model_adamw_update_matches_torch(rollout):
     def jax_loss(weights):
         logits = jnp.asarray(features) @ weights
         lp = jnp.take_along_axis(jax.nn.log_softmax(logits), jnp.asarray(labels)[..., None], axis=-1)[..., 0]
-        return grpo_loss(hax.named(lp, (B, P)), *inputs, pw, kw, config=CONFIG, accumulation_steps=1)[0]
+        return clipped_policy_loss(hax.named(lp, (B, P)), *inputs, pw, kw, config=CONFIG, accumulation_steps=1)[0]
 
     # Match Torch's clip_grad_norm_ epsilon explicitly rather than silently
     # changing either optimizer's clipping convention.
@@ -295,7 +296,7 @@ def test_grpo_zero_advantages_detached_kl_has_zero_surrogate_gradient(rollout):
     )
 
     def loss(values, config):
-        return grpo_loss(
+        return clipped_policy_loss(
             hax.named(values, (B, P)),
             hax.named(old, (B, P)),
             hax.named(reference, (B, P)),
@@ -329,10 +330,10 @@ def test_grpo_clamp_boundaries_preserve_pinned_torch_gradient():
         ],
         dtype=np.float32,
     )
-    config = GrpoConfig(0.0, 0.0, 0.0, KlGradient.DETACHED)
+    config = ClippedPolicyConfig(0.0, 0.0, 0.0, KlGradient.DETACHED)
 
     def jax_loss(values):
-        return grpo_loss(
+        return clipped_policy_loss(
             hax.named(values, (B, P)),
             hax.zeros((B, P)),
             None,
