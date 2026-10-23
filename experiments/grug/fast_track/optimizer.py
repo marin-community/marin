@@ -471,6 +471,9 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     adam_ademamix_beta3: float = 0.999
     """Decay of the AdEMAMix slow EMA, warmed up over ``adam_ademamix_warmup`` as in the paper."""
     router_lr_mult: float = 1.0
+    halt_lr_mult: float = 1.0
+    """Adam LR (no weight decay) of the halting gate's zero-init stream writes and biases (``halt_layers``), as a
+    multiple of ``adam_lr``."""
     """LR multiplier of the router weights alone (of ``adam_lr`` or, with ``router_group=muonh``, the MuonH LR)."""
     embed_optimizer: EmbedOptimizer = EmbedOptimizer.ADAM_GROUP
     """How ``token_embed`` (the input table alone) is optimized, at the Adam LR (``EmbedOptimizer``)."""
@@ -558,6 +561,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "null_gain": adam_at(adam_lr),
                 "embed2": adam_at(adam_lr * self.embed2_lr_mult),
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
+                "halt": adam_at(adam_lr * self.halt_lr_mult),
                 "embed": embed_at(adam_lr),
             }
             return optax.multi_transform(
@@ -584,6 +588,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 return "kda_beta"
             if kda_leaf in _KDA_ADAM_LEAVES:
                 return "kda_decay"
+            if re.search(r"(^|\.)halt_", path_lower):
+                return "halt"
             if re.search(
                 r"null_gain|extra_mlp_gain|entropy_head|mid_conf|final_conf|skip_probe|skip_router", path_lower
             ):

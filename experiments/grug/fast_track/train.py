@@ -79,6 +79,7 @@ from experiments.grug.fast_track.model import (
     LayerSkip,
     Transformer,
     forward_flops_per_token,
+    halt_schedule,
     layer_onset_gates,
     layer_onset_update_scales,
 )
@@ -311,6 +312,10 @@ class GrugTrainerConfig:
     # neuron activity to ``<routing_dump_dir>/step-<step>.npz`` (``write_routing_dump``).
     routing_dump_dir: str | None = None
     routing_dump_steps: tuple[int, ...] = ()
+    # Every ``halt_dump_every`` steps (``halt_layers``), write the halting gates and the soft and all-halted
+    # next-token losses of ``HALT_DUMP_SEQUENCES`` fixed held-out sequences to ``<halt_dump_dir>/step-<step>.npz``.
+    halt_dump_dir: str | None = None
+    halt_dump_every: int = 0
     # XLA GPU autotune results shared across runs of the same program (``_use_xla_autotune_cache``): loaded at start
     # when present, written by process 0 after the first step otherwise. None: autotune every compile.
     xla_autotune_cache_path: str | None = None
@@ -1044,8 +1049,10 @@ def _loss_and_grads(
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
     layer_gates: jax.Array | None = None,
+    halt: jax.Array | None = None,
 ):
-    """With ``lm_head_grad_probe_site`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come
+    """``halt`` is the halting gate's ``halt_schedule`` at this step.
+    With ``lm_head_grad_probe_site`` the metrics also hold ``_lm_head_grad_metrics``: the per-token norms come
     back as the gradients of zeros probes (``model.lm_head_grad_probe``) differentiated next to the params."""
 
     def loss_fn(model, probes):
@@ -1064,6 +1071,7 @@ def _loss_and_grads(
             head_grad_probe=probes.get(GradProbeSite.POST_NORM),
             pre_norm_grad_probe=probes.get(GradProbeSite.PRE_NORM),
             layer_gates=layer_gates,
+            halt_schedule=halt,
         )
         if skip is not None:
             metrics = {**metrics, "train/aux/layer_skip_frac": jnp.mean(1.0 - skip.keep.astype(jnp.float32))}
@@ -1093,6 +1101,7 @@ def _accumulated_loss_and_grads(
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_active: jax.Array | bool = True,
     layer_gates: jax.Array | None = None,
+    halt: jax.Array | None = None,
 ):
     """``_loss_and_grads`` over ``num_microbatches`` equal slices of ``batch``, one at a time: the loss, gradients
     and float metrics are averaged, integer metrics (counts) summed. Every microbatch runs in one ``lax.scan``
@@ -1101,7 +1110,9 @@ def _accumulated_loss_and_grads(
     micro = reshape_batch_into_microbatches(batch, num_microbatches)
 
     def one(microbatch):
-        return _loss_and_grads(params, microbatch, mp, z_loss, layer_skip, extra_mlp_active, layer_gates=layer_gates)
+        return _loss_and_grads(
+            params, microbatch, mp, z_loss, layer_skip, extra_mlp_active, layer_gates=layer_gates, halt=halt
+        )
 
     shapes = jax.eval_shape(one, jax.tree.map(lambda x: x[0], micro))
     zeros = jax.tree.map(lambda s: jnp.zeros(s.shape, s.dtype, out_sharding=getattr(s.sharding, "spec", None)), shapes)
@@ -1188,13 +1199,15 @@ def _make_train_step(
     lm_head_grad_clip: float | None = None,
     token_embed_stats: bool = False,
     layer_onset: GrugModelConfig | None = None,
+    halt: tuple[GrugModelConfig, int] | None = None,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
     ``layer_onset`` (a model config with delayed ``layer_onset_steps``) gates the delayed layers' AttnRes sources by
     ``layer_onset_gates`` and scales their parameter steps by ``layer_onset_update_scales`` (``_scale_layer_updates``):
     an offline layer's parameters and QB betas stay bit-identical.
     ``lm_head_grad_probe_site`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
-    ``token_embed_stats`` the ``_token_embed_stats``.
+    ``token_embed_stats`` the ``_token_embed_stats``. ``halt`` (a model config with ``halt_layers`` and the
+    schedule's step count) passes the halting gate's ``halt_schedule`` at each step to the loss.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
     (``_accumulated_loss_and_grads``). ``offload_opt_state`` keeps the optimizer state on pinned host memory
     between steps; ``master_param_mode`` picks where the authoritative weights live (``MasterParamMode``)."""
@@ -1217,10 +1230,11 @@ def _make_train_step(
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
         extra_active = state.step >= extra_mlp_start_step
         layer_gates = None if layer_onset is None else layer_onset_gates(layer_onset, state.step)
+        halt_now = None if halt is None else halt_schedule(halt[0], state.step, halt[1])
 
         if grad_accum_microbatches > 1:
             (loss, summarized_metrics), grads = _accumulated_loss_and_grads(
-                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active, layer_gates
+                grad_accum_microbatches, qb_params, batch, mp, z_loss, layer_skip, extra_active, layer_gates, halt_now
             )
         else:
             (loss, summarized_metrics), grads = _loss_and_grads(
@@ -1233,6 +1247,7 @@ def _make_train_step(
                 lm_head_grad_probe_site,
                 lm_head_grad_clip,
                 layer_gates,
+                halt_now,
             )
         metrics = {"train/loss": loss, **summarized_metrics}
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
@@ -1631,6 +1646,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
         gc.disable()
         hlo_written = False
         routing_dump = None
+        halt_dump = None
         autotune_published = False
 
         # The step runs on the state's flat leaves (``_flat_train_step``); ``state`` is rebuilt from them each step.
@@ -1826,6 +1842,13 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         if routing_dump is None:
                             routing_dump = _routing_dump_runner(config, mesh)
                         routing_dump(state)
+                    if (
+                        config.trainer.halt_dump_dir is not None
+                        and (current_step + 1) % config.trainer.halt_dump_every == 0
+                    ):
+                        if halt_dump is None:
+                            halt_dump = _halt_dump_runner(config, mesh)
+                        halt_dump(state)
                     # Host time to hand the step to the devices (rebuilding the state tree, launch).
                     dispatch_time = time.perf_counter() - dispatch_start
                     if inline_watch_stats is not None and watch_due:
@@ -1978,7 +2001,7 @@ def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
         cfg.mid_head_layer is not None,
         bool(cfg.final_conf_layers),
         cfg.skip_probe_layer is not None,
-        bool(cfg.skip_router_layers or cfg.entropy_head_layers),
+        bool(cfg.skip_router_layers or cfg.entropy_head_layers or cfg.halt_layers),
     )
     parts: list[dict[str, np.ndarray]] = []
     for start in range(0, num_sequences, batch_size):
@@ -2053,6 +2076,45 @@ def _routing_dump_runner(config: GrugRunConfig, mesh: Mesh):
     return write
 
 
+HALT_DUMP_SEQUENCES = 32
+
+
+def _halt_dump_runner(config: GrugRunConfig, mesh: Mesh):
+    """``state -> None``: writes the halting gates (``halt_g_L<l>``), ``next_token_loss`` and ``skipped_loss``
+    (every token halted at every gated layer) of the same held-out sequences every call."""
+    cfg = config.model
+    if not cfg.halt_layers:
+        raise ValueError("halt_dump_every needs halt_layers")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _held_out_sequences, config.data, seq_len=cfg.max_seq_len, num_sequences=HALT_DUMP_SEQUENCES
+        ).result()
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    batch = [jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index]) for x in (tokens, segments)]
+    step = _token_dump_step(
+        config.trainer.trainer.mp, cfg.num_experts, False, cfg.halt_layers, False, False, False, skip_signals=True
+    )
+
+    def write(state: GrugTrainState) -> None:
+        outputs = multihost_utils.process_allgather(step(state.params, state.pending_qb_betas, *batch), tiled=True)
+        if jax.process_index() != 0:
+            return
+        buffer = io.BytesIO()
+        np.savez(
+            buffer,
+            tokens=tokens,
+            segment_ids=segments,
+            step=np.asarray(int(state.step)),
+            **{k: np.asarray(v).astype(np.float16) for k, v in outputs.items()},
+        )
+        path = f"{config.trainer.halt_dump_dir}/step-{int(state.step)}.npz"
+        with fsspec.open(path, "wb") as f:
+            f.write(buffer.getvalue())
+        logger.info("Wrote the halt dump to %s", path)
+
+    return write
+
+
 def _autotune_dump_file() -> str:
     # One file per process: the processes of a multi-GPU task share /tmp.
     return f"/tmp/xla_autotune_results_{os.getpid()}.textproto"
@@ -2117,6 +2179,7 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         lm_head_grad_clip=config.model.lm_head_grad_clip,
         token_embed_stats=config.model.token_embed_stats,
         layer_onset=_layer_onset_config(config.model, trainer.num_train_steps),
+        halt=(config.model, trainer.num_train_steps) if config.model.halt_layers else None,
     )
     return train_step_fn, diagnostic_watch_step
 

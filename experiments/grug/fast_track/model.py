@@ -178,6 +178,15 @@ _SKIP_KEEP = "layer_skip_keep"
 _EXTRA_KEEP = "extra_mlp_keep"
 _ENTROPY_PRED = "entropy_pred"
 _SKIP_ROUTER_SCORE = "skip_router_score"
+# Learned halting gate (``halt_layers``): per-layer extras key carrying a gated layer's ``g`` (scales its branch
+# outputs before their SConv), the stats key of each layer's ``[B, S]`` write to the halting stream ``z``, and the
+# final stats key of the ``[G, B, S]`` gates of the gated layers.
+_HALT_SCALE = "halt_scale"
+_HALT_Z = "halt_z"
+_HALT_GATES = "halt_gates"
+_HALT_GATES_RAW = "halt_gates_raw"
+# The routed experts' down-projection grows by the halting-vote column plus zero padding to this width.
+_HALT_COLUMN_PAD = 8
 _ENTROPY_CHUNK = 1024
 # Per-layer router stats carrying each token's ``[T, K]`` selected experts and combine weights to
 # ``Transformer.routing_assignments``.
@@ -193,7 +202,7 @@ _ROUTED_COMBINE = "routed_combine"
 _SAVED_ROUTED = "saved_routed"
 # Per-layer moe_compress / moe_shadow_width loss and metrics, stacked over layers like the router stats.
 _COMPRESS_LOSS = "compress_loss"
-_DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA)
+_DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA, _HALT_Z)
 _COMPRESS_PREFIX = "compress/"
 # Per-layer branch-output max |x| and RMS (``layer_output_stats``), stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
@@ -242,6 +251,13 @@ class ExtraMlpSelect(StrEnum):
     HIGH = "high"  # the highest predicted entropy
     LOW = "low"  # the lowest
     RANDOM = "random"  # a fixed pseudo-random subset (the control)
+
+
+class HaltWrite(StrEnum):
+    """How a layer writes to the halting stream ``z`` (``halt_layers``)."""
+
+    UNIT = "unit"  # every unit casts its own vote: activation x its own zero-init coefficient
+    READ = "read"  # one zero-init linear read of the rms-normed layer output
 
 
 class LocalMixer(StrEnum):
@@ -757,6 +773,8 @@ class GrugModelConfig:
     max_seq_len: int = 4096
     sliding_window: int = 2048
     global_every: int = 4
+    global_layers: tuple[int, ...] | None = None
+    """The full-causal (MLA under ``local_mixer=kda``) layers; None: every ``global_every``-th and the last."""
     capacity_factor: float = 1.05
     layer_norm_eps: float = 1e-5
     initializer_std: float = 0.02
@@ -858,6 +876,26 @@ class GrugModelConfig:
     ``LayerSkip``), and the kept tokens' sublayer outputs are scaled by ``2 sigmoid(score)``, which trains the
     router. The threshold is the batch quantile of the scores."""
     skip_router_frac: float = 0.2
+    halt_layers: tuple[int, ...] = ()
+    """Learned halting gate: layer ``l`` in this list scales its attention and MLP branch outputs (before their
+    SConv) by ``g_l = prod_{j in halt_layers, j <= l} sigmoid(z_j + b_j)``, where ``z_j`` is a per-token scalar
+    side stream summing the writes of every layer below ``j`` (``halt_write``) and ``b_j`` a learned bias (init
+    ``halt_bias_init``). ``z`` never enters a norm, an AttnRes gate or the lm_head. ``g`` is non-increasing in
+    depth, so inference can skip every later gated layer once ``g < halt_threshold``."""
+    halt_write: HaltWrite = HaltWrite.UNIT
+    halt_bias_init: float = 4.0
+    halt_penalty: float = 0.0
+    """Compute penalty ``lambda * mean(g)`` over the gated layers and loss tokens, ramped linearly from 0 over the
+    first ``halt_penalty_ramp_frac`` of training."""
+    halt_penalty_ramp_frac: float = 0.35
+    halt_floor: float = 0.0
+    """Training floor ``g_eff = f + (1 - f) g`` with ``f`` decaying linearly from this value to 0 at
+    ``halt_floor_frac`` of training (0: no floor)."""
+    halt_floor_frac: float = 0.2
+    halt_wrong_weight: float = 0.0
+    """The "low and wrong" term ``mu * mean((1 - g) * stop_gradient(CE_t))`` over gated layers and loss tokens."""
+    halt_threshold: float | None = None
+    """Outside training (no halt schedule), a gated layer with ``g < halt_threshold`` is skipped (scale 0)."""
     mid_head_layer: int | None = None
     """A second lm_head (own weights, initialized like the lm_head) reads the rms-normed stream entering this layer
     and adds its next-token loss (``mid_head_loss_weight``) in training. A confidence head (``mid_confidence_dim``
@@ -895,6 +933,10 @@ class GrugModelConfig:
     projections: KDA's decay, beta and write / erase gates (the state update) and MLA's value-embedding gate. Only
     the query side (q, the Inkling bias, the output gates) keeps the attention gate's mix, so a token that skips
     these layers still writes exactly the K/V (and KDA state) other tokens read."""
+    attn_res_kv_strict_query: bool = False
+    """With ``attn_res_kv_strict``, a KDA ``attn_res_kv_layers`` layer's whole attention branch (q and its SConv, the
+    output gate) reads the KV mix too, so the q SConv never reads a neighbour's own attention mix (exact skipping of
+    that layer; its attention gate's sources are the KV mix's when it is the first KV layer)."""
     attn_res_partial_scale: bool = False
     """Learned scalars ``(a_attn, a_mlp)`` per layer, init 1: each sublayer adds ``a * out`` to its block's partial,
     so a block (and the MLP gate's in-layer partial) weights its attention and MLP outputs."""
@@ -1149,6 +1191,16 @@ class GrugModelConfig:
                 raise ValueError(f"extra_mlp_frac must be in (0, 1), got {self.extra_mlp_frac}")
         if self.skip_adapter_dim and not self.attn_res:
             raise ValueError("skip_adapter_dim needs attn_res")
+        if self.halt_layers:
+            layers = self.halt_layers
+            if not self.attn_res or self.scan_layers or self.dense_mlp:
+                raise ValueError("halt_layers needs attn_res, the unrolled layer loop and a MoE")
+            if layers != tuple(sorted(set(layers))) or not 1 <= layers[0] <= layers[-1] < self.num_layers:
+                raise ValueError(f"halt_layers must be increasing layers in 1..{self.num_layers - 1}, got {layers}")
+            if not 0.0 <= self.halt_floor < 1.0 or not 0.0 < self.halt_penalty_ramp_frac <= 1.0:
+                raise ValueError("halt_floor must be in [0, 1) and halt_penalty_ramp_frac in (0, 1]")
+            if self.halt_write == HaltWrite.UNIT and (not self.moe_ungated_relu2 or self.num_null_experts):
+                raise ValueError("halt_write=unit needs ungated ReLU^2 experts in one bank (no null experts)")
         if self.skip_router_layers:
             if not self.attn_res or self.scan_layers or not 0.0 <= self.skip_router_frac < 1.0:
                 raise ValueError("skip_router_layers needs attn_res, the unrolled layer loop and 0 <= frac < 1")
@@ -1177,6 +1229,10 @@ class GrugModelConfig:
                 raise ValueError(f"attn_res_kv_layers {bad} must read only earlier layers (>= {cutoff})")
         if self.attn_res_kv_strict and not self.attn_res_kv_layers:
             raise ValueError("attn_res_kv_strict needs attn_res_kv_layers")
+        if self.attn_res_kv_strict_query and not self.attn_res_kv_strict:
+            raise ValueError("attn_res_kv_strict_query needs attn_res_kv_strict")
+        if self.global_layers is not None and not all(0 <= i < self.num_layers for i in self.global_layers):
+            raise ValueError(f"global_layers must be in 0..{self.num_layers - 1}, got {self.global_layers}")
         if (self.moe_null_renorm_scale != 1.0 or self.moe_null_learned_gain) and not self.moe_null_layers:
             raise ValueError("moe_null_renorm_scale / moe_null_learned_gain need moe_null_layers")
         if self.moe_null_target_frac is not None:
@@ -1708,8 +1764,10 @@ class CausalSelfAttention(eqx.Module):
         proj_inputs: dict[str, jax.Array] | None = None,
         value_residual: bool = False,
         kv_input: Float[Array, "B S W"] | None = None,
+        halt_o: Float[Array, " NH"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent`` and
+        """``halt_o`` (``halt_write=unit``) adds each token's vote ``_halt_vote`` of the merged heads to the stats.
+        ``kv_share`` (MLA only) is a per-forward mailbox for ``mla_share_kv_latent`` and
         ``value_residual_layers``; ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v``
         projections; ``value_residual`` (static) mixes the first layer's values into this layer's;
         ``kv_input`` (``kv_stream_dim``) is the normed KV side stream the K/V projections read instead of ``x``.
@@ -1844,7 +1902,15 @@ class CausalSelfAttention(eqx.Module):
             out_sharding=P(_BATCH_AXES, None, "model"),
         )
         assert self.w_o is not None
+        if halt_o is not None:
+            stats[_HALT_Z] = _halt_vote(attn_out, halt_o)
         return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=batch_spec), stats
+
+
+def _halt_vote(units: Float[Array, "B S N"], coefficients: Float[Array, " N"]) -> Float[Array, "B S"]:
+    """Each unit's halting vote ``activation * coefficient``, summed, over sqrt(N) (``halt_write=unit``)."""
+    votes = jnp.einsum("bsn,n->bs", units.astype(jnp.float32), coefficients.astype(jnp.float32))
+    return votes / math.sqrt(coefficients.shape[0])
 
 
 # FoX key bias channels: a bf16 hi/mid/lo split of -c_j (bf16 alone is off by ~|c| * 2^-9 logits; with three
@@ -2154,8 +2220,10 @@ class KimiDeltaAttention(eqx.Module):
         value_residual: bool = False,
         kv_input: Float[Array, "B S W"] | None = None,
         token_ids: Int[Array, "B S"] | None = None,
+        halt_o: Float[Array, " NH"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``kv_input`` (``kv_stream_dim``) is the normed KV side stream that the ``k`` / ``v`` projections
+        """``halt_o`` as in ``CausalSelfAttention``.
+        ``kv_input`` (``kv_stream_dim``) is the normed KV side stream that the ``k`` / ``v`` projections
         (and their SConvs) read instead of ``x``; the erase / write gates, beta and decay stay on ``x`` unless
         ``attn_res_kv_strict``.
         ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
@@ -2265,6 +2333,8 @@ class KimiDeltaAttention(eqx.Module):
             gate_heads = gate_heads * head_keep[..., None].astype(gate.dtype)
             gate = rearrange(gate_heads, "... n d -> ... (n d)")
         o = o * gate
+        if halt_o is not None:
+            stats[_HALT_Z] = _halt_vote(o, halt_o)
         out = _proj(cfg, o, self.w_o, out_sharding=_batch_spec())
         return out, stats
 
@@ -2726,8 +2796,12 @@ class MoEMLP(eqx.Module):
         saved_routed: Float[Array, "T L"] | None = None,
         moe_k_keep: Int[Array, "B S"] | None = None,
         moe_dynamic_layer: bool = False,
+        halt_routed: Float[Array, "E I"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``router_embed`` is the token embedding the router reads under ``router_on_embed``.
+        """``halt_routed`` (``halt_write=unit``) appends each expert's per-unit halting coefficients to its
+        down-projection as one extra output column; the combined column (activation x coefficient x combine
+        weight, summed over units and the selected experts) goes to the stats as the routed halting vote.
+        ``router_embed`` is the token embedding the router reads under ``router_on_embed``.
         ``moe_k_keep`` (a ``moe_dynamic_layers`` layer) is each token's routed-expert count (``MoeDynamicK``).
         ``saved_routed`` is this call's combined expert output from the forward (``scan_save_routed_output``):
         the recompute returns it, with the gradient still flowing through the experts.
@@ -2901,6 +2975,8 @@ class MoEMLP(eqx.Module):
             )
         outputs, overflows, bank_keeps, col = [], [], [], 0
         overlap_out = None
+        if halt_routed is not None and (len(banks) > 1 or self.expert_private_proj is not None):
+            raise ValueError("halt_write=unit needs one expert bank without expert_private_dim")
         for (start, _, bank_k), em, bank_index in zip(banks, bank_mlps, (1, 2), strict=False):
             bank_selected = (real_selected[:, col : col + bank_k] - start).astype(jnp.int32)
             if self.expert_private_proj is not None:
@@ -2922,6 +2998,7 @@ class MoEMLP(eqx.Module):
                     bank_selected,
                     real_weights[:, col : col + bank_k],
                     overlap if bank_index == 1 else None,
+                    halt_routed,
                 )
             if bank_overlap_out:
                 overlap_out = bank_overlap_out[0]
@@ -2932,6 +3009,11 @@ class MoEMLP(eqx.Module):
             overflows.append(overflow)
             col += bank_k
         routed_flat = functools.reduce(jnp.add, outputs)
+        if halt_routed is not None:
+            out_dim = self.expert_mlp.w_down.shape[-1]
+            vote = routed_flat[:, out_dim].astype(jnp.float32) / math.sqrt(halt_routed.shape[1])
+            router_stats[_HALT_Z] = rearrange(vote, "(b s) -> b s", b=b, s=s)
+            routed_flat = routed_flat[:, :out_dim]
         if saved_routed is not None:
             routed_flat = _saved_value(routed_flat, saved_routed.astype(routed_flat.dtype))
         if self.cfg.scan_save_routed_output:
@@ -2981,6 +3063,18 @@ class MoEMLP(eqx.Module):
         return routed, {**router_stats, **assignments, _ROUTED_INPUT: routed_input}
 
 
+def _shared_experts_hidden(
+    cfg: "GrugModelConfig", parts: Sequence[jax.Array], num_shared: int, gated: bool
+) -> jax.Array:
+    """The shared experts' concatenated ``[T, I]`` hidden units from their gate/up projections ``parts``."""
+    gates, ups = (parts[:num_shared], parts[num_shared:]) if gated else ((), parts)
+    if gated:
+        act = ActivationFunctionEnum(cfg.expert_activation).to_jax_fn()
+        return jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
+    slope = 0.0
+    return jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+
+
 def _shared_experts_tail(
     cfg: "GrugModelConfig",
     parts: Sequence[jax.Array],
@@ -2992,13 +3086,7 @@ def _shared_experts_tail(
     out_sharding: P | None,
 ) -> jax.Array:
     """Shared-expert output from each expert's gate/up projections ``parts`` (gates first when ``gated``)."""
-    gates, ups = (parts[:num_shared], parts[num_shared:]) if gated else ((), parts)
-    if gated:
-        act = ActivationFunctionEnum(cfg.expert_activation).to_jax_fn()
-        hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
-    else:
-        slope = 0.0
-        hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+    hidden = _shared_experts_hidden(cfg, parts, num_shared, gated)
     shared_out = _proj(cfg, hidden, w_down, out_sharding=out_sharding)
     if shared_gate is not None:
         gate_logit = jnp.einsum("td,d->t", x_flat.astype(jnp.float32), shared_gate)
@@ -3041,8 +3129,12 @@ def moe_and_shared_fused(
     saved_routed: Float[Array, "T L"] | None = None,
     moe_k_keep: Int[Array, "B S"] | None = None,
     moe_dynamic_layer: bool = False,
+    halt_shared: Float[Array, " I"] | None = None,
+    halt_routed: Float[Array, "E I"] | None = None,
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
+
+    ``halt_shared`` / ``halt_routed`` (``halt_write=unit``) put the units' summed halting votes in the stats.
 
     The router, latent down-projection and each shared expert's gate/up read the same input, so they
     run as one ``[D, sum widths]`` GEMM; the shared experts' down-projections run as one GEMM over
@@ -3111,9 +3203,12 @@ def moe_and_shared_fused(
             saved_routed=saved_routed,
             moe_k_keep=moe_k_keep,
             moe_dynamic_layer=moe_dynamic_layer,
+            halt_routed=halt_routed,
         )
 
     routed, stats = routed_mlp()
+    if overlap is not None and halt_shared is not None:
+        raise ValueError("halt_write=unit needs moe_shared_placement other than overlap")
     if overlap is not None:
         if shadow is not None:
             raise ValueError("moe_shadow_width / moe_compress need moe_shared_placement other than overlap")
@@ -3127,6 +3222,12 @@ def moe_and_shared_fused(
         mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, x_flat, gate, _batch_spec()
     )
     shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
+    if halt_shared is not None:
+        if gate is not None:
+            raise ValueError("halt_write=unit does not support the shared-expert gate")
+        hidden = _shared_experts_hidden(mlp.cfg, parts[len(moe_weights) :], len(shared), gated)
+        vote = _halt_vote(rearrange(hidden, "(b s) i -> b s i", b=b, s=s), halt_shared)
+        stats = {**stats, _HALT_Z: stats[_HALT_Z] + vote}
     if shadow is not None:
         shared_in = part_inputs["shared"] if part_inputs and "shared" in part_inputs else x
         # The transfer and gap terms read the shared expert on a stop-gradient input so they move only it.
@@ -3436,6 +3537,25 @@ def _memory_branch(
     return memory(rms_norm(h))
 
 
+def _halt_init(
+    cfg: GrugModelConfig, attn: "CausalSelfAttention | KimiDeltaAttention", mlp: "MoEMLP | DenseMLP", shared
+) -> dict[str, jax.Array | None]:
+    """``Block``'s zero-init halting-stream writes (``halt_layers``, ``halt_write``)."""
+    out: dict[str, jax.Array | None] = dict.fromkeys(("halt_read", "halt_attn", "halt_shared", "halt_routed"))
+    if not cfg.halt_layers:
+        return out
+    if cfg.halt_write == HaltWrite.READ:
+        out["halt_read"] = reshard(jnp.zeros((cfg.hidden_dim,), jnp.float32), P(None))
+        return out
+    assert isinstance(mlp, MoEMLP) and attn.w_o is not None
+    out["halt_attn"] = reshard(jnp.zeros((attn.w_o.shape[0],), jnp.float32), P(None))
+    if shared:
+        out["halt_shared"] = reshard(jnp.zeros((sum(e.w_down.shape[0] for e in shared),), jnp.float32), P(None))
+    w_down = mlp.expert_mlp.w_down
+    out["halt_routed"] = reshard(jnp.zeros(w_down.shape[:2], jnp.float32), P(*_padded_spec(w_down)[:2]))
+    return out
+
+
 class Block(eqx.Module):
     rms_attn: LearnedRMSNorm | DyT
     attn_gated_norm: GatedNorm | None
@@ -3455,6 +3575,12 @@ class Block(eqx.Module):
     extra_mlp: DenseMLP | None  # cfg.extra_mlp_layers (every layer carries one; those use it)
     extra_mlp_gain: Float[Array, ""] | None
     attn_res_partial_scale: Float[Array, " 2"] | None  # cfg.attn_res_partial_scale: (a_attn, a_mlp)
+    # Learned halting gate (cfg.halt_layers): zero-init writes to the halting stream z. Every layer carries them;
+    # the layers below the last gated layer write z.
+    halt_read: Float[Array, " D"] | None  # halt_write=read: one linear read of the rms-normed layer output
+    halt_attn: Float[Array, " NH"] | None  # halt_write=unit: per attention output channel (before w_o)
+    halt_shared: Float[Array, " I"] | None  # halt_write=unit: per shared-expert unit
+    halt_routed: Float[Array, "E I"] | None  # halt_write=unit: per routed-expert unit (times its combine weight)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, layer_index: jax.Array, use_kda: bool = False) -> "Block":
@@ -3524,7 +3650,21 @@ class Block(eqx.Module):
             attn_res_partial_scale=(
                 reshard(jnp.ones((2,), jnp.float32), P(None)) if cfg.attn_res and cfg.attn_res_partial_scale else None
             ),
+            **_halt_init(cfg, attn, mlp, shared),
         )
+
+    def halt_write_z(
+        self, attn_out: jax.Array, mlp_out: jax.Array, attn_vote: jax.Array | None, mlp_vote: jax.Array | None
+    ) -> jax.Array | None:
+        """This layer's ``[B, S]`` write to the halting stream (``halt_write``): the branches' unit votes, or the
+        linear read of the rms-normed layer output. None without halting."""
+        if self.halt_read is not None:
+            out = rms_norm((attn_out + mlp_out).astype(jnp.float32), self.attn.cfg.layer_norm_eps)
+            return jnp.einsum("bsd,d->bs", out, self.halt_read) / math.sqrt(self.halt_read.shape[0])
+        if attn_vote is None:
+            return None
+        assert mlp_vote is not None
+        return attn_vote + mlp_vote
 
     def _attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
         x = self.rms_attn(x)
@@ -3547,8 +3687,11 @@ class Block(eqx.Module):
         kda_ablation: tuple[bool, bool] = (False, False),
         value_residual: bool = False,
         kv_input: Float[Array, "B S W"] | None = None,
+        out_scale: Float[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
+        """``out_scale`` (the halting gate) scales each token's output before the branch SConv, so a halted
+        token's own compute never reaches its neighbours; with ``halt_write=unit`` the stats carry its votes.
+        ``sum_stream`` (with ``sum_components``) feeds those q/k/v projections from the straight-sum
         stream, through the same RMSNorm and GatedNorm, instead of the AttnRes mix ``h``; ``kv_input``
         (``kv_stream_dim``) is the normed KV side stream the K/V projections read. Returns the branch output
         and the mixer's logging stats."""
@@ -3572,6 +3715,7 @@ class Block(eqx.Module):
                 value_residual=value_residual,
                 kv_input=kv_input,
                 token_ids=token_ids,
+                halt_o=self.halt_attn,
             )
         else:
             out, stats = self.attn(
@@ -3584,7 +3728,10 @@ class Block(eqx.Module):
                 proj_inputs=proj_inputs,
                 value_residual=value_residual,
                 kv_input=kv_input,
+                halt_o=self.halt_attn,
             )
+        if out_scale is not None:
+            out = out * out_scale[..., None].astype(out.dtype)
         if self.sconv_attn is not None:
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
         return out, stats
@@ -3604,8 +3751,10 @@ class Block(eqx.Module):
         saved_routed: Float[Array, "T L"] | None = None,
         moe_k_keep: Int[Array, "B S"] | None = None,
         moe_dynamic_layer: bool = False,
+        out_scale: Float[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
+        """``out_scale`` as in ``attn_branch``.
+        ``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
         (``moe_hash_layers``, ``moe_gumbel_tau``, ``router_token_bias_rank``, ``router_bias_seed``)."""
         normed = self._mlp_input(_laurel(h, None, None))
@@ -3637,8 +3786,12 @@ class Block(eqx.Module):
                 saved_routed,
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
+                halt_shared=self.halt_shared,
+                halt_routed=self.halt_routed,
             )
         else:
+            if self.halt_routed is not None:
+                raise ValueError("halt_write=unit needs shared experts")
             out, stats = self.mlp(
                 mlp_in,
                 hash_token_ids=hash_token_ids,
@@ -3656,6 +3809,8 @@ class Block(eqx.Module):
                 # No shared expert here (shared_expert_mult_*): zero pre-activations, so every layer carries the
                 # stat the shared layers emit (``moe_and_shared_fused``).
                 stats = {**stats, _SHARED_PRE: jnp.zeros((mlp_in.shape[0] * mlp_in.shape[1], 0), mlp_in.dtype)}
+        if out_scale is not None:
+            out = out * out_scale[..., None].astype(out.dtype)
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
         return out, stats
@@ -3839,18 +3994,29 @@ def _run_expert_bank(
     selected: jax.Array,
     combine_weights: jax.Array,
     overlap: MoeOverlapWork | None = None,
+    halt_routed: jax.Array | None = None,
 ):
     """Dispatch one expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
     dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``, plus the
     ``overlap`` output when given. ``moe_drop_renorm`` also asks the backend for the per-slot keep mask
-    (``MoeDispatchCounts.assignment_keep``)."""
+    (``MoeDispatchCounts.assignment_keep``). ``halt_routed`` ``[E, I]`` widens the down-projection by its
+    halting-vote column (output column ``w_down.shape[-1]``), zero-padded to a multiple of 8."""
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
+        w_up, w_down = _mixed_width_weights(
+            cfg, em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1), em.w_down
+        )
+        if halt_routed is not None:
+            spec = P(*_padded_spec(w_down))
+            column = reshard(halt_routed.astype(w_down.dtype)[:, :, None], spec)
+            pad = jnp.zeros((*w_down.shape[:2], _HALT_COLUMN_PAD - 1), w_down.dtype, out_sharding=spec)
+            w_down = jnp.concatenate([w_down, column, pad], axis=-1)
         return moe_mlp(
             routed_input,
             selected,
             combine_weights,
-            *_mixed_width_weights(cfg, em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1), em.w_down),
+            w_up,
+            w_down,
             activation=(ActivationFunctionEnum.relu2) if ungated else _tied_expert_activation(cfg, em),
             implementation=em.implementation,
             mesh=get_abstract_mesh(),
@@ -3872,6 +4038,8 @@ def _run_expert_bank(
         )
     if cfg.fp8_recipe != Fp8Recipe.NONE:
         raise ValueError("fp8_recipe supports ungated ReLU^2 expert banks only")
+    if halt_routed is not None:
+        raise ValueError("halt_write=unit needs ungated expert banks")
     return em(
         routed_input,
         selected,
@@ -4590,6 +4758,9 @@ def _attn_res_sublayers(
         kv_gate = 2 * cfg.num_layers + (cfg.num_layers if cfg.attn_res_shared_query else 0) + layer_index
         h_kv, _, _ = mix(None, kv_gate, False, leading_sources_only=True)
         kv_input = layer._attn_input(h_kv)
+        if cfg.attn_res_kv_strict_query and isinstance(layer.attn, KimiDeltaAttention):
+            h = h_kv
+    halt_scale = None if logit_bias is None else logit_bias.get(_HALT_SCALE)
     attn_out, attn_stats = attn_branch(
         layer,
         h,
@@ -4603,7 +4774,9 @@ def _attn_res_sublayers(
         kda_ablation,
         physical in (),
         kv_input,
+        halt_scale,
     )
+    attn_vote = attn_stats.pop(_HALT_Z, None)
     attn_out = _sublayer_dropout(cfg, attn_out, noise_key, _ATTN_DROPOUT_SALT)
     skip_keep = None if logit_bias is None else logit_bias.get(_SKIP_KEEP)
     if skip_keep is not None:
@@ -4624,7 +4797,8 @@ def _attn_res_sublayers(
     route = _route_kwargs(cfg, physical, token_ids, noise_key, logit_bias)
     route["moe_k_keep"] = _moe_k_keep(cfg, physical, mask, attn_out)
     route["moe_dynamic_layer"] = physical in cfg.moe_dynamic_layers
-    mlp_out, router_stats = layer.mlp_branch(h, mask, **shared_kwargs, **route)
+    mlp_out, router_stats = layer.mlp_branch(h, mask, **shared_kwargs, **route, out_scale=halt_scale)
+    halt_z = layer.halt_write_z(attn_out, mlp_out, attn_vote, router_stats.pop(_HALT_Z, None))
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
@@ -4662,6 +4836,7 @@ def _attn_res_sublayers(
         _ATTN_RES_Z: z_attn + z_mlp,
         _ATTN_RES_W_ATTN: w_attn,
         _ATTN_RES_W_MLP: w_mlp,
+        **({} if halt_z is None else {_HALT_Z: halt_z}),
     }
 
 
@@ -4860,7 +5035,9 @@ def _kda_layer_indices(cfg: GrugModelConfig) -> tuple[int, ...]:
     """Layers whose mixer is KDA: the local layers when ``local_mixer`` is KDA, else none."""
     if cfg.local_mixer != LocalMixer.KDA:
         return ()
-    return tuple(i for i in range(cfg.num_layers) if not _is_long_layer(i, cfg.num_layers, cfg.global_every, (None)))
+    return tuple(
+        i for i in range(cfg.num_layers) if not _is_long_layer(i, cfg.num_layers, cfg.global_every, cfg.global_layers)
+    )
 
 
 def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
@@ -4959,7 +5136,7 @@ def _scan_units(cfg: GrugModelConfig) -> tuple[tuple[_UnitLayer, ...], int]:
     kda, tail = set(_kda_layer_indices(cfg)), set(_tail_layers(cfg))
 
     def signature(i: int) -> tuple[bool, bool, bool]:
-        return i in kda, _is_long_layer(i, cfg.num_layers, cfg.global_every, None), i in tail
+        return i in kda, _is_long_layer(i, cfg.num_layers, cfg.global_every, cfg.global_layers), i in tail
 
     unit0 = [signature(j) for j in range(min(unit_size, cfg.num_layers))]
     num_units = 0
@@ -5435,6 +5612,51 @@ def _strip_unread_weights(stats: dict[str, jax.Array], schedule: _BlockSchedule,
         stats[name] = jnp.concatenate([weights[:filled], weights[num_sources:]]) if has_partial else weights[:filled]
 
 
+HALT_THRESHOLDS = (0.1, 0.3, 0.5)
+
+
+def halt_schedule(cfg: GrugModelConfig, step: jax.Array, total_steps: int) -> Float[Array, " 2"]:
+    """``(penalty weight, floor)`` of the halting gate at ``step``: ``halt_penalty`` ramped linearly from 0 over
+    ``halt_penalty_ramp_frac`` of training, and ``halt_floor`` decaying linearly to 0 at ``halt_floor_frac``."""
+    frac = jnp.asarray(step, jnp.float32) / max(total_steps, 1)
+    penalty = cfg.halt_penalty * jnp.clip(frac / cfg.halt_penalty_ramp_frac, 0.0, 1.0)
+    floor = cfg.halt_floor * jnp.clip(1.0 - frac / max(cfg.halt_floor_frac, 1e-9), 0.0, 1.0)
+    return jnp.stack([penalty, floor])
+
+
+def _halt_terms(
+    cfg: GrugModelConfig,
+    gates: Float[Array, "G B S"],
+    raw: Float[Array, "G B S"],
+    schedule: Float[Array, " 2"],
+    loss_weight: Float[Array, "B S"],
+    token_ce: Float[Array, "B S"] | None,
+) -> tuple[jax.Array, dict[str, jax.Array]]:
+    """The halting gate's training loss (compute penalty plus the optional "low and wrong" term) and its logs:
+    per gated layer the mean, quantiles and fraction below each of ``HALT_THRESHOLDS`` of the raw gate."""
+    weight = loss_weight.astype(jnp.float32)
+    count = jnp.maximum(jnp.sum(weight), 1.0)
+    mean_gate = jnp.mean(gates, axis=0)
+    penalty = schedule[0] * jnp.sum(weight * mean_gate) / count
+    loss = penalty
+    metrics = {"train/halt/penalty_weight": schedule[0], "train/halt/floor": schedule[1]}
+    if token_ce is not None:
+        wrong = jnp.sum(weight * (1.0 - mean_gate) * jax.lax.stop_gradient(token_ce)) / count
+        loss = loss + cfg.halt_wrong_weight * wrong
+        metrics["train/halt/wrong_term"] = jax.lax.stop_gradient(wrong)
+    metrics["train/halt/penalty"] = jax.lax.stop_gradient(penalty)
+    sg_raw = jax.lax.stop_gradient(raw)
+    flat = reshard(sg_raw.reshape(sg_raw.shape[0], -1), P(None, None))
+    quantiles = jnp.quantile(flat, jnp.asarray([0.1, 0.25, 0.5, 0.75, 0.9]), axis=1)
+    for n, layer in enumerate(cfg.halt_layers):
+        metrics[f"train/halt/g_mean_L{layer}"] = jnp.sum(weight * sg_raw[n]) / count
+        for q, name in zip(quantiles[:, n], ("p10", "p25", "p50", "p75", "p90"), strict=True):
+            metrics[f"train/halt/g_{name}_L{layer}"] = q
+        for tau in HALT_THRESHOLDS:
+            metrics[f"train/halt/frac_below_{tau:g}_L{layer}"] = jnp.sum(weight * (sg_raw[n] < tau)) / count
+    return loss, metrics
+
+
 class Transformer(eqx.Module):
     token_embed: jax.Array
     embed_norm: LearnedRMSNorm
@@ -5462,6 +5684,7 @@ class Transformer(eqx.Module):
     skip_adapter: DenseMLP | None  # cfg.skip_adapter_dim: the skipped tokens' readout MLP
     skip_router: Float[Array, " D"] | None  # cfg.skip_router_layers: the skip router's score
     skip_router_bias: Float[Array, ""] | None
+    halt_bias: Float[Array, " G"] | None  # cfg.halt_layers: each gated layer's halting bias b_l
     skip_probe_w1: Float[Array, "3 D H"] | None  # cfg.skip_probe_layer probes (f0, f1, g)
     skip_probe_b1: Float[Array, "3 H"] | None
     skip_probe_w2: Float[Array, "3 H"] | None
@@ -5584,6 +5807,11 @@ class Transformer(eqx.Module):
                 else None
             ),
             skip_router_bias=jnp.zeros((), jnp.float32) if cfg.skip_router_layers else None,
+            halt_bias=(
+                reshard(jnp.full((len(cfg.halt_layers),), cfg.halt_bias_init, jnp.float32), P(None))
+                if cfg.halt_layers
+                else None
+            ),
             **_mid_head_params(cfg, output_proj.shape, random.fold_in(key, 5)),
             **_final_conf_params(cfg, random.fold_in(key, 7)),
             **_probe_mlp_params("skip_probe", 3 if cfg.skip_probe_layer is not None else 0, cfg, random.fold_in(key, 8)),
@@ -5707,9 +5935,12 @@ class Transformer(eqx.Module):
         extra_mlp_active: jax.Array | bool = True,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
+        halt_schedule: Float[Array, " 2"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``layer_gates`` (``layer_onset_gates`` at the train step) masks or ramps the delayed layers' AttnRes
         sources; None runs every layer fully on.
+        ``halt_schedule`` (``halt_schedule`` at the train step: penalty weight, floor) marks a training forward of
+        the halting gate: the floor applies and ``halt_threshold`` does not.
         ``extra_mlp_active`` (traced bool) turns on the ``extra_mlp_layers`` MLPs (off: no token reaches them).
         ``pre_norm_grad_probe`` (zeros ``[B, S]``) passes the stream entering ``final_norm`` through
         ``lm_head_grad_probe`` and adds each token's RMS of it as ``FINAL_NORM_INPUT_RMS_KEY``.
@@ -5802,13 +6033,14 @@ class Transformer(eqx.Module):
                 layer_skip,
                 extra_mlp_active,
                 layer_gates,
+                halt_schedule,
             )
         else:
             if layer_skip is not None:
                 raise ValueError("layer_skip needs attn_res")
             # One compiled Block body scanned over the stacked layers; per-layer short/long is a
             # Bool[num_layers] scan input, and the FA4 metadata is selected per layer with jnp.where.
-            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every, (None))
+            mask_schedule = _long_layer_schedule(cfg.num_layers, cfg.global_every, cfg.global_layers)
 
             def _scan_layers(
                 carry_hidden: Float[Array, "B S D"],
@@ -5895,6 +6127,7 @@ class Transformer(eqx.Module):
         layer_skip: "LayerSkip | None" = None,
         extra_mlp_active: jax.Array | bool = True,
         layer_gates: Float[Array, " L"] | None = None,
+        halt_schedule: Float[Array, " 2"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
         """Block AttnRes over the layers, unrolled so each gate reads only its valid sources.
 
@@ -5987,6 +6220,24 @@ class Transformer(eqx.Module):
         stats_out: list[dict[str, jax.Array]] = []
         z_out: list[jax.Array] = []
         extra_state: dict[str, jax.Array] = {}
+        halt_gates: list[tuple[jax.Array, jax.Array]] = []  # (effective, raw) per gated layer
+
+        def halt_gate(i: int) -> jax.Array:
+            """Gated layer ``i``'s output scale from the halting stream written by the layers below it."""
+            assert self.halt_bias is not None and "halt_z" in extra_state
+            n = cfg.halt_layers.index(i)
+            step_gate = jax.nn.sigmoid(extra_state["halt_z"] + self.halt_bias[n])
+            raw = step_gate if "halt_g" not in extra_state else extra_state["halt_g"] * step_gate
+            extra_state["halt_g"] = raw
+            if halt_schedule is not None:
+                floor = halt_schedule[1]
+                gate = floor + (1.0 - floor) * raw
+            elif cfg.halt_threshold is not None:
+                gate = jnp.where(raw >= cfg.halt_threshold, raw, 0.0)
+            else:
+                gate = raw
+            halt_gates.append((gate, raw))
+            return gate
 
         def run_pass(state, pass_index, start=0):
             """One pass over the physical layers from ``start``, extending the history; returns the new state."""
@@ -6004,7 +6255,7 @@ class Transformer(eqx.Module):
                         _logit_rows(_attn_res_source_logits(partial, queries[2 * eff :], eps, (False))),
                     )
                     partial = None
-                use_long = _is_long_layer(i, num_layers, cfg.global_every, (None))
+                use_long = _is_long_layer(i, num_layers, cfg.global_every, cfg.global_layers)
                 partial_before = partial
                 layer_extras = logit_bias
                 if ple_rows is not None:
@@ -6062,6 +6313,8 @@ class Transformer(eqx.Module):
                 skip_keep = functools.reduce(jnp.multiply, keeps) if keeps else None
                 if skip_keep is not None:
                     layer_extras = {**(layer_extras or {}), _SKIP_KEEP: skip_keep}
+                if i in cfg.halt_layers:
+                    layer_extras = {**(layer_extras or {}), _HALT_SCALE: halt_gate(i)}
                 layer_args = (
                     (layer, blocks, block_logits, partial, queries, layer_extras),
                     long_layer_mask if use_long else short_layer_mask,
@@ -6075,6 +6328,9 @@ class Transformer(eqx.Module):
                     partial, blocks, block_logits, stats = layer_fn(*layer_args)
                 else:
                     partial, blocks, block_logits, stats = _attn_res_layer_passthrough(*layer_args, kv_share)
+                halt_write = stats.pop(_HALT_Z, None)
+                if halt_write is not None and i < cfg.halt_layers[-1]:
+                    extra_state["halt_z"] = extra_state["halt_z"] + halt_write if "halt_z" in extra_state else halt_write
                 absorb(eff, stats, partial_before is not None)
             return blocks, block_logits, partial
 
@@ -6180,6 +6436,9 @@ class Transformer(eqx.Module):
         if "router_frac" in extra_state:
             final_stats["attn_res_skip_router_frac"] = extra_state["router_frac"]
             final_stats[_SKIP_ROUTER_SCORE] = extra_state["router_score"]
+        if halt_gates:
+            final_stats[_HALT_GATES] = jnp.stack([gate for gate, _ in halt_gates])
+            final_stats[_HALT_GATES_RAW] = jnp.stack([raw for _, raw in halt_gates])
         # Source n is block n (the embedding is block len(extra_sources)); "p" is the running partial.
         for gate, (mean_weights, has_partial) in sorted(weight_logs.items()):
             num_blocks = mean_weights.shape[0] - int(has_partial)
@@ -6390,7 +6649,7 @@ class Transformer(eqx.Module):
         cfg = self.config
         return tuple(
             ("kda" if isinstance(layer.attn, KimiDeltaAttention) else "mla" if cfg.mla else "gqa")
-            + ("_global" if _is_long_layer(i, cfg.num_layers, cfg.global_every, (None)) else "_local")
+            + ("_global" if _is_long_layer(i, cfg.num_layers, cfg.global_every, cfg.global_layers) else "_local")
             for i, layer in enumerate(self.layers())
         )
 
@@ -6612,6 +6871,9 @@ class Transformer(eqx.Module):
             out["skip_router_score"] = stats[_SKIP_ROUTER_SCORE]
         if _ENTROPY_PRED in stats:
             out["entropy_pred"] = stats[_ENTROPY_PRED]
+        if _HALT_GATES_RAW in stats:
+            for n, layer in enumerate(self.config.halt_layers):
+                out[f"halt_g_L{layer}"] = stats[_HALT_GATES_RAW][n]
         return out
 
     def mid_head_diagnostics(self, token_ids: Int[Array, "B S"], mask: AttentionMask) -> dict[str, Float[Array, "B S"]]:
@@ -6651,6 +6913,7 @@ class Transformer(eqx.Module):
         head_grad_probe: Float[Array, "B S"] | None = None,
         pre_norm_grad_probe: Float[Array, "B S"] | None = None,
         layer_gates: Float[Array, " L"] | None = None,
+        halt_schedule: Float[Array, " 2"] | None = None,
     ) -> jax.Array | tuple[jax.Array, dict[str, jax.Array | SummaryStats]]:
         """``train_terms`` adds the training-only objectives (MTP, AttnRes z-loss, the mid head); evals leave it off
         so they score the plain next-token loss. ``head_grad_probe`` (zeros ``[B, S]``) passes the main lm_head
@@ -6667,7 +6930,10 @@ class Transformer(eqx.Module):
             extra_mlp_active=extra_mlp_active,
             pre_norm_grad_probe=pre_norm_grad_probe,
             layer_gates=layer_gates,
+            halt_schedule=halt_schedule,
         )
+        halt_gates = router_metrics.pop(_HALT_GATES, None)
+        halt_raw = router_metrics.pop(_HALT_GATES_RAW, None)
         final_norm_rms = router_metrics.pop(FINAL_NORM_INPUT_RMS_KEY, None)
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         mid_hidden = router_metrics.pop(_MID_HIDDEN, None)
@@ -6685,7 +6951,7 @@ class Transformer(eqx.Module):
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        def lm_loss(h: jax.Array) -> jax.Array:
+        def lm_loss(h: jax.Array, reduction: str = reduction) -> jax.Array:
             head_in, lm_head = self._lm_head_operands(h, token_ids)
             ce = functools.partial(
                 fused_linear_softmax_cross_entropy_loss,
@@ -6706,7 +6972,14 @@ class Transformer(eqx.Module):
             # The loss is a mean over loss tokens, so the raw per-token gradient is the per-token one / N.
             raw_clip = jnp.inf if clip is None else clip / jnp.maximum(jnp.sum(loss_weight.astype(jnp.float32)), 1.0)
             head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
-        cross_entropy_loss = lm_loss(head_in)
+        halt_train = halt_gates is not None and train_terms and halt_schedule is not None
+        token_ce = None
+        if halt_train and self.config.halt_wrong_weight:
+            # The "low and wrong" term weights each token by its own loss: score per token, then average.
+            token_ce = lm_loss(head_in, "none")
+            cross_entropy_loss = jnp.sum(token_ce) / jnp.maximum(jnp.sum(loss_weight), 1.0)
+        else:
+            cross_entropy_loss = lm_loss(head_in)
         replay_loss = None
         if head_replay is not None:
             # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
@@ -6779,6 +7052,13 @@ class Transformer(eqx.Module):
             }
         if compress_loss is not None and train_terms:
             loss = loss + jnp.sum(compress_loss).astype(loss_dtype)
+        if halt_train:
+            assert halt_gates is not None and halt_raw is not None and halt_schedule is not None
+            halt_loss, halt_metrics = _halt_terms(
+                self.config, halt_gates, halt_raw, halt_schedule, loss_weight, token_ce
+            )
+            loss = loss + halt_loss.astype(loss_dtype)
+            mid_metrics = {**mid_metrics, **halt_metrics}
         entropy_metrics: dict[str, jax.Array] = {}
         if entropy_pred is not None and train_terms:
             head_in, lm_head = self._lm_head_operands(hidden, token_ids)
@@ -7146,7 +7426,7 @@ def forward_flops_per_token(model: "Transformer") -> float:
         for i in range(cfg.num_layers):
             if i in kda_layers:
                 continue
-            long = _is_long_layer(i, cfg.num_layers, cfg.global_every, None)
+            long = _is_long_layer(i, cfg.num_layers, cfg.global_every, cfg.global_layers)
             span = seq if long or window is None else min(window, seq)
             # Mean keys per query under a causal mask capped at ``span``: sum_p min(p + 1, span) / seq.
             keys = (span * (span + 1) / 2 + (seq - span) * span) / seq
