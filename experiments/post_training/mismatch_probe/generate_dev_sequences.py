@@ -87,37 +87,32 @@ def select_prompts(reserved_rows: list[dict], x_rows: list[dict], *, count_per_s
     ]
 
 
-async def generate(engines_client, tokenizer, requests: list[dict], *, master_seed: int) -> list[dict]:
-    """One sampled continuation per request; returns the scored-sequence rows."""
+async def generate(engines_client, tokenizer, requests: list[dict], *, master_seed: int) -> list[str]:
+    """One sampled continuation per request, each under its own seed and token cap.
+
+    The engine client shares one set of sampling parameters across a call, so each
+    request is its own call; the calls run concurrently.
+    """
     from skyrl_train.inference_engines.base import InferenceEngineInput  # noqa: PLC0415  # skyrl_train only in a runtime
 
-    prompt_texts = []
-    for request in requests:
-        text = tokenizer.apply_chat_template(
-            [{"role": "user", "content": request["prompt"]}],
-            chat_template=shared_template(FAMILY_TOKEN_MAPS[FAMILY]),
-            tokenize=False,
-            add_generation_prompt=True,
+    async def one(request: dict) -> list[int]:
+        output = await engines_client.generate(
+            InferenceEngineInput(
+                prompt_token_ids=[render_prompt_ids(tokenizer, request["prompt"])],
+                sampling_params={
+                    "temperature": TEMPERATURE,
+                    "top_p": TOP_P,
+                    "max_tokens": request["max_tokens"],
+                    "seed": request_seed(master_seed, request["sample_id"], 0),
+                },
+            )
         )
-        prompt_texts.append(text)
-    engine_input = InferenceEngineInput(
-        prompts=prompt_texts,
-        sampling_params=[
-            {
-                "temperature": TEMPERATURE,
-                "top_p": TOP_P,
-                "max_tokens": request["max_tokens"],
-                "seed": request_seed(master_seed, request["sample_id"], 0),
-            }
-            for request in requests
-        ],
-    )
+        (response_ids,) = output["response_ids"]
+        return response_ids
+
     started = time.monotonic()
-    output = await engines_client.generate(engine_input)
+    response_ids = await asyncio.gather(*(one(request) for request in requests))
     print(f"generation took {time.monotonic() - started:.0f} s")
-    response_ids = output["response_ids"]
-    if len(response_ids) != len(requests):
-        raise ValueError(f"the engines returned {len(response_ids)} responses for {len(requests)} prompts")
     return [response_text(tokenizer, ids) for ids in response_ids]
 
 

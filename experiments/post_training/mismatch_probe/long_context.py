@@ -66,23 +66,27 @@ def scoring_config(model_path: str, *, num_gpus: int) -> object:
     return cfg
 
 
-def synthetic_batch(length: int, vocabulary_size: int, seed: int) -> TrainingInputBatch:
-    """One synthetic sequence of ``length`` in-vocabulary token ids."""
+def synthetic_batch(length: int, vocabulary_size: int, seed: int, *, rows: int) -> TrainingInputBatch:
+    """``rows`` synthetic sequences of ``length`` in-vocabulary token ids.
+
+    The mesh dispatch splits the batch over the data-parallel ranks, so one row per
+    rank puts exactly one ``length``-token sequence on each GPU.
+    """
     generator = np.random.default_rng(seed)
-    token_ids = generator.integers(10, vocabulary_size, size=(1, length))
+    token_ids = generator.integers(10, vocabulary_size, size=(rows, length))
     batch = TrainingInputBatch(
         {
             "sequences": torch.from_numpy(token_ids),
-            "attention_mask": torch.ones(1, length, dtype=torch.int64),
+            "attention_mask": torch.ones(rows, length, dtype=torch.int64),
         }
     )
     batch.metadata = {"response_length": length}
     return batch
 
 
-def score_length(policy, length: int, vocabulary_size: int, seed: int) -> dict:
-    """One probe forward at ``length``; returns the timing and memory record."""
-    batch = synthetic_batch(length, vocabulary_size, seed)
+def score_length(policy, length: int, vocabulary_size: int, seed: int, *, num_gpus: int) -> dict:
+    """One probe forward of one ``length``-token sequence per GPU; returns the timing and memory record."""
+    batch = synthetic_batch(length, vocabulary_size, seed, rows=num_gpus)
     batch.metadata["probe_mode"] = NATIVE_MODE
     batch.metadata["probe_micro_batch_size"] = 1
     started = time.monotonic()
@@ -144,7 +148,7 @@ def main() -> None:
         largest = None
         for length in sorted(args.lengths):
             try:
-                record = score_length(policy, length, vocabulary_size, args.seed)
+                record = score_length(policy, length, vocabulary_size, args.seed, num_gpus=args.num_gpus)
             except Exception as error:
                 records.append({"length": length, "failed": type(error).__name__, "detail": str(error)[:500]})
                 print(f"length {length}: FAILED {type(error).__name__}")
