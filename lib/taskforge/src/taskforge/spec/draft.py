@@ -518,9 +518,7 @@ def machine_runtime(
 ) -> MachineRuntimeSpec:
     """The ``MachineRuntimeSpec`` of a machine with ``requirements`` on ``host``.
 
-    ``requirements`` are the machine's ``host_requirements``. ``lower`` builds every task and verifier
-    machine with it; a builder prototyping a machine outside a task rollout spec uses it too, so the
-    backend choice stays in one place.
+    Pass requirements already resolved for the available factories with ``host_requirements``.
     """
     return MachineRuntimeSpec(
         backend=machine_backend(requirements, host).value,

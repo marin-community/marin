@@ -1,0 +1,64 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""A small valid proposal document that tests edit one property at a time."""
+
+import json
+from dataclasses import replace
+
+import pytest
+
+from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
+
+FILLER = "The builder writes this section in full detail with concrete inputs, outputs, and checks. " * 6
+
+SECTIONS = {
+    "Grader design and controls": (
+        "The private evaluator runs `grader/check.py`, which parses the answer and compares each value. " + FILLER
+    ),
+    "Research plan": "research[0] finds two real lab handouts to model the deliverable on. " + FILLER,
+    "Build plan": "Session S1 writes `grader/check.py` and the fixtures under `fixtures/`. " + FILLER,
+}
+
+
+def document(verification: str = "code", resources: str = '["grader/check.py", "fixtures/*.json"]') -> str:
+    body = "\n".join(f"## {h}\n{SECTIONS.get(h, FILLER)}\n" for h in REQUIRED_HEADINGS)
+    return json.dumps(
+        {
+            "header": {
+                "id": "d01.cap/1",
+                "source": {"kind": "capability", "ref": "d01.cap", "hash": "abc"},
+                "grounding": "unverified",
+                "null_reason": None,
+                "environment": "reasoning",
+                "solver_machine": "shellsim",
+                "verification": verification,
+                "research_need": "needed",
+                "research_reason": "the deliverable is modeled on real lab handouts",
+                "research": [{"kind": "web", "purpose": "two real lab handouts to model the deliverable on"}],
+                "build": [{"name": "grader", "description": "the private checker and its tests"}],
+                "resources": json.loads(resources),
+            },
+            "body": body,
+        }
+    )
+
+
+def with_section(p: TaskProposal, heading: str, text: str) -> TaskProposal:
+    body = "\n".join(f"## {h}\n{text if h == heading else SECTIONS.get(h, FILLER)}\n" for h in REQUIRED_HEADINGS)
+    return replace(p, body=body)
+
+
+@pytest.fixture
+def proposal() -> TaskProposal:
+    return parse(document())
+
+
+@pytest.fixture
+def make_document():
+    return document
+
+
+@pytest.fixture
+def section_replaced():
+    return with_section

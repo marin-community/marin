@@ -27,7 +27,8 @@ src/taskforge/
   stage10_proposal/            model.py: the TaskProposal JSON document and generation schema;
                                source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
                                protocol, `proposal_batch`, `propose_all`
-  stage20_triage/              verdict.py: TriageDecision and `accept`
+  stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
+                               verdict.py: Verdict, TriageDecision and `accept`
   stage30_author/              program.py: build steps and the DAG they form;
                                author.py: Revision, AuthoredProgram, the Author protocol, `static_author`,
                                the program manifest;
@@ -79,11 +80,36 @@ non-null body cites every item, and only listed items, as `research[i]`. `solver
 solver's machine: `null` for a container proposal, which runs in the image its build publishes, and
 `none`, `shellsim`, `cpython` or `packages` (`SolverMachine`) for a reasoning or shellsim one, where
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
-The proposer or triage writes it, and the build keeps it.
+The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
+not a relative path inside the build root and a `build` name that repeats.
 `document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
 field that constrains a completion to the typed object for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
+
+## Triage
+
+The default triage is `stage20_triage.preflight.preflight(proposal) -> Verdict`, a deterministic
+preflight that makes no model call. Header validity is `parse`'s job, which runs before triage, so
+the checks in `stage20_triage.checks.CHECKS` read the body and what the header promises. One is
+fatal: the required sections have content. Three are advisory: the grader section is consistent with
+the declared verification, every research item states a purpose, and the build plan names every
+declared resource. A fatal failure rejects the proposal with the failing check as the reason, and a
+null proposal is rejected with its `null_reason`. Anything else is accepted and goes to build.
+Advisory failures are recorded on the verdict and decide nothing. Whether the host can provide the
+declared machine is checked by the build before any model call, and a host that cannot ends the
+workpiece as the host's failure.
+
+A consumer could add a model review to triage in one of two designs:
+
+- A panel with repair: several independent model reviews of the proposal, a majority vote that
+  accepts, rejects or asks for repair, one model rewrite of a repair proposal within a budget, and
+  a repair exit on the stage coordinator that sends the rewrite back to triage.
+- A bounded review with obligations: one model review that accepts the proposal and attaches
+  obligations its author must honour, carried to build as state on the accept event.
+
+Neither is implemented by default, because experiments found them not to be meaningful predictors
+of downstream quality.
 
 ## Task specs
 

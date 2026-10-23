@@ -272,7 +272,7 @@ Score = Annotated[int, Field(ge=1, le=5)]
 
 
 class RubricShaped(BaseModel):
-    """Seven 1-5 scores, three lists and an enum, the shape of triage's rubric report."""
+    """Seven 1-5 scores, three lists and an enum: a review-shaped object."""
 
     clarity: Score
     feasibility: Score

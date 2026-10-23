@@ -14,6 +14,7 @@ import json
 import re
 from dataclasses import dataclass, replace
 from enum import StrEnum
+from pathlib import PurePosixPath
 from typing import Annotated, Any
 
 from pydantic import ConfigDict, StringConstraints, TypeAdapter, with_config
@@ -187,7 +188,10 @@ def parse(text: str) -> TaskProposal:
     except ValueError as error:
         raise ProposalFormatError(str(error)) from error
     header, body = proposal.header, proposal.body
-    _solver_machine(header.solver_machine, header.environment)
+    violation = solver_machine_violation(header.environment, header.solver_machine)
+    if violation is not None:
+        raise ProposalFormatError(f"solver_machine: {violation}")
+    _check_build(header)
     if header.null_reason is None:
         _check_headings(body)
     elif not body.strip():
@@ -259,24 +263,34 @@ def _check_research(header: ProposalHeader, body: str) -> None:
             raise ProposalFormatError(f"body: research[{index}] is never cited as research[{index}]")
 
 
-def _solver_machine(value: SolverMachine | None, environment: Environment) -> SolverMachine | None:
+def solver_machine_violation(environment: Environment, machine: SolverMachine | None) -> str | None:
+    """Why ``machine`` cannot be the solver machine of an ``environment`` proposal, or ``None`` when it can.
+
+    A container proposal declares no machine (``None``), any other declares one, and only a reasoning
+    proposal may declare ``SolverMachine.NONE``.
+    """
     if environment is Environment.CONTAINER:
-        if value is not None:
-            raise ProposalFormatError(
-                f"solver_machine: a container proposal runs in its own image and declares null, got {value!r}"
-            )
+        if machine is not None:
+            return f"a container proposal runs in its own image and declares null, got {str(machine)!r}"
         return None
-    if value is None:
-        raise ProposalFormatError(
-            f"solver_machine: a {environment} proposal declares one of {[str(m) for m in SolverMachine]}, got null"
-        )
-    machine = value
+    if machine is None:
+        return f"a {environment} proposal declares one of {[str(m) for m in SolverMachine]}, got null"
     if machine is SolverMachine.NONE and environment is not Environment.REASONING:
-        raise ProposalFormatError(
-            f"solver_machine: only a reasoning proposal may declare {SolverMachine.NONE}; a {environment} "
+        return (
+            f"only a reasoning proposal may declare {SolverMachine.NONE}; a {environment} "
             f"proposal declares one of {[str(m) for m in SolverMachine if m is not SolverMachine.NONE]}"
         )
-    return machine
+    return None
+
+
+def _check_build(header: ProposalHeader) -> None:
+    names = [item.name for item in header.build]
+    repeated = sorted({name for name in names if names.count(name) > 1})
+    if repeated:
+        raise ProposalFormatError(f"build: names repeat: {repeated}")
+    escaping = [r for r in header.resources if PurePosixPath(r).is_absolute() or ".." in PurePosixPath(r).parts]
+    if escaping:
+        raise ProposalFormatError(f"resources: must be relative paths inside the build root: {escaping}")
 
 
 _PROPOSAL = TypeAdapter(TaskProposal)
