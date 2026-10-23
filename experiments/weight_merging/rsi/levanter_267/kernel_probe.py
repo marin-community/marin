@@ -47,12 +47,17 @@ def cases(family):
             ],
             dict(name="packed-short-tail", width=256, lengths=[128, 127], ends=[4099, 4098]),
         ]
-    if family == "exhausted":
-        return [
+    if family in ("exhausted", "exhausted-first", "compact"):
+        rows = [
             dict(name="exhausted-second", width=256, lengths=[128, 0], ends=[4227, 4098]),
             dict(name="exhausted-first", width=256, lengths=[0, 128], ends=[4098, 4227], page_counts=[33, 42]),
             dict(name="one-active-capacity-two", width=256, lengths=[128, 0], ends=[4227, 4098], active=1),
         ]
+        if family == "exhausted-first":
+            return [rows[1]]
+        if family == "compact":
+            return [rows[2]]
+        return rows
     raise ValueError(family)
 
 
@@ -213,7 +218,9 @@ def run(family, output, q_tile, source_commit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--submit", action="store_true")
-    parser.add_argument("--family", choices=("serial", "packed", "exhausted"), required=True)
+    parser.add_argument(
+        "--family", choices=("serial", "packed", "exhausted", "exhausted-first", "compact"), required=True
+    )
     parser.add_argument("--q-tile", type=int, choices=(0, 1, 2, 16, 32), default=0)
     parser.add_argument("--output", required=True)
     parser.add_argument("--name", required=True)

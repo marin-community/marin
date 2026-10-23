@@ -35,3 +35,12 @@ def test_conditional_probe_carries_dependency_and_returns_both_layers(monkeypatc
     result = compiled_invoke(q, kv, lens, indices, cu, num, window=2048, conditional=True)
     np.testing.assert_array_equal(result[0], 2)
     np.testing.assert_array_equal(result[1], 4)
+
+
+def test_compact_control_preserves_live_metadata():
+    original = kernel_probe.cases("exhausted")[0]
+    compact = kernel_probe.cases("compact")[0]
+    for field in ("width", "lengths", "ends"):
+        assert compact[field] == original[field]
+    assert compact["active"] == 1
+    assert kernel_probe.cases("exhausted-first")[0]["lengths"] == [0, 128]
