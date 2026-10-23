@@ -227,26 +227,27 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 
 `experiments.post_training.inventory.train` starts RL from Datakit SFT revision
 `fe666478454e79fe6027a0bab0388d9abd68f51a`, using its tokenizer at the same revision.
-The data dependency prepares all 100,000 training tasks and a fixed heldout panel of
-100 tasks, with 20 per family. Its separate `full_validation.parquet` retains all 910
-heldout source tasks.
-
-Script graders that reference the missing source lock use a pinned reconstruction of that environment.
-The data summary records this dependency replacement; original source artifacts remain unchanged.
+It consumes the versioned [task-selection artifact](task-curation.md#final-task-selection).
+For the Snowball inventory, that artifact must contain 100,000 canonical training
+`TaskSpec` rows and a fixed 100-task heldout panel with 20 per family. The same
+artifact retains all 910 heldout source tasks in `full_validation.parquet`.
+SkyRL binds the task harness, rollout limits and verifier backend when loading
+the `task_spec` rows.
 
 Print the three-update qualification plan:
 
 ```bash
 uv run python -m experiments.post_training.inventory.train \
-  --version 2026.10.22.4 --data-version 2026.10.22.4 --steps 3 \
-  --train-source "$TRAIN_SOURCE" --validation-source "$VALIDATION_SOURCE"
+  --version 2026.10.23.1 --steps 3 \
+  --selection-name "$SELECTION_NAME" --selection-version "$SELECTION_VERSION" \
+  --selection-uri "$SELECTION_URI"
 ```
 
-Set the source URIs to the published training and heldout Parquet files. The data
-producer checks their fixed source digests and counts. Add `--run` to submit.
-Use a fresh run version and `--steps 25` or `--steps 50` for
-subsequent iterations; the default is 25. Reuse the data version while its source and
-lowering remain unchanged.
+Set the selection name and version to the curation recipe values, and the URI to
+the published artifact root containing `train.parquet`, `validation.parquet` and
+`summary.json`. Check the summary's row counts and family counts before submission.
+Add `--run` to submit. Use a fresh run version for subsequent iterations; the
+default is 25 updates, and `--steps` changes the count.
 
 Every run uses 40 H100s, 128 prompt groups per update and four samples per group.
 It uses synchronous RLOO-N, a 24,576-token request window and an 8,192-token response

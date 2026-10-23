@@ -8,6 +8,7 @@ from dataclasses import replace
 import click
 import yaml
 from iris.rpc import job_pb2
+from marin.execution.artifact import Artifact
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
 from marin.experiment.namespacing import user_owned_name
@@ -26,14 +27,12 @@ from marin.rl.skyrl import (
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.async_rl import DEFAULT, SNOWBALL_RECIPE, training_config
-from experiments.post_training.inventory import TRAIN_FILENAME, VALIDATION_FILENAME, VALIDATION_ROWS
-from experiments.post_training.inventory.data import data_step
+from experiments.post_training.task_curation.inventory import TRAIN_FILENAME, VALIDATION_FILENAME
 
 MODEL_ID = "open-athena/Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 MODEL_REVISION = "fe666478454e79fe6027a0bab0388d9abd68f51a"
 MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
-DATA_VERSION = "2026.10.22.4"
 DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
 CLUSTER = "cw-us-east-02a"
@@ -79,7 +78,6 @@ def training_recipe(steps: int) -> dict:
         seed=SEED,
         project_name="marin-snowball-curriculum",
         eval_num_prompts=None,
-        eval_batch_size=VALIDATION_ROWS,
         dump_eval_results=True,
     )
     trainer["algorithm"].update(
@@ -103,13 +101,10 @@ def training_recipe(steps: int) -> dict:
 def build_run(
     version: str,
     *,
-    training_uri: str,
-    validation_uri: str,
+    selection: ArtifactStep[Artifact],
     steps: int = DEFAULT_STEPS,
-    data_version: str = DATA_VERSION,
 ) -> ArtifactStep[SkyRLRun]:
-    """Bind the frozen data, pinned SFT model and terminal checkpoint/export."""
-    data = data_step(data_version, training_uri, validation_uri)
+    """Bind selected canonical tasks, pinned SFT weights and terminal outputs."""
     model = ArtifactStep.adopt(
         f"models/snowball-datakit-sft-{MODEL_REVISION}",
         MODEL_VERSION,
@@ -128,8 +123,8 @@ def build_run(
                 tokenizer_revision=MODEL_REVISION,
                 relative_path="",
             ),
-            train_data=(ArtifactDataSource(data, relative_path=TRAIN_FILENAME),),
-            validation_data=(ArtifactDataSource(data, relative_path=VALIDATION_FILENAME),),
+            train_data=(ArtifactDataSource(selection, relative_path=TRAIN_FILENAME),),
+            validation_data=(ArtifactDataSource(selection, relative_path=VALIDATION_FILENAME),),
             topology=SkyRLTopology(
                 num_nodes=plan.num_nodes,
                 gpus_per_node=plan.policy_num_gpus_per_node,
@@ -160,19 +155,18 @@ def build_run(
 
 
 @click.command(help=__doc__)
-@click.option("--train-source", required=True)
-@click.option("--validation-source", required=True)
+@click.option("--selection-name", required=True, help="Name in the task-selection recipe.")
+@click.option("--selection-version", required=True, help="Version in the task-selection recipe.")
+@click.option("--selection-uri", required=True, help="Task-selection artifact root.")
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
-@click.option("--data-version", default=DATA_VERSION, show_default=True)
 @rl_build_options
-def main(train_source: str, validation_source: str, steps: int, data_version: str) -> ArtifactStep[SkyRLRun]:
+def main(selection_name: str, selection_version: str, selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(ARTIFACT_NAME)
+    selection = ArtifactStep.adopt(f"rl-data/task-selection/{selection_name}", selection_version, selection_uri)
     return build_run(
         resolve_version(name, None),
-        training_uri=train_source,
-        validation_uri=validation_source,
+        selection=selection,
         steps=steps,
-        data_version=data_version,
     )
 
 
