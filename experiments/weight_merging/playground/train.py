@@ -12,7 +12,23 @@ from pathlib import Path
 import torch
 import transformers
 from datasets import load_from_disk
-from transformers import AutoModelForCausalLM, AutoTokenizer, DataCollatorForSeq2Seq, Trainer, TrainingArguments
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    DataCollatorForSeq2Seq,
+    Trainer,
+    TrainerCallback,
+    TrainingArguments,
+)
+
+from experiments.weight_merging.playground.retention import prune_checkpoints
+
+
+class CheckpointRetention(TrainerCallback):
+    """Retain one resumable checkpoint and any older best weights only."""
+
+    def on_save(self, args, state, control, **kwargs):
+        prune_checkpoints(Path(args.output_dir))
 
 
 def main() -> None:
@@ -66,7 +82,7 @@ def main() -> None:
         eval_steps=250,
         save_strategy="steps",
         save_steps=250,
-        save_total_limit=2,
+        save_total_limit=1,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         logging_steps=10,
@@ -97,6 +113,7 @@ def main() -> None:
         model=model,
         args=training_args,
         processing_class=tokenizer,
+        callbacks=[CheckpointRetention()],
         train_dataset=load_from_disk(str(args.data / args.domain / "train")),
         eval_dataset=load_from_disk(str(args.data / args.domain / "validation")),
         data_collator=DataCollatorForSeq2Seq(tokenizer, pad_to_multiple_of=8),
@@ -109,6 +126,7 @@ def main() -> None:
     metadata["best_checkpoint"] = trainer.state.best_model_checkpoint
     metadata["best_validation_loss"] = trainer.state.best_metric
     metadata["completed_steps"] = trainer.state.global_step
+    prune_checkpoints(args.output, final_saved=True)
     (args.output / "training-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
 
 
