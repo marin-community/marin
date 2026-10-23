@@ -1,23 +1,17 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-import io
-import json
 from dataclasses import replace
-from email.message import Message
-from urllib.response import addinfourl
 
 import pytest
 
-from experiments.datakit.scripts.metadata_upstream_locators import (
+from experiments.datakit.store.upstream_locators import (
     OffsetNamespace,
     SourceFile,
     SourceManifest,
     SourceRef,
-    card_file_memberships,
     locate_file_row,
     locate_split_row,
-    probe_viewer_row,
     validate_locator_mapping,
     verify_viewer_response,
     viewer_row_url,
@@ -69,41 +63,3 @@ def test_viewer_coordinates_require_matching_namespace_revision_and_complete_raw
         verify_viewer_response(
             locator, {**payload, "rows": [{**payload["rows"][0], "truncated_cells": [0]}]}, "pinned-commit"
         )
-
-
-def test_pinned_card_memberships_preserve_config_ambiguity_and_distinct_splits():
-    card = {
-        "configs": [
-            {"config_name": "all", "data_files": "data/*/*/*.parquet"},
-            {
-                "config_name": "eng",
-                "data_files": [
-                    {"split": "train", "path": "data/eng/train/*.parquet"},
-                    {"split": "test", "path": "data/eng/test/*.parquet"},
-                ],
-            },
-        ]
-    }
-    files = ["data/eng/test/first.parquet", "data/eng/train/second.parquet", "README.md"]
-    matches = card_file_memberships(card, files)
-    assert [(match.config, match.split) for match in matches[files[0]]] == [("all", "train"), ("eng", "test")]
-    assert [(match.config, match.split) for match in matches[files[1]]] == [("all", "train"), ("eng", "train")]
-    assert matches["README.md"] == []
-
-
-@pytest.mark.parametrize("ids", [["document-1"], []])
-def test_viewer_probe_requires_a_reconstructed_document(monkeypatch, ids):
-    manifest = SourceManifest(
-        SourceRef("provider/dataset", "config", "train", "pinned-commit"),
-        (SourceFile("original.parquet", 1),),
-        "verified original/viewer file identity",
-        OffsetNamespace.HF_VIEWER_PARQUET,
-    )
-    payload = {"partial": False, "rows": [{"row_idx": 0, "row": {"ids": ids}, "truncated_cells": []}]}
-    headers = Message()
-    headers["X-Revision"] = "pinned-commit"
-    stream = addinfourl(io.BytesIO(json.dumps(payload).encode()), headers, "https://datasets-server.huggingface.co/rows")
-    monkeypatch.setattr("experiments.datakit.scripts.metadata_upstream_locators.urlopen", lambda *args, **kwargs: stream)
-    result = probe_viewer_row(manifest, 0, normalized_ids=lambda row: row["ids"], expected_ids=ids)
-    assert result["status"] == ("passed" if ids else "mismatch")
-    assert result["actual_ids"] == ids

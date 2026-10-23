@@ -13,13 +13,13 @@ import pyarrow.parquet as pq
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.datakit.scripts.metadata_upstream_locators import SourceManifest, validate_locator_mapping
 from experiments.datakit.store.metadata import (
     DEFAULT_EMBEDDING_READ_BYTES,
     METADATA_SCHEMA,
     ShardManifest,
     export_metadata_shard,
 )
+from experiments.datakit.store.upstream_locators import SourceManifest, validate_locator_mapping
 
 SOURCE_ROW_TYPE = pa.struct(
     [

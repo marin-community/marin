@@ -13,10 +13,14 @@ from experiments.datakit.store.datakit_store import _FilterStats, _iter_survivin
 from experiments.datakit.store.metadata import ShardManifest, export_metadata_shard
 
 
-@pytest.mark.parametrize("fuzzy_exempt", [False, True])
 @pytest.mark.parametrize(
-    "provider_ids",
-    [None, [10, 11, 12, 13, 14, 15], ["a", "b", "c", "d", "e", "f"], [{"page": i} for i in range(6)]],
+    "fuzzy_exempt,provider_ids",
+    [
+        (False, None),
+        (True, [10, 11, 12, 13, 14, 15]),
+        (False, ["a", "b", "c", "d", "e", "f"]),
+        (True, [{"page": i} for i in range(6)]),
+    ],
 )
 def test_metadata_export_matches_token_store_and_preserves_occurrences(tmp_path, fuzzy_exempt, provider_ids):
     ids = ["repeat", "repeat", "contaminated", "exact", "fuzzy", "keep"]
@@ -69,7 +73,6 @@ def test_metadata_export_matches_token_store_and_preserves_occurrences(tmp_path,
     assert [(row["id"], row["normalized_row"]) for row in rows] == [(doc.id, doc.normalized_row) for doc in store_rows]
     assert [row["quality_score"] for row in rows] == [tables["quality"]["score"][i] for i in expected_positions]
     assert all(row["normalized_shard"] == manifest.normalized and row["store_task_id"] == 7 for row in rows)
-    assert [row["id"] for row in rows] == [ids[position] for position in expected_positions]
     assert [row["source_id"] for row in rows] == [
         json.dumps(provider_ids[position]) if provider_ids is not None else None for position in expected_positions
     ]

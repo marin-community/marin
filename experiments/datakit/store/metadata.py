@@ -1,12 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded metadata-only trial of the clustered store's document selection.
+"""Export selected metadata from co-partitioned normalized and attribute shards.
 
-The manifest names exact co-partitioned artifacts, including the normalized
-shard. A trial selects a prefix of normalized documents; it is not a sample of
-all documents in a source. Output locators refer to normalized artifacts, not
-upstream dataset rows. Empty ``dedup`` explicitly means fuzzy-exempt.
+Exports inspect a bounded prefix. Locators identify normalized rows; the public
+release adds upstream coordinates. Empty ``dedup`` marks fuzzy-exempt sources.
 """
 
 import dataclasses
@@ -71,19 +69,17 @@ METADATA_SCHEMA = pa.schema(
 
 
 def _rows(parquet: pq.ParquetFile, columns: list[str], limit: int, batch_size: int) -> Iterator[dict]:
-    read = 0
     for batch in parquet.iter_batches(columns=columns, batch_size=batch_size):
-        remaining = limit - read
-        if remaining <= 0:
+        if limit <= 0:
             return
-        rows = batch.slice(0, remaining).to_pylist()
+        rows = batch.slice(0, limit).to_pylist()
         yield from rows
-        read += len(rows)
-        if read >= limit:
+        limit -= len(rows)
+        if limit == 0:
             return
 
 
-def _trial_duplicates(path: str, ids: set[str], batch_size: int, *, fuzzy: bool) -> set[str]:
+def _selected_duplicates(path: str, ids: set[str], batch_size: int, *, fuzzy: bool) -> set[str]:
     if not path:
         return set()
     fs, resolved = filesystem_for(path)
@@ -177,22 +173,17 @@ def export_metadata_shard(
     batch_size: int = 8192,
     max_embedding_bytes: int = DEFAULT_EMBEDDING_READ_BYTES,
 ) -> dict:
-    """Export a bounded prefix, checking dense alignment before bucket routing.
+    """Export a bounded prefix after validating dense row counts and IDs.
 
-    ``bucket_edges`` must explicitly be None for precomputed quality buckets;
-    otherwise raw float64 scores are cut with the frozen v5 store's per-type
-    edges, falling back to default for unknown content types. Dense IDs are
-    validated only within the inspected prefix; row counts cover whole shards.
+    ``bucket_edges=None`` uses precomputed quality buckets. Otherwise, apply
+    frozen per-type cutpoints, with default cutpoints for unknown types.
+    Provider IDs are JSON-encoded to preserve numeric and structured values.
 
-    Each call must receive its own output directory. Source IDs are JSON-encoded
-    strings so numeric, string and structured provider IDs share one schema.
-    Sparse duplicates are streamed and retained only for IDs in the bounded
-    prefix. Memory use is bounded by ``max_rows`` plus one Parquet batch.
-    Optional Harrier shards are sparse: join quantized vectors by ID, retaining
-    only selected IDs under a projected compressed-byte read budget. Public
-    vectors use nullable lists because nullable Arrow fixed-size lists do not
-    reliably round-trip through Parquet; present source vectors must be 1024 int8.
-    Byte budgets exclude footer reads and filesystem read-ahead.
+    Each call needs a separate output directory. Memory is bounded by
+    ``max_rows`` plus one batch. Sparse embeddings join by ID within a compressed
+    byte budget that excludes footers and filesystem read-ahead. Output vectors
+    use nullable lists because Arrow's nullable fixed-size lists can fail a
+    Parquet round trip; present vectors contain exactly 1024 int8 coordinates.
     """
     if max_rows <= 0 or batch_size <= 0 or max_embedding_bytes <= 0:
         raise ValueError("Row, batch and embedding read limits must be positive")
@@ -224,8 +215,8 @@ def export_metadata_shard(
             normalized_columns.append("source_id")
         normalized = list(_rows(parquets["normalized"], normalized_columns, limit, batch_size))
         ids = {row["id"] for row in normalized}
-        exact = _trial_duplicates(manifest.exact_dedup, ids, batch_size, fuzzy=False)
-        fuzzy = _trial_duplicates(manifest.dedup, ids, batch_size, fuzzy=True)
+        exact = _selected_duplicates(manifest.exact_dedup, ids, batch_size, fuzzy=False)
+        fuzzy = _selected_duplicates(manifest.dedup, ids, batch_size, fuzzy=True)
         dense = {
             "decontam": _rows(parquets["decontam"], ["id", "contaminated"], limit, batch_size),
             "cluster": _rows(parquets["cluster"], ["id", cluster_column], limit, batch_size),
@@ -295,34 +286,24 @@ def export_metadata_shard(
             for row in rows:
                 row["harrier_embedding"] = embeddings.get(row["id"])
                 embedded_occurrences += row["harrier_embedding"] is not None
+        null_occurrences = stats.records_out - embedded_occurrences
+        unmatched_occurrences = null_occurrences if manifest.harrier_embedding else 0
+        embedding_status = "not_requested"
+        if manifest.harrier_embedding:
+            embedding_status = "incomplete" if null_occurrences else "complete"
         embedding_report = {
-            "status": (
-                "not_requested"
-                if not manifest.harrier_embedding
-                else "complete" if embedded_occurrences == stats.records_out else "incomplete"
-            ),
+            "status": embedding_status,
             "selected_occurrences": stats.records_out,
             "embedded_occurrences": embedded_occurrences,
-            "null_occurrences": stats.records_out - embedded_occurrences,
-            "unmatched_occurrences": stats.records_out - embedded_occurrences if manifest.harrier_embedding else 0,
-            "missing_occurrences": (
-                None
-                if embedding_scan["budget_exhausted"]
-                else stats.records_out - embedded_occurrences if manifest.harrier_embedding else 0
-            ),
-            "unresolved_occurrences": (
-                stats.records_out - embedded_occurrences if embedding_scan["budget_exhausted"] else 0
-            ),
+            "null_occurrences": null_occurrences,
+            "unmatched_occurrences": unmatched_occurrences,
+            "missing_occurrences": None if embedding_scan["budget_exhausted"] else unmatched_occurrences,
+            "unresolved_occurrences": unmatched_occurrences if embedding_scan["budget_exhausted"] else 0,
             "unmatched_distinct_ids": len(selected_ids - embeddings.keys()) if manifest.harrier_embedding else 0,
             **embedding_scan,
             "provenance": manifest.harrier_embedding_provenance,
             "dimension": HARRIER_DIM,
             "dtype": "int8",
-            "wire_type": "nullable list<int8>; present vectors have exactly 1024 coordinates",
-            "scan_scope": "Only examined row groups are checked for conflicting duplicate vectors.",
-            "null_policy": (
-                "Unrequested or missing sparse embeddings are null; vectors are never recomputed or zero-filled."
-            ),
         }
         # Write only after alignment has passed for the complete bounded prefix.
         outputs = []

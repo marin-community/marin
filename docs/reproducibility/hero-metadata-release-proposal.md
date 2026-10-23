@@ -53,7 +53,7 @@ coordinates would stay out of the public document rows.
 
 We should include the existing Harrier embeddings so users can cluster or
 analyze the selected documents without running the embedding model again.
-These are quantized vectors, not the original floating-point model outputs.
+The vectors retain the stored int8 quantization.
 The release manifest must pin the embedding artifact, model repository and
 revision, dimension, quantization scale and range, and the input preprocessing.
 Multiplying the stored `int8` values by the recorded scale gives approximate
@@ -241,6 +241,7 @@ store, and measure its compressed size before uploading it. Publication should
 include the manifests, a dataset card, and instructions for reconstructing one
 source or one bucket. The locators should let users fetch the contributing
 rows directly, subject to the provider's file format and access methods.
-The trial tools live under
-`experiments/datakit/scripts/metadata_*`; they provide the export and replay
-checks, but are not yet the public reconstruction interface.
+The draft exporters and locator validation live under
+`experiments/datakit/store/`. The exploratory inventory and replay tools are
+preserved in a complete Marin checkout in the
+[research archive](https://github.com/marin-community/marin-logbooks/blob/5460b8a8c94a344600c58163ac040813f2a43f86/logbooks/10527-hero-metadata/notebook.md).

@@ -10,20 +10,11 @@ revision. Original files and converted files are distinct coordinate systems.
 
 import hashlib
 import json
-import re
 from bisect import bisect_right
-from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from enum import StrEnum
 from typing import Any
 from urllib.parse import urlencode
-from urllib.request import Request, urlopen
-
-from datasets.data_files import sanitize_patterns
-from datasets.utils.metadata import MetadataConfigs
-from fsspec.utils import glob_translate
-from huggingface_hub import DatasetCardData
-
 
 class OffsetNamespace(StrEnum):
     SOURCE_MANIFEST = "source_manifest"
@@ -63,36 +54,6 @@ class SourceManifest:
     def sha256(self) -> str:
         encoded = json.dumps(asdict(self), sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(encoded).hexdigest()
-
-
-@dataclass(frozen=True)
-class ProviderSplitMatch:
-    config: str
-    split: str
-    pattern: str
-
-
-def card_file_memberships(card_data: dict, files: list[str]) -> dict[str, list[ProviderSplitMatch]]:
-    """Resolve explicit pinned-card config/split globs without inventing file order.
-
-    Paths are repository-relative original files, not local staging names. A
-    file can match several configs (for example all-languages and one language).
-    Empty results require provider-specific config discovery. Neither source
-    file order nor Dataset Viewer conversion order follows from this mapping.
-    """
-    configs = MetadataConfigs.from_dataset_card_data(DatasetCardData(**card_data))
-    matches: dict[str, list[ProviderSplitMatch]] = {path: [] for path in files}
-    for config, attrs in configs.items():
-        if "data_files" not in attrs:
-            continue
-        for split, patterns in sanitize_patterns(attrs["data_files"]).items():
-            for pattern in patterns:
-                expression = re.compile(glob_translate(pattern))
-                match = ProviderSplitMatch(config=config, split=split, pattern=pattern)
-                for path in files:
-                    if expression.fullmatch(path):
-                        matches[path].append(match)
-    return matches
 
 
 @dataclass(frozen=True)
@@ -184,38 +145,3 @@ def verify_viewer_response(locator: RowLocator, response: dict, response_revisio
     if rows[0].get("truncated_cells"):
         raise ValueError("Dataset Viewer truncated source values")
     return rows[0]["row"]
-
-
-def probe_viewer_row(
-    manifest: SourceManifest,
-    row_offset: int,
-    *,
-    normalized_ids: Callable[[dict], list[str]],
-    expected_ids: list[str],
-    token: str | None = None,
-    max_response_bytes: int = 8 * 1024 * 1024,
-) -> dict:
-    """Fetch one raw viewer row and compare independently reconstructed text IDs.
-
-    The callback must apply the source transform and normalization, and may
-    return several IDs for an expanding transform. Response text is not logged
-    or returned. Historical revisions cannot be requested through /rows; a
-    changed viewer revision fails and callers must read the pinned files.
-    """
-    locator = locate_split_row(manifest, row_offset)
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
-    request = Request(viewer_row_url(locator), headers=headers)
-    with urlopen(request, timeout=30) as stream:
-        content = stream.read(max_response_bytes + 1)
-        if len(content) > max_response_bytes:
-            raise ValueError("Dataset Viewer response exceeds trial byte limit")
-        revision = stream.headers.get("X-Revision", "")
-    row = verify_viewer_response(locator, json.loads(content), revision)
-    actual_ids = normalized_ids(row)
-    return {
-        "status": "passed" if actual_ids and actual_ids == expected_ids else "mismatch",
-        "locator": asdict(locator),
-        "actual_ids": actual_ids,
-        "expected_ids": expected_ids,
-        "response_bytes": len(content),
-    }

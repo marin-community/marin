@@ -10,9 +10,9 @@ import pyarrow.parquet as pq
 import pytest
 from marin.datakit.normalize import generate_id
 
-from experiments.datakit.scripts.metadata_upstream_locators import SourceFile, SourceManifest, SourceRef
 from experiments.datakit.store.metadata import ShardManifest
 from experiments.datakit.store.release_metadata import export_release_metadata_shard
+from experiments.datakit.store.upstream_locators import SourceFile, SourceManifest, SourceRef
 
 
 class ReleaseInputs(NamedTuple):
