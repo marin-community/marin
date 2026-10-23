@@ -107,6 +107,7 @@ trainer:
       interval_seconds: 60
     # frozen preserves the checkpoint bias; replace and interpolate use Quantile
     # Balancing; loss_free uses DeepSeek's signed load-error update.
+    update_samples_per_tensor: 0 # bounded model-weight update diagnostics; zero disables sampling
     grug_query_bias_update_mode: "frozen"
     grug_query_bias_interpolation_weight: null
     grug_query_bias_update_rate: null
@@ -254,6 +255,12 @@ trainer:
     cispo:
       cispo_eps_clip_low: 1.0
       cispo_eps_clip_high: 5
+
+    # LUFFY mixed-policy GRPO shaping (policy_loss_type=mixed_policy_grpo). gamma is
+    # the f(r)=r/(r+gamma) regularizer on the off-policy (teacher-token) ratio; it is
+    # distinct from eps_clip_* (on-policy student clipping) and any KL coefficient.
+    mixed_policy:
+      gamma: 0.1
 
   # Rollout workers generate prompt groups under leases from the rollout buffer; each step trains on
   # train_batch_size groups. At 0 staleness every group comes from the current policy (synchronous training).

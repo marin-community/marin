@@ -25,6 +25,9 @@ class PolicyLossInputs:
     rollout_log_probs: torch.Tensor | None
     advantages: torch.Tensor
     loss_mask: torch.Tensor
+    # 1 where the behavior policy that generated the token was the teacher, else 0.
+    # None means every token came from the student.
+    behavior_sources: torch.Tensor | None = None
     ftpo: FTPOInputs | None = None
     ref_log_probs: torch.Tensor | None = None
     dpo: DPOInputs | None = None
@@ -295,3 +298,94 @@ def dpo_policy_loss(inputs: PolicyLossInputs, config: DictConfig) -> TokenLoss:
         config.dpo.label_smoothing,
     )
     return _token_loss(values.to(inputs.log_probs.dtype), inputs, metrics)
+
+
+TEACHER_RATIO_HIGH_SATURATION = 10.0
+TEACHER_RATIO_LOW_FLOOR = 1e-3
+
+
+@register_policy_loss(PolicyLossType.MIXED_POLICY_GRPO)
+def mixed_policy_grpo_loss(inputs: PolicyLossInputs, config: DictConfig) -> TokenLoss:
+    """Return LUFFY's mixed-policy GRPO: clipped student terms plus shaped off-policy teacher terms.
+
+    Student tokens use the pessimistic PPO surrogate against the old policy. Teacher
+    tokens use the unclipped, shaped ratio ``f(r) = r / (r + gamma)`` against the
+    recorded behavior logprobs (gamma = ``algorithm.mixed_policy.gamma``), following
+    arXiv:2504.14945v5 with a well-defined pi_phi instead of the reference
+    implementation's pi_phi = 1 approximation.
+    """
+    if inputs.rollout_log_probs is None:
+        raise ValueError("mixed_policy_grpo requires rollout logprobs")
+    gamma = float(config.mixed_policy.gamma)
+    if not torch.isfinite(torch.tensor(gamma)) or gamma <= 0:
+        raise ValueError("mixed_policy.gamma must be a positive finite number")
+    teacher = (torch.zeros_like(inputs.loss_mask, dtype=torch.bool) if inputs.behavior_sources is None
+               else (inputs.behavior_sources > 0) & (inputs.loss_mask > 0))
+    student = ~teacher & (inputs.loss_mask > 0)
+
+    ratio = safe_exp_delta(inputs.log_probs - inputs.old_log_probs)
+    unclipped = -ratio * inputs.advantages
+    clipped = -ratio.clamp(1 - config.eps_clip_low, 1 + config.eps_clip_high) * inputs.advantages
+    student_values = torch.maximum(unclipped, clipped)
+
+    teacher_ratio = safe_exp_delta(inputs.log_probs - inputs.rollout_log_probs)
+    shaped = teacher_ratio / (teacher_ratio + gamma)
+    teacher_values = -shaped * inputs.advantages
+
+    values = torch.where(teacher, teacher_values, student_values)
+    metrics = clipping_metrics(
+        ratio,
+        (clipped > unclipped) & student,
+        inputs.loss_mask,
+        eps_clip_low=config.eps_clip_low,
+        eps_clip_high=config.eps_clip_high,
+    )
+    metrics.update(_mixed_policy_metrics(inputs, teacher, teacher_ratio, shaped, values))
+    return _token_loss(values, inputs, metrics)
+
+
+def _mixed_policy_metrics(
+    inputs: PolicyLossInputs,
+    teacher: torch.Tensor,
+    teacher_ratio: torch.Tensor,
+    shaped: torch.Tensor,
+    values: torch.Tensor,
+) -> dict[str, float]:
+    """Report the off-policy diagnostics the campaign plan requires per update."""
+    trainable = inputs.loss_mask > 0
+    teacher_fraction = _masked_fraction(teacher, inputs.loss_mask)
+    if not int(teacher.sum().item()):
+        return {
+            "mixed/teacher_token_fraction": teacher_fraction,
+            "mixed/teacher_ratio_mean": 0.0,
+            "mixed/teacher_log_ratio_mean": 0.0,
+            "mixed/teacher_advantage_mean": 0.0,
+            "mixed/teacher_positive_advantage_fraction": 0.0,
+            "mixed/teacher_ratio_high_saturation_fraction": 0.0,
+            "mixed/teacher_ratio_below_floor_fraction": 0.0,
+            "mixed/teacher_shaped_weight_mean": 0.0,
+            "mixed/teacher_effective_sample_size": 0.0,
+            "mixed/teacher_loss_fraction": 0.0,
+        }
+    teacher_ratio_trainable = teacher_ratio[teacher]
+    shaped_trainable = shaped[teacher]
+    weights_sum = shaped_trainable.detach().sum()
+    metrics = {
+        "mixed/teacher_token_fraction": teacher_fraction,
+        "mixed/teacher_ratio_mean": teacher_ratio_trainable.detach().mean().item(),
+        "mixed/teacher_log_ratio_mean": (inputs.log_probs - inputs.rollout_log_probs)[teacher].detach().mean().item(),
+        "mixed/teacher_advantage_mean": inputs.advantages[teacher].detach().mean().item(),
+        "mixed/teacher_positive_advantage_fraction": (inputs.advantages[teacher] > 0).float().mean().item(),
+        "mixed/teacher_ratio_high_saturation_fraction": _masked_fraction(
+            teacher_ratio > TEACHER_RATIO_HIGH_SATURATION, teacher
+        ),
+        "mixed/teacher_ratio_below_floor_fraction": _masked_fraction(
+            teacher_ratio < TEACHER_RATIO_LOW_FLOOR, teacher
+        ),
+        "mixed/teacher_shaped_weight_mean": shaped_trainable.detach().mean().item(),
+        "mixed/teacher_effective_sample_size": (weights_sum**2 / (shaped_trainable.detach() ** 2).sum()).item(),
+        "mixed/teacher_loss_fraction": (
+            values.detach().abs()[teacher].sum() / values.detach().abs()[trainable].sum().clamp(min=1e-12)
+        ).item(),
+    }
+    return metrics

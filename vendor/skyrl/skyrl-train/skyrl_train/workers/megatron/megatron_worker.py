@@ -18,6 +18,7 @@ from megatron.core.optimizer import ChainedOptimizer, DistributedOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
 from omegaconf import OmegaConf
+from skyrl_train.utils.update_measurement import model_update_metrics, sample_model_weights
 from skyrl_train.distributed.dispatch import MeshRank
 from skyrl_train.distributed.megatron.grug_muonh import MegatronGrugMuonH
 from skyrl_train.distributed.megatron.megatron_strategy import MegatronStrategy
@@ -600,6 +601,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         rollout_action_logprobs=experience.rollout_logprobs,
                         correction_weights=experience.correction_weights,
                         response_span_tags=experience.response_span_tags,
+                        behavior_sources=experience.behavior_sources,
                         distillation=experience.distillation,
                         ftpo=experience.ftpo,
                         rollout_routed_experts=experience.rollout_routed_experts,
@@ -643,6 +645,10 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                     if self.empty_cuda_cache:
                         torch.cuda.empty_cache()
 
+                    weight_samples = sample_model_weights(
+                        (parameter for chunk in self.actor_module for parameter in chunk.parameters()),
+                        int(self.cfg.trainer.policy.update_samples_per_tensor),
+                    )
                     with timing.span("megatron_optimizer_step"):
                         step_result = self.strategy.optimizer_step(
                             self.optimizer,
@@ -652,6 +658,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                             consecutive_nonfinite_steps=self._consecutive_nonfinite_steps,
                             max_consecutive_nonfinite_steps=self.cfg.trainer.policy.max_consecutive_nonfinite_steps,
                         )
+                    update_metrics = model_update_metrics(weight_samples)
+                    del weight_samples
                     checksum_mismatch = None
                     if self.cfg.trainer.policy.megatron_config.check_dp_weight_consistency:
                         with timing.span("megatron_dp_weight_checksum"):
@@ -672,6 +680,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         # Attach grad norm only for the last micro in the mini-batch
                         if i == len(metrics_list) - 1:
                             status["skipped_steps"] = float(not step_result.applied)
+                            status.update(update_metrics)
                             if checksum_mismatch is not None:
                                 status["dp_weight_checksum_mismatch"] = checksum_mismatch
                             if step_result.grad_norm is not None:

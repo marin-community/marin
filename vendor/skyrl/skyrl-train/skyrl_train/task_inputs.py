@@ -1,6 +1,6 @@
 """Task and preference inputs shared by dataset loading and rollout requests."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS, assistant_prefix_prompt
@@ -20,6 +20,7 @@ class TrajectoryMetadata:
     data_source: str | None = None
     teacher_route: str | None = None
     metric_tags: tuple[str, ...] = ()
+    chat_template_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

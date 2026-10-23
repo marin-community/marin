@@ -161,6 +161,7 @@ async def _render_chat_prompt(
             request,
             assistant_message_index=current_continuation["assistant_message_index"],
             served_prefix_token_ids=current_continuation["served_prefix_token_ids"],
+            continue_final_message=current_continuation.get("continue_final_message", False),
         )
 
     messages = render_request["json"]["messages"]

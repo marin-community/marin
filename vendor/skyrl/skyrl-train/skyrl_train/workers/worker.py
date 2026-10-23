@@ -1132,6 +1132,7 @@ class PolicyWorkerBase(Worker):
         rollout_action_logprobs = experience.rollout_logprobs
         rollout_routed_experts = experience.rollout_routed_experts
         response_span_tags = experience.response_span_tags
+        behavior_sources = experience.behavior_sources
 
         grug_causal_lm = self._grug_causal_lm()
         grug_query_bias_window = self._grug_query_bias_window
@@ -1180,6 +1181,7 @@ class PolicyWorkerBase(Worker):
                 rollout_logprobs=rollout_action_logprobs,
                 correction_weights=experience.correction_weights,
                 response_span_tags=response_span_tags,
+                behavior_sources=behavior_sources,
                 token_entropy=token_entropy,
                 think_token_weight=self.cfg.trainer.algorithm.think_token_weight,
                 teacher=teacher,

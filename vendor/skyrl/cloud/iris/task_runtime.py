@@ -75,6 +75,7 @@ from marinskyrl.model_manifest import MODEL_MANIFEST_FILENAME
 from cloud.iris.telemetry_env import telemetry_environment
 from marinskyrl.resource_locator import RolloutModelLoading, is_cloud_uri, is_hugging_face_repo_id, join_resource_path
 from marinskyrl.speculative_decoding import SpeculatorModelConfig, SpeculatorModelSourceKind
+from marinskyrl.identity_repair import RepairTeacherSettings
 from marinskyrl.distillation import TeacherModelSpec, TeacherSource, compile_distillation_plan_from_config
 from marinskyrl.process_diagnostics import (
     ProcessOutcomeKind,
@@ -2016,9 +2017,13 @@ def _json_list(value: Any) -> str:
 
 def _local_teacher_models(skyrl: DictConfig) -> tuple[TeacherModelSpec, ...]:
     plan = compile_distillation_plan_from_config(skyrl)
-    if plan is None:
-        return ()
-    return tuple(teacher.model for teacher in plan.teachers if teacher.source is TeacherSource.LOCAL_INFERENCE)
+    models = (() if plan is None else
+              tuple(teacher.model for teacher in plan.teachers if teacher.source is TeacherSource.LOCAL_INFERENCE))
+    identity = skyrl.get("identity_repair")
+    if identity is not None:
+        teacher = RepairTeacherSettings.model_validate(_container(identity.teacher))
+        models += (TeacherModelSpec(teacher.model_path, teacher.revision),)
+    return models
 
 
 def _runtime_namespace(config: DictConfig) -> argparse.Namespace:

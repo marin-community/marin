@@ -1,0 +1,163 @@
+status: preflight_candidate
+source_config: /Users/benfeuer/Documents/experiments/complete/bfcl-rl/artifacts/configs/source-v125/async.yaml
+skyrl:
+  context_budget:
+    request_window_tokens: 12288
+    max_new_tokens_per_turn: 2048
+    max_turns: 3
+    generated_budget_fraction: 1.0
+  trainer:
+    strategy: megatron
+    seed: 42
+    flash_attn: true
+    gradient_checkpointing: true
+    gradient_checkpointing_use_reentrant: false
+    offload_optimizer_during_rollouts: true
+    algorithm:
+      advantage_estimator: grpo
+      advantage_batch_normalize: false
+      eps_clip_low: 0.2
+      eps_clip_high: 0.2
+      use_entropy_loss: false
+      use_kl_loss: false
+      use_kl_in_reward: false
+      loss_reduction: token_mean
+      group_advantage_min_size: 4
+      dynamic_sampling:
+        type: null
+      policy_loss_type: mixed_policy_grpo
+      mixed_policy:
+        gamma: 1.0
+      off_policy_correction: tis
+    epochs: 1
+    max_steps: 1
+    update_epochs_per_batch: 1
+    train_batch_size: 20
+    policy_mini_batch_size: 20
+    eval_batch_size: 8
+    micro_forward_batch_size_per_gpu: 1
+    micro_train_batch_size_per_gpu: 1
+    use_sample_packing: true
+    eval_before_train: false
+    eval_interval: 1
+    ckpt_interval: 1
+    max_ckpts_to_keep: 1
+    resume_mode: null
+    logger: wandb
+    project_name: grpo-teacher-forcing
+    policy:
+      optimizer_config:
+        optimizer: AdamW
+        lr: 1.0e-06
+        weight_decay: 0.0
+        max_grad_norm: 0.5
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 1
+        expert_model_parallel_size: 16
+        expert_tensor_parallel_size: 1
+        ddp_config:
+          overlap_grad_reduce: false
+          overlap_param_gather: false
+          grad_reduce_in_fp32: false
+        logprob_chunk_size: 256
+        transformer_config_kwargs: {}
+        optimizer_checkpoint_sharding_type: dp_reshardable
+      model:
+        path: open-athena/Marin-Snowball-67B-A2B-v0.1
+        revision: adc0078a19a4383bc998fcdb43867b3360baf5f3
+      update_samples_per_tensor: 512
+    ref:
+      megatron_config:
+        tensor_model_parallel_size: 1
+        pipeline_model_parallel_size: 2
+        context_parallel_size: 1
+        expert_model_parallel_size: 16
+        expert_tensor_parallel_size: 1
+        logprob_chunk_size: 256
+        transformer_config_kwargs: {}
+    placement:
+      colocate_all: false
+      colocate_policy_ref: true
+      policy_num_nodes: 4
+      policy_num_gpus_per_node: 8
+      ref_num_nodes: 4
+      ref_num_gpus_per_node: 8
+      policy_strict_spread_pg: true
+    run_name: repair-smoke-v1
+    restore_dataloader_state: true
+    hf_save_interval: -1
+  generator:
+    backend: vllm
+    model_dtype: bfloat16
+    vllm_attention_backend: FLASH_ATTN
+    inference_engine_tensor_parallel_size: 1
+    inference_engine_data_parallel_size: 4
+    inference_engine_expert_parallel_size: 4
+    num_inference_engines: 2
+    n_samples_per_prompt: 4
+    eval_n_samples_per_prompt: 1
+    gpu_memory_utilization: 0.8
+    max_num_seqs: 8
+    max_num_batched_tokens: 12288
+    enable_prefix_caching: true
+    enable_chunked_prefill: true
+    enforce_eager: false
+    run_engines_locally: true
+    weight_sync_backend: nccl
+    enable_http_endpoint: true
+    sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      logprobs: 0
+    engine_init_kwargs:
+      revision: adc0078a19a4383bc998fcdb43867b3360baf5f3
+      served_model_name: open-athena/Marin-Snowball-67B-A2B-v0.1
+    model_loading: stage_local
+    trajectory_retention:
+      enabled: true
+      phases:
+      - train
+      - eval
+      sample_count_per_step: 80
+      sample_fraction: 1.0
+      required: true
+  environment:
+    env_class: prompt_only
+  data:
+    kind: tasks
+  entrypoint: standard
+  identity_repair:
+    fact_manifest: facts.json
+    requested_facts_manifest: requested-facts.json
+    teacher:
+      model_path: open-athena/Marin-Snowball-67B-A2B-v0.1.1
+      revision: 59852d6f07261722bbec1edb6ab148317156b58e
+      engines: 1
+      tensor_parallel_size: 1
+      data_parallel_size: 4
+      expert_parallel_size: 4
+      max_model_len: 12288
+      gpu_memory_utilization: 0.8
+    judge_base_url: http://10.168.192.93:8010/v1
+    judge_model: glm-5.3
+    judge_revision: glm-5.3
+    judge_api_key_env: GLM_BULK_TOKEN
+    judge_max_tokens: 2048
+    teacher_sampling_params:
+      temperature: 1.0
+      top_p: 1.0
+      top_k: -1
+      logprobs: 0
+      max_tokens: 2048
+    max_resume_turns: 2
+    reward_weights:
+      factual_correctness: 1.0
+      responsiveness: 0.25
+      unsupported_claim_penalty: 0.5
+      refusal_penalty: 0.5
+      unsolicited_identity_penalty: 0.25
+judge_provenance: Versioned service model identifier glm-5.3; underlying weight SHA
+  is not exposed/verified. Authenticated regional completion probe succeeded.

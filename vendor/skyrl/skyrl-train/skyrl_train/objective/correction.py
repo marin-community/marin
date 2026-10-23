@@ -29,10 +29,14 @@ def compute_correction(
     rollout_log_probs: torch.Tensor,
     loss_mask: torch.Tensor,
     correction: OffPolicyCorrection,
+    *,
+    behavior_sources: torch.Tensor | None = None,
 ) -> CorrectionResult:
     """Return detached policy numerator weights and token-weighted correction statistics."""
     assert old_log_probs.shape == rollout_log_probs.shape == loss_mask.shape
     valid = loss_mask > 0
+    teacher = torch.zeros_like(valid) if behavior_sources is None else (behavior_sources > 0) & valid
+    valid = valid & ~teacher
     old = torch.where(valid, old_log_probs, 0).float()
     rollout = torch.where(valid, rollout_log_probs, 0).float()
     log_ratio = old - rollout
@@ -72,4 +76,6 @@ def compute_correction(
         if correction.rules
         else {}
     )
-    return CorrectionResult(weights, metrics)
+    # Teacher tokens already use their recorded behavior denominator in the shaped loss.
+    # Apply asynchronous student correction only once, to student-generated tokens.
+    return CorrectionResult(torch.where(teacher, 1.0, weights), metrics)

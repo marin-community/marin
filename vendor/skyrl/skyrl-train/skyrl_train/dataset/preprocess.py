@@ -82,6 +82,7 @@ def convert_prompts_responses_to_batch_tensors(
     logprobs: Optional[List[np.ndarray]] = None,
     token_level_shaping: Optional[List[List[float]]] = None,
     response_span_tags: Optional[List[List[int]]] = None,
+    behavior_sources: Optional[List[np.ndarray]] = None,
 ) -> Tuple[
     Float[torch.Tensor, "batch seq_len"],
     Float[torch.Tensor, "batch seq_len"],
@@ -90,6 +91,7 @@ def convert_prompts_responses_to_batch_tensors(
     Float[torch.Tensor, "batch response_len"],
     Optional[Float[torch.Tensor, "batch response_len"]],
     Optional[Float[torch.Tensor, "batch response_len"]],
+    Optional[Integer[torch.Tensor, "batch response_len"]],
     Optional[Integer[torch.Tensor, "batch response_len"]],
 ]:
     """
@@ -182,6 +184,12 @@ def convert_prompts_responses_to_batch_tensors(
         dtype=torch.long,
         expected_lengths=response_token_lens,
     )
+    behavior_sources_tensor = collate_response_token_channel(
+        None if behavior_sources is None else [row.tolist() for row in behavior_sources],
+        action_mask,
+        dtype=torch.uint8,
+        expected_lengths=response_token_lens,
+    )
 
     return (
         sequences,
@@ -192,4 +200,5 @@ def convert_prompts_responses_to_batch_tensors(
         logprobs_tensor,
         token_level_shaping_tensor,
         response_span_tags_tensor,
+        behavior_sources_tensor,
     )

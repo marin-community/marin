@@ -23,6 +23,7 @@ from skyrl_train.config.ftpo import FTPOConfig
 
 from cloud.iris.paths import resolve_paths_in_dict
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT as CHECKPOINT_EXPORT_MODULE
+from marinskyrl.identity_repair import IdentityRuntimeSettings
 from marinskyrl.environment_contract import TrainingType
 from marinskyrl.distillation import DistillationPlan, compile_distillation_plan, validate_distillation_runtime_support
 from marinskyrl.resource_locator import join_resource_path, model_source_for_path
@@ -816,12 +817,14 @@ def _skyrl_config_sections(
     for section in ("teachers", "teacher_routing"):
         if parsed.raw.get(section):
             sections[section] = copy.deepcopy(parsed.raw[section])
+    if parsed.raw.get("identity_repair") is not None:
+        sections["identity_repair"] = IdentityRuntimeSettings.model_validate(parsed.raw["identity_repair"]).model_dump()
     if terminal_bench is not None:
         sections[RESOLVED_HARBOR_CONFIG_KEY] = terminal_bench
     return sections
 
 
-_OPEN_CONFIG_ROOTS = frozenset({"teachers", "teacher_routing", RESOLVED_HARBOR_CONFIG_KEY})
+_OPEN_CONFIG_ROOTS = frozenset({"teachers", "teacher_routing", "identity_repair", RESOLVED_HARBOR_CONFIG_KEY})
 _FTPO_CONFIG_PATHS = frozenset(f"trainer.algorithm.ftpo.{item.name}" for item in fields(FTPOConfig))
 
 
