@@ -25,7 +25,7 @@ src/taskforge/
   sandbox/                     explicit MachineFactory selection, up-front task refusals, image builds,
                                the host-failure messages build and validation both classify
   spec/                        TaskSpec assembly, lowering, fixed controls, grader verdicts
-  stage10_proposal/            model.py: the TaskProposal document and its generation regex;
+  stage10_proposal/            model.py: the TaskProposal document and its generation schema;
                                source.py: Portfolio, SlotProposal, SlotFailure, the ProposalSource
                                protocol, `proposal_batch`, `propose_all`
   stage20_triage/              checks.py: structural checks; preflight.py: `preflight`, the default triage;
@@ -100,8 +100,8 @@ and one outcome per slot, in slot order, so a failed slot does not drop its sibl
 `propose_all(source, idea, n)` plans, writes every slot concurrently and returns that batch, for a
 caller that wants everything at once.
 
-`stage10_proposal.model.TaskProposal` is YAML front matter (`ProposalHeader`, keys in `HEADER_KEYS`
-order) plus a markdown body with required section headings. `parse` and `render`
+`stage10_proposal.model.TaskProposal` is a JSON object with a typed `header` (`ProposalHeader`)
+and a Markdown `body` with required section headings. `parse` and `render`
 round-trip it and `digest` is the sha256 of the canonical form. `parse` also checks the research
 decision: `research_need: needed` lists at least one `research` item and `not_needed` none, and a
 non-null body cites every item, and only listed items, as `research[i]`. `solver_machine` pins the
@@ -110,8 +110,8 @@ solver's machine: `null` for a container proposal, which runs in the image its b
 `none` (no machine: the solver answers in the conversation) is legal only for a reasoning proposal.
 The proposer writes it, and the build keeps it. `parse` also refuses a `resources` entry that is
 not a relative path inside the build root and a `build` name that repeats.
-`document_request_fields(proposal_id, source)` returns the `structured_outputs.regex` request
-field that constrains a completion to the canonical layout for that id and source. A reply cut off
+`document_request_fields(proposal_id, source)` returns the `response_format` JSON-schema request
+field that constrains a completion to the typed object for that id and source. A reply cut off
 by the output limit is a `SlotFailure`, and a reply that fails `parse` gets one repair request
 built from `DOCUMENT_REPAIR_PROMPT`.
 

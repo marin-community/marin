@@ -3,6 +3,7 @@
 
 """A small valid proposal document that tests edit one property at a time."""
 
+import json
 from dataclasses import replace
 
 import pytest
@@ -22,23 +23,25 @@ SECTIONS = {
 
 def document(verification: str = "code", resources: str = '["grader/check.py", "fixtures/*.json"]') -> str:
     body = "\n".join(f"## {h}\n{SECTIONS.get(h, FILLER)}\n" for h in REQUIRED_HEADINGS)
-    return f"""---
-id: "d01.cap/1"
-source: {{kind: capability, ref: "d01.cap", hash: "abc"}}
-grounding: unverified
-null_reason: null
-environment: reasoning
-solver_machine: shellsim
-verification: {verification}
-research_need: needed
-research_reason: "the deliverable is modeled on real lab handouts"
-research:
-  - {{kind: web, purpose: "two real lab handouts to model the deliverable on"}}
-build:
-  - "grader": "the private checker and its tests"
-resources: {resources}
----
-{body}"""
+    return json.dumps(
+        {
+            "header": {
+                "id": "d01.cap/1",
+                "source": {"kind": "capability", "ref": "d01.cap", "hash": "abc"},
+                "grounding": "unverified",
+                "null_reason": None,
+                "environment": "reasoning",
+                "solver_machine": "shellsim",
+                "verification": verification,
+                "research_need": "needed",
+                "research_reason": "the deliverable is modeled on real lab handouts",
+                "research": [{"kind": "web", "purpose": "two real lab handouts to model the deliverable on"}],
+                "build": [{"name": "grader", "description": "the private checker and its tests"}],
+                "resources": json.loads(resources),
+            },
+            "body": body,
+        }
+    )
 
 
 def with_section(p: TaskProposal, heading: str, text: str) -> TaskProposal:
