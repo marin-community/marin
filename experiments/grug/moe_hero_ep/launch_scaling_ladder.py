@@ -203,7 +203,6 @@ def build_ladder_run(
     initialize_from_checkpoint: str | None = None,
     context_phases: Sequence[HarrierContextPhase] | None = None,
     flops_baseline_total: float | None = None,
-    context_axis_size: int | None = None,
 ) -> ArtifactStep[HeroThroughputResult]:
     """One scaling-ladder rung at width ``size`` on ``LADDER_RACKS[size]`` GB200 racks.
 
@@ -230,10 +229,9 @@ def build_ladder_run(
     and ``HERO_FLOPS_BASELINE_TOTAL`` for d6144, and none for the narrow rungs, which train at their context
     length from their start. Pass both to build another history.
 
-    ``context_axis_size`` splits each sequence over that many devices, and each rack's expert axis shrinks to
-    ``HERO_RACK_GPUS // context_axis_size`` to keep the rack full. ``None`` selects the checked-in
-    ``HERO_CONTEXT_AXIS_SIZE`` (with ``HERO_BALANCE_ATTENTION_ROWS``) for d6144, and no context parallelism for
-    the narrow rungs.
+    d6144 splits each sequence over the checked-in ``HERO_CONTEXT_AXIS_SIZE`` devices, with each rack's expert
+    axis shrunk to ``HERO_RACK_GPUS // HERO_CONTEXT_AXIS_SIZE``, and balances rows when
+    ``HERO_BALANCE_ATTENTION_ROWS`` is set. The narrow rungs use neither.
     """
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
@@ -246,8 +244,7 @@ def build_ladder_run(
             raise ValueError("flops_baseline_total requires an explicit context_phases")
         context_phases = HERO_CONTEXT_PHASES if hero else ()
         flops_baseline_total = HERO_FLOPS_BASELINE_TOTAL if hero else None
-    if context_axis_size is None:
-        context_axis_size = HERO_CONTEXT_AXIS_SIZE if hero else 1
+    context_axis_size = HERO_CONTEXT_AXIS_SIZE if hero else 1
     balance_attention_rows = HERO_BALANCE_ATTENTION_ROWS if hero else False
     expert_axis_size = hero_expert_axis_size(context_axis_size)
 

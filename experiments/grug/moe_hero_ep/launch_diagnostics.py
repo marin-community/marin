@@ -27,6 +27,8 @@ from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
     DEFAULT_WANDB_PROJECT,
+    HERO_BALANCE_ATTENTION_ROWS,
+    HERO_CONTEXT_AXIS_SIZE,
     HERO_EP_NODES,
     HERO_GPUS_PER_NODE,
     HERO_MASTER_PARAM_MODE,
@@ -39,6 +41,7 @@ from experiments.grug.moe_hero_ep.hero_recipe import (
     HERO_TENSORSTORE_CACHE_BYTES,
     HERO_WATCH_INTERVAL,
     HeroThroughputResult,
+    hero_expert_axis_size,
     hero_grug_trainer_config,
     hero_rack_batch_size,
     hero_trainer_config,
@@ -77,9 +80,9 @@ def build_diagnostic_run(
     capacity_factor: float | None = None,
     latent_dim: int | None = None,
     max_seq_len: int | None = None,
-    context_axis_size: int = 1,
-    expert_axis_size: int = HERO_RACK_GPUS,
-    balance_attention_rows: bool = False,
+    context_axis_size: int = HERO_CONTEXT_AXIS_SIZE,
+    expert_axis_size: int | None = None,
+    balance_attention_rows: bool = HERO_BALANCE_ATTENTION_ROWS,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
@@ -106,10 +109,15 @@ def build_diagnostic_run(
     hero spec. They keep the hidden dimension, so the compute-scaled optimizer values stay
     comparable across a sweep. ``None`` keeps the hero value.
 
+    The context axis and row balancing default to the hero's, and ``expert_axis_size=None`` fills the rest
+    of each rack (``hero_expert_axis_size``).
+
     ``batch_size`` is the global batch across all data-parallel racks. It does not scale with
     ``dp_racks``. ``None`` selects the hero's tokens per rack at the model's context length.
     ``batch_size``, ``max_seq_len``, and ``schedule_steps`` determine the heuristic token budget.
     """
+    if expert_axis_size is None:
+        expert_axis_size = hero_expert_axis_size(context_axis_size)
     if not run_id.strip():
         raise ValueError("run_id must not be empty")
     if dp_racks <= 0:
@@ -166,7 +174,7 @@ def build_diagnostic_run(
         seq_len=model.max_seq_len,
     )
     batch_axes = validated_batch_axis_size(
-        device_count=HERO_EP_NODES * HERO_GPUS_PER_NODE * dp_racks,
+        device_count=HERO_RACK_GPUS * dp_racks,
         dp_racks=dp_racks,
         batch_size=batch_size,
         context_axis_size=context_axis_size,
@@ -507,14 +515,19 @@ def build_diagnostic_run(
 @click.option(
     "--context-axis-size",
     type=click.IntRange(min=1),
-    default=1,
+    default=HERO_CONTEXT_AXIS_SIZE,
     show_default=True,
     help="Context-parallel axis width. Partitions sequence positions across devices.",
 )
-@click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_RACK_GPUS, show_default=True)
+@click.option(
+    "--expert-axis-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help=f"Expert axis width. Defaults to the rest of the rack: {HERO_RACK_GPUS} / --context-axis-size.",
+)
 @click.option(
     "--balance-attention-rows/--no-balance-attention-rows",
-    default=False,
+    default=HERO_BALANCE_ATTENTION_ROWS,
     show_default=True,
     help="Deal rows to batch shards by attention cost.",
 )
@@ -561,7 +574,7 @@ def main(
     training_data: str,
     seq_len: int | None,
     context_axis_size: int,
-    expert_axis_size: int,
+    expert_axis_size: int | None,
     balance_attention_rows: bool,
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
