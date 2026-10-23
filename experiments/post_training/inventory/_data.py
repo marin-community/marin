@@ -43,8 +43,8 @@ LIMITS = RolloutLimits(
     verifier_timeout=300,
     cleanup_timeout=60,
 )
-LOCAL_VERIFIER = MachineRuntimeSpec(
-    backend="local",
+IMAGE_VERIFIER = MachineRuntimeSpec(
+    backend="daytona",
     cpus=2,
     memory_mb=4096,
     storage_mb=10240,
@@ -55,7 +55,9 @@ LOCAL_VERIFIER = MachineRuntimeSpec(
     cleanup_timeout=60,
 )
 
-IMAGE_VERIFIER = LOCAL_VERIFIER.model_copy(update={"backend": "daytona"})
+LOCAL_VERIFIER = IMAGE_VERIFIER.model_copy(
+    update={"backend": "local", "cpus": None, "memory_mb": None, "storage_mb": None}
+)
 
 
 def current_task(document: dict[str, Any]) -> TaskSpec:
@@ -211,6 +213,7 @@ def prepare(
                 "TaskSpec.schema_version:0.27->0.28",
                 "native structure_closure->assistant_prefix using shared importer",
                 "registry-image graders use Daytona; package-based graders use the local backend",
+                "local grader machines request no per-machine CPU, memory, or storage allocations",
             ],
             "files": output_hashes,
         }

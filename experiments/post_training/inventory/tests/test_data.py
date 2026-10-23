@@ -16,6 +16,8 @@ from rolloutengine.models import TaskRolloutSpec
 from rolloutengine.test_support import arithmetic_task
 from rolloutengine.validation import validate_spec
 from shellbox.backends.daytona.machine import DaytonaMachineFactory
+from shellbox.backends.local.machine import check_local_environment
+from shellbox.machine import Backend, ExecutionRequirements, Machine, MachineSpec, PackageSpec
 from taskcompendium.models import (
     CommandSemantics,
     ConversationInput,
@@ -27,7 +29,7 @@ from taskcompendium.models import (
 )
 from taskcompendium.runtime.resources import inline_resource
 
-from experiments.post_training.inventory._data import FAMILIES, IMAGE_VERIFIER, LOCAL_VERIFIER, prepare
+from experiments.post_training.inventory._data import FAMILIES, IMAGE_VERIFIER, prepare
 
 
 def source_task(identifier: str) -> dict:
@@ -106,7 +108,7 @@ def sources(directory: Path) -> SourceFiles:
                         "task": source_task(identifier),
                         "runtime": {
                             "task_machine": None,
-                            "verifier_machine": {**LOCAL_VERIFIER.model_dump(mode="json"), "backend": "daytona"},
+                            "verifier_machine": IMAGE_VERIFIER.model_dump(mode="json"),
                         },
                         "session": {"task_session": "shellbox", "max_turns": 1},
                     }
@@ -196,3 +198,33 @@ def test_persisted_image_graders_are_admitted_by_the_image_backend(tmp_path):
     # RegistryImage before any rollout could begin, despite preserving the correct grader image.
     for spec in read_tasks(output / "train.parquet") + read_tasks(output / "full_validation.parquet"):
         validate_spec(spec, factories)
+
+
+class LocalAdmissionFactory:
+    backend = Backend.LOCAL
+
+    def check_environment(self, requirements: ExecutionRequirements, spec: MachineSpec) -> None:
+        check_local_environment(requirements, spec)
+
+    async def create(self, spec: MachineSpec) -> Machine:
+        raise AssertionError("Admission must not acquire a machine")
+
+
+@pytest.mark.parametrize(
+    "software", [{"packages_lock": "s3://fixture/grader.lock"}, {"package_spec": PackageSpec(pypi_packages=())}]
+)
+def test_persisted_package_graders_pass_local_allocation_admission(tmp_path, software):
+    inputs = sources(tmp_path)
+    task = json.loads(inputs.training_rows[0]["task_json"])
+    task["grader"]["environment"] = EnvironmentRequirements(
+        command_semantics=CommandSemantics.LINUX_PROCESS, **software
+    ).model_dump(mode="json")
+    inputs.training_rows[0]["task_json"] = json.dumps(task)
+    pq.write_table(pa.Table.from_pylist(inputs.training_rows), inputs.training)
+    output = tmp_path / "output"
+    produce(inputs.training, inputs.validation, output)
+    spec = read_tasks(output / "train.parquet")[0]
+    assert spec.task.model_dump(mode="json") == {**task, "schema_version": "0.28"}
+    # Use the real local capability check without probing or starting bubblewrap.
+    # The old per-machine CPU/storage requests fail here before any lock read or grading.
+    validate_spec(spec, {"local": LocalAdmissionFactory()})
