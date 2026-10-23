@@ -372,9 +372,12 @@ for model_path in models.glob("*.yaml"):
         resolved = EvalchemyDefinition(name=name, config_path=config_path).config_for(
             source, model, None
         )
-        expected = {"enable_thinking": name in thinking_on}
+        expected = {**model.generation.chat_template_kwargs, "enable_thinking": name in thinking_on}
         if name in thinking_off and model.generation.thinking_off_template_kwargs:
-            expected = dict(model.generation.thinking_off_template_kwargs)
+            expected = {
+                **{key: value for key, value in expected.items() if key != "enable_thinking"},
+                **model.generation.thinking_off_template_kwargs,
+            }
         assert resolved.chat_template_kwargs == expected, (
             model.location,
             name,
@@ -387,6 +390,7 @@ for model_path in models.glob("*.yaml"):
     )
     assert "enable_thinking" not in nupa.chat_template_kwargs, (model.location, nupa.chat_template_kwargs)
 fallbacks = {
+    "CohereLabs/North-Mini-Code-1.0": {"reasoning": False},
     "openai/gpt-oss-20b": {"reasoning_effort": "low"},
     "IFM/K2-Horizon-MoVA-36B-A4B": {"reasoning_effort": "low"},
     "Aleph-Alpha/Kolibri-1": {"reasoning_effort": "none"},
