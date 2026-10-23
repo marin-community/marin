@@ -41,6 +41,7 @@ ContextAttentionLayout = Literal["zigzag", "contiguous"]
 "zigzag" swaps the late half of each shard's queries with its mirror shard so every shard does equal
 causal work; "contiguous" runs each shard's own rows. Other implementations ignore it.
 """
+DEFAULT_CONTEXT_ATTENTION_LAYOUT: ContextAttentionLayout = "zigzag"
 
 
 @dataclass(frozen=True)
@@ -444,7 +445,7 @@ def attention(
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
     implementation: GrugAttentionImplementation | None = None,
-    context_layout: ContextAttentionLayout = "zigzag",
+    context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT,
 ) -> Float[Array, "B Q Hq D"]:
     if implementation == "reference":
         return reference_attention(q, k, v, mask, logits_dtype=jnp.float32)
@@ -483,6 +484,7 @@ def attention(
 __all__ = [
     "AttentionMask",
     "ContextAttentionLayout",
+    "DEFAULT_CONTEXT_ATTENTION_LAYOUT",
     "GrugAttentionImplementation",
     "RotaryConfig",
     "align_kv_heads",

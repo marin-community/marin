@@ -37,6 +37,7 @@ from levanter.grug._moe.common import (
 )
 from levanter.grug._moe.topk import top_k_indices
 from levanter.grug.attention import (
+    DEFAULT_CONTEXT_ATTENTION_LAYOUT,
     AttentionMask,
     ContextAttentionLayout,
     GrugAttentionImplementation,
@@ -309,7 +310,7 @@ class GrugModelConfig:
     sconv_kernel: int = 4
     sconv_sites: tuple[str, ...] = ("k", "attn", "mlp")
     attention_implementation: GrugAttentionImplementation | None = None
-    attention_context_layout: ContextAttentionLayout = "zigzag"
+    attention_context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT
     """Query-row layout for FA4 under context parallelism. "zigzag" balances causal work across
     context shards at the cost of a query swap and a second kernel launch per call; it pays off at 262K
     but costs 0.7% at 65K, where the hero should use "contiguous". See README "Context-length switches"."""

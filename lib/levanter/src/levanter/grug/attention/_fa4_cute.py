@@ -15,7 +15,7 @@ from jax.sharding import get_abstract_mesh, reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.cutlass_kernel_cache import gpu_compute_capability
-from levanter.grug.attention._core import AttentionMask, ContextAttentionLayout
+from levanter.grug.attention._core import DEFAULT_CONTEXT_ATTENTION_LAYOUT, AttentionMask, ContextAttentionLayout
 from levanter.grug.attention._fa4_cute_backend import fa4_cute_attention_forward
 from levanter.grug.attention._fa4_cute_config import (
     SM100_GQA_RATIOS,
@@ -392,7 +392,7 @@ def gpu_fa4_cute_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
-    context_layout: ContextAttentionLayout = "zigzag",
+    context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT,
 ) -> Float[Array, "B Q Hq D"]:
     """Run causal self-attention through the segmented FA4/CuTe kernel."""
     if jax.default_backend() != "gpu":
@@ -408,7 +408,7 @@ def gpu_fa4_cute_sm100_attention(
     v: Float[Array, "B K Hkv D"],
     mask: AttentionMask | Bool[Array, "B Q K"] | Float[Array, "B Q K"] | None,
     *,
-    context_layout: ContextAttentionLayout = "zigzag",
+    context_layout: ContextAttentionLayout = DEFAULT_CONTEXT_ATTENTION_LAYOUT,
 ) -> Float[Array, "B Q Hq D"]:
     """Run native SM100 forward and one-block backward for BF16 D128 GQA.
 
