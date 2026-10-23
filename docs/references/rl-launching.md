@@ -223,41 +223,5 @@ data-dependent numerical failures in runtime diagnosis rather than guessing at t
 For live submission, monitoring, or recovery, follow the `launch-rl` and `use-iris` skills and
 `lib/iris/OPS.md`. Do not restart a cluster or resubmit a failed run without explicit authority.
 
-## Snowball 100k selection
-
-`experiments.post_training.inventory.train` consumes the curation selection from
-[`recipes/snowball-100k.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-100k.json).
-Publish it through the [curation driver](task-curation.md#final-task-selection)
-before launching training. Check the published selection's row counts and source
-provenance before submission.
-
-The recipe defines family and source quotas over FULL-curated tasks.
-This produces a fresh selection; it does not replay
-the historical pool's exact rows or native family/control stratification.
-A source shortfall fails instead of borrowing tasks from another source.
-
-The selection artifact supplies `train.parquet` and `validation.parquet` to the
-trainer. Validation contains 20 tasks per family, sampled from the original
-910-task development panel. All 910 tasks remain in `full_validation.parquet`
-for training-overlap exclusion. This reused development panel is not an
-independent final benchmark. SkyRL binds harnesses, rollout limits and verifier
-backends when loading the canonical `task_spec` rows.
-
-Print the three-update training plan after publishing the selection:
-
-```bash
-uv run python -m experiments.post_training.inventory.train \
-  --version 2026.10.23.2 --steps 3
-```
-
-`--selection-uri` accepts another published selection artifact root. The trainer
-starts from Datakit SFT revision `fe666478454e79fe6027a0bab0388d9abd68f51a`, with
-the tokenizer at the same revision, and defaults to 25 updates. Add `--run` to
-submit; use a fresh run version for each iteration.
-
-Every run uses 40 H100s, 128 prompt groups per update and four samples per group.
-It uses synchronous RLOO-N, a 24,576-token context and an 8,192-token response
-limit. Evaluation runs before training and after the final update. The final
-update also saves a checkpoint and HF export. Saved evaluation results retain
-task-level verifier outcomes. Local graders require the privileged container profile; image-backed
-graders and remote judges require their configured credentials.
+For the current curation, training and evaluation recipe, see the
+[quick RL loop](../recipes/quick-rl-loop.md).

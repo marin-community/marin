@@ -133,25 +133,7 @@ Parquet. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
-The checked-in [Snowball 100k recipe](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-100k.json)
-sets the five-family and 13-source allocation. Run it against a saved FULL corpus:
-
-```bash
-uv run --with-editable './lib/taskcompendium[pipeline]' python \
-  -m experiments.post_training.task_curation.driver \
-  --corpus /path/to/full-campaign/corpus.json \
-  --selection experiments/post_training/task_curation/recipes/snowball-100k.json
-```
-
-Omit `--run` to inspect the plan; add it to produce the selection. The corpus
-must contain all recipe sources. `source_limits`, when supplied, covers every
-source and sums to each family quota. Each source is sampled independently,
-and an admission shortfall fails before publishing the training files. The
-100k recipe preserves the historical allocation on fresh admitted populations;
-it does not reproduce the historical selected rows or native stratification.
-See the
-[training recipe](rl-launching.md#snowball-100k-selection) for the artifact handoff
-and before/final evaluation.
+For the current task-to-training recipe, see the [quick RL loop](../recipes/quick-rl-loop.md).
 
 The recipe contains an explicit source allowlist and family quotas. For example,
 this small recipe selects 100 calendar tasks from two admitted sources:
@@ -191,7 +173,8 @@ uv run --with-editable './lib/taskcompendium[pipeline]' python \
 ```
 
 Omit `--run` to print the artifact and its dependencies. Source IDs in the recipe
-must all be present in the campaign or saved corpus. Changing quotas, the seed,
+must all be present in the campaign or saved corpus. Optional `source_limits`
+must cover every source and sum to each family quota. Changing quotas, the seed,
 source artifacts, the source allowlist or the heldout input requires a new recipe version.
 The output lives under the active artifact root at
 `rl-data/task-selection/<name>/<version>`; `--cache-dir` selects a local root.

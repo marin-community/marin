@@ -95,6 +95,7 @@ class Candidate:
     task_id: str
     task_json: str
     source_id: str
+    # Semantic deduplication key, including private grader inputs for opaque contracts.
     contract: str
 
 

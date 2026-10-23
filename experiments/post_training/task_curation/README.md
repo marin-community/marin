@@ -13,8 +13,8 @@ The recipe names the source IDs, assigns them to selection families, sets
 family quotas and pins the complete heldout source in retained storage.
 The step filters heldout overlap and cross-source duplicates before sampling,
 then writes canonical `task_spec` Parquet for training and evaluation.
-The checked-in [`recipes/snowball-100k.json`](recipes/snowball-100k.json) preserves
-the five-family and 13-source allocation for a fresh admitted 100k pool.
+See the [quick RL loop](../../../docs/recipes/quick-rl-loop.md) for the current
+selection recipe and the training/evaluation handoff.
 See [task selection](../../../docs/references/task-curation.md#final-task-selection)
 for the recipe and resume commands.
 
