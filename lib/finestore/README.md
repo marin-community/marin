@@ -87,6 +87,8 @@ descending maximum row commit. Once a key's winning row is newer than every unre
 candidate, its lookup stops. A compacted file's publication age does not determine its
 rows' precedence. Shards without row-commit bounds use publication as a conservative
 upper bound.
+Table point lookups still read candidate schemas to preserve columns introduced by
+schema evolution; descriptor lookups can skip older files entirely.
 
 ## Named objects and caches
 

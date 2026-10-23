@@ -196,7 +196,6 @@ def test_point_lookups_skip_old_rows_in_a_later_compaction(simulated_bucket):
 
     view = ReadView(ROOT)
     assert view.read_blob("kernel") == b"new"
-    assert view.point(BlobTables.DESCRIPTORS, name="kernel")["data"] == b"new"
     # A scan still requires the entire committed table; only a resolved point lookup can stop early.
     with pytest.raises(FileNotFoundError):
         view.scan(BlobTables.DESCRIPTORS)

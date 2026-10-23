@@ -704,13 +704,18 @@ class _ReadOperations:
                 yield from rows.to_pylist()
 
     def point(self, table: str, **keys) -> dict | None:
-        if not self.list_shards(table):
+        plan = self._read_plan(table, None, [(key, "==", value) for key, value in keys.items()])
+        if plan is None:
             return None
-        primary_key = self.primary_key(table)
-        if set(keys) == set(primary_key):
-            result = self._lookup_rows(table, [tuple(keys[column] for column in primary_key)], _TABLE_SCAN_PROFILE)
+        if set(keys) == set(plan.primary_key):
+            result = self._lookup_rows(table, [tuple(keys[column] for column in plan.primary_key)], _TABLE_SCAN_PROFILE)
+            if result is not None:
+                # Preserve columns from older candidates even when their payloads can be skipped.
+                result = pa.concat_tables(
+                    [result, pa.Table.from_batches([], schema=plan.schema)], promote_options="permissive"
+                )
         else:
-            result = self.scan(table, where=[(key, "==", value) for key, value in keys.items()])
+            result = _scan_plan(plan, None, history_floor=self._history_floor)
         if result is None or result.num_rows == 0:
             return None
         return result.slice(0, 1).to_pylist()[0]
