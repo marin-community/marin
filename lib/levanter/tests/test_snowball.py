@@ -32,7 +32,7 @@ from levanter.grug.grug_moe import PreparedMoERouteCapture
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm_reference
-from levanter.models.lm_model import LmConfig
+from levanter.models.lm_model import LmConfig, LmExample
 from levanter.layers.attention import AttentionMask as LmAttentionMask
 from levanter.layers.kv_cache import KvPageCache
 from levanter.inference.page_table import PageBatchInfo, PageTableSpec
@@ -627,6 +627,96 @@ def test_snowball_public_capture_replay_binds_tokens_and_preserves_logits():
         changed_kv_mask = LmAttentionMask.causal().with_segment_ids(q_segment_ids, changed_kv_segment_ids)
         with pytest.raises(ValueError, match="different packed segment IDs"):
             model(ids_a, changed_kv_mask, route_captures=prepared)
+
+
+def test_snowball_next_token_loss_replays_routes_with_masks_and_gradients():
+    cfg = SnowballConfig(
+        vocab_size=64,
+        hidden_dim=32,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=48,
+        num_experts=8,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=4,
+        num_kv_heads=2,
+        head_dim=12,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+        inference_attention_implementation="reference",
+        moe_implementation="scatter",
+        rms_norm_implementation="native",
+    )
+    compute_axis_mapping = {
+        "batch": ("replica_dcn", "data", "expert"),
+        "position": None,
+        "vocab": "model",
+    }
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        batch = Axis("batch", 2)
+        position = Axis("position", 8)
+        ids = hax.named(
+            jnp.asarray([[3, 5, 7, 11, 13, 17, 0, 0], [19, 23, 29, 31, 37, 0, 0, 0]], dtype=jnp.int32),
+            (batch, position),
+        )
+        segment_ids = hax.named(
+            jnp.asarray([[0, 0, 0, 0, 0, 0, -1, -1], [1, 1, 1, 1, 1, -1, -1, -1]], dtype=jnp.int32),
+            (batch, position),
+        )
+        loss_weight = hax.named(
+            jnp.asarray(
+                [[1.0, 0.5, 0.25, 0.75, 1.0, 0.9, 0.0, 0.0], [1.0, 0.2, 0.8, 0.4, 0.6, 0.0, 0.0, 0.0]],
+                dtype=jnp.float32,
+            ),
+            (batch, position),
+        )
+        example = LmExample(
+            tokens=ids,
+            loss_weight=loss_weight,
+            attn_mask=LmAttentionMask.causal().with_segment_ids(segment_ids),
+        )
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(33))
+        with hax.axis_mapping(compute_axis_mapping):
+            sharded_example = hax.auto_sharded(example)
+            captures = model.capture_route_captures(sharded_example.tokens, sharded_example.attn_mask)
+            changed_block = eqx.tree_at(
+                lambda block: block.mlp.router,
+                model.transformer.blocks[0],
+                model.transformer.blocks[0].mlp.router.at[:, 0].add(0.01),
+            )
+            changed = eqx.tree_at(lambda current: current.transformer.blocks[0], model, changed_block)
+            uncaptured_logits = changed(sharded_example.tokens, sharded_example.attn_mask)
+            replay_logits = changed(sharded_example.tokens, sharded_example.attn_mask, route_captures=captures)
+            replay_loss = changed.compute_next_token_loss(sharded_example, reduction=None, route_captures=captures)
+            replay_mean = changed.compute_next_token_loss(sharded_example, route_captures=captures)
+
+            def reference_loss(logits):
+                logits = np.asarray(logits)
+                target = np.roll(np.asarray(sharded_example.tokens.array), -1, axis=1)
+                weights = np.asarray(sharded_example.loss_weight.array).copy()
+                weights[:, -1] = 0
+                log_probs = logits - np.logaddexp.reduce(logits, axis=-1, keepdims=True)
+                token_loss = -np.take_along_axis(log_probs, target[..., None], axis=-1)[..., 0]
+                return jnp.asarray(token_loss * weights)
+
+            expected_unreduced = reference_loss(replay_logits.array)
+            expected_mean = jnp.sum(expected_unreduced) / jnp.sum(sharded_example.loss_weight.array.at[:, -1].set(0))
+
+            def loss_for_grad(current):
+                return current.compute_next_token_loss(sharded_example, route_captures=captures).array
+
+            _, gradients = eqx.filter_value_and_grad(loss_for_grad)(changed)
+
+            changed_tokens = hax.named(ids.array.at[0, 0].set(11), ids.axes)
+            mismatched_example = hax.auto_sharded(dataclasses.replace(example, tokens=changed_tokens))
+            with pytest.raises(ValueError, match="different token IDs"):
+                changed.compute_next_token_loss(mismatched_example, route_captures=captures)
+
+    assert not np.array_equal(np.asarray(uncaptured_logits.array), np.asarray(replay_logits.array))
+    np.testing.assert_allclose(np.asarray(replay_loss.array), np.asarray(expected_unreduced), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(replay_mean.array), np.asarray(expected_mean), rtol=1e-5, atol=1e-5)
+    assert float(jnp.max(jnp.abs(gradients.transformer.blocks[0].mlp.router))) > 0.0
 
 
 def test_snowball_public_capture_replay_jit_binds_dynamic_tokens_and_segments():

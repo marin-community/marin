@@ -74,7 +74,7 @@ from levanter.kernels.pallas.rms_norm import Implementation as BatchInvariantRms
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.layers.kv_cache import KvPageCache, ListCache
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
 from levanter.utils.activation import ActivationFunctionEnum
 from levanter.utils.logging import silence_transformer_nag
 
@@ -1323,6 +1323,34 @@ class SnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[Snowball
             route_captures=route_captures,
         )
         return hax.dot(hidden, self.get_lm_head(), axis=self.Embed)
+
+    def compute_next_token_loss(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: Optional[hax.ReductionFunction] = cast(Optional[hax.ReductionFunction], hax.mean),
+        reduction_axis: Optional[hax.AxisSelection] = None,
+        logsumexp_weight: Optional[float] = None,
+        loss_dtype: Optional[jnp.dtype] = jnp.float32,
+        logit_soft_cap: Optional[float] = None,
+        route_captures: SnowballRouteCaptureBatch | None = None,
+    ) -> jnp.ndarray | NamedArray:
+        """Compute next-token loss, optionally replaying a bound route capture batch.
+
+        Replay fixes expert IDs and ``qb_alpha`` from the capture while current model parameters
+        still determine combine weights and gradients. Captures contain no dispatch drop masks,
+        capacity state, or router auxiliary losses; those training-time effects are not replayed.
+        """
+        return self._compute_next_token_loss_from_activations(
+            example,
+            self.activations(example.tokens, example.attn_mask, key=key, route_captures=route_captures),
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
+        )
 
     def get_lm_head(self) -> NamedArray:
         return hax.named(reshard(self.transformer.output_proj, P(None, "model")), (self.Embed, self.Vocab))
