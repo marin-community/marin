@@ -434,6 +434,13 @@ def merge_router_telemetry_metrics(
         )
 
 
+def dense_reduce(values: torch.Tensor, group) -> None:
+    """Sum a CPU tensor in place over a process group; NCCL reduces it on the current GPU."""
+    reduced = values.to(device=torch.cuda.current_device())
+    torch.distributed.all_reduce(reduced, group=group)
+    values.copy_(reduced.cpu())
+
+
 def sum_gathered_task_sos(task_sos: Mapping[tuple[str, int, int], float], group) -> dict[tuple[str, int, int], float]:
     """Sum sparse per-task mass over a parallel group with an object gather."""
     gathered: list[Any] = [None] * torch.distributed.get_world_size(group)
