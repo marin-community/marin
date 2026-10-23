@@ -113,15 +113,15 @@ not read it.
 
 ### Assistant prefills
 
-`PrefillHarness` continues the final assistant text in `ConversationInput.events` once. Register it
+`AssistantPrefixHarness` continues the final assistant text in `ConversationInput.events` once. Register it
 and select it explicitly with `TaskRolloutSpec.harness`:
 
 ```python
-from rolloutengine.harness.prefill import PrefillHarness
+from rolloutengine.harness.assistant_prefix import AssistantPrefixHarness
 
-engine = RolloutEngine({}, {"prefill": PrefillHarness()})
+engine = RolloutEngine({}, {"assistant_prefix": AssistantPrefixHarness()})
 spec = TaskRolloutSpec(
-    task=task, harness="prefill", limits=limits, task_machine=None, verifier_machine=None
+    task=task, harness="assistant_prefix", limits=limits, task_machine=None, verifier_machine=None
 )
 ```
 
