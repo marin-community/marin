@@ -277,8 +277,6 @@ qwen3_8b = download_model(
     )
 )
 
-# The Smartie RL run 2026.10.15.32 at step 14, as a MarinSkyRL HF export (GrugMoeForCausalLM, ~134 GB).
-
 qwen3_0_6b_base = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-0.6B-Base",

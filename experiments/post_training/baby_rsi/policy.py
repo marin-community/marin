@@ -1,13 +1,13 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The policy under training: a vLLM server with LoRA adapters that load at runtime, and its exact-token model.
+"""A policy on a vLLM server, and its exact-token model.
 
-``VllmPolicy`` is a ``rolloutengine`` model. It renders each request with the policy's own chat template, sends the
-prompt token IDs to the server's completions endpoint, and returns the sampled token IDs and their log
-probabilities, so that a trainer can learn from the rollout. A continuation keeps the served tokens unchanged and
-appends only the template's boundary and the new messages. ``model`` names the adapter that serves the next request:
-the trainer loads each new adapter and sets it, and requests in flight keep the adapter that they started with.
+``VllmServer`` runs ``vllm serve`` for the evaluation. ``VllmPolicy`` is a ``rolloutengine`` model on any
+OpenAI-compatible completions endpoint, for example a ``VllmServer`` or the live endpoint of a SkyRL job. It renders
+each request with the policy's own chat template, sends the prompt token IDs to the completions endpoint, and
+returns the sampled token IDs and their log probabilities. A continuation keeps the served tokens unchanged and
+appends only the template's boundary and the new messages. ``model`` names the weights that serve the next request.
 """
 
 import asyncio
