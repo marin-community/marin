@@ -80,28 +80,8 @@ queued readers can proceed. Background warming uses only immediately available
 download slots; a broad query cannot leave an unbounded queue of cache fills
 after its deadline. Required local reads still wait for a download slot.
 
-Query misses qualify for background warming after two remembered query
-requests. A query shares a 256 MiB / 64-object fill budget
-across all namespaces, source Parquet, index bundles, and projections. Repeated
-scans of an object in one query count once. Objects larger than the remaining
-byte budget continue scanning remotely; smaller objects can still qualify.
-Each cached store keeps saturating request counts and last-seen times in a hash
-map. Every 32,768 object observations, it halves the counts and removes zero-count
-and ten-minute-idle entries. Pruning favors repeated demand over one-off scans
-without maintaining an eviction order. The total count, and hence the entry
-count, stays below 65,536. Idle counts reset on lookup, so stale demand never
-qualifies an object between pruning passes. This is an approximate reuse
-threshold: a single observation can age out before ten minutes. A process
-restart clears the history. Separate RPC requests, including retries, count as
-separate queries.
-
-These are admission limits, not a hard disk quota. Uploads still seed the cache,
-required local reads and bounded key-bounds repair bypass query admission, and
-five-minute LRU eviction still enforces `object_cache_gb`. Compare eviction
-volume and repeat-query latency before increasing the admission constants in
-`rust/src/store/object_store/admission.rs`. A repeated broad query can admit
-another budget on each request; the limits reduce its fill rate, not its total
-working set over time.
+When cache eviction remains high despite little query traffic, check ingestion
+and compaction activity; both write through to the cache.
 
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
