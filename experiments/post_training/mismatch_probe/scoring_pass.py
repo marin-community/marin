@@ -135,7 +135,9 @@ def build_score_batch(
                 seed = exact_subsample_seed(master_seed, sequence.probe_hash)
                 mask = position_subsample_mask(len(scored), rate=exact_rate, seed=seed)
                 for selected, position in zip(mask.tolist(), scored, strict=True):
-                    positions[row, start + position] = row + 1 if selected else 0
+                    # The distribution that scores token ``position`` sits at the logits
+                    # position before it.
+                    positions[row, start + position - 1] = row + 1 if selected else 0
     padded_gather: np.ndarray | None = None
     if gather_ids is not None:
         if gather_ids.shape[:2] != (count, padded_len):
@@ -255,27 +257,35 @@ def exact_rows_from_passes(
     reference_positions: list[tuple[int, int]],
     candidate_exact: np.ndarray,
     candidate_positions: list[tuple[int, int]],
+    *,
+    padded_len: int,
 ) -> list[tuple[str, int, str, float]]:
-    """(sample_id, position, probe_hash, exact KL) per subsampled position.
+    """(sample_id, token position, probe_hash, exact KL) per subsampled position.
 
     ``reference_exact``/``candidate_exact`` are the full-vocabulary log-softmax
     rows of the two passes, each in its own compacted order beside the
-    ``(batch row, padded position)`` coordinates of every returned row.
+    ``(batch row, padded logits position)`` coordinates of every returned row.
+    The reported position is the scored token's, as in the binned rows.
     """
     if len(reference_exact) != len(reference_positions) or len(candidate_exact) != len(candidate_positions):
         raise ValueError("exact rows and their coordinates disagree")
     reference_by_key = {tuple(key): value for key, value in zip(reference_positions, reference_exact, strict=True)}
     rows = []
-    for (row, position), logprobs in zip(candidate_positions, candidate_exact, strict=True):
-        if (row, position) not in reference_by_key:
-            raise ValueError(f"the candidate pass scored position {position} of row {row}; the reference pass did not")
+    for (row, logits_position), logprobs in zip(candidate_positions, candidate_exact, strict=True):
+        if (row, logits_position) not in reference_by_key:
+            raise ValueError(
+                f"the candidate pass scored logits position {logits_position} of row {row}; the reference pass did not"
+            )
         kl = float(
             exact_kl(
-                torch.from_numpy(reference_by_key[(row, position)].astype(np.float64)),
+                torch.from_numpy(reference_by_key[(row, logits_position)].astype(np.float64)),
                 torch.from_numpy(logprobs.astype(np.float64)),
             )
         )
         sequence = sequences[row]
+        # Logits position j of a row left-padded to padded_len scores the token at
+        # sequence position j - (padded_len - len) + 1, the binned rows' position.
+        position = logits_position - (padded_len - len(sequence.token_ids)) + 1
         rows.append((sequence.sample_id, position, sequence.probe_hash, kl))
     return rows
 

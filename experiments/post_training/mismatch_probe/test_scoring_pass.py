@@ -62,8 +62,9 @@ def test_build_score_batch_pads_left_and_selects_exact_positions():
     )
     assert batch["sequences"].tolist() == [[1, 2, 3, 4], [99, 99, 5, 6]]
     assert batch["attention_mask"].tolist() == [[1, 1, 1, 1], [0, 0, 1, 1]]
-    # Rate 1.0 selects every scored position, tagged with its row plus one.
-    assert batch["probe_score_positions"].tolist() == [[0, 0, 0, 0], [0, 0, 0, 2]]
+    # Rate 1.0 selects every scored token; its row-plus-one tag sits at the logits
+    # position before it, whose distribution scores it.
+    assert batch["probe_score_positions"].tolist() == [[0, 0, 0, 0], [0, 0, 2, 0]]
 
 
 def test_build_score_batch_exact_selection_is_seeded_and_reproducible():
@@ -167,8 +168,9 @@ def test_exact_rows_pair_the_two_passes_by_coordinate():
     vocabulary = torch.arange(4, dtype=torch.float64)
     reference_rows = torch.log_softmax(torch.stack([vocabulary + 1, vocabulary + 2]), dim=-1).numpy()
     candidate_rows = torch.log_softmax(torch.stack([vocabulary, vocabulary]), dim=-1).numpy()
+    # Row 0 is left-padded by one: logits positions 1 and 2 score tokens 1 and 2.
     coordinates = [(0, 1), (0, 2)]
-    rows = exact_rows_from_passes([sequence_row], reference_rows, coordinates, candidate_rows, coordinates)
+    rows = exact_rows_from_passes([sequence_row], reference_rows, coordinates, candidate_rows, coordinates, padded_len=4)
     assert [sample_id for sample_id, _position, _hash, _kl in rows] == ["s", "s"]
     for index, ((_sample_id, position, probe_hash, kl), reference_row, candidate_row) in enumerate(
         zip(rows, reference_rows, candidate_rows, strict=True)
@@ -178,3 +180,23 @@ def test_exact_rows_pair_the_two_passes_by_coordinate():
         assert kl == pytest.approx(expected, rel=1e-12)
         assert position == index + 1
         assert probe_hash == sequence_row.probe_hash
+
+
+def test_exact_rows_report_the_binned_rows_token_positions():
+    """The positions the builder marks, read back as the worker reports them, are scored positions."""
+    short = sequence("a", [1, 2, 3], [CONTEXT_TAG, ProbeBucket.REASONING, ProbeBucket.FINAL_MESSAGE])
+    long = sequence("b", [4, 5, 6, 7, 8], [CONTEXT_TAG, CONTEXT_TAG] + [ProbeBucket.REASONING] * 3)
+    sequences = [short, long]
+    batch = build_score_batch(
+        sequences, pad_token_id=0, gather_ids=None, exact_positions=True, exact_rate=1.0, master_seed=7
+    )
+    tags = batch["probe_score_positions"]
+    # The worker reports (tag - 1, padded logits position) for every tagged position.
+    coordinates = [(int(tags[row, column]) - 1, column) for row, column in zip(*np.nonzero(tags))]
+    rows_of_vocab = np.log(np.full((len(coordinates), 2), 0.5))
+    rows = exact_rows_from_passes(
+        sequences, rows_of_vocab, coordinates, rows_of_vocab, coordinates, padded_len=batch["sequences"].shape[1]
+    )
+    reported = sorted((sample_id, position) for sample_id, position, _hash, _kl in rows)
+    expected = sorted((s.sample_id, position) for s in sequences for position in s.scored_positions())
+    assert reported == expected

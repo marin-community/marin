@@ -171,7 +171,9 @@ def exact_pass(args) -> None:
             results, duration = run_score(policy, batch, top_k=None)
         passes[label] = (results["exact_logprobs"], results["exact_positions"].tolist())
         print(f"{label} exact pass ({model_path}): {len(results['exact_positions'])} positions in {duration:.0f} s")
-    rows = exact_rows_from_passes(sequences, *passes["reference"], *passes["candidate"])
+    rows = exact_rows_from_passes(
+        sequences, *passes["reference"], *passes["candidate"], padded_len=batch["sequences"].shape[1]
+    )
     kls = np.asarray([row[3] for row in rows])
     print(
         f"exact subsample: {len(rows)} positions, mean exact KL {kls.mean():.6f} nats/token, "
