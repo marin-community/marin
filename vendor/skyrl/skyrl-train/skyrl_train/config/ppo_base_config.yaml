@@ -32,6 +32,26 @@ data:
     adaptive_min_informative: 0.1 # informative-group fraction below which the level is exhausted
     weighting: pass-variance # learnability/grade-prior weight curve: pass-variance|group-informative
     seed: null # falls back to trainer.seed
+  # A task feed that a producer extends while training runs (skyrl_train/dataset/task_feed.py). With a root, the
+  # taskcompendium entrypoint reads <root>/chunks instead of train_data, trains each row once in feed order, and
+  # writes graded/, skipped/ and policy_endpoint.json under the root.
+  feed:
+    root: null # object-store prefix or local directory; null reads train_data once
+    poll_seconds: 10 # the least time between two listings of <root>/chunks
+    min_rows: ${trainer.train_batch_size} # rows to wait for before training starts; at least one batch
+    session: # rollout limits and Shellbox settings of each feed task
+      max_turns: ${environment.task_sessions.session.max_turns}
+      max_total_tokens: ${environment.task_sessions.session.max_total_tokens}
+      model_turn_timeout: ${environment.task_sessions.session.model_turn_timeout}
+      tool_turn_timeout: ${environment.task_sessions.session.tool_turn_timeout}
+      total_turn_timeout: ${environment.task_sessions.session.total_turn_timeout}
+      attempt_timeout: ${environment.task_sessions.session.attempt_timeout}
+      verifier_timeout: ${environment.task_sessions.session.verifier_timeout}
+      cleanup_timeout: ${environment.task_sessions.session.cleanup_timeout}
+      command_timeout: ${environment.task_sessions.session.command_timeout}
+      shell_tool:
+        name: shell
+        command_parameter: command
 
 checkpoint_export:
   step: null

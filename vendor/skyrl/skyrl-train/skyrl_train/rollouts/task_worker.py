@@ -14,12 +14,14 @@ from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from transformers import PreTrainedTokenizerBase
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
+from rolloutengine.harness.prefill import PrefillHarness
 from rolloutengine.models import (
     GenerationLimitReached,
     GradedRollout,
@@ -30,6 +32,7 @@ from rolloutengine.models import (
     RolloutFailure,
     RolloutOperation,
     Prompt,
+    Rollout,
     TaskRolloutSpec,
 )
 from rolloutengine.engine import RolloutEngine
@@ -37,6 +40,7 @@ from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
+from skyrl_train.dataset.task_feed import PREFILL_HARNESS, graded_group, write_graded_group, write_skipped
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
@@ -208,6 +212,43 @@ async def _model_turn(
     )
 
 
+def _prefill_request(
+    request: ModelRequest, tokenizer: PreTrainedTokenizerBase, chat_template_kwargs: dict[str, Any]
+) -> ModelRequest:
+    """Pin the prompt tokens of a request that continues its final assistant message.
+
+    The chat path of the inference client always opens a new assistant turn. The policy's tokenizer renders the
+    prefix with ``continue_final_message`` here, and the engine serves the tokens unchanged.
+    """
+    if (
+        request.prompt_token_ids is not None
+        or request.continuation is not None
+        or not (request.options.get("extra_body") or {}).get("continue_final_message")
+    ):
+        return request
+    template_kwargs = {**chat_template_kwargs, **request.options.get("chat_template_kwargs", {})}
+    encoded = tokenizer.apply_chat_template(
+        list(request.messages),
+        tools=request.options.get("tools") or None,
+        add_generation_prompt=False,
+        continue_final_message=True,
+        tokenize=True,
+        **template_kwargs,
+    )
+    if isinstance(encoded, Mapping):
+        encoded = encoded["input_ids"]
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if encoded and isinstance(encoded[0], list):
+        (encoded,) = encoded
+    sampling = {
+        key: value
+        for key, value in request.options.items()
+        if key not in ("extra_body", "tools", "chat_template_kwargs")
+    }
+    return replace(request, options=sampling, prompt_token_ids=tuple(int(token) for token in encoded))
+
+
 def _failed_rollout(
     interruption: GradedRolloutInterrupted,
     lowered: TaskRolloutSpec,
@@ -342,8 +383,10 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        feed_root: str | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
+        self.feed_root = feed_root
         self.model_client = model_client
         self.judge_connection = judge_connection
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
@@ -401,6 +444,8 @@ class TaskRolloutWorker:
         harnesses = episode_harnesses(lowered, self.sessions)
         if is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = shell_harness(lowered.harness)
+        elif lowered.harness == PREFILL_HARNESS:
+            harnesses[PREFILL_HARNESS] = PrefillHarness()
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
@@ -463,7 +508,7 @@ class TaskRolloutWorker:
             async def model(request):
                 return await _model_turn(
                     self.model_client,
-                    request,
+                    _prefill_request(request, self.projection.tokenizer, self.chat_template_kwargs),
                     sampling_params=sampling,
                     max_context_length=max_context_length,
                     max_prompt_length=max_input_length,
@@ -588,9 +633,46 @@ class TaskRolloutWorker:
 
     async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
         with self._active_request():
+            if self.feed_root is not None:
+                return await self._run_feed_task(task, writer)
             rollouts = await self.generate(task.request)
             batch = await self.training_batch(task.request, rollouts)
             return await write_trajectory_batch(task, writer, batch)
+
+    async def _run_feed_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
+        """Write the graded group of a feed row before batch selection; skip a row that fails, not training."""
+        assert self.feed_root is not None
+        uid = task.prompt["uid"]
+        try:
+            rollouts = await self.generate(task.request)
+        except Exception as error:
+            logger.opt(exception=error).warning("Feed row {} failed", uid)
+            await asyncio.to_thread(write_skipped, self.feed_root, uid, f"{type(error).__name__}: {error}")
+            await writer.skip_rollout(task.lease, task.prompt)
+            return 0
+        trajectory_ids = task.request.trajectory_ids
+        graded = [
+            GradedRollout(
+                Rollout(
+                    trajectory_ids[index].to_string() if trajectory_ids is not None else f"{uid}_{index}",
+                    rollout.conversations,
+                    rollout.stop_reason,
+                    rollout.metrics,
+                    rollout.outputs,
+                    rollout.failure,
+                ),
+                rollout.grade,
+            )
+            for index, rollout in enumerate(rollouts)
+        ]
+        await asyncio.to_thread(write_graded_group, self.feed_root, graded_group(uid, task.lease.policy_step, graded))
+        try:
+            batch = await self.training_batch(task.request, rollouts)
+        except Exception as error:
+            logger.opt(exception=error).warning("Feed row {} has no training batch; skipping it", uid)
+            await writer.skip_rollout(task.lease, task.prompt)
+            return 0
+        return await write_trajectory_batch(task, writer, batch)
 
 
 @dataclass(frozen=True)
@@ -665,4 +747,5 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            feed_root=self.config.data.feed.root,
         )
