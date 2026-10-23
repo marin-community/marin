@@ -26,6 +26,7 @@ from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 from safetensors.numpy import load_file
 
+from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.layers.attention import AttentionMask as LmHeadAttentionMask
 from levanter.models.lm_model import LmConfig
@@ -328,6 +329,30 @@ def test_snowball_packed_documents_do_not_attend_across_segments():
         alone_out = activations(model, alone, None)
 
     np.testing.assert_allclose(np.asarray(packed_out[:, first_len:]), np.asarray(alone_out), rtol=1e-4, atol=1e-5)
+
+
+def test_snowball_expert_loads_count_each_token_k_times_per_layer_matching_layer_zero_routing():
+    cfg = _tiny_config()
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(5))
+        ids = _device_batched_ids(cfg.vocab_size, 8)
+        loads = eqx.filter_jit(lambda m, x: m.transformer.expert_loads(x))(model, ids.array)
+        transformer = model.transformer
+        hidden = transformer.embed_gated_norm(
+            transformer.embed_norm(jnp.asarray(np.asarray(transformer.token_embed)[np.asarray(ids.array)]))
+        )
+        block = transformer.blocks[0]
+        x = hidden + block.attn(
+            block.attn_gated_norm(block.rms_attn(hidden)),
+            GrugAttentionMask(is_causal=True, sliding_window=cfg.sliding_window),
+        )
+        selected, _ = block.mlp._route(block.mlp_gated_norm(block.rms_mlp(x)).reshape(-1, cfg.hidden_dim))
+    tokens = ids.array.size
+    assert loads.shape == (cfg.num_layers, cfg.num_experts)
+    np.testing.assert_array_equal(np.asarray(loads).sum(axis=1), tokens * cfg.num_experts_per_token)
+    np.testing.assert_array_equal(
+        np.asarray(loads[0]), np.bincount(np.asarray(selected).ravel(), minlength=cfg.num_experts)
+    )
 
 
 @pytest.mark.parametrize(

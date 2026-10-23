@@ -571,10 +571,8 @@ class SnowballMoEMLP(eqx.Module):
             cfg=cfg,
         )
 
-    @named_call
-    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
-        b, s, _ = x.shape
-        x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
+    def _route(self, x_flat: Float[Array, "T D"]) -> tuple[Int[Array, "T K"], Float[Array, "T K"]]:
+        """Selected experts (top-k on biased logits) and their combine weights (unbiased sigmoid)."""
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
@@ -588,16 +586,25 @@ class SnowballMoEMLP(eqx.Module):
         combine_weights_f = jax.nn.sigmoid(unbiased_topk)
         denom = jnp.sum(combine_weights_f, axis=-1, keepdims=True)
         combine_weights_f = combine_weights_f * (_ROUTING_RENORM_SUM / (denom + 1e-9))
-        combine_weights = combine_weights_f.astype(x.dtype)
+        return selected_experts.astype(jnp.int32), combine_weights_f
 
+    def forward_with_load(self, x: Float[Array, "B S D"]) -> tuple[Float[Array, "B S D"], Int[Array, " E"]]:
+        """The routed output and the number of tokens routed to each expert."""
+        b, s, _ = x.shape
+        x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
+        selected_experts, combine_weights_f = self._route(x_flat)
         routed_flat = self.expert_mlp(
             x_flat,
-            selected_experts.astype(jnp.int32),
-            combine_weights,
+            selected_experts,
+            combine_weights_f.astype(x.dtype),
             mesh=get_abstract_mesh(),
             report_capacity_overflow=False,
         )
-        return jnp.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
+        load = jnp.zeros((self.cfg.num_experts,), dtype=jnp.int32).at[unshard(selected_experts).reshape(-1)].add(1)
+        return jnp.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec()), load
+
+    def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
+        return self.forward_with_load(x)[0]
 
 
 class SnowballBlock(eqx.Module):
@@ -632,6 +639,16 @@ class SnowballBlock(eqx.Module):
         long_mask: AttentionMask,
         use_long: Bool[Array, ""],
     ) -> Float[Array, "B S D"]:
+        return self.forward_with_load(x, short_mask, long_mask, use_long)[0]
+
+    def forward_with_load(
+        self,
+        x: Float[Array, "B S D"],
+        short_mask: AttentionMask,
+        long_mask: AttentionMask,
+        use_long: Bool[Array, ""],
+    ) -> tuple[Float[Array, "B S D"], Int[Array, " E"]]:
+        """The block output and its routed-expert load (unused loads are dead code under jit)."""
         attn_in = self.attn_gated_norm(self.rms_attn(x))
         # ``lax.cond`` keeps a uniform per-layer body so the transformer can scan the layers:
         # long layers use the full causal mask and disable RoPE (NoPE); short layers use the
@@ -644,8 +661,8 @@ class SnowballBlock(eqx.Module):
         )
         x = x + attn_out
         mlp_in = self.mlp_gated_norm(self.rms_mlp(x))
-        mlp_out = self.mlp(mlp_in) + self.shared(mlp_in)
-        return x + mlp_out
+        routed, load = self.mlp.forward_with_load(mlp_in)
+        return x + (routed + self.shared(mlp_in)), load
 
 
 def long_attention_layer_mask(num_layers: int) -> jnp.ndarray:
@@ -722,6 +739,24 @@ class SnowballTransformer(eqx.Module):
         # Bound routed-expert activation memory during the backward pass as well as forward.
         hidden, _ = jax.lax.scan(jax.checkpoint(_scan_layer), hidden, (stacked, long_schedule))
         return self.final_gated_norm(self.final_norm(hidden))
+
+    def expert_loads(self, token_ids: Int[Array, "B S"], mask: Optional[AttentionMask] = None) -> Int[Array, "L E"]:
+        """Tokens routed to each expert in each layer over ``token_ids`` (forward only)."""
+        cfg = self.config
+        segment_ids = mask.segment_ids if isinstance(mask, AttentionMask) else None
+        short_mask = AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=segment_ids)
+        long_mask = AttentionMask(is_causal=True, sliding_window=None, segment_ids=segment_ids)
+        token_ids = reshard(token_ids, P(_BATCH_AXES, _context_axis()))
+        hidden = self.token_embed.at[token_ids].get(out_sharding=_activation_spec())
+        hidden = self.embed_gated_norm(self.embed_norm(hidden))
+        stacked = jax.tree_util.tree_map(lambda *layers: jnp.stack(layers), *self.blocks)
+
+        def _scan_layer(carry, layer_and_flag):
+            layer, use_long = layer_and_flag
+            return layer.forward_with_load(carry, short_mask, long_mask, use_long)
+
+        _, loads = jax.lax.scan(_scan_layer, hidden, (stacked, long_attention_layer_mask(len(self.blocks))))
+        return loads
 
 
 # --- LmHeadModel adapter -----------------------------------------------------------------------
