@@ -356,6 +356,8 @@ def _training_batch(
         exclude_from_baseline=[not decision.disposition.baseline_eligible for decision in decisions],
     )
     _attach_reward_channels(batch, decisions)
+    if any(rollout.reasoning_span_penalty for rollout in rollouts):
+        batch["reasoning_span_penalties"] = [rollout.reasoning_span_penalty for rollout in rollouts]
     _attach_failure_channels(batch, decisions)
     _attach_student_topk(batch, rollouts)
     _attach_routed_experts(batch, rollouts)

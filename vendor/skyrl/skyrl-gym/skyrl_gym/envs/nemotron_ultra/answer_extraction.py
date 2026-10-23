@@ -1,6 +1,7 @@
 """Final-answer extraction shared by Ultra graders and model transport."""
 
 import re
+from enum import StrEnum
 
 from skyrl_gym.envs.aime.utils import last_boxed_only_string, remove_boxed
 
@@ -9,6 +10,35 @@ REASONING_DELIMITERS = (
     ("<thinking>", "</thinking>"),
     ("<|start_think|>", "<|end_think|>"),
 )
+_OPENING_MARKERS = frozenset(opening for opening, _ in REASONING_DELIMITERS)
+_REASONING_MARKER = re.compile("|".join(re.escape(marker) for pair in REASONING_DELIMITERS for marker in pair))
+
+
+class ReasoningViolation(StrEnum):
+    """A malformed reasoning span in one model response."""
+
+    UNCLOSED = "unclosed"
+    SECOND_SPAN = "second_span"
+    STRAY_END = "stray_end"
+
+
+def reasoning_span_violation(text: str) -> ReasoningViolation | None:
+    """Name the malformed reasoning span in ``text``, decoded with special tokens kept.
+
+    A response may have one span, in any delimiter syntax. A closing marker before any opening
+    marker closes a span that the chat template opened in the prompt.
+    """
+    openings = [match in _OPENING_MARKERS for match in _REASONING_MARKER.findall(text)]
+    if not openings:
+        return None
+    if openings[-1]:
+        return ReasoningViolation.UNCLOSED
+    spans = sum(openings) + (not openings[0])
+    if spans > 1:
+        return ReasoningViolation.SECOND_SPAN
+    if openings.count(False) > spans:
+        return ReasoningViolation.STRAY_END
+    return None
 
 
 def final_answer_text(text: str) -> str:

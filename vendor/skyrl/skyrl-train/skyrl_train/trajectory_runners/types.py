@@ -116,6 +116,8 @@ class TrajectoryBatch(TypedDict):
     reward_shaping_components: Optional[List[RewardShapingComponents]]
     reward_shaping_loop_spans: Optional[List[List[RewardShapingLoopSpan]]]
     loop_advantages: Optional[List[List[float]]]
+    # Consumed by finalization, so it never reaches batch concatenation.
+    reasoning_span_penalties: NotRequired[List[float]]
     reward_shaping_versions: Optional[List[int]]
     verification_results: List[Optional[VerificationResult]]
     evidence_messages: List[Optional[list[dict[str, Any]]]]

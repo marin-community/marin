@@ -10,7 +10,12 @@ from uuid import uuid4
 import numpy as np
 from rolloutengine.models import RolloutContractError
 
-from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
+from skyrl_gym.envs.nemotron_ultra.answer_extraction import (
+    REASONING_DELIMITERS,
+    ReasoningViolation,
+    final_answer_text,
+    reasoning_span_violation,
+)
 
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
@@ -43,11 +48,15 @@ _OUTPUT_LIMIT_KEYS = ("max_generate_length", "max_tokens")
 _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 
+REASONING_VIOLATIONS_KEY = "reasoning_violations"
+
+
 class ModelClientOutput(InferenceEngineOutput):
     """Normalized model output with explicit token provenance."""
 
     token_provenance: TokenProvenance
     generation_token_budgets: NotRequired[list[int | None]]
+    reasoning_violations: NotRequired[list[ReasoningViolation | None]]
 
 
 class ModelClient(Protocol):
@@ -113,6 +122,7 @@ class _ChatResult:
     generation_token_budget: int | None
     routed_experts: np.ndarray | None = None
     policy_steps: list[int] | None = None
+    reasoning_violation: ReasoningViolation | None = None
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -138,6 +148,8 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
         token_provenance=TokenProvenance.ENGINE,
         generation_token_budgets=[result.generation_token_budget for result in results],
     )
+    if any(result.reasoning_violation is not None for result in results):
+        output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
         output["behavior_topk_logprobs"] = selected_scores
@@ -196,6 +208,14 @@ async def _render_chat_prompt(
     if not isinstance(prompt_ids, list) or not all(isinstance(token, int) for token in prompt_ids):
         raise RuntimeError("vLLM tokenization did not return prompt token IDs")
     return messages, prompt_ids
+
+
+def _reasoning_violation(decoded: str, stop_reason: str) -> ReasoningViolation | None:
+    violation = reasoning_span_violation(decoded)
+    if violation == ReasoningViolation.UNCLOSED and stop_reason == "length":
+        # Truncation, not a format error: the turn has no answer and keeps the length stop's handling.
+        return None
+    return violation
 
 
 class DirectModelClient:
@@ -364,22 +384,6 @@ class DirectModelClient:
                 text = text.removesuffix(eos_text)
                 if message.get("content") is not None:
                     message = {**message, "content": text}
-            decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
-            if any(marker in decoded for pair in REASONING_DELIMITERS for marker in pair):
-                text = final_answer_text(decoded)
-                if not message.get("tool_calls"):
-                    message = {**message, "content": text}
-            logprob_items = (choice.get("logprobs") or {}).get("content")
-            response_logprobs = (
-                [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
-            )
-            selected = None
-            if requested_top_k is not None and logprob_items is not None:
-                if len(logprob_items) != len(response_ids):
-                    raise ValueError("chat response top-K rows must align with exact token IDs")
-                selected = [
-                    select_chat_response_topk(item.get("top_logprobs") or [], requested_top_k) for item in logprob_items
-                ]
             stop_reason = choice["finish_reason"]
             token_budget = chat_options.get("max_completion_tokens")
             if (
@@ -391,6 +395,23 @@ class DirectModelClient:
             ):
                 # A tool parser can replace the backend's output-budget stop reason.
                 stop_reason = "length"
+            decoded = tokenizer.decode(semantic_ids, skip_special_tokens=False)
+            if any(marker in decoded for pair in REASONING_DELIMITERS for marker in pair):
+                text = final_answer_text(decoded)
+                if not message.get("tool_calls"):
+                    message = {**message, "content": text}
+            reasoning_violation = _reasoning_violation(decoded, stop_reason)
+            logprob_items = (choice.get("logprobs") or {}).get("content")
+            response_logprobs = (
+                [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
+            )
+            selected = None
+            if requested_top_k is not None and logprob_items is not None:
+                if len(logprob_items) != len(response_ids):
+                    raise ValueError("chat response top-K rows must align with exact token IDs")
+                selected = [
+                    select_chat_response_topk(item.get("top_logprobs") or [], requested_top_k) for item in logprob_items
+                ]
             return _ChatResult(
                 prompt_ids,
                 response_ids,
@@ -403,6 +424,7 @@ class DirectModelClient:
                 token_budget,
                 _choice_routed_experts(choice, prompt_ids, response_ids),
                 choice.get(CHOICE_POLICY_STEPS_KEY),
+                reasoning_violation,
             )
 
         results = await asyncio.gather(

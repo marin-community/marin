@@ -437,6 +437,12 @@ generator:
     default_error_treatment: mask
     preserve_logprobs_on_timeout: true
 
+  reasoning_spans:
+    policy: ignore
+    penalty: 0.0
+    # Per-agent overrides for Nemotron Ultra tasks, e.g. `code_gen_simple_agent: reject`.
+    agent_policies: {}
+
   chat_template:
     source: "name"
     name_or_path: null

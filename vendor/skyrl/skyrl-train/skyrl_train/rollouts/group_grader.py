@@ -32,15 +32,20 @@ class GenRMGroupGraderParameters(BaseModel):
     config: dict[str, Any]
 
 
+def nemotron_ultra_source(lowered: TaskRolloutSpec) -> dict[str, Any] | None:
+    """The Nemotron Ultra source payload of a session task, or ``None`` for any other task."""
+    if lowered.harness != "nemotron_ultra" or not isinstance(lowered.task.grader, NoGrader):
+        return None
+    extras = session_parameters(lowered.task).extras
+    return (extras.get("extra_info") or {}).get("nemotron_ultra") or {}
+
+
 def task_group_grader(lowered: TaskRolloutSpec) -> GroupGraderSpec | None:
     """Derive a group grader from the SkyRL environment payload."""
-    task = lowered.task
-    if lowered.harness != "nemotron_ultra" or not isinstance(task.grader, NoGrader):
+    ultra = nemotron_ultra_source(lowered)
+    if ultra is None:
         return None
-    parameters = session_parameters(task)
-    extras = parameters.extras
-    config = parameters.config
-    ultra = (extras.get("extra_info") or {}).get("nemotron_ultra") or {}
+    config = session_parameters(lowered.task).config
     if ultra.get("agent") not in GENRM_AGENTS or config.get("grading") == "skip":
         return None
     record = json.loads(ultra["record_json"])

@@ -829,6 +829,7 @@ def _path_allows_new_keys(path: str) -> bool:
     return (
         path in _FTPO_CONFIG_PATHS
         or path.startswith("environment.task_sessions.")
+        or path.startswith("generator.reasoning_spans.agent_policies.")
         or path.split(".", 1)[0] in _OPEN_CONFIG_ROOTS
         or any(pattern in f".{path}" for pattern in _OPTIONAL_HYDRA_PATTERNS)
     )

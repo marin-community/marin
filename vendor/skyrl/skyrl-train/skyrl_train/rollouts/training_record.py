@@ -1,12 +1,60 @@
 """SkyRL training signals projected from Marin's graded attempt records."""
 
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import asdict, dataclass, field, replace
+from enum import StrEnum
 from typing import Any
 
 from rolloutengine.models import ConversationRecord, GradedRollout, ModelTurn, RolloutFailure, TaskRolloutSpec
 from skyrl_gym.task_records import FOLDED_GRADE_HARNESSES, StepReward, fold_grades
-from taskcompendium.grading_result import GradeResult
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import NoGrader
+
+REASONING_VIOLATION_METADATA_KEY = "reasoning_violation"
+REASONING_VIOLATIONS_DIAGNOSTIC = "reasoning_violations"
+
+
+class ReasoningSpanPolicy(StrEnum):
+    """How training treats a rollout with a malformed reasoning span.
+
+    PENALIZE subtracts a fixed penalty from the reward. REJECT grades the rollout 0.
+    """
+
+    IGNORE = "ignore"
+    PENALIZE = "penalize"
+    REJECT = "reject"
+
+
+@dataclass(frozen=True)
+class ReasoningSpanSettings:
+    """A default reasoning-span policy with per-agent overrides for Nemotron Ultra tasks."""
+
+    policy: ReasoningSpanPolicy
+    penalty: float = 0.0
+    agent_policies: Mapping[str, ReasoningSpanPolicy] = field(default_factory=dict)
+
+    def __post_init__(self):
+        penalized = ReasoningSpanPolicy.PENALIZE in {self.policy, *self.agent_policies.values()}
+        if penalized != (self.penalty > 0):
+            raise ValueError("reasoning_spans.penalty must be positive exactly when some policy is penalize")
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> "ReasoningSpanSettings":
+        return cls(
+            ReasoningSpanPolicy(config["policy"]),
+            float(config["penalty"]),
+            {agent: ReasoningSpanPolicy(policy) for agent, policy in config["agent_policies"].items()},
+        )
+
+    def policy_for(self, agent: str | None) -> ReasoningSpanPolicy:
+        return self.policy if agent is None else self.agent_policies.get(agent, self.policy)
+
+
+@dataclass(frozen=True)
+class TurnReasoningViolation:
+    conversation: int
+    turn: int
+    violation: str
 
 
 @dataclass(frozen=True)
@@ -47,6 +95,7 @@ class TrainingRollout:
     outputs: dict[str, bytes] = field(default_factory=dict)
     failure: RolloutFailure | None = None
     conversations: tuple[ConversationRecord, ...] = ()
+    reasoning_span_penalty: float = 0.0
 
 
 def training_rollout(result: GradedRollout, spec: TaskRolloutSpec) -> TrainingRollout:
@@ -97,3 +146,54 @@ def training_rollout(result: GradedRollout, spec: TaskRolloutSpec) -> TrainingRo
         failure=rollout.failure,
         conversations=rollout.conversations,
     )
+
+
+def _reasoning_violations(rollout: TrainingRollout) -> list[TurnReasoningViolation]:
+    return [
+        TurnReasoningViolation(index, turn, violation)
+        for index, conversation in enumerate(rollout.conversations)
+        for turn, step in enumerate(conversation.steps)
+        if (violation := step.turn.metadata.get(REASONING_VIOLATION_METADATA_KEY)) is not None
+    ]
+
+
+def reject_malformed_reasoning(rollout: TrainingRollout) -> TrainingRollout:
+    """Grade a rollout with a malformed reasoning span as a reward-0 submission failure.
+
+    Step rewards are cleared so the zero grade is the whole reward.
+    """
+    violations = _reasoning_violations(rollout)
+    if not violations:
+        return rollout
+    grade = GradeResult(
+        Outcome.SUBMISSION_FAILURE,
+        0.0,
+        "Malformed reasoning span",
+        passed=False,
+        diagnostics={REASONING_VIOLATIONS_DIAGNOSTIC: [asdict(violation) for violation in violations]},
+    )
+    steps = tuple(
+        replace(step, transition=replace(step.transition, reward=None, token_rewards=None, reward_components={}))
+        for step in rollout.steps
+    )
+    return replace(rollout, grade=grade, steps=steps)
+
+
+def penalize_malformed_reasoning(rollout: TrainingRollout, penalty: float) -> TrainingRollout:
+    """Charge ``penalty`` to a rollout with a malformed reasoning span.
+
+    The grade keeps the task reward. Finalization subtracts the penalty from the optimization reward, as it
+    does the length penalties, so outcome metrics stay unpenalized.
+    """
+    violations = _reasoning_violations(rollout)
+    if not violations or rollout.grade.reward is None:
+        return rollout
+    grade = replace(
+        rollout.grade,
+        diagnostics={
+            **rollout.grade.diagnostics,
+            REASONING_VIOLATIONS_DIAGNOSTIC: [asdict(violation) for violation in violations],
+            "reasoning_span_penalty": penalty,
+        },
+    )
+    return replace(rollout, grade=grade, reasoning_span_penalty=penalty)

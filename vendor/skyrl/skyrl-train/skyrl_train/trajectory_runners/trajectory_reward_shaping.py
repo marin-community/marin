@@ -475,6 +475,30 @@ def refresh_trajectory_reward_shaping_metrics(output: TrajectoryBatch) -> None:
     output["rollout_metrics"] = metrics
 
 
+def apply_reasoning_span_penalties(output: TrajectoryBatch) -> None:
+    """Subtract each trajectory's reasoning-span penalty from its optimization reward, like the length penalties.
+
+    The penalty lands on the trajectory's final row and leaves ``unshaped_rewards`` unchanged.
+    """
+    penalties = output.pop("reasoning_span_penalties", None)
+    if penalties is None:
+        return
+    batch_size = len(output["response_ids"])
+    if len(penalties) != batch_size:
+        raise ValueError("reasoning span penalties must have one entry per generated row")
+    rewards = list(output["rewards"])
+    output.setdefault("unshaped_rewards", [NormalizedReward.from_output(reward).outcome for reward in rewards])
+    excluded = output.get("exclude_from_baseline") or [False] * batch_size
+    loss_masks = output["loss_masks"]
+    for group in _trajectory_groups(output, batch_size):
+        final = group[-1]
+        if penalties[final] and not excluded[final] and any(loss_masks[final]):
+            rewards[final] = NormalizedReward.from_output(rewards[final]).with_penalty(
+                loss_masks[final], -penalties[final]
+            )
+    output["rewards"] = rewards
+
+
 def shape_trajectory_rewards(output: TrajectoryBatch, raw_config: Mapping[str, Any] | None) -> None:
     """Build runner-independent reward penalties and token-local loop credit.
 
