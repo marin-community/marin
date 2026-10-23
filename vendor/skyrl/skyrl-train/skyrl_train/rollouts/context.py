@@ -119,10 +119,11 @@ def prompt_order_from_config(config: DictConfig, dataset: PromptGroupDataset) ->
     sampling = config.data.sampling
     if sampling.kind is None:
         routes = dataset.teacher_routes() if isinstance(dataset, FixedCompletionsDataset) else set()
-        if len(routes) > 1:
+        if len(routes) > 1 and config.data.shuffle:
             raise ValueError(
-                f"fixed-completion rows span teacher routes {sorted(routes)}; seeded passes leave each batch's "
-                "route mix to chance, so set data.sampling.kind=domain-weighted with data.sampling.domain_weights"
+                f"fixed-completion rows span teacher routes {sorted(routes)}; shuffled passes leave each batch's "
+                "route mix to chance, so set data.sampling.kind=domain-weighted with data.sampling.domain_weights, "
+                "or data.shuffle=false to read the file's order"
             )
         return SeededPasses(len(dataset), seed=config.trainer.seed, shuffle=config.data.shuffle)
     if config.trainer.step_wise_training:
