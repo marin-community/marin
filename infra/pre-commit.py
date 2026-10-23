@@ -485,6 +485,9 @@ def check_trailing_whitespace(files: list[pathlib.Path], fix: bool) -> int:
     buf = io.StringIO()
 
     for file_path in files:
+        # Unified diff context must preserve the source's literal whitespace.
+        if file_path.suffix == ".patch":
+            continue
         try:
             with open(file_path) as f:
                 lines = f.readlines()
