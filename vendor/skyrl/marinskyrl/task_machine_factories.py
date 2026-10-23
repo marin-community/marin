@@ -19,6 +19,7 @@ from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend, Command, ExecutionRequirements, Machine, MachineFactory, MachineSpec, Result
 
 HOST_PYTHON_ENVIRONMENT = "host"
+UV_ARCHIVE_DIRECTORY = "archive-v0"
 
 
 def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactory]:
@@ -41,13 +42,13 @@ def task_machine_factories(task_sessions: DictConfig) -> dict[str, MachineFactor
 def host_python_mounts() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     """The read-only directories and the ``bin`` directory of the Python environment that runs this process.
 
-    The directories are the environment, the source directories of its editable installs, and the base
-    interpreter. The editable sources of SkyRL's own environment are Marin's ``lib`` packages outside the
+    The directories are the environment, the source directories of its editable installs, the uv archive that
+    its files link to (the task bootstrap runs ``uv sync --link-mode symlink``), and the base interpreter. The editable sources of SkyRL's own environment are Marin's ``lib`` packages outside the
     environment, for example ``verifyit``, which the script graders import. Every sandbox sees the system
     directories already, and mounts inside them fail; a directory inside another mount is not mounted again.
     """
     environment = Path(sys.prefix)
-    candidates = (environment, *editable_sources(environment), Path(sys.base_prefix))
+    candidates = (environment, *editable_sources(environment), *linked_archives(environment), Path(sys.base_prefix))
     usable = [
         path
         for path in dict.fromkeys(candidates)
@@ -55,6 +56,20 @@ def host_python_mounts() -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     ]
     mounts = tuple(path for path in usable if not any(path != other and path.is_relative_to(other) for other in usable))
     return mounts, (environment / "bin",)
+
+
+def linked_archives(environment: Path) -> tuple[Path, ...]:
+    """The uv ``archive-v0`` directories that the files of ``environment`` link to, so that the links resolve in a
+    sandbox. uv links every file of a package, so the first link of each site-packages directory is enough."""
+    archives = []
+    for site_packages in environment.glob("lib/python*/site-packages"):
+        link = next((path for path in site_packages.rglob("*") if path.is_symlink()), None)
+        if link is None:
+            continue
+        archive = next((parent for parent in link.resolve().parents if parent.name == UV_ARCHIVE_DIRECTORY), None)
+        if archive is not None:
+            archives.append(archive)
+    return tuple(archives)
 
 
 def editable_sources(environment: Path) -> tuple[Path, ...]:
