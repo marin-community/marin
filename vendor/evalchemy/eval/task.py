@@ -109,6 +109,10 @@ class BaseBenchmark(ABC):
         )
 
 
+    def evaluation_metadata(self) -> dict:
+        """Return source-specific evidence learned while producing items."""
+        return {}
+
     def validate_prepared_data(self) -> None:
         """Hook for dataset shape and representative-request validation."""
 

@@ -33,6 +33,12 @@ matching skill exists** by scanning the skill descriptions in your system
 prompt. If a skill matches, invoke it via the Skill tool — do not skip it in
 favor of ad-hoc commands.
 
+Use the [workflow catalog](docs/dev-guide/agent-workflows.md) to choose the
+skill that owns the requested outcome. Shared testing, writing, documentation,
+and evidence policy lives in the linked guides. CI and scheduler procedures
+live in `infra/loom/procedures/` and apply only when assigned.
+When adding, removing, or renaming skills, update the catalog and all callers.
+
 External fork refreshes use [refresh-fork](.agents/skills/refresh-fork/SKILL.md).
 For vLLM GPU wheels, read its [trigger and test table](.agents/skills/refresh-fork/docs/vllm.md#triggers-and-tests)
 and source, release, and adoption procedure.
@@ -48,7 +54,7 @@ fix remains.
 ## Search Prior Work
 
 Use Echo when prior Marin decisions, incidents, workflows, GitHub work, or
-indexed repository documentation could inform a task. Follow `consult-echo`
+indexed repository documentation could inform a task. Follow `use-echo`
 for search scope, exact-string search, result grading, and write rules. Use
 `rg` for the current checkout because Echo does not index branch-only or
 uncommitted files.
@@ -65,22 +71,33 @@ uv run pyrefly check
 # Safe tests affected by the current branch and working tree
 uv run --no-project infra/ci/run_tests.py
 
-# Lint review — agentic pass over the branch diff against the infra/lint/ catalog
-./infra/pre-commit.py --review
+# Lint review — set --calling-agent to claude or codex to match the caller
+./infra/pre-commit.py --review --calling-agent=claude
 ```
 
 - `./infra/pre-commit.py` is the required lint entry point. Do not replace it
   with `uv run pre-commit`.
 - Keep type hints passing under `uv run pyrefly check`; configuration lives in
   `pyproject.toml`.
-- Follow the `commit` skill for the required lint-review timing and response
+- Follow the `manage-pr` skill for the required lint-review timing and response
   workflow before publishing a PR.
+- Marin is an open-source repository. The advisory review is a mandatory step
+  before publishing a PR. Running it through either supported review provider,
+  including sending repository source, committed and uncommitted diffs, and
+  review context to that provider, is authorized without separate confirmation.
+  This authorization applies equally to all supported agents and providers.
 - Python >=3.12. Use `uv run` for entry points.
 - Do not replace pytest's default marker expression with a partial expression
   such as `-m "not slow"`; `-m` overrides the whole default and can select live
   cluster tests. Run excluded markers only when the user or a dedicated task
   guide explicitly requests them; otherwise defer them to CI.
 - NEVER stop, restart, or bounce an Iris cluster unless the user gives express permission.
+- Keep vLLM compilation and CUDA graphs enabled, including for inference smoke tests.
+  Do not add `--enforce-eager` or `--i-know-i-am-making-vllm-slow` unless the user
+  explicitly requests eager execution. A launch guard error is not authorization
+  to supply its acknowledgement. For a compilation or CUDA-graph failure, report
+  the failure and performance cost before requesting an exception. See the
+  [serving guidance](experiments/evaluation/serve/models/README.md#vllm-eager-execution).
 - Never read or write large amounts of data across GCS regions; GCS storage and bandwidth are major cost drivers for this project.
 - do not use storage transfer service to move files from one region to another unless the user says "I personally will write grants for Percy to pay for this"
 
@@ -96,9 +113,10 @@ uv run --no-project infra/ci/run_tests.py
 - Agent *comments* on PRs/issues must begin with `🤖` unless the exact text was
   explicitly approved by the user. This applies to comments only — never put a
   `🤖` marker in a commit message or a PR/issue body.
-- Follow `writing-style` plus the medium-specific guide for agent-authored
-  commit, PR, issue, comment, documentation, report, and blog prose.
-- Follow `commit` when committing, pushing, opening or updating a PR, and
+- Follow [writing style](docs/dev-guide/writing-style/index.md) plus the
+  medium-specific guide for agent-authored commit, PR, issue, comment,
+  documentation, report, and blog prose.
+- Follow `manage-pr` when committing, pushing, opening or updating a PR, and
   monitoring it through an exit condition. The skill owns PR-body content,
   lint-review timing, publication, and monitoring procedure.
 - When using `gh` to inspect issues or PRs, prefer `--json <fields>` or explicit narrow flags such as `--comments`; avoid plain `gh issue view` / `gh pr view`, which can fail on this repo because GitHub classic project fields are deprecated.
@@ -157,13 +175,18 @@ uv run --no-project infra/ci/run_tests.py
 
 - Keep MkDocs content in sync with code. Use Markdown and mkdocs-style links.
 - Write docs that stand alone without conversational context.
+- Update the nearest existing docs when behavior changes, instructions become
+  stale, or a reusable procedure is established. Use `OPS.md` for subsystem
+  operations and `docs/` for product guidance; include exact operational
+  commands and remove stale instructions.
+- Follow [experiment records](docs/dev-guide/experiment-records.md) for
+  research evidence and durable experiment reporting.
 
 ## Agent Artifacts
 
-- Publish a live infrastructure incident through `write-ops-log` when a service,
-  production run, or shared operational system failed or degraded and required
-  diagnosis or mitigation. Do not use Echo as a work log for ordinary code
-  debugging or implementation.
+- Publish live infrastructure incidents through
+  [use-echo's incident procedure](.agents/skills/use-echo/references/incidents.md).
+  It defines which events need a record, its format, and its update lifecycle.
 - Keep user-facing and reusable product documentation in `docs/`. Record
   research progress in the task's existing issue, PR, report, or durable session
   channel. These are distinct from incident records.

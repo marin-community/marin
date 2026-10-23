@@ -676,6 +676,8 @@ iris rpc controller list-users        # active users with task/job counts
 iris user budget list                 # per-user budget limits
 ```
 
+See [shared budgets](docs/federation.md#shared-budgets) for federation configuration.
+
 Users authenticate **only through IAP**: the GCLB validates an OIDC token at the edge
 and forwards a signed assertion the controller verifies; the controller mints **no**
 user token. `iris login` runs the browser desktop-OAuth flow once and caches the IAP

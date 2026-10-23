@@ -36,6 +36,8 @@ class ModelRequest:
     chat_template: Mapping[str, Any] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
     prompt_format: Literal["fastchat"] | None = None
+    # Source-selected budgets remain upper bounds after transport-level caller overrides.
+    output_token_cap: int | None = None
 
 
 @dataclass(frozen=True)

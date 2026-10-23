@@ -64,6 +64,32 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
+Start with the server's stage timings when unrelated log and SQL requests slow
+down together. For the GCE hub:
+
+```bash
+gcloud compute ssh finelog-marin --project hai-gcp-models --zone us-central1-a \
+  --tunnel-through-iap \
+  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
+```
+
+Large `visibility_wait_ms` means the request waited for shared storage
+maintenance before it could query. Compare the timestamps with cache eviction
+and object cleanup. Cache removals release this lock between small batches so
+queued readers can proceed. Background warming uses only immediately available
+download slots; a broad query cannot leave an unbounded queue of cache fills
+after its deadline. Maintenance reads use cached files or read directly from
+object storage. A nonzero `required_fill_bytes` counter means a caller still
+forces a local file; inspect the remaining `local_path` callers.
+`query_byte_limit` counts objects skipped after the query's byte allowance is
+exhausted. The last admitted object can cross the allowance.
+
+When cache eviction remains high despite little query traffic, check ingestion
+and compaction activity; both write through to the cache. Compare `write_bytes`
+with `query_fill_bytes` in the activity summaries. Match `max_lock_hold_us` in
+sweep logs and `cleanup_max_lock_hold_us` in activity summaries against slow
+requests' `visibility_wait_ms` to check whether cleanup blocks readers.
+
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
 correct key with many segments points to a different problem than a

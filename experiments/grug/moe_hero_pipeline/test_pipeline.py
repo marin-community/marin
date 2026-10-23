@@ -31,7 +31,9 @@ from experiments.grug.moe_hero_pipeline.pipeline import (
 )
 
 
-def _tiny_hero(qb_estimator: QbEstimator, context_axis_size: int = 1) -> tuple[Mesh, Transformer]:
+def _tiny_hero(
+    qb_estimator: QbEstimator, context_axis_size: int = 1, *, num_layers: int = 5
+) -> tuple[Mesh, Transformer]:
     config = GrugModelConfig(
         vocab_size=16,
         hidden_dim=8,
@@ -41,7 +43,7 @@ def _tiny_hero(qb_estimator: QbEstimator, context_axis_size: int = 1) -> tuple[M
         num_shared_experts=2,
         num_experts=4,
         num_experts_per_token=1,
-        num_layers=5,
+        num_layers=num_layers,
         num_heads=2,
         num_kv_heads=2,
         local_kv_heads=2,
@@ -176,7 +178,9 @@ def test_hero_pipeline_preserves_hidden_states_and_router_statistics(qb_estimato
 @pytest.mark.timeout(180)
 @pytest.mark.parametrize("remat_mode", ["recompute_all", "offload_carry"])
 def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
-    mesh, model = _tiny_hero(QbEstimator.HIST)
+    # Two layers cover local and global attention across a stage boundary
+    # without compiling the two gradient paths for five layers per mode.
+    mesh, model = _tiny_hero(QbEstimator.HIST, num_layers=2)
     batch = _packed_batch()
 
     def ordinary_loss(params):
@@ -184,7 +188,7 @@ def test_hero_pipeline_loss_and_gradients_match_unsplit_model(remat_mode):
 
     def pipeline_loss(params):
         params = dataclasses.replace(params, config=dataclasses.replace(params.config, remat_mode=remat_mode))
-        stages = split_transformer(params, 2, layer_counts=(2, 3))
+        stages = split_transformer(params, 2, layer_counts=(1, 1))
         hidden = stages[0].embed(batch.tokens)
         for stage in stages:
             hidden, _ = stage.run_blocks(hidden, batch.attn_mask)
@@ -329,7 +333,8 @@ def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_
             )
         canonical = checkpoint_state(state)
         root = str(tmp_path)
-        path = save_checkpoint(root, state, step=1, contract={"model": "tiny-hero", "optimizer": optimizer_name})
+        contract = {"model": "tiny-hero", "optimizer": optimizer_name, "data_schedule_steps": 100}
+        path = save_checkpoint(root, state, step=1, contract=contract)
         loaded = load_checkpoint(jax.tree.map(jnp.zeros_like, canonical), path)
         assert jax.tree.structure(loaded) == jax.tree.structure(canonical)
         for actual, expected in zip(jax.tree.leaves(loaded), jax.tree.leaves(canonical), strict=True):
@@ -338,9 +343,10 @@ def test_hero_checkpoint_restores_complete_state_with_different_stage_split(tmp_
         destination = _pipeline_state(model, optimizer, (1, 1, 1, 1, 1))
         destination = jax.tree.map(jnp.zeros_like, destination)
         shardings = jax.tree.map(lambda value: value.sharding, destination)
-        restored, completed = restore_checkpoint(
-            root, destination, shardings, contract={"model": "tiny-hero", "optimizer": optimizer_name}
-        )
+        # A changed mixture horizon changes random-access data order after resume.
+        with pytest.raises(ValueError):
+            restore_checkpoint(root, destination, shardings, contract={**contract, "data_schedule_steps": 99})
+        restored, completed = restore_checkpoint(root, destination, shardings, contract=contract)
         assert completed == 1
         restored_canonical = checkpoint_state(restored)
         assert jax.tree.structure(restored_canonical) == jax.tree.structure(canonical)

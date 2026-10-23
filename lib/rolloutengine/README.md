@@ -27,7 +27,7 @@ result = await engine.run_task(spec, model)
   providers; `AgentHarness` runs an agent that owns its prompts and tool loop, for example an installed agent
   behind an HTTP proxy; `StepHarness` runs an `Episode` that returns the first prompt and handles each turn.
   Without interactive tools, `ShellHarness` answers an ordinary conversation and finishes after one response.
-  `PrefillHarness` continues the final assistant text once. Select it explicitly for unfinished assistant
+  `AssistantPrefixHarness` continues the final assistant text once. Select it explicitly for unfinished assistant
   messages; it can advertise final tool schemas but cannot execute tools.
 - `harness_rollout` runs one harness on one task with one model, without grading. `task_machine` starts the
   task machine for it.

@@ -1,0 +1,327 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Tiny-config self-consistency tests for grug_moe_mlx.py (Mac only).
+
+Loads the model file the same way mlx-lm does (spec_from_file_location) and
+exercises behavior on a config small enough to run in seconds. All weights are
+random float32; we are testing wiring (caching, masking, routing, XSA), not
+learned values.
+"""
+
+import importlib.util
+import math
+from pathlib import Path
+
+import pytest
+
+# MLX only installs on Apple Silicon; root CI collects experiments/ on Linux.
+mx = pytest.importorskip("mlx.core")
+import mlx_lm.server  # noqa: E402  (imported first so the model file patches the server)
+from mlx.utils import tree_map  # noqa: E402
+from mlx_lm.generate import TextStateMachine, make_text_state_machine  # noqa: E402
+
+MODEL_FILE = Path(__file__).resolve().parent / "grug_moe_mlx.py"
+
+
+def load_module():
+    spec = importlib.util.spec_from_file_location("custom_model", MODEL_FILE)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+mod = load_module()
+
+
+def tiny_args(**overrides):
+    defaults = dict(
+        hidden_size=64,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=16,
+        num_experts=8,
+        num_experts_per_tok=2,
+        moe_intermediate_size=32,
+        shared_expert_intermediate_size=64,
+        num_hidden_layers=5,
+        sliding_window=8,
+        vocab_size=101,
+        rope_theta=10000.0,
+        qk_mult=1.75,
+        qk_mult_long_scale=1.0,
+    )
+    defaults.update(overrides)
+    return mod.ModelArgs(**defaults)
+
+
+def tiny_model(**overrides):
+    mx.random.seed(0)
+    model = mod.Model(tiny_args(**overrides))
+
+    def rand(p):
+        return mx.random.normal(p.shape) * 0.1
+
+    model.update(tree_map(rand, model.parameters()))
+    return model
+
+
+LAYER_TYPES_5 = ["sliding_attention"] * 3 + ["full_attention"] * 2
+
+
+def test_layer_types_rule():
+    args = mod.ModelArgs(**{**vars(tiny_args()), "num_hidden_layers": 26})
+    full = [i for i, lt in enumerate(args.layer_types) if lt == "full_attention"]
+    assert full == [3, 7, 11, 15, 19, 23, 25]
+    # (i+1) % 4 == 0 or last layer
+    assert tiny_args(num_hidden_layers=5).layer_types == LAYER_TYPES_5
+
+
+def test_incremental_decode_matches_full_forward():
+    model = tiny_model()
+    n = 40
+    ids = mx.random.randint(0, 101, (1, n))
+
+    full = model(ids)  # [1, n, vocab]
+
+    cache = model.make_cache()
+    prefill = 10
+    outs = [model(ids[:, :prefill], cache)]
+    for i in range(prefill, n):
+        outs.append(model(ids[:, i : i + 1], cache))
+    cached = mx.concatenate(outs, axis=1)
+
+    assert cached.shape == full.shape
+    # Kernel paths differ between batched prefill and single-token decode, so
+    # exact comparison is impossible in f32 (float64 wiring check lives in
+    # test_attention_cache_exact_in_f64). Real wiring bugs (wrong window,
+    # wrong RoPE offset) produce O(0.1+) logit diffs and flip the greedy
+    # choice; observed kernel noise on these random-weight logits is <~4e-4.
+    diff = mx.abs(cached - full).max().item()
+    assert diff < 1e-3, f"incremental decode diverged: max |diff| = {diff}"
+    assert mx.array_equal(
+        mx.argmax(cached, axis=-1), mx.argmax(full, axis=-1)
+    ), "greedy choice differs between cached and full forward"
+
+
+def test_chunked_prefill_matches_full_forward():
+    model = tiny_model()
+    n = 40
+    ids = mx.random.randint(0, 101, (1, n))
+    full = model(ids)
+
+    cache = model.make_cache()
+    outs = []
+    for start in range(0, n, 7):
+        outs.append(model(ids[:, start : start + 7], cache))
+    chunked = mx.concatenate(outs, axis=1)
+
+    diff = mx.abs(chunked - full).max().item()
+    assert diff < 1e-3, f"chunked prefill diverged: max |diff| = {diff}"
+    assert mx.array_equal(
+        mx.argmax(chunked, axis=-1), mx.argmax(full, axis=-1)
+    ), "greedy choice differs between chunked and full forward"
+
+
+def test_sliding_window_is_real():
+    # 3 layers: 0 and 1 sliding (window 8), layer 2 full (last layer).
+    model = tiny_model(num_hidden_layers=3)
+    n = 31
+    ids = mx.random.randint(0, 101, (1, n))
+    # Rebuild with token 0 changed (MLX arrays are immutable).
+    other = mx.concatenate([mx.array([[42]]), ids[:, 1:]], axis=1)
+    assert not mx.array_equal(ids[0, 0], other[0, 0])
+
+    def hidden_after_layer(idx, input_ids):
+        m = model.model
+        h = m.embed_gated_norm(m.embed_norm(m.embed_tokens(input_ids)))
+        full_mask = mod.create_attention_mask(h, None)
+        swa_mask = mod.create_attention_mask(h, None, window_size=m.window_size)
+        for i, layer in enumerate(m.layers[: idx + 1]):
+            mask = full_mask if m.layer_types[i] == "full_attention" else swa_mask
+            h = layer(h, mask)
+        return h
+
+    h1_a = hidden_after_layer(1, ids)
+    h1_b = hidden_after_layer(1, other)
+    # Position 30 is outside the window of both sliding layers for token 0.
+    assert mx.abs(h1_a[0, 30] - h1_b[0, 30]).max().item() < 1e-5
+    # But earlier positions do see the change.
+    assert mx.abs(h1_a[0, 0] - h1_b[0, 0]).max().item() > 1e-5
+
+    # The full (last) layer propagates the change to the logits at position 30.
+    logits_a = model(ids)
+    logits_b = model(other)
+    assert mx.abs(logits_a[0, 30] - logits_b[0, 30]).max().item() > 1e-5
+
+
+def test_xsa_removes_value_projection():
+    """Each head's attention output is orthogonal to the current token's value."""
+    model = tiny_model(num_hidden_layers=1)
+    attn = model.model.layers[0].self_attn
+    B, L = 1, 12
+    x = mx.random.normal((B, L, 64))
+    # Identity o_proj and a zero gate logit (gate = 2 * sigmoid(0) = 1) expose the
+    # per-head output of Attention.__call__.
+    attn.o_proj.weight = mx.eye(attn.n_heads * attn.head_dim)
+    attn.attn_gate.weight = mx.zeros_like(attn.attn_gate.weight)
+
+    y = attn(x, "causal", None).reshape(B, L, attn.n_heads, attn.head_dim).transpose(0, 2, 1, 3)
+    v = attn.v_proj(x).reshape(B, L, attn.n_kv, attn.head_dim).transpose(0, 2, 1, 3)
+    vf = mx.repeat(v, attn.n_rep, axis=1).astype(mx.float32)
+    yf = y.astype(mx.float32)
+
+    # Without XSA the coefficient of v in y is O(1) (it is 1 at position 0, where y = v).
+    coefficient = mx.sum(yf * vf, axis=-1) / mx.sum(vf * vf, axis=-1)
+    assert mx.abs(coefficient).max().item() < 1e-3
+
+
+def test_router_bias_selection_and_renorm():
+    """The router selects on biased logits but weights experts by the unbiased ones."""
+    model = tiny_model(num_hidden_layers=1)
+    moe = model.model.layers[0].mlp
+    moe.update(tree_map(mx.zeros_like, moe.parameters()))
+    # Equal unbiased logits give equal mixture weights; only bias chooses experts.
+    moe.router.bias = mx.array([0, 0, 0, 0, 0, 0, 10, 20], dtype=mx.float32)
+    for expert, scale in [(6, 4.0), (7, 2.0)]:
+        moe.experts.gate_proj.weight = moe.experts.gate_proj.weight.at[expert, 0, 0].add(1)
+        moe.experts.up_proj.weight = moe.experts.up_proj.weight.at[expert, 0, 0].add(1)
+        moe.experts.down_proj.weight = moe.experts.down_proj.weight.at[expert, 0, 0].add(scale)
+    x = mx.ones((1, 1, 64))
+    expected = mx.zeros_like(x).at[0, 0, 0].add(7.5 / (1 + math.exp(-1)))
+    assert mx.abs(moe(x) - expected).max().item() < 1e-4
+
+
+def test_rotating_cache_decode_past_window_matches_full_forward():
+    """Decoding 11 tokens past an 8-token window, after the rotating cache wraps,
+    matches the full forward pass."""
+    model = tiny_model(num_hidden_layers=2)
+    n = 20
+    ids = mx.random.randint(0, 101, (1, n))
+
+    full = model(ids)[0]  # [n, vocab]
+    cache = model.make_cache()
+    outs = [model(ids[:, :9], cache)]
+    for i in range(9, n):
+        outs.append(model(ids[:, i : i + 1], cache))
+    cached = mx.concatenate(outs, axis=1)[0]
+
+    diff = mx.abs(cached - full).max().item()
+    assert diff < 1e-3, f"rotating cache divergence: {diff}"
+    assert mx.array_equal(
+        mx.argmax(cached, axis=-1), mx.argmax(full, axis=-1)
+    ), "greedy choice differs under rotating cache"
+
+
+def test_attention_cache_exact_in_f64():
+    """Compare full and cached attention on CPU with float64 inputs.
+
+    Normalization and gating still use float32, so the comparison allows 1e-6 error.
+    """
+    with mx.stream(mx.cpu):
+        args = tiny_args()
+        x = mx.random.normal((1, 40, 64)).astype(mx.float64)
+        for is_long in (False, True):
+            mx.random.seed(2)
+            attn = mod.Attention(args, is_long=is_long)
+            attn.update(tree_map(lambda p: mx.random.normal(p.shape) * 0.1, attn.parameters()))
+            attn.update(tree_map(lambda p: p.astype(mx.float64), attn.parameters()))
+
+            if is_long:
+                y_full = attn(x, "causal")
+                cache = mod.KVCache()
+            else:
+                y_full = attn(x, mod.create_attention_mask(x, None, window_size=8))
+                cache = mod.RotatingKVCache(max_size=8)
+            outs = []
+            for s in range(0, 40, 6):
+                xc = x[:, s : s + 6]
+                if is_long:
+                    mask = "causal" if xc.shape[1] > 1 else None
+                else:
+                    mask = mod.create_attention_mask(xc, cache, window_size=8)
+                outs.append(attn(xc, mask, cache))
+            y_cached = mx.concatenate(outs, axis=1)
+            diff = mx.abs(y_cached - y_full).max().item()
+            assert diff < 1e-6, f"f64 attention ({'full' if is_long else 'sliding'}): {diff}"
+
+
+def test_think_markers_inferred_from_vocab():
+    class Tokenizer:
+        def get_vocab(self):
+            return {"<|start_think|>": 11, "<|end_think|>": 12, "hello": 3}
+
+    assert mod.tokenizer_utils._infer_thinking(Tokenizer()) == ("<|start_think|>", "<|end_think|>", (11,), (12,))
+
+
+class GrugTokenizerStub:
+    """The attributes make_text_state_machine reads, for a Grug tokenizer with json_tools."""
+
+    has_thinking = True
+    think_start, think_end = mod._GRUG_THINK
+    has_tool_calling = True
+    tool_call_start, tool_call_end = "<tool_call>", "</tool_call>"
+    structural_markers = ()
+
+    @property
+    def _response_format(self):
+        return {}
+
+    @property
+    def response_transitions(self):
+        return mod.tokenizer_utils.TokenizerWrapper.response_transitions.fget(self)
+
+
+def _parse(text: str, initial: str) -> dict[str, str]:
+    machine = make_text_state_machine(GrugTokenizerStub())
+    _, segments = TextStateMachine.split(machine.make_state(initial), text)
+    parsed: dict[str, str] = {}
+    for state, chunk in segments:
+        parsed[state] = parsed.get(state, "") + chunk
+    return parsed
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["plan the email<|end_think|>Dear landlord", "<|start_think|>plan the email<|end_think|>Dear landlord"],
+)
+def test_thinking_mode_parses_reasoning_with_or_without_start_marker(text):
+    assert mlx_lm.server.ResponseGenerator._tokenize._grug_patch
+    assert _parse(text, "reasoning") == {"reasoning": "plan the email", "normal": "Dear landlord"}
+
+
+def test_reasoning_before_tool_call_without_end_marker():
+    parsed = _parse('check files first<tool_call>{"name": "bash"}</tool_call>', "reasoning")
+    assert parsed["reasoning"] == "check files first"
+    assert parsed["tool"] == '{"name": "bash"}'
+
+
+def _respond(turn, chunks):
+    """Feed (text, reasoning, tool_calls, finish_reason) chunks; return the sent text and reasoning."""
+    sent = {"text": "", "reasoning": ""}
+    for text, reasoning, tool_calls, finish_reason in chunks:
+        text, reasoning = turn.response_parts(text, reasoning, tool_calls, finish_reason)
+        sent["text"] += text
+        sent["reasoning"] += reasoning or ""
+    return sent
+
+
+def test_answer_without_think_markers_is_content():
+    assert _respond(mod._UnmarkedTurn(), [("", "Paris", [], "stop")]) == {"text": "Paris", "reasoning": ""}
+    streamed = [("", "Par", [], None), ("", "is", [], None), ("", "", [], "stop")]
+    assert _respond(mod._UnmarkedTurn(), streamed) == {"text": "Paris", "reasoning": ""}
+
+
+def test_marked_turn_keeps_held_reasoning():
+    turn = mod._UnmarkedTurn()
+    sent = _respond(turn, [("", "plan the ", [], None)])
+    assert sent == {"text": "", "reasoning": ""}
+    turn.marked = True  # <|end_think|> arrived in the next chunk
+    sent = _respond(turn, [("Dear", "email", [], None), (" landlord", "", [], "stop")])
+    assert sent == {"text": "Dear landlord", "reasoning": "plan the email"}
+
+
+def test_tool_call_confirms_held_reasoning():
+    turn = mod._UnmarkedTurn()
+    sent = _respond(turn, [("", "check files first", [], None), ("", "", ['{"name": "bash"}'], "stop")])
+    assert sent == {"text": "", "reasoning": "check files first"}

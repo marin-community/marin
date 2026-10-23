@@ -32,6 +32,7 @@ from iris.cluster.controller.autoscaler.status import PendingHint
 from iris.cluster.controller.backend import BackendCapability, BackendObservation, JobFeasibilityRequest, TaskBackend
 from iris.cluster.controller.codec import reconstruct_launch_job_request, resource_spec_from_job_row
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.federation_budget import FederationBudgets
 from iris.cluster.controller.projections.attempt_counts import AttemptCountsProjection
 from iris.cluster.controller.reads import TaskJobSummary
 from iris.cluster.controller.reconcile.policy import MAX_ACTIVE_TASKS_PER_USER
@@ -46,7 +47,6 @@ from iris.cluster.types import (
     TERMINAL_JOB_STATES,
     USER_JOB_STATES,
     JobName,
-    UserBudgetDefaults,
     is_federated,
     is_job_finished,
 )
@@ -103,7 +103,7 @@ class JobDependencies:
     runtime: JobRuntime
     bundles: BundleStore
     auth: ControllerAuth
-    user_budget_defaults: UserBudgetDefaults
+    budgets: FederationBudgets
 
 
 class JobStatusRow(Protocol):
@@ -578,16 +578,17 @@ def _resolve_launch_priority(
             inherited_band = reads.get_priority_bands(snapshot, [launch.job_id.parent])[launch.job_id.parent]
     band = ops.job.resolve_priority_band(int(request.priority_band), inherited_band)
     request.priority_band = band
-    if launch.received_handoff:
+    if launch.received_handoff and (
+        not dependencies.budgets.parent_id or request.federation.requester_id == dependencies.budgets.parent_id
+    ):
         return band
-    if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider:
+    budget_context = dependencies.budgets.snapshot()
+    if band in ADMIN_PRIORITY_BAND_VALUES and dependencies.auth.provider and not launch.received_handoff:
         parent = _task_caller_parent(dependencies, launch.job_id)
         if parent is None or priority_band_rank(band) < priority_band_rank(int(parent.priority_band)):
             authorize(AuthzAction.MANAGE_BUDGETS)
         return band
-    with dependencies.db.read_snapshot() as snapshot:
-        user_budget = reads.get_user_budget(snapshot, launch.budget_user)
-    max_band = user_budget.max_band if user_budget is not None else dependencies.user_budget_defaults.max_band
+    max_band = budget_context.user(launch.budget_user).max_band
     if priority_band_rank(band) < priority_band_rank(max_band):
         raise ConnectError(
             Code.PERMISSION_DENIED,

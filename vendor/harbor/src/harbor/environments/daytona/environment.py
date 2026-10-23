@@ -875,7 +875,11 @@ class _DaytonaDinD(_DaytonaStrategy):
                 labels={"harbor.instance": env._instance_label},
             )
         else:
-            image = Image.base(dind_image)
+            # Pinned dind tags are not rebuilt when Alpine updates its CA bundle,
+            # so refresh it before dockerd pulls task images.
+            image = Image.base(dind_image).dockerfile_commands(
+                ["RUN apk upgrade --no-cache ca-certificates"]
+            )
             params = env._image_sandbox_params(
                 image=image,
                 resources=resources,

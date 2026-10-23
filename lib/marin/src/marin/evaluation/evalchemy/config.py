@@ -84,6 +84,8 @@ class EvalchemyConfig(BaseModel):
     apply_chat_template: bool | None = None
     chat_tokenizer_backend: ChatTokenizerBackend = ChatTokenizerBackend.SERVER
     debug: bool = False
+    # The task counts rendered prompts and owns per-example output/context selection.
+    prompt_budget_preflight: bool = False
     limit: int | None = None
     num_fewshot: int | None = None
     batch_size: str | None = None

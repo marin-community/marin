@@ -15,6 +15,44 @@ session:
   cleanup_timeout: ${trajectory_runner.cleanup_timeout}
   max_total_tokens: null
 
+# Canonical TaskSpec rows acquire rollout policy when the trainer loads them.
+# A launch may override the verifier backend without rewriting the task artifact.
+task_spec:
+  default_harness: shellbox
+  harness_by_dataset:
+    structure-closure: assistant_prefix
+  session:
+    max_turns: 1
+    max_total_tokens: null
+    model_turn_timeout: 1800
+    tool_turn_timeout: 90
+    total_turn_timeout: 2400
+    attempt_timeout: 3600
+    verifier_timeout: 300
+    cleanup_timeout: 60
+    command_timeout: 30
+    shell_tool: {}
+  image_verifier:
+    backend: daytona
+    cpus: 2
+    memory_mb: 4096
+    storage_mb: 10240
+    gpus: 0
+    network: allow
+    user: null
+    startup_timeout: 600
+    cleanup_timeout: 60
+  package_verifier:
+    backend: local
+    cpus: null
+    memory_mb: null
+    storage_mb: null
+    gpus: 0
+    network: allow
+    user: null
+    startup_timeout: 600
+    cleanup_timeout: 60
+
 lcb:
   machine: &python_machine
     requirements:

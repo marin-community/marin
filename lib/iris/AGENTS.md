@@ -5,8 +5,8 @@ Distributed job orchestration for Marin. Start with the shared instructions in `
 ## Key Docs
 
 - `README.md` — overview + quick start
-- `OPS.md` — operating / troubleshooting a live cluster (also used by skills: `debug`, `use-iris`)
-- Echo — live infrastructure incident records; use `write-ops-log` when an
+- `OPS.md` — operating / troubleshooting a live cluster (also used by `use-iris`)
+- Echo — live infrastructure incident records; use `use-echo`'s incident procedure when an
   investigation diagnoses a service, production run, or shared operational
   system failure or degradation
 - `TESTING.md` — testing policy, markers, and commands
