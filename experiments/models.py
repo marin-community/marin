@@ -263,6 +263,13 @@ qwen3_4b = download_model(
     )
 )
 
+qwen3_4b_instruct_2507 = download_model(
+    ModelConfig(
+        hf_repo_id="Qwen/Qwen3-4B-Instruct-2507",
+        hf_revision="cdbee75f17c01a7cc42f958dc650907174af0554",
+    )
+)
+
 qwen3_8b = download_model(
     ModelConfig(
         hf_repo_id="Qwen/Qwen3-8B",
