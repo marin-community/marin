@@ -231,6 +231,31 @@ def test_source_quotas_feed_training_and_heldout_evaluation(tmp_path):
     assert launch["skyrl"]["trainer"]["eval_interval"] == launch["skyrl"]["trainer"]["max_steps"]
 
 
+@pytest.mark.parametrize("shared_id", ["shared-unsampled", "shared-alias"])
+def test_source_quotas_can_select_an_earlier_sources_unsampled_duplicate(tmp_path, shared_id):
+    settings = recipe(tmp_path).model_copy(
+        update={"family_limits": {"calendar": 3}, "source_limits": {"fixture:first": 1, "fixture:second": 2}}
+    )
+    selected = source_task("first-selected")
+    shared = source_task("shared-unsampled")
+    second = source_task("second-only")
+    curated = {
+        "fixture:first": admitted_source(tmp_path / "first", [selected, shared]),
+        "fixture:second": admitted_source(
+            tmp_path / "second",
+            [
+                selected.model_copy(update={"id": "selected-alias"}),
+                shared.model_copy(update={"id": shared_id}),
+                second,
+                second.model_copy(update={"id": "second-copy"}),
+            ],
+        ),
+    }
+    output = run(task_selection_step(curated, settings))[0]
+    tasks = read_tasks(Path(output.path) / TRAIN_FILENAME)
+    assert {task.id for task in tasks} == {"first-selected", shared_id, "second-only"}
+
+
 def test_source_shortfall_cannot_be_filled_from_another_source(tmp_path):
     settings = recipe(tmp_path).model_copy(
         update={"family_limits": {"calendar": 3}, "source_limits": {"fixture:first": 1, "fixture:second": 2}}

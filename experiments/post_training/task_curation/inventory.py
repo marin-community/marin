@@ -95,6 +95,7 @@ class Candidate:
     task_id: str
     task_json: str
     source_id: str
+    contract: str
 
 
 @dataclass
@@ -169,11 +170,13 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
     heldout_ids = {task.id for task in full}
     heldout_public = {semantic_digest(task, False) for task in full}
     heldout_contexts = {task.context.model_dump_json() for task in full}
-    seen_ids: set[str] = set()
-    seen_contracts: set[str] = set()
+    selected_ids: set[str] = set()
+    selected_contracts: set[str] = set()
     counts = {source.source_id: SourceCounts() for source in config.sources}
 
     def candidates(sources: tuple[SelectionInput, ...]) -> Iterator[Candidate]:
+        seen_ids: set[str] = set()
+        seen_contracts: set[str] = set()
         for source in sources:
             root = StoragePath(source.root)
             manifest = json.loads((root / "manifest.json").read_text())
@@ -196,13 +199,18 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
                                 source_counts.heldout_overlap += 1
                                 continue
                             contract = deduplication_key(task)
-                            if task.id in seen_ids or contract in seen_contracts:
+                            if (
+                                task.id in selected_ids
+                                or contract in selected_contracts
+                                or task.id in seen_ids
+                                or contract in seen_contracts
+                            ):
                                 source_counts.duplicate += 1
                                 continue
                             seen_ids.add(task.id)
                             seen_contracts.add(contract)
                             source_counts.eligible += 1
-                            yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id)
+                            yield Candidate(task.id, row[TASK_JSON_COLUMN], source.source_id, contract)
 
     def selected_records() -> Iterator[dict[str, str]]:
         groups = (
@@ -220,6 +228,8 @@ def write_training(config: SelectionConfig, full: tuple[TaskSpec, ...], destinat
             if count < limit:
                 raise ValueError(f"Selection shortfall for {group}: requested {limit}, eligible {count}")
             for row in sample:
+                selected_ids.add(row.task_id)
+                selected_contracts.add(row.contract)
                 counts[row.source_id].selected += 1
                 yield {TASK_SPEC_COLUMN: row.task_json}
 

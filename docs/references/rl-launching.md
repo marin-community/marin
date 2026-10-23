@@ -226,16 +226,13 @@ For live submission, monitoring, or recovery, follow the `launch-rl` and `use-ir
 ## Snowball 100k selection
 
 `experiments.post_training.inventory.train` consumes the curation selection from
-[`recipes/snowball-100k.json`](../../experiments/post_training/task_curation/recipes/snowball-100k.json).
+[`recipes/snowball-100k.json`](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-100k.json).
 Publish it through the [curation driver](task-curation.md#final-task-selection)
-before launching training. The selection URI is versioned; its default has not
-been published or runtime-qualified.
+before launching training. Check the published selection's row counts and source
+provenance before submission.
 
-The recipe selects 100,000 admitted training tasks across 13 sources. Its family
-counts are calendar 9,115, competitive coding 22,722, Reasoning Gym 22,721, STEM
-22,721 and structural 22,721. Explicit source quotas preserve the earlier
-Snowball allocation, including 11,634 native structural tasks. These tasks now
-pass through FULL curation. This produces a fresh selection; it does not replay
+The recipe defines family and source quotas over FULL-curated tasks.
+This produces a fresh selection; it does not replay
 the historical pool's exact rows or native family/control stratification.
 A source shortfall fails instead of borrowing tasks from another source.
 

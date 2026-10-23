@@ -133,7 +133,7 @@ Parquet. Selection reads only `final/*.parquet` from training sources whose
 manifests record `mode: full`. SAMPLE panels and QUICK conversions cannot supply
 the training population.
 
-The checked-in [Snowball 100k recipe](../../experiments/post_training/task_curation/recipes/snowball-100k.json)
+The checked-in [Snowball 100k recipe](https://github.com/marin-community/marin/blob/main/experiments/post_training/task_curation/recipes/snowball-100k.json)
 sets the five-family and 13-source allocation. Run it against a saved FULL corpus:
 
 ```bash
@@ -149,7 +149,7 @@ source and sums to each family quota. Each source is sampled independently,
 and an admission shortfall fails before publishing the training files. The
 100k recipe preserves the historical allocation on fresh admitted populations;
 it does not reproduce the historical selected rows or native stratification.
-Its new artifact version has not been produced. See the
+See the
 [training recipe](rl-launching.md#snowball-100k-selection) for the artifact handoff
 and before/final evaluation.
 
