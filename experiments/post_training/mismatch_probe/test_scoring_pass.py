@@ -48,7 +48,9 @@ def test_sequence_probe_hash_is_sha256_of_the_token_ids():
 
 
 def test_scored_positions_skip_context_and_the_first_token():
-    sequence_row = sequence("s", [10, 11, 12, 13], [CONTEXT_TAG, ProbeBucket.REASONING, CONTEXT_TAG, ProbeBucket.FINAL_MESSAGE])
+    sequence_row = sequence(
+        "s", [10, 11, 12, 13], [CONTEXT_TAG, ProbeBucket.REASONING, CONTEXT_TAG, ProbeBucket.FINAL_MESSAGE]
+    )
     assert sequence_row.scored_positions() == [1, 3]
 
 
@@ -69,8 +71,12 @@ def test_build_score_batch_exact_selection_is_seeded_and_reproducible():
     tags = [ProbeBucket.REASONING] * 20
     first = sequence("a", tokens, tags)
     second = sequence("a", tokens, tags)
-    one = build_score_batch([first], pad_token_id=0, gather_ids=None, exact_positions=True, exact_rate=0.5, master_seed=7)
-    two = build_score_batch([second], pad_token_id=0, gather_ids=None, exact_positions=True, exact_rate=0.5, master_seed=7)
+    one = build_score_batch(
+        [first], pad_token_id=0, gather_ids=None, exact_positions=True, exact_rate=0.5, master_seed=7
+    )
+    two = build_score_batch(
+        [second], pad_token_id=0, gather_ids=None, exact_positions=True, exact_rate=0.5, master_seed=7
+    )
     assert one["probe_score_positions"].tolist() == two["probe_score_positions"].tolist()
     selected = int(np.count_nonzero(one["probe_score_positions"]))
     assert 0 < selected < 19  # the seeded mask draws, rather than taking everything or nothing

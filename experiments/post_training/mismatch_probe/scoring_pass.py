@@ -236,7 +236,6 @@ def reference_logprob_at(ids: np.ndarray, logprobs: np.ndarray, token_id: int) -
     return float(logprobs[matches[0]]) if len(matches) else -np.inf
 
 
-
 def exact_rows_from_passes(
     sequences: list[ProbeSequence],
     reference_exact: np.ndarray,

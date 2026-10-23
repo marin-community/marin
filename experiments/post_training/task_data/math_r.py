@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from datasets import load_dataset as hf_load_dataset
-from verifyit.grade import InvalidTask
+from verifyit.grade import GradingInfraError, InvalidTask
 from verifyit.modes.extract import extract_boxed
 from verifyit.modes.grade_math import grade_math_text_candidate
 from verifyit.spec import MathSpec
@@ -101,22 +101,28 @@ def r_prompt(problem: str) -> str:
 def answer_is_verifier_parsable(answer: str) -> bool:
     """Whether the math verifier can grade ``answer`` as a checkable final answer.
 
-    Three requirements: the reference must parse as a math expression at all (answers
+    Four requirements: the reference must parse as a math expression at all (answers
     like empty or malformed LaTeX raise ``InvalidTask``), a correct boxed restatement
-    must grade positive, and a mutated answer must grade zero — an answer that cannot
-    be told apart from a wrong one cannot check completions.
+    must grade positive, a mutated answer must grade zero — an answer that cannot
+    be told apart from a wrong one cannot check completions — and the verifier must
+    reach a verdict within its per-expression deadline at all (a pathological
+    expression that exhausts it raises ``GradingInfraError``; that is a property of
+    the answer, and the answer is not usable here).
     """
     correct = f"The final answer is $\\boxed{{{answer}}}$."
     mutated = f"The final answer is $\\boxed{{{answer}X'}}$."
     try:
         if grade_math_text_candidate(MathSpec(expected=answer), correct).reward <= 0:
             return False
-    except InvalidTask:
+    except (InvalidTask, GradingInfraError):
         return False
     try:
         mutated_reward = grade_math_text_candidate(MathSpec(expected=answer), mutated).reward
     except InvalidTask:
         return True
+    except GradingInfraError:
+        # The mutation could not be decided, so discrimination is unverified.
+        return False
     return mutated_reward <= 0
 
 
