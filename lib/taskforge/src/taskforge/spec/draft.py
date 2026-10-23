@@ -47,6 +47,7 @@ from taskcompendium.models import (
     ExitCodeReward,
     FileReward,
     FunctionDefinition,
+    Grader,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -65,7 +66,7 @@ from taskcompendium.submission import require_submission_compatibility
 from verifyit.candidate import IN_PROCESS_MODES
 from verifyit.spec import Spec, mode_of
 
-from taskforge.sandbox.factories import MachineHost, container_backend, grading_environment
+from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, MachineHost, container_backend, grading_environment
 from taskforge.sandbox.images import GRADER_BASE_IMAGE
 from taskforge.spec.verdict import VERDICT_REWARD
 
@@ -217,6 +218,18 @@ def machine(
         startup_timeout=startup_timeout,
         cleanup_timeout=cleanup_timeout,
     )
+
+
+GRADER_TIMEOUT = 300.0
+"""Default command timeout for generated script graders, and budget for in-process grading."""
+MACHINE_PREPARATION_TIMEOUT = 300.0
+GRADING_MACHINE = machine(startup_timeout=SANDBOX_SCHEDULING_TIMEOUT + MACHINE_PREPARATION_TIMEOUT)
+"""Machine settings allowing scheduling plus resource installation and setup."""
+
+
+def verifier_timeout(grader: Grader) -> float:
+    """Allow the verifier's scheduling budget and its own command timeout before ending grading."""
+    return SANDBOX_SCHEDULING_TIMEOUT + (grader.timeout if isinstance(grader, ScriptGrader) else GRADER_TIMEOUT)
 
 
 def rollout_limits(

@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import Backend
 from taskcompendium.models import TaskSpec
+from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
@@ -132,7 +133,7 @@ async def test_the_catalog_entry_becomes_an_accepted_task_under_the_callers_work
         factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
         images=None,
         web_tools=(),
-        ledger=None,
+        ledger=DiscardingLedger(),
         reasoning_replay=ReasoningReplay.KEEP,
         agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
     )

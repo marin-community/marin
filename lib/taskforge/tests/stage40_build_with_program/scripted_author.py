@@ -28,6 +28,7 @@ from taskforge.stage40_build_with_program.program_sdk import load_program
 
 PROGRAM = '''"""Grades 6 * 7 in process."""
 
+from dataclasses import replace
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import AnswerType, Source, TaskSpec
 from verifyit.spec import ExactSpec
@@ -49,7 +50,9 @@ async def sources(context: RLEnvBuildContext, proposal: TaskProposal) -> Sources
 @rl_env_build_step
 async def grader(context: RLEnvBuildContext, sources: Sources) -> Grader:
     package = draft.answer_grader(ExactSpec(expected=("42",)))
-    reference = await grade_candidate(context, None, package, AnswerType.TEXT, ANSWER_FORMAT, "(instruction)", "42")
+    reference = await grade_candidate(
+        context, draft.NO_MACHINE, package, AnswerType.TEXT, ANSWER_FORMAT, "(instruction)", "42"
+    )
     if reference.status != Outcome.GRADED:
         raise BuildFailure(f"the reference was graded {reference.status}")
     return Grader(
@@ -66,7 +69,9 @@ async def assemble(context: RLEnvBuildContext, grader: Grader) -> TaskSpec:
         ANSWER_FORMAT,
         grader.package,
         Source(dataset="test", revision="r", row="0", importer_revision="test"),
-        environment=draft.requirements(image=None),
+        environment=draft.requirements(image=None).model_copy(
+            update={"package_spec": replace(draft.SHELLSIM_CPYTHON, pypi_packages=None)}
+        ),
     )
 
 

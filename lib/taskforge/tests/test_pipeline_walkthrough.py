@@ -26,6 +26,7 @@ from taskcompendium.models import AnswerType, InlineFile, PlainText, Source, Tas
 from verifyit.spec import NumericSpec
 
 from taskforge import content_hash
+from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, StructuredResult, Usage
 from taskforge.llm.policy import LLMPolicy, Message
@@ -155,7 +156,7 @@ SERVICES = RLEnvBuildServices(
     factories={Backend.SHELLSIM.value: ShellSimMachineFactory()},
     images=None,
     web_tools=(),
-    ledger=None,
+    ledger=DiscardingLedger(),
     reasoning_replay=ReasoningReplay.KEEP,
     agent_limits=AgentLimits(max_turns=1, max_tokens=1024, max_calls=1),
 )
@@ -1218,11 +1219,9 @@ def agentic_author(model: ScriptedModel, root: Path) -> AgenticAuthor:
                 model_digest=UNUSED_MODEL_DIGEST,
             )
 
-        return SessionBuild(
-            builder, store, UnusedModel(), SAMPLING, SERVICES, root / "sessions.jsonl", in_process_loader
-        )
+        return SessionBuild(builder, store, SERVICES, root / "sessions.jsonl", in_process_loader)
 
-    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.recording, builds)
+    return AgenticAuthor(CONFIG, model, SAMPLING, SERVICES.ledger, builds)
 
 
 class RecordingValidate:

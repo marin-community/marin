@@ -62,11 +62,12 @@ from typing import Annotated, Literal
 
 import httpx
 from pydantic import Field, TypeAdapter
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.log_setup import configure_logging
 
 from taskforge.child_process import stop_process_group
 from taskforge.ledger.jsonl import JsonlLedger
+from taskforge.ledger.records import DiscardingLedger
 from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import ModelClient, ModelUnavailable
 from taskforge.llm.glm_client import FixedEndpoint, GlmClient, GlmEndpoint, Pool
@@ -318,7 +319,7 @@ async def _resources(request: BuildRequest) -> AsyncIterator[tuple[ModelClient, 
             factories=machine_factories(config.host, config.controller_url),
             images=image_builder(config),
             web_tools=() if config.parallel_key_env is None else web_tools(http, _secret(config.parallel_key_env)),
-            ledger=None if config.ledger_root is None else JsonlLedger(config.ledger_root),
+            ledger=DiscardingLedger() if config.ledger_root is None else JsonlLedger(config.ledger_root),
             reasoning_replay=config.reasoning_replay,
             agent_limits=config.agent_limits,
         )
@@ -375,8 +376,7 @@ def main() -> None:
     configure_logging(logging.INFO)
     request = REQUEST.validate_json(Path(request_path).read_bytes())
     result = asyncio.run(build_result(request))
-    with atomic_rename(result_path) as temp:
-        Path(temp).write_bytes(RESULT.dump_json(result, indent=2))
+    write_bytes_atomic(result_path, RESULT.dump_json(result, indent=2))
 
 
 if __name__ == "__main__":

@@ -79,7 +79,7 @@ from pathlib import Path, PurePosixPath
 from typing import Protocol
 
 from pydantic import JsonValue
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.models import TaskResource, TextMessage
 
@@ -92,6 +92,7 @@ from taskforge.spec import draft as draft_module
 from taskforge.stage10_proposal.model import TaskProposal, render
 from taskforge.stage30_author.author import (
     PROGRAM_FILE,
+    ROUNDS_DIR,
     AuthorContext,
     AuthoredProgram,
     AuthorFailure,
@@ -104,10 +105,15 @@ from taskforge.stage40_build_with_program.context import (
     BuildExpired,
     BuildFailure,
     BuildInfrastructureFailure,
-    RLEnvBuildContext,
 )
 from taskforge.stage40_build_with_program.failure_text import failure_head, failure_text
-from taskforge.stage40_build_with_program.glm_author import RECORD_FILE, REVISION_PROMPT, author_messages, sdk_reference
+from taskforge.stage40_build_with_program.glm_author import (
+    AUTHOR_STEP,
+    RECORD_FILE,
+    REVISION_PROMPT,
+    author_messages,
+    sdk_reference,
+)
 from taskforge.stage40_build_with_program.infrastructure import (
     HOST_REJECTIONS,
     InfrastructureCause,
@@ -117,7 +123,7 @@ from taskforge.stage40_build_with_program.infrastructure import (
 from taskforge.stage40_build_with_program.outputs import GradedCandidate, Grader
 from taskforge.stage40_build_with_program.program_sdk import load_program, sdk_exports
 from taskforge.stage40_build_with_program.run import TaskDraft, step_output
-from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate
+from taskforge.stage40_build_with_program.sandbox_effects import grade_candidate_on_host
 from taskforge.stage40_build_with_program.sdk import grade_diagnostics, grading_language
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import SDK_VERSION
@@ -125,11 +131,8 @@ from taskforge.stage40_build_with_program.template import standard
 
 AUTHOR_KIND = "agentic"
 """The ``author_kind`` this author writes into ``author.json``, ``record.json`` and its ledger entries."""
-ROUNDS_DIR = "rounds"
 AGENTIC_DIR = "agentic"
 AUTHOR_RECORD = "author.json"
-AUTHOR_STEP = "author"
-"""The ledger step of every agentic author turn."""
 
 WORKSPACE_DIR = "workspace"
 RUNS_DIR = "runs"
@@ -165,10 +168,9 @@ HOST_RETRIES = 2
 HOST_RETRY_BACKOFF = 5.0
 """Seconds before the first such retry; each later retry waits twice as long as the one before."""
 SESSION_ORIGIN = "author_session"
-GRADE_STEP = "author_grade"
-"""The ``RLEnvBuildContext.step`` of a ``run_grade_candidate`` call."""
 GRADE_INSTRUCTION = "(instruction)"
 """The instruction the template's grader step grades against."""
+
 
 LENGTH_NUDGE = (
     "Your reply was cut off at the {limit}-token output limit before it made a tool call, so nothing ran. Take a "
@@ -318,8 +320,6 @@ class SessionBuild:
     Attributes:
         builder: Builds a program as the caller's build stage does.
         store_root: The step store the builder uses; ``step_output`` reads the grader from it.
-        client: The in-process model of ``grade_candidate``'s context (grading never calls it).
-        policy: The sampling policy of that context.
         services: The build's services: ``grade_candidate``'s factories, host, ledger and web tools, and the
             image builder the in-session builds publish with (``None`` when they cannot). ``AgenticAuthor``
             checks the proposal's solver machine against them before the session starts.
@@ -331,8 +331,6 @@ class SessionBuild:
 
     builder: ProgramBuilder
     store_root: str
-    client: ModelClient
-    policy: LLMPolicy
     services: RLEnvBuildServices
     session_ledger: Path
     loader: ProgramLoader = load_in_child
@@ -356,13 +354,7 @@ def _write_json(path: Path, value: object) -> None:
 
 
 def _write_text(path: Path, text: str) -> None:
-    _write_bytes(path, text.encode())
-
-
-def _write_bytes(path: Path, content: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_rename(str(path)) as temp:
-        Path(temp).write_bytes(content)
+    write_bytes_atomic(str(path), text.encode())
 
 
 def _read_json(path: Path) -> dict:
@@ -543,7 +535,7 @@ class AuthorSession:
         self.round_no = round_no
         self.proposal = proposal
         self.build = build
-        self.ledger = TaggedLedger(build.services.recording, {"origin": SESSION_ORIGIN, "session": session_id})
+        self.ledger = TaggedLedger(build.services.ledger, {"origin": SESSION_ORIGIN, "session": session_id})
         self.services = replace(build.services, ledger=self.ledger)
         self.built: set[str] = set()
         self.refused_untested: set[str] = set()
@@ -705,16 +697,9 @@ class AuthorSession:
     ) -> GradeResult:
         """Grade ``reply`` with the ``workspace`` files it leaves against ``draft``'s task, no model called."""
         task = draft.task
-        context = RLEnvBuildContext(
-            workpiece_id=self.workpiece_id,
-            round=self.round_no,
-            model=self.build.client,
-            sampling=self.build.policy,
-            services=self.services,
-            step=GRADE_STEP,
-        )
-        return await grade_candidate(
-            context,
+        return await grade_candidate_on_host(
+            self.services,
+            self.workpiece_id,
             task.environment_requirements,
             grader.package,
             task.answer_type,

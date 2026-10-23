@@ -154,15 +154,6 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
             r"did you mean 'grade_candidate' from taskforge\.stage40_build_with_program\.sandbox_effects\?",
         ),
         (
-            lambda s: s.replace(
-                "    package = draft.answer_grader(",
-                "    timeout = draft.GRADER_TIMEOUT\n    package = draft.answer_grader(",
-            ),
-            r"`draft\.GRADER_TIMEOUT` \(line \d+\): 'taskforge\.spec\.draft' has no name 'GRADER_TIMEOUT'; "
-            r"did you mean 'GRADER_RESOURCE_ROOT' from taskforge\.spec\.draft, "
-            r"or 'GRADER_TIMEOUT' from taskforge\.stage40_build_with_program\.sdk\?",
-        ),
-        (
             lambda s: s.replace("stage40_build_with_program.outputs import", "stage40_build_with_program.output import"),
             r"may not import 'taskforge.stage40_build_with_program.output'; "
             r"did you mean 'taskforge.stage40_build_with_program.outputs'\?",
@@ -196,7 +187,6 @@ def test_an_interrupted_load_does_not_stand_in_for_the_next_load():
         "unimported-sdk-name",
         "former-sdk-name",
         "former-sdk-name-import",
-        "attribute-of-the-wrong-module",
         "misspelt-module",
         "no-sink-keyword",
         "step-as-sink",

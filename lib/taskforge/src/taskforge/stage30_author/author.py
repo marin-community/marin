@@ -31,6 +31,7 @@ from taskforge.stage30_author.program import RLEnvBuildProgram
 
 PROGRAM_MANIFEST_FILE = "program.json"
 PROGRAM_FILE = "program.py"
+ROUNDS_DIR = "rounds"
 
 
 class RevisionKind(StrEnum):

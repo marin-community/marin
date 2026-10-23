@@ -11,14 +11,11 @@ with ``infrastructure.host_checked_factories`` first, so a host fault raises
 ``grade_candidate`` grades a candidate through ``RolloutEngine.run_task`` under the shell harness, the
 path a validation control takes. The candidate's workspace files are written by one shell call each and
 its reply ends the conversation (``spec.controls.candidate_turns``). The engine grades only a rollout
-with a model turn, and under its default exact-token trace it requires token evidence for every turn,
-which grading reads none of, so the model serving those turns makes up ids that extend each request's
-served tokens (``ModelRequest.continuation``) by one token.
+with a model turn. Scripted grading uses the messages trace and records no synthetic token ids.
 
-``build_machine`` prepares a machine through RolloutEngine's own ``_prepare_machine``, so files, setup
-commands, the execution user and the startup deadline behave as in a task attempt. RolloutEngine's
-public form of it, ``machines.task_machine``, starts the machine of a whole ``TaskSpec``, which a build
-step that tries fixtures does not have.
+``build_machine`` prepares a machine through RolloutEngine's own ``prepare_machine``, so files, setup
+commands, the execution user and the startup deadline behave as in a task attempt. It accepts
+requirements and resources before a build has assembled a complete task.
 
 A deadline that expires while a machine starts or a candidate is graded is the host's
 (``InfrastructureCause.SANDBOX_DEADLINE``): a grader command past its own timeout comes back as a
@@ -30,24 +27,21 @@ because one slow exec cannot be told from a slow grader; only the second result 
 import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
-from dataclasses import dataclass
-from typing import Any
 
-from rolloutengine.cleanup import _Cleanup
 from rolloutengine.engine import RolloutEngine
-from rolloutengine.machines import _prepare_machine
-from rolloutengine.models import Model, ModelRequest, ModelTurn, RolloutInterrupted, TaskRolloutSpec
+from rolloutengine.machines import prepare_machine
+from rolloutengine.models import Model, RolloutInterrupted, TaskRolloutSpec, TraceMode
 from shellbox.machine import Machine
 from taskcompendium.grader import GraderPackage
 from taskcompendium.grading_result import GradeResult, GradingFailure
 from taskcompendium.models import AnswerFormat, AnswerType, EnvironmentRequirements, Source, TaskResource
 
-from taskforge.sandbox.factories import SANDBOX_SCHEDULING_TIMEOUT, grading_environment
+from taskforge.sandbox.factories import grading_environment
 from taskforge.sandbox.image_builder import BuildFailed, ImageJobFailed
 from taskforge.sandbox.images import BUILD_LIMITS, DockerBuild, check_build_limits
 from taskforge.spec import draft
-from taskforge.spec.controls import candidate_turns
-from taskforge.spec.draft import MachineSettings, machine_runtime
+from taskforge.spec.controls import ScriptedModel, candidate_turns
+from taskforge.spec.draft import GRADING_MACHINE, MachineSettings, machine_runtime
 from taskforge.stage40_build_with_program.context import BuildFailure, BuildInfrastructureFailure, RLEnvBuildContext
 from taskforge.stage40_build_with_program.infrastructure import (
     InfrastructureCause,
@@ -55,27 +49,11 @@ from taskforge.stage40_build_with_program.infrastructure import (
     host_checked_factories,
     infrastructure_failure,
 )
-from taskforge.stage40_build_with_program.sdk import GRADER_TIMEOUT
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import SDK_VERSION
 
 MACHINE_CLEANUP_TIMEOUT = 120.0
 """Seconds ``build_machine`` and ``grade_candidate`` wait for a machine to close."""
-GRADE_CANDIDATE_PREPARATION_TIMEOUT = 300.0
-"""Seconds a grading machine's start allows past the factory's scheduling budget, for its files and setup commands."""
-GRADE_CANDIDATE_MACHINE = draft.machine(startup_timeout=SANDBOX_SCHEDULING_TIMEOUT + GRADE_CANDIDATE_PREPARATION_TIMEOUT)
-"""The task and verifier machine settings ``grade_candidate`` uses unless the step passes its own.
-
-The startup deadline outlasts ``SANDBOX_SCHEDULING_TIMEOUT``, as the verifier deadline does, so a
-sandbox that never starts surfaces as the factory's typed ``SCHEDULING_TIMEOUT`` rather than as an
-untyped startup deadline; the margin is the machine's preparation once it is scheduled.
-"""
-GRADE_CANDIDATE_VERIFIER_TIMEOUT = SANDBOX_SCHEDULING_TIMEOUT + GRADER_TIMEOUT
-"""Seconds ``grade_candidate`` allows one grading: the verifier machine's scheduling budget, then the grader's own.
-
-The sum keeps the deadline behind the factory's scheduling timeout, so a sandbox that never starts
-surfaces as the factory's ``SCHEDULING_TIMEOUT`` host failure rather than as this deadline.
-"""
 GRADE_CANDIDATE_SOURCE = "taskforge.grade_candidate"
 """``Source.dataset`` of the provisional task ``grade_candidate`` grades against."""
 IMAGE_REPOSITORY_PREFIX = "taskforge-tasks"
@@ -105,8 +83,10 @@ async def build_machine(
     runtime = machine_runtime(settings, hosted, services.host)
     async with AsyncExitStack() as owned:
         try:
-            prepared = await _prepare_machine(
-                hosted, runtime, tuple(files), factories, _Cleanup(MACHINE_CLEANUP_TIMEOUT), owned
+            prepared = await owned.enter_async_context(
+                prepare_machine(
+                    hosted, tuple(files), factories[runtime.backend], runtime, cleanup_timeout=MACHINE_CLEANUP_TIMEOUT
+                )
             )
         except TimeoutError as error:
             raise BuildInfrastructureFailure(
@@ -114,27 +94,12 @@ async def build_machine(
                 f"machine start: the sandbox did not answer within the {settings.startup_timeout:.0f}-second "
                 "startup deadline",
             ) from error
-        assert prepared is not None, "a machine runtime always prepares a machine"
         yield prepared
-
-
-@dataclass(frozen=True)
-class _CandidateModel:
-    """Serves a candidate's assistant turns in order, with made-up token ids that extend the served tokens."""
-
-    turns: tuple[dict[str, Any], ...]
-
-    async def __call__(self, request: ModelRequest) -> ModelTurn:
-        message = self.turns[sum(entry["role"] == "assistant" for entry in request.messages)]
-        served = () if request.continuation is None else request.continuation.served_token_ids
-        prompt = (*served, len(served))
-        stop = "tool_calls" if "tool_calls" in message else "stop"
-        return ModelTurn(message, prompt, (len(prompt),), None, stop, text=message["content"])
 
 
 async def grade_candidate(
     context: RLEnvBuildContext,
-    requirements: EnvironmentRequirements | None,
+    requirements: EnvironmentRequirements,
     grader: GraderPackage,
     answer_type: AnswerType,
     answer_format: AnswerFormat,
@@ -144,14 +109,14 @@ async def grade_candidate(
     files: Sequence[TaskResource] = (),
     workspace: Sequence[TaskResource] = (),
     output_paths: Sequence[str] = (),
-    settings: MachineSettings = GRADE_CANDIDATE_MACHINE,
+    settings: MachineSettings = GRADING_MACHINE,
 ) -> GradeResult:
     """Grade one candidate, a final ``reply`` and the ``workspace`` files it leaves, as validation would.
 
     The grader receives a provisional task: ``instruction`` as its only message, the task's
     environment ``requirements`` with the agent-visible ``files``, ``grader`` with ``answer_type``
     and ``answer_format``, and ``output_paths``. Pass the task's own requirements: a task machine
-    (``draft.requirements(...)``), or ``draft.NO_MACHINE`` or ``None`` for a task without one. The
+    (``draft.requirements(...)``), or ``draft.NO_MACHINE`` for a task without one. The
     grading starts a task machine exactly when they have the shell capability, as validation's
     lowering does, so a step passes the ``requirements`` step's output whatever machine it declares.
     The candidate writes each ``workspace`` file with a shell call, paths relative to the machine
@@ -179,9 +144,41 @@ async def grade_candidate(
         BuildInfrastructureFailure: the host failed to create or drive a grading machine, or a machine
             start or the grading outlasted its deadline (``SANDBOX_DEADLINE``).
     """
+    return await grade_candidate_on_host(
+        context.services,
+        context.workpiece_id,
+        requirements,
+        grader,
+        answer_type,
+        answer_format,
+        instruction,
+        reply,
+        files=files,
+        workspace=workspace,
+        output_paths=output_paths,
+        settings=settings,
+    )
+
+
+async def grade_candidate_on_host(
+    services: RLEnvBuildServices,
+    workpiece_id: str,
+    requirements: EnvironmentRequirements,
+    grader: GraderPackage,
+    answer_type: AnswerType,
+    answer_format: AnswerFormat,
+    instruction: str,
+    reply: str,
+    *,
+    files: Sequence[TaskResource] = (),
+    workspace: Sequence[TaskResource] = (),
+    output_paths: Sequence[str] = (),
+    settings: MachineSettings = GRADING_MACHINE,
+) -> GradeResult:
+    """Grade a candidate using the host resources, without a build model or sampling policy."""
     try:
         task = draft.assemble(
-            task_id=f"{context.workpiece_id}.grade_candidate",
+            task_id=f"{workpiece_id}.grade_candidate",
             instruction=instruction,
             answer_type=answer_type,
             answer_format=answer_format,
@@ -189,7 +186,7 @@ async def grade_candidate(
             source=Source(
                 dataset=GRADE_CANDIDATE_SOURCE,
                 revision=SDK_VERSION,
-                row=context.workpiece_id,
+                row=workpiece_id,
                 importer_revision=SDK_VERSION,
             ),
             environment=requirements,
@@ -202,11 +199,11 @@ async def grade_candidate(
     if workspace and not machine:
         raise BuildFailure("grade_candidate: workspace files need a task machine")
     turns = candidate_turns(reply, sorted(workspace, key=lambda resource: resource.path))
-    factories = host_checked_factories(context.services.factories, context.services.host)
+    factories = host_checked_factories(services.factories, services.host)
     try:
         spec = draft.lower(
             task,
-            host=context.services.host,
+            host=services.host,
             task_machine=settings if machine else None,
             verifier_machine=None if grading_environment(task) is None else settings,
             limits=draft.rollout_limits(
@@ -215,7 +212,7 @@ async def grade_candidate(
                 tool_turn_timeout=None,
                 total_turn_timeout=None,
                 attempt_timeout=None,
-                verifier_timeout=GRADE_CANDIDATE_VERIFIER_TIMEOUT,
+                verifier_timeout=draft.verifier_timeout(grader.grader),
                 cleanup_timeout=MACHINE_CLEANUP_TIMEOUT,
             ),
             factories=factories,
@@ -223,7 +220,8 @@ async def grade_candidate(
     except (ValueError, NotImplementedError) as error:
         raise BuildFailure(f"grade_candidate: {error}") from error
     engine = draft.rollout_engine(factories, command_timeout=None)
-    model = _CandidateModel(turns)
+    spec = spec.model_copy(update={"trace": TraceMode.MESSAGES})
+    model = ScriptedModel(turns, context_assistant_turns=0)
     grade = await _graded(engine, spec, model)
     if grade.failure is GradingFailure.TIMEOUT:
         grade = await _graded(engine, spec, model)
@@ -259,7 +257,12 @@ async def publish_image(context: RLEnvBuildContext, build: DockerBuild) -> str:
         BuildInfrastructureFailure: this host has no image builder (``NO_IMAGE_BUILDER``), or a build or
             push job failed for a host reason (``IMAGE_JOB_FAILED``, from ``image_builder.ImageJobFailed``).
     """
-    images = context.services.images
+    return await publish_image_on_host(context.services, context.workpiece_id, build)
+
+
+async def publish_image_on_host(services: RLEnvBuildServices, workpiece_id: str, build: DockerBuild) -> str:
+    """Publish the workpiece's image using the host's image builder."""
+    images = services.images
     if images is None:
         raise BuildInfrastructureFailure(InfrastructureCause.NO_IMAGE_BUILDER, "this host cannot publish images")
     try:
@@ -267,7 +270,7 @@ async def publish_image(context: RLEnvBuildContext, build: DockerBuild) -> str:
     except ValueError as error:
         raise BuildFailure(f"publish_image: {error}") from error
     try:
-        return await images.publish(build, image_repository(context.workpiece_id))
+        return await images.publish(build, image_repository(workpiece_id))
     except BuildFailed as error:
         raise BuildFailure(f"publish_image: {error}") from error
     except ImageJobFailed as error:

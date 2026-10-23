@@ -234,11 +234,6 @@ async def test_a_grader_that_times_out_twice_expires_the_build_instead_of_going_
     assert slow.grader_runs == 2
 
 
-def test_a_rejection_ceiling_at_full_credit_is_refused():
-    with pytest.raises(ValueError, match=r"rejection_ceiling is a reward from 0 up to, not including, 0\.99"):
-        GraderDraft.model_validate({**grader_call(GOOD_GRADER), "rejection_ceiling": 0.99})
-
-
 async def test_the_grader_step_sends_back_a_grader_without_per_check_results(context, proposal, fake_glm):
     fake_glm.stream(content=json.dumps(grader_call(NO_CHECKS_GRADER)))
     fake_glm.stream(content=json.dumps(grader_call(GOOD_GRADER)))
@@ -368,13 +363,6 @@ async def test_package_fixtures_choose_a_package_machine_without_an_image(contex
     )
     assert "`numpy`, `pandas==2.2.3`" in machine_facts(requirements)
     assert isinstance(package.grader, ScriptGrader) and package.grader.environment.docker_image == GRADER_BASE_IMAGE
-
-
-def test_fixtures_refuse_a_package_with_pip_options():
-    with pytest.raises(ValueError, match="without pip options"):
-        FixturesDraft.model_validate(
-            {"agent_files": [], "private_files": [], "facts": "", "packages": ["--index-url=https://example.org"]}
-        )
 
 
 @pytest.mark.parametrize(

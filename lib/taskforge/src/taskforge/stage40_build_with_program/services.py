@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from shellbox.machine import MachineFactory
 
-from taskforge.ledger.records import Ledger, LedgerEntry
+from taskforge.ledger.records import Ledger
 from taskforge.llm.agent import AgentTool, ReasoningReplay
 from taskforge.sandbox.factories import MachineHost
 from taskforge.sandbox.images import ImageBuilder
@@ -48,7 +48,7 @@ class RLEnvBuildServices:
             ``taskforge.sandbox.factories.machine_factories(host, ...)`` returns them.
         images: Publishes task images by digest, or ``None`` when this host cannot.
         web_tools: Web search and fetch tools (``taskforge.llm.web.web_tools``), or empty.
-        ledger: Where steps, model calls and tool calls are recorded, or ``None`` to record nothing.
+        ledger: Where steps, model calls and tool calls are recorded, use ``DiscardingLedger`` to record nothing.
         reasoning_replay: Whether every agent loop replays its assistant turns' reasoning.
         agent_limits: The bounds of every agent loop.
     """
@@ -57,19 +57,6 @@ class RLEnvBuildServices:
     factories: Mapping[str, MachineFactory]
     images: ImageBuilder | None
     web_tools: tuple[AgentTool, ...]
-    ledger: Ledger | None
+    ledger: Ledger
     reasoning_replay: ReasoningReplay
     agent_limits: AgentLimits
-
-    @property
-    def recording(self) -> Ledger:
-        """``ledger``, or a ledger that drops every entry when ``ledger`` is ``None``."""
-        return _DISCARD if self.ledger is None else self.ledger
-
-
-class _DiscardingLedger:
-    def record(self, entry: LedgerEntry) -> None:
-        pass
-
-
-_DISCARD = _DiscardingLedger()

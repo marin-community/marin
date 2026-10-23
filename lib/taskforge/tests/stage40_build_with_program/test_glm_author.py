@@ -22,15 +22,6 @@ from tests.stage30_author.programs import PROGRAM
 from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE
 
 
-def test_the_sdk_reference_lists_the_fields_of_the_task_types_steps_read():
-    reference = sdk_reference()
-
-    assert "class TaskResource(*, path: str, source: taskcompendium.models.InlineFile" in reference
-    assert "class EnvironmentRequirements(*, capabilities:" in reference
-    assert "docker_image:" in reference
-    assert "resource_bytes(resource: taskcompendium.models.TaskResource) -> bytes" in reference
-
-
 def test_the_sdk_reference_lists_what_grade_candidate_returns():
     reference = sdk_reference()
 

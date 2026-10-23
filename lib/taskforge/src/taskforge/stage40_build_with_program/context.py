@@ -103,5 +103,5 @@ class RLEnvBuildContext:
 def call_ledger(context: RLEnvBuildContext) -> CallLedger:
     """Where the running step records its model and tool calls: its workpiece, round and step name."""
     return CallLedger(
-        ledger=context.services.recording, workpiece_id=context.workpiece_id, round=context.round, step=context.step
+        ledger=context.services.ledger, workpiece_id=context.workpiece_id, round=context.round, step=context.step
     )

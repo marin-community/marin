@@ -62,9 +62,7 @@ modules (`capability`, `child_process`, `content_hash`, `ledger`, `llm`, `sandbo
 the shared modules import no stage. The build package is `stage40_build_with_program`: every way Taskforge
 builds a task today goes through a build program, so the SDK, the standard template, the build
 services, the program runner and the agentic author (an agent session that writes and iterates
-that program) all live there. The name leaves room for a `stage40_build_with_agent` package in
-which an agent produces the task draft directly, with no build program at all; that is a future
-surface, not a home for anything that writes a program, however the writer runs. The coordinator
+that program) all live there. The coordinator
 package, `stage_coordinator`, runs the stages in order and is unnumbered. It may import any stage
 and shared module, and `tests/test_imports.py` refuses an import of it from any other package, along
 with the other wrong-way imports. `scripts/ledger_summary.py` totals wall time and tokens per kind
