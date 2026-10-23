@@ -1,77 +1,28 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run a workpiece through its stages with the stage functions a caller passes.
+"""Run a workpiece through the caller's stages, checkpointing after every stage event.
 
-A ``StageCoordinator`` holds the caller's ``StageFunctions``, the workpiece budget, the run root, the
-event store, and the model with its sampling policy. ``run_workpiece`` runs a workpiece to a terminal:
+Only completed evaluation supports ACCEPTED or REJECTED. Exhausted triage,
+author/build, validation or modify budgets produce resumable ABANDONED. Other
+execution failures and unavailable evidence produce resumable HELD.
 
-1. When the caller's log is empty and the event store holds the workpiece's events, ``run_workpiece``
-   restores the log from the store.
-2. It opens the workpiece with an ``OPENED`` event, or checks the proposal, the budget and the model
-   digest against the existing ``OPENED`` event.
-3. It folds the log with ``derive_state``. An accepted or rejected workpiece returns its terminal here,
-   before any stage runs or any file is written.
-4. It runs the stage in the state, appends the stage's event and folds the event in, until the
-   workpiece reaches a terminal.
-5. It saves the log to the event store, after every other file of the workpiece.
+An explicit relaunch of ABANDONED starts a fresh budget window and records its
+budget digest. Cumulative repair, revision and round numbers keep earlier files
+intact. A review hold resumes validation; a stage exception resumes that stage.
+Accepted and rejected workpieces remain final. Legacy FAILED records resume as HELD.
 
-Each stage runs through an adapter in this module. The adapter calls the caller's function, writes
-the round's files, and returns the stage's event.
+Triage repairs are stored in repaired/<k>.json. Author calls write program.json
+and optional program.py to rounds/<n>/authored/<k>/, where k counts author/build
+failures. Failure text in build-failures/<k>.txt supplies the next revision.
+Programs without source must be deterministic when the build asks the author
+again. Completed build steps are reused from the step store.
 
-The triage stage exits accept or reject on the verdict's decision, and a reject records the
-verdict's reasons. An accept records the verdict's ``author_state``, a JSON mapping the workpiece
-state folds and every author call receives; the preflight's is empty, and nothing in the package
-writes one, so it is a surface for a consumer's triage to hand findings or obligations to the
-author.
-
-A REPAIR verdict is a surface the preflight or a Taskforge consumer may use, for a deterministic
-rewrite such as fixing a proposal header, by setting ``max_triage_repairs``. The edge may later
-retry a proposal on the findings of the deterministic preflight, which returns no REPAIR verdict
-today. While the budget lasts, the stage calls ``StageFunctions.repair``, writes the rewritten
-proposal to ``repaired/<k>.json`` in the workpiece directory, ``k`` counting the rewrites, and exits
-repair, so triage judges the rewrite next. A REPAIR verdict past the budget, which is every one
-under a budget of zero, or a rewrite raising ``ProposalFormatError``, exits reject. Every stage
-after a rewrite runs it, read back from its file and checked against the digest its event records.
-
-The coordinator spends a build revision on:
-
-* a build raising ``BuildFailure`` or any other error, recorded as ``BUILD_FAILED``, unless the
-  error is a ``BuildInfrastructureFailure``, a ``BuildExpired``, ``ModelUnavailable``, or an
-  ``OSError`` raised outside the program's own frames: a storage fault, a missing blob or memo, or a corrupt one
-  (``StoreCorruption``). An ``OSError`` raised in the program, a step opening a file that is not
-  there, is the program's and spends a revision like any other error of its code;
-* an author raising ``StructuredOutputError`` or ``AuthorFailure``, recorded as ``AUTHOR_FAILED``.
-  The author's structured reply stayed invalid through its repairs, as when the output limit cut
-  it, or the author ended without a program to hand in, and a new call tries again.
-
-For either error the adapter writes the failure text to ``build-failures/<k>.txt`` in the round
-directory: a head naming the failure, then the traceback tail. For a build failure the head leads
-with the program's own frame, the file, line and source line the failure came from in the step it
-names (``failure_text.failure_head``), since the last frames of a traceback are often library code.
-The files share a counter, ``WorkpieceState.build_revisions``,
-because both errors spend the same budget. Any other exception, from these stages or any other,
-ends the run with ``TERMINAL`` failed. The coordinator then saves the log and re-raises, and the
-next ``run_workpiece`` on the workpiece resumes at that stage, with the step store serving the steps already
-built.
-
-The author stage writes each author call's files to ``authored/<k>/`` in the round directory,
-with ``k`` set to the workpiece's build and author failures so far (``WorkpieceState.build_revisions``):
-
-* ``program.json``, the program's manifest;
-* ``program.py``, the program's source, when the author returned one.
-
-The build stage reads ``k`` from the same state and loads the program from
-``authored/<k>/program.py`` with ``StageFunctions.load_program``. A later author call writes to a
-new directory, so a relaunch resuming at build after a process was killed mid-revision still finds
-the program its ``AUTHORED`` event records. For a program without source, as ``static_author``
-returns, the build stage asks the author again with the context and the revision kept in the state.
-Such an author has to return the same program for the same context, proposal and revision. Either
-way, the build stage refuses a program whose digest differs from the ``AUTHORED`` event.
-
-The layout of the run root is in ``lib/taskforge/README.md``.
+Triage author_state is preserved for every author call. The run layout is
+documented in lib/taskforge/README.md.
 """
 
+import asyncio
 import inspect
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -82,7 +33,7 @@ from rigging.filesystem.atomic import write_bytes_atomic
 
 from taskforge.content_hash import canonical_json, digest, pretty_json
 from taskforge.ledger.records import check_workpiece_id
-from taskforge.llm.client import ModelClient, ModelUnavailable
+from taskforge.llm.client import ModelClient, ModelRequestRejected, ModelUnavailable
 from taskforge.llm.policy import LLMPolicy
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.stage10_proposal.model import ProposalFormatError, TaskProposal, parse, render
@@ -99,13 +50,19 @@ from taskforge.stage30_author.author import (
 )
 from taskforge.stage30_author.program import RLEnvBuildProgram
 from taskforge.stage40_build_with_program.context import BuildExpired, BuildFailure, BuildInfrastructureFailure
-from taskforge.stage40_build_with_program.failure_text import error_line, failure_head, failure_text
-from taskforge.stage40_build_with_program.infrastructure import storage_fault
+from taskforge.stage40_build_with_program.failure_text import BuildCrash, error_line, failure_head, failure_text
+from taskforge.stage40_build_with_program.infrastructure import (
+    InfrastructureCause,
+    authored_failure,
+    infrastructure_failure,
+    storage_fault,
+)
 from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirement, load_draft
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import CacheStatus
 from taskforge.stage50_validate.round import ValidationContext, load_validation, write_validation
-from taskforge.stage60_review.decision import Accept, Decision, Modify, Reject, RejectKind, Retry
+from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Hold, Modify, Reject, RejectKind, Retry
+from taskforge.stage60_review.rules import evidence_gaps
 from taskforge.stage_coordinator.event_log import WORKPIECES_DIR, WorkpieceEventLog, WorkpieceEventStore
 from taskforge.stage_coordinator.stage_functions import StageFunctions
 from taskforge.stage_coordinator.workpiece_machine import (
@@ -148,12 +105,12 @@ class WorkpieceBudget:
 
     Attributes:
         max_triage_repairs: The REPAIR verdicts a workpiece may answer with a rewrite that triage judges
-            again. Zero sends every REPAIR verdict to reject; a consumer using the surface sets one.
+            again. Zero abandons on every REPAIR verdict; a consumer using the surface sets one.
         max_build_revisions: The build and author failures a workpiece may revise after. The next failure
-            rejects it.
+            abandons it.
         max_validation_retries: The review ``Retry`` decisions a workpiece may follow before it is abandoned.
         max_modify_rounds: The review ``Modify`` decisions a workpiece may follow into a new round. The next
-            one rejects it on its budget; zero rejects on the first.
+            one abandons it; zero abandons on the first.
     """
 
     max_triage_repairs: int
@@ -170,7 +127,7 @@ class StageCoordinator:
         stages: The caller's function for each stage.
         budget: The budget of every workpiece. ``OPENED`` records its digest.
         root: The run root holding ``workpieces/`` and the step store in ``store/``.
-        event_store: The store each workpiece's events are saved to on reaching a terminal.
+        event_store: The store checkpointed after each stage event and terminal.
         model: The model build steps call.
         sampling: The sampling policy build steps pass to ``model``.
         services: The build host's machines, images, web tools, ledger and agent-loop settings, passed
@@ -237,33 +194,15 @@ def _repaired_file(repairs: int) -> Path:
 async def run_workpiece(
     coordinator: StageCoordinator, workpiece_id: str, proposal: TaskProposal, log: WorkpieceEventLog
 ) -> Terminal:
-    """Run ``proposal`` as workpiece ``workpiece_id`` to a terminal, resuming from ``log`` or the event store.
+    """Run or resume a workpiece, restoring its event log when the caller's log is empty.
 
-    A workpiece already ``ACCEPTED`` or ``REJECTED`` returns at once. When the event store lacks that
-    final log, as after a failed save and a retry with the same ``log``, ``run_workpiece`` saves it first.
-    Otherwise it writes nothing. An ``ABANDONED`` workpiece re-enters validation with its retries reset,
-    and a ``FAILED`` one resumes at the stage that raised.
+    Final decisions return without running stages. ABANDONED starts a fresh budget
+    window; HELD resumes the interrupted stage with the existing budget. Other run
+    settings must still match the original proposal, model and research digests.
 
-    A REPAIR verdict within ``max_triage_repairs`` has ``StageFunctions.repair`` rewrite the proposal,
-    triage judges the rewrite, and every later stage runs it. A REPAIR verdict past the budget rejects
-    the workpiece.
-
-    A ``Modify`` decision within ``max_modify_rounds`` sends the workpiece back to the author for the
-    next round. One past it rejects the workpiece with ``RejectKind.BUDGET``.
-
-    A build failure, or an author raising ``StructuredOutputError``, spends one of the workpiece's build
-    revisions and sends the workpiece back to the author. When the build raises
-    ``BuildInfrastructureFailure``, ``BuildExpired``, ``ModelUnavailable`` or an ``OSError`` from
-    outside the program's frames, the workpiece fails in place with its revisions unspent, and the next
-    ``run_workpiece`` builds the same program again. Such an ``OSError`` is a storage fault, a missing
-    blob or memo, or a corrupt one (``StoreCorruption``); one raised by the program's own code is the
-    program's.
-
-    Raises:
-        ValueError: ``workpiece_id`` is unsafe as a directory name, the workpiece was opened for another
-            proposal, budget, model digest or research requirement, the build found a program other than the authored
-            one, a repaired proposal's file changed, or the log is inconsistent.
-        Exception: whatever a stage raised, after the workpiece is saved as failed.
+    Stage exceptions and cancellation are checkpointed as HELD and re-raised.
+    Persistence errors are propagated; an unavailable store may prevent a checkpoint.
+    Invalid ids, mismatched settings and corrupt logs are rejected before execution.
     """
     check_workpiece_id(workpiece_id)
     stored = coordinator.event_store.load(workpiece_id)
@@ -277,11 +216,28 @@ async def run_workpiece(
             coordinator.event_store.save(workpiece_id, log.events())
         return state.terminal
     try:
-        state = await _advance(workpiece, state)
-    except Exception as error:
-        attrs = {TERMINAL_ATTR: Terminal.FAILED.value, REASON_ATTR: f"{type(error).__name__}: {error}"}
-        log.append(WorkpieceEvent(EventKind.TERMINAL, log.events()[-1].round, None, attrs))
+        if state.terminal is Terminal.ABANDONED:
+            resumed = WorkpieceEvent(EventKind.RESUMED, state.round, None, {BUDGET_DIGEST: digest(coordinator.budget)})
+            state = transition(state, log.append(resumed))
         coordinator.event_store.save(workpiece_id, log.events())
+        state = await _advance(workpiece, state)
+    except (Exception, asyncio.CancelledError) as error:
+        exhausted = False
+        # A failed save after a conclusive decision must not append an illegal event
+        # after its final terminal. Retain that decision for the next save attempt.
+        if derive_state(log.events()).terminal not in FINAL:
+            infrastructure = infrastructure_failure(error)
+            exhausted = infrastructure is not None and infrastructure.cause == InfrastructureCause.BUDGET_EXHAUSTED
+            attrs = {
+                TERMINAL_ATTR: Terminal.ABANDONED.value if exhausted else Terminal.HELD.value,
+                REASON_ATTR: f"{type(error).__name__}: {error}",
+            }
+            if exhausted:
+                attrs["kind"] = RejectKind.BUDGET
+            log.append(WorkpieceEvent(EventKind.TERMINAL, log.events()[-1].round, None, attrs))
+        coordinator.event_store.save(workpiece_id, log.events())
+        if exhausted:
+            return Terminal.ABANDONED
         raise
     coordinator.event_store.save(workpiece_id, log.events())
     assert state.terminal is not None
@@ -292,6 +248,7 @@ async def _advance(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceSta
     while True:
         event = await ADAPTERS[state.stage](workpiece, state)
         state = transition(state, workpiece.log.append(event))
+        workpiece.coordinator.event_store.save(workpiece.workpiece_id, workpiece.log.events())
         if state.terminal is not None:
             return state
 
@@ -311,9 +268,14 @@ def _open(workpiece: _Workpiece) -> None:
     first = events[0]
     if first.digest != proposal_digest:
         raise ValueError(f"{workpiece.workpiece_id} was opened for proposal {first.digest}, not {proposal_digest}")
-    if first.attrs[BUDGET_DIGEST] != attrs[BUDGET_DIGEST]:
+    budget_event = next((event for event in reversed(events) if event.kind is EventKind.RESUMED), first)
+    if (
+        budget_event.attrs[BUDGET_DIGEST] != attrs[BUDGET_DIGEST]
+        and derive_state(events).terminal is not Terminal.ABANDONED
+    ):
         raise ValueError(
-            f"{workpiece.workpiece_id} was opened under budget {first.attrs[BUDGET_DIGEST]}, not {attrs[BUDGET_DIGEST]}"
+            f"{workpiece.workpiece_id} was opened under budget {budget_event.attrs[BUDGET_DIGEST]}, "
+            f"not {attrs[BUDGET_DIGEST]}"
         )
     if first.attrs[MODEL_DIGEST] != attrs[MODEL_DIGEST]:
         raise ValueError(
@@ -332,8 +294,7 @@ async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     An ACCEPT records the verdict's ``author_state`` as canonical JSON on the event, and a REJECT the
     verdict's reasons. A REPAIR verdict within ``max_triage_repairs`` has ``StageFunctions.repair``
     rewrite the proposal, writes the rewrite to ``repaired/<k>.json``, ``k`` counting the rewrites, and
-    exits repair with the rewrite's digest. A REPAIR verdict past the budget, or a rewrite raising
-    ``ProposalFormatError``, exits reject with the reason.
+    exits repair with the rewrite's digest. Exhaustion exits abandon; an invalid rewrite exits hold.
     """
     stages = workpiece.coordinator.stages
     proposal = workpiece.proposal_at(state)
@@ -344,8 +305,11 @@ async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
         return WorkpieceEvent(EventKind.TRIAGED, state.round, state.proposal_digest, attrs)
     reason = f"{TRIAGE_REJECTED}: {'; '.join(verdict.reasons)}"
     budget = workpiece.coordinator.budget.max_triage_repairs
-    if verdict.decision is TriageDecision.REPAIR and state.triage_repairs >= budget:
-        reason = f"triage returned REPAIR with {state.triage_repairs} of {budget} rewrites spent"
+    way = Exit.HOLD
+    if verdict.decision is TriageDecision.REPAIR and state.triage_repairs - state.triage_repairs_at_resume >= budget:
+        way = Exit.ABANDON
+        spent_repairs = state.triage_repairs - state.triage_repairs_at_resume
+        reason = f"triage returned REPAIR with {spent_repairs} of {budget} rewrites spent"
     elif verdict.decision is TriageDecision.REPAIR:
         try:
             rewrite = await stages.repair(proposal, verdict)
@@ -353,7 +317,7 @@ async def _triage(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
             reason = f"the rewrite for the REPAIR verdict is not a valid proposal: {error}"
         else:
             return _repaired(workpiece, state, rewrite)
-    attrs = {EXIT: Exit.REJECT, **spent, REASON_ATTR: reason[:ATTR_CHARS]}
+    attrs = {EXIT: way, **spent, REASON_ATTR: reason[:ATTR_CHARS]}
     return WorkpieceEvent(EventKind.TRIAGED, state.round, state.proposal_digest, attrs)
 
 
@@ -470,11 +434,16 @@ async def _build(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEvent
             research=coordinator.research,
             model_digest=coordinator.model_digest,
         )
-    except (BuildInfrastructureFailure, BuildExpired, ModelUnavailable):
+    except (BuildInfrastructureFailure, BuildExpired, ModelUnavailable, ModelRequestRejected):
         raise
     except Exception as error:
+        infrastructure = infrastructure_failure(error)
+        if infrastructure is not None:
+            raise infrastructure from error
         if storage_fault(error, _program_files(program)):
             raise
+        if not isinstance(error, BuildCrash) and not authored_failure(error, _program_files(program)):
+            raise BuildInfrastructureFailure("unclassified_build_failure", str(error)) from error
         attrs = {
             **_failure_attrs(workpiece, state, error, _build_failure_head(error, program)),
             "step": (error.step or "") if isinstance(error, BuildFailure) else "",
@@ -491,14 +460,18 @@ def _failure_attrs(workpiece: _Workpiece, state: WorkpieceState, error: Exceptio
 
     The file holds ``failure_text(head, error, FAILURE_CHARS)``: ``head``, a blank line, then the
     tail of the traceback. ``k`` is ``build_revisions + 1``, counting build and author failures
-    together. The attrs exit revise while ``k`` is within ``max_build_revisions`` and reject past
-    it, and keep ``head`` as ``failure``.
+    together. The attrs exit revise while failures in the current resume window fit
+    ``max_build_revisions``, and abandon after exhaustion. They keep ``head`` as ``failure``.
     """
     failures = state.build_revisions + 1
     relative = Path(ROUNDS_DIR) / str(state.round) / FAILURES_DIR / f"{failures}.txt"
     write_bytes_atomic(str(workpiece.directory / relative), failure_text(head, error, FAILURE_CHARS).encode())
     return {
-        EXIT: Exit.REVISE if failures <= workpiece.coordinator.budget.max_build_revisions else Exit.REJECT,
+        EXIT: (
+            Exit.REVISE
+            if failures - state.build_revisions_at_resume <= workpiece.coordinator.budget.max_build_revisions
+            else Exit.ABANDON
+        ),
         "failure": head[:ATTR_CHARS],
         "failure_file": str(relative),
     }
@@ -548,14 +521,21 @@ async def _review(workpiece: _Workpiece, state: WorkpieceState) -> WorkpieceEven
     """Decide on the result read back from ``validation.json`` and write the decision to ``decision.json``."""
     coordinator = workpiece.coordinator
     round_dir = workpiece.round_dir(state.round)
-    decision = await coordinator.stages.review(load_validation(round_dir))
+    result = load_validation(round_dir)
+    decision = await coordinator.stages.review(result)
+    if isinstance(decision, Accept) or (isinstance(decision, Reject) and decision.kind is RejectKind.TASK):
+        gaps = evidence_gaps(result)
+        if isinstance(decision, Accept) and decision.band is not BandOutcome.IN_BAND:
+            gaps += (f"review attempted acceptance outside the band: {decision.band}",)
+        if gaps:
+            decision = Hold(gaps)
     write_bytes_atomic(str(round_dir / DECISION_FILE), _DECISION.dump_json(decision, indent=2))
     return WorkpieceEvent(EventKind.DECIDED, state.round, state.task_digest, _decision_attrs(workpiece, state, decision))
 
 
 def _modify_rounds_left(workpiece: _Workpiece, state: WorkpieceState) -> int:
     """``max_modify_rounds`` less the ``Modify`` decisions the workpiece has followed (``WorkpieceState.round``)."""
-    return workpiece.coordinator.budget.max_modify_rounds - state.round
+    return workpiece.coordinator.budget.max_modify_rounds - (state.round - state.round_at_resume)
 
 
 def _decision_attrs(workpiece: _Workpiece, state: WorkpieceState, decision: Decision) -> dict[str, str]:
@@ -563,23 +543,32 @@ def _decision_attrs(workpiece: _Workpiece, state: WorkpieceState, decision: Deci
 
     A ``Retry`` past ``max_validation_retries`` exits abandon. A ``Modify`` once the workpiece's rounds
     have spent ``max_modify_rounds`` (``WorkpieceState.round`` counts the ``Modify`` decisions followed)
-    exits reject with ``RejectKind.BUDGET``, its findings in the reasons.
+    exits abandon, with its findings in the reasons.
     """
     used = {"retries_used": str(state.retries)}
     match decision:
         case Accept(band=band):
             return {EXIT: Exit.ACCEPT, "band": band, **used}
+        case Reject(kind=RejectKind.BUDGET, reasons=reasons):
+            return {EXIT: Exit.ABANDON, "reasons": "; ".join(reasons), "resume_stage": Stage.VALIDATE, **used}
+        case Reject(kind=RejectKind.HOST, reasons=reasons):
+            return {EXIT: Exit.HOLD, "reasons": "; ".join(reasons), **used}
         case Reject(kind=kind, reasons=reasons):
             return {EXIT: Exit.REJECT, "kind": kind, "reasons": "; ".join(reasons), **used}
+        case Hold(reasons=reasons):
+            return {EXIT: Exit.HOLD, "reasons": "; ".join(reasons), **used}
         case Retry(cause=cause, count=count):
             spent = state.retries >= workpiece.coordinator.budget.max_validation_retries
             way = Exit.ABANDON if spent else Exit.RETRY
+            if spent:
+                return {EXIT: way, "reasons": f"{count} ungraded trial(s): {cause}", **used}
             return {EXIT: way, "cause": cause, "count": str(count), "retries_used": str(state.retries + 1)}
         case Modify(findings=findings):
             budget = workpiece.coordinator.budget.max_modify_rounds
-            if state.round >= budget:
-                reason = f"review returned Modify with {state.round} of {budget} rounds spent: {'; '.join(findings)}"
-                return {EXIT: Exit.REJECT, "kind": RejectKind.BUDGET, "reasons": reason, **used}
+            if state.round - state.round_at_resume >= budget:
+                spent_rounds = state.round - state.round_at_resume
+                reason = f"review returned Modify with {spent_rounds} of {budget} rounds spent: {'; '.join(findings)}"
+                return {EXIT: Exit.ABANDON, "reasons": reason, "resume_stage": Stage.REVIEW, **used}
             return {EXIT: Exit.MODIFY, "findings": "; ".join(findings), **used}
 
 

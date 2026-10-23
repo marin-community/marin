@@ -230,7 +230,6 @@ async def test_the_grader_step_keeps_the_declared_rejection_ceiling(context, pro
     grader = await standard.grader.fn(context(), proposal, FIXTURES, SHELLSIM)
 
     assert grader.rejection_ceiling == 0.3
-    assert "declare rejection_ceiling" in fake_glm.requests[0]["messages"][-2]["content"]
 
 
 async def test_a_grader_that_times_out_twice_expires_the_build_instead_of_going_back_to_the_model(

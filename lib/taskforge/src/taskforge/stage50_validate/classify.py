@@ -34,6 +34,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rolloutengine.models import (
     LENGTH_STOP_REASON,
+    MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     GenerationLimitReached,
     GradedRollout,
@@ -50,6 +51,7 @@ from verifyit.spec import Mode
 from taskforge.llm.client import ContextExhausted, ModelRequestRejected, ModelUnavailable
 from taskforge.sandbox.host_failures import machine_lost
 from taskforge.spec.verdict import reward_in_range
+from taskforge.stage40_build_with_program.infrastructure import exception_chain
 from taskforge.stage50_validate.outcome import GRADED_STATUSES, Cause, Graded, Outcome, Ungraded
 
 GRADING_FAILURES = {
@@ -95,13 +97,17 @@ def candidate_code_error(grade: GradeResult, task: TaskSpec) -> bool:
 def trial_outcome(result: GradedRollout | Exception, task: TaskSpec) -> Outcome:
     """The outcome of one engine run: what ``RolloutEngine.run_task`` returned or raised.
 
-    A total-turn deadline is a normal ending: RolloutEngine grades the state the agent left, and the
-    trial is ``Graded`` with that grade and ``timed_out`` set, so timed-out trials stay in the
-    denominator. A deadline that expired before the first response leaves nothing to grade
-    (``UNAVAILABLE``), which is ``Ungraded(AGENT_TIMEOUT)``.
+    A timeout, context boundary, length stop or turn limit is incomplete evidence even if the engine
+    graded the partial state. Preserve that grade for diagnosis, but return ``Ungraded`` for review to hold.
     """
     if isinstance(result, GradedRollout):
         rollout, grade = result.rollout, result.grade
+        if rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON:
+            return Ungraded(Cause.AGENT_TIMEOUT, "solver session timed out before completion", rollout, grade)
+        if rollout.stop_reason == MAX_TURNS_STOP_REASON:
+            return Ungraded(Cause.BUDGET_EXHAUSTED, "solver turn budget exhausted", rollout, grade)
+        if rollout.stop_reason in (LENGTH_STOP_REASON, "context"):
+            return Ungraded(Cause.GENERATION_LIMIT, f"solver stopped at {rollout.stop_reason}", rollout, grade)
         if grade.status in GRADED_STATUSES and reward_in_range(grade):
             return Graded(rollout, grade, candidate_code_error(grade, task))
         if grade.status in GRADED_STATUSES:
@@ -170,12 +176,19 @@ def _interruption_cause(error: RolloutInterrupted) -> Cause:
     if operation is RolloutOperation.ATTEMPT:
         return Cause.ATTEMPT_TIMEOUT
     original = error.__cause__
-    if original is not None:
-        cause = _exception_cause(original)
+    causes = [] if original is None else exception_chain(original)
+    for linked in causes:
+        if isinstance(linked, RolloutInterrupted):
+            continue
+        cause = _exception_cause(linked)
         if cause is not Cause.UNCLASSIFIED:
             return cause
-    timed_out = isinstance(original, TimeoutError)
-    if operation in (RolloutOperation.START, RolloutOperation.PREPARE) and _is_setup_failure(original, operation):
+    timed_out = any(isinstance(linked, TimeoutError) for linked in causes)
+    if (
+        not timed_out
+        and operation in (RolloutOperation.START, RolloutOperation.PREPARE)
+        and _is_setup_failure(original, operation)
+    ):
         return Cause.TASK_SETUP
     if operation is RolloutOperation.START:
         return Cause.MACHINE_START_TIMEOUT if timed_out else Cause.MACHINE_START

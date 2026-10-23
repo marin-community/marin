@@ -1,15 +1,12 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed trial outcomes: a trial either produced a grade or failed for a classified ``Cause``.
+"""Typed outcomes distinguish usable grades from incomplete evaluation.
 
-``Graded`` holds a rollout and its grade, a judgment of the submission: ``GRADED``, or
-``SUBMISSION_FAILURE`` (the model ended without a valid submission, which scores zero). An agent that runs
-out of ``RolloutLimits.total_turn_timeout`` is a budget stop like running out of turns, so it is
-``Graded`` too (``classify.trial_outcome``), and so is a verifyit pytest grade of 0 because the candidate's own code
-did not load (``Graded.candidate_code_error``): a failed attempt, flagged so the band and the summary can show it.
-Everything else is ``Ungraded``: task setup, infrastructure and grader failures that say nothing about the
-submission. Statistics use graded outcomes only; ungraded ones make the evidence incomplete.
+GRADED and SUBMISSION_FAILURE carry completed evaluations; submission failures
+score zero. A candidate-code failure is a graded zero with a separate diagnostic
+flag. Timeouts, generation limits, setup and grading failures remain Ungraded.
+Statistics use graded outcomes only; incomplete outcomes prevent a final verdict.
 """
 
 from dataclasses import dataclass
@@ -61,8 +58,10 @@ class Cause(StrEnum):
     TOOL_EXECUTION = "tool_execution"
     """A shell tool step raised (the machine failed, not the command), or outlived
     ``RolloutLimits.tool_turn_timeout``."""
+    BUDGET_EXHAUSTED = "budget_exhausted"
+    """An explicitly configured agent turn budget ended evaluation before completion."""
     GENERATION_LIMIT = "generation_limit"
-    """The first prompt left no generation budget, so nothing was graded."""
+    """A physical context or output boundary interrupted generation."""
     GRADER_RAISED = "grader_raised"
     GRADER_TIMEOUT = "grader_timeout"
     GRADER_MISSING_REWARD = "grader_missing_reward"
@@ -103,6 +102,20 @@ RETRYABLE = frozenset(
     }
 )
 """Causes a fresh attempt can fix. The rest are properties of the task, the grader or the model."""
+
+TASK_DEFECTS = frozenset(
+    {
+        Cause.TASK_SETUP,
+        Cause.SUBMISSION_UNSUPPORTED,
+        Cause.GRADER_MISSING_REWARD,
+        Cause.GRADER_EMPTY_REWARD,
+        Cause.GRADER_INVALID_REWARD,
+        Cause.GRADER_REWARD_RANGE,
+        Cause.INVALID_TASK,
+        Cause.VERIFIER_SKIPPED,
+    }
+)
+"""Ungraded causes that establish an authored defect. All other causes require a hold, not a task verdict."""
 
 GRADED_STATUSES = frozenset({GradeStatus.GRADED, GradeStatus.SUBMISSION_FAILURE})
 

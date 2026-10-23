@@ -21,6 +21,7 @@ from taskforge.llm.agent import ReasoningReplay
 from taskforge.llm.client import Completion, StructuredResult
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.sandbox.factories import MachineHost
+from taskforge.spec.controls import ControlKind
 from taskforge.stage10_proposal.model import REQUIRED_HEADINGS, TaskProposal, parse
 from taskforge.stage20_triage.preflight import preflight
 from taskforge.stage20_triage.verdict import Verdict
@@ -37,11 +38,15 @@ from taskforge.stage40_build_with_program.run import (
     run_build,
 )
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
+from taskforge.stage50_validate.controls import ControlVerdict
 from taskforge.stage50_validate.evidence import RewardStats
 from taskforge.stage50_validate.round import (
+    ControlResult,
     Lowering,
     LoweringStatus,
     SolverEvidence,
+    TrialResult,
+    TrialStatus,
     ValidationContext,
     ValidationResult,
 )
@@ -110,7 +115,18 @@ async def task(context: RLEnvBuildContext, proposal: TaskProposal) -> TaskSpec:
 async def validate(draft: TaskDraft, context: ValidationContext) -> ValidationResult:
     stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
     lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
-    return ValidationResult(context.workpiece_id, context.round, lowering, SolverEvidence((), stats, {}), (), (), None)
+    trials = tuple(
+        TrialResult(str(i), TrialStatus.GRADED, reward, None, f"solver/{i}/attempt-0.json")
+        for i, reward in enumerate((1.0, 0.0, 1.0, 0.0))
+    )
+    controls = (
+        ControlResult(
+            "negative", ControlKind.NEGATIVE, ControlVerdict.MET, 0.0, None, "controls/negative/attempt-0.json"
+        ),
+    )
+    return ValidationResult(
+        context.workpiece_id, context.round, lowering, SolverEvidence(trials, stats, {}), controls, (), None
+    )
 
 
 async def no_repair(proposal: TaskProposal, verdict: Verdict) -> TaskProposal:

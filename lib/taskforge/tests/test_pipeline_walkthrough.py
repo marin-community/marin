@@ -33,6 +33,7 @@ from taskforge.llm.client import Completion, FinishReason, ModelUnavailable, Str
 from taskforge.llm.policy import LLMPolicy, Message
 from taskforge.llm.structured import StructuredOutputError
 from taskforge.sandbox.factories import MachineHost
+from taskforge.spec.controls import ControlKind
 from taskforge.spec.draft import assemble, requirements
 from taskforge.stage10_proposal.model import (
     Environment,
@@ -80,10 +81,12 @@ from taskforge.stage40_build_with_program.run import (
 )
 from taskforge.stage40_build_with_program.services import AgentLimits, RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import StoreCorruption
+from taskforge.stage50_validate.controls import ControlVerdict
 from taskforge.stage50_validate.evidence import RewardStats
 from taskforge.stage50_validate.outcome import Cause
 from taskforge.stage50_validate.round import (
     VALIDATION_FILE,
+    ControlResult,
     Lowering,
     LoweringStatus,
     SolverEvidence,
@@ -93,7 +96,7 @@ from taskforge.stage50_validate.round import (
     ValidationResult,
     load_validation,
 )
-from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, RejectKind
+from taskforge.stage60_review.decision import Accept, BandOutcome, Decision, Modify, Reject, RejectKind, Retry
 from taskforge.stage60_review.rules import BandRules, default_review
 from taskforge.stage_coordinator.coordinator import (
     AUTHORED_DIR,
@@ -108,7 +111,7 @@ from taskforge.stage_coordinator.coordinator import (
 from taskforge.stage_coordinator.event_log import InMemoryEventLog, JsonEventStore
 from taskforge.stage_coordinator.run import InfrastructureRetry, run_workpieces
 from taskforge.stage_coordinator.stage_functions import StageFunctions
-from taskforge.stage_coordinator.workpiece_machine import EXIT, Stage, Terminal, WorkpieceEvent, derive_state
+from taskforge.stage_coordinator.workpiece_machine import EXIT, EventKind, Stage, Terminal, WorkpieceEvent, derive_state
 from tests.proposals import proposal_document
 from tests.stage40_build_with_program.scripted_author import CONFIG, ScriptedModel, in_process_loader, turn
 from tests.stage40_build_with_program.scripted_author import PROGRAM as AGENTIC_SOURCE
@@ -265,7 +268,17 @@ def passing_result(context: ValidationContext) -> ValidationResult:
     stats = RewardStats(graded=4, mean_reward=0.5, solved=2, timed_out=0, candidate_code_errors=0)
     lowering = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
     return ValidationResult(
-        context.workpiece_id, context.round, lowering, SolverEvidence(trials, stats, {}), (), (), None
+        context.workpiece_id,
+        context.round,
+        lowering,
+        SolverEvidence(trials, stats, {}),
+        (
+            ControlResult(
+                "negative", ControlKind.NEGATIVE, ControlVerdict.MET, 0.0, None, "controls/negative/attempt-0.json"
+            ),
+        ),
+        (),
+        None,
     )
 
 
@@ -434,33 +447,31 @@ MACHINELESS_SHELLSIM = replace(PROPOSAL, header=replace(PROPOSAL.header, solver_
         (NULL_PROPOSAL, "null proposal: the capability has no gradable artifact here"),
     ],
 )
-async def test_the_default_preflight_rejects_a_proposal_with_the_failing_check_before_any_later_stage(
-    tmp_path, proposal, reason
-):
+async def test_a_failed_preflight_holds_before_any_later_stage(tmp_path, proposal, reason):
     assert proposal.header.environment is Environment.SHELLSIM
     log = InMemoryEventLog()
     stages = replace(STAGES, author=no_call, load_program=no_call, build=no_call, validate=no_call, review=no_call)
-    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, proposal, log) is Terminal.REJECTED
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, proposal, log) is Terminal.HELD
 
-    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
+    assert exits(log) == [("opened", None), ("triaged", "hold"), ("terminal", "held")]
     triaged, terminal = log.events()[1:]
     assert triaged.attrs["reason"] == terminal.attrs["reason"]
     assert terminal.attrs["reason"].startswith("triage rejected the proposal: ")
     assert reason in terminal.attrs["reason"]
 
 
-async def test_a_retry_after_a_failed_save_of_a_finished_workpiece_writes_its_events(tmp_path):
+async def test_a_failed_initial_checkpoint_holds_before_execution_and_resumes(tmp_path):
     store = SaveFailsOnce(tmp_path)
     log = InMemoryEventLog()
     with pytest.raises(OSError, match="unreachable"):
         await run_workpiece(replace(coordinator(tmp_path), event_store=store), WORKPIECE, PROPOSAL, log)
-    assert store.load(WORKPIECE) is None
+    assert derive_state(stored_log(tmp_path, WORKPIECE).events()).terminal is Terminal.HELD
+    assert exits(log) == [("opened", None), ("terminal", "held")]
 
-    untouched = StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call, no_call)
-    retried = replace(coordinator(tmp_path, untouched), event_store=store)
+    retried = replace(coordinator(tmp_path), event_store=store)
     assert await run_workpiece(retried, WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert store.load(WORKPIECE) == log.events()
-    assert exits(log) == ACCEPTED_EXITS
+    assert exits(log) == [ACCEPTED_EXITS[0], ("terminal", "held"), *ACCEPTED_EXITS[1:]]
 
 
 async def test_an_author_returning_source_runs_once_and_the_build_loads_its_program_file(tmp_path):
@@ -520,7 +531,7 @@ async def test_a_program_other_than_the_authored_one_fails_the_workpiece_at_buil
         await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, InMemoryEventLog())
 
     state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
-    assert (state.stage, state.terminal) == (Stage.BUILD, Terminal.FAILED)
+    assert (state.stage, state.terminal) == (Stage.BUILD, Terminal.HELD)
 
 
 async def test_a_program_file_changed_on_disk_fails_the_workpiece_at_build(tmp_path):
@@ -535,23 +546,23 @@ async def test_a_program_file_changed_on_disk_fails_the_workpiece_at_build(tmp_p
             coordinator(tmp_path, replace(stages, author=no_call)), WORKPIECE, PROPOSAL, InMemoryEventLog()
         )
     state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
-    assert (state.stage, state.terminal) == (Stage.BUILD, Terminal.FAILED)
+    assert (state.stage, state.terminal) == (Stage.BUILD, Terminal.HELD)
 
 
-async def test_a_build_failure_costs_a_revision_and_the_next_one_rejects_the_workpiece(tmp_path):
+async def test_a_build_failure_costs_a_revision_and_the_next_one_abandons_the_workpiece(tmp_path):
     author = RecordingAuthor(FAILING)
     log = InMemoryEventLog()
     terminal = await run_workpiece(coordinator(tmp_path, replace(STAGES, author=author)), WORKPIECE, PROPOSAL, log)
 
-    assert terminal is Terminal.REJECTED
+    assert terminal is Terminal.ABANDONED
     assert exits(log) == [
         ("opened", None),
         ("triaged", "accept"),
         ("authored", "authored"),
         ("build_failed", "revise"),
         ("authored", "authored"),
-        ("build_failed", "reject"),
-        ("terminal", "rejected"),
+        ("build_failed", "abandon"),
+        ("terminal", "abandoned"),
     ]
     assert log.events()[-1].attrs["kind"] == "budget"
     asked = [None if revision is None else revision.kind for revision in author.revisions]
@@ -576,7 +587,7 @@ def program_frame(source: str, text: str, step: str) -> str:
 
 
 async def failure_heads(root: Path, source: str) -> tuple[str, str, str]:
-    """Run a workpiece authoring ``source`` to its rejection, and return the head of its failure text.
+    """Run a workpiece authoring ``source`` to budget exhaustion, and return the head of its failure text.
 
     It returns the head, the text before the first blank line, from ``build-failures/1.txt`` and from
     the revision detail the second author call received, and the ``failure`` attr of the first
@@ -586,7 +597,7 @@ async def failure_heads(root: Path, source: str) -> tuple[str, str, str]:
     log = InMemoryEventLog()
     assert (
         await run_workpiece(coordinator(root, replace(STAGES, author=author)), WORKPIECE, PROPOSAL, log)
-        is Terminal.REJECTED
+        is Terminal.ABANDONED
     )
     revision = author.revisions[1]
     assert revision is not None and revision.kind is RevisionKind.BUILD_FAILURE
@@ -697,19 +708,19 @@ async def test_an_author_reply_cut_after_its_repairs_costs_a_revision_and_the_au
     assert (round_dir / AUTHORED_DIR / "1" / PROGRAM_FILE).read_text() == SOURCE
 
 
-async def test_author_replies_cut_past_the_budget_reject_the_workpiece_on_its_budget(tmp_path):
+async def test_author_replies_cut_past_the_budget_abandon_the_workpiece(tmp_path):
     author = CutAuthor(cuts=2)
     log = InMemoryEventLog()
 
     assert (
         await run_workpiece(coordinator(tmp_path, replace(STAGES, author=author)), WORKPIECE, PROPOSAL, log)
-        is Terminal.REJECTED
+        is Terminal.ABANDONED
     )
     assert exits(log) == [
         *ACCEPTED_EXITS[:2],
         ("author_failed", "revise"),
-        ("author_failed", "reject"),
-        ("terminal", "rejected"),
+        ("author_failed", "abandon"),
+        ("terminal", "abandoned"),
     ]
     assert log.events()[-1].attrs["kind"] == RejectKind.BUDGET
     assert [None if revision is None else revision.kind for revision in author.revisions] == [
@@ -733,7 +744,7 @@ async def test_an_unavailable_model_fails_the_workpiece_at_the_author_with_its_r
             coordinator(tmp_path, replace(STAGES, author=unavailable_author)), WORKPIECE, PROPOSAL, InMemoryEventLog()
         )
     state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
-    assert (state.stage, state.terminal, state.build_revisions) == (Stage.AUTHOR, Terminal.FAILED, 0)
+    assert (state.stage, state.terminal, state.build_revisions) == (Stage.AUTHOR, Terminal.HELD, 0)
     assert not (tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR).exists()
 
 
@@ -751,12 +762,12 @@ async def test_a_failure_outside_the_program_fails_the_workpiece_at_build_and_a_
     with pytest.raises(type(error), match=str(error)):
         await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, InMemoryEventLog())
     state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
-    assert (state.stage, state.terminal, state.build_revisions) == (Stage.BUILD, Terminal.FAILED, 0)
+    assert (state.stage, state.terminal, state.build_revisions) == (Stage.BUILD, Terminal.HELD, 0)
 
     log = InMemoryEventLog()
     resumed = replace(stages, author=no_call)
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
-    assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "failed"), *ACCEPTED_EXITS[3:]]
+    assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "held"), *ACCEPTED_EXITS[3:]]
 
 
 async def builds_then_the_host_fails(*args: Any, **kwargs: Any) -> TaskDraft:
@@ -774,7 +785,7 @@ async def test_a_corrupt_memo_fails_the_workpiece_at_build_with_its_revisions_un
     log = InMemoryEventLog()
     with pytest.raises(StoreCorruption, match="does not validate"):
         await run_workpiece(coordinator(tmp_path), WORKPIECE, PROPOSAL, log)
-    assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "failed"), ("terminal", "failed")]
+    assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "held"), ("terminal", "held")]
     assert derive_state(log.events()).build_revisions == 0
     assert not (tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / FAILURES_DIR).exists()
 
@@ -783,16 +794,21 @@ async def fails_in_the_program(*args: Any, **kwargs: Any) -> TaskDraft:
     raise BuildFailure("the numbers do not multiply to the answer", "task")
 
 
-async def test_a_relaunch_after_a_killed_re_author_builds_the_program_its_authored_event_records(tmp_path):
-    first = replace(STAGES, author=SourceAuthor(), build=FailsOnce())
-    with pytest.raises(BuildInfrastructureFailure):
-        await run_workpiece(coordinator(tmp_path, first), WORKPIECE, PROPOSAL, InMemoryEventLog())
+async def test_a_failed_checkpoint_after_re_author_resumes_the_recorded_program(tmp_path):
+    class SaveAfterAuthorFailsOnce(JsonEventStore):
+        failed = False
+
+        def save(self, workpiece_id, events):
+            if not self.failed and events[-1].kind is EventKind.AUTHORED and len(events) > 4:
+                self.failed = True
+                raise OSError("the event store is unreachable")
+            super().save(workpiece_id, events)
 
     other = SOURCE.replace("6 7", "6 8")
-    killed = coordinator(tmp_path, replace(STAGES, author=SourceAuthor(other), build=fails_in_the_program))
+    first = coordinator(tmp_path, replace(STAGES, author=SourceAuthor(other), build=fails_in_the_program))
     with pytest.raises(OSError, match="unreachable"):
         await run_workpiece(
-            replace(killed, event_store=SaveFailsOnce(tmp_path)), WORKPIECE, PROPOSAL, InMemoryEventLog()
+            replace(first, event_store=SaveAfterAuthorFailsOnce(tmp_path)), WORKPIECE, PROPOSAL, InMemoryEventLog()
         )
     authored = tmp_path / "workpieces" / WORKPIECE / "rounds" / "0" / AUTHORED_DIR
     assert (authored / "1" / PROGRAM_FILE).read_text() == other
@@ -800,8 +816,9 @@ async def test_a_relaunch_after_a_killed_re_author_builds_the_program_its_author
     log = InMemoryEventLog()
     resumed = replace(STAGES, author=no_call)
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
-    assert exits(log) == [*ACCEPTED_EXITS[:3], ("terminal", "failed"), *ACCEPTED_EXITS[3:]]
-    assert (authored / "0" / PROGRAM_FILE).read_text() == SOURCE
+    assert derive_state(log.events()).build_revisions == 1
+    assert exits(log)[-4:] == ACCEPTED_EXITS[-4:]
+    assert (authored / "0" / PROGRAM_FILE).read_text() == other
 
 
 class UnavailableOnce:
@@ -829,12 +846,12 @@ async def test_an_unavailable_model_fails_the_workpiece_at_validation_and_a_rela
             coordinator(tmp_path, replace(STAGES, validate=validate_once)), WORKPIECE, PROPOSAL, InMemoryEventLog()
         )
     state = derive_state(JsonEventStore(tmp_path).load(WORKPIECE) or ())
-    assert (state.stage, state.terminal) == (Stage.VALIDATE, Terminal.FAILED)
+    assert (state.stage, state.terminal) == (Stage.VALIDATE, Terminal.HELD)
 
     resumed = replace(STAGES, author=no_call, build=no_call, validate=validate_once)
     log = InMemoryEventLog()
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
-    assert exits(log) == [*ACCEPTED_EXITS[:4], ("terminal", "failed"), *ACCEPTED_EXITS[4:]]
+    assert exits(log) == [*ACCEPTED_EXITS[:4], ("terminal", "held"), *ACCEPTED_EXITS[4:]]
 
 
 async def test_validate_and_review_receive_each_rounds_context_and_modify_rounds_left_across_a_relaunch(
@@ -891,43 +908,31 @@ class GradedOnPass:
         return replace(result, solver=solver)
 
 
-async def test_a_retry_followed_by_a_graded_rerun_accepts_the_workpiece_within_its_validation_retries(tmp_path):
+async def test_a_hold_resumes_validation_without_spending_author_revisions(tmp_path):
     validate_retried = GradedOnPass(graded_from=2)
     log = InMemoryEventLog()
-
     stages = replace(STAGES, validate=validate_retried)
-    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
-
-    assert BUDGET.max_validation_retries == 1
-    assert exits(log) == [*ACCEPTED_EXITS[:5], ("decided", "retry"), *ACCEPTED_EXITS[4:]]
-    assert [context.validation_pass for context in validate_retried.contexts] == [1, 2]
-    retry = log.events()[5]
-    assert (retry.attrs["cause"], retry.attrs["count"]) == (Cause.MODEL_UNAVAILABLE, "1")
-
-
-async def test_a_relaunch_of_a_workpiece_abandoned_on_its_retries_validates_the_rounds_next_pass_and_can_accept(
-    tmp_path,
-):
-    validate_passes = GradedOnPass(graded_from=3)
-    stages = replace(STAGES, validate=validate_passes)
-    abandoned = InMemoryEventLog()
-    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, abandoned) is Terminal.ABANDONED
-    assert exits(abandoned) == [
-        *ACCEPTED_EXITS[:5],
-        ("decided", "retry"),
-        ("validated", "validated"),
-        ("decided", "abandon"),
-        ("terminal", "abandoned"),
-    ]
-    state = derive_state(abandoned.events())
-    assert (state.stage, state.retries, state.validation_passes) == (Stage.VALIDATE, 0, 2)
-
-    log = InMemoryEventLog()
+    coordinator_instance = coordinator(tmp_path, stages)
+    assert await run_workpiece(coordinator_instance, WORKPIECE, PROPOSAL, log) is Terminal.HELD
+    held = derive_state(log.events())
+    assert (held.stage, held.round, held.build_revisions, held.retries) == (Stage.VALIDATE, 0, 0, 0)
     resumed = replace(stages, triage=no_call, author=no_call, build=no_call)
     assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    assert [context.validation_pass for context in validate_retried.contexts] == [1, 2]
 
+
+async def test_repeated_holds_preserve_validation_passes_across_relaunches(tmp_path):
+    validate_passes = GradedOnPass(graded_from=3)
+    stages = replace(STAGES, validate=validate_passes)
+    for _ in range(2):
+        assert (
+            await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, InMemoryEventLog()) is Terminal.HELD
+        )
+    resumed = replace(stages, triage=no_call, author=no_call, build=no_call)
+    log = InMemoryEventLog()
+    assert await run_workpiece(coordinator(tmp_path, resumed), WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
     assert [context.validation_pass for context in validate_passes.contexts] == [1, 2, 3]
-    assert exits(log)[len(abandoned.events()) :] == ACCEPTED_EXITS[4:]
+    assert derive_state(log.events()).round == 0
 
 
 async def test_a_modify_decision_re_authors_the_workpiece_in_round_one_with_the_findings_and_context(tmp_path):
@@ -955,19 +960,19 @@ async def always_modify(result: ValidationResult) -> Decision:
 
 @pytest.mark.parametrize(
     ("max_modify_rounds", "decided"),
-    [(0, [(0, "reject")]), (1, [(0, "modify"), (1, "reject")])],
+    [(0, [(0, "abandon")]), (1, [(0, "modify"), (1, "abandon")])],
     ids=["no rounds", "one round"],
 )
-async def test_a_modify_past_the_modify_rounds_rejects_the_workpiece_on_its_budget(tmp_path, max_modify_rounds, decided):
+async def test_a_modify_past_the_modify_rounds_abandons_the_workpiece(tmp_path, max_modify_rounds, decided):
     author = RecordingAuthor(PROGRAM)
     stages = replace(STAGES, author=author, review=always_modify)
     budget = replace(BUDGET, max_modify_rounds=max_modify_rounds)
     log = InMemoryEventLog()
 
-    assert await run_workpiece(coordinator(tmp_path, stages, budget), WORKPIECE, PROPOSAL, log) is Terminal.REJECTED
+    assert await run_workpiece(coordinator(tmp_path, stages, budget), WORKPIECE, PROPOSAL, log) is Terminal.ABANDONED
     assert [(event.round, event.attrs[EXIT]) for event in log.events() if event.kind == "decided"] == decided
     closed = log.events()[-1]
-    assert (closed.attrs["terminal"], closed.attrs["kind"]) == ("rejected", RejectKind.BUDGET)
+    assert (closed.attrs["terminal"], closed.attrs["kind"]) == ("abandoned", RejectKind.BUDGET)
     assert "the file states the product" in closed.attrs["reason"]
     assert derive_state(log.events()).round == max_modify_rounds
 
@@ -1033,7 +1038,7 @@ async def test_a_repair_verdict_triages_the_repaired_proposal_and_the_later_stag
         *ACCEPTED_EXITS[:1],
         ("triaged", "repair"),
         ("triaged", "accept"),
-        ("terminal", "failed"),
+        ("terminal", "held"),
         *ACCEPTED_EXITS[2:],
     ]
     repaired, accepted = log.events()[1:3]
@@ -1049,16 +1054,16 @@ async def test_a_repair_verdict_triages_the_repaired_proposal_and_the_later_stag
     assert derive_state(log.events()).triage_repairs == 1
 
 
-async def test_a_second_repair_verdict_rejects_the_workpiece_without_a_second_repair(tmp_path):
+async def test_a_second_repair_verdict_abandons_without_a_second_repair(tmp_path):
     triage, repair = TriageInTurn(TriageDecision.REPAIR, TriageDecision.REPAIR), MachineRepair()
     stages = replace(STAGES, triage=triage, repair=repair, author=no_call)
     log = InMemoryEventLog()
 
     assert (
         await run_workpiece(coordinator(tmp_path, stages, REPAIRING), WORKPIECE, MACHINELESS_SHELLSIM, log)
-        is Terminal.REJECTED
+        is Terminal.ABANDONED
     )
-    assert exits(log) == [("opened", None), ("triaged", "repair"), ("triaged", "reject"), ("terminal", "rejected")]
+    assert exits(log) == [("opened", None), ("triaged", "repair"), ("triaged", "abandon"), ("terminal", "abandoned")]
     rejected, closed = log.events()[2:]
     assert (rejected.digest, rejected.attrs["decision"], rejected.attrs["repairs"]) == (
         content_hash.digest(PROPOSAL),
@@ -1066,20 +1071,20 @@ async def test_a_second_repair_verdict_rejects_the_workpiece_without_a_second_re
         "1",
     )
     assert closed.attrs == {
-        "terminal": "rejected",
+        "terminal": "abandoned",
         "reason": "triage returned REPAIR with 1 of 1 rewrites spent",
-        "kind": RejectKind.TASK,
+        "kind": RejectKind.BUDGET,
     }
     assert (triage.proposals, repair.calls) == ([MACHINELESS_SHELLSIM, PROPOSAL], 1)
 
 
-async def test_a_rewrite_that_is_not_a_valid_proposal_rejects_the_workpiece_with_its_error(tmp_path):
+async def test_an_invalid_rewrite_holds_with_its_error(tmp_path):
     repair = MachineRepair()
     stages = replace(STAGES, triage=TriageInTurn(TriageDecision.REPAIR), repair=repair, author=no_call)
     log = InMemoryEventLog()
 
-    assert await run_workpiece(coordinator(tmp_path, stages, REPAIRING), WORKPIECE, PROPOSAL, log) is Terminal.REJECTED
-    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
+    assert await run_workpiece(coordinator(tmp_path, stages, REPAIRING), WORKPIECE, PROPOSAL, log) is Terminal.HELD
+    assert exits(log) == [("opened", None), ("triaged", "hold"), ("terminal", "held")]
     assert log.events()[-1].attrs["reason"] == (
         f"the rewrite for the REPAIR verdict is not a valid proposal: no header fix applies to {PROPOSAL.header.id}"
     )
@@ -1087,12 +1092,12 @@ async def test_a_rewrite_that_is_not_a_valid_proposal_rejects_the_workpiece_with
     assert not (tmp_path / "workpieces" / WORKPIECE / REPAIRED_DIR).exists()
 
 
-async def test_under_the_default_budget_a_repair_verdict_rejects_without_a_rewrite(tmp_path):
+async def test_under_the_default_budget_a_repair_verdict_abandons_without_a_rewrite(tmp_path):
     log = InMemoryEventLog()
     stages = replace(STAGES, triage=TriageInTurn(TriageDecision.REPAIR), repair=no_call)
 
-    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.REJECTED
-    assert exits(log) == [("opened", None), ("triaged", "reject"), ("terminal", "rejected")]
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.ABANDONED
+    assert exits(log) == [("opened", None), ("triaged", "abandon"), ("terminal", "abandoned")]
     assert log.events()[-1].attrs["reason"] == "triage returned REPAIR with 0 of 0 rewrites spent"
     assert not (tmp_path / "workpieces" / WORKPIECE / REPAIRED_DIR).exists()
 
@@ -1195,15 +1200,15 @@ async def test_run_workpieces_fails_a_workpiece_in_place_and_cancels_no_sibling_
     stages = replace(STAGES, validate=validate_or_crash)
     terminals = await run_workpieces(coordinator(tmp_path, stages), arriving("toy-0", "toy-1", "toy-2"), RETRY)
 
-    assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": Terminal.FAILED, "toy-2": Terminal.ACCEPTED}
-    assert exits(stored_log(tmp_path, "toy-1")) == [*ACCEPTED_EXITS[:4], ("terminal", "failed")]
+    assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": Terminal.HELD, "toy-2": Terminal.ACCEPTED}
+    assert exits(stored_log(tmp_path, "toy-1")) == [*ACCEPTED_EXITS[:4], ("terminal", "held")]
     for sibling in ("toy-0", "toy-2"):
         assert exits(stored_log(tmp_path, sibling)) == ACCEPTED_EXITS
 
 
 @pytest.mark.parametrize(
     ("failures", "terminal", "builds"),
-    [(2, Terminal.ACCEPTED, 3), (5, Terminal.FAILED, 3)],
+    [(2, Terminal.ACCEPTED, 3), (5, Terminal.ABANDONED, 3)],
     ids=["recovers", "attempts spent"],
 )
 async def test_run_workpieces_retries_a_host_failure_in_process_while_its_attempts_last(
@@ -1217,7 +1222,7 @@ async def test_run_workpieces_retries_a_host_failure_in_process_while_its_attemp
     assert terminals == {"toy-0": Terminal.ACCEPTED, "toy-1": terminal}
     assert build.calls == builds
     log = stored_log(tmp_path, "toy-1")
-    assert exits(log).count(("terminal", "failed")) == min(failures, RETRY.max_attempts)
+    assert exits(log).count(("terminal", "held")) == min(failures, RETRY.max_attempts)
     assert derive_state(log.events()).build_revisions == 0
 
 
@@ -1228,7 +1233,7 @@ async def test_run_workpieces_retries_an_unavailable_model_at_the_stage_that_rai
     assert await run_workpieces(coordinator(tmp_path, stages), arriving(WORKPIECE), RETRY) == {
         WORKPIECE: Terminal.ACCEPTED
     }
-    assert exits(stored_log(tmp_path, WORKPIECE)) == [*ACCEPTED_EXITS[:4], ("terminal", "failed"), *ACCEPTED_EXITS[4:]]
+    assert exits(stored_log(tmp_path, WORKPIECE)) == [*ACCEPTED_EXITS[:4], ("terminal", "held"), *ACCEPTED_EXITS[4:]]
     assert validate_once.calls == 2
 
 
@@ -1244,9 +1249,7 @@ async def test_run_workpieces_does_not_retry_a_failure_another_attempt_would_mee
     build = FailsFor(WORKPIECE, RETRY.max_attempts, error)
     stages = replace(STAGES, build=build)
 
-    assert await run_workpieces(coordinator(tmp_path, stages), arriving(WORKPIECE), RETRY) == {
-        WORKPIECE: Terminal.FAILED
-    }
+    assert await run_workpieces(coordinator(tmp_path, stages), arriving(WORKPIECE), RETRY) == {WORKPIECE: Terminal.HELD}
     assert build.calls == 1
 
 
@@ -1394,3 +1397,114 @@ async def test_a_build_failure_returns_to_the_agentic_session_that_submitted_the
     session = json.loads((round_dir / "agentic" / "1" / "session.json").read_text())
     assert (session["mode"], session["continued_from"]) == ("same_session", "rounds/0/agentic/0")
     assert (round_dir / AUTHORED_DIR / "1" / PROGRAM_FILE).read_text() == AGENTIC_SOURCE
+
+
+async def test_abandoned_author_budget_resumes_with_failure_and_preserves_old_files(tmp_path):
+    author = CutAuthor(cuts=2)
+    first = coordinator(tmp_path, replace(STAGES, author=author))
+    log = InMemoryEventLog()
+    assert await run_workpiece(first, WORKPIECE, PROPOSAL, log) is Terminal.ABANDONED
+    before = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds")
+    assert derive_state(log.events()).stage is Stage.AUTHOR
+
+    resumed = replace(first, budget=replace(BUDGET, max_build_revisions=3))
+    assert await run_workpiece(resumed, WORKPIECE, PROPOSAL, InMemoryEventLog()) is Terminal.ACCEPTED
+    after = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds")
+    assert all(after[path] == data for path, data in before.items())
+    state = derive_state(stored_log(tmp_path, WORKPIECE).events())
+    assert state.build_revisions == state.build_revisions_at_resume == 2
+    revision = author.revisions[-1]
+    assert revision is not None and revision.kind is RevisionKind.AUTHOR_FAILURE
+
+
+async def test_abandoned_modify_budget_resumes_review_before_starting_a_new_round(tmp_path):
+    first = coordinator(tmp_path, replace(STAGES, review=always_modify), replace(BUDGET, max_modify_rounds=0))
+    assert await run_workpiece(first, WORKPIECE, PROPOSAL, InMemoryEventLog()) is Terminal.ABANDONED
+    old_round = tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds" / "0")
+
+    async def review(result):
+        return await always_modify(result) if result.round == 0 else await default_review(result, band=BAND)
+
+    resumed = replace(first, stages=replace(STAGES, review=review), budget=replace(BUDGET, max_modify_rounds=1))
+    log = InMemoryEventLog()
+    assert await run_workpiece(resumed, WORKPIECE, PROPOSAL, log) is Terminal.ACCEPTED
+    assert derive_state(log.events()).round == 1
+    assert tree_bytes(tmp_path / "workpieces" / WORKPIECE / "rounds" / "0") == old_round
+
+
+async def test_abandoned_triage_budget_resumes_with_the_last_rewritten_proposal(tmp_path):
+    triage = TriageInTurn(TriageDecision.REPAIR, TriageDecision.REPAIR, TriageDecision.ACCEPT)
+    stages = replace(STAGES, triage=triage, repair=MachineRepair())
+    first = coordinator(tmp_path, stages, REPAIRING)
+    assert await run_workpiece(first, WORKPIECE, MACHINELESS_SHELLSIM, InMemoryEventLog()) is Terminal.ABANDONED
+    assert await run_workpiece(first, WORKPIECE, MACHINELESS_SHELLSIM, InMemoryEventLog()) is Terminal.ACCEPTED
+    assert triage.proposals[-1] == PROPOSAL
+    state = derive_state(stored_log(tmp_path, WORKPIECE).events())
+    assert state.triage_repairs == state.triage_repairs_at_resume == 1
+
+
+async def test_exhausted_validation_retries_resume_without_rebuilding(tmp_path):
+    async def retry(result):
+        return Retry(Cause.MODEL_UNAVAILABLE, 1)
+
+    first = coordinator(tmp_path, replace(STAGES, review=retry), replace(BUDGET, max_validation_retries=0))
+    assert await run_workpiece(first, WORKPIECE, PROPOSAL, InMemoryEventLog()) is Terminal.ABANDONED
+    resumed = replace(first, stages=replace(STAGES, author=no_call, build=no_call))
+    assert await run_workpiece(resumed, WORKPIECE, PROPOSAL, InMemoryEventLog()) is Terminal.ACCEPTED
+    state = derive_state(stored_log(tmp_path, WORKPIECE).events())
+    assert state.validation_passes == 2 and state.round == 0
+
+
+@pytest.mark.parametrize("decision", [Accept(BandOutcome.IN_BAND), Reject(RejectKind.TASK, ("bad task",))])
+async def test_custom_review_cannot_close_a_task_with_missing_evidence(tmp_path, decision):
+    async def incomplete(draft, context):
+        return replace(passing_result(context), controls=())
+
+    async def review(result):
+        return decision
+
+    stages = replace(STAGES, validate=incomplete, review=review)
+    log = InMemoryEventLog()
+    assert await run_workpiece(coordinator(tmp_path, stages), WORKPIECE, PROPOSAL, log) is Terminal.HELD
+    assert derive_state(log.events()).stage is Stage.VALIDATE
+
+
+async def test_cancellation_holds_at_the_interrupted_stage_and_resumes(tmp_path):
+    async def interrupted(draft, context):
+        raise asyncio.CancelledError()
+
+    first = coordinator(tmp_path, replace(STAGES, validate=interrupted))
+    with pytest.raises(asyncio.CancelledError):
+        await run_workpiece(first, WORKPIECE, PROPOSAL, InMemoryEventLog())
+    state = derive_state(stored_log(tmp_path, WORKPIECE).events())
+    assert (state.stage, state.terminal, state.build_revisions) == (Stage.VALIDATE, Terminal.HELD, 0)
+    resumed = replace(first, stages=replace(STAGES, author=no_call, build=no_call))
+    assert await run_workpiece(resumed, WORKPIECE, PROPOSAL, InMemoryEventLog()) is Terminal.ACCEPTED
+
+
+async def test_failed_final_checkpoint_preserves_a_conclusive_decision(tmp_path):
+    class SaveFinalFailsOnce(JsonEventStore):
+        failed = False
+
+        def save(self, workpiece_id, events):
+            if not self.failed and events[-1].attrs.get("terminal") == "accepted":
+                self.failed = True
+                raise OSError("the event store is unreachable")
+            super().save(workpiece_id, events)
+
+    first = replace(coordinator(tmp_path), event_store=SaveFinalFailsOnce(tmp_path))
+    with pytest.raises(OSError, match="unreachable"):
+        await run_workpiece(first, WORKPIECE, PROPOSAL, InMemoryEventLog())
+    assert derive_state(stored_log(tmp_path, WORKPIECE).events()).terminal is Terminal.ACCEPTED
+    untouched = replace(first, stages=StageFunctions(no_call, no_call, no_call, no_call, no_call, no_call, no_call))
+    assert await run_workpiece(untouched, WORKPIECE, PROPOSAL, InMemoryEventLog()) is Terminal.ACCEPTED
+
+
+async def test_explicit_inner_budget_abandons_without_automatic_retry(tmp_path):
+    error = BuildInfrastructureFailure(InfrastructureCause.BUDGET_EXHAUSTED, "model call budget exhausted")
+    build = FailsOnce(error)
+    first = coordinator(tmp_path, replace(STAGES, build=build))
+    assert await run_workpieces(first, arriving(WORKPIECE), RETRY) == {WORKPIECE: Terminal.ABANDONED}
+    state = derive_state(stored_log(tmp_path, WORKPIECE).events())
+    assert (state.stage, state.terminal, state.build_revisions) == (Stage.BUILD, Terminal.ABANDONED, 0)
+    assert await run_workpiece(first, WORKPIECE, PROPOSAL, InMemoryEventLog()) is Terminal.ACCEPTED
