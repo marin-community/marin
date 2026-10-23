@@ -624,8 +624,8 @@ ever moves the grader-base CPython between the two backends that run it, never t
 `stage50_validate.trials.run_trials(spec, plan, settings, model)` runs k trials of a
 `TaskRolloutSpec` through `EngineSettings.engine()`, the `RolloutEngine` whose shell harness has
 `EngineSettings.command_timeout`. Each attempt runs on `model.for_step("<kind>/<trial>/<attempt>")`, so
-a `GlmRolloutModel` records and routes every trial attempt under its own step. `TrialPlan.deadlines`
-and `EngineSettings` replace the builder's limits. The `TRIAL` span's `input_hash` is
+a `GlmRolloutModel` records and routes every trial attempt under its own step. Lowering applies
+`EngineSettings.limits` once, with the grading deadline derived from the grader's own timeout. The `TRIAL` span's `input_hash` is
 `task_digest(spec, command_timeout)`, the sha256 of Taskforge's own record of what the trial ran
 (`trial_record`): a JSON object of the task (answer format included), the task and verifier machine
 selections, the effective `RolloutLimits` and the command timeout, so it does not follow the shape of
@@ -633,7 +633,7 @@ the engine's spec. Each trial is `Graded` or `Ungraded` with one typed `Cause`, 
 `stage50_validate.classify.classify` is the only failure classifier: an interruption maps by its
 operation (`start`, `prepare`, `model`, `advance`, `grade`) unless its original error names a cause, and
 an `attempt` interruption, the attempt deadline, is `ATTEMPT_TIMEOUT` even when the harness ended after
-the deadline. Every trial runs under the engine's messages trace (`EngineSettings.apply`) with no token
+the deadline. Every trial runs under the engine's messages trace (`TraceMode.MESSAGES`, selected during lowering) with no token
 budget: a trial is graded, never trained on, so the engine does not hold its turns to exact tokens, and
 an attempt's `TRIAL` span counts its tokens from each turn's `usage` across the rollout's conversations.
 The attempt file holds the outcome, its grade and the whole `Rollout`. A trial is attempted again for a
@@ -648,7 +648,7 @@ adversary_model)` runs one validation round from these parts as a graph of units
 `ValidationContext`, is what the stage coordinator knows of the round: the workpiece id, the round, its
 directory, the proposal it built, the step store, the MODIFY rounds the workpiece has left and the pass of
 the round this validation is (`validation_pass`, from 1).
-`settings`, a `ValidationSettings`, is the validating host's: engine, deadlines, the solver trials `k`,
+`settings`, a `ValidationSettings`, is the validating host's: engine and its limits, the solver trials `k`,
 retries and backoff, the control writer's sampling, the adversary policy and the ledger. Lowering
 (`preflight`) and control writing start together; each of the `settings.k` solver trials starts once the
 lowering is done, without waiting for the controls; each control's replay and each of the
@@ -661,10 +661,10 @@ that has not ended, and the round returns once the other control replays end. It
 result's `solver` and `adversary` leave out. A cancelled attempt writes no attempt file, so a later round
 on the same files runs those trials again. With no MODIFY round left the round waits for every trial,
 since the workpiece's final record needs complete evidence. Every unit is idempotent on its own file, so
-a relaunch runs only the units whose files are missing:
+a relaunch resumes missing units and trials eligible for another attempt:
 
 ```
-<round_dir>/validation/<draft>/lowered.json                  the lowering, for one host and set of backends
+<round_dir>/validation/<draft>/<limits>-lowered.json                  the lowering, for one host and set of backends
 <round_dir>/validation/<draft>/controls.json                 the written controls
 <round_dir>/validation/<draft>/<task>/solver/<i>/attempt-<n>.json
 <round_dir>/validation/<draft>/<task>/controls-<controls>/control/<id>/attempt-<n>.json
@@ -672,7 +672,8 @@ a relaunch runs only the units whose files are missing:
 <round_dir>/validation/<draft>/<task>/adversary/<i>/submissions/<n>/control/s<m>/attempt-<k>.json
 ```
 
-`<draft>` is `content_hash.digest` of the draft's task, `<task>` the `trials.task_digest` of the
+`<draft>` is `content_hash.digest` of the draft's task, `<limits>` the engine limits,
+`<task>` the `trials.task_digest` of the
 lowered spec as the round's trials run it, and `<controls>` `content_hash.digest` of the control set,
 so no file of another task, lowered spec or control set counts as done. A trial is done when its
 last attempt is graded, failed for a cause that is not retryable, or used its retries: it holds
@@ -700,7 +701,8 @@ apply. A `blackbox` adversary sees the task as the solver does; a `whitebox` one
 grader's specification and verifier files, the round's controls with their expected rewards and the
 task's example answers. The brief (`adversary_prompts`) asks for at least `min_probes` shortcut
 candidates and a final `NO_SHORTCUT` or `SHORTCUT:` line, recorded as the trial's claim. An attempt is
-graded with its last passing submission's grade, else its last submission's. Its attempt file holds the
+reported with its last passing submission, else its last submission. A verifier failure stays
+ungraded with its original cause and retryability. Its attempt file holds the
 agent's whole rollout, the brief and every submission; an attempt under another brief, such as another
 mode or control set, does not count as done. The round records facts only: whether a passing submission
 is a shortcut is review's judgement.

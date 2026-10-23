@@ -60,7 +60,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from pydantic import JsonValue, TypeAdapter
-from rigging.filesystem.atomic import atomic_rename
+from rigging.filesystem.atomic import write_bytes_atomic
 from rigging.timing import ExponentialBackoff
 from rolloutengine.engine import RolloutEngine
 from rolloutengine.models import GradedRollout, Model, Rollout, RolloutLimits, RolloutStep, TaskRolloutSpec
@@ -135,10 +135,10 @@ class RetryBackoff:
 
 @dataclass(frozen=True)
 class TrialPlan:
-    """Which workpiece the trials belong to, how many run, their deadlines, how they retry, and where they
+    """Which workpiece the trials belong to, how many run, how they retry, and where they
     are recorded.
 
-    ``max_retries`` bounds retries of ``RETRYABLE`` causes. each trial starts a fresh schedule from ``retry_backoff``.
+    ``max_retries`` bounds retries of ``RETRYABLE`` causes. Each trial starts a fresh schedule from ``retry_backoff``.
     ``first_attempt`` numbers each trial's first attempt file and ledger step; later attempts follow it.
     """
 
@@ -381,6 +381,4 @@ _ROLLOUT: TypeAdapter[Rollout] = TypeAdapter(Rollout)
 
 def write_evidence(path: Path, payload: bytes) -> None:
     """Write ``payload`` to ``path`` through a temporary sibling, so the file is whole or absent."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with atomic_rename(str(path)) as temp:
-        Path(temp).write_bytes(payload)
+    write_bytes_atomic(str(path), payload)

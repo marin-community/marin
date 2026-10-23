@@ -308,7 +308,7 @@ async def validate_round(
     controls_model: ModelClient,
     adversary_model: ModelClient,
 ) -> ValidationResult:
-    """Validate ``draft``, running only the units without a file, and return the round's result.
+    """Validate ``draft``, resuming missing units and trials eligible for another attempt.
 
     A stage coordinator passes ``context``; a caller's validate function closes over ``settings`` and the models.
     ``write_validation`` writes the result as ``validation.json``.

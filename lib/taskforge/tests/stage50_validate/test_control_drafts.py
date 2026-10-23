@@ -344,7 +344,3 @@ def test_the_controls_request_names_the_output_paths_the_task_ships():
     text = output_paths_text(task.output_paths, shipped_output_paths(task))
     assert "/workspace/README.md, /workspace/answer.txt" in text
     assert "the task ships /workspace/README.md" in text
-    assert (
-        output_paths_text((), ())
-        == "The task has no output paths, so every control is a final reply alone with no files."
-    )

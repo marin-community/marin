@@ -24,9 +24,10 @@ conversation whose steps are the agent's turns; it carries no token ids. Each su
 ``CONTROL`` trial ``s<ordinal>`` under ``<evidence_dir>/adversary/<trial>/submissions/<attempt>/``, whose attempt
 file keeps the grader's full result.
 
-An attempt that ran its loop is ``Graded`` with the grade of its last passing submission, else of its last
-submission, and ``SUBMISSION_FAILURE`` without one. An attempt whose machine did not start or whose deadline
-expired is ``Ungraded`` with the cause ``classify`` gives it, and is retried like a solver attempt. The final
+An attempt retains the outcome of its last passing submission, else its last submission, and reports
+``SUBMISSION_FAILURE`` without one. A verifier failure retains its ungraded cause. An attempt whose machine
+did not start or whose deadline expired is ``Ungraded`` with the cause ``classify`` gives it, and is retried
+like a solver attempt. The final
 reply's verdict line is recorded as the adversary's ``Claim``; whether a passing submission is a shortcut is not
 judged here.
 """
@@ -92,6 +93,7 @@ from taskforge.spec.controls import (
     candidate_turns,
     context_assistant_turns,
 )
+from taskforge.spec.draft import GRADER_RESOURCE_ROOT
 from taskforge.stage50_validate.adversary_prompts import (
     BRIEF_TEMPLATE,
     GRADER_LINE_MARKER,
@@ -125,8 +127,6 @@ from taskforge.stage50_validate.trials import (
 )
 
 SUBMIT_TOOL_NAME = "submit"
-GRADER_RESOURCE_ROOT = "/tests"
-"""Where the verifier's resources are installed on the grading machine."""
 SUBMISSIONS_DIR = "submissions"
 SUBMISSION_PREFIX = "s"
 ADVERSARY_KEY = "adversary"
@@ -159,7 +159,7 @@ class AdversaryPolicy:
         k: Adversary trials per round; 0 runs none.
         submissions: Verifier submissions per attempt.
         repair_submissions: The submissions within which a first accepted shortcut makes a grader repair finding.
-            The round records each submission's ordinal and grade; review applies this bound.
+            Recorded for an arbiter policy; the default review does not yet decide on adversary findings.
         max_turns: Agent turns per attempt.
         sampling: The adversary's sampling policy; an agent loop has no continuation.
         mode: What the adversary knows of the grader.
@@ -587,10 +587,7 @@ def submission_turns(run: AgentRun) -> dict[int, int]:
         for result in turn.tool_results:
             if result.call.name != SUBMIT_TOOL_NAME or result.outcome is not ToolOutcome.EXECUTED:
                 continue
-            try:
-                ordinal = json.loads(result.output).get("submission")
-            except ValueError:
-                continue
+            ordinal = json.loads(result.output).get("submission")
             if ordinal is not None:
                 turns[ordinal] = index
     return turns
