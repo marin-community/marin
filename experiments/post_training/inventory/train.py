@@ -35,6 +35,7 @@ MODEL_VERSION = "2026.09.21"
 MODEL_URI = "s3://marin-us-east-02a/models/open-athena--Grug-67B-A2B-Datakit-SFT-262K-2026.09.21"
 DEFAULT_STEPS = 25
 ARTIFACT_NAME = "checkpoints/snowball-inventory"
+SELECTION_PREFIX = "rl-data/task-selection"
 CLUSTER = "cw-us-east-02a"
 SEED = 20261020
 REQUEST_WINDOW_TOKENS = 24_576
@@ -155,14 +156,21 @@ def build_run(
 
 
 @click.command(help=__doc__)
-@click.option("--selection-name", required=True, help="Name in the task-selection recipe.")
-@click.option("--selection-version", required=True, help="Version in the task-selection recipe.")
-@click.option("--selection-uri", required=True, help="Task-selection artifact root.")
+@click.option("--selection-uri", required=True, help="Published task-selection artifact root.")
 @click.option("--steps", type=click.IntRange(min=1), default=DEFAULT_STEPS, show_default=True)
 @rl_build_options
-def main(selection_name: str, selection_version: str, selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
+def main(selection_uri: str, steps: int) -> ArtifactStep[SkyRLRun]:
     name = user_owned_name(ARTIFACT_NAME)
-    selection = ArtifactStep.adopt(f"rl-data/task-selection/{selection_name}", selection_version, selection_uri)
+    selection_uri = selection_uri.rstrip("/")
+    _, marker, identity = selection_uri.rpartition(f"/{SELECTION_PREFIX}/")
+    parts = identity.split("/")
+    if not marker or len(parts) != 2 or not all(parts):
+        raise click.BadParameter(
+            "Expected a published .../rl-data/task-selection/<name>/<version> artifact root",
+            param_hint="--selection-uri",
+        )
+    selection_name, selection_version = parts
+    selection = ArtifactStep.adopt(f"{SELECTION_PREFIX}/{selection_name}", selection_version, selection_uri)
     return build_run(
         resolve_version(name, None),
         selection=selection,

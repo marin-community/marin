@@ -239,13 +239,13 @@ Print the three-update qualification plan:
 ```bash
 uv run python -m experiments.post_training.inventory.train \
   --version 2026.10.23.1 --steps 3 \
-  --selection-name "$SELECTION_NAME" --selection-version "$SELECTION_VERSION" \
   --selection-uri "$SELECTION_URI"
 ```
 
-Set the selection name and version to the curation recipe values, and the URI to
-the published artifact root containing `train.parquet`, `validation.parquet` and
-`summary.json`. Check the summary's row counts and family counts before submission.
+Set `SELECTION_URI` to the `task_selection` path printed by the curation driver
+after `--selection RECIPE.json --run`. Its path includes the selection name and
+version and contains `train.parquet`, `validation.parquet` and `summary.json`.
+Check the summary's row counts and family counts before submission.
 Add `--run` to submit. Use a fresh run version for subsequent iterations; the
 default is 25 updates, and `--steps` changes the count.
 
