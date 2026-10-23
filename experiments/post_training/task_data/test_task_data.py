@@ -341,6 +341,10 @@ def test_chat_completion_sends_sampling_params_keeps_reasoning_and_retries():
         "temperature": 0.6,
         "max_tokens": 20_000,
     }
+    # The GLM relay sends the chain of thought as ``reasoning``.
+    relay = FakeChatClient([{"content": "42", "reasoning": "doubled 21"}])
+    relay_response = chat_completion(relay, model="glm-5.3", messages=[], temperature=0.7, max_tokens=8)
+    assert relay_response.reasoning == "doubled 21"
     with pytest.raises(ConnectionError):
         chat_completion(FakeChatClient([{}], failures=3), model="m", messages=[], temperature=0.0, max_tokens=8)
 

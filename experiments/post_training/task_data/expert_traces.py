@@ -69,8 +69,9 @@ def chat_completion(
     Transport failures are retried up to ``GLM_REQUEST_ATTEMPTS`` times. A response
     that ran into ``max_tokens`` is marked ``truncated``; callers set ``max_tokens``
     above the cap, so a truncated response is over the cap and is dropped.
-    ``reasoning_content`` is the chain-of-thought field the GLM relay and vLLM's
-    reasoning parsers emit; a provider that omits it leaves the reasoning empty.
+    The chain of thought arrives as ``reasoning`` from the GLM relay and as
+    ``reasoning_content`` from vLLM's reasoning parsers; a provider that sends
+    neither leaves the reasoning empty.
     """
     body = {"model": model, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
     for attempt in range(GLM_REQUEST_ATTEMPTS):
@@ -83,7 +84,7 @@ def chat_completion(
     choice = response["choices"][0]
     message = choice["message"]
     return ExpertResponse(
-        reasoning=message.get("reasoning_content") or "",
+        reasoning=message.get("reasoning") or message.get("reasoning_content") or "",
         content=message.get("content") or "",
         truncated=choice.get("finish_reason") == "length",
     )
