@@ -421,6 +421,7 @@ def build_h100_ladder_run(
     token_dump_skip_layers: tuple[int, ...] = (),
     routing_dump_steps: tuple[int, ...] = (),
     halt_dump_every: int = 0,
+    halt_vote_dump: bool = False,
     layer_skip: LayerSkipRule | None = None,
     extra_mlp_start_frac: float = 0.5,
     resume_from: str | None = None,
@@ -662,6 +663,7 @@ def build_h100_ladder_run(
                 routing_dump_steps=routing_dump_steps,
                 halt_dump_dir=prefix_join(ctx.output_path, "halt_dump") if halt_dump_every else None,
                 halt_dump_every=halt_dump_every,
+                halt_vote_dump_path=prefix_join(ctx.output_path, "halt_votes.npz") if halt_vote_dump else None,
                 xla_autotune_cache_path=autotune_cache_path,
                 preload_library_kernels=rung.device == "GB200",
                 first_step_timeout=GB200_FIRST_STEP_TIMEOUT if rung.device == "GB200" else None,
@@ -934,6 +936,11 @@ def _layer_skip_rule(
     "held-out sequences to <output>/halt_dump/step-<step>.npz (halt_layers; 0: off).",
 )
 @click.option(
+    "--halt-vote-dump",
+    is_flag=True,
+    help="After the last step, write the routed experts' halting votes to <output>/halt_votes.npz (halt_write=unit).",
+)
+@click.option(
     "--token-dump-skip-layers",
     default=None,
     help="Comma-separated layers: the token dump also records each token's loss with every token skipping them.",
@@ -1097,6 +1104,7 @@ def main(
     token_dump_skip_layers: str | None,
     routing_dump_steps: str | None,
     halt_dump_every: int,
+    halt_vote_dump: bool,
     extra_mlp_start_frac: float,
     layer_skip_layers: str | None,
     layer_skip_rate: float,
@@ -1153,6 +1161,7 @@ def main(
         watch_interval=watch_interval,
         routing_dump_steps=tuple(int(x) for x in routing_dump_steps.split(",")) if routing_dump_steps else (),
         halt_dump_every=halt_dump_every,
+        halt_vote_dump=halt_vote_dump,
         token_dump_skip_layers=(
             tuple(int(x) for x in token_dump_skip_layers.split(",")) if token_dump_skip_layers else ()
         ),

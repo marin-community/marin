@@ -316,6 +316,8 @@ class GrugTrainerConfig:
     # next-token losses of ``HALT_DUMP_SEQUENCES`` fixed held-out sequences to ``<halt_dump_dir>/step-<step>.npz``.
     halt_dump_dir: str | None = None
     halt_dump_every: int = 0
+    # After the last step, write the routed experts' halting votes on the halt-dump sequences here (``halt_vote_dump``).
+    halt_vote_dump_path: str | None = None
     # XLA GPU autotune results shared across runs of the same program (``_use_xla_autotune_cache``): loaded at start
     # when present, written by process 0 after the first step otherwise. None: autotune every compile.
     xla_autotune_cache_path: str | None = None
@@ -1889,6 +1891,8 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 write_token_dump(
                     config, state, mesh, batch_schedule.batch_size_at_step(0), config.trainer.token_dump_path
                 )
+            if config.trainer.halt_vote_dump_path is not None:
+                write_halt_vote_dump(config, state, mesh, config.trainer.halt_vote_dump_path)
             if marker is not None and jax.process_index() == 0:
                 with fsspec.open(marker, "w") as f:
                     json.dump({"step": int(state.step), "final_loss": float(last_loss)}, f)
@@ -2114,6 +2118,37 @@ def _halt_dump_runner(config: GrugRunConfig, mesh: Mesh):
         logger.info("Wrote the halt dump to %s", path)
 
     return write
+
+
+HALT_VOTE_TOP_UNITS = 16
+HALT_VOTE_CHUNK = 64
+
+
+def write_halt_vote_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, path: str) -> None:
+    """``Transformer.halt_vote_dump`` on the ``HALT_DUMP_SEQUENCES`` halt-dump sequences, with their tokens."""
+    cfg = config.model
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _held_out_sequences, config.data, seq_len=cfg.max_seq_len, num_sequences=HALT_DUMP_SEQUENCES
+        ).result()
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    batch = [jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index]) for x in (tokens, segments)]
+    mp = config.trainer.trainer.mp
+
+    @jax.jit
+    def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
+        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
+        mask = AttentionMask.causal().with_segment_ids(segment_ids)
+        return model.halt_vote_dump(tokens, mask, HALT_VOTE_TOP_UNITS, HALT_VOTE_CHUNK)
+
+    outputs = multihost_utils.process_allgather(run(state.params, state.pending_qb_betas, *batch), tiled=True)
+    if jax.process_index() != 0:
+        return
+    buffer = io.BytesIO()
+    np.savez(buffer, tokens=tokens, segment_ids=segments, **{k: np.asarray(v) for k, v in outputs.items()})
+    with fsspec.open(path, "wb") as f:
+        f.write(buffer.getvalue())
+    logger.info("Wrote the halt vote dump to %s", path)
 
 
 def _autotune_dump_file() -> str:

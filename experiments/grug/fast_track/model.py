@@ -6642,6 +6642,68 @@ class Transformer(eqx.Module):
         dump["weights"] = weights.astype(jnp.float16)
         return dump
 
+    def halt_vote_dump(
+        self, token_ids: Int[Array, "B S"], mask: AttentionMask | jax.Array, top_units: int, chunk: int
+    ) -> dict[str, jax.Array]:
+        """The routed experts' halting votes (``halt_write=unit``; a vote is ``combine x h x u / sqrt(I)``, negative
+        votes mute), with ``T = B * S`` and the writer layers ``W`` (below the last gated layer):
+
+        ``gates`` ``[G, T]``; ``routed_vote`` ``[W, T]``, each token's summed routed vote; ``vote_sum_muted`` /
+        ``vote_sum_all`` ``[W, E, I]``, each unit's summed vote over the muted tokens (first gate below 0.5) and over
+        all tokens; ``top_ids`` / ``top_vals`` ``[W, T, top_units]``, each token's most muting units
+        (id ``expert * I + unit``)."""
+        cfg = self.config
+        if not cfg.halt_layers or cfg.halt_write != HaltWrite.UNIT:
+            raise ValueError("halt_vote_dump needs halt_layers with halt_write=unit")
+        _, metrics = self(token_ids, mask=mask, return_routing=True)
+
+        def replicated(x):
+            return reshard(x, P(*([None] * x.ndim)))
+
+        gates = replicated(metrics[_HALT_GATES]).reshape(len(cfg.halt_layers), -1)
+        muted = (gates[0] < 0.5).astype(jnp.float32)
+        selected = replicated(metrics[ROUTING_SELECTED_KEY])
+        weights = replicated(metrics[ROUTING_WEIGHTS_KEY]).astype(jnp.float32)
+        routed = replicated(metrics[ROUTED_INPUT_KEY])
+        _, num_tokens, k = selected.shape
+        e = cfg.num_experts
+        out: dict[str, list[jax.Array]] = {
+            n: [] for n in ("routed_vote", "vote_sum_muted", "vote_sum_all", "top_ids", "top_vals")
+        }
+        for layer, block in enumerate(self.layers()[: cfg.halt_layers[-1]]):
+            assert block.halt_routed is not None
+            w_up = replicated(block.mlp.expert_mlp.w_up)
+            coef = replicated(block.halt_routed)
+            inter = w_up.shape[-1]
+
+            def body(carry, xs, w_up=w_up, coef=coef, inter=inter):
+                sum_muted, sum_all = carry
+                x, sel, w, m = xs
+                pre = jnp.einsum("cr,ckri->cki", x, w_up[sel], preferred_element_type=jnp.float32)
+                votes = jnp.square(jax.nn.relu(pre)) * coef[sel] * (w[..., None] / math.sqrt(inter))
+                flat_sel = sel.reshape(-1)
+                sum_all = sum_all + jax.ops.segment_sum(votes.reshape(-1, inter), flat_sel, num_segments=e)
+                weighted = (votes * m[:, None, None]).reshape(-1, inter)
+                sum_muted = sum_muted + jax.ops.segment_sum(weighted, flat_sel, num_segments=e)
+                vals, idx = jax.lax.top_k(-votes.reshape(votes.shape[0], -1), top_units)
+                ids = jnp.take_along_axis(sel, idx // inter, axis=1) * inter + idx % inter
+                return (sum_muted, sum_all), (jnp.sum(votes, axis=(1, 2)), ids, -vals)
+
+            xs = (
+                routed[layer].reshape(num_tokens // chunk, chunk, -1),
+                selected[layer].reshape(num_tokens // chunk, chunk, k),
+                weights[layer].reshape(num_tokens // chunk, chunk, k),
+                muted.reshape(num_tokens // chunk, chunk),
+            )
+            zeros = jnp.zeros((e, inter), jnp.float32)
+            (sum_muted, sum_all), (total, ids, vals) = jax.lax.scan(body, (zeros, zeros), xs)
+            out["routed_vote"].append(total.reshape(num_tokens))
+            out["vote_sum_muted"].append(sum_muted)
+            out["vote_sum_all"].append(sum_all)
+            out["top_ids"].append(ids.reshape(num_tokens, top_units).astype(jnp.int32))
+            out["top_vals"].append(vals.reshape(num_tokens, top_units).astype(jnp.float16))
+        return {"gates": gates, **{name: jnp.stack(parts) for name, parts in out.items()}}
+
     def layer_kinds(self) -> tuple[str, ...]:
         """Per layer, its mixer and context, e.g. ``kda_local`` or ``mla_global``."""
         cfg = self.config
