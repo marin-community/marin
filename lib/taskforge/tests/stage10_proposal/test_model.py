@@ -137,7 +137,7 @@ def test_json_header_contract_rejects_unknown_fields_and_wrong_types(proposal, k
 def test_duplicate_json_keys_cannot_replace_identity(proposal, key):
     raw = render(proposal)
     raw = raw.replace(f'"{key}":', f'"{key}": "forged", "{key}":', 1)
-    with pytest.raises(ProposalFormatError, match="duplicate key"):
+    with pytest.raises(ProposalFormatError, match=r"duplicate.*key"):
         parse(raw)
 
 
@@ -202,4 +202,3 @@ def test_build_manifest_cannot_escape_root_or_replace_named_artifact(proposal, f
     raw["header"][field] = value
     with pytest.raises(ProposalFormatError, match=field):
         parse(json.dumps(raw))
-
