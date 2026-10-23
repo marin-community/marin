@@ -155,16 +155,10 @@ this small recipe selects 100 calendar tasks from two admitted sources:
 }
 ```
 
-The heldout input uses the original Snowball development-release schema
-(`lowered_task_spec`, with TaskSpec 0.27). Its pinned upstream is
+The retained S3 heldout input contains all 910 original Snowball development
+tasks, with string columns `lowered_task_spec` (TaskSpec 0.27) and `teacher_route`.
+Its pinned upstream is
 [`cb728a7` on Hugging Face](https://huggingface.co/datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data/tree/cb728a7636caad3fc6fa6b6ba85a49194d9d69a3).
-Populate the retained S3 location before running the example:
-
-```bash
-uv run fsutil cp -n \
-  hf://datasets/open-athena/Snowball-Smartie-RL-2026.10.15.32-Data@cb728a7636caad3fc6fa6b6ba85a49194d9d69a3/validation.parquet \
-  s3://marin-us-east-02a/marin/rl-data/inputs/snowball-heldout/2026.10.23.1/validation.parquet
-```
 
 Use `--selection recipe.json` alongside the normal FULL campaign options, or
 select again from the campaign's saved admitted corpus:
