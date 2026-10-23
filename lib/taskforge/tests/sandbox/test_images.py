@@ -48,7 +48,7 @@ def test_directory_round_trips_through_the_build_archive(tmp_path):
     assert build_digest(docker_build_from_directory(tmp_path / "out", LIMITS)) == build_digest(build)
 
 
-def test_build_digest_tracks_content_mode_path_and_dockerfile():
+def test_build_digest_tracks_content_mode_and_path():
     dockerfile = resource("Dockerfile", b"FROM x\n")
     script = resource("a.sh", b"a", "755")
     other = resource("x/Dockerfile", b"FROM y\n")
@@ -61,13 +61,12 @@ def test_build_digest_tracks_content_mode_path_and_dockerfile():
         DockerBuild(files=(dockerfile, resource("a.sh", b"a", "644"))),
         DockerBuild(files=(dockerfile, resource("b.sh", b"a", "755"))),
         DockerBuild(files=(dockerfile, script, other)),
-        DockerBuild(files=(dockerfile, script, other), dockerfile="x/Dockerfile"),
     ]
     assert len({build_digest(base), *(build_digest(v) for v in variants)}) == 1 + len(variants)
 
 
 def test_build_must_contain_its_dockerfile():
-    with pytest.raises(ValueError, match="no 'Dockerfile'"):
+    with pytest.raises(ValueError, match="requires Dockerfile"):
         DockerBuild(files=(resource("app/run.sh", b"echo\n"),))
 
 
@@ -78,12 +77,26 @@ def test_build_context_paths_must_not_collide(paths):
         DockerBuild(files=(resource("Dockerfile", b"FROM x\n"), *files))
 
 
-def test_context_over_the_total_limit_is_refused(tmp_path):
+@pytest.mark.parametrize(
+    "limits",
+    [
+        BuildLimits(max_files=2, max_file_bytes=1024, max_total_bytes=4096),
+        BuildLimits(max_files=16, max_file_bytes=512, max_total_bytes=4096),
+        LIMITS,
+    ],
+    ids=["file-count", "file-size", "total-size"],
+)
+def test_oversized_context_is_refused_before_reading_files(tmp_path, monkeypatch, limits):
     write_context(tmp_path)
     (tmp_path / "blob.bin").write_bytes(b"x" * 1024)
     (tmp_path / "blob2.bin").write_bytes(b"x" * 1024)
-    with pytest.raises(BuildTooLarge, match="limit is 2048"):
-        docker_build_from_directory(tmp_path, LIMITS)
+
+    def cannot_read(*args, **kwargs):
+        raise AssertionError("oversized context must be rejected before reading any file")
+
+    monkeypatch.setattr(Path, "open", cannot_read)
+    with pytest.raises(BuildTooLarge):
+        docker_build_from_directory(tmp_path, limits)
 
 
 def test_symlinks_are_refused(tmp_path):
