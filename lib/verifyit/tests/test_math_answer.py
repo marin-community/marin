@@ -107,7 +107,11 @@ def test_math_unparsable_expected_is_an_invalid_task(tmp_path, expected):
 
 @pytest.mark.parametrize(
     "expected,candidate",
-    [("1<x<3", "1<x<3<5"), ("1<x<3<5", "1<x<3")],
+    [
+        ("1<x<3", "1<x<3<5"),
+        ("1<x<3<5", "1<x<3"),
+        (r"a\le x\le b\le x", r"a\le x\le b\le x\le b"),
+    ],
 )
 @pytest.mark.parametrize("profile", [MathProfile.ANCHORED, MathProfile.BOXED])
 def test_math_chained_relations_with_different_lengths_score_zero(expected, candidate, profile):

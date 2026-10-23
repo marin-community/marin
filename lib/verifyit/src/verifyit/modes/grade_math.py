@@ -43,6 +43,7 @@ SET_TYPES = frozenset({MathType.SET, MathType.INTERVAL})
 
 CLOSERS = {"(": ")", "[": "]", "{": "}"}
 SIZE_COMMANDS = ("\\left", "\\right", "\\big", "\\Big", "\\bigg", "\\Bigg")
+RELATION_OPERATOR = re.compile(r"<=|>=|(?<![<>!])=|<|>|\\(?:leqslant|geqslant|leq|geq|le|ge|lt|gt|neq|ne)(?![A-Za-z])")
 TIMEOUT = 5
 """Seconds math-verify may spend parsing or comparing one expression. Its timeout arms
 ``signal.alarm``, which only the main thread may do, so a worker thread runs without it."""
@@ -62,16 +63,36 @@ def _parse(text: str) -> list:
     )
 
 
-def _verify(expected: Any, candidate: Any, allow_set_relation_comp: bool = False) -> bool:
-    from math_verify import verify  # noqa: PLC0415
+def _chain_lengths(values: list) -> tuple[int | None, ...]:
+    """Read chain lengths from normalized text; cached SymPy And objects can lose duplicate terms."""
     from sympy import And  # noqa: PLC0415
+
+    lengths = []
+    for index, value in enumerate(values):
+        if not isinstance(value, And):
+            lengths.append(None)
+            continue
+        source = values[index + 1] if index + 1 < len(values) and isinstance(values[index + 1], str) else None
+        operator_count = len(RELATION_OPERATOR.findall(source)) if source else 0
+        lengths.append(operator_count or len(value._unsorted_args))
+    return tuple(lengths)
+
+
+def _verify(
+    expected: Any,
+    candidate: Any,
+    allow_set_relation_comp: bool = False,
+) -> bool:
+    from math_verify import verify  # noqa: PLC0415
 
     gold_values = expected if isinstance(expected, list) else [expected]
     prediction_values = candidate if isinstance(candidate, list) else [candidate]
-    for gold in gold_values:
-        for prediction in prediction_values:
+    gold_chain_lengths = _chain_lengths(gold_values)
+    prediction_chain_lengths = _chain_lengths(prediction_values)
+    for gold, gold_length in zip(gold_values, gold_chain_lengths, strict=True):
+        for prediction, prediction_length in zip(prediction_values, prediction_chain_lengths, strict=True):
             # math-verify's strict zip raises for chained relations with different numbers of terms.
-            if isinstance(gold, And) and isinstance(prediction, And) and len(gold.args) != len(prediction.args):
+            if gold_length is not None and prediction_length is not None and gold_length != prediction_length:
                 continue
             if verify(
                 gold,
