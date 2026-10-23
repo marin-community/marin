@@ -14,14 +14,12 @@ from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
-from transformers import PreTrainedTokenizerBase
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
-from rolloutengine.harness.prefill import PrefillHarness
 from rolloutengine.models import (
     GenerationLimitReached,
     GradedRollout,
@@ -41,7 +39,7 @@ from skyrl_gym.rollout_specs import is_shell_harness, shell_harness
 from marinskyrl.task_machine_factories import task_machine_factories
 from skyrl_train.config.utils import generation_context_limit
 from skyrl_train.dataset.harbor_import import HARBOR_TRIAL_SESSION
-from skyrl_train.dataset.task_feed import PREFILL_HARNESS, graded_group, write_graded_group, write_skipped
+from skyrl_train.dataset.task_feed import graded_group, write_graded_group, write_skipped
 from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_harnesses
 from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
@@ -211,41 +209,6 @@ async def _model_turn(
             "generation_token_budget": (output.get("generation_token_budgets") or [None])[0],
         },
     )
-
-
-def _prefill_request(
-    request: ModelRequest, tokenizer: PreTrainedTokenizerBase, chat_template_kwargs: dict[str, Any]
-) -> ModelRequest:
-    """Pin the prompt tokens of a request that continues its final assistant message.
-
-    The chat path of the inference client always opens a new assistant turn. The policy's tokenizer renders the
-    prefix with ``continue_final_message`` here, and the engine serves the tokens unchanged.
-    """
-    if (
-        request.prompt_token_ids is not None
-        or request.continuation is not None
-        or not (request.options.get("extra_body") or {}).get("continue_final_message")
-    ):
-        return request
-    template_kwargs = {**chat_template_kwargs, **request.options.get("chat_template_kwargs", {})}
-    encoded = tokenizer.apply_chat_template(
-        list(request.messages),
-        tools=request.options.get("tools") or None,
-        add_generation_prompt=False,
-        continue_final_message=True,
-        tokenize=True,
-        **template_kwargs,
-    )
-    if isinstance(encoded, Mapping):
-        encoded = encoded["input_ids"]
-    if encoded and isinstance(encoded[0], list):
-        (encoded,) = encoded
-    sampling = {
-        key: value
-        for key, value in request.options.items()
-        if key not in ("extra_body", "tools", "chat_template_kwargs")
-    }
-    return replace(request, options=sampling, prompt_token_ids=tuple(int(token) for token in encoded))
 
 
 def _failed_rollout(
@@ -445,8 +408,6 @@ class TaskRolloutWorker:
             harnesses[lowered.harness] = AssistantPrefixHarness()
         elif is_shell_harness(lowered.harness):
             harnesses[lowered.harness] = shell_harness(lowered.harness)
-        elif lowered.harness == PREFILL_HARNESS:
-            harnesses[PREFILL_HARNESS] = PrefillHarness()
         if lowered.harness == HARBOR_TRIAL_SESSION:
             if harbor is None or self.installed_agents is None:
                 raise ValueError("Full Harbor trials require Harbor and installed-agent settings")
@@ -509,7 +470,7 @@ class TaskRolloutWorker:
             async def model(request):
                 return await _model_turn(
                     self.model_client,
-                    _prefill_request(request, self.projection.tokenizer, self.chat_template_kwargs),
+                    request,
                     sampling_params=sampling,
                     max_context_length=max_context_length,
                     max_prompt_length=max_input_length,

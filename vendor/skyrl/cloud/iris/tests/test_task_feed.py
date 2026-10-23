@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 import yaml
+from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.models import (
     ConversationRecord,
     GradedRollout,
@@ -40,7 +41,6 @@ from cloud.iris.launch_config import LaunchTopology
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
 from marinskyrl import task_machine_factories as machine_factories
 from skyrl_train.dataset.task_feed import (
-    PREFILL_HARNESS,
     FeedTaskDataset,
     GradedGroup,
     graded_group,
@@ -106,7 +106,7 @@ def make_task(content="Say yes.", *, events=None, grader=None, requirements=None
     )
 
 
-def prefill_task() -> TaskSpec:
+def assistant_prefix_task() -> TaskSpec:
     return make_task(
         events=(TextMessage(role="user", content="Close it."), TextMessage(role="assistant", content="[1, [2")),
         grader=verifyit_package(ExactSpec(expected=("]]",))).grader,
@@ -249,7 +249,7 @@ def test_graded_group_round_trip_strips_token_data(tmp_path):
 @pytest.mark.parametrize(
     "task,harness,task_backend,verifier_backend",
     [
-        (prefill_task(), PREFILL_HARNESS, None, None),
+        (assistant_prefix_task(), ASSISTANT_PREFIX_HARNESS, None, None),
         (make_task(), "shellbox:", None, None),
         (make_task(grader=SCRIPT_GRADER), "shellbox:", None, "local"),
         (
@@ -296,6 +296,8 @@ class FakeModel:
         self.requests.append(request)
         return {
             "responses": ["]]"],
+            "assistant_messages": [{"role": "assistant", "content": "]]"}],
+            "prompt_ids": [[1, 2, 3]],
             "response_ids": [[7, 8]],
             "stop_reasons": ["stop"],
             "response_logprobs": [[-0.5, -0.5]],
@@ -337,8 +339,8 @@ def test_worker_skips_a_row_that_fails_the_engine_check(tmp_path):
     assert not (tmp_path / "graded").exists()
 
 
-def test_worker_continues_a_prefill_and_writes_the_group_before_selection(tmp_path):
-    task = feed_task(tmp_path, prefill_task(), 2)
+def test_worker_continues_an_assistant_prefix_and_writes_the_group_before_selection(tmp_path):
+    task = feed_task(tmp_path, assistant_prefix_task(), 2)
     tokenizer, model, writer = CharTokenizer(), FakeModel(), FakeWriter()
     worker = feed_worker(tmp_path, tokenizer, model)
 
@@ -347,9 +349,10 @@ def test_worker_continues_a_prefill_and_writes_the_group_before_selection(tmp_pa
 
     worker.training_batch = training_batch
     assert asyncio.run(worker.run_task(task, writer)) == 4
-    rendered = [call for call in tokenizer.calls if call.get("continue_final_message")]
-    assert len(rendered) == 2 and all(call["add_generation_prompt"] is False for call in rendered)
-    assert all(request["prompt_token_ids"] for request in model.requests)
+    assert len(model.requests) == 2
+    for request in model.requests:
+        (options,) = request["chat_completion_params"]
+        assert options["extra_body"] == {"continue_final_message": True, "add_generation_prompt": False}
     group = GradedGroup.model_validate_json((tmp_path / "graded/000000000000.json").read_text())
     assert group.uid == "0" and group.policy_step == 5 and len(group.rollouts) == 2
     for graded in group.rollouts:
