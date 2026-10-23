@@ -71,7 +71,7 @@ def test_a_resumed_run_takes_the_last_complete_adapter_and_skips_what_it_trained
     (output / "ideas" / IDEA.capability_id / "idea.json").write_text(IDEA.model_dump_json())
     (directory / "task.json").write_text(example_build.task_spec("ledger--00").model_dump_json())
     (directory / "evidence.json").write_text(json.dumps(asdict(Evidence())))
-    review = TaskReview(failure_causes=(), problems=(), summary="ok", accept=True)
+    review = TaskReview(failure_causes=(), option_lists=(), problems=(), summary="ok", accept=True)
     (directory / "review.json").write_text(review.model_dump_json())
     (directory / "program.txt").write_text("build.sh")
     (directory / "workspace.tgz").write_bytes(workspace())
