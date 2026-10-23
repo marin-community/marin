@@ -58,6 +58,7 @@ import logging
 import math
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import fsspec
@@ -71,9 +72,12 @@ from experiments.post_training.weight_analysis.delta_stats import (
     DeltaSummary,
     MatrixOverlap,
     PairGeometry,
+    ReferenceBases,
     block_comparison,
     block_summary,
-    overlap_of_matrix,
+    matrix_generator,
+    overlap_against,
+    reference_bases,
 )
 
 logger = logging.getLogger(__name__)
@@ -311,6 +315,54 @@ def tensor_blocks(array: np.ndarray, name: str, component: Component) -> list[tu
     return [(None, array)]
 
 
+@dataclass(frozen=True)
+class TensorBases:
+    """One tensor's reference bases: one per block (expert slice or whole matrix), plus the stacked matrix's."""
+
+    blocks: list[ReferenceBases | None]
+    stacked: ReferenceBases | None
+
+
+def tensor_reference_bases(
+    name: str,
+    component: Component,
+    base_array: np.ndarray,
+    reference_array: np.ndarray,
+    *,
+    seed: int,
+    pool: ThreadPoolExecutor,
+) -> TensorBases | None:
+    """The reference delta's bases for every matrix of one tensor, computed once for all compared models.
+
+    Each matrix draws its nulls from its own keyed generator, so the matrices are
+    computed concurrently in ``pool`` (eigendecompositions release the GIL) with
+    results that do not depend on scheduling. ``None`` for 1-D tensors, which
+    carry no subspace.
+    """
+    if reference_array.ndim < 2:
+        return None
+    pairs = list(
+        zip(
+            tensor_blocks(base_array, name, component),
+            tensor_blocks(reference_array, name, component),
+            strict=True,
+        )
+    )
+    stacked = None
+    if component is Component.ROUTED_EXPERTS:
+        stacked_reference = (reference_array - base_array).reshape(-1, reference_array.shape[-1])
+        stacked = pool.submit(
+            reference_bases, stacked_reference, generator=matrix_generator(seed, f"{name}:stacked", None)
+        )
+    blocks = [
+        pool.submit(reference_bases, reference_slice - base_slice, generator=matrix_generator(seed, name, expert))
+        for (expert, base_slice), (_expert, reference_slice) in pairs
+    ]
+    return TensorBases(
+        blocks=[future.result() for future in blocks], stacked=stacked.result() if stacked is not None else None
+    )
+
+
 def fold_tensor(
     report: ModelReport,
     *,
@@ -320,15 +372,16 @@ def fold_tensor(
     base_array: np.ndarray,
     model_array: np.ndarray,
     reference_array: np.ndarray | None,
-    generator: np.random.Generator | None,
+    bases: TensorBases | None,
 ) -> tuple[DeltaSummary, float]:
     """Fold one tensor of one model into ``report``.
 
     Returns the tensor's own summary and max absolute delta, which feed the
     per-tensor check against the result JSON. With ``reference_array`` set, the
     tensor also folds into the model's E-comparison and — for plain 2-D tensors
-    and per-expert expert slices — its overlap record. The stacked convention
-    adds one more matrix per fused expert tensor, after its experts.
+    and per-expert expert slices — its overlap record against ``bases``, the
+    reference's precomputed bases. The stacked convention adds one more matrix per
+    fused expert tensor, after its experts.
     """
     blocks = tensor_blocks(model_array, name, component)
     base_blocks = tensor_blocks(base_array, name, component)
@@ -355,7 +408,7 @@ def fold_tensor(
         report.comparison.merge(comparison)
         report.group_comparison(group).merge(comparison)
         if delta.ndim == 2:
-            record = overlap_of_matrix(delta, reference_delta, generator=generator)
+            record = overlap_against(delta, bases.blocks[index])
             # A plain 2-D tensor is one matrix under both conventions; only fused
             # expert tensors differ (per-expert slices here, one stacked matrix
             # below).
@@ -366,8 +419,7 @@ def fold_tensor(
 
     if reference_blocks is not None and component is Component.ROUTED_EXPERTS:
         stacked_delta = (model_array - base_array).reshape(-1, model_array.shape[-1])
-        stacked_reference = (reference_array - base_array).reshape(-1, reference_array.shape[-1])
-        record = overlap_of_matrix(stacked_delta, stacked_reference, generator=generator)
+        record = overlap_against(stacked_delta, bases.stacked)
         report.overlap_shares("stacked", group).add(record)
         report.overlap_shares("stacked", "ALL").add(record)
     return tensor_summary, tensor_max
@@ -412,6 +464,7 @@ def run_pass(
     tensor_filter: set[str] | None,
     full_stage: bool,
     seed: int,
+    workers: int,
 ) -> tuple[list[ComparisonRow], list[str], dict[str, ModelReport]]:
     """Stream every checkpoint once and compare per-tensor metrics with the JSONs.
 
@@ -439,36 +492,41 @@ def run_pass(
     rows: list[ComparisonRow] = []
     failures: list[str] = []
     started = time.time()
-    for index, name in enumerate(names, start=1):
-        component = component_of(name)
-        group = group_9920(name)
-        base_array = base_checkpoint.read(name).astype(np.float32)
-        arrays = {label: checkpoints[label].read(name).astype(np.float32) for label in models}
-        for label in models:
-            reference_array = arrays[reference_label] if full_stage and label != reference_label else None
-            generator = np.random.default_rng(seed) if reference_array is not None else None
-            tensor_summary, tensor_max = fold_tensor(
-                reports[label],
-                name=name,
-                component=component,
-                group=group,
-                base_array=base_array,
-                model_array=arrays[label],
-                reference_array=reference_array,
-                generator=generator,
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for index, name in enumerate(names, start=1):
+            component = component_of(name)
+            group = group_9920(name)
+            base_array = base_checkpoint.read(name).astype(np.float32)
+            arrays = {label: checkpoints[label].read(name).astype(np.float32) for label in models}
+            bases = (
+                tensor_reference_bases(name, component, base_array, arrays[reference_label], seed=seed, pool=pool)
+                if full_stage
+                else None
             )
-            reports[label].per_tensor[name] = tensor_summary
-            reports[label].max_abs_delta[name] = tensor_max
-            tensor_rows = check_per_tensor(label, name, tensor_summary, tensor_max, their[label])
-            rows.extend(tensor_rows)
-            failures.extend(
-                f"{row.model} {row.component} {row.metric}: ours {row.ours!r} theirs {row.theirs!r} "
-                f"rel err {row.relative_error:.3e}"
-                for row in tensor_rows
-                if not row.within
-            )
-        if index % 25 == 0 or index == len(names):
-            logger.info("tensor %d/%d %s (%.0f s elapsed)", index, len(names), name, time.time() - started)
+            for label in models:
+                reference_array = arrays[reference_label] if full_stage and label != reference_label else None
+                tensor_summary, tensor_max = fold_tensor(
+                    reports[label],
+                    name=name,
+                    component=component,
+                    group=group,
+                    base_array=base_array,
+                    model_array=arrays[label],
+                    reference_array=reference_array,
+                    bases=bases if reference_array is not None else None,
+                )
+                reports[label].per_tensor[name] = tensor_summary
+                reports[label].max_abs_delta[name] = tensor_max
+                tensor_rows = check_per_tensor(label, name, tensor_summary, tensor_max, their[label])
+                rows.extend(tensor_rows)
+                failures.extend(
+                    f"{row.model} {row.component} {row.metric}: ours {row.ours!r} theirs {row.theirs!r} "
+                    f"rel err {row.relative_error:.3e}"
+                    for row in tensor_rows
+                    if not row.within
+                )
+            if index % 25 == 0 or index == len(names):
+                logger.info("tensor %d/%d %s (%.0f s elapsed)", index, len(names), name, time.time() - started)
     return rows, failures, reports
 
 
@@ -604,6 +662,7 @@ def main() -> None:
     parser.add_argument("--tensors", action="append", default=None, help="restrict to these tensor names")
     parser.add_argument("--stage", choices=("per-tensor", "full"), default="full")
     parser.add_argument("--seed", type=int, default=0, help="seed of the overlap nulls")
+    parser.add_argument("--workers", type=int, default=8, help="threads computing one tensor's reference bases")
     parser.add_argument("--csv", default=None, help="where to write the comparison CSV")
     args = parser.parse_args()
 
@@ -620,6 +679,7 @@ def main() -> None:
         tensor_filter=set(args.tensors) if args.tensors else None,
         full_stage=args.stage == "full",
         seed=args.seed,
+        workers=args.workers,
     )
     if failures:
         if args.csv:

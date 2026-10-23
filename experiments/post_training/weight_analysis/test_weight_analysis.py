@@ -643,7 +643,7 @@ def test_reproduce_9920_matches_fabricated_results_on_a_tiny_pair(tiny_pair):
     models = {"E": tiny_pair["E"], "opd75": tiny_pair["opd75"]}
     their = load_their(tiny_pair, models)
     rows, failures, reports = run_pass(
-        tiny_pair["base"], models, "E", their, tensor_filter=None, full_stage=True, seed=0
+        tiny_pair["base"], models, "E", their, tensor_filter=None, full_stage=True, seed=0, workers=2
     )
     assert failures == []
     summary, summary_failures = summary_rows(models, "E", their, reports)
@@ -674,7 +674,7 @@ def test_reproduce_9920_overlap_conventions_count_matrices_per_expert(tiny_pair)
     models = {"E": tiny_pair["E"], "opd75": tiny_pair["opd75"]}
     their = load_their(tiny_pair, models)
     _rows, _failures, reports = run_pass(
-        tiny_pair["base"], models, "E", their, tensor_filter=None, full_stage=True, seed=0
+        tiny_pair["base"], models, "E", their, tensor_filter=None, full_stage=True, seed=0, workers=2
     )
     report = reports["opd75"]
     # One matrix per expert slice against one matrix per fused expert tensor.
@@ -696,13 +696,15 @@ def test_reproduce_9920_tensor_filter_restricts_the_compared_tensors(tiny_pair):
     models = {"E": tiny_pair["E"]}
     their = load_their(tiny_pair, models)
     rows, failures, reports = run_pass(
-        tiny_pair["base"], models, "E", their, tensor_filter={"lm_head.weight"}, full_stage=False, seed=0
+        tiny_pair["base"], models, "E", their, tensor_filter={"lm_head.weight"}, full_stage=False, seed=0, workers=2
     )
     assert failures == []
     assert {row.component for row in rows} == {"lm_head.weight"}
     assert set(reports["E"].per_tensor) == {"lm_head.weight"}
     with pytest.raises(ValueError, match="names no tensor"):
-        run_pass(tiny_pair["base"], models, "E", their, tensor_filter={"not.a.tensor"}, full_stage=False, seed=0)
+        run_pass(
+            tiny_pair["base"], models, "E", their, tensor_filter={"not.a.tensor"}, full_stage=False, seed=0, workers=2
+        )
 
 
 def test_reproduce_9920_flags_a_corrupted_result_json(tiny_pair):
@@ -710,7 +712,7 @@ def test_reproduce_9920_flags_a_corrupted_result_json(tiny_pair):
     their = load_their(tiny_pair, models)
     their["E"].per_tensor["lm_head.weight"]["d2"] *= 2.0
     rows, failures, _reports = run_pass(
-        tiny_pair["base"], models, "E", their, tensor_filter={"lm_head.weight"}, full_stage=False, seed=0
+        tiny_pair["base"], models, "E", their, tensor_filter={"lm_head.weight"}, full_stage=False, seed=0, workers=2
     )
     assert failures and all("d2" in failure for failure in failures)
     d2_rows = [row for row in rows if row.metric == "d2"]

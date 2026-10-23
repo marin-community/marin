@@ -26,6 +26,7 @@ Port of the #9920/#9984 weight-delta analyses (``weight_delta_stats.py``,
 from the method text in those issues.
 """
 
+import hashlib
 import itertools
 import math
 from collections.abc import Iterable, Iterator
@@ -389,7 +390,8 @@ class MatrixOverlap:
 
     k is the reference matrix's half-energy rank. ``random`` projects onto a
     random k-dimensional basis and ``permuted`` onto the top-k basis of the
-    reference with its entries permuted; those two nulls consume the generator.
+    reference with its entries permuted; those two nulls draw from the matrix's
+    own generator (:func:`matrix_generator`).
     """
 
     total: float
@@ -400,24 +402,60 @@ class MatrixOverlap:
     zero_reference: bool
 
 
-def overlap_of_matrix(matrix: np.ndarray, reference: np.ndarray, *, generator: np.random.Generator) -> MatrixOverlap:
-    """Subspace overlap of one delta matrix and one reference matrix."""
+@dataclass(frozen=True)
+class ReferenceBases:
+    """What one reference matrix offers every delta compared with it.
+
+    ``basis`` is its half-energy top-k right singular basis; ``random_basis`` and
+    ``permuted_basis`` are the two k-dimensional nulls. They depend only on the
+    reference and its generator, so one computation serves every compared model.
+    """
+
+    basis: np.ndarray
+    random_basis: np.ndarray
+    permuted_basis: np.ndarray
+    k: int
+
+
+def matrix_generator(seed: int, name: str, expert: ExpertKey | None) -> np.random.Generator:
+    """The null draws' generator for one matrix, keyed by its identity.
+
+    A per-matrix key makes each null independent of iteration order and of which
+    other matrices or models were scored, and lets matrices be computed in parallel.
+    """
+    key = hashlib.sha256(f"{name}:{expert}".encode()).digest()
+    return np.random.default_rng([seed, int.from_bytes(key[:8], "little")])
+
+
+def reference_bases(reference: np.ndarray, *, generator: np.random.Generator) -> ReferenceBases | None:
+    """The reference matrix's basis and nulls; ``None`` for a zero reference, which has no subspace."""
+    if reference.ndim != 2:
+        raise ValueError(f"overlap needs a 2-D matrix, got shape {reference.shape}")
+    if sum_squares(reference) == 0.0:
+        return None
+    basis, k = half_energy_basis(reference, None)
+    random_basis, _ = np.linalg.qr(generator.standard_normal((reference.shape[1], k)))
+    permuted = generator.permutation(reference.reshape(-1)).reshape(reference.shape)
+    permuted_basis, _ = half_energy_basis(permuted, k)
+    return ReferenceBases(basis=basis, random_basis=random_basis, permuted_basis=permuted_basis, k=k)
+
+
+def overlap_against(matrix: np.ndarray, bases: ReferenceBases | None) -> MatrixOverlap:
+    """Subspace overlap of one delta matrix with a reference's precomputed bases."""
     if matrix.ndim != 2:
         raise ValueError(f"overlap needs a 2-D matrix, got shape {matrix.shape}")
     total = sum_squares(matrix)
-    if sum_squares(reference) == 0.0:
+    if bases is None:
         return MatrixOverlap(total=total, projected=0.0, random=0.0, permuted=0.0, k=0, zero_reference=True)
     if total == 0.0:
         return MatrixOverlap(total=0.0, projected=0.0, random=0.0, permuted=0.0, k=0, zero_reference=False)
-    basis, k = half_energy_basis(reference, None)
-    projected = energy_inside(matrix, basis)
-    random_basis, _ = np.linalg.qr(generator.standard_normal((matrix.shape[1], k)))
-    random = energy_inside(matrix, random_basis)
-    permuted = generator.permutation(reference.reshape(-1)).reshape(matrix.shape)
-    permuted_basis, _ = half_energy_basis(permuted, k)
-    permuted_energy = energy_inside(matrix, permuted_basis)
     return MatrixOverlap(
-        total=total, projected=projected, random=random, permuted=permuted_energy, k=k, zero_reference=False
+        total=total,
+        projected=energy_inside(matrix, bases.basis),
+        random=energy_inside(matrix, bases.random_basis),
+        permuted=energy_inside(matrix, bases.permuted_basis),
+        k=bases.k,
+        zero_reference=False,
     )
 
 
@@ -436,13 +474,14 @@ def matrix_overlaps(delta: Iterable[Block], reference: Iterable[Block], *, seed:
 
     Each 2-D tensor, and each expert of a stacked routed-expert tensor, is one
     matrix. 1-D tensors (norm scales, the selection bias) have no subspace and
-    are skipped. See :func:`overlap_of_matrix` for the per-matrix computation.
+    are skipped. See :func:`reference_bases` and :func:`overlap_against` for the per-matrix computation.
     """
-    generator = np.random.default_rng(seed)
     for delta_block, reference_block in aligned(delta, reference):
         if delta_block.array.ndim != 2:
             continue
-        overlap = overlap_of_matrix(delta_block.array, reference_block.array, generator=generator)
+        generator = matrix_generator(seed, delta_block.name, delta_block.expert)
+        bases = reference_bases(reference_block.array, generator=generator)
+        overlap = overlap_against(delta_block.array, bases)
         yield MatrixOverlapRecord(delta_block.name, delta_block.component, delta_block.expert, overlap)
 
 
