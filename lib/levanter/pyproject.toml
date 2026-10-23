@@ -67,7 +67,7 @@ dependencies = [
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
     "pydantic<3",
-    "filelock~=3.13",
+    "filelock>=4.2.1,<5",
     "async-lru~=2.0",
     "tqdm-loggable>=0.2",
     "deepdiff>=8.6.2",
