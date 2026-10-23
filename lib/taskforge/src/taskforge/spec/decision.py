@@ -284,7 +284,7 @@ def solver_turn_output(conversation: ConversationTrace) -> str:
 
 
 def rubric_view(item: RubricItem) -> dict[str, JsonValue]:
-    """The item as WS10d v3's state shows it: what it tests and how it passes, never its weight or cap."""
+    """Rubric item fields exposed to the decision model, excluding weight and cap."""
     equivalences: list[JsonValue] = list(item.equivalences)
     view: dict[str, JsonValue] = {
         "id": item.id,

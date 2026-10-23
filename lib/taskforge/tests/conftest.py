@@ -106,6 +106,7 @@ def live_provider() -> LLMProviderConfig:
         stall_timeout=600.0,
         max_connections=512,
         structured_repairs=1,
+        context_window=262144,
     )
 
 
@@ -153,6 +154,7 @@ def fast_provider() -> LLMProviderConfig:
         stall_timeout=600.0,
         max_connections=8,
         structured_repairs=1,
+        context_window=262144,
     )
 
 

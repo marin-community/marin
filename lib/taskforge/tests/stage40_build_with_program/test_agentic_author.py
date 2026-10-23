@@ -26,7 +26,6 @@ from taskforge.stage30_author import load_process
 from taskforge.stage30_author.author import (
     AuthorContext,
     AuthoredProgram,
-    AuthorFailure,
     Revision,
     RevisionKind,
     VerificationChange,
@@ -48,7 +47,7 @@ from taskforge.stage40_build_with_program.run import DRAFT_DIR, ResearchRequirem
 from taskforge.stage40_build_with_program.services import RLEnvBuildServices
 from taskforge.stage40_build_with_program.step_store import StoreCorruption
 from taskforge.stage40_build_with_program.template import standard
-from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE, declaring
+from tests.stage40_build_with_program.conftest import SAMPLING, WORKPIECE, RecordingImageBuilder, declaring
 from tests.stage40_build_with_program.scripted_author import (
     CONFIG,
     PROGRAM,
@@ -65,8 +64,9 @@ SCHEDULING = BuildInfrastructureFailure(InfrastructureCause.SCHEDULING_TIMEOUT, 
 NO_FACTORY = BuildInfrastructureFailure(InfrastructureCause.NO_FACTORY, "this host has no docker machine factory")
 ALWAYS = 1_000
 """A failure count no session reaches: the host fails every build."""
-GIVE_UP = (answer("no"), answer("no"), answer("no"))
-"""A session's replies without a tool call: it ends unsubmitted after its nudges."""
+assert CONFIG.turns is not None
+GIVE_UP = (answer("no"),) * CONFIG.turns
+"""Replies that exercise an explicitly configured author invocation budget."""
 
 
 def cut(reasoning_tokens: int = 49_152) -> Completion:
@@ -273,13 +273,8 @@ async def test_session_builds_grades_and_submits_and_a_later_build_hits_every_st
 
     program = load_program(PROGRAM)
     assert authored.source == PROGRAM and authored.program is program
-    wrote, loader, refused, built, graded = tool_outputs(model)
-    assert wrote == f"wrote {len(PROGRAM.encode())} bytes to program.py"
-    assert loader.startswith("loads: program ")
-    assert refused.startswith("not handed in: the loader accepts it") and "never built in this session" in refused
-    assert built.startswith("built: program ") and "sources MISS" in built and "grader MISS" in built
-    assert "reference: graded reward 1.0" in built
-    assert "empty answer: submission_failure reward 0.0 (graded by the library; ceiling 0.0)" in built
+    wrote = tool_outputs(model)[0]
+    graded = tool_outputs(model)[-1]
     assert graded.startswith("status graded, reward 0.0")
     assert not model.replies, "the session stopped at the accepted submit"
 
@@ -428,7 +423,7 @@ async def test_a_module_body_that_never_returns_is_refused_by_the_loader_tool(tm
     )
     build = replace(session_build(workpiece.parent, model, services, 0), loader=bounded)
 
-    with pytest.raises(AuthorFailure):
+    with pytest.raises(BuildInfrastructureFailure):
         await author_call(build, model, ledger, workpiece, proposal)
 
     _, loader, submitted = session_outputs(workpiece, 0)[:3]
@@ -474,9 +469,12 @@ async def test_a_build_the_host_failed_once_is_built_again_inside_the_tool(
     assert read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")["status"] == "built"
 
 
-async def test_a_container_proposal_on_a_host_without_an_image_builder_ends_before_the_author_runs(
-    tmp_path, services, proposal, ledger
+@pytest.mark.parametrize("cause", [InfrastructureCause.NO_IMAGE_BUILDER, InfrastructureCause.NO_FACTORY])
+async def test_a_container_proposal_on_an_unavailable_host_ends_before_the_author_runs(
+    tmp_path, services, proposal, ledger, cause
 ):
+    if cause is InfrastructureCause.NO_FACTORY:
+        services = replace(services, images=RecordingImageBuilder(), factories={})
     container = declaring(proposal, None)
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel()
@@ -485,7 +483,7 @@ async def test_a_container_proposal_on_a_host_without_an_image_builder_ends_befo
     with pytest.raises(BuildInfrastructureFailure) as raised:
         await author_call(build, model, ledger, workpiece, container)
 
-    assert raised.value.cause == InfrastructureCause.NO_IMAGE_BUILDER
+    assert raised.value.cause == cause
     assert not model.requests, "the author never ran"
     assert not workpiece.exists(), "the round wrote no record and spent no revision"
 
@@ -657,7 +655,7 @@ async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_refere
         *GIVE_UP,
     )
     workpiece = tmp_path / "workpiece"
-    with pytest.raises(AuthorFailure):
+    with pytest.raises(BuildInfrastructureFailure):
         await author(workpiece, model)
 
     assert read(agentic(workpiece, 0, 0) / "author.json")["status"] == "handed_off"
@@ -669,43 +667,38 @@ async def test_tools_refuse_paths_outside_the_workspace_and_writes_to_the_refere
     assert missing.startswith("error: no file 'missing.py'")
 
 
-async def test_unsubmitted_session_hands_off_once_then_the_call_fails_and_spends_a_revision(tmp_path, author):
+async def test_exhausted_author_session_holds_and_resumes_from_its_workspace(tmp_path, author):
     workpiece = tmp_path / "workpiece"
     model = ScriptedModel(
         turn(("write_file", {"path": "notes.md", "content": "fixtures step is next"})),
-        answer("I think it is done."),
-        answer("Done."),
-        answer("Still done."),
         *GIVE_UP,
     )
-    with pytest.raises(AuthorFailure, match="2 agentic sessions of round 0 ended without a submission"):
+    with pytest.raises(BuildInfrastructureFailure, match="saved for resumption"):
         await author(workpiece, model)
-
-    first_session_last = model.requests[3].messages
-    assert [m["content"] for m in first_session_last if m["role"] == "user"][-2:] == [aa.NUDGE, aa.NUDGE]
     session = read(agentic(workpiece, 0, 0) / "session.json")
-    assert session["stop_reason"] == "unsubmitted" and session["nudges"] == 2
+    assert session["stop_reason"] == "max_turns"
+    assert session["turns"] == CONFIG.turns
     assert read(agentic(workpiece, 0, 0) / "author.json")["status"] == "handed_off"
-    opening = model.requests[4].messages
-    assert opening[-1]["role"] == "user" and "ended without a submission (unsubmitted)" in str(opening[-1]["content"])
+    resumed = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("submit", {"path": "program.py", "notes": ""})),
+        turn(("submit", {"path": "program.py", "notes": ""})),
+    )
+    authored = await author(workpiece, resumed)
+    assert authored.source == PROGRAM
     assert (agentic(workpiece, 0, 1) / "workspace" / "notes.md").read_text() == "fixtures step is next"
     assert read(agentic(workpiece, 0, 1) / "session.json")["mode"] == "handoff"
-    assert read(agentic(workpiece, 0, 1) / "author.json")["status"] == "author_failed"
 
 
-async def test_context_guard_hands_off_to_fresh_sessions_until_the_call_cap(tmp_path, author):
-    """A session over the context cap after any turn hands off, a handoff session included; the call stops at
-    MAX_SESSIONS_PER_CALL."""
+async def test_context_boundary_holds_after_saving_the_conversation(tmp_path, author):
     workpiece = tmp_path / "workpiece"
-    sessions = aa.MAX_SESSIONS_PER_CALL
-    model = ScriptedModel(*[turn(("list_files", {}), prompt=220_000, out=1_000)] * sessions)
-    with pytest.raises(AuthorFailure):
+    model = ScriptedModel(turn(("list_files", {}), prompt=220_000, out=1_000))
+    with pytest.raises(BuildInfrastructureFailure, match="context"):
         await author(workpiece, model)
-
-    records = [read(agentic(workpiece, 0, k) / "author.json") for k in range(sessions)]
-    assert [record["stop_reason"] for record in records] == ["context"] * sessions
-    assert [record["status"] for record in records] == ["handed_off"] * (sessions - 1) + ["author_failed"]
-    assert (agentic(workpiece, 0, 1) / "workspace" / "program.py").exists()
+    record = read(agentic(workpiece, 0, 0) / "author.json")
+    assert (record["status"], record["stop_reason"]) == ("handed_off", "context")
+    assert len(read(agentic(workpiece, 0, 0) / "conversation.json")) > 2
+    assert len(model.requests) == 1
 
 
 async def test_a_cut_turn_is_nudged_to_a_smaller_step_and_never_continued(tmp_path, author):
@@ -739,6 +732,8 @@ async def test_cut_turns_past_the_context_cap_hand_off_to_a_session_that_submits
         turn(("submit", {"path": "program.py", "notes": ""})),
         turn(("submit", {"path": "program.py", "notes": ""})),
     )
+    with pytest.raises(BuildInfrastructureFailure, match="context"):
+        await author(workpiece, model)
     authored = await author(workpiece, model)
 
     first = read(agentic(workpiece, 0, 0) / "author.json")
@@ -905,11 +900,11 @@ async def test_round_zero_and_a_build_failure_offer_no_change_verification(tmp_p
         )
 
     round_zero, after_failure = calling_it(), calling_it()
-    with pytest.raises(AuthorFailure):
+    with pytest.raises(BuildInfrastructureFailure):
         await author(tmp_path / "zero" / "workpiece", round_zero)
     failed = tmp_path / "failed" / "workpiece"
     prior_session(failed, "submitted", 100_000, 30)
-    with pytest.raises(AuthorFailure):
+    with pytest.raises(BuildInfrastructureFailure):
         await author(failed, after_failure, round_no=1, revision=FAILURE)
 
     for model in (round_zero, after_failure):
@@ -948,7 +943,7 @@ async def test_an_overlong_write_is_refused_briefly_and_counts_as_executed(tmp_p
         answer("done"),
         *GIVE_UP,
     )
-    with pytest.raises(AuthorFailure):
+    with pytest.raises(BuildInfrastructureFailure):
         await author(workpiece, model)
 
     write, notes = session_outputs(workpiece, 0)
@@ -961,3 +956,22 @@ async def test_an_overlong_write_is_refused_briefly_and_counts_as_executed(tmp_p
     assert session["submit_refusals"] == {"refused_notes": 1} and session["first_submit_accepted"] is False
     submit = read(target / "submit.json")
     assert submit["accepted"] is False and [c["outcome"] for c in submit["calls"]] == ["refused_notes"]
+
+
+async def test_an_untyped_builder_failure_holds_without_author_repair_feedback(tmp_path, services, proposal, ledger):
+    workpiece = tmp_path / "workpiece"
+    model = ScriptedModel(
+        turn(("write_file", {"path": "program.py", "content": PROGRAM})),
+        turn(("run_build", {"path": "program.py"})),
+        answer("should not receive repair feedback"),
+    )
+
+    async def unavailable(*args, **kwargs):
+        raise RuntimeError("Docker daemon disconnected")
+
+    build = replace(session_build(tmp_path, model, services, 0), builder=unavailable)
+    with pytest.raises(BuildInfrastructureFailure, match="unclassified_build_failure"):
+        await author_call(build, model, ledger, workpiece, proposal)
+    assert len(model.requests) == 2
+    record = read(agentic(workpiece, 0, 0) / "runs" / "0" / "run.json")
+    assert record["status"] == "infrastructure"

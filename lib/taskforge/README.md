@@ -251,10 +251,10 @@ run_agent (agent turn)            GlmRolloutModel (RolloutEngine rollout)
 `llm.agent.run_agent(client, policy, messages, tools, max_turns, record, replay)` is Taskforge's
 own tool loop; `replay` defaults to `ReasoningReplay.KEEP`, which replays each assistant turn's
 `reasoning_content`. `shell_tool` offers RolloutEngine's default shell tool on a shellbox
-`Machine`, and `llm.web` adds Parallel search and extract. The client sends the policy's whole
-`max_tokens` with every turn, so a prompt plus that budget beyond the context window raises
-`ContextExhausted`, which ends the loop with `AgentStop.CONTEXT`; long loops set a smaller
-`max_tokens`.
+`Machine`, and `llm.web` adds Parallel search and extract. The policy defaults to no application output cap: `max_tokens=None` omits both
+provider output-limit fields. Explicit caps remain available. A physical context or output
+boundary interrupts the attempt and preserves its partial trace for a hold. Agent turn,
+continuation and structured-repair limits are optional; `None` leaves them unbounded.
 
 `llm.rollout_model.GlmRolloutModel(client, policy, record)` is the RolloutEngine model callable for
 the messages trace. Each turn is one streamed chat-completions call, and the turn reports the reply
@@ -392,7 +392,7 @@ five fooling answers (fluent wrong, hedged, retracted, truncated, and a wrong an
 must each score at most the rejection ceiling under it, and `run_build` refuses any program's task whose
 decision grader lacks those reads (`check_decision_grader`). A reference whose grader
 timed out on both of `grade_candidate`'s gradings raises `BuildExpired` (`GRADER`) at once instead of
-going back to the model, and the driver holds the workpiece as abandoned. The `Grader` it returns
+going back to the model, and the driver holds the workpiece as `HELD`. The `Grader` it returns
 holds the reference answer, the ceiling (the most a submission wrong in substance can earn under
 its partial-credit scheme) and every candidate it graded. The agentic author's `run_build` tool
 grades the empty answer in the library after every build, whatever the program did, and fails the
@@ -438,15 +438,14 @@ re-raise it like `ModelUnavailable`, so the round ends without a record and spen
 loader child the host killed raises it with cause `BUILD_PROCESS`. A `BuildExpired` from `run_build`
 never reaches the model either: the tool writes `run.json` with `status: "expired"`, the `clock`, the
 `step` and the message as `text`, and re-raises it at once, so the round ends the same way and the
-driver holds the workpiece as abandoned. An `OSError` raised outside the program's frames, a storage
+driver holds the workpiece as `HELD`. An `OSError` raised outside the program's frames, a storage
 fault, is written with `status: "storage"` and re-raised at once, as the coordinator's build stage
 re-raises it.
 `submit(path, notes)` loads the file and refuses a loader failure or notes over 4,000 characters; a
 program that never built in the session is refused once and handed in untested when submitted again;
 an accepted submission ends the loop through `run_agent`'s `stop` callback. The session also stops
-when a turn's prompt and output plus `turn_max_tokens` exceed `session_token_cap`, at the turn budget,
-or after a third reply without a tool call (a reply cut at the output limit is nudged to take a
-smaller step instead). Each session writes, under the workpiece's directory, with `k` counting the
+at the physical context boundary or an explicitly configured turn budget. Replies without
+a tool call are nudged to continue; there is no fixed nudge count. Each session writes, under the workpiece's directory, with `k` counting the
 round's sessions across its author calls:
 
 ```
@@ -470,11 +469,9 @@ round, or of the round before when its own has none. With no session yet, it sta
 a build failure, the session that submitted the program continues with the failure as its next user
 turn when it ended by `submit` within `revision_same_session` (its last prompt and its turns used); any
 other revision starts a fresh session from a copy of its workspace. A last session that ended without
-a submission hands its workspace to a fresh session. Within one call, a session that ends without a
-submission hands off once (`handed_off`), and the next unsubmitted one (`author_failed`) makes the call
-raise `AuthorFailure`, which spends a revision; a session stopped by the context guard hands off up to
-four sessions per call. A relaunch never resumes a session mid-way: a session directory without an
-`author.json` starts a handoff.
+a submission hands its workspace to a fresh session. A session that ends without a submission saves its
+workspace and conversation, then reports an execution failure. A later explicit resume starts a handoff session. There is no automatic
+handoff-count cap. A relaunch starts from the saved workspace instead of resuming mid-tool.
 
 ## The stage machine
 
@@ -482,40 +479,33 @@ four sessions per call. A relaunch never resumes a session mid-way: a session di
 `StageFunctions`. Each stage returns an event with an exit, and `TRANSITIONS` in
 `stage_coordinator/workpiece_machine.py` gives the next stage:
 
-| stage    | event           | exit      | next     |
-|----------|-----------------|-----------|----------|
-| triage   | `TRIAGED`       | accept    | author   |
-| triage   | `TRIAGED`       | repair    | triage   |
-| triage   | `TRIAGED`       | reject    | done     |
-| author   | `AUTHORED`      | authored  | build    |
-| author   | `AUTHOR_FAILED` | revise    | author   |
-| author   | `AUTHOR_FAILED` | reject    | done     |
-| build    | `BUILT`         | built     | validate |
-| build    | `BUILD_FAILED`  | revise    | author   |
-| build    | `BUILD_FAILED`  | reject    | done     |
-| validate | `VALIDATED`     | validated | review   |
-| review   | `DECIDED`       | accept    | done     |
-| review   | `DECIDED`       | reject    | done     |
-| review   | `DECIDED`       | retry     | validate |
-| review   | `DECIDED`       | abandon   | done     |
-| review   | `DECIDED`       | modify    | author   |
+| stage    | event           | exit              | next     |
+|----------|-----------------|-------------------|----------|
+| triage   | `TRIAGED`       | accept            | author   |
+| triage   | `TRIAGED`       | repair            | triage   |
+| triage   | `TRIAGED`       | hold / abandon    | done     |
+| author   | `AUTHORED`      | authored          | build    |
+| author   | `AUTHOR_FAILED` | revise            | author   |
+| author   | `AUTHOR_FAILED` | abandon           | done     |
+| build    | `BUILT`         | built             | validate |
+| build    | `BUILD_FAILED`  | revise            | author   |
+| build    | `BUILD_FAILED`  | abandon           | done     |
+| validate | `VALIDATED`     | validated         | review   |
+| review   | `DECIDED`       | accept / reject   | done     |
+| review   | `DECIDED`       | hold / abandon    | done     |
+| review   | `DECIDED`       | retry             | validate |
+| review   | `DECIDED`       | modify            | author   |
 
-From `done`, a `TERMINAL` event closes the workpiece as accepted, rejected or abandoned. A stage
-raising an exception closes it as failed. `WorkpieceBudget` bounds the triage rewrites a workpiece
-may take, the build and author failures it may revise after, the review retries it may follow,
-and the review `Modify` decisions it may follow into a new round. The coordinator spends the
-budget when it records the event, choosing repair or reject, revise or reject, retry or abandon,
-modify or reject. A `Modify` past `max_modify_rounds` exits reject with kind `budget`, so a budget
-of zero never takes the modify edge; the round number counts the `Modify` decisions followed.
+`ACCEPTED` and `REJECTED` are final decisions requiring complete evaluation evidence.
+Acceptance requires a solver solve rate within the configured band. Exhausting a workpiece's triage repairs, author/build
+revisions, validation retries, modify rounds or outer infrastructure retries produces `ABANDONED`.
+Other execution failures and missing evidence produce `HELD`. Both retain the event log, completed artifacts and next stage for resume.
+Historical reject edges remain readable, and historical `FAILED` records are read as `HELD`.
 
-Triage returns a `Verdict`. The preflight's exits accept or reject, and a reject records the
-verdict's reasons. REPAIR is the surface described under Triage, and a `max_triage_repairs` of zero
-sends any REPAIR verdict to reject. On a REPAIR verdict within the budget, the coordinator calls
-`StageFunctions.repair`, writes the rewrite to `repaired/<k>.json`, and records `TRIAGED` exiting
-repair with the rewrite's digest, the triaged proposal's digest, the file and the rewrites spent.
-Triage judges the rewrite, and every later stage runs it, read back from its file. A REPAIR verdict
-past the budget exits reject, and so does a rewrite that is not a valid proposal; the workpiece
-closes as rejected with the reason.
+Triage's preflight verdict is distinct from a task evaluation verdict. A failed preflight holds
+at triage. A REPAIR verdict within budget rewrites the proposal to `repaired/<k>.json` and triages
+it again. Exhaustion abandons at triage; an invalid rewrite holds there. Every later stage reads
+the last successful rewrite and verifies its recorded digest.
 
 An accept records the verdict's `author_state` on its `TRIAGED` event: a JSON mapping, empty
 unless the triage attached state such as findings or obligations for the author. The workpiece
@@ -594,16 +584,19 @@ workpieces/<workpiece_id>/rounds/<n>/
 store/                             the step store: blobs/, workpieces/<workpiece_id>/steps/
 ```
 
-While a workpiece runs, its events stay in the caller's `WorkpieceEventLog`, and `run_workpiece`
-writes `events.json` once, as the last file, when the workpiece reaches a terminal. On the next
-`run_workpiece` with an empty log, the coordinator loads `events.json` back into the log and folds
-it. An accepted or rejected workpiece then returns its terminal without calling a stage or writing a
-byte. A retry with the caller's own log after a failed save of `events.json` writes the file and
-returns. An abandoned workpiece goes back to validation with its retries reset, and a failed one
-resumes at the stage that raised, with the step store serving the build steps already run. A build
-failure in the program's own code spends a revision and sends the workpiece back to the author, and
-so does an author call whose structured reply stays invalid after its repairs
-(`StructuredOutputError`). The workpiece fails in place instead, with its revisions unspent, when:
+The coordinator checkpoints `events.json` after each stage event. A relaunch with an empty log
+loads and folds these events. Accepted and rejected workpieces return their final decision.
+A review hold resumes validation; a stage exception or cancellation holds at that stage.
+Completed build steps remain reusable from the step store.
+
+Explicitly relaunching `ABANDONED` records `RESUMED` and resets the budget spent since the last resume to zero. The caller
+may change `WorkpieceBudget` at this point. Artifact counters remain cumulative, and earlier
+artifacts are retained. Triage exhaustion resumes triage, author/build exhaustion resumes
+authoring with its last failure, modify exhaustion resumes review to reconsider its repair request under the new budget, and
+validation exhaustion resumes validation. A review hold reruns validation to obtain missing evidence. Ordinary holds keep their current budget window.
+
+Authored build defects and invalid structured author replies may spend revisions. Execution
+failures hold with those revisions unspent, including:
 
 - the build host fails (`BuildInfrastructureFailure`), and the relaunch builds the same program
   again;
@@ -759,22 +752,24 @@ is a shortcut is review's judgement.
 `stage60_review.rules.default_review(result, band=band)` decides on a `ValidationResult` by the first
 row of this table that matches:
 
-| finding                                                                 | decision                                       |
-|-------------------------------------------------------------------------|------------------------------------------------|
-| the lowering was `refused` by a factory or `rejected` by RolloutEngine | `Reject(HOST)`                                 |
-| a control was `violated`                                                | `Modify(findings)`; the coordinator enforces the budget |
-| a solver trial or a control replay has a permanent ungraded cause | `Reject(TASK)` (`HOST` for `MACHINE_UNSUPPORTED`) |
-| all ungraded causes are retryable | `Retry(cause, count)` |
-| the solve rate falls in a place `band` accepts                  | `Accept(band)`, else `Reject(TASK)`            |
+| finding | decision |
+|---------|----------|
+| lowering unavailable, or any solver/control/adversary execution unavailable | `Hold(reasons)` |
+| known authored defect or violated control | `Modify(findings)` |
+| missing, inconsistent or non-finite required evidence | `Hold(reasons)` |
+| complete solver evidence inside the configured band | `Accept(IN_BAND)` |
+| complete solver evidence outside the band | `Modify(findings)` |
 
-A `Modify` carries one finding per violated control, naming its kind, id, reward and attempt file. A
-`Retry` names the cause that left the most solver trials and controls ungraded, with their count. The
-solve rate is the solved share of the graded solver trials: below `BandRules.low` it is `too_hard`,
-above `BandRules.high` `too_easy`, and in between, both ends included, `in_band`; `BandRules.accepted`
-lists the places review accepts. A round decided early holds the violated control that closed it, so
-the second row decides it: its cancelled trials never count as incomplete evidence, nor its partial
-solver trials as a solve rate. Adversary trials decide nothing yet: whether a passing submission is
-a shortcut is the arbiter's judgement, which a later rule will read.
+Unavailable execution takes precedence over known task defects. No prior passing submission can
+hide a later or earlier adversary grading outage. Authored defects can receive repair feedback,
+but spending the repair budget ends in `ABANDONED`.
+
+The solve rate is the solved share of graded solver trials. The inclusive band runs from
+`BandRules.low` to `BandRules.high`; `accepted` can include only `IN_BAND`. A control violation
+that stopped a round early may request repair, but its partial solver evidence cannot support
+a final decision. The coordinator also checks completeness before accepting a custom review's
+`Accept` or task `Reject`. Shortcut adjudication and independent correct-answer acceptance policy
+remain separate from these execution-completeness checks.
 
 ## Testing
 

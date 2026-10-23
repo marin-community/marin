@@ -20,7 +20,7 @@ from taskcompendium.models import AnswerType, GradingAttempt, PlainText, Source,
 from tokenizers import Tokenizer, decoders, models, pre_tokenizers
 
 from taskforge.llm.clef import budget
-from taskforge.llm.clef.budget import MAX_LENGTH, ClefTokenizer, TruncateFrom, input_tokens
+from taskforge.llm.clef.budget import ClefTokenizer, TruncateFrom
 from taskforge.llm.clef.decision_client import (
     WINDOW_HEADER,
     ClefDecisionClient,
@@ -36,7 +36,6 @@ from taskforge.llm.clef.schema import (
     NoulQuestion,
     ScoreAnswer,
     ScoreQuestion,
-    SystemOneRequest,
 )
 from taskforge.spec import decision, draft
 from taskforge.spec.decision import (
@@ -265,26 +264,20 @@ class Recording:
 
 
 @pytest.mark.parametrize(("window", "reply_bytes"), [(16384, 40_000), (None, 200_000)], ids=["pinned-16k", "cap-128k"])
-async def test_the_state_is_fitted_to_the_window_by_cutting_the_solver_output(window, reply_bytes):
+async def test_oversized_state_holds_without_grading_a_truncated_answer(window, reply_bytes):
     long_reply = "The approved total is 1,234.56 USD. " + "x" * reply_bytes + " Final: 1,234.56 USD."
     recording = Recording()
     async with client(recording.handle, window) as clef:
-        await graded(calibrated(None), [TRANSCRIPT[0], {"role": "assistant", "content": long_reply}], clef, timeout=30)
-
-    (request,) = recording.fake.seen
-    state = request.state
-    assert isinstance(state, dict)
-    candidate = state["z_candidate_answer"]
-    assert isinstance(candidate, str)
-    assert "tokens truncated by the Clef state budget" in candidate and candidate.endswith("Final: 1,234.56 USD.")
-    assert state["y_reference_answer"] == REFERENCE
-    assert input_tokens(TOKENIZER, SystemOneRequest(request.state, request.questions)) <= (window or MAX_LENGTH)
-    assert recording.sent[0].headers.get(WINDOW_HEADER) == (None if window is None else str(window))
+        with pytest.raises(DecisionUnavailable):
+            await graded(
+                calibrated(None), [TRANSCRIPT[0], {"role": "assistant", "content": long_reply}], clef, timeout=30
+            )
+    assert not recording.fake.seen
 
 
 async def test_the_token_is_never_logged_or_shown(caplog, monkeypatch):
     caplog.set_level(logging.DEBUG)
-    long_reply = "x" * 40_000
+    long_reply = "x" * 40
     async with client(FakeClef(token="another-token").handle, 16384) as clef:
         assert TOKEN not in repr(clef)
         with pytest.raises(DecisionRequestError) as refused:
@@ -312,11 +305,11 @@ GOLDEN_STATE = {"task_deliverable": RUBRIC.deliverable, "y_reference_answer": RE
         (None, REPLY, "bb71f0e9fcd2fc9a4d12587371ef4f30088a47fbcb41c79b174fdf17d25c6682"),
         (
             16384,
-            "Approved total: $1,234.56. " + '"line"\n' * 4_000 + " Final: 1,234.56 USD.",
-            "2fcdcac70bddedd03a5e7db6bc91af8c496b0a79b5e347ae4873573c184528ab",
+            REPLY,
+            "bb71f0e9fcd2fc9a4d12587371ef4f30088a47fbcb41c79b174fdf17d25c6682",
         ),
     ],
-    ids=["fits", "cut-to-16k"],
+    ids=["unpinned", "pinned-16k"],
 )
 async def test_decide_sends_the_pinned_request_bytes(window, reply, digest):
     recording = Recording()
@@ -329,7 +322,7 @@ async def test_decide_sends_the_pinned_request_bytes(window, reply, digest):
         )
 
     (sent,) = recording.sent
-    assert (b"tokens truncated by the Clef state budget" in sent.content) is (window is not None)
+    assert b"tokens truncated by the Clef state budget" not in sent.content
     assert hashlib.sha256(sent.content).hexdigest() == digest
     assert sent.headers.get(WINDOW_HEADER) == (None if window is None else str(window))
 

@@ -287,18 +287,17 @@ def test_consistency_error_gets_one_schema_repair(ideas):
     ]
 
 
-def test_document_still_invalid_after_repair_is_a_slot_failure_with_both_completions(ideas):
+def test_document_repairs_continue_until_valid_without_an_independent_attempt_cap(ideas):
     idea = ideas[CAPABILITY_ID]
-    uncited = filled_document(idea, 1).replace("(research[0])", "")
+    valid = filled_document(idea, 1)
+    uncited = valid.replace("(research[0])", "")
     model = ScriptedModel()
-    model.reply(uncited)
-    model.reply(uncited)
-
+    for _ in range(4):
+        model.reply(uncited)
+    model.reply(valid)
     outcome = author(model, idea)
-
-    assert isinstance(outcome, SlotFailure)
-    assert outcome.error == "invalid after repair: body: research[0] is never cited as research[0]"
-    assert [c.content for c in outcome.completions] == [uncited, uncited]
+    assert isinstance(outcome, SlotProposal)
+    assert [c.content for c in outcome.completions] == [uncited] * 4 + [valid]
 
 
 def test_a_rejected_repair_request_is_a_slot_failure_that_keeps_the_first_completion(ideas):

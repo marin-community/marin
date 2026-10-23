@@ -7,24 +7,23 @@
 The host selects it from its own configuration (``ClefDecisionConfig``: the gateway URL, the name of the
 environment variable holding the bearer token, the engine window); no proposal, author or task names it.
 
-``read`` asks any mix of choice, noul and score questions and returns Clef's whole response; ``decide`` is one
-``read`` of a grader's score questions, answered as level probabilities. Both share the client's HTTP pool and
-in-flight limit. One read is bounded as a whole by the caller's ``timeout`` (for a grade, the verifier
-deadline): the wait for an in-flight slot, fitting the state and the HTTP exchange. Nothing runs on the event
-loop's default executor; fitting the state to the window tokenizes on the client's own thread pool, and the
-HTTP call is async. The client retries nothing: a transient failure (a connection error or timeout, a 5xx, the
-front door's ``clef_unavailable``, the deadline) raises ``DecisionUnavailable``, and for a grade the host
-retries once (``spec.decision.host_graded``); any other failure (a 4xx, an answer that does not match the
-questions) raises ``DecisionRequestError`` and is permanent.
+``read`` asks any mix of choice, noul and score questions and returns Clef's whole response; ``decide``
+asks a grader's score questions and returns level probabilities. Both share the HTTP pool and in-flight limit.
 
-The state is fitted with ``budget.fit_request`` to the pinned window, or to Clef's 131,072-token maximum
-when none is pinned; only the ``elastic`` string the caller names is cut, with a visible marker (``decide``
-cuts the solver's output from the middle). A pinned window is sent as ``x-clef-window``. The token is sent as
-a bearer header and appears in no log, error or repr.
+One read is bounded as a whole by the caller's ``timeout`` (the verifier deadline): the wait for an in-
+flight slot, tokenization and the HTTP exchange. Tokenization runs on the client's own thread pool, and the
+HTTP call is async. The client retries nothing: a transient failure (a connection error or timeout, a 5xx,
+the front door's ``clef_unavailable``, the deadline) raises ``DecisionUnavailable`` and the host retries the
+grade once (``spec.decision.host_graded``); any other failure (a 4xx, an answer that does not match the
+questions) raises ``DecisionRequestError`` and is not retried.
+
+The full state must fit the pinned physical window, or Clef's 131,072-token maximum when unpinned.
+If ``budget.fit_request`` would truncate it, the client raises ``DecisionUnavailable`` before HTTP.
+A pinned window is sent as ``x-clef-window``. Optional relay discovery resolves the current endpoint for
+each request. The token is sent as a bearer header and appears in no log, error or repr.
 """
 
 import asyncio
-import logging
 import os
 from collections.abc import AsyncIterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -48,9 +47,8 @@ from taskforge.llm.clef.schema import (
     SystemOneRequest,
     SystemOneResponse,
 )
+from taskforge.llm.glm_client import GLM_MODEL, Pool, RelayEndpoint
 from taskforge.spec import decision
-
-logger = logging.getLogger(__name__)
 
 ENDPOINT = "/v1/systemone"
 WINDOW_HEADER = "x-clef-window"
@@ -98,12 +96,16 @@ class ClefDecisionConfig:
         window: The engine window every read is pinned to (one of ``WINDOWS``), or ``None`` for an unpinned read
             fitted to ``MAX_LENGTH``.
         max_inflight: Reads in flight at once from this host.
+        relay_job: Discover a live gateway before each request when set.
+        endpoint_name: Service name to resolve within the relay job.
     """
 
     base_url: str
     token_env: str
     window: int | None
     max_inflight: int
+    relay_job: str | None = None
+    endpoint_name: str = GLM_MODEL
 
     def __post_init__(self) -> None:
         if self.window is not None and self.window not in WINDOWS:
@@ -126,6 +128,9 @@ class ClefDecisionClient:
         self._window = config.window
         self._max_length = config.window or MAX_LENGTH
         self._tokenizer = tokenizer
+        self._relay = (
+            None if config.relay_job is None else RelayEndpoint(config.relay_job, token, Pool.BULK, config.endpoint_name)
+        )
         self._slots = asyncio.Semaphore(config.max_inflight)
         self._executor = ThreadPoolExecutor(max_workers=FIT_WORKERS, thread_name_prefix="clef-fit")
         self._http = httpx.AsyncClient(
@@ -158,7 +163,7 @@ class ClefDecisionClient:
     ) -> Mapping[str, tuple[float, ...]]:
         """Each score question's level probabilities from one ``read`` of ``questions`` over ``state``.
 
-        ``elastic`` is the state key ``read`` may cut, from the middle, to fit the window.
+        ``elastic`` identifies the candidate field for the physical-window check; it is never truncated.
 
         Raises:
             DecisionUnavailable: a connection error or timeout, a 5xx or ``clef_unavailable``, or the deadline.
@@ -185,9 +190,9 @@ class ClefDecisionClient:
     ) -> SystemOneResponse:
         """One Clef read of ``questions`` over ``state``, within ``timeout`` seconds, sent once.
 
-        ``state`` is fitted to the window by cutting the string at the key path ``elastic`` from
-        ``truncate_from``. The wait for an in-flight slot, the fit and the HTTP exchange share ``timeout``. Nothing
-        is retried: a caller that wants another read after ``DecisionUnavailable`` makes it.
+        The complete state must fit the physical window. ``elastic`` and ``truncate_from`` select the
+        fit check; a check that would truncate raises ``DecisionUnavailable`` before HTTP. The wait for
+        an in-flight slot, tokenization and HTTP share ``timeout``. A caller retries unavailable reads.
 
         Raises:
             DecisionUnavailable: a connection error or timeout, a 5xx or ``clef_unavailable``, or the deadline.
@@ -207,17 +212,26 @@ class ClefDecisionClient:
                         truncate_from,
                         self._max_length,
                     )
+                    if budget.truncated:
+                        raise decision.DecisionUnavailable(
+                            f"the complete grading state exceeds Clef's physical context ({self._max_length} tokens)"
+                        )
                     response = await self._post(fitted, timeout)
         except TimeoutError as error:
             raise decision.DecisionUnavailable(f"clef gave no answer within {timeout:.1f}s") from error
-        if budget.truncated:
-            logger.info("clef read: cut %d tokens of %r to fit %d", budget.tokens_cut, list(elastic), self._max_length)
         return _matched(response, questions)
 
     async def _post(self, request: SystemOneRequest, timeout: float) -> SystemOneResponse:
         headers = {} if self._window is None else {WINDOW_HEADER: str(self._window)}
+        url = ENDPOINT
+        if self._relay is not None:
+            try:
+                endpoint = await asyncio.to_thread(self._relay.current)
+            except Exception as error:
+                raise decision.DecisionUnavailable(f"Clef relay discovery failed: {type(error).__name__}") from error
+            url = endpoint.base_url.removesuffix("/v1") + ENDPOINT
         try:
-            response = await self._http.post(ENDPOINT, json=request.to_json(), headers=headers, timeout=timeout)
+            response = await self._http.post(url, json=request.to_json(), headers=headers, timeout=timeout)
         except httpx.TransportError as error:
             raise decision.DecisionUnavailable(f"clef transport error: {type(error).__name__}") from error
         if response.status_code == 200:

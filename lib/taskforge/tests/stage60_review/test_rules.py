@@ -7,9 +7,11 @@ from collections import Counter
 from collections.abc import Sequence
 
 import pytest
+from taskcompendium.grading_result import Outcome as GradeStatus
 
 from taskforge.sandbox.factories import MachineRole, Refusal, RefusalReason
 from taskforge.spec.controls import ControlKind
+from taskforge.stage50_validate.adversary import AdversaryMode, Claim, ClaimKind
 from taskforge.stage50_validate.controls import ControlVerdict
 from taskforge.stage50_validate.evidence import RewardStats
 from taskforge.stage50_validate.outcome import Cause
@@ -20,14 +22,15 @@ from taskforge.stage50_validate.round import (
     Lowering,
     LoweringStatus,
     SolverEvidence,
+    SubmissionResult,
     TrialResult,
     TrialStatus,
     ValidationResult,
 )
-from taskforge.stage60_review.decision import Accept, BandOutcome, Modify, Reject, RejectKind, Retry
+from taskforge.stage60_review.decision import Accept, BandOutcome, Hold, Modify
 from taskforge.stage60_review.rules import BandRules, default_review
 
-BAND = BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND, BandOutcome.TOO_HARD}))
+BAND = BandRules(low=0.25, high=0.75, accepted=frozenset({BandOutcome.IN_BAND}))
 LOWERED = Lowering(LoweringStatus.LOWERED, "", (), None, "lowered-task")
 REFUSAL = Refusal(RefusalReason.NO_FACTORY, MachineRole.TASK, "this host has no docker factory")
 
@@ -85,10 +88,10 @@ def result(
     ],
     ids=["refused", "rejected"],
 )
-async def test_a_refused_or_rejected_lowering_rejects_on_the_host_before_any_other_rule(rejected):
+async def test_a_refused_or_rejected_lowering_holds_before_any_task_decision(rejected):
     decision = await default_review(rejected, band=BAND)
 
-    assert isinstance(decision, Reject) and decision.kind is RejectKind.HOST
+    assert isinstance(decision, Hold)
 
 
 async def test_a_violated_control_asks_for_a_modify_round():
@@ -98,7 +101,7 @@ async def test_a_violated_control_asks_for_a_modify_round():
     assert len(decision.findings) == 1 and VIOLATED.id in decision.findings[0]
 
 
-async def test_a_violated_control_decides_before_incomplete_evidence():
+async def test_infrastructure_holds_even_with_a_known_control_defect():
     incomplete = result(
         evidence=solver(1, 0, [Cause.MODEL_TIMEOUT]),
         controls=(VIOLATED, control("N3", ControlVerdict.UNGRADED, Cause.GRADER_TIMEOUT)),
@@ -106,7 +109,7 @@ async def test_a_violated_control_decides_before_incomplete_evidence():
 
     decision = await default_review(incomplete, band=BAND)
 
-    assert isinstance(decision, Modify) and len(decision.findings) == 1
+    assert isinstance(decision, Hold)
 
 
 async def test_a_round_decided_early_is_decided_by_its_violated_control_never_as_incomplete_evidence():
@@ -120,50 +123,74 @@ async def test_a_round_decided_early_is_decided_by_its_violated_control_never_as
     assert isinstance(await default_review(early, band=BAND), Modify)
 
 
-async def test_incomplete_evidence_retries_for_the_cause_that_left_the_most_solver_trials_and_controls_ungraded():
+async def test_incomplete_evidence_holds_with_all_unavailable_causes():
     incomplete = result(
         evidence=solver(2, 0, [Cause.MODEL_TIMEOUT, Cause.GRADER_TIMEOUT]),
         controls=(MET, control("N3", ControlVerdict.UNGRADED, Cause.GRADER_TIMEOUT)),
     )
 
-    assert await default_review(incomplete, band=BAND) == Retry(Cause.GRADER_TIMEOUT, 2)
+    assert await default_review(incomplete, band=BAND) == Hold(
+        ("2 ungraded trial(s): grader_timeout", "1 ungraded trial(s): model_timeout")
+    )
 
 
-async def test_a_solve_rate_in_a_place_the_band_rules_refuse_rejects_the_task():
+async def test_a_solve_rate_outside_the_band_requests_repair():
     decision = await default_review(result(evidence=solver(4, 0)), band=BAND)
 
-    assert isinstance(decision, Reject) and decision.kind is RejectKind.TASK
+    assert isinstance(decision, Modify)
 
 
 @pytest.mark.parametrize(
     ("solved", "band"),
-    [(2, BandOutcome.IN_BAND), (1, BandOutcome.IN_BAND), (0, BandOutcome.TOO_HARD)],
-    ids=["in band", "at the low edge", "too hard and accepted"],
+    [(2, BandOutcome.IN_BAND), (1, BandOutcome.IN_BAND)],
+    ids=["in band", "at the low edge"],
 )
 async def test_complete_evidence_is_accepted_in_the_place_the_callers_band_gives_it(solved, band):
     assert await default_review(result(evidence=solver(solved, 4 - solved)), band=BAND) == Accept(band)
 
 
 @pytest.mark.parametrize(
-    "cause,kind",
+    "cause,expected",
     [
-        (Cause.GRADER_REWARD_RANGE, RejectKind.TASK),
-        (Cause.MODEL_REJECTED, RejectKind.TASK),
-        (Cause.MACHINE_UNSUPPORTED, RejectKind.HOST),
+        (Cause.GRADER_REWARD_RANGE, Modify),
+        (Cause.MODEL_REJECTED, Hold),
+        (Cause.DECISION_UNAVAILABLE, Hold),
+        (Cause.MACHINE_UNSUPPORTED, Hold),
+        (Cause.GRADER_INFRA, Hold),
+        (Cause.GENERATION_LIMIT, Hold),
+        (Cause.UNCLASSIFIED, Hold),
     ],
 )
 @pytest.mark.parametrize("retryable", [(), (Cause.MODEL_TIMEOUT,) * 3], ids=["permanent-only", "mixed"])
-async def test_a_permanent_ungraded_cause_rejects_without_spending_retries(cause, kind, retryable):
+async def test_ungraded_causes_separate_authored_defects_from_missing_evidence(cause, expected, retryable):
     decision = await default_review(result(evidence=solver(2, 0, [cause, *retryable])), band=BAND)
 
-    assert decision == Reject(kind, (f"1 ungraded trial(s): {cause}",))
+    assert isinstance(decision, Hold if retryable else expected)
 
 
-async def test_a_permanent_control_failure_rejects_before_retryable_solver_failures():
+async def test_a_control_defect_does_not_turn_a_solver_outage_into_rejection():
     incomplete = result(
         evidence=solver(2, 0, [Cause.MODEL_TIMEOUT]),
         controls=(control("N3", ControlVerdict.UNGRADED, Cause.GRADER_INVALID_REWARD),),
     )
     decision = await default_review(incomplete, band=BAND)
 
-    assert decision == Reject(RejectKind.TASK, (f"1 ungraded trial(s): {Cause.GRADER_INVALID_REWARD}",))
+    assert decision == Hold(("1 ungraded trial(s): model_timeout",))
+
+
+@pytest.mark.parametrize("cause", [Cause.MODEL_UNAVAILABLE, Cause.GENERATION_LIMIT, None])
+async def test_an_adversary_outage_cannot_be_erased_by_other_passing_evidence(cause):
+    adversary = AdversaryResult(
+        "0",
+        AdversaryMode.WHITEBOX,
+        TrialStatus.UNGRADED if cause else TrialStatus.GRADED,
+        cause,
+        Claim(ClaimKind.NO_SHORTCUT, "", ""),
+        (
+            SubmissionResult(0, GradeStatus.INFRA_ERROR, None, False, "adversary/0/failed.json"),
+            SubmissionResult(1, GradeStatus.GRADED, 1.0, True, "adversary/0/passed.json"),
+        ),
+        "adversary/0/attempt-0.json",
+    )
+    decision = await default_review(result(adversary=(adversary,)), band=BAND)
+    assert isinstance(decision, Hold)

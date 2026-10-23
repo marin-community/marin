@@ -14,6 +14,8 @@ from rolloutengine.engine import RolloutEngine
 from rolloutengine.harness.core import HarnessContext, ModelSession
 from rolloutengine.harness.shell import task_prompt
 from rolloutengine.models import (
+    LENGTH_STOP_REASON,
+    MAX_TURNS_STOP_REASON,
     TOTAL_TURN_TIMEOUT_STOP_REASON,
     GenerationLimitReached,
     GradedRollout,
@@ -176,13 +178,14 @@ async def test_turn_deadline_before_the_first_response_is_an_ungraded_agent_time
     assert outcome.rollout is not None and outcome.rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON
 
 
-async def test_turn_deadline_after_work_keeps_the_engine_grade_and_records_the_timeout(file_task, fakes):
+async def test_turn_deadline_after_work_keeps_grade_as_incomplete_evidence(file_task, fakes):
     model = fakes.script_model([fakes.shell("echo 60 > /workspace/sum.txt")], hang_from=1)
 
     outcome = await outcome_of(with_limits(file_task, total_turn_timeout=1), model, fakes.flaky_factory(0, RuntimeError))
 
-    assert isinstance(outcome, Graded) and outcome.timed_out
-    assert (outcome.reward, outcome.rollout.stop_reason) == (1.0, TOTAL_TURN_TIMEOUT_STOP_REASON)
+    assert isinstance(outcome, Ungraded) and outcome.cause is Cause.AGENT_TIMEOUT
+    assert outcome.grade is not None and outcome.grade.reward == 1.0
+    assert outcome.rollout is not None and outcome.rollout.stop_reason == TOTAL_TURN_TIMEOUT_STOP_REASON
 
 
 async def test_attempt_timeout(math_task, fakes):
@@ -376,3 +379,41 @@ def test_a_machine_lost_under_a_trial_is_a_retryable_termination(math_task, erro
     assert classify(error, math_task.task) == direct_cause
     assert classify(wrapped, math_task.task) == wrapped_cause
     assert (direct_cause in RETRYABLE) == (direct_cause is Cause.MACHINE_TERMINATED)
+
+
+@pytest.mark.parametrize(
+    "operation,cause",
+    [
+        (RolloutOperation.START, Cause.MACHINE_START_TIMEOUT),
+        (RolloutOperation.PREPARE, Cause.SESSION_PREPARE),
+    ],
+)
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_setup_deadlines_are_unavailable_infrastructure_not_authored_defects(math_task, operation, cause, wrapped):
+    rollout = Rollout("setup-timeout", (), "error")
+    interrupted = GradedRolloutInterrupted(rollout, operation, GradeResult(Outcome.UNAVAILABLE, None))
+    timeout = TimeoutError("Environment setup command exceeded its deadline")
+    if wrapped:
+        outer = RuntimeError("Environment setup command failed")
+        outer.__cause__ = timeout
+        interrupted.__cause__ = outer
+    else:
+        interrupted.__cause__ = timeout
+    outcome = trial_outcome(interrupted, math_task.task)
+    assert isinstance(outcome, Ungraded) and outcome.cause is cause
+    assert outcome.rollout is rollout
+
+
+@pytest.mark.parametrize(
+    "stop,cause",
+    [
+        (MAX_TURNS_STOP_REASON, Cause.BUDGET_EXHAUSTED),
+        (LENGTH_STOP_REASON, Cause.GENERATION_LIMIT),
+        ("context", Cause.GENERATION_LIMIT),
+    ],
+)
+def test_a_grade_from_interrupted_generation_cannot_count_as_a_completed_trial(math_task, stop, cause):
+    partial = GradedRollout(Rollout("run", (), stop), GradeResult(Outcome.GRADED, 1.0))
+    outcome = trial_outcome(partial, math_task.task)
+    assert isinstance(outcome, Ungraded) and outcome.cause is cause
+    assert outcome.grade == partial.grade and outcome.rollout == partial.rollout

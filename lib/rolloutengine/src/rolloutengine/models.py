@@ -439,7 +439,7 @@ class RolloutLimits(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    max_turns: int = Field(gt=0)
+    max_turns: int | None = Field(gt=0)
     max_total_tokens: int | None = Field(gt=0)
     model_turn_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)
