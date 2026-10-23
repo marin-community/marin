@@ -22,6 +22,7 @@ from taskforge.agentic.gate import Evidence
 from taskforge.agentic.tools import TaskReview
 from taskforge.capability import CapabilityIdea
 
+from experiments.post_training.baby_rsi.feedback import HELD_OUT_MARKER
 from experiments.post_training.baby_rsi.resume import known_ideas, untrained_instances
 
 IDEA = CapabilityIdea(
@@ -68,3 +69,7 @@ def test_a_restarted_loop_gives_back_the_instances_that_are_not_in_the_feed(tmp_
         return [task.id async for task in stream]
 
     assert asyncio.run(collect()) == [f"{task_id}.train-1", f"{task_id}.train-2"]
+
+    # The tasks of a held-out idea are only probes, also after a restart.
+    (output / "ideas" / IDEA.capability_id / HELD_OUT_MARKER).write_text("")
+    assert asyncio.run(collect()) == []
