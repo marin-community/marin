@@ -1250,6 +1250,15 @@ def _make_train_step(
                 halt_now,
             )
         metrics = {"train/loss": loss, **summarized_metrics}
+        grad_leaves = jax.tree_util.tree_flatten_with_path(grads)[0]
+        bad = jnp.stack([jnp.sum(~jnp.isfinite(g.astype(jnp.float32))) for _, g in grad_leaves])
+        gmax = jnp.stack([jnp.max(jnp.abs(jnp.where(jnp.isfinite(g), g, 0).astype(jnp.float32))) for _, g in grad_leaves])
+        names = " ".join(jax.tree_util.keystr(p) for p, _ in grad_leaves)
+        jax.lax.cond(
+            jnp.sum(bad) > 0,
+            lambda: jax.debug.print("NANDBG grads step {} bad {} gmax {} names " + names, state.step, bad, gmax),
+            lambda: None,
+        )
         opt_state_in = _tree_to_memory_kind(state.opt_state, "device") if offload_opt_state else state.opt_state
         if layer_onset is not None and (
             os.environ.get("GRUG_SKIP_OPTIMIZER") or master_param_mode != MasterParamMode.DEVICE

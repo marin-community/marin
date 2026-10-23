@@ -4802,6 +4802,16 @@ def _attn_res_sublayers(
     route["moe_dynamic_layer"] = physical in cfg.moe_dynamic_layers
     mlp_out, router_stats = layer.mlp_branch(h, mask, **shared_kwargs, **route, out_scale=halt_scale)
     halt_z = layer.halt_write_z(attn_out, mlp_out, attn_vote, router_stats.pop(_HALT_Z, None))
+    _nan_report(
+        f"L{layer_index}",
+        h=h,
+        attn_out=attn_out,
+        mlp_out=mlp_out,
+        halt_z=halt_z,
+        attn_vote=attn_vote,
+        scale=halt_scale,
+        kv_input=kv_input,
+    )
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
         mlp_out = mlp_out + mem_out
@@ -4841,6 +4851,19 @@ def _attn_res_sublayers(
         _ATTN_RES_W_MLP: w_mlp,
         **({} if halt_z is None else {_HALT_Z: halt_z}),
     }
+
+
+def _nan_report(where: str, **tensors) -> None:
+    """NaN debugging: print the non-finite counts and max |x| of ``tensors`` when any is non-finite."""
+    names = [k for k, v in tensors.items() if v is not None]
+    vals = [tensors[k] for k in names]
+    bad = jnp.stack([jnp.sum(~jnp.isfinite(v.astype(jnp.float32))) for v in vals])
+    amax = jnp.stack([jnp.max(jnp.where(jnp.isfinite(v.astype(jnp.float32)), jnp.abs(v.astype(jnp.float32)), 0.0)) for v in vals])
+    jax.lax.cond(
+        jnp.sum(bad) > 0,
+        lambda: jax.debug.print("NANDBG " + where + " " + " ".join(f"{n}={{}}/{{}}" for n in names), *[x for pair in zip(bad, amax) for x in pair]),
+        lambda: None,
+    )
 
 
 def _kv_stream_input(extras: dict[str, jax.Array | None] | None) -> jax.Array | None:
@@ -6965,6 +6988,7 @@ class Transformer(eqx.Module):
             head_in = lm_head_grad_probe(hidden, head_grad_probe, jnp.asarray(raw_clip, jnp.float32))
         halt_train = halt_gates is not None and train_terms and halt_schedule is not None
         cross_entropy_loss = lm_loss(head_in)
+        _nan_report("head", hidden=hidden, ce=cross_entropy_loss, gates=halt_gates)
         replay_loss = None
         if head_replay is not None:
             # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
