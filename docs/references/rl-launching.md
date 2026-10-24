@@ -190,6 +190,18 @@ has uploaded and its latest-checkpoint marker has been published. Pending HF
 exports and the selected best native checkpoint remain protected beyond this
 rolling window. Each successful Marin run also produces a durable terminal export.
 
+The `best_checkpoint` callback accepts a `selection_metric` whose values must be
+finite normalized scores in [0, 1], with larger values preferred. Set
+`save_after_fraction` to delay trained-checkpoint selection until that fraction
+of the total steps has elapsed. Step-zero evaluation still records the initial
+model as a candidate without saving weights; if it remains best, load the
+`model_uri` recorded in `best_checkpoint.json`. Optional `preservation_max_drop`
+entries map metric names to allowed absolute drops from their step-zero values;
+all gates must pass before a candidate can replace the best checkpoint. The
+baseline and selection policy are recorded in `best_checkpoint.json` and the
+baseline is restored on resume. Keep metric definitions and the selection policy
+unchanged on resume.
+
 The temporary checkpoint root is derived from the RL artifact name and version.
 After runtime changes, use a fresh RL artifact version. Reusing the old
 version with `resume_mode=latest` can load private Torch or distributed state serialized by the old
