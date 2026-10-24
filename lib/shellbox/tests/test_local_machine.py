@@ -1200,6 +1200,59 @@ def test_repeated_download_cannot_follow_an_artifact_link_into_the_host(factory,
     assert host_marker.read_text() == "host-private"
 
 
+@pytest.mark.parametrize("first_mode,second_mode,new_mode", [(0o500, 0o777, 0o700), (0o777, 0o500, 0o755)])
+def test_repeated_download_preserves_existing_host_directory_permissions(
+    factory, tmp_path, first_mode, second_mode, new_mode
+):
+    downloaded = tmp_path / "artifacts"
+    existing = downloaded / "existing"
+    existing.mkdir(parents=True)
+    downloaded.chmod(0o750)
+    existing.chmod(0o710)
+    (downloaded / "unrelated").write_text("host-owned")
+
+    async def scenario(machine):
+        first = await machine.run(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    "mkdir -p /app/artifacts/existing /app/artifacts/new; "
+                    "printf first >/app/artifacts/existing/state; printf first >/app/artifacts/new/state; "
+                    f"chmod {first_mode:o} /app/artifacts /app/artifacts/existing /app/artifacts/new",
+                )
+            )
+        )
+        assert first.exit_code == 0, first.stderr
+        await machine.download("/app/artifacts", downloaded)
+        assert downloaded.stat().st_mode & 0o777 == 0o750
+        assert existing.stat().st_mode & 0o777 == 0o710
+        assert (downloaded / "new").stat().st_mode & 0o777 == new_mode
+        # The caller's permissions also survive later guest metadata changes.
+        (downloaded / "new").chmod(0o750)
+        second = await machine.run(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    "chmod 700 /app/artifacts /app/artifacts/existing /app/artifacts/new; "
+                    "printf second >/app/artifacts/existing/state; printf second >/app/artifacts/new/state; "
+                    f"chmod {second_mode:o} /app/artifacts /app/artifacts/existing /app/artifacts/new",
+                )
+            )
+        )
+        assert second.exit_code == 0, second.stderr
+        await machine.download("/app/artifacts", downloaded)
+
+    on_machine(factory, SPEC, scenario)
+    assert downloaded.stat().st_mode & 0o777 == 0o750
+    assert existing.stat().st_mode & 0o777 == 0o710
+    assert (downloaded / "new").stat().st_mode & 0o777 == 0o750
+    assert (existing / "state").read_text() == "second"
+    assert (downloaded / "new/state").read_text() == "second"
+    assert (downloaded / "unrelated").read_text() == "host-owned"
+
+
 @pytest.fixture
 def executable_oci_image(oci_image):
     busybox = shutil.which("busybox")
@@ -1230,7 +1283,32 @@ def executable_oci_image(oci_image):
     )
 
 
-def test_prepared_local_group_runs_image_defaults_with_private_writable_roots(executable_oci_image, tmp_path):
+@pytest.mark.parametrize(
+    "entrypoint,arguments,expected",
+    [
+        (None, None, b"from-image"),
+        (
+            (
+                "/bin/sh",
+                "-c",
+                'test "$#" -eq 0 || exit 23; printf entrypoint >index.html; exec httpd -f -p 8123 -h .',
+                "entrypoint",
+            ),
+            None,
+            b"entrypoint",
+        ),
+        (None, ("printf arguments >index.html; exec httpd -f -p 8123 -h .",), b"arguments"),
+        (
+            ("/bin/sh", "-c", 'printf "%s" "$1" >index.html; exec httpd -f -p 8123 -h .', "entrypoint"),
+            ("both",),
+            b"both",
+        ),
+    ],
+    ids=["image-defaults", "entrypoint-only", "arguments-only", "both-overridden"],
+)
+def test_prepared_local_group_applies_startup_overrides_with_private_writable_roots(
+    executable_oci_image, tmp_path, entrypoint, arguments, expected
+):
     umoci = shutil.which("umoci")
     if umoci is None:
         pytest.skip("OCI preparation requires umoci; the Shellbox CI lane installs it")
@@ -1243,6 +1321,8 @@ def test_prepared_local_group_runs_image_defaults_with_private_writable_roots(ex
         task,
         endpoints=(ServiceEndpoint("http", 8123),),
         readiness=ReadinessProbe(Command(("wget", "-q", "-O", "-", "http://runtime:8123")), timeout=10, interval=0.05),
+        entrypoint=entrypoint,
+        arguments=arguments,
     )
 
     async def scenario():
@@ -1255,11 +1335,11 @@ def test_prepared_local_group_runs_image_defaults_with_private_writable_roots(ex
             written = await group.task.run(Command(("sh", "-c", "printf actor >index.html")))
             assert written.exit_code == 0
             response = await group.task.run(Command(("wget", "-q", "-O", "-", "http://runtime:8123")))
-            assert (response.exit_code, response.stdout) == (0, b"from-image")
+            assert (response.exit_code, response.stdout) == (0, expected)
             await group.task.download("/app/index.html", tmp_path / "actor")
             await group.services["runtime"].download("/app/index.html", tmp_path / "runtime")
             assert (tmp_path / "actor").read_bytes() == b"actor"
-            assert (tmp_path / "runtime").read_bytes() == b"from-image"
+            assert (tmp_path / "runtime").read_bytes() == expected
         finally:
             await group.close()
         assert not any(root.exists() for root in roots)

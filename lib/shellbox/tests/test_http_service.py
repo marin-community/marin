@@ -69,7 +69,7 @@ def test_http_capability_serves_concurrent_requests_and_hides_provider_errors(tm
         machine = ProcessMachine(tmp_path)
         async with serve_http(machine, handler, port=available_port()) as url:
             async with httpx.AsyncClient(trust_env=False) as client:
-                slow = asyncio.create_task(client.post(url + "/slow"))
+                slow = asyncio.create_task(client.post(url + "/slow", timeout=30))
                 await asyncio.wait_for(blocked.wait(), 5)
                 answer = await client.post(url + "/answer", json={"number": 41})
                 assert answer.status_code == 201

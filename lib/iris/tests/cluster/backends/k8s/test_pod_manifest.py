@@ -27,6 +27,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     TopologyMode,
 )
 from iris.cluster.platforms.k8s.fake import InMemoryK8sService
+from iris.cluster.platforms.k8s.network_policies import build_service_group_network_policy
 from iris.cluster.platforms.k8s.types import K8sResource, parse_k8s_quantity
 from iris.cluster.runtime.env import STANDARD_MOUNTS
 from iris.cluster.runtime.types import MountKind
@@ -78,6 +79,8 @@ def _dispatch(
 ) -> tuple[list[TaskUpdate], dict[K8sResource, list[dict]]]:
     """Dispatch one request through the provider and snapshot its K8s effects."""
     k8s = InMemoryK8sService(namespace=config.namespace)
+    if request.environment.sandbox_services:
+        k8s.apply_json(build_service_group_network_policy(config.namespace))
     provider = K8sTaskProvider(descriptor=k8s_backend_descriptor(), kubectl=k8s, pods=config, cluster_scan_interval=0.0)
     try:
         updates = provider.sync(make_batch(tasks_to_run=[request]))

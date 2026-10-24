@@ -38,6 +38,7 @@ from iris.cluster.config import TaskOutputPolicy
 from iris.cluster.controller.backend import ProviderError, TaskTarget
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.platforms.k8s.coreweave_topology import RACK_SIZE
+from iris.cluster.platforms.k8s.network_policies import build_service_group_network_policy
 from iris.cluster.platforms.k8s.types import ExecResult, K8sResource, KubectlError
 from iris.cluster.stats.tables import ProfileTrigger
 from iris.cluster.types import JobName
@@ -69,6 +70,64 @@ def test_sync_applies_pods_for_tasks_to_run(provider, k8s):
     assert len(pods) == 1
     assert pods[0]["kind"] == "Pod"
     assert result == []
+
+
+@pytest.fixture
+def service_group_request():
+    request = make_run_req("/alice/group/0", cpu_mc=2000)
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    request.task_image = "example.test/task@sha256:" + "a" * 64
+    request.environment.sandbox_services.add(
+        name="runtime",
+        image="example.test/runtime@sha256:" + "b" * 64,
+        workdir="/app",
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+    )
+    return request
+
+
+@pytest.mark.parametrize("omitted_empty_rules", [False, True])
+def test_service_groups_dispatch_with_read_only_access_to_installed_isolation(
+    provider, k8s, monkeypatch, service_group_request, omitted_empty_rules
+):
+    policy = build_service_group_network_policy("iris")
+    if omitted_empty_rules:
+        policy["spec"].pop("ingress")
+        policy["spec"].pop("egress")
+    k8s.apply_json(policy)
+    apply = k8s.apply_json
+
+    def apply_without_policy_write(manifest):
+        if manifest["kind"] == "NetworkPolicy":
+            raise KubectlError("Controller may only read operator-managed NetworkPolicies")
+        apply(manifest)
+
+    monkeypatch.setattr(k8s, "apply_json", apply_without_policy_write)
+    updates = provider.sync(make_batch(tasks_to_run=[service_group_request]))
+    assert updates == []
+    assert len(k8s.list_json(K8sResource.PODS)) == 1
+    assert k8s.list_json(K8sResource.NETWORK_POLICIES) == [policy]
+
+
+@pytest.mark.parametrize("failure", ["missing", "egress", "ingress", "selector", "directions", "deleting"])
+def test_service_groups_without_enforcing_isolation_never_create_a_pod(provider, k8s, service_group_request, failure):
+    policy = build_service_group_network_policy("iris")
+    if failure in {"egress", "ingress"}:
+        policy["spec"][failure] = [{}]
+    elif failure == "selector":
+        policy["spec"]["podSelector"] = {"matchLabels": {"iris.egress": "none"}}
+    elif failure == "directions":
+        policy["spec"]["policyTypes"] = ["Ingress"]
+    elif failure == "deleting":
+        policy["metadata"]["deletionTimestamp"] = "2026-10-24T00:00:00Z"
+    if failure != "missing":
+        k8s.apply_json(policy)
+    updates = provider.sync(make_batch(tasks_to_run=[service_group_request]))
+    assert len(updates) == 1
+    assert updates[0].new_state == job_pb2.TASK_STATE_WORKER_FAILED
+    assert k8s.list_json(K8sResource.PODS) == []
+    assert k8s.list_json(K8sResource.CONFIGMAPS) == []
 
 
 @pytest.mark.parametrize("profile", [job_pb2.CONTAINER_PROFILE_DEFAULT, job_pb2.CONTAINER_PROFILE_SANDBOX])

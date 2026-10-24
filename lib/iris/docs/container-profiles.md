@@ -149,7 +149,12 @@ pod loopback. `/etc/hosts` maps the declared service names and `task` to
 account tokens or credential-bearing infrastructure sidecars, with root users,
 all capabilities dropped and privilege escalation disabled. A dedicated policy
 selecting `iris.egress=loopback` denies both ingress and egress, including DNS.
-Iris applies it before creating the pod. The namespace must have an enforcing
+Operator controller startup installs this durable policy. Before creating a
+group pod, the controller reads the named policy and verifies its selector and
+deny-all rules; missing or changed isolation prevents dispatch. Its runtime
+RBAC permits only reading that policy, with no NetworkPolicy write access.
+Existing clusters need the updated RBAC and an operator controller restart
+before service groups can run. The namespace must have an enforcing
 NetworkPolicy implementation and no other allow policy selecting these pods;
 Kubernetes policy permissions are additive.
 
