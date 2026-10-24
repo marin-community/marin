@@ -7,11 +7,13 @@ import argparse
 import hashlib
 import json
 import shutil
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from experiments.weight_merging.playground import evaluation
 from experiments.weight_merging.playground.evaluation import DOCKER_IMAGE, score
+from experiments.weight_merging.playground.remote import grades as grade_cache
 from experiments.weight_merging.playground.remote.grades import GradeStore
 
 # The cleanup-only patch preserves grading and sandbox limits. Reuse requires an
@@ -23,8 +25,8 @@ PRECLEANUP_CACHE_CONTRACT = {
 }
 
 
-def check_cleanup_cache(rows: list[dict], items: dict[str, dict], cache: GradeStore, timeout_replay: dict) -> list[dict]:
-    """Check five saved normal grades and replay an actual pre-patch timeout."""
+def check_cleanup_cache(rows: list[dict], items: dict[str, dict], cache: GradeStore) -> list[dict]:
+    """Check five saved normal grades and a synthetic infinite-loop timeout."""
     selected = []
     for row in rows:
         if row["dataset"] != "mbpp":
@@ -40,7 +42,9 @@ def check_cleanup_cache(rows: list[dict], items: dict[str, dict], cache: GradeSt
         raise ValueError("Cleanup cache audit requires five saved normal grades")
     checks = []
     for row, cached in selected:
+        started = time.monotonic()
         actual = score(items[row["item_id"]], row["completion"])
+        elapsed = time.monotonic() - started
         if actual != cached:
             raise ValueError(f"Cleanup patch changed cached grade: {row['candidate']} {row['item_id']}")
         checks.append(
@@ -48,40 +52,57 @@ def check_cleanup_cache(rows: list[dict], items: dict[str, dict], cache: GradeSt
                 "key": [row[key] for key in ("candidate", "item_id", "mode", "seed")],
                 "grade": actual,
                 "purpose": "cached_normal",
+                "elapsed_seconds": elapsed,
             }
         )
-    replay = next(row for row in rows if all(row[key] == value for key, value in timeout_replay.items()))
-    actual = score(items[replay["item_id"]], replay["completion"])
+    started = time.monotonic()
+    actual = score({"dataset": "mbpp", "setup": [], "tests": []}, "while True:\n    pass\n")
+    elapsed = time.monotonic() - started
     if actual != {"correct": False, "error": "timeout"}:
-        raise ValueError(f"Previously crashing observation did not time out in replay: {timeout_replay}: {actual}")
+        raise ValueError(f"Synthetic infinite-loop control did not time out and fail: {actual}")
     checks.append(
         {
-            "key": [replay[key] for key in ("candidate", "item_id", "mode", "seed")],
+            "key": ["synthetic-timeout-control", "mbpp/control/infinite-loop", "greedy", 0],
             "grade": actual,
-            "purpose": "previously_crashing_timeout",
+            "purpose": "synthetic_timeout",
+            "elapsed_seconds": elapsed,
         }
     )
-    print("Cleanup cache sanity: five saved normal grades exact; crashed-item replay timed out and failed", flush=True)
+    print(
+        "Cleanup cache sanity: five saved normal grades exact; synthetic infinite loop timed out and failed", flush=True
+    )
     return checks
 
 
 def score_rows(
-    rows: list[dict], items: dict[str, dict], *, cache: GradeStore, parity: bool = False
+    rows: list[dict],
+    items: dict[str, dict],
+    *,
+    cache: GradeStore,
+    parity: bool = False,
+    execution_timings: list[dict] | None = None,
 ) -> tuple[list[dict], list[dict]]:
     pending = [row for row in rows if row["dataset"] == "mbpp" and (parity or row.get("pending_execution"))]
 
     def durable_score(row):
         item = items[row["item_id"]]
         identity = cache.identity(row, item)
-        cached = cache.get(identity)
+        key = [row[field] for field in ("candidate", "item_id", "mode", "seed")]
+        cached = cache.get_record(identity)
         if cached is not None:
-            return cached
+            if execution_timings is not None and "elapsed_seconds" in cached:
+                execution_timings.append({"key": key, "elapsed_seconds": cached["elapsed_seconds"], "reused": True})
+            return cached["grade"]
         try:
+            started = time.monotonic()
             grade = score(item, row["completion"])
+            elapsed = time.monotonic() - started
         except Exception as error:
             error.add_note(f"Scoring observation: {row['candidate']} {row['item_id']} {row['mode']} seed={row['seed']}")
             raise
-        cache.put(identity, grade)
+        cache.put(identity, grade, elapsed_seconds=elapsed)
+        if execution_timings is not None:
+            execution_timings.append({"key": key, "elapsed_seconds": elapsed, "reused": False})
         return grade
 
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -123,22 +144,21 @@ def main():
         "docker_image": DOCKER_IMAGE,
         "evaluation_sha256": hashlib.sha256(Path(evaluation.__file__).read_bytes()).hexdigest(),
         "rescore_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "grade_store_sha256": hashlib.sha256(Path(grade_cache.__file__).read_bytes()).hexdigest(),
     }
     compatibility = json.loads(args.cleanup_cache_manifest.read_text()) if args.cleanup_cache_manifest else None
     if compatibility is not None and (
         compatibility["old_contract"] != PRECLEANUP_CACHE_CONTRACT
         or compatibility["new_contract"] != scoring_contract
         or not compatibility["patch_diff"]
-        or compatibility["audit_policy"] != "five_cached_normal_plus_exact_crashed_timeout"
-        or set(compatibility["timeout_replay"]) != {"candidate", "item_id", "mode", "seed"}
+        or compatibility["audit_policy"] != "five_cached_normal_plus_synthetic_timeout"
     ):
         raise ValueError("Cleanup cache manifest does not pin the exact old/new scorer sources and patch")
     cache_contract = PRECLEANUP_CACHE_CONTRACT if compatibility is not None else scoring_contract
     cache = GradeStore(args.cache, cache_contract)
-    sanity = (
-        check_cleanup_cache(rows, items, cache, compatibility["timeout_replay"]) if compatibility is not None else []
-    )
-    scored, differences = score_rows(rows, items, cache=cache, parity=bool(args.parity_items))
+    sanity = check_cleanup_cache(rows, items, cache) if compatibility is not None else []
+    timings = []
+    scored, differences = score_rows(rows, items, cache=cache, parity=bool(args.parity_items), execution_timings=timings)
     args.output.mkdir(parents=True)
     for name in ("panel.json", "model-paths.json", "model-sources.json"):
         shutil.copy2(args.run / name, args.output / name)
@@ -153,6 +173,13 @@ def main():
         "cache_contract": cache_contract,
         "cleanup_cache_compatibility": compatibility,
         "cleanup_cache_sanity": sanity,
+        "execution_timing": {
+            "limit_seconds": 10,
+            "near_limit_threshold_seconds": 8,
+            "observations_with_timing": len(timings),
+            "cached_without_timing": sum(row["dataset"] == "mbpp" for row in rows) - len(timings),
+            "near_limit_items": [value for value in timings if value["elapsed_seconds"] >= 8],
+        },
         "parity_items": args.parity_items,
         "rows": len(scored),
         "differences": differences,

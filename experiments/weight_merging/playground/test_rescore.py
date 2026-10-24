@@ -88,15 +88,19 @@ def test_completed_grades_survive_another_item_failing_and_retry(monkeypatch, tm
         return {"correct": False}
 
     monkeypatch.setattr("experiments.weight_merging.playground.rescore.score", retry)
-    result, _ = score_rows(rows, {"good": {}, "failure": {}}, cache=cache)
+    timings = []
+    result, _ = score_rows(rows, {"good": {}, "failure": {}}, cache=cache, execution_timings=timings)
     assert executed == ["failure"]
     assert [row["correct"] for row in result] == [True, False]
+    measured = {row["key"][1]: row for row in timings}
+    assert measured["good"]["reused"] and not measured["failure"]["reused"]
+    assert measured["good"]["elapsed_seconds"] == cache.get_record(cache.identity(rows[0], {}))["elapsed_seconds"]
     changed = {**rows[0], "completion": "changed"}
     assert cache.get(cache.identity(changed, {})) is None
     assert cache.get(cache.identity(rows[0], {"tests": ["changed test"]})) is None
 
 
-def test_cleanup_cache_audit_checks_saved_grades_and_actual_crashed_timeout(monkeypatch, tmp_path):
+def test_cleanup_cache_audit_checks_saved_grades_and_synthetic_timeout(monkeypatch, tmp_path):
     cache = GradeStore(str(tmp_path), {"scorer": "known-old"})
     rows = [
         {"candidate": "model", "dataset": "mbpp", "item_id": str(i), "mode": "greedy", "seed": 0, "completion": str(i)}
@@ -109,16 +113,15 @@ def test_cleanup_cache_audit_checks_saved_grades_and_actual_crashed_timeout(monk
 
     def reexecute(item, text):
         executed.append(text)
-        return grades[int(text)]
+        return grades[5] if text.startswith("while True:") else grades[int(text)]
 
     monkeypatch.setattr("experiments.weight_merging.playground.rescore.score", reexecute)
-    replay = {key: rows[-1][key] for key in ("candidate", "item_id", "mode", "seed")}
-    checks = check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache, replay)
-    assert executed == ["0", "1", "2", "3", "4", "5"]
+    checks = check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache)
+    assert executed == ["0", "1", "2", "3", "4", "while True:\n    pass\n"]
     assert len(checks) == 6 and checks[-1]["grade"]["error"] == "timeout"
     monkeypatch.setattr("experiments.weight_merging.playground.rescore.score", lambda *args: grades[0])
     with pytest.raises(ValueError, match="did not time out"):
-        check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache, replay)
+        check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache)
     monkeypatch.setattr("experiments.weight_merging.playground.rescore.score", lambda *args: {"correct": False})
     with pytest.raises(ValueError, match="changed cached grade"):
-        check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache, replay)
+        check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache)

@@ -35,18 +35,24 @@ class GradeStore:
             "completion_sha256": digest(row["completion"].encode()),
         }
 
-    def get(self, identity: dict) -> dict | None:
+    def get_record(self, identity: dict) -> dict | None:
         path = self.prefix + "/" + digest(canonical_bytes(identity)) + ".done.json"
         if not self.fs.exists(path):
             return None
         result = json.loads(self.fs.cat(path))
         if result["identity"] != identity or result["grade_sha256"] != digest(canonical_bytes(result["grade"])):
             raise ValueError("Durable grade input or payload changed")
-        return result["grade"]
+        return result
 
-    def put(self, identity: dict, grade: dict) -> None:
+    def get(self, identity: dict) -> dict | None:
+        result = self.get_record(identity)
+        return result["grade"] if result is not None else None
+
+    def put(self, identity: dict, grade: dict, *, elapsed_seconds: float | None = None) -> None:
         path = self.prefix + "/" + digest(canonical_bytes(identity)) + ".done.json"
         payload = {"identity": identity, "grade": grade, "grade_sha256": digest(canonical_bytes(grade))}
+        if elapsed_seconds is not None:
+            payload["elapsed_seconds"] = elapsed_seconds
         self.fs.pipe_file(path, canonical_bytes(payload))
         self.fs.invalidate_cache(path)
         if self.get(identity) != grade:

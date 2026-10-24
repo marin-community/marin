@@ -169,14 +169,18 @@ Timeout cleanup tolerates Docker auto-removal races only after `docker ps -a`
 confirms that the exact named container is gone; the grade remains a timeout
 failure. For this cleanup-only patch, `PLAYGROUND_CLEANUP_CACHE_MANIFEST` may
 point to an explicit compatibility manifest containing `old_contract`,
-`new_contract`, `patch_diff`, `audit_policy` and `timeout_replay`. It must pin the one supported pre-patch contract
+`new_contract`, `patch_diff` and `audit_policy`. It must pin the one supported pre-patch contract
 and the exact current evaluation/scorer hashes. Any later scorer edit invalidates
 that manifest. Before reuse, five cached normal grades must match exactly, and
-the exact previously crashing observation must replay as a timeout failure.
-The manifest records that audit policy and the replay's candidate, item, mode
-and seed; a replay finishing inside the time limit does not pass the timeout
-check. The final run metadata retains both contracts,
+an infinite-loop synthetic control must time out and fail without crashing.
+The manifest records that audit policy and the outcomes of previously crashing
+items, which finished in time on replay and cannot serve as timeout tests.
+The final run metadata retains both contracts,
 the patch and the sanity-check grades. Ordinary runs use a fresh source contract.
+New grades retain wall-clock execution times separately from correctness.
+The manifest lists observations taking at least eight seconds against the
+ten-second limit; those outcomes may change with machine load. Old cached
+grades have no timing measurement and are counted explicitly as unavailable.
 
 Use isolated CUDA environments because the repository defaults to CPU Torch.
 The tested GPU driver is 535.309.01; CUDA 12.1 is compatible with it.
