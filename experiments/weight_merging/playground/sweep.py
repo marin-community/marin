@@ -184,6 +184,7 @@ def reload_probe(llm, tokenizer, items: list[dict], max_tokens: int) -> list[lis
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--revision", help="Source revision when the Iris workspace has no .git directory")
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--max-num-seqs", type=int, default=64)
     parser.add_argument("--max-new-tokens", type=int, default=2048)
@@ -214,7 +215,7 @@ def main() -> None:
     metadata = {
         "panel_sha256": hashlib.sha256(panel_path.read_bytes()).hexdigest(),
         "models": json.loads((args.run / "model-sources.json").read_text()),
-        "git_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "git_revision": args.revision or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "torch": torch.__version__,
         "transformers": transformers.__version__,
         "gpu": torch.cuda.get_device_name(),

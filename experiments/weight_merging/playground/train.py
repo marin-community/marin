@@ -41,6 +41,7 @@ def main() -> None:
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--accumulation", type=int, default=8)
     parser.add_argument("--eval-steps", type=int, default=250)
+    parser.add_argument("--revision", help="Source revision when the Iris workspace has no .git directory")
     parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
     if args.output.exists() and args.resume is None:
@@ -103,7 +104,7 @@ def main() -> None:
         "torch": torch.__version__,
         "transformers": transformers.__version__,
         "gpu": torch.cuda.get_device_name(),
-        "git_revision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+        "git_revision": args.revision or subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
         "data_sha256": hashlib.sha256((args.data / "metadata.json").read_bytes()).hexdigest(),
         "source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
