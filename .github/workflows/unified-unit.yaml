@@ -542,6 +542,11 @@ jobs:
             cloud/iris/tests/test_open_mopd_evaluation.py \
             skyrl-gym/tests/test_aime_answer_normalization.py \
             skyrl-gym/tests/test_nemotron_judge_assets.py
+      - name: Check router replay storage on CPU
+        working-directory: vendor/skyrl
+        run: >-
+          uv run --isolated --frozen --no-group dev --extra cpu --with pytest==8.4.2
+          pytest -q skyrl-train/tests/cpu/test_megatron_router_replay_plumbing.py
 
   unit_tests:
     name: unit-tests
