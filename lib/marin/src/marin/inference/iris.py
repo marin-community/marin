@@ -11,6 +11,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
@@ -28,7 +29,7 @@ from rigging import telemetry
 from rigging.connect import capability_path, proxy_path
 from rigging.filesystem.storage_path import StoragePath
 from rigging.log_setup import configure_logging
-from rigging.timing import Deadline, Duration
+from rigging.timing import Deadline, Duration, retry_with_backoff
 
 from marin.inference.auxiliary import build_auxiliary_app
 from marin.inference.backend import OPENAI_API_SUFFIX, ModelSpec
@@ -651,11 +652,19 @@ def remote_inference(
     if get_job_info() is None:
         raise RuntimeError("remote_inference must run inside an Iris job")
     resolved_broker = _broker_config(config.instances, config.broker)
-    if resolved_broker is None:
-        with _start_direct_inference(config) as session:
-            yield session
-        return
-    with _start_brokered_inference(config, resolved_broker) as session:
+    start = (
+        partial(_start_direct_inference, config)
+        if resolved_broker is None
+        else partial(_start_brokered_inference, config, resolved_broker)
+    )
+    with contextlib.ExitStack() as stack:
+        session = retry_with_backoff(
+            lambda: stack.enter_context(start()),
+            retryable=lambda error: isinstance(error, RemoteInferenceStartupError)
+            and isinstance(error.__cause__, TimeoutError),
+            max_attempts=config.iris.max_retries_failure + 1,
+            operation="remote inference startup",
+        )
         yield session
 
 
@@ -792,10 +801,10 @@ def _submit_broker_workers(
     iris = config.iris
     client = current_client()
     jobs: list[JobHandle] = []
-    for worker_index in range(config.instances):
-        worker_id = f"inference-worker-{run_id}-{worker_index}"
-        jobs.append(
-            client.submit(
+    with contextlib.ExitStack() as cleanup:
+        for worker_index in range(config.instances):
+            worker_id = f"inference-worker-{run_id}-{worker_index}"
+            job = client.submit(
                 JobRequest(
                     name=worker_id,
                     entrypoint=Entrypoint.from_callable(
@@ -810,7 +819,9 @@ def _submit_broker_workers(
                     priority=iris.priority,
                 )
             )
-        )
+            cleanup.callback(_terminate_job, job)
+            jobs.append(job)
+        cleanup.pop_all()
     return jobs
 
 
