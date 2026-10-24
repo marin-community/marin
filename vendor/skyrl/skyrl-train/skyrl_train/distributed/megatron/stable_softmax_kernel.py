@@ -56,9 +56,13 @@ def _softmax_forward(
         d_block = b - next_m
         old_scale = tl.where(start == 0, 0.0, tl.exp(d_old))
         block_scale = tl.exp(d_block)
+        old_mass = old_scale * (s + 1.0)
+        block_mass = block_scale * (sb + 1.0)
         if ENTROPY:
-            t = old_scale * (t + d_old * (s + 1.0)) + block_scale * (tb + d_block * (sb + 1.0))
-        s = old_scale * s + block_scale * sb + tl.where(b > m, old_scale, block_scale)
+            t_up = old_scale * t + d_old * old_mass + tb
+            t_down = t + block_scale * tb + d_block * block_mass
+            t = tl.where(b > m, t_up, t_down)
+        s = tl.where(b > m, old_mass + sb, s + block_mass)
         m = next_m
     if ENTROPY:
         output = libdevice.log1p(s) - t / (1.0 + s)
