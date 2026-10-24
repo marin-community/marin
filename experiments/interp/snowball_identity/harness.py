@@ -378,8 +378,18 @@ class SnowballHarness:
         model = self.model.model
         return model.final_gated_norm(model.norm(hidden.to(self.devices[-1])))
 
-    @torch.no_grad()
-    def run(
+    def run(self, *args, grad: bool = False, **kwargs) -> tuple[torch.Tensor, Recorder | None]:
+        """One batched forward over equal-length sequences, row ``b`` with ``variants[b]``.
+
+        Returns float32 CPU log-probs [batch, len(logit_positions), vocab] (default: the last position), or only
+        the ``gather`` token ids' log-probs [batch, positions, len(gather)]. With ``grad`` the log-probs stay on
+        the last GPU and carry autograd (for optimizing an edit through the frozen model).
+        """
+        with torch.set_grad_enabled(grad):
+            logprobs, recorder = self._run(*args, **kwargs)
+        return (logprobs if grad else logprobs.cpu()), recorder
+
+    def _run(
         self,
         tokens: list[list[int]] | list[tuple[int, ...]],
         *,
@@ -389,11 +399,6 @@ class SnowballHarness:
         logit_positions: torch.Tensor | None = None,
         gather: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, Recorder | None]:
-        """One batched forward over equal-length sequences, row ``b`` with ``variants[b]``.
-
-        Returns float32 CPU log-probs [batch, len(logit_positions), vocab] (default: the last position), or only
-        the ``gather`` token ids' log-probs [batch, positions, len(gather)].
-        """
         batch, length = len(tokens), len(tokens[0])
         if any(len(row) != length for row in tokens):
             raise ValueError("Batched sequences must have equal lengths")
@@ -435,7 +440,7 @@ class SnowballHarness:
             logprobs = torch.log_softmax(self.model.lm_head(selected).float(), dim=-1)
             if gather is not None:
                 logprobs = logprobs[..., gather.to(logprobs.device)]
-            return logprobs.cpu(), recorder
+            return logprobs, recorder
         finally:
             self.state.reset()
 

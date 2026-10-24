@@ -32,10 +32,16 @@ Spec format (JSON). ``id`` is optional; ``submit`` makes one from the time.
     ``resid_pre``, ``attn``, ``routed``, ``shared``, ``resid``), ``heads``, ``per_position``, ``batch``.
     Reports ``recovery = (patched - corrupt) / (clean - corrupt)`` of the target logit difference.
 ``{"command": "steer", "prompts": PATH, "vector": ..., "layers": [...], "alphas": [...], ...}``
-    Adds ``alpha * v`` after each layer in the grid (``analyses.steer``). ``vector`` is ``{"path": PT}`` or
-    ``{"mean_diff": {"a": PATH, "b": PATH}}`` (mean last-position residual of set A minus set B, per layer),
-    with optional ``"unit": true``. Options: ``positions`` (``assistant`` or ``all``), ``generate``
-    (``{"max_new_tokens": N}`` for greedy text), ``batch``.
+    Adds ``alpha * v`` after each layer of each grid entry (``analyses.steer``). A ``layers`` entry is a layer
+    or a list of layers steered together, e.g. ``[18, [22, 23]]``. ``vector`` is ``{"path": PT}``,
+    ``{"mean_diff": {"a": PATH, "b": PATH}}`` (mean last-position residual of set A minus set B, per layer) or
+    ``{"head_diff": {"a": PATH, "b": PATH, "heads": [[22, 3], [23, 1]]}}`` (per layer, the summed mean output
+    of the listed heads over assistant positions, A minus B), with optional ``"unit": true``. Options:
+    ``positions`` (``assistant`` or ``all``), ``generate`` (``{"max_new_tokens": N}`` for greedy text), ``batch``.
+``{"command": "edit_rank1", "layer": L, "module": "o_proj" | "shared_down", "key_prompts": PATH,
+"preserve_prompts": PATH, ...}``
+    A rank-1 weight edit optimized and evaluated in memory (``edits.edit_rank1``; options and outputs are in
+    that module's docstring). The model is unchanged after the spec.
 
 Prompt rows use ``prompts.py``'s format: ``{"id", "messages" | "text", "chat_template_kwargs"?, "prefill"?,
 "targets"?}``.
@@ -52,7 +58,7 @@ import torch
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.interp.snowball_identity import analyses
+from experiments.interp.snowball_identity import analyses, edits
 from experiments.interp.snowball_identity.harness import (
     COMMANDS,
     Output,
@@ -65,7 +71,12 @@ from experiments.interp.snowball_identity.prompts import SNOWBALL_V01, load_toke
 
 logger = logging.getLogger(__name__)
 
-ANALYSES = {"lens": analyses.lens, "patch": analyses.patch, "steer": analyses.steer}
+ANALYSES = {
+    "lens": lambda harness, tokenizer, spec, output, stop_ids: analyses.lens(harness, tokenizer, spec, output),
+    "patch": lambda harness, tokenizer, spec, output, stop_ids: analyses.patch(harness, tokenizer, spec, output),
+    "steer": analyses.steer,
+    "edit_rank1": edits.edit_rank1,
+}
 POLL_SECONDS = 15
 
 
@@ -125,10 +136,8 @@ def run_spec(harness, tokenizer, weights: str, stop_ids: set[int], spec: dict, o
     if command in COMMANDS:
         args = build_parser().parse_args([command, *spec.get("args", []), "--weights", weights, "--output", output.url])
         run_command(harness, tokenizer, args, output, stop_ids)
-    elif command == "steer":
-        analyses.steer(harness, tokenizer, spec, output, stop_ids)
     else:
-        ANALYSES[command](harness, tokenizer, spec, output)
+        ANALYSES[command](harness, tokenizer, spec, output, stop_ids)
 
 
 def serve(queue: Queue, weights: str, idle_minutes: float) -> None:

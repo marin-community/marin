@@ -283,37 +283,81 @@ def _mean_last_resid(harness: SnowballHarness, prompts: list[Prompt]) -> torch.T
     return total / len(prompts)
 
 
+def _mean_head_outputs(harness: SnowballHarness, prompts: list[Prompt], heads: list[tuple[int, int]]) -> dict:
+    """Per (layer, head): the head's output (its o_proj columns times its input), mean over assistant positions,
+    then over prompts: {(layer, head): [hidden]}."""
+    total: dict[tuple[int, int], torch.Tensor] = {}
+    width = harness.head_dim
+    for prompt in prompts:
+        positions = torch.arange(prompt.assistant_start, len(prompt.tokens))
+        _, record = harness.forward(prompt.tokens, assistant_start=prompt.assistant_start, capture=positions)
+        for layer, head in heads:
+            columns = harness.layers[layer].self_attn.o_proj.weight[:, head * width : (head + 1) * width].float().cpu()
+            value = (record.head_in[layer][:, head * width : (head + 1) * width] @ columns.T).mean(0)
+            total[(layer, head)] = value + total.get((layer, head), 0)
+    return {key: value / len(prompts) for key, value in total.items()}
+
+
 def steering_vectors(harness: SnowballHarness, tokenizer, spec: dict) -> dict[int, torch.Tensor]:
-    """``{"path": s3 .pt}`` (one vector for every layer) or ``{"mean_diff": {"a": prompts, "b": prompts}}``."""
+    """One vector per layer, from ``vector``:
+
+    - ``{"path": .pt}``: one 1-D vector for every layer.
+    - ``{"mean_diff": {"a": prompts, "b": prompts}}``: mean last-position residual after the layer, A minus B.
+    - ``{"head_diff": {"a": prompts, "b": prompts, "heads": [[layer, head], ...]}}``: per layer, the sum over the
+      listed heads of the head's mean output over assistant positions, A minus B.
+
+    ``"unit": true`` scales each layer's vector to norm 1.
+    """
     source = spec["vector"]
-    layers = spec["layers"]
+    layers = sorted({layer for entry in spec["layers"] for layer in _layer_set(entry)})
     if "path" in source:
         vector = torch.load(io.BytesIO(read_bytes(source["path"])), map_location="cpu").flatten().float()
         vectors = dict.fromkeys(layers, vector)
-    else:
+    elif "mean_diff" in source:
         a = _mean_last_resid(harness, read_prompts(source["mean_diff"]["a"], tokenizer))
         b = _mean_last_resid(harness, read_prompts(source["mean_diff"]["b"], tokenizer))
         vectors = {layer: a[layer] - b[layer] for layer in layers}
+    elif "head_diff" in source:
+        heads = [tuple(item) for item in source["head_diff"]["heads"]]
+        a = _mean_head_outputs(harness, read_prompts(source["head_diff"]["a"], tokenizer), heads)
+        b = _mean_head_outputs(harness, read_prompts(source["head_diff"]["b"], tokenizer), heads)
+        vectors = {}
+        for layer, head in heads:
+            vectors[layer] = a[(layer, head)] - b[(layer, head)] + vectors.get(layer, 0)
+        missing = set(layers) - set(vectors)
+        if missing:
+            raise ValueError(f"layers {sorted(missing)} have no listed heads")
+    else:
+        raise ValueError('vector needs "path", "mean_diff" or "head_diff"')
     if source.get("unit"):
         vectors = {layer: vector / vector.norm() for layer, vector in vectors.items()}
     return vectors
 
 
-def steer(harness: SnowballHarness, tokenizer, spec: dict, output: Output, stop_ids: set[int]) -> None:
-    """Add alpha * v after layer L for a grid of (L, alpha); report target log-probs and optional greedy text.
+def _layer_set(entry: int | list[int]) -> list[int]:
+    return [entry] if isinstance(entry, int) else list(entry)
 
-    Spec: ``prompts``, ``layers``, ``alphas``, ``vector`` (see ``steering_vectors``), ``positions`` ('all' or
-    'assistant'), optional ``generate: {"max_new_tokens": N}``, ``batch``.
+
+def steer(harness: SnowballHarness, tokenizer, spec: dict, output: Output, stop_ids: set[int]) -> None:
+    """Add alpha * v after each layer of a layer set, for a grid of (layer set, alpha); report target log-probs
+    and optional greedy text.
+
+    Spec: ``prompts``, ``layers`` (each entry a layer or a list of layers steered together), ``alphas``,
+    ``vector`` (see ``steering_vectors``), ``positions`` ('all' or 'assistant'), optional
+    ``generate: {"max_new_tokens": N}``, ``batch``.
     """
     vectors = steering_vectors(harness, tokenizer, spec)
     output.save("vectors.pt", vectors)
     assistant_only = spec.get("positions", "assistant") == "assistant"
-    grid = [(layer, alpha) for layer in spec["layers"] for alpha in spec["alphas"]]
-    variants = [Interventions(add=[AddVector(layer, vectors[layer], alpha, assistant_only)]) for layer, alpha in grid]
+    grid = [(entry, alpha) for entry in spec["layers"] for alpha in spec["alphas"]]
+    variants = [
+        Interventions(add=[AddVector(layer, vectors[layer], alpha, assistant_only) for layer in _layer_set(entry)])
+        for entry, alpha in grid
+    ]
     batch = spec.get("batch", 32)
     results = []
     for prompt in read_prompts(spec["prompts"], tokenizer):
-        row = {"id": prompt.id, "grid": [{"layer": layer, "alpha": alpha} for layer, alpha in grid]}
+        row = {"id": prompt.id, "grid": [{"layer": entry, "alpha": alpha} for entry, alpha in grid]}
         for target in prompt.targets:
             target_tokens = tokenizer(target, add_special_tokens=False)["input_ids"]
             tokens = list(prompt.tokens) + target_tokens
