@@ -1,0 +1,118 @@
+name: Marin - Performance Import
+
+on:
+  workflow_run:
+    workflows: [Marin - AgentX Collection]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      collector_run_id:
+        description: Collection Action that uploaded an agentx-results artifact
+        type: string
+        required: true
+
+concurrency:
+  group: inferencex-import
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+jobs:
+  import:
+    if: >-
+      github.repository == 'marin-community/marin' &&
+      vars.INFERENCEX_INGEST_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_branch == github.event.repository.default_branch))
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+      COLLECTOR_RUN: ${{ inputs.collector_run_id || github.event.workflow_run.id }}
+      INGEST_IMAGE: ${{ vars.INFERENCEX_INGEST_IMAGE }}
+      INSTANCE: hai-gcp-models:us-central1:marin-metadata
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download the completed collector's bundle
+        id: bundle
+        run: |
+          set -euo pipefail
+          [[ "$INGEST_IMAGE" == us-central1-docker.pkg.dev/hai-gcp-models/marin-inferencex/*@sha256:* ]]
+          # An early collection can legitimately have no validated points yet.
+          count=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$COLLECTOR_RUN/artifacts" \
+            --jq '[.artifacts[] | select(.name | startswith("agentx-results-"))] | length')
+          if [[ "$count" == 0 ]]; then exit 0; fi
+          gh run download "$COLLECTOR_RUN" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'agentx-results-*' --dir "$RUNNER_TEMP/agentx-import"
+          bundles=("$RUNNER_TEMP"/agentx-import/agentx-results-*)
+          [[ "${#bundles[@]}" == 1 ]]
+          echo "path=${bundles[0]}" >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v3
+        id: auth
+        if: steps.bundle.outputs.path != ''
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
+          token_format: id_token
+          id_token_audience: 748532799086-qf8m6mvovtdmd71npm07gk1ohijsr3q5.apps.googleusercontent.com
+          id_token_include_email: true
+      - uses: google-github-actions/setup-gcloud@v3
+        if: steps.bundle.outputs.path != ''
+      - name: Open an ephemeral Cloud SQL socket
+        if: steps.bundle.outputs.path != ''
+        run: |
+          set -euo pipefail
+          curl --fail --location --silent --show-error \
+            https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.26.3/cloud-sql-proxy.linux.amd64 \
+            -o "$RUNNER_TEMP/cloud-sql-proxy"
+          echo "5533a05cdbf12f8a0cb46db34c775847a496e181d47f863284d3d02b0fad49fa  $RUNNER_TEMP/cloud-sql-proxy" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/cloud-sql-proxy"
+          mkdir -p "$RUNNER_TEMP/cloudsql"
+          "$RUNNER_TEMP/cloud-sql-proxy" --unix-socket "$RUNNER_TEMP/cloudsql" "$INSTANCE" \
+            > "$RUNNER_TEMP/cloud-sql-proxy.log" 2>&1 &
+          echo "$!" > "$RUNNER_TEMP/cloud-sql-proxy.pid"
+          ready=false
+          for attempt in {1..30}; do
+            if [[ -S "$RUNNER_TEMP/cloudsql/$INSTANCE/.s.PGSQL.5432" ]]; then ready=true; break; fi
+            echo "Waiting for Cloud SQL socket ($attempt/30)"
+            sleep 1
+          done
+          [[ "$ready" == true ]]
+      - name: Import using the writer role and refresh the IAP-protected app
+        if: steps.bundle.outputs.path != ''
+        env:
+          ARTIFACTS: ${{ steps.bundle.outputs.path }}
+          IAP_ID_TOKEN: ${{ steps.auth.outputs.id_token }}
+          DATABASE_USER: inferencex_writer
+          DATABASE_NAME: inferencex
+          DATABASE_DRIVER: postgres
+          DATABASE_SSL: 'false'
+          DASHBOARD_URL: https://performance.oa.dev
+        run: |
+          set -euo pipefail
+          DATABASE_PASSWORD="$(gcloud secrets versions access latest --secret=cloudsql-inferencex-writer-password --project=hai-gcp-models)"
+          INVALIDATE_SECRET="$(gcloud secrets versions access latest --secret=marin-inferencex-invalidate-secret --project=hai-gcp-models)"
+          export DATABASE_PASSWORD INVALIDATE_SECRET
+          echo "::add-mask::$DATABASE_PASSWORD"
+          echo "::add-mask::$INVALIDATE_SECRET"
+          export DATABASE_SOCKET_DIR="$RUNNER_TEMP/cloudsql/$INSTANCE"
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+          docker pull "$INGEST_IMAGE"
+          docker run --rm --network host \
+            --mount "type=bind,src=$ARTIFACTS,dst=/artifacts,readonly" \
+            --mount "type=bind,src=$RUNNER_TEMP/cloudsql,dst=$RUNNER_TEMP/cloudsql" \
+            -e GITHUB_TOKEN -e DATABASE_USER -e DATABASE_PASSWORD -e DATABASE_NAME \
+            -e DATABASE_SOCKET_DIR -e DATABASE_DRIVER -e DATABASE_SSL \
+            -e DASHBOARD_URL -e INVALIDATE_SECRET -e IAP_ID_TOKEN "$INGEST_IMAGE" /artifacts
+      - name: Close the proxy
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/cloud-sql-proxy.pid" ]]; then
+            kill "$(cat "$RUNNER_TEMP/cloud-sql-proxy.pid")" || true
+          fi

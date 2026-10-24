@@ -1,0 +1,8 @@
+name: marin-inferencex
+backend:
+  url: gs://marin-iac-state/
+runtime:
+  name: python
+  options:
+    virtualenv: ../../.venv
+description: Internal Snowball performance dashboard with IAP and Cloud SQL.
