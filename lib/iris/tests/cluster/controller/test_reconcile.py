@@ -67,7 +67,7 @@ from iris.cluster.controller.worker_health import (
 )
 from iris.cluster.runtime.env import TASK_OUTPUT_FINALIZING_STATUS
 from iris.cluster.types import AttemptUid, JobName, WorkerId
-from iris.rpc import job_pb2, worker_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
     assign_task,
     dispatch_task,
@@ -1389,6 +1389,9 @@ class _ScriptedProvider:
     def remove_capacity(self, request: RemoveCapacityRequest) -> RemoveCapacityResult:
         return RemoveCapacityResult()
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
+
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None
 
@@ -1464,6 +1467,9 @@ class _UnreachableProvider:
         self.remove_capacity_calls.append(list(request.worker_ids))
         siblings = [WorkerId(sibling) for dead in request.worker_ids for sibling in self.siblings.get(str(dead), [])]
         return RemoveCapacityResult(sibling_workers=siblings)
+
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        return None
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
         return None

@@ -1,0 +1,101 @@
+[project]
+name = "harbor"
+version = "0.8.1"
+description = "Agent evaluation in sandboxed environments."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "pydantic>=2.11.7",
+    "shortuuid>=1.0.13",
+    "typer>=0.16.0",
+    "requests>=2.32.4",
+    "pyyaml>=6.0.2",
+    "rich>=14.1.0",
+    "toml>=0.10.2",
+    "tenacity>=9.1.2",
+    "python-dotenv>=1.1.1",
+    "openai>=2",
+    "tiktoken>=0.12",
+    "orjson>=3.11.6",
+    "jinja2>=3.1.6",
+    "dirhash>=0.5.0",
+    "packaging>=25.0",
+    "fastapi>=0.128.0",
+    "uvicorn>=0.38.0",
+    "pathspec>=1.0.3",
+    "supabase>=2.28.2",
+    "httpx>=0.27.0",
+    "huggingface-hub>=1.3.2",
+    "universal-pathlib>=0.2.6",
+]
+
+[project.scripts]
+harbor = "harbor.cli.main:app"
+hr = "harbor.cli.main:app"
+hb = "harbor.cli.main:app"
+
+[project.optional-dependencies]
+runtime = ["harbor[archive,telemetry,daytona]", "gcsfs", "s3fs", "pydantic-settings"]
+analysis = ["claude-agent-sdk>=0.1.17"]
+archive = ["marin-finestore"]
+telemetry = ["marin-rigging"]
+datasets = ["datasets>=4.4.1"]
+e2b = ["e2b>=2.4.2", "dockerfile-parse>=2.0.1"]
+daytona = ["daytona==0.200.2"]
+islo = ["islo>=0.3.0", "dockerfile-parse>=2.0.1"]
+modal = ["modal>=1.4.0"]
+runloop = ["runloop-api-client>=1.2.0", "dockerfile-parse>=2.0.1"]
+tensorlake = ["tensorlake>=0.5.18"]
+gke = ["kubernetes>=32.0.0"]
+novita = ["novita-sandbox==2.0.0a3", "dockerfile-parse>=2.0.1"]
+cwsandbox = ["cwsandbox>=0.23.3"]
+wandb = ["wandb>=0.27", "cwsandbox>=0.23.3"]
+cloud = ["harbor[cwsandbox,wandb,e2b,daytona,islo,modal,runloop,gke,tensorlake,novita]"]
+all = ["harbor[analysis,cloud,datasets,tinker]"]
+tinker = ["tinker>=0.14.0", "tinker-cookbook>=0.1.0"]
+
+[dependency-groups]
+test = [
+    "harbor[cwsandbox,wandb]",
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+    "pytest-cov>=7.0.0",
+    "pytest-xdist>=3.8.0",
+    "pytest-timeout",
+    "mini-swe-agent==2.1.0",
+    "anthropic>=1.11.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.8.4,<0.9.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+# Mini-SWE's unused default model declares LiteLLM; our model uses OpenAI directly.
+exclude-dependencies = ["litellm"]
+default-groups = []
+# Local Rigging uses its development version while published FineStore pins a release floor.
+override-dependencies = ["marin-rigging"]
+
+[tool.uv.build-backend]
+module-name = ["harbor", "harbor_config"]
+
+[tool.uv.sources]
+marin-finestore = { path = "../../lib/finestore", editable = true }
+marin-rigging = { path = "../../lib/rigging", editable = true }
+
+[tool.pytest.ini_options]
+timeout = 60
+testpaths = ["tests/unit"]
+pythonpath = ["."]
+addopts = ["-v", "--tb=short", "--strict-markers", "--strict-config"]
+markers = [
+    "asyncio: asynchronous tests",
+    "unit: offline unit tests",
+    "integration: tests requiring external services",
+    "runtime: tests requiring a container runtime",
+    "windows_containers: tests requiring Windows containers",
+]
+asyncio_mode = "auto"

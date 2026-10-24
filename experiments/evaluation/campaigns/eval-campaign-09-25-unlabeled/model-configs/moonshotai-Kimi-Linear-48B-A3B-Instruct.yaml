@@ -1,0 +1,39 @@
+name: moonshotai-Kimi-Linear-48B-A3B-Instruct
+location: moonshotai/Kimi-Linear-48B-A3B-Instruct
+revision: e1df551a447157d4658b573f9a695d57658590e9
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 4
+serve:
+  tensor_parallel_size: 4
+  max_model_len: 73728
+  tool_call_parser: kimi_k2
+  vllm_extra_args:
+  - --enable-prefix-caching
+  chat_template: "{% macro render_content(msg) -%}\n    {%- set c = msg.get('content')\
+    \ -%}\n    {%- if c is string -%}\n      {{ c }}\n    {%- elif c is not none -%}\n\
+    \      {% for content in c -%}\n        {% if content['type'] == 'image' or 'image'\
+    \ in content or 'image_url' in content -%}\n          <|media_start|>image<|media_content|><|media_pad|><|media_end|>\n\
+    \        {% else -%}\n          {{ content['text'] }}\n        {%- endif -%}\n\
+    \      {%- endfor -%}\n    {%- endif -%}\n{%- endmacro %}\n\n\n{%- if tools -%}\n\
+    \  <|im_system|>tool_declare<|im_middle|>{{ tools | tojson(separators=(',', ':'))\
+    \ }}<|im_end|>\n{%- endif -%}\n{% for message in messages %}  \n  {%- set role_name\
+    \ =  message.get('name') or  message['role'] -%}\n  {%- if message['role'] ==\
+    \ 'user' -%}\n    <|im_user|>{{role_name}}<|im_middle|>\n  {%- elif message['role']\
+    \ == 'assistant' -%}\n    <|im_assistant|>{{role_name}}<|im_middle|>\n  {%- else\
+    \ -%}\n    <|im_system|>{{role_name}}<|im_middle|>\n  {%- endif -%}\n\n  {%- if\
+    \ message['role'] == 'assistant' and message.get('tool_calls') -%}\n    {{render_content(message)}}<|tool_calls_section_begin|>\n\
+    \    {%- for tool_call in message['tool_calls'] -%}\n        {%- set formatted_id\
+    \ = tool_call['id'] -%}\n      <|tool_call_begin|>{{ formatted_id }}<|tool_call_argument_begin|>{%\
+    \ if tool_call['function']['arguments'] is string %}{{ tool_call['function']['arguments']\
+    \ }}{% else %}{{ tool_call['function']['arguments'] | tojson }}{% endif %}<|tool_call_end|>\n\
+    \    {%- endfor -%}\n    <|tool_calls_section_end|>\n  {%- elif message['role']\
+    \ == 'tool' -%}\n    {%- set tool_call_id = message.tool_call_id -%}\n    ## Return\
+    \ of {{ tool_call_id }}\n{{render_content(message)}}\n  {%- elif message['content']\
+    \ is not none -%}\n    {{render_content(message)}}\n  {%- endif -%}\n  <|im_end|>\n\
+    {%- endfor -%}\n{%- if add_generation_prompt -%}\n  <|im_assistant|>assistant<|im_middle|>\n\
+    {%- endif -%}\n"
+agent:
+  agent_kwargs:
+    thinking_format: chat-template

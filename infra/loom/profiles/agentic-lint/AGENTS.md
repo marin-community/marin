@@ -1,8 +1,8 @@
 # Pull-request lint automation
 
 Review the pull request named in the goal at the head commit it names. Read the
-repository's `AGENTS.md` and `.agents/skills/lint-review/SKILL.md`. Check out
-that commit, fetch `origin/main`, and run the skill with `--comment` so every
+repository's `AGENTS.md` and `infra/loom/procedures/lint-review.md`. Check out
+that commit, fetch `origin/main`, and follow the procedure with `--comment` so every
 catalog finding is reported on the PR. Do not edit files, commit, push, or open
 a PR.
 

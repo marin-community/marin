@@ -4,12 +4,14 @@
 """Tests for bucket-routed filesystems: which backend a URL resolves to, and the
 endpoint and credentials it is built with."""
 
+import botocore.session
 import pytest
 import rigging.filesystem.cluster_config as cluster_config
 import s3fs
 from fsspec.implementations.local import LocalFileSystem
 from rigging.filesystem.buckets import MissingCredentials, filesystem_for
 from rigging.filesystem.cluster_config import StoreType, load_cluster_config, use_data_config
+from rigging.secrets import secret_file_contents, secret_file_environment
 
 CLUSTER_YAML = """
 data:
@@ -51,6 +53,22 @@ def config(tmp_path, monkeypatch):
     with use_data_config(load_cluster_config("test")):
         yield
     cluster_config.reset_data_config_cache()
+
+
+def test_native_storage_file_authenticates_bucket_routing_and_boto(config, tmp_path, monkeypatch):
+    values = {"CW_KEY_ID": "storage-id", "CW_KEY_SECRET": "storage-secret"}
+    for name, value in secret_file_contents(values).items():
+        (tmp_path / name).write_text(value)
+    for name, value in secret_file_environment(values, directory=tmp_path).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("AWS_PROFILE", "default")
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "application-secrets"))
+    for name in ("CW_KEY_ID", "CW_KEY_SECRET", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    filesystem, _ = filesystem_for("s3://marin-cw/data")
+    native = botocore.session.get_session().get_credentials().get_frozen_credentials()
+    assert (filesystem.key, filesystem.secret) == ("storage-id", "storage-secret")
+    assert (native.access_key, native.secret_key) == ("storage-id", "storage-secret")
 
 
 def test_each_bucket_routes_to_its_own_backend(config, tmp_path):

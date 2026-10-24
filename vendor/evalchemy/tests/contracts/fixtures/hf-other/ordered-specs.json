@@ -1,0 +1,34 @@
+{
+  "MATH500": {
+    "count": 500,
+    "sha256": "8771bafa100f7f511cd798212566e011d5931f6b75ffa39f7020d3a12f19343d"
+  },
+  "SimpleQA": {
+    "count": 4326,
+    "sha256": "d8ce8240dbd302aeecba447b967d3c6724d8e26d0c50f9b6eaaafe793b0dd610"
+  },
+  "SimpleQAMini": {
+    "count": 500,
+    "sha256": "269f4a78bc59444649948be97a3f238083c012a2983c524fe9e919cf3a7545ff"
+  },
+  "IFEval": {
+    "count": 500,
+    "sha256": "87fb8fe7bdeb99543e4e5cd6dfaa84a45024b1fc1b574b53bdb5e64263a87827"
+  },
+  "MixEval": {
+    "count": 4000,
+    "sha256": "8abf23fa5a9b6e31ab2786c071ab5ca2f02506917695455f4738eef289373aa6"
+  },
+  "MixEvalHard": {
+    "count": 1000,
+    "sha256": "cf21fb61aef1d79773f2451f86da12fe22a2bfe475406cc007b3a013e14c13d9"
+  },
+  "MixEvalAugust": {
+    "count": 4000,
+    "sha256": "963f9d60fb8dd8043239cd6c2e3d7583e8cda4a8f16208cb181a316322d64268"
+  },
+  "MixEvalHardAugust": {
+    "count": 1000,
+    "sha256": "5c29d6b3775e86f4b0789b1d19b0dd5f21f4f01efaa0f752503e9a1de9c92f79"
+  }
+}

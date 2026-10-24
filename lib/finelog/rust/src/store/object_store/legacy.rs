@@ -89,6 +89,10 @@ impl LegacyObjectStore {
 
 #[async_trait]
 impl ObjectStore for LegacyObjectStore {
+    fn remote_scan_url(&self, id: &ObjectId) -> Option<String> {
+        Some(self.provider.scan_path(&self.path(id)))
+    }
+
     async fn write(&self, id: &ObjectId, bytes: bytes::Bytes) -> Result<ObjectVersion, StatsError> {
         let path = self.path(id);
         let byte_size = bytes.len() as u64;

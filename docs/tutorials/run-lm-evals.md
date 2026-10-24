@@ -30,7 +30,7 @@ uv run python -m experiments.evaluation.cli launch \
 
 Run the resolved plan before submitting an unfamiliar model or suite. `--dry-run` prints the model
 location, serving backend, accelerator, target cluster or region, priority band, task names, and
-records prefix:
+records and results paths:
 
 ```bash
 uv run python -m experiments.evaluation.cli launch \
@@ -81,11 +81,12 @@ uv run python -m experiments.evaluation.cli launch \
 ```
 
 Each config file is one evaluation with its own `record.json`. Marin decodes the launch YAML without
-importing Evalchemy, then the evaluation child invokes the `evalchemy` console script from the pinned
-external runtime. A dry run checks the YAML shape and launch plan; unavailable task names fail when
+importing Evalchemy, then the evaluation child invokes the `evalchemy` console script from
+`vendor/evalchemy` in an independent, frozen uv environment. A dry run checks the YAML shape and launch plan; unavailable task names fail when
 the Evalchemy process starts. The record keeps the normalized launch-time task routing, few-shot
 counts, generation arguments, concurrency, context limit, and instance limit under `eval.tasks` and
-`eval.evalchemy`. Its provenance stores the exact Evalchemy requirement and optional runtime extras.
+`eval.evalchemy`. Its provenance stores a content hash of the evaluator, independent lock,
+adapter, local FineStore and Rigging sources, and selected runtime extras.
 
 ### Command recipes
 
@@ -169,6 +170,20 @@ uv run python -m experiments.evaluation.cli launch \
 `agentic` runs seven full Harbor datasets and can consume substantial Daytona and inference
 capacity. Use `tb2-lite`, `swebench-lite`, `aime-smoke`, or `--limit N` for validation runs.
 
+Resume an interrupted Harbor evaluation from its existing results tree:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3-32b \
+  --evals tb2 \
+  --resume-results-path s3://marin-us-east-02a/marin/evals/<run-id>/results \
+  --no-wait
+```
+
+The resume option accepts exactly one Harbor evaluation. The launcher and worker check the
+model, hosted judge, dataset, policy, runtime, and task limit against the saved results before
+reuse. Incompatible results are rejected before submission. Compatible completed trials are reused.
+
 Run one OT-TBLite trial with the registered Grug model and OpenCode agent policy:
 
 ```bash
@@ -177,6 +192,35 @@ uv run python -m experiments.evaluation.cli launch \
   --evals ot-tblite \
   --limit 1
 ```
+
+Run [GraphWalks](https://huggingface.co/datasets/openai/graphwalks) on the two GPU models:
+
+```bash
+uv run python -m experiments.evaluation.cli launch \
+  --model grug-67b-a2b-datakit-sft-262k-2026-09-21-graphwalks \
+  --evals graphwalks --no-wait
+
+uv run python -m experiments.evaluation.cli launch \
+  --model qwen3.6-35b-a3b-graphwalks \
+  --evals graphwalks --no-wait
+```
+
+The `graphwalks` key runs the GraphWalks task in the vendored Evalchemy runtime. It uses the pinned
+`openai/graphwalks` dataset and grades the final
+`Final Answer: [...]` line with set F1, following the dataset card. Prompts that cannot fit within
+the served model's context and output budget are skipped; the record reports the benchmark size,
+attempted count, and scored coverage. Compare scores together with these counts because the models'
+context windows differ. The GraphWalks Qwen profile serves its native 262,144-token context to admit more
+`parents` and `bfs` prompts. Some examples exceed even that window and remain context skips.
+Each request reserves twice `max(4096, tokenized gold answer length + 4096)` output tokens. The
+stored samples record the requested budget and the server's finish reason so length-limited
+responses can be separated from completed answers.
+
+The GraphWalks-specific Qwen entry explicitly enables thinking for both token counting and generation.
+The GraphWalks-specific Grug catalog entry omits the `grug` reasoning parser because the pinned Marin GPU vLLM wheel
+lacks [the parser](https://github.com/marin-community/vllm/pull/79). The shared Grug entry retains its parser.
+A one-item GraphWalks run with the parser-free setting scored a sample. The GraphWalks Qwen profile requests 320 GB of host memory after its
+default allocation ran out during model loading; a one-item run with 320 GB scored a sample.
 
 The `qwen3-32b` / `tb2-lite` path follows the H100x2 acceptance run recorded in
 [issue #6503](https://github.com/marin-community/marin/issues/6503). Harbor trial restore and
@@ -228,6 +272,9 @@ when RunAI reports a transient read failure.
 | `chat` | Evalchemy | MATH500, AIME24, and OlympiadBench; requires a chat-template model. |
 | `math` | Evalchemy | MATH500, AIME24, and zero-shot GSM8K; requires a chat-template model. |
 | `agentic` | Harbor | Terminal-Bench 2, SWE-bench, GAIA, BFCL, Aider, MedAgentBench, and FinanceAgent in Daytona. |
+
+GraphWalks is also available as the standalone `graphwalks` evaluation key.
+It is exploratory and is not part of a verified evaluation policy cohort.
 
 The `code` suite is registered but is not runnable with the current pinned evaluation image because
 its HumanEvalPlus and MBPPPlus dependencies are absent. Individual evaluation keys are defined in
@@ -295,6 +342,10 @@ Each Evalchemy evaluator bounds its active evaluation items through
 default can have up to 512 active items. Each evaluation broker worker allows 64 concurrent HTTP
 requests; the proxy allows `max(256, 64 * instances)` outstanding requests (512 for eight instances),
 including requests already running on workers.
+Model-info, metrics, and tokenization requests bypass generation admission. The proxy forwards
+them directly to a worker's auxiliary HTTP endpoint while its heartbeat lease is live. Worker
+replacement updates that address after preemption; when no worker is ready, these requests return
+503. Token counts and model info come from the live serving backend rather than a local estimate.
 GPU evaluation servers schedule up to 4,096 tokens across requests per iteration by default;
 TPU servers use 512.
 Set `serve.max_num_batched_tokens` in the model configuration to override that budget.
@@ -517,6 +568,42 @@ print(report_artifact.averages)      # suite-level rollups
 
 Each individual result is a `FineStoreEvalchemyResult`; `task_metrics()` reads the per-task scores
 from Evalchemy's aggregate source artifacts in FineStore.
+
+### Audit an Evalchemy run before its record appears
+
+The evaluator writes its native result and sample artifacts to FineStore before the parent writes
+`record.json`. A missing record therefore does not prove that evaluation is still incomplete. Read
+the exact run's `results` archive with `fsutil` and inspect the native task outcome without printing
+the full Evalchemy configuration: its model arguments can contain a signed endpoint URL.
+
+```bash
+uv run fsutil ls -l s3://<bucket>/<records-prefix>/<run-id>/results
+```
+
+```python
+import json
+
+from finestore.reader import ReadView
+from marin.evaluation.lm_eval_samples import read_native_evalchemy_artifacts
+
+archive = "s3://<bucket>/<records-prefix>/<run-id>/results"
+reader = ReadView(archive)
+print("archive sealed:", reader.is_sealed())
+for name, payload in read_native_evalchemy_artifacts(archive).result_payloads.items():
+    result = json.loads(payload)
+    for task, outcome in result.get("task_outcomes", {}).items():
+        print(name, task, outcome["status"], outcome["generated_count"], outcome["scored_count"],
+              outcome.get("failure_counts"))
+```
+
+Check the declared benchmark count, unique sample identities, scoreable outcomes, and the run's
+immutable configuration before accepting a recovered result. A sample row count alone can overcount
+trials when an evaluator writes multiple extraction filters or repeats. If FineStore is sealed and the
+evaluator outcome is complete but Iris is retrying, compare `iris task describe` and `iris task events`
+for the evaluator child. A `Completed` container event followed by `PodDeleted` can make Iris retry a
+finished evaluator; see [Iris task operations](https://github.com/marin-community/marin/blob/main/lib/iris/OPS.md#task-operations). Do not mark a
+running child complete merely because some samples exist. Confirm that the exact archive contains
+the full, valid result and that the parent can consume it before recovering the canonical record.
 
 ### Run the repository example scripts
 

@@ -81,35 +81,3 @@ nuances = [
     "This GPU pin refreshes on its own (no shared group). It is the only refresh that rebases marin-community/vllm main. The [vllm] TPU source selector reuses an exact commit on that same lineage and builds a separate wheel pair.",
     "A base that crosses a CUDA/torch or vLLM stable-ABI boundary is a migration. The wheel verifier and the fork release gate both name the extension (vllm._C_stable_libtorch on CUDA 13); audit them when the base moves across such a boundary.",
 ]
-
-[evalchemy]
-upstream = "https://github.com/mlfoundations/evalchemy.git"
-pin = "isolated_project"
-branch = "main"
-base_select = "upstream_main"
-e2e = "experiments/evaluation/configs/evalchemy/gsm8k-smoke.yaml"
-blocker_assignee = "yonromai"
-
-[harbor]
-upstream = "https://github.com/harbor-framework/harbor.git"
-pin = "isolated_project"
-branch = "main"
-base_select = "upstream_main"
-e2e = "experiments/evaluation/configs/harbor/aime-smoke.yaml"
-blocker_assignee = "yonromai"
-nuances = [
-    "Fork main is hundreds of commits behind upstream with a non-linear overlay and an upstream package refactor; auto-rebase is intractable until a one-time manual catch-up brings it close, so a refresh files a blocker until then.",
-]
-
-[MarinSkyRL]
-upstream = "https://github.com/NovaSky-AI/SkyRL.git"
-pin = "isolated_project"
-branch = "main"
-base_select = "upstream_main"
-e2e = "experiments/post_training/iceball_micro.py"
-blocker_assignee = "yonromai"
-nuances = [
-    "Shares history with NovaSky-AI/SkyRL (merge-base 8e132edc, Dec 2025), but NovaSky's later monolith->package restructure (skyrl-train/ -> skyrl/) moved or deleted 684 of the 718 files Marin touched, so a mechanical rebase is intractable.",
-    "Needs a one-time re-fork onto current NovaSky main with Marin's work re-homed into the new package layout (#7920) before it can auto-migrate; until then a refresh files a blocker.",
-    "Marin consumes only the root marinskyrl package; the forked skyrl-train is unused. The GitHub compare API 404s because the repo was pushed as a standalone (its fork network is unlinked), which does not affect git-level rebasing.",
-]

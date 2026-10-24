@@ -8,11 +8,13 @@
 # The controller and worker share all layers up to and including Python
 # dependencies. The worker adds only the Docker CLI on top.
 
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.13.5
+
 # ── Stage: dashboard ─────────────────────────────────────────────────
 # Build the Vue SPA. Output is consumed by the deps stage at
 # /app/lib/iris/dashboard/dist; the controller/worker ASGI apps serve it
 # (see lib/iris/src/iris/cluster/dashboard_common.py).
-FROM --platform=$BUILDPLATFORM node:22-slim AS dashboard
+FROM --platform=$BUILDPLATFORM node:24-slim AS dashboard
 
 WORKDIR /build/dashboard
 
@@ -27,7 +29,7 @@ RUN npm run build
 # ── Stage: iris-native-wheel ────────────────────────────────────────
 # Build the PyO3 companion once per target architecture without carrying a Rust
 # toolchain into the controller or worker images.
-FROM --platform=$BUILDPLATFORM ghcr.io/astral-sh/uv:0.12.3 AS iris-native-uv
+FROM --platform=$BUILDPLATFORM ${UV_IMAGE} AS iris-native-uv
 FROM --platform=$BUILDPLATFORM rust:1-bookworm AS iris-native-wheel
 
 COPY --from=iris-native-uv /uv /uvx /bin/
@@ -86,6 +88,11 @@ RUN --mount=type=cache,id=iris-native-cargo-registry,target=/usr/local/cargo/reg
         --out /wheels
 
 
+# ── Stage: uv ────────────────────────────────────────────────────────
+# uv for the target platform, copied into the base and task images.
+FROM ${UV_IMAGE} AS uv
+
+
 # ── Stage: base ──────────────────────────────────────────────────────
 # System dependencies shared by controller and worker.
 FROM python:3.12-slim AS base
@@ -93,6 +100,9 @@ FROM python:3.12-slim AS base
 LABEL org.opencontainers.image.source="https://github.com/marin-community/marin"
 
 ARG KUBECTL_VERSION=v1.32.2
+# Pinned so a version bump invalidates the cached install layer; an unpinned
+# install keeps serving the cached release while the base image is unchanged.
+ARG GOOGLE_CLOUD_CLI_VERSION=590.0.1-0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
@@ -110,7 +120,7 @@ RUN echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.
     curl https://packages.cloud.google.com/apt/doc/apt-key.gpg \
     | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
     apt-get update && apt-get install -y --no-install-recommends \
-    google-cloud-cli \
+    "google-cloud-cli=${GOOGLE_CLOUD_CLI_VERSION}" \
     && rm -rf /var/lib/apt/lists/*
 
 # kubectl — TARGETARCH is auto-set by buildx (amd64 on x86 nodes, arm64 on Grace).
@@ -121,7 +131,7 @@ RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETA
     && kubectl version --client
 
 # uv
-COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 
 # ── Stage: deps ──────────────────────────────────────────────────────
@@ -272,11 +282,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjemalloc2 \
     libibverbs1 \
     ibverbs-providers \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /uvx /bin/
+COPY --from=uv /uv /uvx /bin/
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
     | sh -s -- -y --default-toolchain stable --profile minimal

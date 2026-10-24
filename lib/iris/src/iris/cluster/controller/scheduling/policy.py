@@ -30,7 +30,6 @@ from iris.cluster.controller import reads
 from iris.cluster.controller.autoscaler.models import DemandEntry
 from iris.cluster.controller.budget import (
     UserTask,
-    budget_user_id,
     compute_effective_band,
     compute_user_spend,
     interleave_by_user,
@@ -43,6 +42,7 @@ from iris.cluster.controller.codec import (
     resource_spec_from_scalars,
 )
 from iris.cluster.controller.db import ControllerDB, Tx
+from iris.cluster.controller.federation_budget import BudgetContext
 from iris.cluster.controller.reads import WorkerAttrsSource
 from iris.cluster.controller.scheduling.scheduler import (
     DEFAULT_MAX_ASSIGNMENTS_PER_WORKER,
@@ -770,6 +770,7 @@ def build_scheduling_context(
     worker_attrs: WorkerAttrsSource,
     defaults: UserBudgetDefaults,
     max_building_tasks: int = DEFAULT_MAX_BUILDING_TASKS_PER_WORKER,
+    budget_context: BudgetContext | None = None,
 ) -> SchedulingContext:
     """Build the complete scheduling workspace for the controller's backend.
 
@@ -781,8 +782,10 @@ def build_scheduling_context(
     pending = reads.pending_tasks_with_jobs(snap)
     requested_bands = reads.get_priority_bands(snap, {task.job_id for task in pending})
     pending = _sort_pending_tasks_by_resolved_band(pending, requested_bands)
-    user_spend = compute_user_spend(snap)
-    user_budget_limits = reads.get_all_user_budget_limits(snap)
+    user_spend = budget_context.spend if budget_context is not None else compute_user_spend(snap)
+    user_budget_limits = budget_context.limits if budget_context is not None else reads.get_all_user_budget_limits(snap)
+    if budget_context is not None:
+        defaults = budget_context.defaults
 
     if health is None or not pending:
         return SchedulingContext(
@@ -891,9 +894,7 @@ def compute_scheduling_order(
     requested_bands = ctx.requested_bands
     user_budget_limits = ctx.user_budget_limits
     defaults = ctx.user_budget_defaults
-    task_budget_users = {
-        task.task_id: budget_user_id(task.job_id, task.submitting_user) for task in ctx.pending_task_rows
-    }
+    task_budget_users = {task.task_id: task.job_id.user for task in ctx.pending_task_rows}
     task_band_map: dict[JobName, int] = {
         task.task_id: compute_effective_band(
             requested_bands.get(task.job_id, task.priority_band),

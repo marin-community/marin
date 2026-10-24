@@ -4,12 +4,15 @@
 //! paths, local cache membership, and legacy layout translation are private to
 //! the implementations of [`ObjectStore`].
 
+mod admission;
 mod cached;
+mod diagnostics;
 mod legacy;
 mod local_file;
 mod provider;
 mod remote;
 
+pub use admission::QueryCacheAdmission;
 pub use cached::CachedObjectStore;
 pub use legacy::LegacyObjectStore;
 pub use provider::is_remote_object_store;
@@ -57,6 +60,19 @@ pub struct ObjectVersion {
 pub struct ObjectReference {
     pub id: ObjectId,
     pub version: ObjectVersion,
+}
+
+/// A cached file or the backing object's scan location.
+#[derive(Clone)]
+pub enum ScanSource {
+    Local(PathBuf),
+    Remote(String),
+}
+
+pub enum CacheMode<'a> {
+    Query(&'a QueryCacheAdmission),
+    /// Use existing cache entries without populating misses or recording demand.
+    Disabled,
 }
 
 /// Result of a best-effort batch deletion.
@@ -248,9 +264,31 @@ pub trait ObjectStore: Send + Sync {
         Ok(None)
     }
 
-    /// Begin materializing `reference` into the local cache without waiting
-    /// for it. A store without a cache does nothing.
-    fn warm(&self, _reference: &ObjectReference) {}
+    /// Resolve an input using the cache when present, otherwise its backing
+    /// scan location. Callers must protect cached paths from concurrent eviction.
+    async fn scan_source(
+        &self,
+        reference: &ObjectReference,
+        cache_mode: CacheMode<'_>,
+    ) -> Result<ScanSource, StatsError> {
+        if let Some(path) = self.cached_path(reference).await? {
+            return Ok(ScanSource::Local(path));
+        }
+        if let Some(url) = self.remote_scan_url(&reference.id) {
+            if let CacheMode::Query(query) = cache_mode {
+                self.warm_query(reference, query);
+            }
+            return Ok(ScanSource::Remote(url));
+        }
+        Err(StatsError::Internal(format!(
+            "object store has no scan source for {:?}",
+            reference.id.as_str()
+        )))
+    }
+
+    /// Consider an optional fill after a query cache miss. Reuse history and
+    /// the query's shared budget decide whether a cached store admits it.
+    fn warm_query(&self, _reference: &ObjectReference, _query: &QueryCacheAdmission) {}
 
     /// Conditionally replace a mutable pointer object. Stores whose objects
     /// are all immutable reject this.

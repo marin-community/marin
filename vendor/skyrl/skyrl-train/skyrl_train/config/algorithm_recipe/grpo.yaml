@@ -1,0 +1,14 @@
+# @package trainer.algorithm
+# DeepSeekMath sections 4.1 and 4.2.1: https://arxiv.org/abs/2402.03300
+advantage_estimator: grpo
+policy_loss_type: regular
+loss_reduction: sequence_mean
+grpo_norm_by_std: true
+advantage_batch_normalize: false
+eps_clip_low: 0.2
+eps_clip_high: 0.2
+use_kl_in_reward: false
+use_kl_loss: true
+kl_loss_coef: 0.04
+dynamic_sampling:
+  type: null

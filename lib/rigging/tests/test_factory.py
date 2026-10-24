@@ -16,7 +16,7 @@ from aiobotocore.config import AioConfig
 from botocore.awsrequest import AWSRequest
 from botocore.exceptions import ReadTimeoutError
 from rigging.filesystem.cross_region import CrossRegionGuardedFS
-from rigging.filesystem.factory import _with_s3_timeout_defaults, filesystem, open_url, url_to_fs
+from rigging.filesystem.factory import _s3_filesystem_options, filesystem, open_url, url_to_fs
 from rigging.filesystem.listing_cache import configure_listing_cache_defaults
 from rigging.filesystem.s3_compat import (
     TotalDeadlineAIOHTTPSession,
@@ -139,7 +139,7 @@ def test_configure_fsspec_s3_preserves_process_listing_cache_config(monkeypatch)
 def test_s3_filesystems_are_built_with_the_deadline():
     """Without this wiring the deadline exists but nothing uses it, and every
     rigging-built S3 filesystem keeps the #6719 hang."""
-    config_kwargs = _with_s3_timeout_defaults({})["config_kwargs"]
+    config_kwargs = _s3_filesystem_options({})["config_kwargs"]
 
     assert config_kwargs["http_session_cls"] is TotalDeadlineAIOHTTPSession
     # AioConfig is the call s3fs makes; it rejects the kwarg before aiobotocore 2.12.2.

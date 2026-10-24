@@ -67,6 +67,8 @@ auth:
 # Federation peers this cluster may hand whole jobs to. Same CoreWeave clusters marin
 # federates to: they trust this cluster's public key under the id `marin-dev`, and admit
 # its submitters by their own auth.allowed_submitters.
+budget_peers: [cw-us-west-04a]
+
 peers:
   cw-rno2a:
     controller_address: https://iris-cw-rno2a.oa.dev

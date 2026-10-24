@@ -67,7 +67,7 @@ dependencies = [
     "tblib>=1.7.0,<4.0.0",
     "dataclasses-json~=0.6.4",
     "pydantic<3",
-    "filelock~=3.13",
+    "filelock>=4.2.1,<5",
     "async-lru~=2.0",
     "tqdm-loggable>=0.2",
     "deepdiff>=8.6.2",
@@ -84,6 +84,8 @@ Homepage = "https://github.com/stanford-crfm/levanter"
 [project.optional-dependencies]
 gpu = [
   "jax[cuda13]==0.11.1",
+  # Scope Torch's cu128 source to Levanter too, so uv enables its CUDA runtime dependencies.
+  "torch==2.11.0; sys_platform == 'linux'",
   # B200 emits a cuBLAS warning with older CUDA 13 cuBLAS builds.
   "nvidia-cublas>=13.2.0.9; sys_platform == 'linux'",
   # Preserve the CoreWeave H100 all-to-all guard under CUDA 13.
@@ -188,6 +190,15 @@ conflicts = [
   ],
 ]  # Never solve for both GPU and TPU at once
 
+[tool.uv.sources]
+# PyTorch cu130 pins an older cuBLAS than the B200 guard above allows.
+torch = [{ index = "pytorch-cu128", extra = "gpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
 [tool.ruff]
 line-length = 119
 target-version = "py312"
@@ -198,7 +209,7 @@ extend-exclude = ["scripts/"]
 # apply repo-wide: PLC0415 (no function-local imports), and the issue #6219
 # local-import hygiene pair TID252 (absolute over parent-relative imports) and
 # ICN001 (conventional import aliases, e.g. `import numpy as np`).
-extend-select = ["PLC0415", "TID252", "ICN001"]
+extend-select = ["PLC0415", "TID251", "TID252", "ICN001"]
 ignore = [
   "E203", "E501", "W605", "F821", "E266", "F722", "E731", "E741"
 ]
@@ -220,7 +231,11 @@ filterwarnings = [
     "ignore:Passing 'msg' argument to Future\\.cancel\\(\\) is deprecated since Python 3\\.11, and scheduled for removal in Python 3\\.14\\.:DeprecationWarning",
 ]
 markers = [
+    "tpu: include in TPU CI; also run on CPU when supported",
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "torch: mark tests that use Torch (deselect with '-m \"not torch\"')",
 ]
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"litellm" = { msg = "LiteLLM is blocked; use a provider SDK or an OpenAI-compatible endpoint." }

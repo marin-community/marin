@@ -1,0 +1,48 @@
+# @package megatron_config.policy
+tensor_model_parallel_size: 1
+pipeline_model_parallel_size: 1
+context_parallel_size: 1
+expert_model_parallel_size: 1
+expert_tensor_parallel_size: null
+
+ddp_config:
+  grad_reduce_in_fp32: true
+  overlap_grad_reduce: false
+  overlap_param_gather: false
+  average_in_collective: true
+
+model_config_kwargs: {}
+
+torch_profiler_config:
+  enable: false
+  ranks: []
+  save_path: null
+
+optimizer_config_kwargs:
+  overlap_cpu_optimizer_d2h_h2d: false
+  use_precision_aware_optimizer: false
+  optimizer_cpu_offload: false
+  optimizer_offload_fraction: 0.0
+
+transformer_config_kwargs:
+  recompute_granularity: full
+  recompute_modules: ["core_attn"]
+  recompute_method: uniform
+  recompute_num_layers: 1
+
+empty_cuda_cache: true
+
+logprob_chunk_size: 1024
+
+# dp_reshardable avoids a CPU optimizer gather when the checkpoint keeps the same
+# tensor/pipeline/context/expert geometry. Loading reads the format from the checkpoint.
+optimizer_checkpoint_sharding_type: fully_reshardable
+
+# Re-run the eval-mode and train-mode forwards inside ppo_train and log how far each is
+# from the old log-probs, separating eval repeatability from train/eval drift.
+check_train_eval_parity: false
+
+# Replay expert choices captured during rollout.
+moe_router_replay: false
+
+check_dp_weight_consistency: false

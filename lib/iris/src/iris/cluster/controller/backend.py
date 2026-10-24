@@ -523,6 +523,10 @@ class TaskBackend(Protocol):
         """Return why a submitted shape can never run, or None if feasible."""
         ...
 
+    def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        """Validate backend requirements; return an error for an invalid job, or None."""
+        ...
+
     def get_process_status(
         self,
         target: TaskTarget,

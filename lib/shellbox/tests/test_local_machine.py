@@ -8,14 +8,27 @@ import io
 import os
 import shutil
 import socket
+import subprocess
+import sys
 import tarfile
 import tempfile
 import uuid
 from collections.abc import Awaitable, Callable, Iterator
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 
 import pytest
-from shellbox.backends.local.machine import NPROC_HEADROOM, LocalMachine, LocalMachineFactory, SandboxUnavailable
+from shellbox.backends.local.launch import COMMAND_NICENESS
+from shellbox.backends.local.machine import (
+    NPROC_HEADROOM,
+    LocalMachine,
+    LocalMachineFactory,
+    SandboxUnavailable,
+    SystemDirectories,
+    _archive,
+    _submounts,
+    _unpack,
+)
 from shellbox.backends.local.python_environment import (
     PythonEnvironment,
     UvError,
@@ -94,6 +107,12 @@ def make_factory(**options) -> LocalMachineFactory:
 @pytest.fixture
 def factory() -> LocalMachineFactory:
     return make_factory()
+
+
+def test_local_factory_reports_unsupported_host(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    with pytest.raises(SandboxUnavailable):
+        LocalMachineFactory()
 
 
 def test_recursive_download_preserves_hardlinks_as_files_and_literal_names(factory, tmp_path):
@@ -222,6 +241,89 @@ def test_bin_dirs_win_path_lookup_and_host_environment_is_not_inherited(tmp_path
     assert b"SHELLBOX_HOST_SECRET" not in environment.stdout
 
 
+@pytest.mark.parametrize("environment_source", ["spec", "command"])
+def test_task_loader_environment_takes_effect_only_inside_sandbox(tmp_path, environment_source):
+    # A preloaded library can write this host directory before isolation. Inside the sandbox it is read-only.
+    library = tmp_path / "preload.so"
+    marker = tmp_path / "host-marker"
+    factory = make_factory(read_only=(tmp_path,))
+    source = b"""
+    #include <fcntl.h>
+    #include <stdlib.h>
+    #include <unistd.h>
+    __attribute__((constructor)) static void record(void) {
+        const char *path = getenv("SHELLBOX_HOST_MARKER");
+        if (path) {
+            int fd = open(path, O_WRONLY | O_CREAT, 0600);
+            if (fd >= 0) close(fd);
+        }
+    }
+    """
+    subprocess.run(["cc", "-shared", "-fPIC", "-x", "c", "-", "-o", str(library)], input=source, check=True)
+    environment = {"LD_PRELOAD": str(library), "SHELLBOX_HOST_MARKER": str(marker)}
+    spec = replace(SPEC, env=environment if environment_source == "spec" else {})
+    command = Command(
+        ("sh", "-c", 'printf "%s" "$LD_PRELOAD"'),
+        env=environment if environment_source == "command" else {},
+    )
+    result = run_command(factory, command, spec)
+    assert (result.exit_code, result.stdout) == (0, str(library).encode()), result.stderr
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("environment_source", ["spec", "command"])
+def test_task_environment_is_absent_from_host_process_arguments(factory, monkeypatch, environment_source):
+    secret = "canary with spaces, 'quotes', and\na newline"
+    environment = {"SHELLBOX_TEST_SECRET": secret}
+    spec = replace(SPEC, env=environment if environment_source == "spec" else {})
+    command = Command(
+        ("sh", "-c", 'read release; printf "%s" "$SHELLBOX_TEST_SECRET"'),
+        env=environment if environment_source == "command" else {},
+        stdin=b"release\n",
+    )
+    create_subprocess = asyncio.create_subprocess_exec
+    host_arguments = []
+
+    async def observe_launcher(*args, **kwargs):
+        process = await create_subprocess(*args, **kwargs)
+        # The guest waits for stdin, which run() supplies after this returns, keeping its launcher alive.
+        host_arguments.append(Path(f"/proc/{process.pid}/cmdline").read_bytes())
+        return process
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", observe_launcher)
+    result = run_command(factory, command, spec)
+    assert (result.exit_code, result.stdout) == (0, secret.encode()), result.stderr
+    assert host_arguments and all(secret.encode() not in arguments for arguments in host_arguments)
+
+
+def test_task_environment_cannot_inject_arguments_through_nul_bytes(factory):
+    # NUL-delimited --args must retain exec's rejection of embedded NULs instead of parsing extra mounts.
+    command = Command(("true",), env={"TASK_VALUE": "value\0--ro-bind\0/etc\0/host-etc"})
+    with pytest.raises(ValueError, match="NUL"):
+        run_command(factory, command)
+
+
+@pytest.mark.parametrize("system_directories", list(SystemDirectories))
+def test_host_configuration_is_hidden_from_commands_and_downloads(tmp_path, system_directories):
+    factory = make_factory(system_directories=system_directories)
+    # These host paths must not become visible even when commands run as the host's root user.
+    hidden = ("/etc/profile", "/etc/environment", "/etc/shadow", "/etc/gshadow", "/etc/ssl/private", "/sys/kernel")
+
+    async def scenario(machine: LocalMachine):
+        result = await machine.run(Command(("sh", "-c", 'for path do test ! -e "$path" || exit 1; done', "sh", *hidden)))
+        assert result.exit_code == 0, result.stderr
+        for path in hidden:
+            with pytest.raises(RuntimeError, match="No such file"):
+                await machine.download(path, tmp_path / "download")
+        configuration = await machine.run(Command(("cat", "/etc/resolv.conf")))
+        assert (configuration.exit_code, configuration.stdout) == (0, Path("/etc/resolv.conf").read_bytes())
+        await machine.download("/etc", tmp_path / "etc")
+
+    on_machine(factory, SPEC, scenario)
+    assert not (tmp_path / "etc/profile").exists()
+    assert (tmp_path / "etc/passwd").read_bytes() == Path("/etc/passwd").read_bytes()
+
+
 def test_host_image_adds_read_only_mount_and_program_path(tmp_path, factory):
     bin_dir = tmp_path / "venv-bin"
     bin_dir.mkdir()
@@ -344,6 +446,180 @@ def test_host_system_directories_are_read_only(factory):
     assert run_command(factory, Command(("sh", "-c", script))).stdout == b"refused\nrefused\n"
 
 
+@pytest.fixture
+def copy_on_write_factory() -> LocalMachineFactory:
+    return make_factory(system_directories=SystemDirectories.COPY_ON_WRITE)
+
+
+# Copy-on-write keeps file permissions, so only a root command may write the root-owned system directories.
+root_commands = pytest.mark.skipif(os.geteuid() != 0, reason="Writing root-owned system directories needs root")
+
+
+@root_commands
+def test_copy_on_write_system_directories_keep_each_machines_writes_to_itself(copy_on_write_factory):
+    name = f"shellbox-test-{uuid.uuid4().hex}"
+    paths = (f"/opt/{name}/file", f"/usr/local/bin/{name}", f"/etc/{name}")
+    write = f"mkdir /opt/{name} && " + " && ".join(f'echo "$1" > {path}' for path in paths)
+    read = "cat " + " ".join(paths)
+
+    async def scenario() -> tuple[list[bytes], list[Path]]:
+        machines = await asyncio.gather(copy_on_write_factory.create(SPEC), copy_on_write_factory.create(SPEC))
+        try:
+            for machine, label in zip(machines, "ab", strict=True):
+                written = await machine.run(Command(("sh", "-c", write, "sh", label)))
+                assert written.exit_code == 0, written.stderr
+            results = await asyncio.gather(*(machine.run(Command(("sh", "-c", read))) for machine in machines))
+            return [result.stdout for result in results], [machine.layers for machine in machines]
+        finally:
+            await asyncio.gather(*(machine.close() for machine in machines))
+
+    outputs, layers = asyncio.run(scenario())
+    assert outputs == [b"a\n" * len(paths), b"b\n" * len(paths)]
+    assert not any(Path(path).exists() for path in (f"/opt/{name}", *paths[1:]))
+    assert not any(layer.exists() for layer in layers)
+
+
+@root_commands
+def test_copy_on_write_transfers_see_the_machines_own_system_directories(tmp_path, copy_on_write_factory):
+    name = f"shellbox-test-{uuid.uuid4().hex}"
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested/data.txt").write_text("from directory")
+    single = tmp_path / "single.txt"
+    single.write_text("from file")
+    downloaded = tmp_path / "downloaded"
+
+    async def scenario(machine: LocalMachine) -> Result:
+        await machine.upload(source, f"/opt/{name}/tree")
+        await machine.upload(single, f"/usr/local/share/{name}/single.txt")
+        read = await machine.run(
+            Command(("cat", "tree/nested/data.txt", f"/usr/local/share/{name}/single.txt"), cwd=f"/opt/{name}")
+        )
+        await machine.run(Command(("sh", "-c", f"echo changed > /opt/{name}/tree/nested/data.txt")))
+        await machine.download(f"/opt/{name}/tree", downloaded / "tree")
+        await machine.download(f"/usr/local/share/{name}/single.txt", downloaded / "single.txt")
+        await machine.download("/etc/passwd", downloaded / "passwd")
+        with pytest.raises(RuntimeError, match="No such file"):
+            await machine.download(f"/opt/{name}/missing", downloaded / "missing")
+        with pytest.raises(UnsupportedMachineSpec):
+            await machine.upload(single, f"/sys/{name}")
+        # A link to a path that exists only on the host does not resolve in the sandbox.
+        await machine.run(Command(("ln", "-s", str(tmp_path), f"/usr/local/share/{name}/host")))
+        with pytest.raises(RuntimeError, match="No such file"):
+            await machine.download(f"/usr/local/share/{name}/host", downloaded / "host")
+        return read
+
+    read = on_machine(copy_on_write_factory, SPEC, scenario)
+    assert (read.exit_code, read.stdout) == (0, b"from directoryfrom file"), read.stderr
+    assert (downloaded / "tree/nested/data.txt").read_text() == "changed\n"
+    assert (downloaded / "single.txt").read_text() == "from file"
+    assert (downloaded / "passwd").read_bytes() == Path("/etc/passwd").read_bytes()
+    assert not Path(f"/opt/{name}").exists() and not Path(f"/usr/local/share/{name}").exists()
+
+
+@root_commands
+def test_copy_on_write_uploads_to_the_root_reach_the_layer_whatever_the_machines_environment(
+    tmp_path, copy_on_write_factory
+):
+    name = f"shellbox-test-{uuid.uuid4().hex}"
+    tree = tmp_path / "tree"
+    (tree / "opt" / name).mkdir(parents=True)
+    (tree / "opt" / name / "data.txt").write_text("in the layer")
+    (tree / "app").mkdir()
+    (tree / "app" / "data.txt").write_text("in the root")
+    # The backend's own transfer commands ignore the PATH and tar options meant for the task's commands.
+    spec = MachineSpec(HostImage(), workdir="/app", env={"PATH": "/nonexistent", "TAR_OPTIONS": "--no-such-option"})
+
+    async def scenario(machine: LocalMachine) -> Result:
+        await machine.upload(tree, "/")
+        with pytest.raises(UnsupportedMachineSpec, match="contains its system directories"):
+            await machine.download("/", tmp_path / "everything")
+        return await machine.run(Command(("/bin/cat", f"/opt/{name}/data.txt", "/app/data.txt")))
+
+    read = on_machine(copy_on_write_factory, spec, scenario)
+    assert (read.exit_code, read.stdout) == (0, b"in the layerin the root"), read.stderr
+    assert not Path(f"/opt/{name}").exists()
+
+
+def _stream(*members: tuple[tarfile.TarInfo, bytes]) -> bytes:
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w") as archive:
+        for member, data in members:
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    return stream.getvalue()
+
+
+def _member(name: str, kind: bytes = tarfile.REGTYPE, linkname: str = "") -> tarfile.TarInfo:
+    member = tarfile.TarInfo(name)
+    member.type, member.linkname, member.mode = kind, linkname, 0o755 if kind == tarfile.DIRTYPE else 0o644
+    return member
+
+
+def test_a_downloaded_archive_keeps_inner_symlinks_as_links_and_refuses_host_reads(tmp_path):
+    secret = tmp_path / "secret"
+    secret.write_text("host only")
+    tree = _stream(
+        (_member(".", tarfile.DIRTYPE), b""),
+        (_member("data.txt"), b"data"),
+        (_member("link", tarfile.SYMTYPE, str(secret)), b""),
+    )
+    _unpack(tree, tmp_path / "tree")
+    assert (tmp_path / "tree/data.txt").read_text() == "data"
+    assert os.readlink(tmp_path / "tree/link") == str(secret)
+
+    refused = [
+        _stream((_member("secret", tarfile.SYMTYPE, str(secret)), b"")),
+        _stream((_member(".", tarfile.DIRTYPE), b""), (_member("copy", tarfile.LNKTYPE, str(secret)), b"")),
+        _stream((_member(".", tarfile.DIRTYPE), b""), (_member("disk", tarfile.BLKTYPE), b"")),
+        _stream(),
+    ]
+    for stream in refused:
+        with pytest.raises((RuntimeError, tarfile.FilterError)):
+            _unpack(stream, tmp_path / "refused")
+    assert not (tmp_path / "refused").exists()
+
+
+def test_an_uploaded_archive_holds_what_a_symlinked_source_leads_to(tmp_path):
+    (tmp_path / "directory").mkdir()
+    (tmp_path / "directory/data.txt").write_text("data")
+    (tmp_path / "directory/inner").symlink_to("data.txt")
+    (tmp_path / "linked-directory").symlink_to(tmp_path / "directory")
+    (tmp_path / "linked-file").symlink_to(tmp_path / "directory/data.txt")
+
+    with tarfile.open(fileobj=io.BytesIO(_archive(tmp_path / "linked-directory", "."))) as archive:
+        members = {member.name: member for member in archive.getmembers()}
+    assert members["."].isdir() and members["./data.txt"].isfile()
+    assert members["./inner"].issym() and members["./inner"].linkname == "data.txt"
+    with tarfile.open(fileobj=io.BytesIO(_archive(tmp_path / "linked-file", "copy.txt"))) as archive:
+        assert [(member.name, member.isfile()) for member in archive.getmembers()] == [("copy.txt", True)]
+
+
+@root_commands
+def test_a_copy_on_write_machine_may_work_in_a_system_directory(copy_on_write_factory):
+    workdir = f"/opt/shellbox-test-{uuid.uuid4().hex}/work"
+    spec = MachineSpec(HostImage(), workdir=workdir)
+    result = run_command(copy_on_write_factory, Command(("sh", "-c", "pwd && touch made && ls")), spec)
+    assert (result.exit_code, result.stdout) == (0, f"{workdir}\nmade\n".encode()), result.stderr
+    assert not Path(workdir).parent.exists()
+
+
+def test_files_mounted_inside_overlaid_directories_are_found_parents_first():
+    # A container runtime mounts files such as /etc/resolv.conf over the image; an overlay of /etc hides them.
+    mountinfo = "\n".join(
+        [
+            "21 1 0:31 / / rw,relatime - overlay overlay rw",
+            "22 21 9:127 /pods/resolv.conf /etc/resolv.conf rw - xfs /dev/md127 rw",
+            "23 21 9:127 /pods/host /etc/host\\040name rw - xfs /dev/md127 rw",
+            "24 21 0:40 / /usr/lib/modules ro - tmpfs tmpfs rw",
+            "25 21 0:41 / /usr ro - tmpfs tmpfs rw",
+            "26 21 0:42 / /usrlocal/data rw - tmpfs tmpfs rw",
+            "27 21 9:127 /pods/app /app rw - xfs /dev/md127 rw",
+        ]
+    )
+    assert _submounts(mountinfo, ("/etc", "/usr")) == ("/etc/host name", "/etc/resolv.conf", "/usr/lib/modules")
+
+
 @pytest.mark.parametrize(
     "spec",
     [
@@ -383,6 +659,12 @@ def test_commands_cannot_gain_privileges(factory):
     status = run_command(factory, Command(("cat", "/proc/self/status"))).stdout.decode().splitlines()
     assert "NoNewPrivs:\t1" in status
     assert "CapEff:\t0000000000000000" in status
+
+
+def test_commands_run_below_the_host_process_cpu_priority(factory):
+    # A CPU-bound command must not starve the host process that drives its machine.
+    niceness = run_command(factory, Command(("sh", "-c", "cut -d' ' -f19 /proc/self/stat"))).stdout
+    assert int(niceness) == min(os.nice(0) + COMMAND_NICENESS, 19)
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="RLIMIT_NPROC does not limit root")
@@ -447,7 +729,6 @@ def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
     assert prefix == python_environment.bin_dir.parent
     assert base_prefix.is_relative_to(python_environment.root)
 
-    monkeypatch.setenv("UV_OFFLINE", "1")
     packages = PackageSpec(pypi_packages=("six==1.17.0",), tools=("python3",))
     factory = make_factory(python_version=PYTHON_VERSION, hash_seed="23")
     spec = MachineSpec(packages, workdir="/app")
@@ -474,6 +755,7 @@ def test_a_python_environment_runs_its_own_interpreter_and_locked_packages(
         finally:
             await first.close()
         # A fresh factory must reuse the resolved installation without index access.
+        monkeypatch.setenv("UV_OFFLINE", "1")
         second = await make_factory(python_version=PYTHON_VERSION).create(spec)
         try:
             result = await second.run(Command(("python3", "-c", "import six,sys; print(sys.prefix)")))

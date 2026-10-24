@@ -16,7 +16,7 @@ uv pip install --prerelease allow 'marin-shellbox[iris]'
 uv pip install 'marin-shellbox[gvisor]'
 ```
 
-The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [Marin Harbor fork](../../config/external/harbor/pyproject.toml), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.38 or newer. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
+The base wheel contains the Harbor adapter, machine API, and guest source. Harbor is the host application: install this wheel into an environment that already has the [vendored Harbor project](../../vendor/harbor/README.md), whose `harbor==0.8.1` distribution is not published on PyPI. The machine API can be used without Harbor. The `shellsim` extra requires ShellSim 0.1.38 or newer. The `qemu` extra requires [quicksand-qemu](https://pypi.org/project/quicksand-qemu/) 0.5.12 or newer within the 0.5 series; it bundles QEMU and its shared libraries in a platform wheel. A QEMU guest bundle still needs a Linux amd64 kernel, static BusyBox, and `bios-microvm.bin`; OCI staging also needs Skopeo, `umoci`, `mkfs.ext4`, and `cpio`. These inputs are explicit until we have a portable, licensed guest-runtime wheel. The tested quicksand-qemu Linux wheel requires glibc 2.38 or newer; use a compatible host QEMU on older clusters.
 
 ## Machine API
 
@@ -182,6 +182,7 @@ environment = build_python_environment(Path("/var/tmp/grader-env"), Path("grader
 factory = LocalMachineFactory(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))
 machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
 try:
+    await machine.upload(Path("grade.py"), "/tests/grade.py")
     result = await machine.run(Command(("python3", "/tests/grade.py")))
 finally:
     await machine.close()
@@ -189,11 +190,12 @@ finally:
 
 `HostImage(read_only=(environment.root,), bin_dirs=(environment.bin_dir,))` can also supply these paths for one machine. The factory combines them with its own mounts and puts the image's `bin_dirs` first on `PATH`; this lets a factory wrapper pass the runtime through `MachineSpec`. `HostImage(mounts=(Mount(host, guest),))` shows a host file or directory read-only at another guest path; the guest path must lie outside the host system directories, where bwrap cannot create a mount point.
 
-- Each machine has a root directory of its own, which `create` makes empty under the host's temporary directory and `close` removes. Commands see it as `/`, with the host's `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`, `/sys` and `/run/systemd/resolve` mounted read-only over it, together with each directory in `read_only` at its own host path. Every other path, including `/app`, `/tests`, `/tmp` and `HOME`, is the machine's own, so paths that the host process uses, such as an Iris task's `/app`, are never touched. No other host file is visible.
+- Each machine has a private root under the host's temporary directory, removed by `close`. Commands see the host's `/usr`, `/bin`, `/sbin` and `/lib*` read-only, together with explicit `read_only` mounts. `/etc` contains copies of only the account databases, name resolution, loader cache, timezone, alternatives and public CA certificates listed in `RUNTIME_CONFIGURATION`. Host shell startup files, `/etc/environment`, password hashes, private keys and other configuration are absent. `/sys` is empty and read-only. `/opt`, `/app`, `/tests`, `/tmp` and `HOME` belong to the machine. Software under the shared program directories and explicit mounts must be trusted and free of credentials.
 - Machines are independent, so a process may run any number of them at once.
 - Files persist in the machine's root between commands. Each command gets new PID, IPC and UTS namespaces and a fresh `/proc`, `/dev` and `/dev/shm`; a command's processes end when it exits or times out. Under `NetworkPolicy.DENY` it also gets a network namespace with only loopback, which refuses TCP and UDP to the host and beyond; under `ALLOW` it uses the host network.
 - `upload` copies into the machine's root and rejects targets in the read-only directories. `download` reads the machine's root or the read-only host directories; a missing path raises `RuntimeError`, as the container backends do.
-- Commands never inherit the host environment, which can hold cluster credentials. Each command gets `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`.
+- With `system_directories=SystemDirectories.COPY_ON_WRITE`, each machine overlays `/usr`, `/bin`, `/sbin` and `/lib*` with a writable layer and makes its private `/etc` writable. Writes persist between commands and `close` discards them; the host's files never change. Writes follow file permissions. `/sys` and host submounts inside overlaid program directories stay read-only; `read_only_system_mounts()` lists those submounts. Transfers involving overlaid directories or `/etc`, and uploads to `/`, run inside the sandbox with a fixed control environment; a download of `/` is refused. This mode needs overlayfs and a temporary directory that is not itself on overlayfs.
+- Commands never inherit the host environment, which can hold cluster credentials. Each command gets `PATH` with `bin_dirs` ahead of the standard system directories, `HOME=/home/shellbox`, `LANG=C.UTF-8`, and `PYTHONHASHSEED` when the factory has a `hash_seed`, then `MachineSpec.env` and `Command.env`. The host launcher uses a fixed control environment. Bubblewrap reads environment options through a private inherited file descriptor, keeping environment values out of host process listings, and applies task and command variables after isolation. Loader options such as `LD_PRELOAD` cannot affect the host launcher.
 - `/bin/sh` enters the working directory and starts the program, so a missing program exits with status 127, as in the container backends. Output beyond `output_limit_bytes` is discarded while the command runs.
 - Commands have no capabilities and run with `no_new_privs`, so setuid programs cannot raise their privileges. They have no core files, files of at most 1 GiB, and, for a command with a timeout, at most the timeout multiplied by the usable CPUs plus 5 seconds of CPU time per process. `RLIMIT_NPROC` counts all of a user's tasks on the host, so the backend limits the command's user to the host's task count when the command starts plus 256; the kernel does not apply it to root.
 - The backend enforces no memory limit, since an address-space limit breaks NumPy and SymPy allocations. `memory_mb`, CPU, storage, and GPU requests raise `UnsupportedMachineSpec`.
@@ -228,7 +230,7 @@ The default ShellSim limits per trial are 10 billion CPU units, 2 GiB modeled me
 Run the local Harbor smoke without QEMU:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[shellsim]' \
   lib/shellbox/tests/harbor_smoke.py shellsim /tmp/shellsim-smoke-jobs
 ```
 
@@ -312,14 +314,14 @@ Acceleration defaults to `auto`. This selects KVM when `/dev/kvm` is readable an
 The local smoke test uses a deterministic OpenAI-compatible server and a Harbor task. Supply a PTY-enabled OCI bundle with `/bin/bash`:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
   lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/bash-image /tmp/qemu-smoke-jobs
 ```
 
 For a task with `docker_image` or `environment/Dockerfile`, use `task-image` and supply the QEMU asset paths in a JSON file with the same keys as `qemu_assets` above:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
   lib/shellbox/tests/harbor_smoke.py task-image /tmp/qemu-image-smoke-jobs \
   --task-path /path/to/task \
   --image-cache /var/cache/marin-shellbox \
@@ -329,7 +331,7 @@ uv run --no-project --python config/external/harbor/.venv/bin/python \
 The TaskTrove `nl2bash` fixture can be built on a Docker-capable build machine, copied to an OCI layout, and staged with `--task-dockerfile` pointing to its extracted `environment/Dockerfile`. Its unchanged Harbor task passes with:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
   lib/shellbox/tests/harbor_smoke.py /opt/marin-shellbox/nl2bash /tmp/nl2bash-jobs \
   --task-path /path/to/extracted/nl2bash \
   --command-file lib/shellbox/tests/manual/tasktrove_nl2bash_command.sh \
@@ -349,7 +351,7 @@ uv run --no-project python lib/shellbox/benchmarks/tasktrove/sample.py /tmp/mari
 Build one Docker image per `dockerfile_id` in `sample.json`, copy each image to an OCI layout, and stage it with its `environment/Dockerfile`. Name the images `tasktrove-clean-qemu:<dockerfile_id>` and the bundles `/tmp/marin-shellbox-benchmark/bundles/<dockerfile_id>`. Then run:
 
 ```sh
-uv run --no-project --python config/external/harbor/.venv/bin/python \
+uv run --project vendor/harbor --extra runtime --frozen --with-editable 'lib/shellbox[qemu]' \
   lib/shellbox/benchmarks/tasktrove/compare.py /tmp/marin-shellbox-benchmark --concurrency 2
 ```
 

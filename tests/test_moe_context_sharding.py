@@ -4,8 +4,9 @@
 """Check hero routing, gradients, and parameter placement across context layouts.
 
 Each case uses a subprocess to configure four CPU devices before JAX initializes.
-The reference and context meshes own the same token blocks but group experts
-differently, so routing comparisons account for each independent context group.
+Under context parallelism, each device flattens its own block of rows and sequence
+shard. The references give each device the same tokens in the same order, so the
+routing and the capacity drops agree.
 """
 
 import textwrap
@@ -13,12 +14,16 @@ import textwrap
 import pytest
 from levanter.testing.cpu_devices import run_on_cpu_devices
 
+# The cases import the hero model only in the subprocess. This import lets the CI test selector see that dependency.
+import experiments.grug.moe_hero_ep.model  # noqa: F401
+
 _PRELUDE = """
 import math
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from einops import rearrange
 from jax import P
 from jax.sharding import AxisType, Mesh, NamedSharding, reshard, set_mesh
 
@@ -64,6 +69,13 @@ def moe_config(**overrides):
 def activation_spec(seq_sharded):
     return P(hero._BATCH_AXES, "context" if seq_sharded else None, None)
 
+
+def context_blocks_as_rows(x):
+    # Row `2 * e + c` holds the tokens of context-mesh device (context=c, expert=e) in its local
+    # flatten order. That device is token shard `2 * e + c`, as row `2 * e + c` is on a mesh with
+    # four batch shards and no context sharding.
+    return rearrange(x, "(e b) (c s) ... -> (e c) (b s) ...", e=2, c=2)
+
 """
 
 
@@ -89,17 +101,17 @@ def test_routed_moe_matches_independent_routing_per_context_shard():
 
         context_mesh = mesh_of((1, 1, 2, 2, 1))
         reference_mesh = mesh_of((1, 1, 1, 2, 1))
-        # Expert-parallel group `c` on the context mesh holds token blocks {c, c + 2}, i.e. rows
-        # {c, c + 2}; the reference mesh runs each of those pairs on its own.
+        # Expert-parallel group `c` on the context mesh holds sequence shard `c` of all rows. The
+        # reference mesh runs each of those shards on its own.
         out, drops = routed(context_mesh, x, seq_sharded=True)
-        out_even, drops_even = routed(reference_mesh, x[0::2], seq_sharded=False)
-        out_odd, drops_odd = routed(reference_mesh, x[1::2], seq_sharded=False)
+        out_first, drops_first = routed(reference_mesh, x[:, :2], seq_sharded=False)
+        out_second, drops_second = routed(reference_mesh, x[:, 2:], seq_sharded=False)
 
-        np.testing.assert_array_equal(out[0::2], out_even)
-        np.testing.assert_array_equal(out[1::2], out_odd)
+        np.testing.assert_array_equal(out[:, :2], out_first)
+        np.testing.assert_array_equal(out[:, 2:], out_second)
         assert drops["capacity_overflow"] > 0, "capacity_factor=0.5 must actually drop assignments"
-        assert drops_even != drops_odd, "the halves must differ, or summing them proves nothing"
-        assert drops == {k: drops_even[k] + drops_odd[k] for k in drops}, (drops, drops_even, drops_odd)
+        assert drops_first != drops_second, "the halves must differ, or summing them proves nothing"
+        assert drops == {k: drops_first[k] + drops_second[k] for k in drops}, (drops, drops_first, drops_second)
 
         """
     )
@@ -112,21 +124,21 @@ def test_qb_threshold_matches_across_token_layouts():
         """
         x = jax.random.normal(jax.random.key(3), (4, 4, 16), dtype=jnp.float32)
 
-        def thresholds(mesh, config, seq_sharded):
+        def thresholds(mesh, config, tokens, seq_sharded):
             with set_mesh(mesh):
                 layer = hero.MoEMLP.init(config, key=jax.random.key(0))
                 call = jax.jit(
                     lambda l, t: l(reshard(t, activation_spec(seq_sharded)), jnp.ones(t.shape[:2], dtype=jnp.bool_))[1]
                 )
-                stats = call(layer, x)
+                stats = call(layer, tokens)
             return {k: np.asarray(v) for k, v in stats.items() if k.startswith("qb_beta")}
 
         context_mesh = mesh_of((1, 1, 2, 2, 1))
         reference_mesh = mesh_of((1, 2, 1, 2, 1))
         for estimator in (hero.QbEstimator.TOPK, hero.QbEstimator.HIST):
             config = moe_config(qb_estimator=estimator, qb_hist_bins=64)
-            reference = thresholds(reference_mesh, config, seq_sharded=False)
-            context = thresholds(context_mesh, config, seq_sharded=True)
+            reference = thresholds(reference_mesh, config, context_blocks_as_rows(x), seq_sharded=False)
+            context = thresholds(context_mesh, config, x, seq_sharded=True)
             assert reference.keys() == context.keys() and reference
             for name, expected in reference.items():
                 np.testing.assert_allclose(context[name], expected, rtol=1e-6, atol=1e-6)
@@ -168,7 +180,7 @@ def test_shared_and_routed_gradients_match_across_context_degree():
         x = jax.random.normal(jax.random.key(3), (4, 4, config.hidden_dim), dtype=jnp.float32)
         cotangent = jax.random.normal(jax.random.key(4), (4, 4, config.hidden_dim), dtype=jnp.float32)
 
-        def gradients(mesh, seq_sharded):
+        def gradients(mesh, tokens, cotangent, seq_sharded):
             with set_mesh(mesh):
                 routed = hero.MoEMLP.init(config, key=jax.random.key(0))
                 shared = hero.DenseMLP.init(
@@ -181,14 +193,20 @@ def test_shared_and_routed_gradients_match_across_context_degree():
                     out, _ = routed(tokens, jnp.ones(tokens.shape[:2], dtype=jnp.bool_))
                     return jnp.sum((out + shared(tokens)) * cotangent)
 
-                grads = jax.jit(jax.grad(objective, argnums=(0, 1, 2)))(routed, shared, x)
-            return [np.asarray(leaf) for leaf in jax.tree.leaves(grads)]
+                grads = jax.jit(jax.grad(objective, argnums=(0, 1, 2)))(routed, shared, tokens)
+            *param_grads, token_grad = [np.asarray(leaf) for leaf in jax.tree.leaves(grads)]
+            return param_grads, token_grad
 
-        reference = gradients(mesh_of((1, 2, 1, 2, 1)), seq_sharded=False)
-        context = gradients(mesh_of((1, 1, 2, 2, 1)), seq_sharded=True)
+        reference, reference_token_grad = gradients(
+            mesh_of((1, 2, 1, 2, 1)), context_blocks_as_rows(x), context_blocks_as_rows(cotangent), seq_sharded=False
+        )
+        context, context_token_grad = gradients(mesh_of((1, 1, 2, 2, 1)), x, cotangent, seq_sharded=True)
         assert reference and len(reference) == len(context)
         for actual, expected in zip(context, reference, strict=True):
             np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(
+            context_blocks_as_rows(context_token_grad), reference_token_grad, rtol=1e-5, atol=1e-5
+        )
         """
     )
 

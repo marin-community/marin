@@ -24,6 +24,9 @@ FILTER_PRIORITY = ("flexible-extract",)
 MRCR_RUN_METRIC = "mrcr_accuracy"
 MRCR_SAMPLE_METRIC = "accuracy"
 
+# Evalchemy's sandbox graders emit each item's pass rate separately from their aggregate names.
+PASS_AT_ONE_METRICS = frozenset({"pass@1", "pass_at_1", "input_pass@1", "output_pass@1"})
+
 
 def primary_filter(filters: Iterable[str]) -> str | None:
     """Pick the extraction filter Evaldash should show by default."""
@@ -64,6 +67,8 @@ def declared_sample_metric(metrics: Mapping[str, float], declared: str | None) -
         return picked
     if declared == MRCR_RUN_METRIC:
         return declared_metric(metrics, MRCR_SAMPLE_METRIC)
+    if declared in PASS_AT_ONE_METRICS:
+        return declared_metric(metrics, "pass_rate")
     return None
 
 
