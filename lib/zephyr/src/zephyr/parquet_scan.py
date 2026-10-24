@@ -11,14 +11,7 @@ from rigging.filesystem.s3_compat import needs_virtual_host_addressing, s3_crede
 
 
 def scan_parquet(path: str, *, schema: pl.Schema | None = None) -> pl.LazyFrame:
-    """Scan a Parquet file, qualifying the endpoint where the store demands it.
-
-    Resolve credentials through Rigging: without the optional boto3 SDK,
-    Polars' Rust object_store client does not read Iris' native credential file.
-    In virtual-host mode it also uses the endpoint verbatim, so the bucket
-    must be part of the endpoint host; a path-style request returns HTTP 400.
-    Both scatter chunks and external-sort spill runs must use this.
-    """
+    """Scan Parquet with resolved S3 credentials and required virtual-host addressing."""
     if not path.startswith("s3://"):
         return pl.scan_parquet(path, schema=schema)
 
