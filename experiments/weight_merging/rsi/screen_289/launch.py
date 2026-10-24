@@ -48,10 +48,13 @@ RUNS = (1, 2)
 RUNTIME_SECONDS = 6 * 3600
 # v4-32: reserved, 4 hosts, TP16 (task261 parity). v5p-8 / v6e-8: preemptible, 1 host, TP4 / TP8 (task249 parity);
 # preemptions retry the whole job, evals finished before it are kept and Evalchemy resumes the interrupted one.
+# Single-host RAM: task249 serves peaked at 97.6 GB (v5p-8) and 107.1 GB (v6e-8, worst of 16 attempts) in
+# finelog iris.task memory_peak_mb; 180g covers that plus the co-located eval client with margin and fits the
+# 192.8 GB free on busy v5p-8 hosts (the 400g task249 hint never placed on 2026-10-24).
 PLATFORMS = {
     "v4-32": dict(tp=16, multihost=True, preemption_retries=0),
-    "v5p-8": dict(tp=4, multihost=False, preemption_retries=30),
-    "v6e-8": dict(tp=8, multihost=False, preemption_retries=30),
+    "v5p-8": dict(tp=4, multihost=False, preemption_retries=30, ram="180g"),
+    "v6e-8": dict(tp=8, multihost=False, preemption_retries=30, ram="180g"),
 }
 # Slice t1v-n-70779c29 hosts the #205 CPU merges (2026-10-23); keep the serve off it.
 AVOID_TPU_NAMES = ("t1v-n-70779c29",)
@@ -218,7 +221,9 @@ def configure(label, platform, attempt):
     core.RUNTIME_SECONDS = RUNTIME_SECONDS
     core.MULTIHOST = spec["multihost"]
     if platform != "v4-32":
-        core.resources = lambda: ResourceConfig.with_tpu(platform, cpu=32, ram="400g", disk="80g", preemptible=True)
+        core.resources = lambda: ResourceConfig.with_tpu(
+            platform, cpu=32, ram=spec["ram"], disk="80g", preemptible=True
+        )
     original_build = core.build_service
 
     def build():
