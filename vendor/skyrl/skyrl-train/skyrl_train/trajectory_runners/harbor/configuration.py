@@ -14,11 +14,11 @@ from skyrl_train.utils.harbor_errors import (
 )
 
 from skyrl_train.rollouts.harbor_settings import (
-    DEFAULT_CONCURRENT_TRIALS,
     EnvironmentConfig,
     EnvironmentType,
     RetryConfig,
     VerifierConfig,
+    concurrent_trials,
 )
 
 
@@ -364,22 +364,9 @@ class HarborConfigBuilder:
         )
         return retry_config.model_copy(update={"exclude_exceptions": set(excluded)})
 
-    def get_n_concurrent_trials(self, default: int = DEFAULT_CONCURRENT_TRIALS) -> int:
-        """
-        Get the number of concurrent Harbor tasks.
-
-        Args:
-            default: Default concurrency if not specified in config.
-
-        Returns:
-            Number of concurrent trials to run.
-        """
-        mapping = ORCHESTRATOR_SCHEMA.fields.get("n_concurrent_trials")
-        if mapping:
-            value = self._get_field_value("n_concurrent_trials", mapping)
-            if value is not None:
-                return int(value)
-        return default
+    def get_n_concurrent_trials(self) -> int:
+        """Get the number of concurrent Harbor tasks."""
+        return concurrent_trials(self._harbor_cfg)
 
     def get_reward_shaping_config(self) -> Dict[str, Any]:
         """
