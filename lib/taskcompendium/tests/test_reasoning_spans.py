@@ -18,12 +18,15 @@ from taskcompendium.reasoning_spans import ReasoningViolation, reasoning_span_vi
         ("<|start_think|>A<|end_think|>B<|end_think|>C", ReasoningViolation.STRAY_END),
         ("A<|end_think|>B<|end_think|>C", ReasoningViolation.STRAY_END),
         ("<think>A</think><|start_think|>B<|end_think|>4", ReasoningViolation.SECOND_SPAN),
+        ("<think>A</thinking>B</think>4", ReasoningViolation.STRAY_END),
     ],
 )
 def test_reasoning_span_violation(text, violation):
     assert reasoning_span_violation(text, "stop") == violation
 
 
-def test_a_span_left_open_by_a_length_stop_is_truncation():
+def test_a_length_stop_excuses_only_the_trailing_open_span():
     assert reasoning_span_violation("<think>Add the", "length") is None
     assert reasoning_span_violation("<think>A</think>B</think>C", "length") == ReasoningViolation.STRAY_END
+    assert reasoning_span_violation("<think>A</think>B<think>C", "length") == ReasoningViolation.SECOND_SPAN
+    assert reasoning_span_violation("<think>A</thinking>B", "length") == ReasoningViolation.STRAY_END

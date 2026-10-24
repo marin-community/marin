@@ -17,7 +17,7 @@ REASONING_DELIMITERS = (
 )
 _LENGTH_STOP_REASON = "length"
 
-_OPENING_MARKERS = frozenset(opening for opening, _ in REASONING_DELIMITERS)
+_CLOSING_MARKER = dict(REASONING_DELIMITERS)
 _REASONING_MARKER = re.compile("|".join(re.escape(marker) for pair in REASONING_DELIMITERS for marker in pair))
 
 
@@ -32,16 +32,26 @@ class ReasoningViolation(StrEnum):
 def reasoning_span_violation(text: str, stop_reason: str) -> ReasoningViolation | None:
     """Name the malformed reasoning span in a reply decoded with its special tokens.
 
-    A span left open by a length stop is truncation, so it is not a violation.
+    A closing marker must match the opening marker of its span. A span left open by a length stop is
+    truncation, so it is not a violation by itself.
     """
-    openings = [match in _OPENING_MARKERS for match in _REASONING_MARKER.findall(text)]
-    if not openings:
-        return None
-    if openings[-1]:
-        return None if stop_reason == _LENGTH_STOP_REASON else ReasoningViolation.UNCLOSED
-    spans = sum(openings) + (not openings[0])
+    spans = 0
+    stray_end = False
+    expected_close: str | None = None
+    for index, marker in enumerate(_REASONING_MARKER.findall(text)):
+        if marker in _CLOSING_MARKER:
+            spans += 1
+            expected_close = _CLOSING_MARKER[marker]
+        elif index == 0:
+            spans += 1
+        elif marker == expected_close:
+            expected_close = None
+        else:
+            stray_end = True
+    if expected_close is not None and stop_reason != _LENGTH_STOP_REASON:
+        return ReasoningViolation.UNCLOSED
     if spans > 1:
         return ReasoningViolation.SECOND_SPAN
-    if openings.count(False) > spans:
+    if stray_end:
         return ReasoningViolation.STRAY_END
     return None
