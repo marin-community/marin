@@ -326,6 +326,12 @@ class GrugModelConfig:
     mla: bool = False
     mla_kv_latent_dim: int = 512
     local_mixer: LocalMixer = LocalMixer.SLIDING_WINDOW
+    swa_layers: tuple[int, ...] = ()
+    """Local layers whose mixer is sliding-window softmax attention instead of KDA (needs ``local_mixer=kda``):
+    MHA with KDA's head layout (``num_heads`` query and KV heads of ``head_dim``), QK-norm, half-RoPE, XSA and the
+    per-head output gate, causal within documents over the last ``swa_window`` tokens (self included). No q/k/v
+    convs and no branch-output SConv, like the KDA blocks minus their q/k/v convs."""
+    swa_window: int = 128
     kda_dt_range: tuple[float, float] = (0.02, 0.5)
     """KDA ``dt_bias`` init: the per-token log-decay ``|g|`` at zero gate input is log-uniform in this range."""
     kda_save_chunk_states: bool = False
@@ -465,6 +471,17 @@ class GrugModelConfig:
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
+        if self.swa_layers:
+            if self.local_mixer != LocalMixer.KDA:
+                raise ValueError("swa_layers replaces KDA layers and needs local_mixer=kda")
+            if bad := [
+                i
+                for i in self.swa_layers
+                if not 0 <= i < self.num_layers or _is_long_layer(i, self.num_layers, self.global_every)
+            ]:
+                raise ValueError(f"swa_layers {bad} must be local (KDA) layers")
+            if self.swa_window <= 0:
+                raise ValueError(f"swa_window must be positive, got {self.swa_window}")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.entropy_skip_layers:
@@ -1787,16 +1804,39 @@ def _long_layer_schedule(num_layers: int, global_every: int) -> jax.Array:
 
 
 def _kda_layer_indices(cfg: GrugModelConfig) -> tuple[int, ...]:
-    """Layers whose mixer is KDA: the local layers when ``local_mixer`` is KDA, else none."""
+    """Layers whose mixer is KDA: the local layers outside ``swa_layers`` when ``local_mixer`` is KDA, else none."""
     if cfg.local_mixer != LocalMixer.KDA:
         return ()
-    return tuple(i for i in range(cfg.num_layers) if not _is_long_layer(i, cfg.num_layers, cfg.global_every))
+    return tuple(
+        i
+        for i in range(cfg.num_layers)
+        if not _is_long_layer(i, cfg.num_layers, cfg.global_every) and i not in cfg.swa_layers
+    )
 
 
-def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """``(softmax_layers, kda_layers)``: the layer indices of ``Transformer.stacked_blocks`` and ``kda_blocks``."""
+def _stack_layer_indices(cfg: GrugModelConfig) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """``(softmax_layers, kda_layers, swa_layers)``: the layer indices of ``Transformer.stacked_blocks``,
+    ``kda_blocks`` and ``swa_blocks``."""
     kda_layers = _kda_layer_indices(cfg)
-    return tuple(i for i in range(cfg.num_layers) if i not in kda_layers), kda_layers
+    swa_layers = tuple(sorted(cfg.swa_layers))
+    softmax_layers = tuple(i for i in range(cfg.num_layers) if i not in kda_layers and i not in swa_layers)
+    return softmax_layers, kda_layers, swa_layers
+
+
+def _swa_config(cfg: GrugModelConfig) -> GrugModelConfig:
+    """The attention config of the ``swa_layers``: plain MHA (no MLA latent, no Inkling bias) with KDA's
+    ``num_heads`` heads as KV heads too, QK-norm and RoPE, and no K or branch-output SConv."""
+    return dataclasses.replace(
+        cfg,
+        mla=False,
+        inkling_relpos=False,
+        mla_num_heads=None,
+        num_kv_heads=cfg.num_heads,
+        local_kv_heads=None,
+        global_kv_heads=None,
+        qk_norm=True,
+        sconv_sites=tuple(site for site in cfg.sconv_sites if site == "mlp"),
+    )
 
 
 def _unstack_layers(stacked: ArrayStacked[Block]) -> list[Block]:
@@ -1839,6 +1879,8 @@ class Transformer(eqx.Module):
     kda_blocks: ArrayStacked[Block] | None
     """The KDA (local) layers. The AttnRes loop splits each stack whole into its layers (never slices
     it), so the hybrid keeps one stack per mixer kind: fewer, larger optimizer leaves."""
+    swa_blocks: ArrayStacked[Block] | None
+    """The sliding-window softmax layers that replace KDA layers (``swa_layers``)."""
     final_norm: RMSNorm
     final_gated_norm: GatedNorm | None
     attn_res_query_final: Float[Array, " D"] | None
@@ -1861,11 +1903,11 @@ class Transformer(eqx.Module):
             _init_weight(out_key, (cfg.hidden_dim, cfg.vocab_size), cfg.initializer_std), _LM_HEAD_PARTITION_SPEC
         )
 
-        def stack(layers: tuple[int, ...], use_kda: bool) -> ArrayStacked[Block]:
+        def stack(layers: tuple[int, ...], use_kda: bool, layer_cfg: GrugModelConfig = cfg) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
-            return ArrayStacked.init(len(layers), Block)(cfg, key=keys, use_kda=use_kda)
+            return ArrayStacked.init(len(layers), Block)(layer_cfg, key=keys, use_kda=use_kda)
 
-        softmax_layers, kda_layers = _stack_layer_indices(cfg)
+        softmax_layers, kda_layers, swa_layers = _stack_layer_indices(cfg)
         return Transformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
@@ -1875,6 +1917,7 @@ class Transformer(eqx.Module):
             output_proj=output_proj,
             stacked_blocks=stack(softmax_layers, False),
             kda_blocks=stack(kda_layers, True) if kda_layers else None,
+            swa_blocks=stack(swa_layers, False, _swa_config(cfg)) if swa_layers else None,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
             final_gated_norm=(
                 GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key) if cfg.final_gated_norm else None
@@ -1903,7 +1946,7 @@ class Transformer(eqx.Module):
 
     def layer_stacks(self) -> list[ArrayStacked[Block]]:
         """The block stacks; stack ``k`` holds layers ``stack_layer_indices()[k]``."""
-        return [s for s in (self.stacked_blocks, self.kda_blocks) if s is not None]
+        return [s for s in (self.stacked_blocks, self.kda_blocks, self.swa_blocks) if s is not None]
 
     def stack_layer_indices(self) -> list[tuple[int, ...]]:
         """The layer indices held by each of ``layer_stacks()``, in stack order."""
@@ -1967,11 +2010,19 @@ class Transformer(eqx.Module):
 
         final_gate_stats: dict[str, jax.Array] = {}
         if cfg.attn_res:
+            swa_layer_mask = None
+            if cfg.swa_layers:
+                swa_mask = AttentionMask(is_causal=True, sliding_window=cfg.swa_window, segment_ids=segment_ids)
+                swa_lower_bounds, _ = fa4_cute_segment_bounds(
+                    swa_mask, batch_size=batch_size, seq_len=seq_len, sliding_window=cfg.swa_window
+                )
+                swa_layer_mask = swa_mask.with_fa4_bounds(_batch_reshard(swa_lower_bounds), valid)
             hidden, stacked_router_stats, final_gate_stats = self._attn_res_layers(
                 hidden,
                 token_ids,
                 long_mask.with_fa4_bounds(long_lower_bounds, valid),
                 long_mask.with_fa4_bounds(short_lower_bounds, valid),
+                swa_layer_mask,
                 layer_skip,
                 extra_mlp_active,
             )
@@ -2033,6 +2084,7 @@ class Transformer(eqx.Module):
         token_ids: Int[Array, "B S"],
         long_layer_mask: AttentionMask,
         short_layer_mask: AttentionMask,
+        swa_layer_mask: AttentionMask | None,
         layer_skip: LayerSkip | None,
         extra_mlp_active: jax.Array | bool,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array], dict[str, jax.Array]]:
@@ -2099,9 +2151,14 @@ class Transformer(eqx.Module):
             if i in cfg.skip_router_layers:
                 keeps.append(extra_state["router_keep"])
             layer_extras = {_SKIP_KEEP: functools.reduce(jnp.multiply, keeps)} if keeps else None
+            if i in cfg.swa_layers:
+                assert swa_layer_mask is not None
+                layer_mask = swa_layer_mask
+            else:
+                layer_mask = long_layer_mask if use_long else short_layer_mask
             partial, blocks, block_logits, stats = layer_fn(
                 (layer, blocks, block_logits, partial, queries, layer_extras),
-                long_layer_mask if use_long else short_layer_mask,
+                layer_mask,
                 token_ids,
                 use_long,
                 i,
@@ -2381,6 +2438,8 @@ def forward_flops_per_token(model: Transformer) -> float:
                 continue
             long = _is_long_layer(i, cfg.num_layers, cfg.global_every)
             span = seq if long or window is None else min(window, seq)
+            if i in cfg.swa_layers:
+                span = min(cfg.swa_window, seq)
             # Mean keys per query under a causal mask capped at ``span``: sum_p min(p + 1, span) / seq.
             keys = (span * (span + 1) / 2 + (seq - span) * span) / seq
             core += 2 * keys * q_width * 2  # QK^T over d_qk and PV over d_v, both q_width = heads * head_dim
