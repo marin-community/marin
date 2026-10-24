@@ -195,18 +195,30 @@ class BestCheckpointCallback(TrainerCallback):
 
     error_behavior = CallbackErrorBehavior.RAISE
 
-    def __init__(self, *, initial_model_uri: str, expected_tasks: int, minimum_scored_tasks: int):
+    def __init__(self, *, initial_model_uri: str, expected_tasks: int, minimum_scored_tasks: int,
+                 selection_metric: str = "eval/all/avg_verifier_score", save_after_fraction: float = 0.0,
+                 preservation_max_drop: dict[str, float] | None = None):
         self.initial_model_uri = initial_model_uri
         self.expected_tasks = expected_tasks
         self.minimum_scored_tasks = minimum_scored_tasks
         self.best_score: float | None = None
+        self.selection_metric = selection_metric
+        if not 0 <= save_after_fraction <= 1:
+            raise ValueError("save_after_fraction must be between zero and one")
+        self.save_after_fraction = save_after_fraction
+        self.preservation_max_drop = preservation_max_drop or {}
+        if any(not math.isfinite(drop) or drop < 0 for drop in self.preservation_max_drop.values()):
+            raise ValueError("Preservation drops must be finite and nonnegative")
+        self.preservation_baseline: dict[str, float] = {}
 
     async def on_evaluate_async(self, state, control, *, metrics, trainer, **kwargs):
         root = trainer.cfg.trainer.ckpt_path
         best_path = join_resource_path(root, BEST_CHECKPOINT_FILENAME)
         if self.best_score is None and io.exists(best_path):
             with io.open_file(best_path, "r") as stream:
-                self.best_score = json.load(stream)["accuracy"]
+                saved = json.load(stream)
+                self.best_score = saved["accuracy"]
+                self.preservation_baseline = saved.get("preservation_baseline", {})
         attempted = metrics["eval/all/num_attempted"]
         scored = metrics["eval/all/num_scored"]
         if (
@@ -215,7 +227,21 @@ class BestCheckpointCallback(TrainerCallback):
             or not metrics.get("eval/selection_eligible", 1.0)
         ):
             return control
-        score = metrics["eval/all/avg_verifier_score"]
+        if state.global_step == 0:
+            self.preservation_baseline = {key: metrics[key] for key in self.preservation_max_drop}
+            if any(not math.isfinite(value) for value in self.preservation_baseline.values()):
+                raise ValueError("Preservation baseline must be finite")
+        if set(self.preservation_baseline) != set(self.preservation_max_drop):
+            raise ValueError("Preservation-gated selection requires step-zero evaluation or restored baseline")
+        for key, maximum_drop in self.preservation_max_drop.items():
+            value = metrics[key]
+            if not math.isfinite(value):
+                raise ValueError(f"Nonfinite preservation metric: {key}")
+            if value < self.preservation_baseline[key] - maximum_drop:
+                return control
+        if state.global_step and state.global_step < math.ceil(self.save_after_fraction * state.total_steps):
+            return control
+        score = metrics[self.selection_metric]
         if not math.isfinite(score) or not 0 <= score <= 1:
             raise ValueError("Best-checkpoint selection requires a finite normalized verifier score")
         if self.best_score is not None and score <= self.best_score:
@@ -235,7 +261,11 @@ class BestCheckpointCallback(TrainerCallback):
             "scored": scored,
             "model_uri": model_uri,
             "model_format": model_format,
-            "selection": "Highest valid normalized verifier score; keep the earliest checkpoint on ties",
+            "selection": "Highest eligible selected metric; keep the earliest checkpoint on ties",
+            "selection_metric": self.selection_metric,
+            "preservation_baseline": self.preservation_baseline,
+            "preservation_max_drop": self.preservation_max_drop,
+            "save_after_fraction": self.save_after_fraction,
         }
         io.makedirs(root, exist_ok=True)
         io.write_bytes_atomic(best_path, json.dumps(payload).encode())

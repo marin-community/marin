@@ -215,3 +215,28 @@ async def test_worker_repairs_second_turn_and_resumes_student(monkeypatch, turn_
             assert history[-2]["content"] == "I am Marin Snowball"
             assert history[-1]["content"] == "Write a poem about rain."
         assert sum(item["answer"] == "Rain drums on leaves." for item in graded) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fact_score,passed", [(0.5, False), (1.0, True)])
+async def test_partial_identity_reward_is_not_a_success(monkeypatch, fact_score, passed):
+    def respond(url, *, headers, json, timeout):
+        response = requests.Response()
+        response.status_code = 200
+        response._content = encode_response({
+            "task_completed": True, "fact_correctness": {"name": fact_score}, "unsupported_claims": 0,
+            "inappropriate_refusal": False, "unsolicited_identity": False, "explanation": "Scored identity.",
+        })
+        return response
+
+    monkeypatch.setattr(requests, "post", respond)
+    rollout = original_rollout(["Maybe Marin Snowball."])
+    judge = ProductionIdentityJudge(OpenAIJudge("http://judge/v1", "judge", strict_completion=True), "pin", 512)
+    groups = IdentityRepairGroups(CharTokenizer(),
+        FactManifest("v1", "Marin Snowball", (), "OpenAthena", (), "OpenAthena", (), (), {}),
+        judge, FakeClient([]), FakeClient([]), TeacherRepairSpec({}, {}, 8192),
+        {rollout.task_id: ((IdentityFact.NAME,),)}, RewardWeights())
+    graded = await groups.grade(rollout)
+    assert graded.grade.passed is passed
+    assert graded.grade.reward == fact_score + 0.25
+    assert graded.grade.score_max == 1.25

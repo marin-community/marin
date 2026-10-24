@@ -67,7 +67,17 @@ class IdentityRepairGroups:
         # Remove inherited per-turn rewards so projection consumes this independent task grade.
         steps = tuple(replace(step, transition=TrainingTransition(done=index == len(rollout.steps)-1))
                       for index, step in enumerate(rollout.steps))
-        return replace(rollout, grade=GradeResult(Outcome.GRADED, reward), steps=steps,
+        passed = all(
+            record["assessment"]["task_completed"]
+            and all(score == 1.0 for score in record["assessment"]["fact_correctness"].values())
+            and record["assessment"]["unsupported_claims"] == 0
+            and not record["assessment"]["inappropriate_refusal"]
+            and not record["assessment"]["unsolicited_identity"]
+            for record in records
+        )
+        grade = GradeResult(Outcome.GRADED, reward, passed=passed,
+                            score_max=self.weights.factual_correctness + self.weights.responsiveness)
+        return replace(rollout, grade=grade, steps=steps,
                        metrics={**rollout.metrics, "identity_reward_records": records})
 
     async def collect(
