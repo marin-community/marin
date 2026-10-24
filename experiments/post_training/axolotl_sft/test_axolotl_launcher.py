@@ -23,6 +23,7 @@ from experiments.post_training.axolotl_sft.launcher import (
     AXOLOTL_TRANSFORMERS_PIN,
     DECODER_LAYER_CLASSES,
     FP32_MASTER_PLUGIN,
+    PACKED_ATTENTION_PLUGIN,
     PAYLOAD_ENV,
     POD_RUNNER,
     SUPPORTED_ARCHITECTURES,
@@ -100,7 +101,8 @@ def test_config_trains_assistant_turns_on_the_inline_template_with_fp32_masters(
         assert dataset["roles_to_train"] == ["assistant"]
         assert config["eot_tokens"] == [spec.turn_close] and dataset["train_on_eot"] == "turn"
         assert config["special_tokens"]["eos_token"] == spec.turn_close
-        assert config["train_on_inputs"] is False and config["sample_packing"] is False
+        assert config["train_on_inputs"] is False and config["sample_packing"] is True
+        assert PACKED_ATTENTION_PLUGIN in config["plugins"], "packed conversations must not attend to each other"
         assert config["micro_batch_size"] * 16 * config["gradient_accumulation_steps"] == spec.global_batch == 64
         assert config["fsdp_config"]["fsdp_version"] == 2
         # Sharded gradients through accumulation: an unsynced micro-batch keeps the model's full gradients.

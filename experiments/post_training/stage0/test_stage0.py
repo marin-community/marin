@@ -480,7 +480,7 @@ def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
             # The family's shared-template instance, identical on every stage of the base.
             assert spec.chat_template == shared_template(FAMILY_TOKEN_MAPS[architecture])
             config = axolotl_config(spec)
-            assert config["sample_packing"] is False
+            assert config["sample_packing"] is True and config["pad_to_sequence_len"] is True
             assert config["sequence_len"] == SEQUENCE_LEN
             assert config["num_epochs"] == EPOCHS_PER_STAGE
             assert config["micro_batch_size"] == PER_DEVICE_BATCH
