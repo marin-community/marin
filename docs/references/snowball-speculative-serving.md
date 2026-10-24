@@ -90,7 +90,7 @@ Relative to that endpoint root:
 - `POST /v1/chat/completions` accepts `model: snowball-67b-a2b-step1903`,
   `messages`, sampling settings and `stream: true` (SSE, ending in `[DONE]`).
 - `GET /v1/models` reports the served alias and context length.
-- `POST /tokenize` and `POST /detokenize` expose the engine's tokenizer.
+- `POST /tokenize` exposes the engine's tokenizer.
 - `GET /metrics` exposes the existing vLLM counters for the harness's
   server-scrape path. Use an exclusive serving allocation for run-scoped deltas.
 
@@ -128,6 +128,12 @@ On the same eight-GPU Iris command above, replace the final arguments with:
 ```bash
 --smoke-all --acceptance-length 2.5 --endpoint-prefix /serve/my-check
 ```
+
+Add `-e VLLM_SERVER_DEV_MODE 1` to the Iris job options for this check. The pinned
+engine gates `/server_info` behind that diagnostic setting. The smoke runner
+reads it on the engine's loopback listener to verify resolved sampler settings;
+the Iris dashboard exposes only its ordinary serving routes. Persistent serves
+use the ordinary engine defaults and do not need this setting.
 
 Here `2.5` is an arbitrary control probe, with no calibration claim. All three
 engines run sequentially in the same allocation. Each receives three short

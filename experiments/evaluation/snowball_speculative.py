@@ -157,8 +157,13 @@ def smoke(service: IrisServiceConfig, output: Path) -> None:
             assert actual["draft_model_config"]["max_model_len"] == CONTEXT
             if expected.synthetic_acceptance_length is not None:
                 assert abs(1 + sum(actual["synthetic_acceptance_rates"]) - expected.synthetic_acceptance_length) < 1e-6
+        assert local.chat_template_content is not None
+        # Supply the resolved template to avoid a chat-detection generation in the counter window.
+        dashboard_service = replace(
+            service, model=replace(service.model, chat_template_content=local.chat_template_content)
+        )
         with _register_dashboard(
-            service,
+            dashboard_service,
             local.model,
             tensor_parallel_size=local.tensor_parallel_size,
             backend_name=local.backend_name,
@@ -208,6 +213,7 @@ def smoke(service: IrisServiceConfig, output: Path) -> None:
                 "worker_region": job.worker_region,
                 "endpoint_name": service.endpoint_name,
                 "engine_version": version.json(),
+                "diagnostic_server_dev_mode": os.environ.get("VLLM_SERVER_DEV_MODE"),
                 "effective_engine": effective,
                 "models": models.json(),
                 "responses": responses,
@@ -240,6 +246,10 @@ def main(
         raise click.UsageError("--acceptance-length requires --mode synthetic or --smoke-all")
     if not endpoint_prefix.startswith("/") or "." in endpoint_prefix:
         raise click.UsageError("--endpoint-prefix must be absolute and contain no periods")
+    if smoke_all and not dry_run and os.environ.get("VLLM_SERVER_DEV_MODE") != "1":
+        raise click.UsageError(
+            "--smoke-all requires -e VLLM_SERVER_DEV_MODE 1 on the Iris job for loopback engine metadata"
+        )
     modes = tuple(Mode) if smoke_all else (Mode(mode),)
     for selected in modes:
         config = snowball_config(selected, acceptance_length if selected is Mode.SYNTHETIC else None)
