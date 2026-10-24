@@ -137,6 +137,20 @@ The gain transfers to synthesized families that the policy never trained on, in 
 the same Taskforge pipeline, so this is transfer within that kind of task. The pool loss of the first seed does not
 occur again: both intervals contain zero.
 
+A third RSI arm repeats seed 1 with `--synthesized-share 0.25`. It trained 1,764 synthesized groups of 119 accepted
+tasks from 78 sessions, and 5,916 pool groups (the share 0.5 arm 4,927, the control 7,680). Its pair is the control
+of seed 1, in a new evaluation on the probes of this arm:
+
+| Share | Task set | Tasks | Base | Control | RSI | RSI − control (95% CI) |
+|---|---|---|---|---|---|---|
+| 0.25 | Held-out pool tasks | 300 | 0.224 | 0.408 | 0.420 | +0.012 [−0.019, +0.043] |
+| 0.25 | Probes of trained families | 700 | 0.151 | 0.181 | 0.642 | +0.461 [+0.429, +0.494] |
+| 0.25 | Probes of held-out families | 208 | 0.119 | 0.126 | 0.549 | +0.423 [+0.367, +0.478] |
+
+With a quarter of each batch synthesized, the probe gain stays large and the pool pass rate does not decrease. The
+share 0.5 arm of seed 1 also had no measurable pool loss, so this arm does not show that a smaller share removes a
+loss. The two shares have different probes, so their probe gains do not compare directly.
+
 The gain does not transfer to standard benchmarks. On IFEval, IFBench, GSM8K (0-shot), MATH500, HumanEval+ and MBPP+
 (full test sets, Evalchemy through `experiments.evaluation`), every RSI − control difference of the first 4B and
 Snowball checkpoints is within its 95% interval of zero. Both RL arms of Snowball score a little below the base on
