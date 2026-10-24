@@ -1,0 +1,3940 @@
+{
+  "anchor": {
+    "path": "gs://marin-us-central2/scratch/karan/rsi-merge/parents/S--open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02@50fe2f488aee",
+    "revision": "50fe2f488aee7730bbccc721024b35229075602e",
+    "dtype_widenings": {
+      "lm_head\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.embed_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.embed_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.embed_norm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.embed_tokens\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.final_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.final_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.0\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.1\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.10\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.11\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.12\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.13\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.14\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.15\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.16\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.17\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.18\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.19\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.2\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.20\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.21\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.22\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.23\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.24\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.25\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.3\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.4\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.5\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.6\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.7\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.8\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.attn_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.attn_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.input_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.mlp\\.experts\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.mlp\\.experts\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.mlp\\.experts\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.mlp\\.router\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.mlp_gated_norm\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.mlp_gated_norm\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.post_attention_layernorm\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.self_attn\\.attn_gate\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.self_attn\\.k_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.self_attn\\.o_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.self_attn\\.q_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.self_attn\\.v_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.shared_expert\\.down_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.shared_expert\\.gate_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.layers\\.9\\.shared_expert\\.up_proj\\.weight": [
+        "bfloat16",
+        "float32"
+      ],
+      "model\\.norm\\.weight": [
+        "bfloat16",
+        "float32"
+      ]
+    }
+  },
+  "donors": [
+    {
+      "path": "gs://marin-us-central2/scratch/karan/rsi-merge/parents/M--marianna13_Grug-67B-A2B-Antidoom-RLVR1-Step12-SFT-mix-v4-think-step465@b45586996e0a",
+      "revision": "b45586996e0ab3935432fae3ab9656603e0a318a",
+      "dtype_widenings": {
+        "lm_head\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.embed_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.embed_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.embed_norm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.embed_tokens\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.final_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.final_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.0\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.1\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.10\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.11\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.12\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.13\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.14\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.15\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.16\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.17\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.18\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.19\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.2\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.20\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.21\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.22\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.23\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.24\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.25\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.3\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.4\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.5\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.6\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.7\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.8\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.attn_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.attn_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.input_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.mlp\\.experts\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.mlp\\.experts\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.mlp\\.experts\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.mlp\\.router\\.bias": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.mlp\\.router\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.mlp_gated_norm\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.mlp_gated_norm\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.post_attention_layernorm\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.self_attn\\.attn_gate\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.self_attn\\.k_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.self_attn\\.o_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.self_attn\\.q_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.self_attn\\.v_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.shared_expert\\.down_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.shared_expert\\.gate_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.layers\\.9\\.shared_expert\\.up_proj\\.weight": [
+          "bfloat16",
+          "float32"
+        ],
+        "model\\.norm\\.weight": [
+          "bfloat16",
+          "float32"
+        ]
+      }
+    }
+  ],
+  "output": "gs://marin-us-central2/scratch/karan/rsi-merge/merges/avg-SM-fp32",
+  "parameters": {
+    "method": "task_arithmetic",
+    "coefficients": [
+      0.1
+    ],
+    "density": 1,
+    "scale": 1,
+    "seed": 19301
+  },
+  "preserve_rows": {},
+  "tensor_coefficients": {}
+}

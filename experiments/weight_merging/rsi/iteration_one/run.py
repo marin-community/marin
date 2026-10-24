@@ -38,6 +38,9 @@ def checkpoint_specs(reader: CheckpointReader) -> dict:
                 continue
             assert reader.weight_map[name] == shard, name
             specs[name] = {"shape": spec["shape"], "dtype": spec["dtype"]}
+            if any(pattern.fullmatch(name) for pattern in reader.widening_patterns):
+                assert spec["dtype"] == "BF16", name
+                specs[name]["dtype"] = "F32"
     assert specs.keys() == reader.weight_map.keys()
     return specs
 
