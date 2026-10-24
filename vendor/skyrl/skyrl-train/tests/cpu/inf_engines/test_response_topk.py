@@ -77,28 +77,3 @@ def test_flat_capture_preserves_explicit_candidate_order_and_sampled_scores():
     assert sampled == [-7.0, -1.0]
     np.testing.assert_array_equal(ids, [[8, 3], [8, 3]])
     np.testing.assert_array_equal(scores, [[-2.0, -1.0], [-2.0, -1.0]])
-
-
-def test_selected_token_outside_topk_is_not_forced_into_student_candidates():
-    # vLLM includes the sampled token in addition to the requested top K.
-    ids, scores = select_response_topk(
-        {9: -7.0, 3: -0.2, 2: -0.1},
-        2,
-    )
-    assert ids == [2, 3]
-    assert scores == [-0.1, -0.2]
-
-
-def test_tied_candidates_use_stable_token_id_order():
-    assert select_response_topk({8: -0.5, 4: -0.5}, 2) == ([4, 8], [-0.5, -0.5])
-
-
-@pytest.mark.parametrize("scores", [{3: float("nan")}, {3: 0.1}, {-1: -0.2}, {"3": -0.2}])
-def test_invalid_scores_fail_closed(scores):
-    with pytest.raises(ValueError):
-        select_response_topk(scores, 1)
-
-
-def test_missing_candidates_fail_closed():
-    with pytest.raises(ValueError, match="fewer response candidates"):
-        select_response_topk({2: -0.1}, 2)

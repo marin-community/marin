@@ -111,7 +111,6 @@ def tiny_training_config(
                 "policy_loss_type": POLICY_LOSS_TYPE[mode],
                 "off_policy_correction": "tis" if mode is TrainingMode.SYNC else "none",
                 # The CPU inference backend supplies chosen-token scores, without vLLM candidate heads.
-                "score_centering_probe": {"interval": 0},
                 "group_admission": {"stall_timeout": STALL_TIMEOUT_SECONDS},
             },
             "rollout_buffer": {

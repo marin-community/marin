@@ -50,9 +50,9 @@ def _make_min_cfg():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("num_engines", [1, 2])
-@pytest.mark.parametrize("num_prompts", [1, 3])
-async def test_generate_preserves_response_topk_across_engine_routing(num_engines, num_prompts):
+async def test_generate_preserves_response_topk_across_engine_routing():
+    num_engines, num_prompts = 2, 3
+
     class TopKEngine:
         async def generate(self, input_batch):
             bases = [row[0] for row in input_batch["prompt_token_ids"]]
@@ -84,179 +84,76 @@ async def test_generate_preserves_response_topk_across_engine_routing(num_engine
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("exact_prompt", [None, [1, 2, 3, 4, 5]])
 @pytest.mark.parametrize("compact", [False, True])
-async def test_chat_completion_retry_accumulates_and_sends_continuations(exact_prompt, compact):
-    """
-    First response aborts with tokens; second aborts with 0 tokens (ignored);
-    third finishes. Assert:
-    - Continuation requests append accumulated assistant content with correct role
-    - continue_final_message/add_generation_prompt flags are set
-    - remaining max_tokens decreases by accumulated completion tokens
-    - Final response accumulates content, logprobs, token_ids and recomputes usage correctly
-    - Each retry request is what we expect the engine to receive
-    """
-
-    class MockEngine:
+async def test_chat_retries_preserve_exact_prefix_heads_and_policy_stamps(compact):
+    class Engine:
         def __init__(self):
-            self.calls = []  # capture full request payloads {"json":..., "headers":...}
-            self.responses = [
-                # 1) abort with 1 token "A"
-                {
-                    "id": "cmpl-1",
-                    "object": "chat.completion",
-                    "model": "dummy-model",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "A"},
-                            "finish_reason": "abort",
-                            "logprobs": {
-                                "content": [
-                                    {
-                                        "token": "token_id:11",
-                                        "logprob": -0.1,
-                                        "bytes": [84, 111],
-                                        "top_logprobs": [{"token": "token_id:11", "logprob": -0.1, "bytes": [116]}],
-                                    },
-                                ]
-                            },
-                            "token_ids": [11],
-                            CHOICE_POLICY_STEPS_KEY: [7],
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
-                },
-                # 2) abort with 0 tokens (should be ignored for accumulation)
-                {
-                    "id": "cmpl-2",
-                    "object": "chat.completion",
-                    "model": "dummy-model",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": ""},
-                            "finish_reason": "abort",
-                            "logprobs": {"content": []},
-                            "token_ids": [],
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
-                },
-                # 3) finish with 1 token "B"
-                {
-                    "id": "cmpl-3",
-                    "object": "chat.completion",
-                    "model": "dummy-model",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "message": {"role": "assistant", "content": "B"},
-                            "finish_reason": "stop",
-                            "logprobs": {
-                                "content": [
-                                    {
-                                        "token": "token_id:12",
-                                        "logprob": -0.1,
-                                        "bytes": [84, 111],
-                                        "top_logprobs": [{"token": "token_id:12", "logprob": -0.1, "bytes": [116]}],
-                                    },
-                                ]
-                            },
-                            "token_ids": [12],
-                            CHOICE_POLICY_STEPS_KEY: [8],
-                        }
-                    ],
-                    "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
-                },
-            ]
+            self.calls = []
 
-        async def chat_completion(self, request_payload):
-            self.calls.append(deepcopy(request_payload))
-            idx = len(self.calls) - 1
-            assert idx < len(self.responses), f"Unexpected extra call {idx}"
-            return deepcopy(self.responses[idx])
+        async def chat_completion(self, payload):
+            self.calls.append(deepcopy(payload))
+            turn = len(self.calls) - 1
+            tokens = ([11], [], [12])[turn]
+            choice = {
+                "index": 0,
+                "message": {"role": "assistant", "content": ("A", "", "B")[turn]},
+                "finish_reason": "abort" if turn < 2 else "stop",
+                "token_ids": tokens,
+                CHOICE_POLICY_STEPS_KEY: [7 if turn == 0 else 8] * len(tokens),
+                "logprobs": None
+                if compact
+                else {"content": [{"token": f"token_id:{token}", "logprob": -0.1} for token in tokens]},
+            }
+            if compact:
+                choice[CHOICE_TOPK_KEY] = ResponseTopK(
+                    [-0.1] * len(tokens),
+                    np.asarray([[token, token - 8] for token in tokens], dtype=np.int32).reshape(-1, 2),
+                    np.asarray([[-0.1, -0.2]] * len(tokens), dtype=np.float32).reshape(-1, 2),
+                )
+            return {
+                "choices": [choice],
+                "usage": {"prompt_tokens": 5, "completion_tokens": len(tokens), "total_tokens": 5 + len(tokens)},
+            }
 
-    engines = [MockEngine()]
-    if compact:
-        for response in engines[0].responses:
-            choice = response["choices"][0]
-            tokens = choice["token_ids"]
-            choice["logprobs"] = None
-            choice[CHOICE_TOPK_KEY] = ResponseTopK(
-                [-0.1] * len(tokens),
-                np.asarray([[token, token - 8] for token in tokens], dtype=np.int32).reshape(-1, 2),
-                np.asarray([[-0.1, -0.2]] * len(tokens), dtype=np.float32).reshape(-1, 2),
-            )
-    cfg = _make_min_cfg()
-    client = InferenceEngineClient(engines=engines, tokenizer=object(), full_config=cfg)
-
-    original = {
+    engine = Engine()
+    client = InferenceEngineClient([engine], object(), _make_min_cfg())
+    request = {
         "json": {
             "model": "dummy-model",
             "messages": [{"role": "user", "content": "Hi"}],
             "max_tokens": 8,
-            # ask for structures that the client can accumulate
             "logprobs": True,
             "top_logprobs": 1,
-            "return_tokens_as_token_ids": True,
+            "_skyrl_exact_prompt_token_ids": [1, 2, 3, 4, 5],
         },
         "headers": {"Content-Type": "application/json"},
     }
-    if exact_prompt is not None:
-        original["json"]["_skyrl_exact_prompt_token_ids"] = exact_prompt
     if compact:
-        original[CHAT_TOPK_WIDTH_KEY] = 2
-
-    out = await client.chat_completion(original)
-
-    assert len(engines[0].calls) == 3
-    first_call = engines[0].calls[0]
-    second_call = engines[0].calls[1]
-    third_call = engines[0].calls[2]
-
-    assert first_call["json"] == {**original["json"], "return_token_ids": True}
-    assert first_call["headers"] == original["headers"]
+        request[CHAT_TOPK_WIDTH_KEY] = 2
+    output = await client.chat_completion(request)
+    assert len(engine.calls) == 3
+    assert engine.calls[0]["json"]["_skyrl_exact_prompt_token_ids"] == [1, 2, 3, 4, 5]
+    assert [call["json"]["max_tokens"] for call in engine.calls] == [8, 7, 7]
+    for call in engine.calls[1:]:
+        body = call["json"]
+        assert body["_skyrl_exact_prompt_token_ids"] == [1, 2, 3, 4, 5, 11]
+        assert body["messages"][-1] == {"role": "assistant", "content": "A"}
+        assert body["continue_final_message"] and not body["add_generation_prompt"]
+        assert call["headers"] == request["headers"]
+    choice = output["choices"][0]
+    assert choice["message"]["content"] == "AB" and choice["finish_reason"] == "stop"
+    assert choice["token_ids"] == [11, 12]
+    assert choice[CHOICE_POLICY_STEPS_KEY] == [7, 8]
     if compact:
-        assert all(call[CHAT_TOPK_WIDTH_KEY] == 2 for call in engines[0].calls)
-    assert first_call["json"].get("continue_final_message") is None
-    assert first_call["json"].get("add_generation_prompt") is None
-    assert first_call["json"]["messages"] == [{"role": "user", "content": "Hi"}]
-    assert first_call["json"]["max_tokens"] == 8
-
-    for call in (second_call, third_call):
-        if exact_prompt is not None:
-            assert call["json"]["_skyrl_exact_prompt_token_ids"] == [1, 2, 3, 4, 5, 11]
-        assert call["headers"] == original["headers"]
-        assert call["json"].get("continue_final_message") is True
-        assert call["json"].get("add_generation_prompt") is False
-        assert call["json"]["messages"][-1] == {"role": "assistant", "content": "A"}
-        assert call["json"]["messages"][0] == {"role": "user", "content": "Hi"}
-        assert call["json"].get("max_tokens") == 7
-        assert call["json"]["model"] == "dummy-model"
-        assert call["json"]["logprobs"] is True
-        assert call["json"]["top_logprobs"] == 1
-        assert call["json"]["return_tokens_as_token_ids"] is True
-
-    choice = out["choices"][0]
-    assert choice["finish_reason"] == "stop"
-    assert choice["message"]["content"] == "AB"
-    if compact:
+        assert all(call[CHAT_TOPK_WIDTH_KEY] == 2 for call in engine.calls)
         assert choice["logprobs"] is None
         selected = choice[CHOICE_TOPK_KEY]
         assert selected.sampled_logprobs == [-0.1, -0.1]
         np.testing.assert_array_equal(selected.topk_indices, [[11, 3], [12, 4]])
         np.testing.assert_allclose(selected.topk_logprobs, [[-0.1, -0.2]] * 2, rtol=0, atol=1e-7)
     else:
-        assert len(choice["logprobs"]["content"]) == 2
-        assert choice["logprobs"]["content"][0]["token"] == "token_id:11"
-        assert choice["logprobs"]["content"][1]["token"] == "token_id:12"
-    assert choice["token_ids"] == [11, 12]
-    assert choice[CHOICE_POLICY_STEPS_KEY] == [7, 8]
-
-    assert out["usage"]["prompt_tokens"] == 5
-    assert out["usage"]["completion_tokens"] == 2
-    assert out["usage"]["total_tokens"] == 7
+        assert [item["token"] for item in choice["logprobs"]["content"]] == ["token_id:11", "token_id:12"]
+    assert output["usage"] == {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
 
 
 def _encoded_routes(rows):

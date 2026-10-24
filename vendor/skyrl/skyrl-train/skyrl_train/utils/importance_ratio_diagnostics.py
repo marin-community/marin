@@ -182,7 +182,9 @@ def mismatch_ratio_metrics(
     bucket_rows.update({name: slice(index, index + 1) for index, (name, _) in enumerate(MISMATCH_STALENESS_BUCKETS)})
 
     def moments(rows: slice, classes: list[int], lengths: slice = slice(None)) -> dict[str, float]:
-        return _moment_metrics({key: total[rows][:, lengths][:, :, classes].sum().item() for key, total in grid.items()})
+        return _moment_metrics(
+            {key: total[rows][:, lengths][:, :, classes].sum().item() for key, total in grid.items()}
+        )
 
     result = {}
     for name, rows in bucket_rows.items():
