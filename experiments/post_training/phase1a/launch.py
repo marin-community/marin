@@ -57,6 +57,9 @@ from experiments.post_training.phase1a.matrix import (
 )
 
 CLUSTER = "cw-us-east-02a"
+# Rollouts render prompts through the shared template B was trained on, not the base
+# tokenizer's own; SkyRL forces this file onto the policy tokenizer on every node.
+POLICY_CHAT_TEMPLATE = "experiments/post_training/chat_templates/grug_shared.jinja"
 # Every scheduled checkpoint stays until the weight analysis has read it.
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=len(CHECKPOINT_STEPS), temporary_storage_ttl_days=90)
 
@@ -113,7 +116,9 @@ def run_spec(
         name=name,
         version=resolve_version(name, None),
         config_yaml=yaml.safe_dump(recipe, sort_keys=False),
-        model=ArtifactHfModel(step=model, tokenizer_uri=repo, tokenizer_revision=revision),
+        model=ArtifactHfModel(
+            step=model, tokenizer_uri=repo, tokenizer_revision=revision, chat_template=POLICY_CHAT_TEMPLATE
+        ),
         train_data=(ArtifactDataSource(run_data, relative_path=run_data_relative_path(run)),),
         validation_data=(),
         topology=topology(run),

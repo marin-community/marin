@@ -37,7 +37,7 @@ from marin.rl.skyrl import ArtifactDataSource, ArtifactHfModel, SkyRLRun, SkyRLS
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.chat_template import FAMILY_TOKENIZER_REVISIONS
-from experiments.post_training.phase1a.launch import RETENTION, execution
+from experiments.post_training.phase1a.launch import POLICY_CHAT_TEMPLATE, RETENTION, execution
 from experiments.post_training.phase1a.matrix import (
     GPUS_PER_NODE,
     POLICY_NODES,
@@ -113,7 +113,9 @@ def expert_spec(plan: ExpertPlan, *, model: ArtifactStep[LevanterCheckpoint], ro
         name=name,
         version=resolve_version(name, None),
         config_yaml=yaml.safe_dump(expert_recipe(plan), sort_keys=False),
-        model=ArtifactHfModel(step=model, tokenizer_uri=repo, tokenizer_revision=revision),
+        model=ArtifactHfModel(
+            step=model, tokenizer_uri=repo, tokenizer_revision=revision, chat_template=POLICY_CHAT_TEMPLATE
+        ),
         train_data=(ArtifactDataSource(rows, relative_path=ROWS_FILES[plan.task]),),
         validation_data=(),
         topology=expert_topology(plan),

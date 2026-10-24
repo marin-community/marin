@@ -6,6 +6,7 @@ agreement on every matched field after SkyRL composes both launch configs."""
 
 import json
 import subprocess
+from pathlib import Path
 
 import click
 import pytest
@@ -15,10 +16,12 @@ from marin.rl.skyrl import _launcher_command as launcher_command_for_test
 from marin.rl.skyrl import skyrl_step
 from marin.training.training import LevanterCheckpoint
 
+from experiments.post_training.chat_template import GRUG_TOKENS, shared_template
 from experiments.post_training.phase1a.data import eligible_samples, layout
 from experiments.post_training.phase1a.launch import (
     CLUSTER,
     MODEL_MANIFEST_FILENAME,
+    POLICY_CHAT_TEMPLATE,
     execution,
     require_teacher_pin,
     run_spec,
@@ -194,3 +197,7 @@ def test_an_object_store_teacher_must_match_its_export_manifest(tmp_path):
     require_teacher_pin(TeacherModel("open-athena/e-x", "1" * 40))  # Hub pins resolve at the Hub
     with pytest.raises(ValueError, match="not the pinned"):
         require_teacher_pin(TeacherModel(f"file://{tmp_path}", "sha256:" + "d" * 64))
+
+
+def test_the_policy_chat_template_file_is_the_shared_grug_template():
+    assert Path(POLICY_CHAT_TEMPLATE).read_text() == shared_template(GRUG_TOKENS)
