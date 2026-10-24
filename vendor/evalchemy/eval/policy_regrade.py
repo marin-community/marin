@@ -6,14 +6,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import hashlib
+import json
 import os
-from dataclasses import replace
+from dataclasses import asdict, replace
 
 import aiohttp
 from eval.chat_benchmarks.OlympiadBench.eval_instruct import _flatten_reference_answers
 from eval.contracts.eval_spec import EvalSpec, Grade, GraderSpec, JudgePlan, SourceRef
+from eval.contracts.policy import TrialVerdict
 from eval.execution.backend import retryable_transport, transport_retry_delay
 from eval.graders.answer_equivalence import JudgeLabel
 from eval.graders.judged import equivalence_judge, equivalence_label
@@ -78,21 +79,21 @@ async def judge_plan(session: aiohttp.ClientSession, endpoint: str, model: str, 
     raise ValueError("MiniMax returned empty judgments at every policy token budget")
 
 
-async def grade_rows(rows: list[dict], benchmark: str, endpoint: str, model: str) -> list[dict]:
+async def grade_rows(rows: list[dict], benchmark: str, endpoint: str, model: str) -> list[TrialVerdict]:
     semaphore = asyncio.Semaphore(JUDGE_CONCURRENCY)
     async with aiohttp.ClientSession() as session:
-        async def grade_row(row: dict) -> dict:
+        async def grade_row(row: dict) -> TrialVerdict:
             async with semaphore:
                 spec, grade = source_grade(row, benchmark)
                 if isinstance(grade, JudgePlan):
                     raw = await judge_plan(session, endpoint, model, grade)
                     grade = equivalence_label(replace(spec, grader=grade.grader), [raw])
-                return {
-                    "task": row["task"], "doc_id": row["doc_id"],
-                    "trial_id": row.get("trial_id") or "", "filter": row.get("filter") or "",
-                    "score": float(grade.metrics["accuracy"]), "audit": dict(grade.audit),
-                    "extracted": str(grade.filtered_resps[-1]) if grade.filtered_resps else "",
-                }
+                return TrialVerdict(
+                    task=row["task"], doc_id=row["doc_id"],
+                    trial_id=row.get("trial_id") or "", filter=row.get("filter") or "",
+                    score=float(grade.metrics["accuracy"]), audit=dict(grade.audit),
+                    extracted=str(grade.filtered_resps[-1]) if grade.filtered_resps else "",
+                )
         return await asyncio.gather(*(grade_row(row) for row in rows))
 
 
@@ -132,18 +133,21 @@ def main() -> None:
         saved = json.loads(existing)
         if any(saved[key] != value for key, value in identity.items()):
             raise ValueError("saved policy judgments have different source or judge provenance")
-        verdicts = saved["trials"]
+        verdicts = [TrialVerdict(**row) for row in saved["trials"]]
     with EvaluationStore.open(root, writer_id="policy-minimax-regrade") as store:
         for row, verdict in zip(scored, verdicts, strict=True):
             sample = sample_from_archive_row(row)
-            metrics = {**sample.metrics, "policy_raw_accuracy": sample.grading.score, "accuracy": verdict["score"]}
+            metrics = {**sample.metrics, "policy_raw_accuracy": sample.grading.score, "accuracy": verdict.score}
             updated = sample.model_copy(update={
-                "metrics": metrics, "correct": bool(verdict["score"]), "extracted": verdict["extracted"],
+                "metrics": metrics, "correct": bool(verdict.score), "extracted": verdict.extracted,
                 "grading": Grading(method="judge:" + config["model"], metric="accuracy", filter=row.get("filter"),
-                                   score=verdict["score"], passed=bool(verdict["score"]), detail=json.dumps(verdict["audit"])),
+                                   score=verdict.score, passed=bool(verdict.score), detail=json.dumps(verdict.audit)),
             })
-            store.add_sample(updated, trial_id=verdict["trial_id"], extraction_filter=verdict["filter"])
-        store.add_artifact(VERDICTS, json.dumps({**identity, "trials": verdicts}, sort_keys=True).encode())
+            store.add_sample(updated, trial_id=verdict.trial_id, extraction_filter=verdict.filter)
+        store.add_artifact(
+            VERDICTS,
+            json.dumps({**identity, "trials": [asdict(verdict) for verdict in verdicts]}, sort_keys=True).encode(),
+        )
         store.seal()
 
 

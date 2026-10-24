@@ -45,7 +45,8 @@ These stages finish before the run is recorded as successful. Missing cohort evi
 failed judge produces `artifact_failed`; completed judge verdicts can be reused on recovery.
 The launch snapshot includes the finalization configuration, judge YAML, and baseline manifest.
 `record.json` records that configuration in `eval.postprocessing`. The generic evaluation CLI
-accepts `--policy-finalization-config`; `launch-campaign.sh` supplies it by default.
+accepts `--policy-finalization-config finalization.yaml`; `launch-campaign.sh` supplies the
+absolute path to this YAML by default.
 
 Evalchemy's 30-minute timeout starts separately for each request after it acquires a client
 concurrency slot. A transport attempt may use that full window; retrying does not extend it.

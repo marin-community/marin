@@ -34,7 +34,10 @@ from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, remote_inference
 from marin.inference.types import InferenceBackendState
 
+from vendor.evalchemy.eval.contracts.policy import TrialVerdict
+
 POLICY = "marin-10197"
+MIN_SCORED_FRACTION = 0.9
 REGRADE_ARTIFACT = "policy-10197/judge-verdicts.json"
 SOTOPIA_ARTIFACT = "policy-10197/sotopia-length-control.json"
 SOTOPIA_METRIC = "length_controlled_overall"
@@ -78,7 +81,11 @@ def _complete_coverage(outcome: EvaluationOutcome) -> None:
     if not outcome.coverage:
         raise ValueError("policy finalization requires declared trial coverage")
     for task, coverage in outcome.coverage.items():
-        if coverage.n_attempted is None or coverage.n_attempted <= 0 or coverage.n_scored < 0.9 * coverage.n_attempted:
+        if (
+            coverage.n_attempted is None
+            or coverage.n_attempted <= 0
+            or coverage.n_scored < MIN_SCORED_FRACTION * coverage.n_attempted
+        ):
             raise ValueError(f"{task}: fewer than 90% of declared trials have valid scores")
 
 
@@ -177,15 +184,15 @@ class MiniMaxRegrade:
             payload = ReadView(output_dir).read_blob(REGRADE_ARTIFACT)
             if payload is None:
                 raise ValueError("policy judge did not preserve its per-trial verdicts")
-            verdicts = json.loads(payload)["trials"]
+            verdicts = [TrialVerdict(**row) for row in json.loads(payload)["trials"]]
             task, original = next(iter(outcome.coverage.items()))
             repeats = 10 if self.benchmark == "olympiadbench" else 1
             assert original.n_attempted is not None
             expected = original.n_attempted * repeats
-            identities = {(row["task"], row["doc_id"], row["trial_id"]) for row in verdicts}
-            if len(identities) != len(verdicts) or not 0.9 * expected <= len(verdicts) <= expected:
+            identities = {(row.task, row.doc_id, row.trial_id) for row in verdicts}
+            if len(identities) != len(verdicts) or not MIN_SCORED_FRACTION * expected <= len(verdicts) <= expected:
                 raise ValueError("policy judge verdicts do not cover at least 90% of declared trials")
-            correct = sum(value["score"] for value in verdicts)
+            correct = sum(value.score for value in verdicts)
             missing = expected - len(verdicts)
             coverage = original.model_copy(
                 update={
@@ -193,7 +200,7 @@ class MiniMaxRegrade:
                     "n_attempted": expected,
                     "n_scored": len(verdicts),
                     "errors": {EVALCHEMY_INFRASTRUCTURE_ERROR: missing} if missing else {},
-                    "n_unanswered": sum(not row["extracted"].strip() for row in verdicts),
+                    "n_unanswered": sum(not row.extracted.strip() for row in verdicts),
                 }
             )
             outcome = replace(outcome, coverage={task: coverage})
