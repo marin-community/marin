@@ -18,7 +18,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from functools import cached_property
-from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Self, Tuple, Type, TypeVar, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Generic, Optional, Protocol, Self, Tuple, Type, TypeVar, Union, cast
 
 import draccus
 import equinox as eqx
@@ -313,7 +313,19 @@ class HFCompatConfig(LmConfig["LmWithHfSerializationMixin"]):
         pass
 
 
-MConfig = TypeVar("MConfig", bound=HFCompatConfig)
+class HfSerializableConfig(Protocol):
+    """Configuration contract shared by language and vision checkpoint models."""
+
+    @property
+    def model_type(self) -> Type["LmHeadModel | ModelWithHfSerializationMixin"]: ...
+
+    def to_hf_config(self, vocab_size: int, config_overrides: Optional[dict] = None) -> HfConfig: ...
+
+    @classmethod
+    def from_hf_config(cls, hf_config: HfConfig) -> Self: ...
+
+
+MConfig = TypeVar("MConfig", bound=HfSerializableConfig)
 
 
 class ModelWithHfSerializationMixin(Generic[MConfig]):
@@ -347,7 +359,7 @@ def _coerce_to_rr(s: Union[str, RepoRef]) -> RepoRef:
         return RepoRef.from_string(s)
 
 
-LevConfig = TypeVar("LevConfig", bound=HFCompatConfig)
+LevConfig = TypeVar("LevConfig", bound=HfSerializableConfig)
 
 # just for generating unique ids
 
@@ -573,7 +585,8 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
         ref = _coerce_to_rr(reference_checkpoint) if reference_checkpoint is not None else None
         HfConfigClass = HFCheckpointConverter._infer_config_class(HfConfigClass, ref, trust_remote_code)
-        tokenizer = HFCheckpointConverter._infer_tokenizer(tokenizer, ref, trust_remote_code)
+        if tokenizer is not None or issubclass(LevConfigClass, LmConfig):
+            tokenizer = HFCheckpointConverter._infer_tokenizer(tokenizer, ref, trust_remote_code)
 
         self.__default_init__(  # type: ignore
             LevConfigClass=LevConfigClass,
@@ -938,9 +951,9 @@ class HFCheckpointConverter(Generic[LevConfig]):
 
     def load_pretrained(
         self,
-        lm_model_cls: Type[ModelWithHfSerializationMixin],
+        model_cls: Type[LmHeadModel | ModelWithHfSerializationMixin],
         ref: Optional[Union[str, RepoRef]] = None,
-        config: Optional[HFCompatConfig] = None,
+        config: Optional[HfSerializableConfig] = None,
         axis_mapping: Optional[ResourceMapping] = None,
         resize_vocab_to_match_tokenizer: bool = False,
         dtype: Optional[jnp.dtype] = None,
@@ -960,11 +973,14 @@ class HFCheckpointConverter(Generic[LevConfig]):
         hf_config = self.hf_config_from_hf_checkpoint(ref)
         if config is None:
             config = self.config_from_hf_config(hf_config)
-        lm_model_cls = config.model_type
 
         # Vocab: first we have to resize the vocab as loaded from the checkpoint
-        tokenizer_Vocab = self.Vocab
-        Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        if isinstance(config, LmConfig):
+            tokenizer_Vocab = self.Vocab
+            Vocab = tokenizer_Vocab.resize(hf_config.vocab_size)
+        else:
+            # Vision models accept an unused vocabulary axis through the serialization interface.
+            tokenizer_Vocab = Vocab = Axis("vocab", 0)
 
         # TODO: in an ideal world, we would only load the part of the array we needed, but
         # AFAICT neither torch state dicts nor safetensors support this.
@@ -983,9 +999,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
             # However, this might miss some buffers that don't get persisted in the state dict
             # (e.g. pytorch buffers with persistent=false), so we have to reinitialize them. We then init the model
             # again, this time keeping only the (missing) buffers, and then combine the two models.
-            lev_model = _patch_missing_buffers_for_deser(
-                lev_model, lm_model_cls, Vocab, config, PRNGKey(0), axis_mapping
-            )
+            lev_model = _patch_missing_buffers_for_deser(lev_model, model_cls, Vocab, config, PRNGKey(0), axis_mapping)
 
             if Vocab.size != tokenizer_Vocab.size:
                 logger.info(
@@ -1006,7 +1020,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
         load_from_state_dict = haliax.named_jit(
             load_from_state_dict, axis_resources=axis_mapping, out_axis_resources=axis_mapping, donate_args=(True,)
         )
-        lev_model = eqx.filter_eval_shape(lm_model_cls.init, Vocab, config, key=PRNGKey(0))
+        lev_model = eqx.filter_eval_shape(model_cls.init, Vocab, config, key=PRNGKey(0))
         lev_model = load_from_state_dict(lev_model, state_dict)
 
         return lev_model
@@ -1242,7 +1256,7 @@ class HFCheckpointConverter(Generic[LevConfig]):
                     logger.info(f"Copying reference code from {self.reference_checkpoint}")
                     self._save_code_local(local_path)
 
-                if save_tokenizer:
+                if save_tokenizer and self.tokenizer is not None:
                     logger.info("Saving tokenizer")
                     _save_tokenizer_pretrained(self.tokenizer, local_path, chat_template=chat_template)
 
@@ -1550,7 +1564,7 @@ def _convert_to_jnp(v, dtype):
         return arr
 
 
-def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key, axis_mapping):
+def _patch_missing_buffers_for_deser(lev_model, model_cls, Vocab, config, key, axis_mapping):
     """
     State dict serialization doesn't always save buffers, so when we initialize a model from a state dict, we might
     need to re-initialize the buffers. We do this by rerunning the constructor, but only save the buffers.
@@ -1566,7 +1580,7 @@ def _patch_missing_buffers_for_deser(lev_model, lm_model_cls, Vocab, config, key
     # arrays. We're relying on jit to do all the work in eliminating the unnecessary computation/memory
     @haliax.named_jit(axis_resources=axis_mapping)
     def _init_buffers():
-        new_model = lm_model_cls.init(Vocab, config, key=key)
+        new_model = model_cls.init(Vocab, config, key=key)
 
         def select_if_missing(missing_leaf, new_value):
             if isinstance(missing_leaf, jax.ShapeDtypeStruct):
