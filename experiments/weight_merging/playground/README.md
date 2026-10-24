@@ -3,6 +3,8 @@
 Five independently written CPU reference merges are cross-checked against
 `marin.merging.arithmetic` on identical tensors. The evaluation runner uses vLLM
 on one GPU and retains every completion and score for paired comparisons.
+Completed curves and their artifact provenance are in [RESULTS.md](RESULTS.md);
+the two-donor experiment remains in progress.
 
 ## Models and interpretation
 
@@ -65,8 +67,8 @@ services stay running. The model commands below are worker commands, executed
 inside an Iris job. Use `host-test-budget` only for light local unit tests.
 
 Use a current Iris submission client including secret-file delivery (commit
-c7c14a252d or later). The experiment branch predates that API; its older bundled
-CLI cannot forward CoreWeave credentials to the current server. Source the
+c7c14a252d or later). An older submission client cannot forward CoreWeave
+credentials to the current server. Source the
 existing operator environment, and let Iris inherit secrets as files. Do not
 put credential values on command lines. The worker bootstrap pins secret-aware
 rigging from the same revision. Keep `config/coreweave.yaml`'s explicit
@@ -207,7 +209,7 @@ env VLLM_ATTENTION_BACKEND=XFORMERS \
 The full panel includes all 1319 GSM8K and 257 sanitized MBPP test items.
 `panel.json` stores exact IDs, content and pinned dataset revisions;
 `model-paths.json` and `model-sources.json` record source locations and revisions.
-Downloads and the Docker pull should complete before borrowing the GPU.
+Downloads and the Docker pull run on Iris workers; keep the local host for metadata checks.
 
 The original 256-token sweep was stopped after its baseline passes because
 Instruct truncated 32.83% of greedy GSM8K and 8.95% of greedy MBPP outputs.
@@ -293,9 +295,10 @@ env VLLM_ATTENTION_BACKEND=XFORMERS \
 
 Registration writes checkpoint paths, weight/config hashes and training metadata
 hashes into the two run manifests. The baseline command above is the donor gate:
-require a strictly larger greedy correct count than Instruct on GSM8K for math
-and MBPP for code. Report sampled accuracy and paired wins/losses as well; a
-positive point estimate alone does not establish statistical significance.
+require a positive own-domain paired item-mean gain in both BF16 and FP32
+serving, with a 95% paired item-bootstrap interval above zero in at least one
+precision. Average each item over greedy and sampled seeds 17/29 before
+bootstrapping. Greedy totals and pooled wins/losses are descriptive.
 Checkpoint selection still uses validation loss, and all test comparisons are
 exploratory. After both gates pass, rerun without `--only` to execute the grid.
 Resume retains the same source, recipes and evaluation settings.
@@ -371,9 +374,10 @@ env VLLM_ATTENTION_BACKEND=XFORMERS \
   --parent PARENT_SNAPSHOT --output /tmp/rft-data
 ```
 
-Sampling uses k=4, temperature 0.7, top-p 0.95, cap 1024 and seed 290 plus task
-index. Math requires a correct marked answer. Code must execute successfully in
-the Docker scorer; verification also includes any challenge assertions absent
+Sampling uses k=4, temperature 0.7, top-p 0.95 and cap 1024. Separate
+requests use the global prompt/sample seed formula above. Math requires a
+correct marked answer. Code must execute successfully in the Docker scorer;
+verification also includes any challenge assertions absent
 from the prompt. Visible tests match the evaluation prompting policy. These
 checks establish consistency with the available assertions, not code correctness
 on every possible input.
@@ -391,6 +395,16 @@ positive mean gain in both serving precisions and a 95% interval excluding zero
 in at least one. Pooled sign tests are descriptive because the three decodes
 of one item are correlated. All comparisons are exploratory; these intervals
 and p-values do not correct for recipe selection.
+
+The later independent k8 dataset selects 1024 distinct training continuations
+and 128 distinct validation continuations per domain after exact response
+deduplication and execution/answer verification. It covers 603 math training
+prompts and 213 code training prompts. The 100-update budget at effective batch
+8 processes 800 examples, under one epoch of this dataset; the old 512-record
+pilot processed about 1.6 epochs. Both new donors use Torch 2.6.0 and the same
+optimizer/loss stack. Validation selects math step 100 and code step 50, so the
+exported donors have different update counts despite equal training budgets.
+Their gates use fresh graph-mode Instruct controls at each serving precision.
 
 ### Aristaeus dose response
 
