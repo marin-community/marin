@@ -33,6 +33,8 @@ def submitted_environments():
 
 @pytest.fixture
 def submitted_batches(monkeypatch, submitted_environments):
+    monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
+    monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
     batches: list[EvaluationBatch] = []
 
     class Client:
@@ -350,11 +352,8 @@ def test_policy_snapshot_uses_project_python_and_preserves_cohort_sources(tmp_pa
     assert saved_cohort.read_bytes() == (campaign / "sotopia-baselines.json").read_bytes()
 
 
-def test_policy_sotopia_launch_provisions_fitting_dependencies(
-    tmp_path, submitted_batches, submitted_environments, monkeypatch
-):
+def test_policy_sotopia_launch_provisions_fitting_dependencies(tmp_path, submitted_batches, submitted_environments):
     campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
-    monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     result = CliRunner().invoke(
         cli,
         [
