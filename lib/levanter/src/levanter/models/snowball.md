@@ -57,3 +57,43 @@ two-device expert-parallel stage path, and the telemetry bound. The wider GRPO
 migration additionally required a scorer-only compute-weight
 cast boundary; its end-to-end numerical result should not be attributed to
 these model changes alone. See the [numerical investigation](https://marina.oa.dev/echo/wiki/363).
+
+## Paged Snowball inference
+
+`SnowballLMHeadModel.initial_cache` and `decode` implement the inference engine's
+packed-token interface. They preserve the global-layer schedule (including the
+last layer), absolute half-RoPE positions on local layers, the 2,048-token local
+window, and the current-token V vector used by exclusive self-attention.
+Every layer initially retains full paged KV storage; the local window changes
+visibility rather than evicting pages.
+
+The initial multi-host layout replicates attention and KV pages and distributes
+expert weights on `expert`. Before MoE dispatch, one global token pack is sharded
+on that axis; the result is replicated again before the next attention layer.
+Padded tokens are excluded from routing. Ring capacity scales with the expert
+axis size to cover worst-case routing, and caches retain sender/receiver drop
+counts so the serving engine can reject a result containing dropped assignments.
+No attention-head partitioning is required.
+
+`MultiHostInferenceEngine` broadcasts materialized batches from process zero
+after tokenization and sampling-seed selection. Followers run `worker_loop`;
+only process zero runs HTTP. Rejectable request errors are checked before
+broadcast. Unexpected execution failures terminate the rank so JAX coordination
+and the job scheduler can fail the gang. Configure bounded runtime and no partial
+gang retries. Stop the HTTP execution thread before calling `shutdown_workers`.
+
+For Snowball, this engine also scores token logprobs through cached, chunked
+decode instead of the full-forward scoring helper. Cached scoring also exercises actual one-row query buffers around the configured
+local-window boundary. The bounded experiment launcher separately checks
+generation after a long prompt. A CPU test is not evidence of TPU
+numerical parity; gate each serving backend against the pinned oracle before
+running evaluations.
+
+TPU serving disables the paged attention reference fallback. The TPU wrapper
+temporarily pads whole GQA groups when required by the kernel's head tiling
+(five KV/twenty Q heads become eight KV/thirty-two Q heads), then slices the
+result back to the logical heads. This adds temporary memory beyond the stored
+KV cache, which uses 66,560 BF16 bytes per cached token per chip for the full
+26-layer model. Set explicit cache limits before benchmarking.
+
+Cached generation accepts batches up to the configured sequence and prefill limits, without clones. The launcher exposes `max_seqs` values 1, 2, 4, and 8; page capacity reserves the full configured context for every sequence. Prefill reserves each prompt's pages, then computes bounded packed chunks with absolute positions and cumulative cache lengths. A sequence samples its first continuation only when its final prompt token is processed; prefix chunks do not consume its generation budget. The pre-broadcast physical-page check reserves configured-context capacity per request, so it intentionally rejects even short batches when their worst-case growth would exceed the allocated cache. CPU tests cover mixed prompt lengths and reuse at four and eight sequences. TPU memory fit and numerical parity for these batched settings require a fresh gate before evaluation.
