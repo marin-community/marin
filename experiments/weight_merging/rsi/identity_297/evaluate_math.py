@@ -29,6 +29,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), required=True)
     parser.add_argument("--sample-seed", type=int, choices=(17, 29))
+    parser.add_argument("--tasks", nargs="+", choices=("gsm8k_0shot", "math500"), default=["gsm8k_0shot", "math500"])
     parser.add_argument("--recover-gsm-job", help="Read an already successful GSM8K child instead of generating again.")
     args = parser.parse_args()
     generation = {"temperature": "0"}
@@ -43,6 +44,8 @@ def main() -> None:
         return InferenceBackendState.READY
 
     for name, alias, thinking, count in (("gsm8k", "gsm8k_0shot", False, 1319), ("MATH500", "math500", True, 500)):
+        if alias not in args.tasks:
+            continue
         output = f"{args.output.rstrip('/')}/{alias}"
         fs, path = filesystem_for(output + "/done.json")
         config = EvalchemyRunConfig(
