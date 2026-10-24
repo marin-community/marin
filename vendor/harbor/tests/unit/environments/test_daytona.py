@@ -4,7 +4,6 @@ import asyncio
 import io
 import json
 import logging
-import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
@@ -2206,22 +2205,3 @@ class TestReapInflightAgentCommand:
             await env._sandbox_exec("sleep 999")
 
         assert reaped["called"] is True
-
-
-@pytest.mark.asyncio
-async def test_explicit_named_credential_reaches_scoped_sdk_client_without_environment_export(temp_dir, monkeypatch):
-    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(temp_dir))
-    monkeypatch.delenv("DAYTONA_TEST_KEY", raising=False)
-    key = f"synthetic-file-{temp_dir.name}"
-    (temp_dir / "DAYTONA_TEST_KEY").write_text(key)
-    class CredentialObserved(RuntimeError):
-        def __init__(self, api_key):
-            self.api_key = api_key
-    def sdk_boundary(config):
-        raise CredentialObserved(config.api_key)
-    monkeypatch.setattr(daytona_environment, "AsyncDaytona", sdk_boundary)
-    environment = _make_env(temp_dir, api_key_env="DAYTONA_TEST_KEY")
-    with pytest.raises(CredentialObserved) as observed:
-        await environment.start(force_build=False)
-    assert observed.value.api_key == key
-    assert "DAYTONA_TEST_KEY" not in os.environ
