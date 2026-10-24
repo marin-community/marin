@@ -35,6 +35,8 @@ from levanter.grug._moe.common import (
     _init_weight,
     MOE_REMAT_SAVE_NAMES as MOE_REMAT_SAVE_NAMES,
     CapacityDrops,
+    ExpertOutputNorm,
+    ExpertOutputNormOrder,
     MoeDispatchCounts,
     MoEExpertMlpPspecs,
     padding_skipped_assignments,
@@ -448,6 +450,12 @@ class MoEExpertMlp(eqx.Module):
         )
 
 
+def _with_output_norm_gain(shard_local_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Call ``shard_local_fn`` on the routed inputs with the trailing positional output-norm gain by keyword."""
+    *routed_args, gain = args
+    return shard_local_fn(*routed_args, output_norm_gain=gain, **kwargs)
+
+
 @named_call
 def moe_mlp(
     x: Float[Array, "T D"],
@@ -475,6 +483,8 @@ def moe_mlp(
     ragged_expert_mxfp8: bool = False,
     ragged_expert_mxfp8_dispatch: bool = False,
     expert_serial_pair: bool = False,
+    expert_output_norm: ExpertOutputNorm | None = None,
+    expert_output_norm_gain: Float[Array, "E O"] | None = None,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
     """Functional routed MoE MLP core used by Grug modules and benchmarks.
 
@@ -521,6 +531,10 @@ def moe_mlp(
     The output width ``O`` (``w_down``'s last dim) may differ from the input width ``D`` only on the
     ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
 
+    `expert_output_norm` RMS-normalizes every expert output row before its combine weight multiplies it, on the
+    ``ragged_all_to_all`` EP path and the ``scatter`` / ``sonic`` local paths. `expert_output_norm_gain` is its
+    optional per-expert ``[E, O]`` gain (sharded with the experts under expert parallelism), differentiable.
+
     `overlap` is independent token-local work (see `MoeOverlapWork`) whose output is appended as the last
     return value. The expert-parallel pooled-wave and ragged paths run it under the dispatch all-to-all (and the
     ragged path its backward under the return-cotangent all-to-all); every other path just computes it.
@@ -543,6 +557,14 @@ def moe_mlp(
 
     if mesh is None:
         mesh = _current_mesh()
+    if expert_output_norm_gain is not None and expert_output_norm is None:
+        raise ValueError("expert_output_norm_gain needs expert_output_norm")
+    if expert_output_norm is not None:
+        norm_ep = mesh is not None and not mesh.empty and _mesh_axis_size(mesh, "expert") > 1
+        if norm_ep and resolved_implementation != "ragged_all_to_all":
+            raise ValueError("expert_output_norm under expert parallelism requires ragged_all_to_all")
+        if overlap is not None:
+            raise ValueError("expert_output_norm does not combine with overlap")
 
     if isinstance(activation, ActivationFunctionEnum):
         activation_fn: Callable[[jax.Array], jax.Array] = activation.to_jax_fn()
@@ -655,6 +677,8 @@ def moe_mlp(
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
+            output_norm=expert_output_norm,
+            output_norm_gain=expert_output_norm_gain,
         )
         if report_capacity_overflow:
             return out, dispatch_counts(
@@ -698,6 +722,7 @@ def moe_mlp(
                 overlap_weight_grads=ragged_overlap_weight_grads,
                 mxfp8=ragged_expert_mxfp8,
                 mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
+                output_norm=expert_output_norm,
             )
         elif resolved_implementation == "fixed_all_to_all":
             shard_local_fn = _moe_mlp_ep_fixed_a2a_local
@@ -754,6 +779,13 @@ def moe_mlp(
                 ),
             )
 
+        if expert_output_norm_gain is not None:
+            # Per-expert gains, sharded with the experts; passed by keyword after the (absent) overlap inputs.
+            gain_spec = P("expert", None)
+            shard_local_fn = partial(_with_output_norm_gain, shard_local_fn)
+            in_specs = (*in_specs, gain_spec)
+            args = (*args, _reshard_for_shard_map(expert_output_norm_gain, mesh, gain_spec))
+
         shard_fn = shard_map(
             partial(
                 shard_local_fn,
@@ -805,7 +837,14 @@ def moe_mlp(
     w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
     w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
-    def local_moe(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down):
+    # The output-norm gains enter the shard replicated, as an argument (shard_map cannot close over them).
+    gain_args: tuple[jax.Array, ...] = ()
+    gain_specs: tuple[P, ...] = ()
+    if expert_output_norm_gain is not None:
+        gain_specs = (P(None, None),)
+        gain_args = (_reshard_for_shard_map(expert_output_norm_gain, mesh, gain_specs[0]),)
+
+    def local_moe(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down, *gain):
         out, dropped = _moe_mlp_local(
             x,
             selected_experts,
@@ -817,6 +856,8 @@ def moe_mlp(
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
+            output_norm=expert_output_norm,
+            output_norm_gain=gain[0] if gain else None,
         )
         local_token_sharding_axes = _axis_names(x_spec[0])
         if report_capacity_overflow and local_token_sharding_axes:
@@ -833,11 +874,12 @@ def moe_mlp(
             token_valid_spec,
             w_up_gate_spec,
             w_down_spec,
+            *gain_specs,
         ),
         out_specs=(x_spec, P()),
         check_vma=False,
     )
-    out, dropped = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
+    out, dropped = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down, *gain_args)
     if report_capacity_overflow:
         return out, dispatch_counts(CapacityDrops(sender_dropped=dropped, receiver_dropped=jnp.zeros_like(dropped)))
     return out
@@ -850,6 +892,8 @@ __all__ = [
     "MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC",
     "MOE_VALID_ASSIGNMENTS_METRIC",
     "MoeDispatchCounts",
+    "ExpertOutputNorm",
+    "ExpertOutputNormOrder",
     "MoeActivation",
     "MoEExpertMlp",
     "MoEExpertMlpPspecs",

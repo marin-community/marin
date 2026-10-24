@@ -18,6 +18,8 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch,
     _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
+    ExpertOutputNorm,
+    normalize_grouped_expert_rows,
     split_moe_w13_output,
 )
 
@@ -32,8 +34,11 @@ def _moe_mlp_local_scatter(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    output_norm: ExpertOutputNorm | None = None,
+    output_norm_gain: Float[Array, "E O"] | None = None,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
-    """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
+    """Local fallback MoE path: sorted grouped GMM then scatter-add combine. ``output_norm`` (with the per-expert
+    ``output_norm_gain``) normalizes each expert output row before its combine weight."""
     x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
         x,
         selected_experts,
@@ -56,6 +61,10 @@ def _moe_mlp_local_scatter(
             ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
             _CHECKPOINT_DISPATCH_OUTPUT,
         )
+        if output_norm is not None:
+            out_dispatch = normalize_grouped_expert_rows(
+                out_dispatch, group_sizes, cumulative_group_sizes[-1], output_norm, output_norm_gain
+            )
 
     with jax.named_scope("scatter"):
         weighted = _zero_inactive_grouped_rows(out_dispatch * w_dispatch[:, None], cumulative_group_sizes)

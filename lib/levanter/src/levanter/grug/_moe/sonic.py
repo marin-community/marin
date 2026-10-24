@@ -29,6 +29,8 @@ from levanter.grug._moe.common import (
     _prepare_moe_dispatch_indices_with_assignment_ids,
     _zero_dropped_assignments,
     _zero_inactive_grouped_rows,
+    ExpertOutputNorm,
+    normalize_grouped_expert_rows,
     split_moe_w13_output,
 )
 
@@ -498,8 +500,11 @@ def _moe_mlp_local_sonic(
     *,
     activation_fn: Callable[[jax.Array], jax.Array],
     num_experts: int,
+    output_norm: ExpertOutputNorm | None = None,
+    output_norm_gain: Float[Array, "E O"] | None = None,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
-    """Local raw-Sonic path: JAX grouped GEMMs plus Sonic Triton gather/combine."""
+    """Local raw-Sonic path: JAX grouped GEMMs plus Sonic Triton gather/combine. ``output_norm`` (with the
+    per-expert ``output_norm_gain``) normalizes each expert output row before its combine weight."""
     token_ids_sort, dispatch_positions, group_sizes, _sorted_assignment_ids = (
         _prepare_moe_dispatch_indices_with_assignment_ids(
             selected_experts,
@@ -519,6 +524,10 @@ def _moe_mlp_local_sonic(
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
         hidden = activation_fn(gate) * up
         out_dispatch = _zero_inactive_grouped_rows(ragged_dot(hidden, moe_w2, group_sizes), cumulative_group_sizes)
+        if output_norm is not None:
+            out_dispatch = normalize_grouped_expert_rows(
+                out_dispatch, group_sizes, cumulative_group_sizes[-1], output_norm, output_norm_gain
+            )
         out = tree_checkpoint_name(
             sonic_gather_sum(out_dispatch, dispatch_positions, jnp.where(token_valid[:, None], combine_weights, 0)),
             _CHECKPOINT_MOE_OUTPUT,

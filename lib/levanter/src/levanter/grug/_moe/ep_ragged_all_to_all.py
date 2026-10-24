@@ -39,6 +39,8 @@ from levanter.grug._moe.common import (
     _interleave_gate_up,
     _scaled_capacity,
     CapacityDrops,
+    ExpertOutputNorm,
+    normalize_grouped_expert_rows,
     split_moe_w13_output,
 )
 from levanter.grug._moe.sonic import (
@@ -178,6 +180,46 @@ class _RaggedDotExpertMlp:
         dx, dw13, dw2 = vjp(cotangent)
         output_dot_cotangent = jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32), axis=-1)
         return dx, dw13, dw2, output_dot_cotangent
+
+
+@dataclasses.dataclass(frozen=True)
+class _RaggedDotOutputNormExpertMlp:
+    """``_RaggedDotExpertMlp`` with ``output_norm`` on every output row: ``norm(act(x W13) W2, gain[expert])``.
+
+    ``forward`` takes the chunk's per-expert gains ``[Echunk, O]`` as an optional last argument and ``backward``
+    then returns their cotangent last. The row dot ``<y, dy>`` is taken on the normalized output, the vector the
+    routing weight multiplies.
+    """
+
+    activation_fn: Callable[[jax.Array], jax.Array]
+    output_norm: ExpertOutputNorm
+
+    def _apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, *gain):
+        out = _RaggedDotExpertMlp(self.activation_fn)._apply(
+            x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes
+        )
+        return normalize_grouped_expert_rows(
+            out, physical_group_sizes, jnp.sum(active_group_sizes), self.output_norm, gain[0] if gain else None
+        )
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, *gain):
+        out = self._apply(x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, *gain)
+        return out, (x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, gain, out)
+
+    backward_parts = _whole_backward_parts
+
+    def backward(self, residuals, cotangent):
+        x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, gain, out = residuals
+        _, vjp = jax.vjp(
+            lambda x, w13, w2, *g: self._apply(x, w13, w2, physical_group_sizes, active_group_sizes, *g),
+            x_dispatch,
+            moe_w13_local,
+            moe_w2_local,
+            *gain,
+        )
+        dx, dw13, dw2, *dgain = vjp(cotangent)
+        output_dot_cotangent = jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32), axis=-1)
+        return (dx, dw13, dw2, output_dot_cotangent, *dgain)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -366,8 +408,12 @@ def _quack_grouped_gemm_available() -> bool:
 _RELU2_FNS = (fused_relu2, ActivationFunctionEnum.relu2.to_jax_fn())
 
 
-def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungated: bool) -> _ExpertMlp:
+def _select_expert_mlp(
+    activation_fn: Callable[[jax.Array], jax.Array], *, ungated: bool, output_norm: ExpertOutputNorm | None = None
+) -> "_ExpertMlp | _RaggedDotOutputNormExpertMlp":
     """Pick the fastest expert-MLP kernel this process can actually run.
+
+    An ``output_norm`` always runs on the portable `ragged_dot` path (``_RaggedDotOutputNormExpertMlp``).
 
     QuACK's SM100 kernels fuse SwiGLU for gated SiLU experts and ReLU^2 for ungated ``fused_relu2``
     experts. Without them, ``fused_relu2`` on ungated experts selects the Pallas fused ReLU^2
@@ -375,6 +421,8 @@ def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungat
     build without the GPU extra -- runs the portable `ragged_dot` path, which computes the same
     function.
     """
+    if output_norm is not None:
+        return _RaggedDotOutputNormExpertMlp(activation_fn, output_norm)
     # QuACK takes any ungated ReLU^2, including the plain ``ActivationFunctionEnum.relu2`` function that
     # ``moe_mlp`` resolves the enum to; the Pallas kernels stay opt-in through ``fused_relu2``.
     if ungated and activation_fn in _RELU2_FNS and _quack_grouped_gemm_available():
@@ -624,6 +672,7 @@ def _routed_experts_forward(
     routing: _ExpertRouting,
     layout: _ExpertLayout,
     overlap: "_OverlapInputs | None" = None,
+    output_norm_gain: Float[Array, "Elocal O"] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], tuple[_ChunkResiduals, ...], Any, Any]:
     """Returns ``(out, chunk_residuals, side, side_vjp)``; ``side`` (and its pullback) is the ``overlap`` work's
     output, run under the first chunk's dispatch all-to-all (None without ``overlap``)."""
@@ -664,12 +713,14 @@ def _routed_experts_forward(
             else:
                 x_dispatch = _dispatch_chunk(source, plan, layout)  # [C, H]
             experts = slice(chunk_index * layout.chunk_experts, (chunk_index + 1) * layout.chunk_experts)
+            gain = () if output_norm_gain is None else (output_norm_gain[experts],)
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(  # [C, H]
                 x_dispatch,
                 moe_w13_local[experts],
                 moe_w2_local[experts],
                 plan.physical_group_sizes,
                 plan.active_group_sizes,
+                *gain,
             )
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
@@ -697,12 +748,13 @@ class _OverlapInputs(NamedTuple):
     params: Any
 
 
-@functools.partial(jax.custom_vjp, nondiff_argnums=(5,))
+@functools.partial(jax.custom_vjp, nondiff_argnums=(6,))
 def _routed_experts(
     sorted_x: Float[Array, "TK H"],
     weights: Float[Array, "Tlocal K"],
     moe_w13_local: Float[Array, "Elocal H I2"],
     moe_w2_local: Float[Array, "Elocal I H"],
+    output_norm_gain: Float[Array, "Elocal O"] | None,
     routing: _ExpertRouting,
     layout: _ExpertLayout,
 ) -> Float[Array, "Tlocal H"]:
@@ -723,21 +775,30 @@ def _routed_experts(
     reads neither ``y``, nor the return transport, nor the combined output. When the combined
     output is saved for the backward, a recompute for the backward runs only the dispatch and
     the gate/up projection.
+
+    ``output_norm_gain`` (None, or the local experts' ``[Elocal, O]`` gains of a ``_RaggedDotOutputNormExpertMlp``)
+    gets each chunk's cotangent in its experts' rows.
     """
-    out, _residuals, _, _ = _routed_experts_forward(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+    out, _residuals, _, _ = _routed_experts_forward(
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, output_norm_gain=output_norm_gain
+    )
     return out
 
 
-def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout):
+def _routed_experts_fwd(sorted_x, weights, moe_w13_local, moe_w2_local, output_norm_gain, routing, layout):
     out, chunk_residuals, _, _ = _routed_experts_forward(
-        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout
+        sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, output_norm_gain=output_norm_gain
     )
-    return out, (weights, routing, chunk_residuals)
+    return out, (weights, routing, chunk_residuals, output_norm_gain)
 
 
 def _routed_experts_bwd(layout, residuals, out_cotangent):
-    weights, routing, chunk_residuals = residuals
-    return _routed_experts_backward(layout, weights, routing, chunk_residuals, out_cotangent)[0]
+    weights, routing, chunk_residuals, output_norm_gain = residuals
+    routed, gain_cotangent, _ = _routed_experts_backward(
+        layout, weights, routing, chunk_residuals, out_cotangent, has_gain=output_norm_gain is not None
+    )
+    sorted_x_cotangent, weights_cotangent, w13_cotangent, w2_cotangent, routing_cotangent = routed
+    return sorted_x_cotangent, weights_cotangent, w13_cotangent, w2_cotangent, gain_cotangent, routing_cotangent
 
 
 @functools.partial(jax.custom_vjp, nondiff_argnums=(7, 8))
@@ -765,17 +826,18 @@ def _routed_experts_overlapped_bwd(layout, overlap_fn, residuals, cotangents):
     del overlap_fn
     weights, routing, chunk_residuals, side_vjp = residuals
     out_cotangent, side_cotangent = cotangents
-    routed, (d_tokens, d_params) = _routed_experts_backward(
+    routed, _, (d_tokens, d_params) = _routed_experts_backward(
         layout, weights, routing, chunk_residuals, out_cotangent, side_vjp, side_cotangent
     )
     return (*routed, d_tokens, d_params)
 
 
 def _routed_experts_backward(
-    layout, weights, routing, chunk_residuals, out_cotangent, side_vjp=None, side_cotangent=None
+    layout, weights, routing, chunk_residuals, out_cotangent, side_vjp=None, side_cotangent=None, has_gain=False
 ):
-    """Cotangents of ``(sorted_x, weights, moe_w13_local, moe_w2_local, routing)``, and with ``side_vjp`` the
-    overlap's ``(d_tokens, d_params)``, pulled back under the first return-cotangent all-to-all."""
+    """Cotangents of ``(sorted_x, weights, moe_w13_local, moe_w2_local, routing)``, of the output-norm gains
+    (``[Elocal, O]`` with ``has_gain``, else None), and with ``side_vjp`` the overlap's ``(d_tokens, d_params)``,
+    pulled back under the first return-cotangent all-to-all."""
     assignments = routing.sorted_indices.shape[0]
     out_dim = out_cotangent.shape[1]
     weights_f32 = weights.astype(jnp.float32)
@@ -809,6 +871,7 @@ def _routed_experts_backward(
     )  # [TK, 1]
     moe_w13_cotangents = []
     moe_w2_cotangents = []
+    gain_cotangents = []
     for chunk_index in reversed(range(layout.chunks)):
         plan, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
@@ -830,7 +893,15 @@ def _routed_experts_backward(
                 with jax.named_scope("overlap"):
                     side_grads = side_vjp(side_cotangent)
                 out_dispatch_cotangent, side_grads = jax.lax.optimization_barrier((out_dispatch_cotangent, side_grads))
-            if layout.overlap_weight_grads:
+            if has_gain:
+                x_dispatch_cotangent, w13_cotangent, w2_cotangent, row_output_dot, chunk_gain_cotangent = (
+                    layout.expert_mlp.backward(expert_mlp_residuals, out_dispatch_cotangent)
+                )
+                gain_cotangents.append(chunk_gain_cotangent)
+                dispatch_cotangent = jax.lax.ragged_all_to_all(
+                    x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
+                )
+            elif layout.overlap_weight_grads:
                 x_dispatch_cotangent, row_output_dot, wgrad_args, wgrad = layout.expert_mlp.backward_parts(
                     expert_mlp_residuals, out_dispatch_cotangent
                 )
@@ -875,7 +946,8 @@ def _routed_experts_backward(
         jnp.concatenate(moe_w2_cotangents[::-1], axis=0),
         None,
     )
-    return routed, (side_grads if side_vjp is not None else (None, None))
+    gain_cotangent = jnp.concatenate(gain_cotangents[::-1], axis=0) if has_gain else None
+    return routed, gain_cotangent, (side_grads if side_vjp is not None else (None, None))
 
 
 _routed_experts.defvjp(_routed_experts_fwd, _routed_experts_bwd)
@@ -902,9 +974,13 @@ def _moe_mlp_ep_ragged_a2a_local(
     mxfp8_dispatch: bool = False,
     serial_pair: bool = False,
     overlap_fn: Callable[[tuple[jax.Array, ...], Any], jax.Array] | None = None,
+    output_norm: ExpertOutputNorm | None = None,
+    output_norm_gain: Float[Array, "Elocal O"] | None = None,
 ) -> tuple[Float[Array, "Tlocal H"], CapacityDrops] | tuple[Float[Array, "Tlocal H"], CapacityDrops, jax.Array]:
     """``overlap_fn`` (with ``overlap_tokens`` / ``overlap_params``, see ``MoeOverlapWork``) runs under the first
-    dispatch all-to-all and its backward under the first return-cotangent all-to-all; its output is appended."""
+    dispatch all-to-all and its backward under the first return-cotangent all-to-all; its output is appended.
+    ``output_norm`` (with the local experts' ``output_norm_gain``) normalizes every expert output row before the
+    combine (``_RaggedDotOutputNormExpertMlp``)."""
     local_experts = moe_w13_local.shape[0]
     if num_experts % local_experts != 0:
         raise ValueError(
@@ -972,7 +1048,13 @@ def _moe_mlp_ep_ragged_a2a_local(
         chunk_clipped_group_sizes=chunk_clipped_group_sizes,
         shard_id=shard_id,
     )
-    expert_mlp = _select_expert_mlp(activation_fn, ungated=_is_ungated(moe_w13_local, moe_w2_local))
+    if output_norm_gain is not None and output_norm is None:
+        raise ValueError("output_norm_gain needs output_norm")
+    if output_norm is not None and (serial_pair or mxfp8 or overlap_fn is not None or overlap_weight_grads):
+        raise ValueError("output_norm does not combine with serial_pair, mxfp8, overlap or overlap_weight_grads")
+    expert_mlp = _select_expert_mlp(
+        activation_fn, ungated=_is_ungated(moe_w13_local, moe_w2_local), output_norm=output_norm
+    )
     if isinstance(expert_mlp, _CuteExpertMlp) and moe_w2_local.shape[-1] != x_local.shape[1]:
         raise ValueError("the QuACK grouped-GEMM expert MLP needs w_down output dim equal to the input dim")
     if serial_pair:
@@ -1002,7 +1084,7 @@ def _moe_mlp_ep_ragged_a2a_local(
     weights = jnp.where(accepted, combine_weights_local, 0)
     side = None
     if overlap_fn is None:
-        out_local = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout)
+        out_local = _routed_experts(sorted_x, weights, moe_w13_local, moe_w2_local, output_norm_gain, routing, layout)
     else:
         out_local, side = _routed_experts_overlapped(
             sorted_x, weights, moe_w13_local, moe_w2_local, routing, overlap_tokens, overlap_params, layout, overlap_fn

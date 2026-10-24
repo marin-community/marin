@@ -44,7 +44,7 @@ from levanter.grug.attention import (
     fa4_cute_segment_bounds,
     inkling_rel_bias,
 )
-from levanter.grug.grug_moe import MoeActivation, MoEExpertMlp, moe_mlp
+from levanter.grug.grug_moe import ExpertOutputNorm, ExpertOutputNormOrder, MoeActivation, MoEExpertMlp, moe_mlp
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
@@ -138,6 +138,19 @@ class AttnResLayerBackward(StrEnum):
     SAVE = "save"
     """Plain autodiff: the forward keeps the layer's residuals, so backward runs no forward again.
     Same math as RECOMPUTE; needs the memory to hold every layer's residuals."""
+
+
+class ExpertOutNorm(StrEnum):
+    """RMSNorm on every routed expert's output row (the latent it writes) before the combine weights."""
+
+    NONE = "none"
+    FIXED = "fixed"
+    """Parameter-free ``rmsnorm(y)``."""
+    PER_EXPERT = "per_expert"
+    """``rmsnorm(y) * g_e``: a learnable ``[E, latent]`` gain, one per expert (init 1)."""
+    MUSE = "muse"
+    """Muse Spark Open's ``post_expert_norm``: ``rmsnorm(y * g)`` with one ``[latent]`` gain shared by every expert
+    of the layer (init 1); every row keeps RMS 1, the gain only reweights channels."""
 
 
 class RouterCombine(StrEnum):
@@ -442,6 +455,12 @@ class GrugModelConfig:
     as ``relu(g) * u`` with the gate tied to ``W_up`` (``relu(u) * u = relu(u)^2``), so every MoE backend
     computes it unchanged; the gate GEMM is still paid. Parameter-match with 1.5x ``num_experts`` and
     ``num_experts_per_token``."""
+    moe_expert_out_norm: ExpertOutNorm = ExpertOutNorm.NONE
+    """RMSNorm of each routed expert output row before the router-weighted combine (``ExpertOutNorm``)."""
+    moe_expert_out_norm_eps: float = 1e-8
+    """Epsilon of ``moe_expert_out_norm`` (Muse Spark's ``post_norm_eps``)."""
+    moe_expert_out_norm_init: float = 1.0
+    """Initial value of the ``per_expert`` gain (the other modes keep 1: ``muse``'s gain is scale-free)."""
     expert_activation: str = "silu"
     """Gate activation of the routed and shared GLU experts (an ``ActivationFunctionEnum`` value, e.g.
     ``relu2`` for ReLU^2-GLU as in Primer / ReMoE)."""
@@ -457,6 +476,8 @@ class GrugModelConfig:
             raise ValueError("lm_head_grad_clip clips at the post-norm probe site")
         if unknown := set(self.sconv_sites) - set(SCONV_SITES):
             raise ValueError(f"sconv_sites must be a subset of {SCONV_SITES}, got {sorted(unknown)}")
+        if self.moe_expert_out_norm_init != 1.0 and self.moe_expert_out_norm != ExpertOutNorm.PER_EXPERT:
+            raise ValueError("moe_expert_out_norm_init needs moe_expert_out_norm=per_expert")
         if self.moe_implementation not in MOE_IMPLEMENTATIONS:
             raise ValueError(f"moe_implementation must be one of {MOE_IMPLEMENTATIONS}, got {self.moe_implementation!r}")
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -1106,12 +1127,20 @@ class DenseMLP(eqx.Module):
         return _batch_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
 
 
+class ExpertOutNormGain(eqx.Module):
+    """The learnable gain of ``moe_expert_out_norm``: ``[E, O]`` per expert, or ``[O]`` shared (``ExpertOutNorm``).
+    A ``.weight`` leaf, so it takes the Adam group like the other norm gains."""
+
+    weight: jax.Array
+
+
 class MoEMLP(eqx.Module):
     """QB-routed MoE with sigmoid combine weights, on the LatentMoE latent when ``latent_dim`` is set."""
 
     router: jax.Array
     router_bias: jax.Array
     expert_mlp: MoEExpertMlp
+    expert_out_norm: ExpertOutNormGain | None
     w_latent_down: jax.Array | None
     latent_norm: RMSNorm | None
     w_latent_up: jax.Array | None
@@ -1143,8 +1172,23 @@ class MoEMLP(eqx.Module):
                 else reshard(_init_weight(k_up, (width, d), cfg.initializer_std), P("model", _FSDP_AXES))
             ),
             expert_mlp=_expert_mlp_init(cfg, width, k_expert),
+            expert_out_norm=_expert_out_norm_init(cfg, width),
             cfg=cfg,
         )
+
+    def _expert_out_norm_args(self) -> tuple[ExpertOutputNorm | None, jax.Array | None]:
+        """``moe_mlp``'s ``(expert_output_norm, expert_output_norm_gain)``; a shared gain is broadcast per expert."""
+        mode = self.cfg.moe_expert_out_norm
+        if mode == ExpertOutNorm.NONE:
+            return None, None
+        order = ExpertOutputNormOrder.SCALE_BEFORE if mode == ExpertOutNorm.MUSE else ExpertOutputNormOrder.SCALE_AFTER
+        norm = ExpertOutputNorm(eps=self.cfg.moe_expert_out_norm_eps, order=order)
+        if self.expert_out_norm is None:
+            return norm, None
+        gain = self.expert_out_norm.weight
+        if gain.ndim == 1:
+            gain = jnp.broadcast_to(reshard(gain, P(None)), (self.cfg.num_experts, gain.shape[0]))
+        return norm, gain
 
     def input_projection_weights(self, dtype: jnp.dtype) -> list[jax.Array]:
         """The ``[D, *]`` projections this MLP applies to its input: the router, then the latent down."""
@@ -1223,9 +1267,17 @@ class MoEMLP(eqx.Module):
         if self.w_latent_down is not None and self.latent_norm is not None:
             # Keep the expert input scale independent of the down-projection initialization.
             routed_input = self.latent_norm(reshard(projected[1], _batch_spec()))
+        out_norm, out_norm_gain = self._expert_out_norm_args()
         routed_flat, overflow = _run_expert_bank(
-            self.expert_mlp, self.cfg, routed_input, selected_experts, combine_weights
+            self.expert_mlp, self.cfg, routed_input, selected_experts, combine_weights, out_norm, out_norm_gain
         )
+        router_stats[f"{_OUTSTAT_PREFIX}routed_latent_rms"] = jnp.sqrt(
+            jnp.mean(jnp.square(jax.lax.stop_gradient(routed_flat).astype(jnp.float32)))
+        )
+        if self.expert_out_norm is not None:
+            router_stats.update(
+                _expert_out_norm_stats(self.expert_out_norm.weight, router_stats["routing_counts_local"])
+            )
         router_stats["capacity_overflow"] = overflow.dropped
         router_stats["sender_capacity_overflow"] = overflow.sender_dropped
         router_stats["receiver_capacity_overflow"] = overflow.receiver_dropped
@@ -1437,15 +1489,52 @@ def _expert_mlp_init(cfg: GrugModelConfig, width: int, key: PRNGKeyArray) -> MoE
     return mlp
 
 
+def _expert_out_norm_init(cfg: GrugModelConfig, width: int) -> ExpertOutNormGain | None:
+    """``moe_expert_out_norm``'s gain: ``[E, width]`` at ``moe_expert_out_norm_init`` sharded with the experts, or
+    ``[width]`` shared at 1."""
+    if cfg.moe_expert_out_norm == ExpertOutNorm.PER_EXPERT:
+        init = jnp.full((cfg.num_experts, width), cfg.moe_expert_out_norm_init, jnp.float32)
+        return ExpertOutNormGain(reshard(init, P("expert", None)))
+    if cfg.moe_expert_out_norm == ExpertOutNorm.MUSE:
+        return ExpertOutNormGain(reshard(jnp.ones((width,), jnp.float32), P(None)))
+    return None
+
+
+def _expert_out_norm_stats(gain: jax.Array, routing_counts_local: jax.Array) -> dict[str, jax.Array]:
+    """Per-layer summaries of the output-norm gain: its mean and spread, and for a per-expert gain the spread of the
+    experts' mean gains and their correlation with this step's expert load."""
+    g = jax.lax.stop_gradient(gain).astype(jnp.float32)
+    stats = {
+        f"{_OUTSTAT_PREFIX}expnorm_gain_mean": jnp.mean(g),
+        f"{_OUTSTAT_PREFIX}expnorm_gain_std": jnp.std(g),
+        f"{_OUTSTAT_PREFIX}expnorm_gain_min": jnp.min(g),
+        f"{_OUTSTAT_PREFIX}expnorm_gain_max": jnp.max(g),
+    }
+    if g.ndim == 2:
+        expert_gain = jnp.mean(g, axis=-1)
+        load = jnp.sum(routing_counts_local.astype(jnp.float32), axis=0)
+        cg, cl = expert_gain - jnp.mean(expert_gain), load - jnp.mean(load)
+        stats[f"{_OUTSTAT_PREFIX}expnorm_expert_gain_std"] = jnp.std(expert_gain)
+        stats[f"{_OUTSTAT_PREFIX}expnorm_gain_load_corr"] = jnp.sum(cg * cl) / jnp.sqrt(
+            jnp.sum(cg * cg) * jnp.sum(cl * cl) + 1e-12
+        )
+    return stats
+
+
 def _run_expert_bank(
     em: MoEExpertMlp,
     cfg: GrugModelConfig,
     routed_input: jax.Array,
     selected: jax.Array,
     combine_weights: jax.Array,
+    out_norm: ExpertOutputNorm | None = None,
+    out_norm_gain: jax.Array | None = None,
 ):
     """Dispatch the expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
-    dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``."""
+    dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``. ``out_norm``
+    (with its per-expert ``out_norm_gain``) normalizes each expert output row before the combine."""
+    if out_norm is not None and em.w_gate is not None:
+        raise ValueError("moe_expert_out_norm needs moe_ungated_relu2 experts")
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         return moe_mlp(
@@ -1463,6 +1552,8 @@ def _run_expert_bank(
             report_capacity_overflow=True,
             expert_chunks=em.expert_chunks,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
+            expert_output_norm=out_norm,
+            expert_output_norm_gain=out_norm_gain,
         )
     return em(routed_input, selected, combine_weights, mesh=get_abstract_mesh(), report_capacity_overflow=True)
 

@@ -5,6 +5,7 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Literal, NamedTuple, TypeAlias, cast, get_args
 
 import jax
@@ -90,6 +91,61 @@ def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
     if gu.dtype.itemsize == 2:
         return _pack_pairs_u32(dgate.astype(gu.dtype), dup.astype(gu.dtype))
     return jnp.stack([dgate, dup], axis=-1).reshape(gu.shape)
+
+
+class ExpertOutputNormOrder(StrEnum):
+    """Where ``ExpertOutputNorm`` applies its gain relative to the RMS normalization."""
+
+    SCALE_AFTER = "scale_after"
+    """``rmsnorm(y) * g``: the ordinary RMSNorm, the gain sets each channel's output scale."""
+    SCALE_BEFORE = "scale_before"
+    """``rmsnorm(y * g)``: Muse Spark's ``post_expert_norm`` order; every row keeps RMS 1, the gain only
+    reweights channels."""
+
+
+@dataclass(frozen=True)
+class ExpertOutputNorm:
+    """RMS normalization of every routed expert output row before the combine weights multiply it.
+
+    The gain is optional and per expert: ``moe_mlp``'s ``expert_output_norm_weight`` ``[E, O]`` gives each
+    row its own expert's ``[O]`` gain. Without it the norm is parameter-free.
+    """
+
+    eps: float
+    order: ExpertOutputNormOrder = ExpertOutputNormOrder.SCALE_AFTER
+
+    def __call__(self, rows: Float[Array, "R O"], row_gain: Float[Array, "R O"] | None) -> Float[Array, "R O"]:
+        y = rows.astype(jnp.float32)
+        if row_gain is not None and self.order == ExpertOutputNormOrder.SCALE_BEFORE:
+            y = y * row_gain.astype(jnp.float32)
+        y = y * jax.lax.rsqrt(jnp.mean(jnp.square(y), axis=-1, keepdims=True) + self.eps)
+        if row_gain is not None and self.order == ExpertOutputNormOrder.SCALE_AFTER:
+            y = y * row_gain.astype(jnp.float32)
+        return y.astype(rows.dtype)
+
+
+def expert_of_rows(group_sizes: Int[Array, "E"], num_rows: int) -> Int[Array, "R"]:
+    """The expert of each row of an expert-major buffer with ``group_sizes`` (rows past their sum: the last)."""
+    ends = jnp.cumsum(group_sizes)
+    return jnp.minimum(jnp.searchsorted(ends, jnp.arange(num_rows), side="right"), group_sizes.shape[0] - 1)
+
+
+def normalize_grouped_expert_rows(
+    rows: Float[Array, "R O"],
+    group_sizes: Int[Array, "E"],
+    active_rows: Int[Array, ""],
+    norm: ExpertOutputNorm,
+    gain: Float[Array, "E O"] | None,
+) -> Float[Array, "R O"]:
+    """``norm`` on an expert-major buffer laid out by ``group_sizes``; rows from ``active_rows`` on are zero.
+
+    The inactive rows are zeroed on both sides of the norm: on the way in so unspecified kernel output never
+    reaches it, and on the way out so their (possibly non-finite) cotangents never reach the gain gradient.
+    """
+    active = (jnp.arange(rows.shape[0]) < active_rows)[:, None]
+    row_gain = None if gain is None else gain[expert_of_rows(group_sizes, rows.shape[0])]
+    normed = norm(jnp.where(active, rows, jnp.zeros((), rows.dtype)), row_gain)
+    return jnp.where(active, normed, jnp.zeros((), rows.dtype))
 
 
 PspecAxis: TypeAlias = str | tuple[str, ...] | None

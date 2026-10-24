@@ -8,7 +8,7 @@ from collections.abc import Callable
 import jax
 from jaxtyping import Array, Bool, Float, Int
 
-from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, MoeImplementation
+from levanter.grug._moe.common import _LOCAL_MOE_IMPLEMENTATIONS, ExpertOutputNorm, MoeImplementation
 from levanter.grug._moe.scatter import _moe_mlp_local_scatter
 from levanter.grug._moe.sonic import _moe_mlp_local_sonic
 
@@ -30,7 +30,11 @@ def _moe_mlp_local(
     num_experts: int,
     implementation: MoeImplementation,
     expert_chunks: int = 1,
+    output_norm: ExpertOutputNorm | None = None,
+    output_norm_gain: Float[Array, "E O"] | None = None,
 ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+    if output_norm is not None and implementation == "sonic_cute":
+        raise ValueError("expert output norms need the scatter or sonic local path, not sonic_cute")
     if implementation == "sonic_cute":
         if activation_fn is not jax.nn.silu:
             raise ValueError("sonic_cute requires SiLU because its QuACK kernel fuses SwiGLU")
@@ -76,4 +80,6 @@ def _moe_mlp_local(
         moe_w2,
         activation_fn=activation_fn,
         num_experts=num_experts,
+        output_norm=output_norm,
+        output_norm_gain=output_norm_gain,
     )
