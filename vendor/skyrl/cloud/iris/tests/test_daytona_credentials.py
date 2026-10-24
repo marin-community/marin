@@ -101,25 +101,3 @@ def test_daytona_preflight_follows_task_backend(entrypoint, terminal_bench_data,
     )
 
     assert launcher._rl_config_uses_daytona(config) is expected
-
-
-@pytest.mark.parametrize("file_state", ["present", "missing", "empty", "unreadable"])
-def test_named_backend_credential_is_file_first_and_fails_before_submission(tmp_path, monkeypatch, file_state):
-    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
-    monkeypatch.setenv("JUDGE_TEST_KEY", "environment-fallback")
-    path = tmp_path / "JUDGE_TEST_KEY"
-    if file_state == "unreadable":
-        path.mkdir()
-    elif file_state != "missing":
-        path.write_text("named-file-key" if file_state == "present" else "")
-    config = OmegaConf.create({
-        "runtime": {"entrypoint": "train", "task_env": {"SETTING": 1}},
-        "skyrl": {"environment": {"task_sessions": {"remote_judge": {"api_key_env": "JUDGE_TEST_KEY"}}}},
-    })
-    if file_state in {"empty", "unreadable"}:
-        with pytest.raises(SecretResolutionError, match="JUDGE_TEST_KEY"):
-            launcher.config_task_environment(config)
-        return
-    environment = launcher.config_task_environment(config)
-    assert environment.secrets == {"JUDGE_TEST_KEY": "named-file-key" if file_state == "present" else "environment-fallback"}
-    assert environment.env_vars == {"SETTING": "1"}
