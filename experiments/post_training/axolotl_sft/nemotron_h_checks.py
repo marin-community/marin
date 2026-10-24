@@ -13,7 +13,8 @@ keeps the conv output for backward, which FSDP's per-block activation checkpoint
 Three NemotronH failure modes are silent in transformers and would only show up as a slow
 or wrong run:
 
-- The hub repo ships its own remote modeling code; Stage 0 must run transformers' class.
+- The hub repo ships its own remote modeling code; Stage 0 must run transformers' class, and
+  the export drops the base config's ``auto_map`` so that serving loads it too.
 - Without the hub ``mamba-ssm`` and ``causal-conv1d`` kernels, the Mamba-2 mixers fall back
   to a pure-torch chunked scan, which at 32k tokens per sequence is far slower and holds
   far more activation memory.
@@ -58,7 +59,9 @@ class _RouterBiasCheck(TrainerCallback):
             checksums = {value.item() for value in gathered}
         else:
             checksums = {checksum.item()}
-        LOG.info("NemotronH router biases at step 0: %d buffers, %d all-zero, checksums %s", len(biases), zeroed, checksums)
+        LOG.info(
+            "NemotronH router biases at step 0: %d buffers, %d all-zero, checksums %s", len(biases), zeroed, checksums
+        )
         if zeroed or len(checksums) != 1:
             raise RuntimeError(f"router biases differ across ranks or are zeroed: {zeroed} zero, checksums {checksums}")
 
@@ -69,6 +72,10 @@ class NemotronHChecksPlugin(BasePlugin):
     def post_model_load(self, cfg, model):
         if type(model).__module__ != modeling_nemotron_h.__name__:
             raise RuntimeError(f"expected transformers' NemotronH, got {type(model).__module__}")
+        # The base config's auto_map names the hub repo's remote code, which the export does
+        # not ship; vLLM serves with trust_remote_code and would look for it.
+        if getattr(model.config, "auto_map", None):
+            del model.config.auto_map
         if not modeling_nemotron_h.is_fast_path_available:
             raise RuntimeError(
                 "NemotronH Mamba kernels (hub mamba-ssm / causal-conv1d) did not load; "
