@@ -38,6 +38,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
     parser.add_argument("--decode-probe", action="store_true")
+    parser.add_argument("--decode-narratives", action="store_true", help="Use three long narrative prompts for decode.")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[4]
     sys.path.insert(0, str(root / "vendor/skyrl/skyrl-train"))
@@ -102,7 +103,7 @@ def main() -> None:
         ),
         "windows": [None if long else model.config.sliding_window for long in grug.grug_long_layer_flags(26)],
         "device_map": {key: str(value) for key, value in model.hf_device_map.items()},
-        "limitation": "Five short prompts and one >3000-token prompt. API values are log probabilities.",
+        "limitation": "API values are log probabilities; decode generations may stop before the 200-token cap.",
     }
     fs.pipe_file(prefix + "/provenance.json", json.dumps(provenance, indent=2).encode())
     print(json.dumps(provenance), flush=True)
@@ -112,6 +113,12 @@ def main() -> None:
             "Explain how to solve linear equations, with five worked examples and detailed reasoning for each step.",
             "Describe the history and culture of Paris in a detailed 600-word essay.",
         )
+        if args.decode_narratives:
+            prompts = (
+                "Write a detailed 600-word horror story about a fairy tending a deserted garden.",
+                "Write a detailed 600-word horror story about a fairy exploring an abandoned lighthouse.",
+                "Write a detailed 600-word horror story about a fairy hearing voices in an ancient forest.",
+            )
         for index, prompt in enumerate(prompts):
             done_path = f"{prefix}/decode-{index}.json"
             if fs.exists(done_path):
