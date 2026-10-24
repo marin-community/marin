@@ -424,7 +424,7 @@ def _to_dropless_local(
     return eqx.tree_at(stack_expert_mlps, model, dropless)
 
 
-_ACT_POWER_FIELDS = ("mlp_act_power", "mlp_act_power_routed", "mlp_act_power_shared")
+_ACT_POWER_FIELDS = ("mlp_act_power", "mlp_act_power_routed", "mlp_act_power_shared", "mlp_act_log_knee")
 
 
 def _mlp_act_power_leaves(model: Transformer) -> list[jax.Array]:

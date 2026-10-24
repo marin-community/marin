@@ -132,8 +132,60 @@ def _relu_power_any(u: Float[Array, "..."], power: ActPower) -> Float[Array, "..
 
 
 def _per_expert_power(power: jax.Array, num_experts: int) -> jax.Array:
-    """A traced routed exponent as ``moe_mlp``'s per-expert ``activation_params``: ``[E, 1]`` or ``[E, I]``."""
-    return jnp.broadcast_to(power, (num_experts, 1)) if power.ndim == 0 else power
+    """A traced routed exponent as ``moe_mlp``'s ``activation_params``: a scalar (shared by every expert, no per-row
+    lookup), ``[E, 1]`` or ``[E, I]``."""
+    del num_experts
+    return power
+
+
+class ActKind(StrEnum):
+    """The routed experts' activation of ``x = relu(pre)`` (``mlp_act_kind``)."""
+
+    RELU_POW = "relu_pow"
+    """``x^p`` (``mlp_act_power``)."""
+    CUBIC_QUAD = "cubic_quad"
+    """``x^3 / (1 + x / c)``: cubic below the knee ``c``, quadratic (slope ``c x^2``) above it."""
+    X2TANH = "x2tanh"
+    """``c x^2 tanh(x / c)``: ``x^3`` below the knee ``c``, ``c x^2`` above it."""
+
+
+def cubic_quad(u: Float[Array, "..."], knee: float | jax.Array) -> Float[Array, "..."]:
+    x = jax.nn.relu(u.astype(jnp.float32))
+    c = jnp.asarray(knee, jnp.float32)
+    return (x * x * x * c / (c + x)).astype(u.dtype)
+
+
+def x2tanh(u: Float[Array, "..."], knee: float | jax.Array) -> Float[Array, "..."]:
+    x = jax.nn.relu(u.astype(jnp.float32))
+    c = jnp.asarray(knee, jnp.float32)
+    return (c * x * x * jnp.tanh(x / c)).astype(u.dtype)
+
+
+def _cubic_quad_gate(g: Float[Array, "..."], knee: float | jax.Array) -> Float[Array, "..."]:
+    """``cubic_quad(u) / u`` on ``u > 0``, the gate of the tied-gate path (``gate(u) * u``)."""
+    x = jax.nn.relu(g.astype(jnp.float32))
+    c = jnp.asarray(knee, jnp.float32)
+    return (x * x * c / (c + x)).astype(g.dtype)
+
+
+def _x2tanh_gate(g: Float[Array, "..."], knee: float | jax.Array) -> Float[Array, "..."]:
+    x = jax.nn.relu(g.astype(jnp.float32))
+    c = jnp.asarray(knee, jnp.float32)
+    return (c * x * jnp.tanh(x / c)).astype(g.dtype)
+
+
+# ActKind -> (activation, tied-gate form).
+_KNEE_ACTS = {ActKind.CUBIC_QUAD: (cubic_quad, _cubic_quad_gate), ActKind.X2TANH: (x2tanh, _x2tanh_gate)}
+
+
+class KneeAct(NamedTuple):
+    """A routed ``ActKind`` other than ``relu_pow`` with its knee ``c`` (a static float or a traced scalar)."""
+
+    kind: ActKind
+    knee: float | jax.Array
+
+
+RoutedAct = ActPower | KneeAct
 
 
 def _unit_spread(spread: tuple[float, ...], width: int) -> np.ndarray:
@@ -587,8 +639,15 @@ class GrugModelConfig:
     """Learnable exponents (``ActPowerScope``: per layer, per routed expert, or per unit), init ``mlp_act_power``,
     optimizer group ``act_power``, clamped to ``MLP_ACT_POWER_RANGE`` in the forward."""
     mlp_act_power_shared_fixed: float | None = None
-    """With ``mlp_act_power_learnable`` ``expert`` or ``neuron``: the shared expert keeps this static exponent
-    instead of learning its own."""
+    """The shared expert's static exponent in place of ``mlp_act_power`` / ``mlp_act_power_layers`` (static routed
+    exponents) or of a learned one (``mlp_act_power_learnable`` ``expert`` or ``neuron``)."""
+    mlp_act_kind: ActKind = ActKind.RELU_POW
+    """The routed experts' activation (``ActKind``); the shared expert keeps ``relu(x)^mlp_act_power``."""
+    mlp_act_knee: tuple[float, ...] = ()
+    """The knee ``c`` of ``mlp_act_kind`` ``cubic_quad`` / ``x2tanh``, one per layer; needs ``attn_res``."""
+    mlp_act_knee_learnable: bool = False
+    """Learn each layer's knee as ``Block.mlp_act_log_knee`` (``log c``, init ``log mlp_act_knee``; optimizer group
+    ``act_power``)."""
     mlp_act_power_unit_spread: tuple[float, ...] = ()
     """``(lo, hi)``: a static exponent per unit, ``lo + (hi - lo) i / (I - 1)`` for unit ``i`` of every routed expert
     and of the shared expert."""
@@ -632,6 +691,17 @@ class GrugModelConfig:
                 raise ValueError(f"attn_res_kv_layers {bad} must read only earlier layers (>= {cutoff})")
 
     def _check_mlp_act_power(self) -> None:
+        if self.mlp_act_kind != ActKind.RELU_POW:
+            if len(self.mlp_act_knee) != self.num_layers or not self.attn_res or min(self.mlp_act_knee) <= 0:
+                raise ValueError(f"mlp_act_kind {self.mlp_act_kind} needs attn_res and {self.num_layers} positive knees")
+            if self.mlp_act_power_dynamic or self.mlp_act_power_layers or self.mlp_act_power_unit_spread:
+                raise ValueError("mlp_act_kind other than relu_pow excludes the other routed mlp_act_power modes")
+            if self.dense_mlp or not (self.moe_ungated_relu2 and self.moe_ungated_kernel):
+                raise ValueError("mlp_act_kind needs MoE layers with moe_ungated_relu2 and moe_ungated_kernel")
+            if self.mlp_act_knee_learnable and self.moe_implementation != "ragged_all_to_all":
+                raise ValueError("a learnable mlp_act_knee needs moe_implementation=ragged_all_to_all")
+        elif self.mlp_act_knee or self.mlp_act_knee_learnable:
+            raise ValueError("mlp_act_knee needs mlp_act_kind cubic_quad or x2tanh")
         learnable = self.mlp_act_power_learnable != ActPowerScope.NONE
         shared_fixed = () if self.mlp_act_power_shared_fixed is None else (self.mlp_act_power_shared_fixed,)
         powers = (
@@ -643,8 +713,12 @@ class GrugModelConfig:
         )
         if all(p == 2.0 for p in powers) and not learnable:
             return
-        if shared_fixed and self.mlp_act_power_learnable not in (ActPowerScope.EXPERT, ActPowerScope.NEURON):
-            raise ValueError("mlp_act_power_shared_fixed needs mlp_act_power_learnable expert or neuron")
+        if shared_fixed and (
+            self.mlp_act_power_schedule
+            or self.mlp_act_power_unit_spread
+            or self.mlp_act_power_learnable == ActPowerScope.LAYER
+        ):
+            raise ValueError("mlp_act_power_shared_fixed needs separate routed and shared exponents")
         if self.mlp_act_power_unit_spread and (
             len(self.mlp_act_power_unit_spread) != 2
             or learnable
@@ -687,7 +761,8 @@ class GrugModelConfig:
             power = float(self.mlp_act_power_layers[layer_index])
         else:
             power = float(self.mlp_act_power)
-        return power, power
+        shared = power if self.mlp_act_power_shared_fixed is None else float(self.mlp_act_power_shared_fixed)
+        return power, shared
 
     @property
     def expert_in_dim(self) -> int:
@@ -1382,7 +1457,7 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         projected: list[jax.Array] | None = None,
-        act_power: ActPower = 2.0,
+        act_power: RoutedAct = 2.0,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller computed them
         already (fused with other projections of the same input). ``act_power`` is the ungated experts' ReLU
@@ -1477,7 +1552,7 @@ def moe_and_shared_fused(
     mlp: MoEMLP,
     shared: tuple[DenseMLP, ...],
     x: Float[Array, "B S D"],
-    act_power: tuple[ActPower, ActPower] = (2.0, 2.0),
+    act_power: tuple[RoutedAct, ActPower] = (2.0, 2.0),
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -1534,6 +1609,7 @@ class Block(eqx.Module):
     mlp_act_power: Float[Array, ""] | None  # per layer (schedule, ActPowerScope.LAYER)
     mlp_act_power_routed: Float[Array, "E ..."] | None  # [E] (EXPERT) or [E, I] (NEURON)
     mlp_act_power_shared: Float[Array, "..."] | None  # [] (EXPERT) or [I_shared] (NEURON)
+    mlp_act_log_knee: Float[Array, ""] | None  # log of the routed knee (cfg.mlp_act_knee_learnable)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, use_kda: bool = False) -> "Block":
@@ -1585,6 +1661,8 @@ class Block(eqx.Module):
             mlp_act_power=_mlp_act_power_init(cfg),
             mlp_act_power_routed=_mlp_act_power_routed_init(cfg),
             mlp_act_power_shared=_mlp_act_power_shared_init(cfg),
+            # Set per layer from cfg.mlp_act_knee by Transformer.init (the stacked init cannot see the layer).
+            mlp_act_log_knee=jnp.zeros((), jnp.float32) if cfg.mlp_act_knee_learnable else None,
         )
 
     def attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
@@ -1618,13 +1696,18 @@ class Block(eqx.Module):
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
         return out, stats
 
-    def mlp_act_power_value(self, layer_index: int | None) -> tuple[ActPower, ActPower]:
+    def mlp_act_power_value(self, layer_index: int | None) -> tuple[RoutedAct, ActPower]:
         """This layer's ``(routed, shared)`` ReLU exponents (``ActPower``): the learnable leaves clamped to
         ``MLP_ACT_POWER_RANGE``, the scheduled one stop-gradient, else the static ``mlp_act_power_at``."""
         if not isinstance(self.mlp, MoEMLP):
             return 2.0, 2.0
         cfg = self.mlp.cfg
         routed, shared = cfg.mlp_act_power_at(layer_index)
+        if cfg.mlp_act_kind != ActKind.RELU_POW:
+            assert layer_index is not None
+            if self.mlp_act_log_knee is not None:
+                return KneeAct(cfg.mlp_act_kind, jnp.exp(self.mlp_act_log_knee.astype(jnp.float32))), shared
+            return KneeAct(cfg.mlp_act_kind, float(cfg.mlp_act_knee[layer_index])), shared
 
         def clamp(p: jax.Array) -> jax.Array:
             return jnp.clip(p.astype(jnp.float32), *MLP_ACT_POWER_RANGE)
@@ -1647,9 +1730,9 @@ class Block(eqx.Module):
         self,
         h: Float[Array, "B S D"],
         mask: AttentionMask | jax.Array,
-        act_power: tuple[ActPower, ActPower] = (2.0, 2.0),
+        act_power: tuple[RoutedAct, ActPower] = (2.0, 2.0),
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``act_power``: the ungated experts' ``(routed, shared)`` ReLU exponents (``mlp_act_power_value``)."""
+        """``act_power``: the ungated experts' ``(routed, shared)`` activations (``mlp_act_power_value``)."""
         mlp_in = self._mlp_input(h)
         stats: dict[str, jax.Array] = {}
         if isinstance(self.mlp, DenseMLP):
@@ -1732,7 +1815,7 @@ def _run_expert_bank(
     routed_input: jax.Array,
     selected: jax.Array,
     combine_weights: jax.Array,
-    act_power: ActPower = 2.0,
+    act_power: RoutedAct = 2.0,
 ):
     """Dispatch the expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
     dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``.
@@ -1744,7 +1827,15 @@ def _run_expert_bank(
         activation: MoeActivation = ActivationFunctionEnum.relu2 if ungated else em.activation
         activation_params = None
         static = isinstance(act_power, (float, np.ndarray))
-        if isinstance(act_power, float) and act_power == 2.0:
+        if isinstance(act_power, KneeAct):
+            fn, gate_fn = _KNEE_ACTS[act_power.kind]
+            fn = fn if ungated else gate_fn
+            if isinstance(act_power.knee, float):
+                activation = functools.partial(fn, knee=act_power.knee)
+            else:
+                # A traced (learnable) knee: one replicated scalar, no per-row lookup.
+                activation, activation_params = fn, act_power.knee
+        elif isinstance(act_power, float) and act_power == 2.0:
             pass
         elif not ungated:
             # The tied gate (the dropless local eval backends): relu(u)^(p-1) * u = relu(u)^p.
@@ -1780,7 +1871,7 @@ def _run_expert_bank(
 
 
 def _routed_unit_stats(
-    em: MoEExpertMlp, routed_input: Float[Array, "T D"], selected: Int[Array, "T K"], act_power: ActPower
+    em: MoEExpertMlp, routed_input: Float[Array, "T D"], selected: Int[Array, "T K"], act_power: RoutedAct
 ) -> dict[str, jax.Array]:
     """``_unit_stats`` of the routed experts' post-activations ``relu(x W_up)^act_power``, recomputed from ``W_up``
     per batch shard in an expert-major buffer and summed over the batch (``collect_unit_stats``)."""
@@ -1791,21 +1882,31 @@ def _routed_unit_stats(
         order = jnp.argsort(flat, stable=True)
         sizes = jnp.bincount(flat, length=num_experts).astype(jnp.int32)
         pre = ragged_dot(x[order // sel.shape[1]], w_up.astype(x.dtype), sizes)
-        a = relu_power_traced(pre, power[flat[order]])
+        if knee_kind is None:
+            a = relu_power_traced(pre, power[flat[order]])
+        else:
+            a = _KNEE_ACTS[knee_kind][0](pre, power)
         stats = _unit_stats(a, flat[order], num_experts, pre)
+        if knee_kind is not None:
+            stats["above_knee"] = jnp.sum((pre.astype(jnp.float32) > power).astype(jnp.int32))
         return jax.tree.map(lambda v: jax.lax.psum(v, _BATCH_AXES), stats)
 
+    if isinstance(act_power, KneeAct):
+        knee_kind, power, power_spec = act_power.kind, jnp.asarray(act_power.knee, jnp.float32), P()
+    else:
+        knee_kind, power_spec = None, P(None, None)
+        power = jnp.broadcast_to(jnp.asarray(act_power, jnp.float32), em.w_up.shape[::2])
     return jax.shard_map(
         local,
         mesh=get_abstract_mesh(),
-        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(None, None, None), P(None, None)),
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(None, None, None), power_spec),
         out_specs=P(),
         check_vma=False,
     )(
         reshard(routed_input, P(_BATCH_AXES, None)),
         reshard(selected, P(_BATCH_AXES, None)),
         reshard(em.w_up, P(None, None, None)),
-        reshard(jnp.broadcast_to(jnp.asarray(act_power, jnp.float32), em.w_up.shape[::2]), P(None, None)),
+        reshard(power, power_spec),
     )
 
 
@@ -2217,7 +2318,11 @@ class Transformer(eqx.Module):
 
         def stack(layers: tuple[int, ...], use_kda: bool) -> ArrayStacked[Block]:
             keys = jnp.stack([block_keys[i] for i in layers])
-            return ArrayStacked.init(len(layers), Block)(cfg, key=keys, use_kda=use_kda)
+            stacked = ArrayStacked.init(len(layers), Block)(cfg, key=keys, use_kda=use_kda)
+            if cfg.mlp_act_knee_learnable:
+                log_knees = jnp.log(jnp.asarray([cfg.mlp_act_knee[i] for i in layers], jnp.float32))
+                stacked = eqx.tree_at(lambda s: s.stacked.mlp_act_log_knee, stacked, log_knees)
+            return stacked
 
         softmax_layers, kda_layers = _stack_layer_indices(cfg)
         return Transformer(
@@ -2498,6 +2603,11 @@ class Transformer(eqx.Module):
                 final_stats[f"attn_res_w_g{gate:02d}_p"] = mean_weights[-1]
         for i, layer in enumerate(layers):
             routed_power, shared_power = layer.mlp_act_power_value(i)
+            if layer.mlp_act_log_knee is not None:
+                assert isinstance(routed_power, KneeAct)
+                final_stats[f"{MLP_ACT_POWER_KEY.removesuffix('_power_L')}_knee_L{i}"] = jax.lax.stop_gradient(
+                    jnp.asarray(routed_power.knee, jnp.float32)
+                )
             if layer.mlp_act_power is not None:
                 final_stats[f"{MLP_ACT_POWER_KEY}{i}"] = jax.lax.stop_gradient(jnp.asarray(routed_power, jnp.float32))
             if layer.mlp_act_power_routed is not None:

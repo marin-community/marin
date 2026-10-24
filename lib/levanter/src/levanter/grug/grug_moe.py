@@ -451,9 +451,12 @@ class MoEExpertMlp(eqx.Module):
 
 @named_call
 def _bind_activation_params(activation_fn: Callable[..., jax.Array], params: Any) -> Any:
-    """``activation_fn`` itself without parameters, else its ``ExpertParamActivation``."""
+    """``activation_fn`` itself without parameters, ``h -> activation_fn(h, params)`` for a scalar, else its
+    ``ExpertParamActivation``."""
     if params is None:
         return activation_fn
+    if params.ndim == 0:
+        return lambda h: activation_fn(h, params)
     return ExpertParamActivation(activation_fn, params)
 
 
@@ -540,7 +543,7 @@ def moe_mlp(
     ``sonic`` local paths) is an ``[E, ...]`` array of differentiable per-expert activation parameters: ``activation``
     is a callable of two arguments, ``activation(h, activation_params[expert of each row])`` in place of
     ``activation(h)``, and the parameters get their gradient. Under expert parallelism they are sharded with the
-    experts.
+    experts. A scalar ``activation_params`` is shared by every expert (replicated, no per-row lookup).
 
     `overlap` is independent token-local work (see `MoeOverlapWork`) whose output is appended as the last
     return value. The expert-parallel pooled-wave and ragged paths run it under the dispatch all-to-all (and the
@@ -783,7 +786,7 @@ def moe_mlp(
 
         if activation_params is not None:
             # Per-expert parameters, sharded with the experts and appended after the (absent) overlap inputs.
-            param_specs = P("expert", *(None,) * (activation_params.ndim - 1))
+            param_specs = P() if activation_params.ndim == 0 else P("expert", *(None,) * (activation_params.ndim - 1))
             shard_local_fn = partial(_with_activation_params, shard_local_fn)
             in_specs = (*in_specs, param_specs)
             args = (

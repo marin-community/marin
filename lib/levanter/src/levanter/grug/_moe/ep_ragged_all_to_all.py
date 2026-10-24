@@ -195,7 +195,8 @@ class _RaggedDotParamExpertMlp:
         active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
         x_dispatch = jnp.where(active, x_dispatch, 0)
         pre = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
-        row_params = params[expert_of_rows(physical_group_sizes, pre.shape[0])]
+        # A scalar is shared by every expert; otherwise each row reads its expert's parameters.
+        row_params = params if params.ndim == 0 else params[expert_of_rows(physical_group_sizes, pre.shape[0])]
         out = ragged_dot(self.activation_fn(pre, row_params), moe_w2_local, physical_group_sizes)
         return jnp.where(active, out, 0)
 
@@ -716,7 +717,10 @@ def _routed_experts_forward(
                 plan.active_group_sizes,
             )
             if activation_params is not None:
-                mlp_args = (*mlp_args, activation_params[experts])
+                mlp_args = (
+                    *mlp_args,
+                    activation_params if activation_params.ndim == 0 else activation_params[experts],
+                )
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(*mlp_args)  # [C, H]
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
@@ -956,9 +960,12 @@ def _routed_experts_backward(
         jnp.concatenate(moe_w2_cotangents[::-1], axis=0),
         None,
     )
-    activation_params_cotangent = (
-        jnp.concatenate(activation_params_cotangents[::-1], axis=0) if activation_params_cotangents else None
-    )
+    if not activation_params_cotangents:
+        activation_params_cotangent = None
+    elif activation_params_cotangents[0].ndim == 0:
+        activation_params_cotangent = sum(activation_params_cotangents[1:], activation_params_cotangents[0])
+    else:
+        activation_params_cotangent = jnp.concatenate(activation_params_cotangents[::-1], axis=0)
     return routed, activation_params_cotangent, (side_grads if side_vjp is not None else (None, None))
 
 
