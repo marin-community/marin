@@ -28,6 +28,7 @@ import asyncio
 import multiprocessing as mp
 
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
+from skyrl_train.config.numerics import NumericsMode
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
     validate_rollout_launch,
@@ -212,6 +213,7 @@ def create_ray_wrapped_inference_engines_from_config(
         decode_context_parallel_size=cfg.generator.get("inference_engine_decode_context_parallel_size", 1),
         shared_pg=colocate_pg,
         inference_engine_enable_sleep=(cfg.trainer.placement.colocate_all and operation is EntrypointOperation.TRAIN),
+        decode_invariant=NumericsMode(cfg.trainer.numerics.mode) is NumericsMode.EXACT,
         max_logprobs=max([1, *requested_logprobs]),
     )
     model_revision = cfg.trainer.policy.model.get("revision")

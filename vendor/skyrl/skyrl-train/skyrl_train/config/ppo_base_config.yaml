@@ -180,7 +180,8 @@ trainer:
     sequence_parallel_size: 1
   numerics:
     # The kernels a run uses. native: the trainer's and the engines' own. batch_invariant: vLLM's batch-invariant
-    # kernels in both (local vLLM engines only).
+    # kernels in both (local vLLM engines only). exact: decode-invariant vLLM policy rollout engines (local, tensor
+    # parallel 1, Triton MoE kernels) and the trainer's own kernels.
     mode: native
     # Online check that the trainer reproduces the engines' log-probabilities: after qualifying weight syncs each
     # live engine generates one fixed short response and the trainer's next policy forward scores it.
