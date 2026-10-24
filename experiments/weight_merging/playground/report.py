@@ -26,6 +26,8 @@ def main():
         row = json.loads(line)
         if row["candidate"] not in selected:
             continue
+        if row.get("pending_execution"):
+            raise ValueError("Code execution is pending; run rescore on an isolated Iris CPU worker first")
         key = (row["candidate"], row["dataset"], row["mode"], row["seed"])
         c = counts[key]
         c["n"] += 1
@@ -54,7 +56,10 @@ def main():
         )
     cap = json.loads((args.run / "run-metadata.json").read_text())["max_new_tokens"]
     lines = [
-        f"| Candidate (max_tokens={cap}) | GSM greedy | Strict MBPP greedy | Unclosed GSM / MBPP | Truncated GSM / MBPP | GSM W/L (p) | MBPP W/L (p) |",
+        (
+            f"| Candidate (max_tokens={cap}) | GSM greedy | Strict MBPP greedy | Unclosed GSM / MBPP | "
+            "Truncated GSM / MBPP | GSM W/L (p) | MBPP W/L (p) |"
+        ),
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
 
@@ -78,7 +83,10 @@ def main():
     lines.extend(
         [
             "",
-            "Exact two-sided sign tests compare paired items with Instruct. These exploratory p-values do not correct for recipe selection.",
+            (
+                "Exact two-sided sign tests compare paired items with Instruct. "
+                "These exploratory p-values do not correct for recipe selection."
+            ),
             "",
             "| Candidate | GSM sampled seed17 / seed29 | MBPP sampled seed17 / seed29 |",
             "| --- | ---: | ---: |",

@@ -4,7 +4,7 @@
 set -euo pipefail
 work_dir=$(mktemp -d /tmp/playground-resume-XXXXXX)
 uv --no-config venv "$work_dir/io" --python 3.12
-uv --no-config pip install --python "$work_dir/io/bin/python" -e lib/rigging
+uv --no-config pip install --python "$work_dir/io/bin/python" "marin-rigging @ git+https://github.com/marin-community/marin.git@c7c14a252dc2d6f7cd86136f99799960e1667e53#subdirectory=lib/rigging"
 mkdir -p "$work_dir/code-rft"
 "$work_dir/io/bin/fsutil" cp -r "$PLAYGROUND_INPUT/code-rft/checkpoint-50" "$work_dir/code-rft/"
 "$work_dir/io/bin/fsutil" cp -r "$PLAYGROUND_INPUT/rft-data" "$work_dir/"

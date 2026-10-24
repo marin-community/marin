@@ -10,7 +10,10 @@ def test_last_closed_fence_is_selected_without_inspecting_test_outcomes():
 
 
 def test_last_unfenced_complete_region_preserves_imports_and_helpers():
-    text = "<think>Draft:\ndef old():\n    return 1\n\nWait, revise this.\nimport math\ndef helper():\n    return 2\n\ndef final():\n    return helper()\n\nSo that is my answer."
+    text = (
+        "<think>Draft:\ndef old():\n    return 1\n\nWait, revise this.\n"
+        "import math\ndef helper():\n    return 2\n\ndef final():\n    return helper()\n\nSo that is my answer."
+    )
     code, policy = tolerant_code(text)
     assert policy == "unfenced_ast_draft"
     assert code.startswith("import math\ndef helper")

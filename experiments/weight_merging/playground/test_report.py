@@ -4,6 +4,8 @@
 import json
 import sys
 
+import pytest
+
 from experiments.weight_merging.playground.report import main
 
 
@@ -46,3 +48,16 @@ def test_report_preserves_seed_pairs_and_behavior_denominators(tmp_path, monkeyp
     assert merged["gsm8k", "sample", 29]["correct"] == 0
     assert "max_tokens=8192" in output.read_text()
     assert all(r["candidate"] != "ignore" for r in summaries)
+
+
+def test_report_refuses_to_count_pending_code_as_wrong(tmp_path, monkeypatch):
+    candidates = tmp_path / "candidates.json"
+    candidates.write_text(json.dumps([{"name": "merged"}]))
+    (tmp_path / "outputs.jsonl").write_text(json.dumps({"candidate": "merged", "pending_execution": True}) + "\n")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["report", "--run", str(tmp_path), "--candidates", str(candidates), "--output", str(tmp_path / "report.md")],
+    )
+    with pytest.raises(ValueError, match="execution is pending"):
+        main()
