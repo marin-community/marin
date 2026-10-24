@@ -3,8 +3,9 @@
 
 """The Stage 0 gate's routing-health check on ``T`` for a Snowball checkpoint.
 
-The gate (DESIGN, "Stage 0 gate"): no layer has more than 5% of its experts below 10% of
-that layer's mean load on ``T``. Load is the number of tokens a layer routes to an expert
+The gate (DESIGN, "Stage 0 gate", relative form of 2026-10-24): in no layer may the share of
+experts below 10% of that layer's mean load on ``T`` exceed the pretrained base's share in the
+same layer by more than 2 percentage points. Load is the number of tokens a layer routes to an expert
 (top-k selections on the biased router scores). ``T`` documents are packed into fixed
 windows with segment ids, so no padding is routed.
 
@@ -36,6 +37,8 @@ logger = logging.getLogger(__name__)
 
 LOW_LOAD_FRACTION_OF_MEAN = 0.10
 MAX_LOW_LOAD_EXPERT_SHARE = 0.05
+# The relative gate: B may starve at most this much more of a layer's experts than the base.
+MAX_LOW_LOAD_SHARE_INCREASE = 0.02
 WINDOW_TOKENS = 4096
 WINDOWS_PER_BATCH = 8
 
@@ -69,6 +72,33 @@ def routing_gate(loads: np.ndarray) -> dict:
         "worst_low_load_share": worst.low_load_share,
         "threshold": {"low_load_fraction_of_mean": LOW_LOAD_FRACTION_OF_MEAN, "max_share": MAX_LOW_LOAD_EXPERT_SHARE},
         "layers": [entry.__dict__ for entry in health],
+    }
+
+
+def relative_routing_gate(loads: np.ndarray, base_loads: np.ndarray) -> dict:
+    """The relative verdict: each layer's low-load share against the base's in that layer."""
+    candidate, base = layer_health(loads), layer_health(base_loads)
+    if len(candidate) != len(base):
+        raise ValueError("the candidate and the base must have the same layers")
+    deltas = [
+        {
+            "layer": c.layer,
+            "share": c.low_load_share,
+            "base_share": b.low_load_share,
+            "increase": c.low_load_share - b.low_load_share,
+        }
+        for c, b in zip(candidate, base, strict=True)
+    ]
+    worst = max(deltas, key=lambda entry: entry["increase"])
+    return {
+        "passed": worst["increase"] <= MAX_LOW_LOAD_SHARE_INCREASE + 1e-12,
+        "worst_layer": worst["layer"],
+        "worst_increase": worst["increase"],
+        "threshold": {
+            "low_load_fraction_of_mean": LOW_LOAD_FRACTION_OF_MEAN,
+            "max_increase": MAX_LOW_LOAD_SHARE_INCREASE,
+        },
+        "layers": deltas,
     }
 
 
@@ -142,14 +172,45 @@ def checkpoint_loads(checkpoint: str, t_file: str, *, max_tokens: int | None) ->
     return total, tokens
 
 
+def compare_reports(candidate_path: str, base_path: str, out: str) -> dict:
+    """Apply the relative gate to two stored routing reports (each holds its ``loads``)."""
+    reports = []
+    for path in (candidate_path, base_path):
+        with fsspec.open(path, "r") as handle:
+            reports.append(json.load(handle))
+    candidate, base = reports
+    if candidate["t_file"] != base["t_file"] or candidate["tokens"] != base["tokens"]:
+        raise ValueError("the candidate and the base must be measured on the same T tokens")
+    verdict = {
+        "candidate": candidate_path,
+        "base": base_path,
+        **relative_routing_gate(np.asarray(candidate["loads"]), np.asarray(base["loads"])),
+    }
+    with fsspec.open(out, "w") as handle:
+        json.dump(verdict, handle, indent=2)
+    return verdict
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--t-file", required=True)
+    parser.add_argument("--compare", nargs=2, metavar=("CANDIDATE_JSON", "BASE_JSON"), help="relative gate only")
+    parser.add_argument("--checkpoint")
+    parser.add_argument("--t-file")
     parser.add_argument("--out", required=True)
     parser.add_argument("--max-tokens", type=int, default=None, help="stop early; for pipeline checks only")
     args = parser.parse_args()
+    if args.compare:
+        verdict = compare_reports(*args.compare, args.out)
+        logger.info(
+            "relative routing gate %s: worst layer %d (+%.3f)",
+            "PASSED" if verdict["passed"] else "FAILED",
+            verdict["worst_layer"],
+            verdict["worst_increase"],
+        )
+        return
+    if args.checkpoint is None or args.t_file is None:
+        parser.error("--checkpoint and --t-file are required unless --compare is given")
     loads, tokens = checkpoint_loads(args.checkpoint, args.t_file, max_tokens=args.max_tokens)
     report = {
         "checkpoint": args.checkpoint,
