@@ -9,7 +9,7 @@ mkdir -p "$work_dir/code-rft"
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io  cp -r "$PLAYGROUND_INPUT/code-rft/checkpoint-50" "$work_dir/code-rft/"
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io  cp -r "$PLAYGROUND_INPUT/rft-data" "$work_dir/"
 uv --no-config venv "$work_dir/train" --python 3.12
-uv --no-config pip install --python "$work_dir/train/bin/python" torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+uv --no-config pip install --python "$work_dir/train/bin/python" torch==2.6.0 --index-url https://download.pytorch.org/whl/cu118
 uv --no-config pip install --python "$work_dir/train/bin/python" transformers==4.57.6 datasets==4.8.5 accelerate==1.12.0 bitsandbytes==0.45.5 liger-kernel==0.6.4 numpy==2.5.4 pyarrow==26.0.0 safetensors==0.8.0 wandb==0.31.0
 "$work_dir/train/bin/python" - "$work_dir" <<'PY'
 import json
@@ -29,7 +29,9 @@ state['best_model_checkpoint'] = str(root/'code-rft/checkpoint-50')
 p.write_text(json.dumps(state, indent=2)+'\n')
 (root/'code-rft/resume-provenance.json').write_text(json.dumps({
     'original_best_checkpoint': original_best, 'resume_step': 50,
-    'previous_gpu': 'RTX 3090', 'note': 'Hardware changed; bitwise training equivalence is not assumed.'}, indent=2)+'\n')
+    'previous_gpu': 'RTX 3090', 'previous_torch': '2.5.1+cu121', 'resume_torch': '2.6.0+cu118',
+    'unchanged': {'transformers': '4.57.6', 'bitsandbytes': '0.45.5', 'liger-kernel': '0.6.4'},
+    'note': 'Hardware and Torch changed. Math used the old stack throughout; donors are not fully matched.'}, indent=2)+'\n')
 PY
 parent=$(cat "$work_dir/parent-path.txt")
 export WANDB_MODE=offline

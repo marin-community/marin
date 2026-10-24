@@ -97,7 +97,11 @@ checkpoint to step100 on one H100. Stage `code-rft/checkpoint-50/` and `rft-data
 under `PLAYGROUND_INPUT`, set `PLAYGROUND_OUTPUT` and `PLAYGROUND_REVISION`, and
 submit with `--gpu H100x1 --cpu 8 --memory 32GB --disk 64GB --no-sync`. The script
 relocates the saved best-checkpoint path and records the hardware transition;
-bitwise training equivalence across GPUs is not assumed.
+bitwise training equivalence across GPUs is not assumed. Resume training uses
+Torch2.6.0/CUDA11.8 because Transformers4.57.6 rejects optimizer loading on
+Torch2.5.1. Transformers, bitsandbytes0.45.5 and Liger0.6.4 stay fixed. Math's
+100steps use the old stack; code's final50use the new stack. This is a known
+asymmetry between donors, recorded in resume provenance.
 
 `iris_generate.sh` runs the 11-point Aristaeus curve on one H100 with fresh
 H100 baselines, cap8192/context12288 and a reload parity check every five
