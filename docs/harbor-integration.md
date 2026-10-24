@@ -167,6 +167,8 @@ artifact. Evaluation reads the prepared references and never executes their buil
 Build images separately with the task's dependencies, verifier dependencies and terminal utilities
 already installed. Terminus needs Bash and tmux; runtime downloads cannot succeed on this path.
 Tasks using the model relay also need Python 3 in the main image.
+Services with timed readiness checks need Python 3 in their own images to supervise
+individual probes without stopping the service on the first timeout.
 For example, prepare a reviewed tau3 task snapshot on a trusted image builder. These commands
 preserve the runtime's per-task configuration and add Terminus's missing terminal dependencies:
 

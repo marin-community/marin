@@ -8,6 +8,7 @@ import json
 import os
 import pwd
 import subprocess
+import tarfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -221,6 +222,39 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     assert submitted_environments == [{"JUDGE_KEY": secret} if private_credentials else {}]
     assert secret not in json.dumps(asdict(spec), default=str)
     assert secret not in caplog.text
+
+
+def test_directory_upload_does_not_restore_host_ownership(tmp_path, monkeypatch):
+    original_metadata = tarfile.TarFile.gettarinfo
+
+    def foreign_owner(archive, *args, **kwargs):
+        metadata = original_metadata(archive, *args, **kwargs)
+        metadata.uid = os.getuid() + 1
+        metadata.gid = os.getgid() + 1
+        metadata.uname = metadata.gname = ""
+        return metadata
+
+    # Force the ownership-restoration behavior GNU tar uses for root, while
+    # exercising real extraction as an unprivileged test user.
+    monkeypatch.setenv("TAR_OPTIONS", "--same-owner")
+    monkeypatch.setattr(tarfile.TarFile, "gettarinfo", foreign_owner)
+    source = tmp_path / "input"
+    source.mkdir()
+    (source / "solution.sh").write_text("#!/bin/sh\nexit 0\n")
+    (source / "solution.sh").chmod(0o755)
+    target = tmp_path / "remote"
+
+    async def run():
+        machine, _ = local_machine(tmp_path)
+        try:
+            await machine.upload(source, str(target))
+            assert (target / "solution.sh").read_bytes() == (source / "solution.sh").read_bytes()
+            assert (target / "solution.sh").stat().st_uid == os.getuid()
+            assert (target / "solution.sh").stat().st_mode & 0o777 == 0o755
+        finally:
+            await machine.close()
+
+    asyncio.run(run())
 
 
 def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
@@ -482,6 +516,72 @@ def test_private_group_routes_service_exec_reserves_resources_and_closes_togethe
     assert environment.sandbox_services[0].name == "runtime"
     assert not environment.sandbox_services[0].HasField("entrypoint")
     assert not environment.sandbox_services[0].HasField("arguments")
+
+
+def test_readiness_timeout_retries_without_stopping_runtime_or_leaving_probe_children(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    client = TaskClient(job)
+    rpc = GroupRpc()
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    probe_program = """\
+import fcntl
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+assert os.getcwd() == os.environ['EXPECTED_CWD']
+assert sys.stdin.buffer.read() == b'probe input'
+counter = Path('attempts')
+attempt = int(counter.read_text()) + 1 if counter.exists() else 1
+counter.write_text(str(attempt))
+if attempt == 1:
+    subprocess.run([sys.executable, '-c',
+        "import fcntl,time; lock=open('probe.lock','w'); "
+        "fcntl.flock(lock,fcntl.LOCK_EX); time.sleep(3)"], check=True)
+else:
+    assert Path('probe.lock').exists()
+    with open('probe.lock') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        Path('healthy').write_text(str(attempt))
+"""
+    probe = Command(
+        ("python3", "-c", probe_program),
+        cwd=str(runtime),
+        env={"EXPECTED_CWD": str(runtime)},
+        stdin=b"probe input",
+        timeout=1,
+        output_limit_bytes=8,
+        user=str(os.getuid()),
+    )
+    spec = ServiceGroupSpec(
+        task=MachineSpec(image, workdir=str(tmp_path / "task")),
+        services=(
+            ServiceSpec(
+                name="runtime",
+                machine=MachineSpec(image, workdir=str(tmp_path)),
+                readiness=ReadinessProbe(probe, timeout=8, interval=0.001, attempts=2),
+            ),
+        ),
+    )
+
+    async def run():
+        group = await IrisMachineFactory(controller_url="http://controller").create_group(spec)
+        try:
+            await group.wait_ready()
+            assert (runtime / "healthy").read_text() == "2"
+            assert not job.cancelled
+            assert (await group.services["runtime"].run(Command(("printf", "running")))).stdout == b"running"
+        finally:
+            await group.close()
+        assert job.cancelled
+
+    asyncio.run(run())
 
 
 def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):

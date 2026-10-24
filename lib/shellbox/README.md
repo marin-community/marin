@@ -129,8 +129,11 @@ Python 3 in its member image. It supports bounded nonstreaming GET and POST
 requests, with no caller headers forwarded to the host handler.
 
 `group.wait_ready()` runs each service's own readiness command with its declared
-timeout, interval, start period and optional attempt limit. A failed probe or
-cancelled startup closes the whole group. Closing any member, a member exiting,
+timeout, interval, start period and optional attempt limit. Timed readiness
+requires Python 3 in each service image: a guest supervisor kills the probe's
+process group when its attempt times out, allowing the next attempt without
+stopping the runtime service. Exhausted attempts, the overall readiness timeout
+or cancelled startup close the whole group. Closing any member, a member exiting,
 or the job lifetime ending also tears down the group; containers are not reused
 between trials. Download outputs through machine handles before closing them.
 

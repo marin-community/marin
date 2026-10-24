@@ -265,7 +265,8 @@ class IrisMachine:
                 await self._upload_bytes(Path(archive.name).read_bytes(), remote_archive)
             try:
                 await self._checked(
-                    f"mkdir -p {shlex.quote(target)} && tar xzf {shlex.quote(remote_archive)} -C {shlex.quote(target)}"
+                    f"mkdir -p {shlex.quote(target)} && tar xzf {shlex.quote(remote_archive)} "
+                    f"--no-same-owner -C {shlex.quote(target)}"
                 )
             finally:
                 await self._script(f"rm -f {shlex.quote(remote_archive)}")

@@ -5,10 +5,31 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 
 from shellbox.machine import Command, ExitReason, Machine, MachineSpec, NetworkPolicy, UnsupportedMachineSpec
+
+_TIMED_PROBE = """\
+import os
+import signal
+import subprocess
+import sys
+
+process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    try:
+        result = process.wait(timeout=float(sys.argv[1]))
+    except subprocess.TimeoutExpired:
+        result = 124
+finally:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait()
+sys.exit(result if result >= 0 else 128 - result)
+"""
 
 
 @dataclass(frozen=True)
@@ -100,12 +121,21 @@ class ServiceGroup:
 
 async def wait_service_ready(machine: Machine, probe: ReadinessProbe) -> None:
     """Run an image-owned readiness command within its bounded startup budget."""
+    command = probe.command
+    if command.timeout is not None:
+        # Machine timeouts may destroy the machine. Keep individual failed
+        # health checks inside the guest; only the overall budget cancels it.
+        command = replace(
+            command,
+            argv=("python3", "-c", _TIMED_PROBE, str(command.timeout), *command.argv),
+            timeout=None,
+        )
     async with asyncio.timeout(probe.timeout):
         if probe.start_period:
             await asyncio.sleep(probe.start_period)
         attempted = 0
         while True:
-            result = await machine.run(probe.command)
+            result = await machine.run(command)
             if result.reason is ExitReason.EXITED and result.exit_code == 0:
                 return
             attempted += 1

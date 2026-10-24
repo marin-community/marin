@@ -154,8 +154,11 @@ NetworkPolicy implementation and no other allow policy selecting these pods;
 Kubernetes policy permissions are additive.
 
 Shellbox starts the group, installs any host capability relay through exec, then
-runs bounded readiness probes. Closing any machine cancels the shared job; a
-container exiting fails the group so reconciliation reclaims all members.
+runs bounded readiness probes. Timed probes require Python 3 in each service
+image; a guest supervisor kills a timed-out probe's process group and retries
+without stopping the service. Exhausting the readiness budget closes the group.
+Closing any machine cancels the shared job; a container exiting fails the group
+so reconciliation reclaims all members.
 Service exec names are checked against the job definition before dispatch, so
 the API cannot address an infrastructure container. Model calls can use
 Shellbox's host HTTP capability relay, keeping upstream credentials and model
