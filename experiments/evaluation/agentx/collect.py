@@ -12,13 +12,16 @@ import tarfile
 from pathlib import Path
 
 from fsspec.implementations.local import LocalFileSystem
-from iris.client.workload import JobStatus, TaskOutputArchiveState
+from iris.client.client import IrisClient
+from iris.client.workload import JobStatus, TaskOutputArchive, TaskOutputArchiveState
 from iris.resources.state import JobState, TaskState
 from rigging.filesystem import atomic
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.evaluation.agentx.batch import json_value, write_record
 from experiments.evaluation.agentx.submit import SERIES_PATH
+
+STREAM_LOG_LINE_LIMIT = 20_000
 
 
 def copy_file(source: str, destination: str) -> None:
@@ -39,6 +42,18 @@ def unpack(archive: Path, destination: Path) -> None:
             contents.extractall(destination, filter="data")
         if process.wait(timeout=60):
             raise RuntimeError("Iris output archive decompression failed")
+
+
+def retain_archive(archive: TaskOutputArchive, prefix: str, directory: Path) -> tuple[Path, str]:
+    directory.mkdir(parents=True, exist_ok=True)
+    local = directory / "outputs.tar.zst"
+    copy_file(archive.uri, str(local))
+    with local.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if digest != archive.sha256:
+        raise ValueError("Downloaded output differs from Iris's uploader SHA256")
+    copy_file(str(local), f"{prefix}/outputs.tar.zst")
+    return local, digest
 
 
 def validate_window(point: Path, manifest: dict, attempt_uid: str) -> dict:
@@ -153,7 +168,14 @@ def process_point(point: Path, manifest: dict, processor: Path, artifacts: Path)
 
 
 def collect_terminal(
-    status: JobStatus, manifest: dict, retention: str, work: Path, processor: Path, now: float
+    status: JobStatus,
+    manifest: dict,
+    retention: str,
+    work: Path,
+    processor: Path,
+    now: float,
+    *,
+    client: IrisClient | None = None,
 ) -> dict | None:
     """Retain every final outcome, and process only its complete successful attempt."""
     if len(status.tasks) > 1:
@@ -191,28 +213,65 @@ def collect_terminal(
     snapshot = json.loads(json.dumps(status, default=json_value))
     write_record(f"{prefix}/iris-status.json", snapshot)
     (directory / "iris-status.json").write_text(json.dumps(snapshot, indent=2))
+    receipt["previous_attempts"] = []
+    receipt["stream_logs"] = []
+    for previous in task.attempts:
+        previous_prefix = f"{retention}/{manifest['profile']}/c{manifest['concurrency']}/{previous.attempt_uid}"
+        previous_archive = previous.output_archive
+        if client is not None and (
+            previous_archive is None or previous_archive.state != TaskOutputArchiveState.UPLOADED
+        ):
+            entries = (
+                client.task(task.task_id)
+                .attempt(previous.attempt_number)
+                .logs(max_lines=STREAM_LOG_LINE_LIMIT, tail=True)
+            )
+            logs_uri = f"{previous_prefix}/stream-logs.json"
+            write_record(
+                logs_uri,
+                {
+                    "attempt_uid": previous.attempt_uid,
+                    "tail": True,
+                    "max_lines": STREAM_LOG_LINE_LIMIT,
+                    "entries": entries,
+                },
+            )
+            receipt["stream_logs"].append(
+                {
+                    "attempt_uid": previous.attempt_uid,
+                    "uri": logs_uri,
+                    "returned_lines": len(entries),
+                    "max_lines": STREAM_LOG_LINE_LIMIT,
+                }
+            )
+        if previous.attempt_uid == attempt.attempt_uid:
+            continue
+        retained = {"attempt_uid": previous.attempt_uid, "state": previous.state.value}
+        if previous_archive is not None and previous_archive.state == TaskOutputArchiveState.UPLOADED:
+            _, previous_digest = retain_archive(
+                previous_archive, previous_prefix, directory.parent / previous.attempt_uid
+            )
+            retained.update({"archive_uri": f"{previous_prefix}/outputs.tar.zst", "sha256": previous_digest})
+        else:
+            retained["reason"] = "No uploaded archive; native attempt metadata remains in iris-status.json"
+        receipt["previous_attempts"].append(retained)
     archive = attempt.output_archive
     if archive is None:
-        if attempt.finished_at is None or now - attempt.finished_at.epoch_ms() / 1000 < 600:
+        finished = attempt.finished_at or status.finished_at
+        if finished is not None and now - finished.epoch_ms() / 1000 < 600:
             return None
         receipt["reason"] = "No output receipt after the bounded Iris finalization period"
         write_record(f"{prefix}/receipt.json", receipt)
         return receipt
     if archive.state == TaskOutputArchiveState.UPLOADED:
-        local = directory / "outputs.tar.zst"
-        copy_file(archive.uri, str(local))
-        with local.open("rb") as stream:
-            digest = hashlib.file_digest(stream, "sha256").hexdigest()
-        if digest != archive.sha256:
-            raise ValueError("Downloaded output differs from Iris's uploader SHA256")
-        copy_file(str(local), f"{prefix}/outputs.tar.zst")
+        local, digest = retain_archive(archive, prefix, directory)
         receipt.update({"archive_uri": f"{prefix}/outputs.tar.zst", "sha256": digest})
         unpack(local, directory / "raw")
         if status.state == JobState.SUCCEEDED and attempt.state == TaskState.SUCCEEDED and attempt.exit_code == 0:
             point = directory / "raw" / "point"
             try:
                 receipt["validation"] = validate_window(point, manifest, attempt.attempt_uid)
-            except ValueError as error:
+            except (ValueError, KeyError, FileNotFoundError) as error:
                 receipt["reason"] = str(error)
             else:
                 artifacts = directory / "artifacts"

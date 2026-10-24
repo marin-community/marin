@@ -73,9 +73,10 @@ jobs:
         run: |
           set -eo pipefail
           uv sync --frozen --package marin-core --extra cpu --no-default-groups
+          processor_sha=$(python -c 'import json; print(json.load(open("experiments/evaluation/agentx/series.json"))["processor_source"])')
           git init "$RUNNER_TEMP/agentx-processor"
           git -C "$RUNNER_TEMP/agentx-processor" remote add origin https://github.com/SemiAnalysisAI/InferenceX.git
-          git -C "$RUNNER_TEMP/agentx-processor" fetch --depth=1 origin 80dff120d27fd6092210f4546b8faa5e6c9723ac
+          git -C "$RUNNER_TEMP/agentx-processor" fetch --depth=1 origin "$processor_sha"
           git -C "$RUNNER_TEMP/agentx-processor" checkout --detach FETCH_HEAD
           git -C "$RUNNER_TEMP/agentx-processor" apply "$GITHUB_WORKSPACE/experiments/evaluation/agentx/inferencex.patch"
       - name: Advance once and rebuild the complete import bundle

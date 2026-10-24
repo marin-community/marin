@@ -160,11 +160,25 @@ def test_cancellation_survives_lost_ack_without_starting_another_point(saved_bat
     with pytest.raises(TimeoutError):
         cancel_batch(controller, batch, checkpoint)
     recovered = read_record(checkpoint)
-    advance_batch(controller, recovered, checkpoint, no_collection, 1002)
+    advance_batch(controller, recovered, checkpoint, lambda *_: {"status": "failed", "reason": "cancelled"}, 1002)
     assert recovered["status"] == "cancelled"
     assert len(controller.jobs) == 1
     assert next(iter(controller.jobs.values())).state == JobState.KILLED
     assert recovered["points"][1]["state"] == "unsubmitted"
+
+
+def test_cancelled_batch_waits_for_output_retention_before_it_can_be_archived(saved_batch):
+    batch, checkpoint = saved_batch
+    controller = FakeController()
+    advance_batch(controller, batch, checkpoint, no_collection, 1001)
+    cancel_batch(controller, batch, checkpoint)
+    advance_batch(controller, batch, checkpoint, lambda *_: None, 1002)
+    assert batch["points"][0]["state"] == "awaiting-output"
+    receipt = {"status": "failed", "archive_uri": "retained/cancelled.tar.zst"}
+    advance_batch(controller, batch, checkpoint, lambda *_: receipt, 1003)
+    assert batch["points"][0]["state"] == "cancelled"
+    assert read_record(checkpoint)["points"][0]["receipt"] == receipt
+    assert len(controller.jobs) == 1
 
 
 def test_native_success_with_invalid_export_stays_failed(saved_batch):
