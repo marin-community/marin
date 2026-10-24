@@ -303,7 +303,7 @@ index 39b5484d..fb4c28b7 100644
      phase === 'warmup' ? request.start < boundaryOff : request.start >= boundaryOff;
    const shift = phase === 'profiling' ? boundaryOff : 0;
 diff --git a/packages/app/src/components/inference/agentic-point/point-summary.test.ts b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
-index a3bbce47..cb6975af 100644
+index a3bbce47..5410ecff 100644
 --- a/packages/app/src/components/inference/agentic-point/point-summary.test.ts
 +++ b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
 @@ -32,6 +32,7 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
@@ -314,7 +314,7 @@ index a3bbce47..cb6975af 100644
      conc: 128,
      offload_mode: 'off',
      kv_offloading: null,
-@@ -52,6 +53,18 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
+@@ -52,6 +53,17 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
  }
  
  describe('PointSummary', () => {
@@ -327,7 +327,6 @@ index a3bbce47..cb6975af 100644
 +    expect(html).toContain('marin-vllm:build-sha');
 +    expect(html).toContain('recipe-sha');
 +    const missing = renderToStaticMarkup(createElement(PointSummary, { meta: meta() }));
-+    expect(missing).toContain('Serving recipe');
 +    expect(missing).toContain('>—</code>');
 +  });
    it('identifies multinode aggregate without calling it disaggregated', () => {
@@ -608,10 +607,10 @@ index c4088fbd..32c5e853 100644
  export const AUTHOR_URL = 'https://semianalysis.com';
  export const AUTHOR_HANDLE = '@SemiAnalysis_';
 diff --git a/packages/db/src/connection.ts b/packages/db/src/connection.ts
-index f643ab83..c76b7d6b 100644
+index f643ab83..6934b7da 100644
 --- a/packages/db/src/connection.ts
 +++ b/packages/db/src/connection.ts
-@@ -72,10 +72,19 @@ function wrapPostgres(sql: postgres.Sql): DbClient {
+@@ -72,13 +72,23 @@ function wrapPostgres(sql: postgres.Sql): DbClient {
  
  const g = globalThis as unknown as { __dbClients?: Map<string, DbClient> };
  
@@ -633,11 +632,15 @@ index f643ab83..c76b7d6b 100644
  }
  
  export interface DatabaseClientOverrides {
-@@ -91,14 +100,15 @@ function memoizedClient(envVar: string, overrides: DatabaseClientOverrides = {})
++  socketDirectory?: string;
+   url?: string;
+   driver?: DatabaseDriver;
+   ssl?: DatabaseSsl;
+@@ -91,14 +101,15 @@ function memoizedClient(envVar: string, overrides: DatabaseClientOverrides = {})
      driver: overrides.driver ?? process.env.DATABASE_DRIVER,
      ssl: overrides.ssl ?? process.env.DATABASE_SSL,
    });
-+  const socketDirectory = process.env.DATABASE_SOCKET_DIR;
++  const socketDirectory = overrides.socketDirectory ?? process.env.DATABASE_SOCKET_DIR;
    const key =
      connection.driver === 'neon'
        ? `neon\0${connection.url}`

@@ -77,6 +77,22 @@ server counter deltas. Generated tokens can differ from tokens received by the c
 check these totals against `server_metrics.tokens`, not client throughput times duration.
 Upstream fixture smoke tests are separate regression evidence.
 
+For request-timeline links into the corpus explorer, bootstrap the dataset once with the
+upstream CLI (writer connection and socket mount as above):
+
+```sh
+docker run --rm --network host --entrypoint bun \
+  -e DATABASE_WRITE_URL -e DATABASE_SOCKET_DIR -e DATABASE_SSL=false \
+  inferencex-ingest packages/db/src/ingest-weka-dataset.ts \
+  semianalysisai/cc-traces-weka-062126-256k --variant 256k --no-ssl
+```
+
+That CLI reads the Hub's current rows API. Verify the dataset's Hub SHA matches the
+runner's `dataset_revision` before and after this one-time operation; it must import
+393 conversations. The runner independently verifies the immutable corpus bytes.
+Refresh `/api/v1/invalidate` afterward. This bootstrap supplies explorer structure;
+it does not create or change benchmark measurements.
+
 History uses the original GitHub source run's UTC creation date, following upstream's
 convention. Iris submission/start times and raw profiling start/end times retain the
 actual queue delay and measurement window. A later collector date is not substituted
