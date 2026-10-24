@@ -1,6 +1,6 @@
 # Task289 H100x8 lane: same serve block as the Step12 campaign config (H100 parity reference).
 name: rsi289-ta-S-C-A5
-location: gs://marin-us-central2/scratch/karan/rsi-merge/merges/ta-S-C-A5/
+location: s3://marin-rno2a/scratch/karan/task289/merges/ta-S-C-A5/
 tokenizer: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
 tokenizer_revision: 50fe2f488aee7730bbccc721024b35229075602e
 apply_chat_template: true
