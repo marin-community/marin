@@ -35,3 +35,11 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
   --run "$work_dir/run" --candidates "$work_dir/recipes.json" \
   --max-new-tokens 8192 --max-model-len 12288 --max-num-seqs 64 \
   --reload-check-every 5 --dtype bfloat16 --defer-code-scoring --revision "$PLAYGROUND_REVISION"
+
+if [ "${PLAYGROUND_BASE_CONTROL:-0}" = 1 ]; then
+  uv --no-config pip install --python "$work_dir/eval/bin/python" datasets==3.2.0 pyarrow==18.1.0
+  anchor=$("$work_dir/eval/bin/python" -c 'import json,sys; print(json.load(open(sys.argv[1]))["anchor"])' "$work_dir/run/model-paths.json")
+  "$work_dir/eval/bin/python" -m experiments.weight_merging.playground.controls \
+    --mode base_fewshot --model "$anchor" --tokenizer "$anchor" \
+    --panel "$work_dir/run/panel.json" --output "$work_dir/run/base-eightshot.json" --max-new-tokens 8192
+fi
