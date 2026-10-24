@@ -32,7 +32,6 @@ from harbor.models.trajectories import (
 )
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.trial.errors import AgentTimeoutError
-from harbor.utils.env import parse_bool_env_value
 from harbor.utils.trajectory_utils import format_trajectory_json
 from upath import UPath
 
@@ -701,36 +700,6 @@ class Codex(BaseInstalledAgent):
         escaped_config = shlex.quote("\n".join(lines))
         return f'echo {escaped_config} >> "$CODEX_HOME/config.toml"'
 
-    def _resolve_auth_json_path(self) -> Path | None:
-        """Resolve which auth.json to inject, if any.
-
-        Defaults to None (OPENAI_API_KEY auth). Opt into auth.json auth via:
-          - CODEX_AUTH_JSON_PATH=<path> → use that specific file
-          - CODEX_FORCE_AUTH_JSON=<truthy> → use ~/.codex/auth.json
-        """
-        explicit = self._get_env("CODEX_AUTH_JSON_PATH")
-        if explicit:
-            p = Path(explicit)
-            if not p.is_file():
-                raise ValueError(
-                    f"CODEX_AUTH_JSON_PATH points to non-existent file: {explicit}"
-                )
-            return p
-
-        if parse_bool_env_value(
-            self._get_env("CODEX_FORCE_AUTH_JSON"),
-            name="CODEX_FORCE_AUTH_JSON",
-            default=False,
-        ):
-            default = Path.home() / ".codex" / "auth.json"
-            if not default.is_file():
-                raise ValueError(
-                    f"CODEX_FORCE_AUTH_JSON is set but {default} does not exist"
-                )
-            return default
-
-        return None
-
     @with_prompt_template
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
@@ -751,12 +720,6 @@ class Codex(BaseInstalledAgent):
         cli_flags = self.build_cli_flags()
         cli_flags_arg = (cli_flags + " ") if cli_flags else ""
 
-        # Auth resolution:
-        #   1. CODEX_AUTH_JSON_PATH=<path> → use that specific auth.json file
-        #   2. CODEX_FORCE_AUTH_JSON=<truthy> → use ~/.codex/auth.json
-        #   3. Default: use OPENAI_API_KEY
-        auth_json_path = None if self._api_base else self._resolve_auth_json_path()
-
         remote_codex_home = self._REMOTE_CODEX_HOME.as_posix()
         remote_secrets_dir = self._REMOTE_CODEX_SECRETS_DIR.as_posix()
         remote_auth_path = (self._REMOTE_CODEX_SECRETS_DIR / "auth.json").as_posix()
@@ -774,29 +737,15 @@ class Codex(BaseInstalledAgent):
             env=env,
         )
 
-        if auth_json_path:
-            self.logger.debug("Codex auth: using auth.json from %s", auth_json_path)
-            await environment.upload_file(auth_json_path, remote_auth_path)
-            # upload_file copies as root; fix ownership so the agent user can read it
-            if environment.default_user is not None:
-                await self.exec_as_root(
-                    environment,
-                    command=f"chown {environment.default_user} {remote_auth_path}",
-                )
-            setup_command = (
-                f'ln -sf {shlex.quote(remote_auth_path)} "$CODEX_HOME/auth.json"\n'
-            )
-        else:
-            self.logger.debug("Codex auth: using OPENAI_API_KEY")
-            env["OPENAI_API_KEY"] = (
-                "EMPTY" if self._api_base else self._get_env("OPENAI_API_KEY") or ""
-            )
-            setup_command = (
-                f"cat >{shlex.quote(remote_auth_path)} <<EOF\n"
-                '{\n  "OPENAI_API_KEY": "${OPENAI_API_KEY}"\n}\nEOF\n'
-                f"ln -sf {shlex.quote(remote_auth_path)} "
-                '"$CODEX_HOME/auth.json"\n'
-            )
+        env["OPENAI_API_KEY"] = (
+            "EMPTY" if self._api_base else self._get_env("OPENAI_API_KEY") or "EMPTY"
+        )
+        setup_command = (
+            f"cat >{shlex.quote(remote_auth_path)} <<EOF\n"
+            '{\n  "OPENAI_API_KEY": "${OPENAI_API_KEY}"\n}\nEOF\n'
+            f"ln -sf {shlex.quote(remote_auth_path)} "
+            '"$CODEX_HOME/auth.json"\n'
+        )
 
         config_toml_block = ""
         if self._api_base:

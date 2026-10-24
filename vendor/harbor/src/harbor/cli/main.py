@@ -1,3 +1,4 @@
+import os
 from importlib.metadata import version
 from typing import Optional
 
@@ -18,6 +19,7 @@ from harbor.cli.sync import sync_command
 from harbor.cli.tasks import tasks_app
 from harbor.cli.traces import traces_app
 from harbor.cli.trials import trials_app
+from harbor.cli.utils import bind_backend_credentials
 
 
 def version_callback(value: bool) -> None:
@@ -33,11 +35,12 @@ app = Typer(
 
 @app.callback()
 def main(
+    context: typer.Context,
     version: Optional[bool] = typer.Option(
         None, "--version", "-v", callback=version_callback, is_eager=True
     ),
 ) -> None:
-    pass
+    bind_backend_credentials(context, os.environ)
 
 
 # Primary commands (singular)

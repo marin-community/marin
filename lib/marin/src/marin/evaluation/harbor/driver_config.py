@@ -3,7 +3,6 @@
 
 """Opaque Harbor policies and the isolated-driver process protocol."""
 
-import hashlib
 import json
 import logging
 import subprocess
@@ -17,9 +16,8 @@ from pydantic import ValidationError
 from rigging.config_discovery import find_project_root
 from rigging.tunnel import terminate_process_group
 
-from marin.evaluation.eval_env import env_vars_from_keys
-from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_LENGTH
-from marin.evaluation.harbor.provenance import vendored_harbor_source, vendored_runtime_digest
+from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS, env_vars_from_keys
+from marin.evaluation.harbor.driver_protocol import IRIS_ENVIRONMENT
 from marin.evaluation.records import BenchmarkMetadataRef
 from marin.evaluation.runner import BACKEND_POLL_SECONDS, check_inference_backend
 from marin.inference.iris import InferenceBackendState
@@ -28,7 +26,14 @@ _TRIAL_DRIVER = Path(__file__).with_name("trial_driver.py")
 _DRIVER_PYTHONPATH = str(Path(__file__).parents[3])
 _OWNER_ONLY_MODE = 0o600
 _DRIVER_TERMINATION_GRACE_SECONDS = 30.0
+_DRIVER_IRIS_ENV_KEYS = (
+    "IRIS_CONTROLLER_ADDRESS",
+    "IRIS_CONTROLLER_URL",
+    "IRIS_TASK_ID",
+    "IRIS_TASK_TOKEN",
+)
 _DRIVER_SYSTEM_ENV_KEYS = (
+    *DAYTONA_RUNTIME_ENV_KEYS,
     "CURL_CA_BUNDLE",
     # Harbor downloads gated Hugging Face datasets in preflight and on workers.
     "HF_TOKEN",
@@ -83,23 +88,6 @@ def _harbor_env_dir() -> Path:
     return workspace_root / HARBOR_RUNTIME_PROJECT
 
 
-def harbor_runtime_descriptor() -> str:
-    project = _harbor_env_dir()
-    source = vendored_harbor_source(project)
-    workspace_root = project.parent.parent
-    lock_digest = hashlib.sha256((project / "uv.lock").read_bytes()).hexdigest()
-    return "; ".join(
-        (
-            f"harbor[runtime] @ {HARBOR_RUNTIME_PROJECT}",
-            f"upstream={source.repository}@{source.commit}",
-            f"source={vendored_runtime_digest(workspace_root)}",
-            f"lock=sha256:{lock_digest}",
-        )
-    )
-
-
-HARBOR_SOURCE = vendored_harbor_source(_harbor_env_dir())
-
 logger = logging.getLogger(__name__)
 
 
@@ -119,7 +107,6 @@ class HarborErrorTaxonomy:
     agent: frozenset[str]
     passthrough: frozenset[str]
     undecided: frozenset[str]
-    commit: str
 
 
 @dataclass(frozen=True)
@@ -301,19 +288,11 @@ def _validated_config(payload: object, path: Path) -> ValidatedHarborConfig:
             raise ValueError(f"Harbor preflight returned invalid {category!r} error taxonomy for {path}")
         return frozenset(values)
 
-    taxonomy_commit = taxonomy_payload.get("commit")
-    if (
-        not isinstance(taxonomy_commit, str)
-        or len(taxonomy_commit) != FULL_GIT_COMMIT_LENGTH
-        or any(character not in "0123456789abcdef" for character in taxonomy_commit)
-    ):
-        raise ValueError(f"Harbor preflight returned invalid error taxonomy commit for {path}")
     error_taxonomy = HarborErrorTaxonomy(
         infrastructure=taxonomy_names("infrastructure"),
         agent=taxonomy_names("agent"),
         passthrough=taxonomy_names("passthrough"),
         undecided=taxonomy_names("undecided"),
-        commit=taxonomy_commit,
     )
     categories = (
         error_taxonomy.infrastructure,
@@ -404,8 +383,6 @@ def run_harbor_driver(
     backend_state: Callable[[], InferenceBackendState],
 ) -> None:
     """Apply a runtime overlay and run one Harbor job in the isolated environment."""
-    runtime = {"project": HARBOR_RUNTIME_PROJECT, "commit": config.error_taxonomy.commit}
-    logger.info("Harbor runtime: %s", json.dumps(runtime, sort_keys=True), extra={"harbor_runtime": runtime})
     with tempfile.TemporaryDirectory(prefix="marin-harbor-run-") as temp_dir:
         policy_path = Path(temp_dir) / "policy.json"
         overlay_path = Path(temp_dir) / "overlay.json"
@@ -427,4 +404,7 @@ def run_harbor_driver(
         overlay_path.chmod(_OWNER_ONLY_MODE)
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
-        _stream_driver(command, driver_env, backend_state)
+        runtime_env = dict(driver_env)
+        if config.environment == IRIS_ENVIRONMENT:
+            runtime_env.update(env_vars_from_keys(_DRIVER_IRIS_ENV_KEYS))
+        _stream_driver(command, runtime_env, backend_state)

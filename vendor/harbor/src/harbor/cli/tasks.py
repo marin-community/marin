@@ -4,11 +4,6 @@ from pathlib import Path
 from typing import Annotated
 from uuid import uuid4
 
-from rich.console import Console
-from rich.table import Table
-from typer import Argument, Option, Typer
-from upath import UPath
-
 from harbor.cli.init import _init_task, _resolve_name
 from harbor.cli.utils import run_async
 from harbor.mappers.terminal_bench import TerminalBenchMapper
@@ -17,6 +12,10 @@ from harbor.models.task.config import Author, TaskConfig
 from harbor.models.task.paths import TaskPaths
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import EnvironmentPaths, TrialPaths
+from rich.console import Console
+from rich.table import Table
+from typer import Argument, Option, Typer
+from upath import UPath
 
 tasks_app = Typer(
     no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
@@ -229,16 +228,7 @@ def start_env(
             help="Environment type to start.",
             rich_help_panel="Environment",
         ),
-    ] = EnvironmentType.DOCKER,
-    environment_import_path: Annotated[
-        str | None,
-        Option(
-            "--environment-import-path",
-            help="Import path for custom environment (module.path:ClassName).",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
+    ] = EnvironmentType.IRIS,
     mounts: Annotated[
         str | None,
         Option(
@@ -382,26 +372,15 @@ def start_env(
         if mounts is not None:
             extra_env_kwargs["mounts"] = json.loads(mounts)
 
-        if environment_import_path is not None:
-            environment = EnvironmentFactory.create_environment_from_import_path(
-                environment_import_path,
-                environment_dir=task.paths.environment_dir,
-                environment_name=task.short_name,
-                session_id=str(uuid4()),
-                trial_paths=trial_paths,
-                task_env_config=task.config.environment,
-                **extra_env_kwargs,
-            )
-        else:
-            environment = EnvironmentFactory.create_environment(
-                environment_type,
-                environment_dir=task.paths.environment_dir,
-                environment_name=task.short_name,
-                session_id=str(uuid4()),
-                trial_paths=trial_paths,
-                task_env_config=task.config.environment,
-                **extra_env_kwargs,
-            )
+        environment = EnvironmentFactory.create_environment(
+            environment_type,
+            environment_dir=task.paths.environment_dir,
+            environment_name=task.short_name,
+            session_id=str(uuid4()),
+            trial_paths=trial_paths,
+            task_env_config=task.config.environment,
+            **extra_env_kwargs,
+        )
         if environment.capabilities.mounted:
             trial_paths.chmod_dir()
 

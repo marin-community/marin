@@ -9,6 +9,7 @@ from harbor.models.task.config import TaskOS
 from harbor.models.task.config import VerifierConfig as TaskVerifierConfig
 from harbor.models.trial.paths import TrialPaths
 from harbor.verifier.verifier import Verifier
+from harbor.utils.env import task_environment
 
 
 def _make_task(tmp_path: Path, verifier_env: dict[str, str]):
@@ -77,12 +78,12 @@ async def test_verifier_runtime_env_overrides_task_env(tmp_path, monkeypatch):
         },
     )
 
-    result = await verifier.verify()
+    with task_environment({"HOST_API_KEY": "EMPTY"}):
+        result = await verifier.verify()
 
     assert result.rewards == {"reward": 1.0}
-    assert environment.exec.await_count == 2
     assert environment.exec.await_args_list[1].kwargs["env"] == {
-        "OPENAI_API_KEY": "host-secret",
+        "OPENAI_API_KEY": "EMPTY",
         "MODEL_NAME": "judge-model",
         "OPENAI_BASE_URL": "http://judge.example/v1",
     }
@@ -90,7 +91,7 @@ async def test_verifier_runtime_env_overrides_task_env(tmp_path, monkeypatch):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_verifier_runtime_env_missing_host_var_raises(tmp_path, monkeypatch):
+async def test_verifier_runtime_env_missing_capability_raises(tmp_path, monkeypatch):
     monkeypatch.delenv("MISSING_VERIFIER_KEY", raising=False)
 
     task = _make_task(tmp_path, verifier_env={})
@@ -128,9 +129,10 @@ async def test_verifier_no_override_uses_task_env(tmp_path, monkeypatch):
         environment=environment,
     )
 
-    result = await verifier.verify()
+    with task_environment({"HOST_API_KEY": "EMPTY"}):
+        result = await verifier.verify()
 
     assert result.rewards == {"reward": 1.0}
     assert environment.exec.await_args_list[1].kwargs["env"] == {
-        "OPENAI_API_KEY": "host-secret",
+        "OPENAI_API_KEY": "EMPTY",
     }

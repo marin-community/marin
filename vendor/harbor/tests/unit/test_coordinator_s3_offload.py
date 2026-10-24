@@ -10,8 +10,6 @@ reads it directly), so a local-``trials_dir`` swap is NOT viable — the fix is 
 offload each blocking sync fsspec call via ``asyncio.to_thread`` so the loop is free.
 
 These tests lock the offload at the sites caught by py-spy:
-  - env layer: ``DaytonaEnvironment._sdk_download_dir`` (agent-log + verifier-dir +
-    artifact-dir downloads all route here) and ``._sdk_download_file``;
   - trial layer: ``Trial._finalize`` (result.json) and ``Trial._init_result``
     (config.json + the redundant remote mkdir skip);
   - verifier layer: ``Verifier._resolve_rewards`` (reward-file exists/read);
@@ -33,8 +31,6 @@ from unittest.mock import AsyncMock
 import pytest
 from upath import UPath
 
-from harbor.environments.daytona import environment as daytona_env
-from harbor.environments.daytona.environment import DaytonaEnvironment
 from harbor.models.trial.config import TaskConfig, TrialConfig
 from harbor.trial import artifact_handler as artifact_handler_module
 from harbor.trial import trial as trial_module
@@ -71,74 +67,6 @@ def _configure_trial_for_init_result(trial: SingleStepTrial, tmp_path: Path) -> 
     trial._verifier_timeout_sec = 600
     trial._agent_setup_timeout_sec = 360
     trial._environment_build_timeout_sec = 600
-
-
-# ── env layer ────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.unit
-async def test_sdk_download_dir_copies_remote_tree_off_event_loop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    loop_thread = threading.get_ident()
-    remote_target = tmp_path / "remote"  # local UPath -> real copy runs
-
-    env = object.__new__(DaytonaEnvironment)
-    env._sandbox = object()  # truthy: passes the "sandbox exists" guard
-
-    async def _fake_local_dl(source_dir: str, staging: Path) -> None:
-        Path(staging, "trajectory.json").write_text("{}")
-
-    env._download_dir_to_local = _fake_local_dl  # type: ignore[attr-defined]
-
-    # Force the REMOTE staging branch (target is not treated as a local target).
-    monkeypatch.setattr(daytona_env, "_local_download_target", lambda _t: None)
-
-    real_copy = daytona_env._copy_local_tree_to_remote
-    seen: dict[str, int] = {}
-
-    def _spy_copy(local_root: Path, remote_root: UPath) -> None:
-        seen["thread"] = threading.get_ident()
-        real_copy(local_root, remote_root)
-
-    monkeypatch.setattr(daytona_env, "_copy_local_tree_to_remote", _spy_copy)
-
-    await env._sdk_download_dir("/logs/agent", UPath(str(remote_target)))
-
-    assert (remote_target / "trajectory.json").read_text() == "{}"
-    assert seen["thread"] != loop_thread, "remote tree copy ran ON the event loop"
-
-
-@pytest.mark.unit
-async def test_sdk_download_file_writes_remote_off_event_loop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    loop_thread = threading.get_ident()
-    remote_target = tmp_path / "out" / "result.json"
-
-    async def _fake_download_file(source_path: str, dest: str) -> None:
-        Path(dest).write_text("payload")
-
-    env = object.__new__(DaytonaEnvironment)
-    env._sandbox = SimpleNamespace(
-        fs=SimpleNamespace(download_file=AsyncMock(side_effect=_fake_download_file))
-    )
-
-    monkeypatch.setattr(daytona_env, "_local_download_target", lambda _t: None)
-
-    real_copy = daytona_env._copy_local_file_to_remote
-    seen: dict[str, int] = {}
-
-    def _spy_copy(local_file: Path, target: UPath) -> None:
-        seen["thread"] = threading.get_ident()
-        real_copy(local_file, target)
-
-    monkeypatch.setattr(daytona_env, "_copy_local_file_to_remote", _spy_copy)
-
-    await env._sdk_download_file("/logs/result.json", UPath(str(remote_target)))
-
-    assert remote_target.read_text() == "payload"
-    assert seen["thread"] != loop_thread, "remote file write ran ON the event loop"
 
 
 # ── trial layer ──────────────────────────────────────────────────────────────

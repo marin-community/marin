@@ -69,16 +69,15 @@ def test_verified_launch_requires_its_historical_evaluator_checkout(monkeypatch,
 
 @pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
 @pytest.mark.parametrize(
-    ("selection", "evaluator"),
+    "selection",
     [
-        (None, "Evalchemy"),
-        (("math500",), "Evalchemy"),
-        (("swebench-recovery", "math500"), "Evalchemy"),
-        (("swebench-recovery", "ot-tblite-recovery"), "Harbor"),
+        None,
+        ("math500",),
+        ("swebench-recovery", "math500"),
     ],
 )
-def test_policy_launcher_rejects_historical_evaluators_before_writing_or_launching(
-    tmp_path, monkeypatch, version, selection, evaluator
+def test_policy_launcher_rejects_historical_evalchemy_before_writing_or_launching(
+    tmp_path, monkeypatch, version, selection
 ):
     output_dir = tmp_path / "eval_policy"
     output_dir.mkdir()
@@ -88,7 +87,7 @@ def test_policy_launcher_rejects_historical_evaluators_before_writing_or_launchi
     monkeypatch.setattr("eval_policy.launch.ROOT", tmp_path)
     monkeypatch.setattr("eval_policy.launch.run", lambda command, **_kwargs: launched.append(command))
 
-    with pytest.raises(ValueError, match=rf"requires historical {evaluator} commit.*checkout"):
+    with pytest.raises(ValueError, match=r"requires historical Evalchemy commit.*checkout"):
         launch_policy(version, model_path, None, None, "cw-rno2a", selection)
 
     assert not launched

@@ -1,20 +1,17 @@
 import json
 import logging
+import os
 import signal
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 import yaml
-from dotenv import dotenv_values, load_dotenv
-from upath import UPath
-from rich.console import Console
-from rich.table import Table
-from typer import Argument, Option, Typer
-
+from dotenv import load_dotenv
 from harbor.agents.factory import AgentFactory
 from harbor.cli.notifications import show_registry_hint_if_first_run
 from harbor.cli.utils import (
+    bind_backend_credentials,
     load_mcp_servers,
     parse_env_vars,
     parse_kwargs,
@@ -41,6 +38,10 @@ from harbor.models.trial.paths import TrialPaths
 from harbor.models.trial.result import TrialResult
 from harbor.trial.simulated_user import validate_user_agent_version_pin
 from harbor.utils.artifact_authority import validate_artifact_authority
+from rich.console import Console
+from rich.table import Table
+from typer import Argument, Context, Option, Typer
+from upath import UPath
 
 jobs_app = Typer(
     no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
@@ -59,142 +60,6 @@ def _validate_bridge_target_agents(agents: list[AgentConfig], kind: BridgeKind) 
             raise ValueError(
                 f"Agent '{agent.name}' does not support the '{kind}' bridge."
             )
-
-
-def _confirm_host_env_access(
-    job,
-    console: Console,
-    *,
-    explicit_env_file_keys: set[str] | None = None,
-    skip_confirm: bool = False,
-) -> None:
-    import os
-    import tomllib
-
-    from pydantic import ValidationError
-
-    from harbor.models.task.config import TaskConfig as TaskDefinitionConfig
-    from harbor.models.task.paths import TaskPaths
-    from harbor.utils.env import get_required_host_vars
-
-    is_oracle = any(a.name == AgentName.ORACLE.value for a in job.config.agents)
-    explicit_env_file_keys = explicit_env_file_keys or set()
-    explicit_job_environment_keys = set(job.config.environment.env)
-    explicit_job_verifier_keys = set(job.config.verifier.env)
-    sections: dict[str, list[tuple[str, str | None]]] = {}
-
-    for task_config in job._task_configs:
-        try:
-            local_path = task_config.get_local_path()
-        except ValueError:
-            continue
-        if not local_path.exists():
-            continue
-        try:
-            task_config_model = TaskDefinitionConfig.model_validate_toml(
-                TaskPaths(local_path).config_path.read_text()
-            )
-        except (OSError, tomllib.TOMLDecodeError, ValidationError):
-            continue
-
-        env_sections = [
-            ("environment", task_config_model.environment.env),
-            ("verifier", task_config_model.verifier.env),
-        ]
-        if is_oracle:
-            env_sections.append(("solution", task_config_model.solution.env))
-
-        for section_name, env_dict in env_sections:
-            filtered_env_dict = env_dict
-            if section_name == "environment" and explicit_job_environment_keys:
-                filtered_env_dict = {
-                    key: value
-                    for key, value in env_dict.items()
-                    if key not in explicit_job_environment_keys
-                }
-            elif section_name == "verifier" and explicit_job_verifier_keys:
-                filtered_env_dict = {
-                    key: value
-                    for key, value in env_dict.items()
-                    if key not in explicit_job_verifier_keys
-                }
-
-            required = [
-                item
-                for item in get_required_host_vars(filtered_env_dict)
-                if item[0] not in explicit_env_file_keys
-            ]
-            if required:
-                key = f"[{section_name}.env]"
-                existing = sections.get(key, [])
-                for item in required:
-                    if item not in existing:
-                        existing.append(item)
-                if existing:
-                    sections[key] = existing
-
-    if not sections:
-        return
-
-    missing = []
-    for section, vars_list in sections.items():
-        for var_name, default in vars_list:
-            if default is None and var_name not in os.environ:
-                missing.append((section, var_name))
-
-    if missing:
-        table = Table(
-            title="Missing Environment Variables",
-            title_style="bold red",
-            show_header=True,
-            header_style="bold",
-            padding=(0, 2),
-            show_edge=False,
-            show_lines=False,
-        )
-        table.add_column("Variable", style="cyan")
-        table.add_column("Phase", style="dim")
-
-        for section, var_name in missing:
-            escaped = section.replace("[", "\\[")
-            table.add_row(var_name, escaped)
-
-        console.print()
-        console.print(table)
-        console.print(
-            "\n[yellow]Export them in your shell or pass --env-file.[/yellow]"
-        )
-        raise SystemExit(1)
-
-    if skip_confirm:
-        return
-
-    table = Table(
-        title="Environment Variables",
-        title_style="bold",
-        show_header=True,
-        header_style="bold",
-        padding=(0, 2),
-        show_edge=False,
-        show_lines=False,
-    )
-    table.add_column("Variable", style="cyan")
-    table.add_column("Phase", style="dim")
-
-    for section, vars_list in sections.items():
-        escaped = section.replace("[", "\\[")
-        for var_name, default in vars_list:
-            table.add_row(var_name, escaped)
-
-    console.print()
-    console.print(table)
-    console.print()
-
-    response = console.input(
-        "Tasks in this run will load these from your environment. [yellow]Proceed? (Y/n):[/yellow] "
-    )
-    if response.strip().lower() in ("n", "no"):
-        raise SystemExit(0)
 
 
 def _format_duration(started_at: datetime | None, finished_at: datetime | None) -> str:
@@ -312,6 +177,7 @@ def _handle_sigterm(signum, frame):
 
 
 def start(
+    context: Context,
     config_path: Annotated[
         Path | None,
         Option(
@@ -670,16 +536,7 @@ def start(
         Option(
             "-e",
             "--env",
-            help=f"Environment type (default: {EnvironmentType.DOCKER.value})",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
-    environment_import_path: Annotated[
-        str | None,
-        Option(
-            "--environment-import-path",
-            help="Import path for custom environment (module.path:ClassName).",
+            help=f"Environment type (default: {EnvironmentType.IRIS.value})",
             rich_help_panel="Environment",
             show_default=False,
         ),
@@ -1045,6 +902,7 @@ def start(
             console.print(f"[red]❌ Env file not found: {env_file}[/red]")
             raise SystemExit(1)
         load_dotenv(env_file, override=True)
+        bind_backend_credentials(context, os.environ)
 
     base_config = None
     if config_path is not None:
@@ -1253,9 +1111,6 @@ def start(
 
     if environment_type is not None:
         config.environment.type = environment_type
-    if environment_import_path is not None:
-        config.environment.import_path = environment_import_path
-        config.environment.type = None  # Clear type so import_path takes precedence
     if environment_force_build is not None:
         config.environment.force_build = environment_force_build
     if environment_delete is not None:
@@ -1393,12 +1248,6 @@ def start(
 
     async def _run_job():
         job = await Job.create(config)
-        _confirm_host_env_access(
-            job,
-            console,
-            explicit_env_file_keys=explicit_env_file_keys,
-            skip_confirm=yes,
-        )
         job_result = await job.run()
         console.print()
         print_job_results_tables(job_result)
@@ -1414,14 +1263,7 @@ def start(
 
     EnvironmentFactory.run_preflight(
         type=config.environment.type,
-        import_path=config.environment.import_path,
     )
-
-    explicit_env_file_keys: set[str] = set()
-    if env_file is not None:
-        explicit_env_file_keys = {
-            key for key in dotenv_values(env_file).keys() if key is not None
-        }
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
@@ -1565,7 +1407,6 @@ def resume(
 
     EnvironmentFactory.run_preflight(
         type=config.environment.type,
-        import_path=config.environment.import_path,
     )
 
     async def _run_job():

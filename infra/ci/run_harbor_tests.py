@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 HARBOR_TEST_PATTERNS = (
+    "lib/shellbox/tests/test_iris_machine.py",
     "vendor/harbor/tests/unit/models",
     "vendor/harbor/tests/unit/test_job_*.py",
     "vendor/harbor/tests/unit/test_trial_*.py",
@@ -16,6 +17,8 @@ HARBOR_TEST_PATTERNS = (
     "vendor/harbor/tests/unit/test_archive.py",
     "vendor/harbor/tests/unit/test_benchmark_metadata.py",
     "vendor/harbor/tests/unit/test_environment_preflight.py",
+    "vendor/harbor/tests/unit/test_env_resolver.py",
+    "vendor/harbor/tests/unit/test_task_environment.py",
     "vendor/harbor/tests/unit/test_runtime.py",
     "vendor/harbor/tests/unit/test_task_packager.py",
     "vendor/harbor/tests/unit/test_task_packager_multi_step.py",
@@ -24,7 +27,18 @@ HARBOR_TEST_PATTERNS = (
     "vendor/harbor/tests/unit/agents/installed/test_mini_swe_agent.py",
     "vendor/harbor/tests/unit/agents/installed/test_mini_swe_context.py",
     "vendor/harbor/tests/unit/agents/installed/test_sotopia.py",
-    "vendor/harbor/tests/unit/environments/test_daytona*.py",
+    "vendor/harbor/tests/unit/agents/installed/test_claude_code_bedrock.py",
+    "vendor/harbor/tests/unit/agents/installed/test_cline_cli.py",
+    "vendor/harbor/tests/unit/agents/installed/test_codex_auth.py",
+    "vendor/harbor/tests/unit/environments/test_daytona.py",
+    "vendor/harbor/tests/unit/cli/test_jobs_start_retry.py",
+    "vendor/harbor/tests/unit/cli/test_trials_start_extra_compose.py",
+    "vendor/harbor/tests/unit/environments/test_iris*.py",
+    "vendor/harbor/tests/unit/environments/test_prepared*.py",
+    "vendor/harbor/tests/unit/environments/test_local.py",
+    "vendor/harbor/tests/unit/environments/test_base*.py",
+    "lib/shellbox/tests/test_http_service.py",
+    "vendor/harbor/tests/unit/environments/test_shellsim.py",
 )
 
 

@@ -23,8 +23,6 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import prefix_join
 
-from marin.evaluation.harbor.driver_protocol import FULL_GIT_COMMIT_PATTERN
-
 logger = logging.getLogger(__name__)
 
 DEFAULT_RECORDS_PREFIX = "gs://marin-eval-metadata/evals"
@@ -330,12 +328,6 @@ class HarborRef(BaseModel):
         pattern=r"^sha256:[0-9a-f]{64}$",
         exclude_if=lambda value: value is None,
     )
-    harbor_config_commit: str | None = Field(
-        default=None,
-        description="Upstream Harbor import base; eval_runtime identifies the vendored source and dependency lock",
-        pattern=FULL_GIT_COMMIT_PATTERN,
-        exclude_if=lambda value: value is None,
-    )
     max_input_tokens: int | None = Field(
         default=None,
         description="Agent context budget resolved from the served model, the policy, and Harbor's defaults",
@@ -394,18 +386,16 @@ class HostedJudgeRef(BaseModel):
 
 
 class Provenance(BaseModel):
-    """Where the run came from: launch-time git SHA, eval runtime, and launch host.
-
-    ``eval_runtime`` identifies Evalchemy's pinned package, vendored Harbor's upstream revision
-    and runtime digests, or a historical Harbor environment's pinned packages.
-    Records written before external evaluators used ``eval_image`` or
-    ``evalchemy_image`` for the same value.
-    """
+    """Launch-time Marin revision, host, and an optional external evaluator runtime."""
 
     model_config = ConfigDict(frozen=True)
 
     git_sha: str
-    eval_runtime: str = Field(validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"))
+    eval_runtime: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("eval_runtime", "eval_image", "evalchemy_image"),
+        exclude_if=lambda value: value is None,
+    )
     launch_host: str
 
 

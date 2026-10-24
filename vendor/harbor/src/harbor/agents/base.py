@@ -14,6 +14,7 @@ from harbor.models.task.config import MCPServerConfig
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.models.trial.result import AgentInfo, ModelInfo
 from harbor.utils.logger import logger as global_logger
+from harbor.utils.env import validate_task_environment
 
 
 class MalformedModelResponseError(Exception):
@@ -95,8 +96,9 @@ class BaseAgent(ABC):
         model_name: str | None = None,
         model_alias: str | None = None,
         logger: logging.Logger | None = None,
-        mcp_servers: list[MCPServerConfig]
-        | None = None,  # MCP servers from task config; see setup()/run() for usage
+        mcp_servers: (
+            list[MCPServerConfig] | None
+        ) = None,  # MCP servers from task config; see setup()/run() for usage
         skills_dir: str | None = None,  # Skills directory path in the environment
         *args,
         extra_env: dict[str, str] | None = None,
@@ -109,6 +111,7 @@ class BaseAgent(ABC):
         self.model_alias = model_name if model_alias is None else model_alias
         self.logger = (logger or global_logger).getChild(__name__)
         self.mcp_servers = mcp_servers or []
+        validate_task_environment(extra_env or {})
         self.skills_dir = skills_dir
         if not hasattr(self, "_extra_env"):
             self._extra_env = dict(extra_env) if extra_env else {}

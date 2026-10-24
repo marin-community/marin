@@ -339,17 +339,9 @@ class ClineCli(BaseInstalledAgent):
             "cline --version || cline version || echo '(version command may not be available)'"
         )
 
-        # Build env for the install command - pass GitHub tokens
-        install_env: dict[str, str] = {}
-        for token_env_var in ("GITHUB_TOKEN", "GH_TOKEN"):
-            token_value = os.environ.get(token_env_var)
-            if token_value:
-                install_env[token_env_var] = token_value
-
         await self.exec_as_agent(
             environment,
             command="set -e; " + " && ".join(install_parts),
-            env=install_env or None,
         )
 
     @staticmethod
@@ -708,9 +700,9 @@ class ClineCli(BaseInstalledAgent):
             ),
             "trial_id": trial_id,
             "task_id": task_id,
-            "instruction_sha256": hashlib.sha256(
-                instruction.encode("utf-8")
-            ).hexdigest(),
+            "instruction_sha256": (
+                hashlib.sha256(instruction.encode("utf-8")).hexdigest()
+            ),
         }
 
     def _build_register_skills_command(self) -> str | None:
@@ -785,11 +777,9 @@ class ClineCli(BaseInstalledAgent):
 
         provider, model = self.model_alias.split(":", 1)
 
-        # Validate required environment variable
-        if "API_KEY" not in os.environ:
-            raise ValueError("API_KEY environment variable is required")
-
-        api_key = os.environ["API_KEY"]
+        api_key = self._get_env("API_KEY")
+        if api_key is None:
+            raise ValueError("API_KEY task capability is required")
 
         # Validate provider (exhaustive list from Cline's mapProviderStringToEnum)
         valid_providers = [
@@ -833,12 +823,12 @@ class ClineCli(BaseInstalledAgent):
         # Add BASE_URL for openai provider with custom endpoints
         base_url = ""
         if provider == "openai":
-            if "BASE_URL" not in os.environ:
+            base_url = self._get_env("BASE_URL")
+            if base_url is None:
                 raise ValueError(
-                    "BASE_URL environment variable is required for openai provider"
+                    "BASE_URL task capability is required for openai provider"
                 )
-            env["BASE_URL"] = os.environ["BASE_URL"]
-            base_url = os.environ["BASE_URL"]
+            env["BASE_URL"] = base_url
 
         # Command 0: Write minimal globalState.json to skip welcome wizard
         global_state_json = shlex.quote(
