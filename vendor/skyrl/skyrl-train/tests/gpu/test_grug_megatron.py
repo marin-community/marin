@@ -499,7 +499,8 @@ def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
 
 
 @pytest.mark.vllm
-def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollout(tmp_path):
+@pytest.mark.parametrize("nccl_max_channels", [None, 32])
+def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollout(tmp_path, nccl_max_channels):
     """Rollout, PP2 Megatron update, mixed-dtype broadcast, serving readback, rollout."""
     policy_world_size = 2
     require_hoppers(policy_world_size + ROLLOUT_WORLD_SIZE)
@@ -507,6 +508,9 @@ def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollou
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
     cfg = _config(str(model_path), world_size=policy_world_size, pp=2, ep=1)
+    if nccl_max_channels is not None:
+        cfg.trainer.algorithm.batch_invariant = True
+        cfg.trainer.policy.megatron_config.nccl_max_channels = nccl_max_channels
     initialize_ray(cfg)
     client = grug_engine_client(cfg, str(model_path))
     try:
