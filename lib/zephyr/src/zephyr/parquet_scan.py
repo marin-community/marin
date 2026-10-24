@@ -11,7 +11,16 @@ from rigging.filesystem.s3_compat import needs_virtual_host_addressing, s3_crede
 
 
 def scan_parquet(path: str, *, schema: pl.Schema | None = None) -> pl.LazyFrame:
-    """Scan Parquet with resolved S3 credentials and required virtual-host addressing."""
+    """Scan a Parquet file, qualifying the endpoint where the store demands it.
+
+    Polars' Rust object_store client receives credentials resolved by Rigging
+    and reads the region from the environment, but unlike fsspec it cannot
+    infer CoreWeave's virtual-host requirement. In virtual-host mode
+    object_store uses the endpoint verbatim, so the bucket must be part of
+    the endpoint host; a path-style request returns HTTP 400. Every Zephyr
+    Parquet read that goes through Polars (scatter chunks and external-sort
+    spill runs alike) must use this.
+    """
     if not path.startswith("s3://"):
         return pl.scan_parquet(path, schema=schema)
 
