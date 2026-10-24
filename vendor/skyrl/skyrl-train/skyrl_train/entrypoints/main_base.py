@@ -27,6 +27,7 @@ from loguru import logger
 import asyncio
 import multiprocessing as mp
 
+from skyrl_train.rollouts.identity_runtime import close_repair_engines, start_repair_engines
 from skyrl_train.inference_engines.chat_template import get_custom_chat_template
 from skyrl_train.config.rollout_validation import (
     EntrypointOperation,
@@ -296,6 +297,7 @@ class BasePPOExp:
         The `cfg` passed here will be the final config from Hydra, including CLI overrides.
         """
         self.cfg = cfg
+        self.repair_teacher_engines = []
         self.sessions = {} if sessions is None else dict(sessions)
         self._configure_log_level()
         self.tokenizer = self.get_tokenizer()
@@ -541,6 +543,7 @@ class BasePPOExp:
                 inference_engine_client.engines,
                 harbor_config=harbor_config if harbor_config is not None else cfg.get("terminal_bench_config"),
                 sessions=self.sessions,
+                repair_teacher_engines=self.repair_teacher_engines,
             ),
             resources,
         )
@@ -623,6 +626,7 @@ class BasePPOExp:
 
         prepared_distillation = prepare_distillation_runtime(self.cfg, tokenizer)
         inference_engine_client = self.create_inference_engine_client()
+        self.repair_teacher_engines = start_repair_engines(self.cfg, tokenizer)
 
         trajectory_runner: TrajectoryRunner = self.get_trajectory_runner(self.cfg, tokenizer, inference_engine_client)
 
@@ -691,6 +695,7 @@ class BasePPOExp:
 
         with self.get_tracker() as tracker:
             trainer = None
+            self.repair_teacher_engines = []
             try:
                 trainer = self._setup_trainer(tracker)
                 asyncio.run(trainer.train())
@@ -701,6 +706,7 @@ class BasePPOExp:
                         asyncio.run(trainer.shutdown())
                     except Exception as e:
                         logger.warning(f"Error shutting down trainer: {e}")
+                asyncio.run(close_repair_engines(self.repair_teacher_engines))
 
 
 @ray.remote(num_cpus=1, max_retries=0)

@@ -371,6 +371,18 @@ def concatenate_trajectory_batches(
                 for response_ids in output["response_ids"]:
                     response_span_tags_concat.append([0] * len(response_ids))
 
+    # Behavior sources fill 0 (student) for batches that never recorded the channel,
+    # so mixed-policy groups concatenate cleanly with ordinary student-only batches.
+    behavior_sources_concat = None
+    if any(output.get("behavior_sources") is not None for output in trajectory_batches):
+        behavior_sources_concat = []
+        for output in trajectory_batches:
+            if output.get("behavior_sources") is not None:
+                behavior_sources_concat.extend(output["behavior_sources"])
+            else:
+                for response_ids in output["response_ids"]:
+                    behavior_sources_concat.append(np.zeros(len(response_ids), dtype=np.uint8))
+
     result: TrajectoryBatch = {
         "prompt_token_ids": sum([output["prompt_token_ids"] for output in trajectory_batches], []),
         "response_ids": sum([output["response_ids"] for output in trajectory_batches], []),
@@ -403,6 +415,8 @@ def concatenate_trajectory_batches(
         result["token_level_shaping"] = token_level_shaping_concat
     if response_span_tags_concat is not None:
         result["response_span_tags"] = response_span_tags_concat
+    if behavior_sources_concat is not None:
+        result["behavior_sources"] = behavior_sources_concat
     if unshaped_rewards_concat is not None:
         result["unshaped_rewards"] = unshaped_rewards_concat
     if unshaped_reward_available_concat is not None:
@@ -413,7 +427,7 @@ def concatenate_trajectory_batches(
         result["exclude_from_baseline"] = baseline_exclusions_concat
 
     _concatenate_environment_metrics(result, trajectory_batches)
-    for key in ("verification_results", "evidence_messages"):
+    for key in ("verification_results", "evidence_messages", "teacher_route_keys"):
         if any(batch.get(key) is not None for batch in trajectory_batches):
             result[key] = [
                 value

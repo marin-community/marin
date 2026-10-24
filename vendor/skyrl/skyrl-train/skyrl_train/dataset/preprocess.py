@@ -1,8 +1,8 @@
-from typing import List, Tuple, Optional, Sequence
+from dataclasses import dataclass
+from typing import List, Optional, Sequence
 import numpy as np
 import torch
 from transformers import AutoTokenizer
-from jaxtyping import Float, Integer
 
 
 def _verify_inputs(
@@ -73,6 +73,21 @@ def collate_response_token_channel(
     return result
 
 
+@dataclass(frozen=True)
+class ResponseBatchTensors:
+    """Padded sequences and response-aligned training channels."""
+
+    sequences: torch.Tensor
+    attention_mask: torch.Tensor
+    action_mask: torch.Tensor
+    rewards: torch.Tensor
+    loss_masks: torch.Tensor
+    logprobs: torch.Tensor | None
+    token_level_shaping: torch.Tensor | None
+    response_span_tags: torch.Tensor | None
+    behavior_sources: torch.Tensor | None
+
+
 def convert_prompts_responses_to_batch_tensors(
     tokenizer: AutoTokenizer,
     prompts: List[List[int]],
@@ -82,16 +97,8 @@ def convert_prompts_responses_to_batch_tensors(
     logprobs: Optional[List[np.ndarray]] = None,
     token_level_shaping: Optional[List[List[float]]] = None,
     response_span_tags: Optional[List[List[int]]] = None,
-) -> Tuple[
-    Float[torch.Tensor, "batch seq_len"],
-    Float[torch.Tensor, "batch seq_len"],
-    Float[torch.Tensor, "batch response_len"],
-    Float[torch.Tensor, "batch response_len"],
-    Float[torch.Tensor, "batch response_len"],
-    Optional[Float[torch.Tensor, "batch response_len"]],
-    Optional[Float[torch.Tensor, "batch response_len"]],
-    Optional[Integer[torch.Tensor, "batch response_len"]],
-]:
+    behavior_sources: Optional[List[np.ndarray]] = None,
+) -> ResponseBatchTensors:
     """
     Convert prompts and responses to batch tensors for training.
 
@@ -168,7 +175,7 @@ def convert_prompts_responses_to_batch_tensors(
     # shaping channel and span tags on the response axis exactly like rewards /
     # loss_mask. Both are gated upstream (only passed when
     # enable_token_reward_channel is on), so when off they stay None and the
-    # returned tuple's last two slots are None — the caller attaches the batch keys
+    # corresponding fields stay None — the caller attaches the batch keys
     # only when non-None, keeping the flag-off batch byte-identical.
     token_level_shaping_tensor = collate_response_token_channel(
         token_level_shaping,
@@ -182,8 +189,14 @@ def convert_prompts_responses_to_batch_tensors(
         dtype=torch.long,
         expected_lengths=response_token_lens,
     )
+    behavior_sources_tensor = collate_response_token_channel(
+        None if behavior_sources is None else [row.tolist() for row in behavior_sources],
+        action_mask,
+        dtype=torch.uint8,
+        expected_lengths=response_token_lens,
+    )
 
-    return (
+    return ResponseBatchTensors(
         sequences,
         attention_mask,
         action_mask,
@@ -192,4 +205,5 @@ def convert_prompts_responses_to_batch_tensors(
         logprobs_tensor,
         token_level_shaping_tensor,
         response_span_tags_tensor,
+        behavior_sources_tensor,
     )

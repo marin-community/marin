@@ -96,6 +96,7 @@ class MegatronPolicyMicroBatch:
     loss_mask: torch.Tensor
     rollout_action_logprobs: Optional[torch.Tensor]
     response_span_tags: Optional[torch.Tensor]
+    behavior_sources: Optional[torch.Tensor] = None
     distillation: Optional[TopKEvidence] = None
     ftpo: FTPOTargets | None = None
     correction_weights: Optional[torch.Tensor] = None
@@ -541,6 +542,7 @@ class MegatronModelWrapper:
             loss_mask = data.loss_mask
             rollout_action_logprobs = data.rollout_action_logprobs
             response_span_tags = data.response_span_tags
+            behavior_sources = data.behavior_sources
 
             ftpo_inputs = None
             if data.ftpo is not None:
@@ -595,6 +597,7 @@ class MegatronModelWrapper:
                 rollout_logprobs=rollout_action_logprobs,
                 correction_weights=data.correction_weights,
                 response_span_tags=response_span_tags,
+                behavior_sources=behavior_sources,
                 token_entropy=token_entropies[:, -num_actions - 1 : -1],
                 think_token_weight=self.cfg.trainer.algorithm.think_token_weight,
                 teacher=teacher,

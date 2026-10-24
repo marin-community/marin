@@ -46,6 +46,8 @@ from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngine
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
+from skyrl_train.rollouts.identity_groups import IdentityRepairGroups
+from skyrl_train.rollouts.identity_runtime import build_identity_groups
 from skyrl_train.rollouts.group_grading import GROUP_GRADERS, GroupGrader, grade_groups
 from skyrl_train.rollouts.harbor_tasks import (
     HARBOR_MACHINE_BACKEND,
@@ -343,9 +345,11 @@ class TaskRolloutWorker:
         shutdown_timeout: float,
         installed_agents: InstalledAgentWorker | None = None,
         judge_connection: JudgeConnection | None = None,
+        identity_groups: IdentityRepairGroups | None = None,
     ):
         self.trajectory_runner_cfg = trajectory_runner_cfg
         self.model_client = model_client
+        self.identity_groups = identity_groups
         self.judge_connection = judge_connection
         self.factories = {name: OwnedMachineFactory(factory, name) for name, factory in factories.items()}
         self.active_requests: set[asyncio.Task] = set()
@@ -462,6 +466,7 @@ class TaskRolloutWorker:
             task = lowered.task
             harbor = harbor_settings[index]
             session_id = session_ids[index]
+            request_batch_template_kwargs = request.rows[index].metadata.chat_template_kwargs
 
             async def model(request):
                 return await _model_turn(
@@ -470,7 +475,7 @@ class TaskRolloutWorker:
                     sampling_params=sampling,
                     max_context_length=max_context_length,
                     max_prompt_length=max_input_length,
-                    chat_template_kwargs=self.chat_template_kwargs,
+                    chat_template_kwargs={**self.chat_template_kwargs, **request_batch_template_kwargs},
                     session_id=session_id,
                 )
 
@@ -511,12 +516,22 @@ class TaskRolloutWorker:
                 retries += 1
 
         with rollout_phase("collect"):
-            async with asyncio.TaskGroup() as group:
-                pending = [group.create_task(run(index, item)) for index, item in enumerate(lowered_tasks)]
+            if self.identity_groups is not None and phase == "train":
+
+                async def generate_original(index):
+                    return await run(index, lowered_tasks[index])
+
+                collected = await self.identity_groups.collect(request, generate_original)
+            else:
+                async with asyncio.TaskGroup() as group:
+                    pending = [group.create_task(run(index, item)) for index, item in enumerate(lowered_tasks)]
+                collected = [task.result() for task in pending]
+                if self.identity_groups is not None:
+                    collected = await asyncio.gather(*(self.identity_groups.grade(rollout) for rollout in collected))
             rollouts = await grade_groups(
                 tasks,
                 group_graders,
-                [task.result() for task in pending],
+                collected,
                 [item.instance_id for item in trajectory_ids]
                 if trajectory_ids is not None
                 else [task.id for task in tasks],
@@ -602,6 +617,7 @@ class TaskRolloutWorkerSpec:
     engines: list[InferenceEngineInterface]
     sessions: dict[str, EpisodeFactory] = field(default_factory=dict)
     harbor_config: DictConfig | None = None
+    repair_teacher_engines: list[InferenceEngineInterface] = field(default_factory=list)
 
     @classmethod
     def from_config(
@@ -611,12 +627,14 @@ class TaskRolloutWorkerSpec:
         *,
         harbor_config: DictConfig | None = None,
         sessions: Mapping[str, EpisodeFactory] | None = None,
+        repair_teacher_engines=(),
     ):
         return cls(
             detached_config(config),
             list(engines),
             {} if sessions is None else dict(sessions),
             None if harbor_config is None else detached_config(harbor_config),
+            list(repair_teacher_engines),
         )
 
     def build(self, tokenizer, shard: WorkerShard) -> TaskRolloutWorker:
@@ -668,4 +686,5 @@ class TaskRolloutWorkerSpec:
             shutdown_timeout=float(self.config.trajectory_runner.shutdown_timeout),
             installed_agents=installed_agents,
             judge_connection=judge,
+            identity_groups=build_identity_groups(self.config, tokenizer, client, self.repair_teacher_engines),
         )

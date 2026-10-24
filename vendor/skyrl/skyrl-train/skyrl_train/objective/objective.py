@@ -76,6 +76,7 @@ def build_objective_micro_batch(
     ftpo: FTPOInputs | None = None,
     pair_roles: torch.Tensor | None = None,
     correction_weights: torch.Tensor | None = None,
+    behavior_sources: torch.Tensor | None = None,
     structural: FTPOAuxiliaryBatch | None = None,
 ) -> ObjectiveMicroBatch:
     """Prepare finite values at masked positions before objective formulas run."""
@@ -99,6 +100,7 @@ def build_objective_micro_batch(
             rollout_log_probs=None if rollout_logprobs is None else sanitize(rollout_logprobs),
             advantages=sanitize(advantages),
             loss_mask=loss_mask,
+            behavior_sources=None if behavior_sources is None else sanitize(behavior_sources.to(loss_mask.dtype)),
             ftpo=ftpo,
             ref_log_probs=None if base_action_log_probs is None else sanitize(base_action_log_probs),
             dpo=None if pair_roles is None else DPOInputs(pair_roles),

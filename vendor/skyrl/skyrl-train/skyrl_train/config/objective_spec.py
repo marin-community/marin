@@ -59,6 +59,11 @@ BUILTIN_LOSS_SPECS: Mapping[str, LossSpec] = MappingProxyType(
         PolicyLossType.KL_COV: LossSpec(RatioAnchor.OLD, row_local=False, advantage_linear=False),
         PolicyLossType.IMPORTANCE_SAMPLING: LossSpec(RatioAnchor.OLD),
         PolicyLossType.BEHAVIOR_CLIP: LossSpec(RatioAnchor.ROLLOUT),
+        # LUFFY-style mixed-policy GRPO: student tokens clip against the old policy,
+        # teacher tokens use the shaped unclipped ratio against the behavior policy.
+        # The spec anchor stays OLD because corrections must anchor the same way the
+        # dominant (student) term does; teacher tokens anchor internally on rollout.
+        PolicyLossType.MIXED_POLICY_GRPO: LossSpec(RatioAnchor.OLD),
         PolicyLossType.SFT: LossSpec(RatioAnchor.NONE, advantage_linear=False),
         PolicyLossType.FTPO: LossSpec(RatioAnchor.NONE, advantage_linear=False),
         PolicyLossType.DPO: LossSpec(RatioAnchor.NONE, advantage_linear=False),
@@ -203,7 +208,28 @@ def rollout_logprobs_required(algorithm: DictConfig, *, loss_spec: LossSpec | No
         and distillation.reward_mode == DistillationRewardMode.REPLACE
     ):
         return False
-    return spec.anchor is RatioAnchor.ROLLOUT or bool(off_policy_correction(algorithm).rules)
+    return (
+        spec.anchor is RatioAnchor.ROLLOUT
+        or mixed_policy_requested(algorithm)
+        or bool(off_policy_correction(algorithm).rules)
+    )
+
+
+def mixed_policy_requested(algorithm: DictConfig) -> bool:
+    """Return whether the selected policy loss is LUFFY-style mixed-policy GRPO."""
+    return algorithm.policy_loss_type == PolicyLossType.MIXED_POLICY_GRPO
+
+
+def validate_mixed_policy(cfg: DictConfig) -> None:
+    """Reject mixed-policy settings that cannot weight teacher tokens correctly."""
+    algorithm = cfg.trainer.algorithm
+    gamma = float(algorithm.mixed_policy.gamma)
+    if not math.isfinite(gamma) or gamma <= 0:
+        raise ValueError("trainer.algorithm.mixed_policy.gamma must be a positive finite number")
+    if LossReduction(algorithm.loss_reduction) is not LossReduction.TOKEN_MEAN:
+        raise ValueError("mixed_policy_grpo requires trainer.algorithm.loss_reduction=token_mean")
+    if algorithm.get("use_kl_loss", False):
+        raise ValueError("mixed_policy_grpo follows LUFFY with use_kl_loss=false; log reference KL instead")
 
 
 def validate_dpo(cfg: DictConfig) -> None:
@@ -285,6 +311,8 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     validate_ftpo(cfg)
     if cfg.trainer.algorithm.policy_loss_type == PolicyLossType.DPO:
         validate_dpo(cfg)
+    if cfg.trainer.algorithm.policy_loss_type == PolicyLossType.MIXED_POLICY_GRPO:
+        validate_mixed_policy(cfg)
     limit = cfg.trainer.policy.max_consecutive_nonfinite_steps
     if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
         raise ValueError("trainer.policy.max_consecutive_nonfinite_steps must be null or an integer >= 1")
