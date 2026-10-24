@@ -211,6 +211,9 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         # The router aux loss is explicit on the spec: without it the router trains only
         # through the LM loss.
         "output_router_logits": spec.output_router_logits,
+        # Reduce-scatter gradients after every micro-batch. Skipping the sync during accumulation
+        # keeps the whole model's unsharded bf16 gradients on every GPU (~61 GB for Qwen3-30B).
+        "accelerator_config": {"gradient_accumulation_kwargs": {"sync_each_batch": True}},
         "logging_steps": 1,
         "save_strategy": "steps",
         "save_steps": 200,

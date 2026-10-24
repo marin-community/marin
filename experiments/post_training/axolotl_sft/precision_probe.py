@@ -65,7 +65,9 @@ class _Probe(TrainerCallback):
             return
         inputs = {type(a).__name__ if not isinstance(a, torch.Tensor) else str(a.dtype) for a in args}
         params = {name: str(p.dtype) for name, p in module.named_parameters(recurse=False)}
-        _say(f"experts {type(module).__name__}: params {params}, inputs {inputs}, autocast {torch.is_autocast_enabled()}")
+        _say(
+            f"experts {type(module).__name__}: params {params}, inputs {inputs}, autocast {torch.is_autocast_enabled()}"
+        )
 
     def _pack(self, tensor):
         self._saved[str(tensor.dtype)] += tensor.numel() * tensor.element_size()
