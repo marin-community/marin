@@ -16,7 +16,7 @@ from marin.experiment.namespacing import user_owned_name
 from marin.rl.cli import rl_build_options
 from marin.rl.skyrl import IrisSkyRLExecution, SkyRLRun, SkyRLSpec, skyrl_step
 from marin.training.training import LevanterCheckpoint
-from mergedeep import merge
+from skyrlrecipe import RecipePatch, SkyRLRecipe
 
 from experiments.post_training.iceball_micro import iceball_rl_execution, iceball_rl_spec
 
@@ -91,7 +91,12 @@ def probe_step(spec: SkyRLSpec, execution: IrisSkyRLExecution, settings: ProbeSe
         spec,
         name=name,
         version=resolve_version(name, None),
-        config_yaml=yaml.safe_dump(merge({}, yaml.safe_load(spec.config_yaml), probe_block(settings)), sort_keys=False),
+        config_yaml=yaml.safe_dump(
+            SkyRLRecipe.from_document(yaml.safe_load(spec.config_yaml))
+            .merge(RecipePatch.from_document(probe_block(settings)))
+            .to_skyrl(),
+            sort_keys=False,
+        ),
         retention=replace(spec.retention, temporary_storage_ttl_days=30),
         seed=settings.seed,
     )
@@ -145,7 +150,13 @@ def main(
     )
     spec = iceball_rl_spec(model, data)
     spec = replace(
-        spec, config_yaml=yaml.safe_dump(merge(yaml.safe_load(spec.config_yaml), ICEBALL_PROBE_RECIPE), sort_keys=False)
+        spec,
+        config_yaml=yaml.safe_dump(
+            SkyRLRecipe.from_document(yaml.safe_load(spec.config_yaml))
+            .merge(RecipePatch.from_document(ICEBALL_PROBE_RECIPE))
+            .to_skyrl(),
+            sort_keys=False,
+        ),
     )
     return probe_step(spec, iceball_rl_execution(), settings)
 

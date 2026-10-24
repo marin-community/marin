@@ -53,6 +53,21 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from rigging.provenance import username_segment
+from skyrlrecipe import (
+    Algorithm,
+    ContextBudget,
+    ExpertBlockSync,
+    Generator,
+    Placement,
+    Policy,
+    PolicyOptimizerConfig,
+    Ref,
+    RolloutBuffer,
+    SamplingParams,
+    SkyRLRecipe,
+    Trainer,
+    WeightSyncPause,
+)
 
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.curriculum_rl.launch import (
@@ -76,6 +91,7 @@ from experiments.post_training.curriculum_rl.pool import (
     pool_step,
 )
 from experiments.post_training.skyrl_evaluation import skyrl_eval_step
+from experiments.post_training.skyrl_recipes import MARIN_RECIPE_POLICY
 
 EXPERIMENT_NAME = "async-rl"
 WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
@@ -312,155 +328,105 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     """Render the RL config: the curriculum data wiring plus every setting this launcher decides."""
     recipe = SNOWBALL_RECIPE
     plan = recipe.role_plan
-    # The curriculum template supplies the data and environment sections; every other section is
-    # written below in full.
     config = yaml.safe_load(rl_config_yaml(CURRICULUM_TEMPLATE, ARMS["naive"], SNOWBALL_POLICY))
     config["entrypoint"] = "standard"
-    # The one public context declaration; MarinSkyRL derives the prompt, generation and engine
-    # lengths from it.
-    config["context_budget"] = {
-        "request_window_tokens": preset.request_window_tokens,
-        "max_new_tokens_per_turn": preset.max_new_tokens,
-        # Single-turn math: the policy answers once and the episode ends. Each of a prompt's four
-        # answers is its own rollout.
-        "max_turns": 1,
-    }
-    config["trainer"] = {
-        "strategy": "megatron",
-        # Keep Transformer Engine's attention backend; true forces the flash-attn package
-        # (NVTE_FUSED_ATTN=0).
-        "flash_attn": False,
-        # One sequence per row; packing changes the micro-step shape.
-        "use_sample_packing": False,
-        # Recompute activations in the backward pass; the 67B-A2B forward does not fit otherwise.
-        "gradient_checkpointing": True,
-        # Keep the optimizer state resident; the engines run on their own node.
-        "offload_optimizer_during_rollouts": False,
-        # Passes over the pool the dataloader may make; 100 updates of 128 prompts need several.
-        "epochs": 50,
-        "max_steps": preset.max_steps,
-        # One optimizer pass over each batch; the mini batch equals the batch, so one update per batch.
-        "update_epochs_per_batch": 1,
-        "train_batch_size": plan.train_batch_size,
-        "policy_mini_batch_size": plan.policy_mini_batch_size,
-        "micro_train_batch_size_per_gpu": plan.micro_train_batch_size_per_gpu,
-        "micro_forward_batch_size_per_gpu": 1,
-        # Validation prompts scored per in-run evaluation.
-        "eval_batch_size": 256,
-        "eval_interval": preset.eval_interval,
-        "resume_mode": "latest",
-        "max_ckpts_to_keep": RETENTION.resume_checkpoint_count,
-        # Sampling and shuffling seed; --set trainer.seed=N changes it and the run's address with it.
-        "seed": SEED,
-        "logger": "wandb",
-        "project_name": WANDB_PROJECT,
-        # Commit each step's metrics as they are logged, so a killed run keeps its curve.
-        "tracker_commit_each_step": True,
-        "training_metrics": preset.telemetry,
-        "rollout_spans": preset.telemetry,
-        "policy_train_spans": preset.telemetry,
-        "algorithm": {
-            # Group-relative advantages over each prompt's answers.
-            "advantage_estimator": "grpo",
-            # The plain clipped loss: every sampled token contributes, with no off-policy mask or
-            # reweighting of the tokens the current weights did not sample.
-            "policy_loss_type": "regular",
-            "loss_reduction": "token_mean",
-            # No KL term against the reference, in the loss or in the reward.
-            "use_kl_loss": False,
-            "use_kl_in_reward": False,
-            "kl_estimator_type": "k3_unbiased_gradient",
-            # The policy loss uses unit correction weights.
-            "off_policy_correction": "none",
-            # Symmetric PPO clip.
-            "eps_clip_low": 0.2,
-            "eps_clip_high": 0.2,
-        },
-        "policy": {
-            "optimizer_config": {
-                "optimizer": "AdamW",
-                "lr": recipe.learning_rate,
-                "weight_decay": recipe.weight_decay,
-                "max_grad_norm": recipe.max_grad_norm,
-            },
-            "megatron_config": asdict(recipe.megatron),
-        },
-        # The reference model shares the policy's geometry so it can share the policy's GPUs.
-        "ref": {"megatron_config": asdict(recipe.megatron)},
-        "placement": {
-            "colocate_all": plan.colocate_all,
-            # The reference model lives on the policy's nodes; only the engine has its own node.
-            "colocate_policy_ref": True,
-            "policy_num_nodes": plan.policy_num_nodes,
-            "policy_num_gpus_per_node": plan.policy_num_gpus_per_node,
-            "ref_num_nodes": plan.policy_num_nodes,
-            "ref_num_gpus_per_node": plan.policy_num_gpus_per_node,
-        },
-        # Leases bound untrained groups to max_staleness_steps + 1 batches.
-        "rollout_buffer": {
-            "max_staleness_steps": preset.max_staleness_steps,
-            "batch_policy": preset.batch_policy,
-            "max_in_flight": preset.generation_workers,
-            "object_store_root": None,
-        },
-    }
-    config["generator"] = {
-        "backend": "vllm",
-        "model_dtype": "bfloat16",
-        "vllm_attention_backend": "FLASH_ATTN",
-        # vLLM runs inside the job, on the engine node.
-        "run_engines_locally": True,
-        # Weights reach the engine over NCCL from the policy ranks at each sync.
-        "weight_sync_backend": "nccl",
-        "weight_sync_pause": {"mode": PAUSE_MODE, "clear_cache": preset.clear_kv_cache_on_weight_sync},
-        # Each expert matrix goes from a Megatron rank that holds it straight to the vLLM workers that
-        # serve it; the recipe meets its requirements (TP=1, ETP=1, local vLLM engines at TP=1 with
-        # EP=DP=8, and the Triton MoE backend).
-        "weight_sync_transport": "expert_block",
-        "expert_block_sync": {"timeout_seconds": 600, "verify": False},
-        "num_inference_engines": plan.num_inference_engines,
-        "inference_engine_tensor_parallel_size": plan.inference_engine_tensor_parallel_size,
-        "inference_engine_pipeline_parallel_size": plan.inference_engine_pipeline_parallel_size,
-        "inference_engine_data_parallel_size": plan.inference_engine_data_parallel_size,
-        "inference_engine_expert_parallel_size": plan.inference_engine_expert_parallel_size,
-        "n_samples_per_prompt": plan.n_samples_per_prompt,
-        # Fraction of each engine GPU vLLM may occupy, weights and KV cache together; the rest
-        # leaves room for the NCCL weight-sync buffers.
-        "gpu_memory_utilization": 0.75,
-        # Concurrent sequences per engine rank, above the 512 answers one update needs.
-        "max_num_seqs": 1024,
-        # Tokens one engine scheduling step may prefill or decode.
-        "max_num_batched_tokens": 8192,
-        # Share each prompt's prefill across its four answers; the cache is cleared at each pause.
-        "enable_prefix_caching": True,
-        # Split long prefills across scheduling steps so decodes keep flowing.
-        "enable_chunked_prefill": True,
-        # Capture CUDA graphs for decode.
-        "enforce_eager": False,
-        # Task sessions send token requests directly to model engines.
-        "enable_http_endpoint": False,
-        "chat_template": None,
-        "engine_init_kwargs": dict(recipe.engine_init_kwargs),
-        "sampling_params": {
-            # Full-distribution sampling; the ratio diagnostics assume no truncation.
-            "temperature": 1.0,
-            "top_p": 1.0,
-            # Return the sampled token's logprob so the ratio diagnostics can compare it with the learner's.
-            "logprobs": 0,
-        },
-    }
-    # Let the allocator grow segments instead of fragmenting at the memory ceiling.
+    config["context_budget"] = ContextBudget(
+        request_window_tokens=preset.request_window_tokens, max_new_tokens_per_turn=preset.max_new_tokens, max_turns=1
+    ).to_skyrl()
+    config["trainer"] = Trainer(
+        strategy="megatron",
+        flash_attn=False,
+        use_sample_packing=False,
+        gradient_checkpointing=True,
+        offload_optimizer_during_rollouts=False,
+        epochs=50,
+        max_steps=preset.max_steps,
+        update_epochs_per_batch=1,
+        train_batch_size=plan.train_batch_size,
+        policy_mini_batch_size=plan.policy_mini_batch_size,
+        micro_train_batch_size_per_gpu=plan.micro_train_batch_size_per_gpu,
+        micro_forward_batch_size_per_gpu=1,
+        eval_batch_size=256,
+        eval_interval=preset.eval_interval,
+        resume_mode="latest",
+        logger="wandb",
+        project_name=WANDB_PROJECT,
+        tracker_commit_each_step=True,
+        training_metrics=preset.telemetry,
+        rollout_spans=preset.telemetry,
+        policy_train_spans=preset.telemetry,
+        algorithm=Algorithm(
+            advantage_estimator="grpo",
+            policy_loss_type="regular",
+            loss_reduction="token_mean",
+            use_kl_loss=False,
+            use_kl_in_reward=False,
+            kl_estimator_type="k3_unbiased_gradient",
+            off_policy_correction="none",
+            eps_clip_low=0.2,
+            eps_clip_high=0.2,
+        ),
+        policy=Policy(
+            optimizer_config=PolicyOptimizerConfig(
+                optimizer="AdamW",
+                lr=recipe.learning_rate,
+                weight_decay=recipe.weight_decay,
+                max_grad_norm=recipe.max_grad_norm,
+            ),
+            megatron_config=asdict(recipe.megatron),
+        ),
+        ref=Ref(megatron_config=asdict(recipe.megatron)),
+        placement=Placement(
+            colocate_all=plan.colocate_all,
+            colocate_policy_ref=True,
+            policy_num_nodes=plan.policy_num_nodes,
+            policy_num_gpus_per_node=plan.policy_num_gpus_per_node,
+            ref_num_nodes=plan.policy_num_nodes,
+            ref_num_gpus_per_node=plan.policy_num_gpus_per_node,
+        ),
+        rollout_buffer=RolloutBuffer(
+            max_staleness_steps=preset.max_staleness_steps,
+            batch_policy=preset.batch_policy,
+            max_in_flight=preset.generation_workers,
+            object_store_root=None,
+        ),
+    ).to_skyrl()
+    config["generator"] = Generator(
+        backend="vllm",
+        model_dtype="bfloat16",
+        vllm_attention_backend="FLASH_ATTN",
+        run_engines_locally=True,
+        weight_sync_backend="nccl",
+        weight_sync_pause=WeightSyncPause(mode=PAUSE_MODE, clear_cache=preset.clear_kv_cache_on_weight_sync),
+        weight_sync_transport="expert_block",
+        expert_block_sync=ExpertBlockSync(timeout_seconds=600, verify=False),
+        num_inference_engines=plan.num_inference_engines,
+        inference_engine_tensor_parallel_size=plan.inference_engine_tensor_parallel_size,
+        inference_engine_pipeline_parallel_size=plan.inference_engine_pipeline_parallel_size,
+        inference_engine_data_parallel_size=plan.inference_engine_data_parallel_size,
+        inference_engine_expert_parallel_size=plan.inference_engine_expert_parallel_size,
+        n_samples_per_prompt=plan.n_samples_per_prompt,
+        gpu_memory_utilization=0.75,
+        max_num_seqs=1024,
+        max_num_batched_tokens=8192,
+        enable_prefix_caching=True,
+        enable_chunked_prefill=True,
+        enforce_eager=False,
+        enable_http_endpoint=False,
+        chat_template=None,
+        engine_init_kwargs=dict(recipe.engine_init_kwargs),
+        sampling_params=SamplingParams(temperature=1.0, top_p=1.0, logprobs=0),
+    ).to_skyrl()
     config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
     for text in settings:
         apply_setting(config, parse_setting(text))
     trainer = config["trainer"]
-    # Score the starting weights once when evaluation is on, so the curves have a step-0 point.
     trainer["eval_before_train"] = trainer["eval_interval"] > 0
     trainer["ckpt_interval"] = checkpoint_interval(trainer["max_steps"], trainer["eval_interval"])
-    # Enable terminal export without an earlier periodic export; its interval must align with checkpoints.
     trainer["hf_save_interval"] = math.ceil(trainer["max_steps"] / trainer["ckpt_interval"]) * trainer["ckpt_interval"]
     check_loop_shape(config)
-    return config
+    authored = SkyRLRecipe.from_document(config)
+    return SkyRLRecipe.combine(base=authored, authored=authored, marin=MARIN_RECIPE_POLICY).to_skyrl()
 
 
 @dataclass(frozen=True)
@@ -499,7 +465,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
                 role_plan=recipe.role_plan,
             ),
             retention=RETENTION,
-            seed=config["trainer"]["seed"],
+            seed=SEED,
         ),
         IrisSkyRLExecution(
             cluster=policy.cluster,
