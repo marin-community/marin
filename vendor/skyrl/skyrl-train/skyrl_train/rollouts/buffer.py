@@ -18,6 +18,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
+import numpy as np
+from skyrl_gym.verification import VerificationStatus
+
+from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
 from skyrl_train.dynamic_sampling import DynamicSamplingType, GroupSelectionPolicy, GroupSelectionResult
 from skyrl_train.group_admission import (
     AdmissionRejection,
@@ -28,9 +32,20 @@ from skyrl_train.group_admission import (
 from skyrl_train.rollout_observability import rollout_wait
 from skyrl_train.rollouts.loader import JudgedGroup
 from skyrl_train.telemetry import GeneratedWork
-from skyrl_train.trajectory_runners.trajectory_processing import get_outcome_rewards, get_trajectory_passes
+from skyrl_train.trajectory_runners.trajectory_processing import (
+    get_outcome_rewards,
+    get_trajectory_passes,
+    graded_row_indices,
+    normalized_verifier_scores,
+    rollout_successes,
+)
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import NormalizedReward
-from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
+from skyrl_train.trajectory_runners.types import (
+    BatchFields,
+    TrajectoryBatch,
+    TrajectoryRequestBatch,
+    RewardShapingComponents,
+)
 
 
 class BatchPolicy(StrEnum):
@@ -128,6 +143,118 @@ class GroupRewards:
 
 
 @dataclass(frozen=True)
+class RowFacts:
+    """Compact row values and channel geometry in one committed verdict."""
+
+    stamped_loss_tokens: tuple[int, ...]
+    spanning_policy_steps: tuple[bool, ...]
+    prompt_len: np.ndarray
+    response_len: np.ndarray
+    score: np.ndarray
+    loss_tokens: np.ndarray
+    is_last_step: np.ndarray
+    exclude_from_baseline: np.ndarray
+    fields: BatchFields
+    rewards: GroupRewards
+    scalar_rewards: bool
+    loop_credit: bool
+    shaping_components: tuple[RewardShapingComponents, ...] | None
+    shaping_response_tokens: tuple[int, ...]
+    loop_incidence: tuple[bool, ...]
+    reward_sign_totals: tuple[float, ...]
+    metric_totals: tuple[float | np.floating, ...]
+    passes: tuple[bool, ...]
+    rollout_passes: tuple[bool, ...]
+    scalar_values: tuple[float | None, ...]
+    verifier_present: tuple[bool, ...]
+    verifier_task_pass: tuple[bool | None, ...]
+    graded: tuple[bool, ...]
+    verifier_scores: tuple[float | None, ...] | None
+    verifier_agents: tuple[str | None, ...] | None
+    data_sources: tuple[str | None, ...] | None
+    env_metrics: tuple[dict, ...] | None
+    env_classes: tuple[str, ...] | None
+    group_metrics: dict[str, float]
+    stop_reasons: tuple[str | None, ...] | None
+
+    @classmethod
+    def from_batch(cls, batch: TrajectoryBatch) -> RowFacts:
+        """Capture finalized row scalars without retaining token arrays or verifier records."""
+        responses = batch["response_ids"]
+        count = len(responses)
+        rewards = GroupRewards.from_batch(batch)
+        results = batch.get("verification_results")
+        reward_sign_totals = tuple(float(np.sum(reward)) for reward in batch["rewards"])
+        scores = normalized_verifier_scores(batch)
+        graded = frozenset(graded_row_indices(batch))
+        policy_steps = batch.get("rollout_policy_steps")
+        stamped_steps = (
+            [
+                [step for step, mask in zip(steps, masks, strict=True) if step != UNSTAMPED_POLICY_STEP and mask > 0]
+                for steps, masks in zip(policy_steps, batch["loss_masks"], strict=True)
+            ]
+            if policy_steps is not None
+            else [[] for _ in responses]
+        )
+        return cls(
+            stamped_loss_tokens=tuple(len(steps) for steps in stamped_steps),
+            spanning_policy_steps=tuple(len(set(steps)) > 1 for steps in stamped_steps),
+            prompt_len=np.asarray([len(prompt) for prompt in batch["prompt_token_ids"]], dtype=np.int64),
+            response_len=np.asarray([len(response) for response in responses], dtype=np.int64),
+            score=np.asarray(
+                [
+                    np.sum(reward, dtype=np.float32) if isinstance(reward, list) else float(reward) if response else 0.0
+                    for reward, response in zip(batch["rewards"], responses, strict=True)
+                ],
+                dtype=np.float32,
+            ),
+            loss_tokens=np.asarray([sum(mask) for mask in batch["loss_masks"]], dtype=np.int64),
+            is_last_step=np.asarray(batch.get("is_last_step") or [True] * count, dtype=bool),
+            exclude_from_baseline=np.asarray(batch.get("exclude_from_baseline") or [False] * count, dtype=bool),
+            fields=BatchFields.from_batch(batch),
+            rewards=rewards,
+            scalar_rewards=all(
+                not isinstance(reward, list) or sum(value != 0 for value in reward) <= 1 for reward in batch["rewards"]
+            ),
+            loop_credit=any(value != 0 for row in batch.get("loop_advantages") or () for value in row),
+            shaping_components=tuple(dict(values) for values in batch["reward_shaping_components"])
+            if batch.get("reward_shaping_components") is not None
+            else None,
+            shaping_response_tokens=tuple(sum(bool(value) for value in row) for row in batch["loss_masks"]),
+            loop_incidence=tuple(bool(spans) for spans in batch.get("reward_shaping_loop_spans") or [[]] * count),
+            reward_sign_totals=reward_sign_totals,
+            metric_totals=tuple(
+                sum(reward) if isinstance(reward, list) else float(reward) for reward in batch["rewards"]
+            ),
+            passes=tuple(get_trajectory_passes(batch)),
+            rollout_passes=tuple(rollout_successes(batch["rewards"], results)),
+            scalar_values=tuple(None if isinstance(reward, list) else float(reward) for reward in batch["rewards"]),
+            verifier_present=tuple(result is not None for result in results)
+            if results is not None
+            else (False,) * count,
+            verifier_task_pass=tuple(
+                None if result is None else result.passed if result.status is VerificationStatus.VERIFIED else False
+                for result in results
+            )
+            if results is not None
+            else (None,) * count,
+            graded=tuple(index in graded for index in range(count)),
+            verifier_scores=tuple(scores) if scores is not None else None,
+            verifier_agents=tuple(
+                agent if result is not None and isinstance(agent := result.diagnostics.get("agent"), str) else None
+                for result in results
+            )
+            if results is not None
+            else None,
+            data_sources=tuple(batch["data_sources"]) if batch.get("data_sources") is not None else None,
+            env_metrics=tuple(batch["env_metrics"]) if "env_metrics" in batch else None,
+            env_classes=tuple(batch["env_classes"]) if "env_classes" in batch else None,
+            group_metrics=dict(batch.get("rollout_metrics") or {}),
+            stop_reasons=tuple(batch["stop_reasons"]) if batch.get("stop_reasons") is not None else None,
+        )
+
+
+@dataclass(frozen=True)
 class RolloutVerdict:
     """What the buffer needs to know about a group's content to select it.
 
@@ -139,6 +266,7 @@ class RolloutVerdict:
     selection: GroupSelectionResult | None
     rewards: GroupRewards | None
     work: GeneratedWork
+    row_facts: RowFacts | None = None
 
     @property
     def trainable(self) -> bool:
@@ -163,7 +291,8 @@ class RolloutContentPolicy:
         work = GeneratedWork.from_batch(batch["response_ids"], batch.get("is_last_step"))
         if not decision.accepted:
             return RolloutVerdict(group.uid, decision.rejections, None, None, work)
-        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), GroupRewards.from_batch(batch), work)
+        facts = RowFacts.from_batch(batch)
+        return RolloutVerdict(group.uid, (), self.selection.evaluate(group), facts.rewards, work, facts)
 
 
 class RolloutWriter(Protocol):
@@ -241,6 +370,7 @@ class AdmittedRollout:
     policy_step: int
     sample_count: int
     response_tokens: int
+    row_facts: RowFacts | None = None
 
 
 @dataclass(frozen=True)
@@ -548,6 +678,7 @@ class RolloutBuffer:
                         policy_step=rollout.policy_step,
                         sample_count=rollout.verdict.work.sample_count,
                         response_tokens=rollout.verdict.work.generated_token_count,
+                        row_facts=rollout.verdict.row_facts,
                     )
                     for index, rollout in enumerate(
                         self._unreported, start=len(self._admitted[self._policy_step]) - len(self._unreported)
