@@ -4,6 +4,7 @@
 """CPU checks of the harness forward, capture and interventions on a tiny random GrugMoE."""
 
 import copy
+import json
 
 import pytest
 import torch
@@ -12,9 +13,13 @@ from experiments.interp.snowball_identity.harness import (
     AddVector,
     Interventions,
     NeuronEdit,
+    Output,
     SnowballHarness,
     import_grug,
+    run_positions,
 )
+from experiments.interp.snowball_identity.logit_check import compare
+from experiments.interp.snowball_identity.sequences import Sequence
 
 grug = import_grug()
 
@@ -172,3 +177,49 @@ def test_residual_patch(harness):
     torch.testing.assert_close(recorder.resid[2][4], value)
     torch.testing.assert_close(patched[:4], base[:4])
     assert not torch.allclose(patched[4:], base[4:])
+
+
+def test_positions_and_logit_check(harness, tmp_path):
+    sequences = [
+        Sequence("check|a", "check", tuple(TOKENS)),
+        *(
+            Sequence(
+                f"contrastive|r|no_system|{index}",
+                "contrastive",
+                (*TOKENS[:6], 40 + index, 50 + index),
+                (6, 8),
+                {"correct": (0,)},
+            )
+            for index in range(3)
+        ),
+    ]
+    run_positions(harness, sequences, Output(str(tmp_path / "out")))
+    ours = torch.load(tmp_path / "out" / "positions.pt")
+    # A "vLLM" reference that is the harness's own output: every comparison must be exact.
+    reference = {}
+    for sequence in sequences:
+        record = ours[sequence.id]
+        reference[sequence.id] = {
+            "tokens": record["tokens"],
+            "actual": [None, *record["actual"][1:].tolist()],
+            "top": [None]
+            + [
+                dict(zip(ids[:20].tolist(), values[:20].tolist(), strict=True))
+                for ids, values in zip(record["top_ids"][1:], record["top_lp"][1:], strict=True)
+            ],
+        }
+    (tmp_path / "vllm.json").write_text(json.dumps(reference))
+    result = compare(
+        str(tmp_path / "out" / "positions.pt"),
+        str(tmp_path / "vllm.json"),
+        None,
+        {s.id: (s.score, s.meta["correct"]) for s in sequences if s.score},
+    )
+    check = result["positions"]["check"]
+    assert check["top1_agree"] == check["positions"] == len(TOKENS) - 1
+    assert check["max_abs_logprob_diff"] == 0 and check["missing_from_harness_top50"] == 0
+    contrastive = result["contrastive"]
+    assert contrastive["row_conditions"] == 1 and contrastive["max_abs_score_diff_vs_vllm"] < 1e-5
+    scores = [float(ours[f"contrastive|r|no_system|{i}"]["actual"][6:8].sum()) for i in range(3)]
+    won = scores[0] > max(scores[1:])
+    assert contrastive["wins"]["no_system"] == {"harness": won, "vllm": won, "rows": 1}

@@ -8,9 +8,10 @@ split evenly over the visible GPUs. Every forward is a full forward (the torch G
 
 Subcommands (each writes under ``--output``, an s3:// or local directory):
 
-``logits``
-    Next-token log-probs at the last position of each prompt, saved as ``logits/<id>.pt``. ``compare``
-    checks them against ``vllm_reference.py``.
+``positions``
+    Teacher-forced log-probs at every position of the logit-check sequences (``sequences.py``): the actual
+    token's log-prob and the top 50, saved as ``positions.pt``. ``logit_check.py`` compares them with
+    ``vllm_reference.py``.
 ``capture``
     For each prompt, at the chosen positions: the residual stream after each layer; the attention, routed-MLP
     and shared-expert outputs per layer; the router's top-4 expert ids and combine weights; the post-activation
@@ -18,8 +19,6 @@ Subcommands (each writes under ``--output``, an s3:// or local directory):
     log-probs of each listed target continuation. One ``capture/<id>.pt`` per prompt plus ``capture.jsonl``.
 ``generate``
     Sample continuations, with the same interventions active. Writes ``generate.jsonl``.
-``compare``
-    Local, no GPU: max abs log-prob difference over vLLM's top 50 and top-1 agreement.
 
 Interventions (``capture`` and ``generate``; each flag may repeat):
 
@@ -59,6 +58,7 @@ from experiments.interp.snowball_identity.prompts import (
     load_tokenizer,
     read_prompts,
 )
+from experiments.interp.snowball_identity.sequences import Sequence, build_sequences
 
 logger = logging.getLogger(__name__)
 
@@ -420,11 +420,25 @@ def top(logprobs: torch.Tensor, tokenizer, k: int = 5) -> list[dict]:
     ]
 
 
-def run_logits(harness: SnowballHarness, prompts: list[Prompt], output: Output, tokenizer) -> None:
-    for prompt in prompts:
-        logprobs, _ = harness.forward(prompt.tokens, assistant_start=prompt.assistant_start)
-        output.save(f"logits/{prompt.id}.pt", {"tokens": list(prompt.tokens), "logprobs": logprobs[0]})
-        logger.info("logits %s: top %s", prompt.id, top(logprobs[0], tokenizer, 3))
+def run_positions(harness: SnowballHarness, sequences: list[Sequence], output: Output) -> None:
+    """Entry ``i`` of each tensor is the distribution over token ``i`` given tokens ``0..i-1`` (vLLM's layout)."""
+    results = {}
+    started = time.time()
+    for number, sequence in enumerate(sequences):
+        tokens = torch.tensor(sequence.tokens)
+        logprobs, _ = harness.forward(sequence.tokens, assistant_start=0, logit_positions=torch.arange(len(tokens) - 1))
+        top_lp, top_ids = logprobs.topk(TOP_K, dim=-1)
+        actual = torch.full((len(tokens),), float("nan"))
+        actual[1:] = logprobs[torch.arange(len(tokens) - 1), tokens[1:]]
+        results[sequence.id] = {
+            "tokens": list(sequence.tokens),
+            "actual": actual,
+            "top_ids": torch.cat([torch.full((1, TOP_K), -1), top_ids]).int(),
+            "top_lp": torch.cat([torch.full((1, TOP_K), float("nan")), top_lp]),
+        }
+        if number % 50 == 0:
+            logger.info("positions %d/%d %s (%.0fs)", number, len(sequences), sequence.id, time.time() - started)
+    output.save("positions.pt", results)
 
 
 def run_capture(harness, prompts, by_id, base, patches, args, output: Output, tokenizer) -> None:
@@ -505,44 +519,13 @@ def run_generate(harness, prompts, by_id, base, patches, args, output: Output, t
     output.write("generate.jsonl", "".join(json.dumps(row) + "\n" for row in rows).encode())
 
 
-def compare(torch_dir: str, vllm_json: str) -> dict:
-    """Compare ``logits`` output with ``vllm_reference.py`` output over vLLM's top-50 tokens."""
-    reference = json.loads(read_bytes(vllm_json))
-    fs, root = filesystem_for(torch_dir)
-    rows = []
-    for prompt_id, ref in sorted(reference.items()):
-        saved = torch.load(io.BytesIO(fs.cat_file(prefix_join(root, f"logits/{prompt_id}.pt"))), map_location="cpu")
-        if saved["tokens"] != ref["tokens"]:
-            raise ValueError(f"{prompt_id}: torch and vLLM saw different token IDs")
-        ids = torch.tensor([int(token) for token in ref["top_logprobs"]])
-        vllm = torch.tensor(list(ref["top_logprobs"].values()))
-        ours = saved["logprobs"][ids]
-        rows.append(
-            {
-                "id": prompt_id,
-                "top1_agree": int(saved["logprobs"].argmax()) == ref["greedy"],
-                "torch_top1": int(saved["logprobs"].argmax()),
-                "vllm_top1": ref["greedy"],
-                "max_abs_logprob_diff": float((ours - vllm).abs().max()),
-                "max_abs_prob_diff": float((ours.exp() - vllm.exp()).abs().max()),
-            }
-        )
-    return {
-        "prompts": len(rows),
-        "top1_agree": sum(row["top1_agree"] for row in rows),
-        "max_abs_logprob_diff": max(row["max_abs_logprob_diff"] for row in rows),
-        "max_abs_prob_diff": max(row["max_abs_prob_diff"] for row in rows),
-        "rows": rows,
-    }
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["logits", "capture", "generate", "compare"])
+    parser.add_argument("command", choices=["positions", "capture", "generate"])
     parser.add_argument("--weights", default=SNOWBALL_V01)
     parser.add_argument("--prompts", default="check", help='JSONL path, or "check" for the built-in set')
     parser.add_argument("--output", required=True, help="output directory (s3:// or local)")
-    parser.add_argument("--vllm", help="compare: vllm_reference.py output JSON")
+    parser.add_argument("--identity", help="positions: identity.jsonl with the contrastive rows (s3:// or local)")
     parser.add_argument("--positions", default="last")
     parser.add_argument("--full-logits", action="store_true", help="capture: also save full log-probs")
     parser.add_argument("--add-vector", action="append", default=[])
@@ -553,11 +536,6 @@ def main() -> None:
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
-
-    if args.command == "compare":
-        result = compare(args.output, args.vllm)
-        print(json.dumps(result, indent=1))
-        return
 
     tokenizer = load_tokenizer(args.weights)
     prompts = read_prompts(args.prompts, tokenizer)
@@ -573,8 +551,8 @@ def main() -> None:
         f"{args.command}-args.json",
         json.dumps({**vars(args), "torch": torch.__version__, "gpus": len(devices)}).encode(),
     )
-    if args.command == "logits":
-        run_logits(harness, prompts, output, tokenizer)
+    if args.command == "positions":
+        run_positions(harness, build_sequences(tokenizer, args.identity), output)
     elif args.command == "capture":
         run_capture(harness, prompts, by_id, base, patches, args, output, tokenizer)
     else:
