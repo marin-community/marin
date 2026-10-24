@@ -52,6 +52,8 @@ DECODER_LAYER_CLASSES = {
 TEMPLATE_INTEGRITY_PLUGIN = "axolotl.integrations.template_integrity.TemplateIntegrityPlugin"
 # Shipped next to the pod runner; see fp32_master.py.
 FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
+# A diagnostic-only plugin shipped next to the pod runner; see precision_probe.py.
+PRECISION_PROBE_PLUGIN = "precision_probe.PrecisionProbePlugin"
 # The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
 CUT_CROSS_ENTROPY_PLUGIN = "axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin"
 # Per-architecture load-time checks shipped next to the pod runner (see nemotron_h_checks.py).
@@ -220,6 +222,9 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         # The router aux loss is explicit on the spec: without it the router trains only
         # through the LM loss.
         "output_router_logits": spec.output_router_logits,
+        # Reduce-scatter gradients after every micro-batch. Skipping the sync during accumulation
+        # keeps the whole model's unsharded bf16 gradients on every GPU (~61 GB for Qwen3-30B).
+        "accelerator_config": {"gradient_accumulation_kwargs": {"sync_each_batch": True}},
         "logging_steps": 1,
         "save_strategy": "steps",
         "save_steps": 200,
@@ -372,6 +377,7 @@ def main() -> None:
     submit.add_argument("--timeout-hours", type=int, default=96)
     submit.add_argument("--dry-run", action="store_true")
     submit.add_argument("--preprocess-only", action="store_true", help="validate and tokenize on CPU only")
+    submit.add_argument("--probe-precision", action="store_true", help="log dtypes and memory on the first step")
     args = parser.parse_args()
 
     spec = stage_specs(args.base, data_root=args.data_root, output_root=args.output_root)[args.stage - 1]
@@ -379,6 +385,8 @@ def main() -> None:
     if args.max_steps is not None:
         output_uri = f"{output_uri}-smoke{args.max_steps}"
     payload = launch_payload(spec, output_uri=output_uri, max_steps=args.max_steps)
+    if args.probe_precision:
+        payload["config"]["plugins"].append(PRECISION_PROBE_PLUGIN)
     command = iris_command(
         payload,
         job_name=args.job_name,
