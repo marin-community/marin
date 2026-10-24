@@ -28,7 +28,7 @@ Methods: oracle (skip a block when every unit in it is zero), random (skip block
 block of B in a given order) and top-group (keep only the heaviest half / quarter of the bisection order, or of the
 original order: oracle sub-expert dispatch). Block granularities 1, 32, 64 and 128 in the seriation order.
 
-Writes ``excl_plan.npz`` (orders, triggers, labels) and ``excl_skip.json``.
+Writes ``excl_plan.npz`` (orders ``perms [O, L, E, I]``, triggers, group-pass histograms) and the sweep json.
 """
 
 import argparse
@@ -253,12 +253,15 @@ def build_plan(tag: str) -> dict:
         parts.append(layer_plan(layer, stats["asum"][li], seed=li))
         logger.info("plan layer %d", li)
     plan = {k: np.stack([p[k] for p in parts]) for k in parts[0]}
+    plan["perms"] = np.swapaxes(plan["perms"], 0, 1)  # [O, L, E, I]
     plan["cnt"] = stats["cnt"]
     return plan
 
 
 def device_plan(plan: dict, table: np.ndarray | None) -> Plan:
     perms = plan["perms"].astype(np.int32)
+    if perms.shape[:2] != (len(ORDERS), L):
+        raise ValueError(f"perms must be [O, L, E, I], got {perms.shape}")
     inv = np.argsort(perms, axis=-1).astype(np.int32)
     trig_mask = np.zeros((L, E, I), bool)
     np.put_along_axis(trig_mask, plan["trig"], True, axis=-1)
@@ -563,6 +566,7 @@ def main() -> None:
     parser.add_argument("--calib-sequences", type=int, default=256)
     parser.add_argument("--eval-sequences", type=int, default=128)
     parser.add_argument("--only", default="", help="comma-separated config name prefixes (default: all)")
+    parser.add_argument("--out", default="excl_skip", help="name of the sweep json")
     args = parser.parse_args()
     t0 = time.time()
     plan_host = build_plan(args.tag)
@@ -626,7 +630,7 @@ def main() -> None:
         eval_sequences=args.eval_sequences,
         calib_sequences=args.calib_sequences,
     )
-    common.save_json(args.tag, "excl_skip", out)
+    common.save_json(args.tag, args.out, out)
     common.save_npz(
         args.tag,
         "excl_plan",
@@ -638,7 +642,7 @@ def main() -> None:
         **{f"group_{k}": v for k, v in gstate.items()},
         mass_bins=MASS_BINS,
     )
-    with fsspec.open(f"{common.OUTPUT_ROOT}/{args.tag}/excl_skip_done.txt", "w") as f:
+    with fsspec.open(f"{common.OUTPUT_ROOT}/{args.tag}/{args.out}_done.txt", "w") as f:
         f.write(json.dumps({"seconds": time.time() - t0, "configs": len(results)}))
     logger.info("done in %.0fs", time.time() - t0)
 

@@ -46,6 +46,8 @@ from experiments.grug.fast_track.interp.exclusion_skip import (
     base_selection,
     bisection_order,
     lowrank,
+    phi_matrix,
+    wta_orders,
 )
 from experiments.grug.fast_track.interp.exclusion_stats import CAPACITY, padded_rows, scatter_padded
 from experiments.grug.fast_track.interp.ngram import load_npz
@@ -502,15 +504,19 @@ def main() -> None:
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
-    skip_plan = load_npz(args.tag, "excl_plan")
-    skip_orders = list(skip_plan["orders"])
-    lr_a, lr_b = [], []
+    stats = load_npz(args.tag, "excl_stats")
+    lr_a, lr_b, binary_bisection, wta4 = [], [], [], []
     for li in range(L):
         layer = load_npz(args.tag, f"excl_cofire_L{li}")
-        a, b, _ = lowrank(layer["w_eff"], layer["lat_m2"] / np.maximum(layer["cnt"], 1.0)[:, None, None])
+        n = np.maximum(layer["cnt"], 1.0)
+        a, b, _ = lowrank(layer["w_eff"], layer["lat_m2"] / n[:, None, None])
         lr_a.append(a)
         lr_b.append(b)
-    logger.info("low-rank factors (%.0fs)", time.time() - t0)
+        phi = phi_matrix(layer["cofire"], layer["cnt"])
+        binary_bisection.append(np.stack([bisection_order(phi[e]) for e in range(E)]))
+        diag = np.diagonal(layer["cofire"], axis1=1, axis2=2)
+        wta4.append(wta_orders(layer["cofire"] / n[:, None, None], stats["asum"][li] / np.maximum(diag, 1.0), 4))
+    logger.info("low-rank factors and orders (%.0fs)", time.time() - t0)
     calib = common.train_batches(BATCH, args.calib_sequences, seed=CALIB_SEED)
     evals = common.train_batches(BATCH, args.eval_sequences, seed=EVAL_SEED)
     out: dict = {}
@@ -572,7 +578,7 @@ def main() -> None:
             [
                 np.stack(perms_strong["q90"]),
                 np.stack(perms_strong["c5"]),
-                skip_plan["perms"][skip_orders.index("bisection")].astype(np.int64),
+                np.stack(binary_bisection),
                 rand,
             ]
         ).astype(np.int32)
@@ -584,7 +590,7 @@ def main() -> None:
             for k, v in run(make_share_step(), sstate, model, evals, mesh, norms, jnp.asarray(sperms)).items()
         }
         logger.info("share pass (%.0fs)", time.time() - t0)
-        wta_perm = skip_plan["perms"][skip_orders.index("wta4")].astype(np.int32)
+        wta_perm = np.stack(wta4).astype(np.int32)
         perms = np.stack([np.tile(np.arange(I, dtype=np.int32), (L, E, 1)), wta_perm])
         plan = MassPlan(
             norms=norms,
