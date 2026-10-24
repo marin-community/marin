@@ -6,7 +6,12 @@
 Tokenizes a few real CL12 conversations through the training strategy, packs them with the
 collator Axolotl uses for the configured attention backend, and compares each segment's
 logits and loss with the same conversation run alone. Also checks that position ids reset
-per segment and that the packed labels keep the template's ``{% generation %}`` spans.
+per segment and that the packed labels keep the template's ``{% generation %}`` spans, and
+reruns the pack with the first segment's tokens reversed: the later segments must not change.
+
+For Qwen3.5 in float32, run with ``TRITON_F32_DEFAULT=ieee``: fla's Gated DeltaNet kernels
+otherwise take TF32 dots, and packed and alone logits then differ by ~5e-2 relative from
+rounding alone (segment 0 included); with IEEE dots they agree to ~1e-5.
 
     python experiments/post_training/axolotl_sft/packing_check.py PAYLOAD.json DATA.jsonl.gz \\
         --attn flex_attention [--model BASE_OR_PATH --device cuda] [--rows 3]
@@ -22,6 +27,7 @@ import json
 import sys
 
 import torch
+from axolotl.monkeypatch.models.qwen3_5.modeling import patch_qwen3_5_moe_modeling_packing
 from axolotl.prompt_strategies.chat_template import StrategyLoader
 from axolotl.utils.collators.batching import V2BatchSamplerDataCollatorForSeq2Seq
 from axolotl.utils.dict import DictDefault
@@ -29,8 +35,15 @@ from packed_attention import SegmentPositionCollator
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 IGNORE = -100
+# Packing patches Axolotl's PatchManager applies under sample_packing, by model type: Qwen3.5's
+# Gated DeltaNet layers take segment boundaries (cu_seqlens) from the position ids only once
+# patched, so the check must run the patched layers that training runs.
+PACKING_PATCHES = {"qwen3_5_moe": patch_qwen3_5_moe_modeling_packing}
 # bf16 logits differ at about 1e-2 relative between packed and unpacked kernels.
 RELATIVE_TOLERANCE = {torch.float32: 1e-4, torch.bfloat16: 3e-2}
+# The swap test reruns the pack with the first segment's tokens reversed: same layout, same
+# kernels, so a later segment's logits may change only through leakage.
+SWAP_TOLERANCE = 1e-5
 
 
 def _features(strategy, rows: list[dict]) -> list[dict]:
@@ -105,6 +118,9 @@ def main() -> None:
         rows = [json.loads(line) for _, line in zip(range(args.rows), handle, strict=False)]
     features = _features(strategy, rows)
 
+    model_type = AutoConfig.from_pretrained(config["base_model"], revision=config["revision_of_model"]).model_type
+    if model_type in PACKING_PATCHES:
+        PACKING_PATCHES[model_type]()
     if args.model is None:
         model = _tiny_model(config["base_model"], config["revision_of_model"], args.attn)
     else:
@@ -132,6 +148,16 @@ def main() -> None:
             # As in training: a KV cache turns off transformers' packed-segment detection.
             use_cache=False,
         ).logits[0]
+        swapped_ids = packed["input_ids"].clone()
+        first = len(features[0]["input_ids"])
+        swapped_ids[0, :first] = swapped_ids[0, :first].flip(0)
+        swapped_logits = model(
+            input_ids=swapped_ids.to(device),
+            attention_mask=attention_mask,
+            position_ids=packed["position_ids"].to(device),
+            use_cache=False,
+        ).logits[0]
+        tolerance = RELATIVE_TOLERANCE[dtype]
         offset = 0
         for index, feature in enumerate(features):
             length = len(feature["input_ids"])
@@ -143,14 +169,24 @@ def main() -> None:
             scale = alone.float().abs().max().item()
             per_position = (segment.float() - alone.float()).abs().amax(-1) / scale
             difference = per_position.max().item()
-            offending = (per_position > RELATIVE_TOLERANCE[dtype]).nonzero().flatten().tolist()
+            offending = (per_position > tolerance).nonzero().flatten().tolist()
+            swap_change = (
+                None
+                if index == 0
+                else (swapped_logits[offset : offset + length].float() - segment.float()).abs().max().item() / scale
+            )
             labels = torch.tensor(feature["labels"], device=device)
             packed_labels = packed["labels"][0, offset : offset + length].to(device)
             losses = (_segment_loss(segment, packed_labels).item(), _segment_loss(alone, labels).item())
             positions_reset = packed["position_ids"][0, offset : offset + length].tolist() == list(range(length))
             labels_kept = packed_labels.tolist() == feature["labels"]
             ids_kept = packed["input_ids"][0, offset : offset + length].tolist() == feature["input_ids"]
-            ok = difference <= RELATIVE_TOLERANCE[dtype] and positions_reset and labels_kept
+            ok = (
+                difference <= tolerance
+                and (swap_change is None or swap_change <= SWAP_TOLERANCE)
+                and positions_reset
+                and labels_kept
+            )
             failures += not ok
             print(
                 json.dumps(
@@ -159,6 +195,7 @@ def main() -> None:
                         "tokens": length,
                         "max_relative_logit_difference": difference,
                         "positions_over_tolerance": len(offending),
+                        "max_relative_change_when_first_segment_reversed": swap_change,
                         "first_offending_positions": offending[:8],
                         "loss_packed": losses[0],
                         "loss_alone": losses[1],

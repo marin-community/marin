@@ -545,6 +545,7 @@ def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
 
 def test_axolotl_router_policy_is_explicit_per_architecture():
     from experiments.post_training.axolotl_sft.launcher import (  # noqa: PLC0415 - pulls the launcher's iris stack
+        ROUTER_AUX_LOSS_PLUGIN,
         axolotl_config,
     )
     from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415 - pulls the launcher's iris stack
@@ -556,7 +557,7 @@ def test_axolotl_router_policy_is_explicit_per_architecture():
         expected = ROUTER_AUX_LOSS[base.architecture]
         for spec in specs:
             assert spec.output_router_logits is expected
-            assert axolotl_config(spec)["output_router_logits"] is expected
+            assert (ROUTER_AUX_LOSS_PLUGIN in axolotl_config(spec)["plugins"]) is expected
     # The deviation is deliberate: Qwen arms carry the aux loss, Nemotron-H does not.
     assert ROUTER_AUX_LOSS["qwen3_moe"] is True
     assert ROUTER_AUX_LOSS["qwen3_5_moe"] is True
