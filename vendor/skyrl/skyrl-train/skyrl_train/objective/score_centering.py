@@ -173,8 +173,8 @@ def collate_score_probe(
     remove evidence; padding uses invalid candidate IDs. Sampled-token scores
     validate the behavior head before returning ``score_topk_indices``,
     ``score_behavior_logprobs`` and ``score_probe_positions`` (empty if none survive).
-    The trainer gathers generating-policy stamps at these returned positions,
-    using -1 for unknown sources, then recomputes ``score_old_logprobs``.
+    Callers must provide aligned ``score_probe_source_steps`` (-1 for unknown)
+    and ``score_old_logprobs`` for these positions before summarizing.
     """
     positions = trajectory_batch["score_probe_positions"]
     index_rows = trajectory_batch["score_probe_indices"]

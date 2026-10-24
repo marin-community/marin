@@ -100,7 +100,6 @@ async def test_chat_completion_retry_accumulates_and_sends_continuations(exact_p
     class MockEngine:
         def __init__(self):
             self.calls = []  # capture full request payloads {"json":..., "headers":...}
-            # Pre-programmed partial responses
             self.responses = [
                 # 1) abort with 1 token "A"
                 {
