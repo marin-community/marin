@@ -71,6 +71,7 @@ from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
     NULL_REAL_SLOTS,
     NULL_REAL_WEIGHT,
+    OUTSTAT_PREFIX,
     DenseMLP,
     GradProbeSite,
     GrugModelConfig,
@@ -1022,14 +1023,17 @@ def _make_train_step(
                 model_tree_type=type(state.params),
             )
 
+        # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
+        # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
+        pending_qb_betas = metrics.get("qb_beta_per_layer", state.pending_qb_betas)
+        if state.params.config.num_null_experts:
+            pending_qb_betas = _null_bias_step(state.params.config, state.pending_qb_betas, pending_qb_betas, metrics)
         next_state = dataclasses.replace(
             state,
             step=state.step + one,
             params=params,
             opt_state=opt_state,
-            # Dense blocks have no router, so the forward emits no qb_beta_per_layer; keep the
-            # (zeros) pending betas -- _apply_qb_betas is already a no-op for dense.
-            pending_qb_betas=metrics.get("qb_beta_per_layer", state.pending_qb_betas),
+            pending_qb_betas=pending_qb_betas,
         )
         if next_state.pending_qb_betas.shape[-1] <= _LOGGED_QB_BETA_MAX_EXPERTS:
             # Few experts (the specialization study models): log every expert's QB balancing bias.
@@ -1040,6 +1044,20 @@ def _make_train_step(
         return next_state, metrics, watch_stats
 
     return train_step
+
+
+def _null_bias_step(
+    cfg: GrugModelConfig, pending: jax.Array, real_betas: jax.Array, metrics: dict[str, jax.Array]
+) -> jax.Array:
+    """Next pending QB betas with null columns: this step's real-expert betas, then the null controller
+    ``b_null += null_bias_rate * (mean real slots - null_target_real_experts)`` per layer, in float32 (the null
+    columns hold ``-b_null``)."""
+    real_slots = jnp.stack(
+        [metrics[f"train/aux/{OUTSTAT_PREFIX}moe_active_k_L{i}"] for i in range(cfg.num_layers)]
+    ).astype(jnp.float32)
+    error = real_slots - cfg.null_target_real_experts
+    null_columns = pending[:, cfg.num_experts :] - cfg.null_bias_rate * error[:, None]
+    return jnp.concatenate([real_betas[:, : cfg.num_experts], null_columns], axis=-1)
 
 
 def _flat_train_step(step_fn, treedef):

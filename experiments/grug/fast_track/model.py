@@ -84,7 +84,7 @@ _SKIP_KEEP = "layer_skip_keep"
 _ENTROPY_PRED = "entropy_pred"
 _ENTROPY_CHUNK = 1024
 # Per-layer branch-output stats, stacked over layers like the router stats.
-_OUTSTAT_PREFIX = "outstat/"
+OUTSTAT_PREFIX = "outstat/"
 # Per-layer per-token total combine weight of the selected real experts ``[T]`` (``num_null_experts`` with a
 # ``null_aux`` pressure): differentiable, from the forward to the loss.
 NULL_REAL_WEIGHT = "null_real_weight"
@@ -468,11 +468,11 @@ class GrugModelConfig:
     """Zero-compute experts (AdaMoE / MoE++ / LongCat-Flash): extra router columns that join the top-K selection.
     A selected null slot keeps its share of the renormalized combine weight but outputs zero and is dropped from
     dispatch, so a token's real experts get only ``routing_renorm_sum * (real share)``. The nulls share one
-    selection bias per layer (``null_bias_rate`` controller); QB balances the real experts only."""
+    selection bias per layer (``null_bias_rate`` controller); QB balances the real experts only. Ragged EP only."""
     null_target_real_experts: float = 8.0
     """With ``num_null_experts``: the null-bias controller's target mean real (non-null) slots per token per layer.
     Also sizes the ragged EP transport buffers (``capacity_factor`` times this many slots per token)."""
-    null_bias_rate: float = 0.01
+    null_bias_rate: float = 0.05
     """With ``num_null_experts``: each step ``b_null += null_bias_rate * (mean real slots - target)`` per layer."""
     null_aux: NullAux = NullAux.NONE
     null_aux_weight: float = 0.0
@@ -657,7 +657,7 @@ class InklingRelPos(eqx.Module):
 def _log_head_gate_off(head_gate: Float[Array, "B S N"], stats: dict[str, jax.Array]) -> None:
     """Log into ``stats`` the fraction of heads whose output gate, normalized to (0, 1), is near off."""
     g = jax.lax.stop_gradient(head_gate.astype(jnp.float32))
-    stats[f"{_OUTSTAT_PREFIX}head_gate_off"] = jnp.mean((g < _HEAD_GATE_OFF).astype(jnp.float32))
+    stats[f"{OUTSTAT_PREFIX}head_gate_off"] = jnp.mean((g < _HEAD_GATE_OFF).astype(jnp.float32))
 
 
 class CausalSelfAttention(eqx.Module):
@@ -1288,21 +1288,18 @@ class MoEMLP(eqx.Module):
             batch_axes=_BATCH_AXES,
         )
         if num_null:
-            # LongCat-style controller on the shared null bias (applied next step like the QB betas, which carry
-            # it as -bias in the null columns).
+            # The trainer steps the null bias (``null_bias_rate``) in float32 from this layer's mean real slots.
             null_bias = jax.lax.stop_gradient(self.router_bias[num_experts])
-            next_null_bias = null_bias + self.cfg.null_bias_rate * (mean_real - self.cfg.null_target_real_experts)
-            beta = jnp.concatenate([beta, jnp.broadcast_to(-next_null_bias, (num_null,))])
-            router_stats[f"{_OUTSTAT_PREFIX}null_bias"] = null_bias
-            router_stats[f"{_OUTSTAT_PREFIX}null_real_slots_std"] = jnp.std(real_slots)
-            router_stats[f"{_OUTSTAT_PREFIX}null_real_weight"] = jax.lax.stop_gradient(jnp.mean(real_weight))
+            router_stats[f"{OUTSTAT_PREFIX}null_bias"] = null_bias
+            router_stats[f"{OUTSTAT_PREFIX}null_real_slots_std"] = jnp.std(real_slots)
+            router_stats[f"{OUTSTAT_PREFIX}null_real_weight"] = jax.lax.stop_gradient(jnp.mean(real_weight))
             router_stats[NULL_REAL_WEIGHT] = reshard(
                 real_weight if self.cfg.null_aux != NullAux.NONE else jax.lax.stop_gradient(real_weight),
                 P(_BATCH_AXES),
             )
             router_stats[NULL_REAL_SLOTS] = reshard(real_slots, P(_BATCH_AXES))
         router_stats["qb_beta"] = beta
-        router_stats[f"{_OUTSTAT_PREFIX}moe_active_k"] = mean_real if num_null else jnp.asarray(float(k), jnp.float32)
+        router_stats[f"{OUTSTAT_PREFIX}moe_active_k"] = mean_real if num_null else jnp.asarray(float(k), jnp.float32)
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
 
@@ -2145,7 +2142,7 @@ class Transformer(eqx.Module):
                 "margin_min_per_layer": stacked_router_stats["margin_min"],
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
-            router_metrics.update({k: v for k, v in stacked_router_stats.items() if k.startswith(_OUTSTAT_PREFIX)})
+            router_metrics.update({k: v for k, v in stacked_router_stats.items() if k.startswith(OUTSTAT_PREFIX)})
             for key in (NULL_REAL_WEIGHT, NULL_REAL_SLOTS):
                 if key in stacked_router_stats:
                     router_metrics[key] = stacked_router_stats[key]
@@ -2385,7 +2382,7 @@ class Transformer(eqx.Module):
         final_norm_rms = router_metrics.pop(FINAL_NORM_INPUT_RMS_KEY, None)
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
-        outstats = {k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith(_OUTSTAT_PREFIX)}
+        outstats = {k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith(OUTSTAT_PREFIX)}
         real_weight = router_metrics.pop(NULL_REAL_WEIGHT, None)
         router_metrics.pop(NULL_REAL_SLOTS, None)
         if self.config.null_aux == NullAux.NONE:
