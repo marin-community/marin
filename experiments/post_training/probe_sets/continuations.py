@@ -130,6 +130,38 @@ def _sample(endpoint: OpenAIEndpoint, body: dict[str, Any]) -> list[int]:
     return [int(token) for token in choice["token_ids"]]
 
 
+def _sampled_responses(
+    endpoint: OpenAIEndpoint, rows: list[dict[str, Any]], prompt_ids: list[list[int]], stop_id: int, raw_path: str
+) -> list[list[int]]:
+    """Each probe's sampled ids, written to ``raw_path`` before tagging; a raw file already there is reused.
+
+    The sampled ids are the expensive part, and reusing them keeps a tagging failure
+    from costing a second sampling pass (the seeds would reproduce it anyway).
+    """
+    filesystem, path = fsspec.core.url_to_fs(raw_path)
+    if filesystem.exists(path):
+        stored = {row["probe_id"]: row for row in read_jsonl(raw_path)}
+        logger.info("reusing %d sampled replies from %s", len(stored), raw_path)
+        for row, ids in zip(rows, prompt_ids, strict=True):
+            if stored[row["probe_id"]]["prompt_ids"] != ids:
+                raise ValueError(f"{raw_path} holds a different prompt for {row['probe_id']}")
+        return [stored[row["probe_id"]]["response_ids"] for row in rows]
+    bodies = [
+        request_body(endpoint.model, ids, request_seed(MASTER_SEED, row["probe_id"], 0), SNOWBALL_DECODE, stop_id)
+        for row, ids in zip(rows, prompt_ids, strict=True)
+    ]
+    with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
+        responses = list(pool.map(functools.partial(_sample, endpoint), bodies))
+    write_jsonl(
+        raw_path,
+        [
+            {"probe_id": row["probe_id"], "prompt_ids": ids, "response_ids": response}
+            for row, ids, response in zip(rows, prompt_ids, responses, strict=True)
+        ],
+    )
+    return responses
+
+
 def read_jsonl(path: str) -> list[dict[str, Any]]:
     with fsspec.open(path, "rt") as handle:
         return [json.loads(line) for line in handle if line.strip()]
@@ -201,15 +233,9 @@ def main() -> None:
         endpoint = session.model.endpoint
         for name, rows in probes.items():
             prompt_ids = [render_prompt_ids(tokenizer, args.family, row["messages"]) for row in rows]
-            bodies = [
-                request_body(
-                    endpoint.model, ids, request_seed(MASTER_SEED, row["probe_id"], 0), SNOWBALL_DECODE, stop_id
-                )
-                for row, ids in zip(rows, prompt_ids, strict=True)
-            ]
+            raw_path = f"{args.out.rstrip('/')}/{name}.raw.jsonl"
             started = time.monotonic()
-            with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
-                responses = list(pool.map(functools.partial(_sample, endpoint), bodies))
+            responses = _sampled_responses(endpoint, rows, prompt_ids, stop_id, raw_path)
             seconds = time.monotonic() - started
             out_rows = [
                 continuation_row(tokenizer, args.family, name, row, ids, response)

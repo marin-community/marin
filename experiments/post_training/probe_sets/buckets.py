@@ -66,15 +66,17 @@ class TaggedSequence:
 
 
 def _json_string_values(content: str, key: str) -> list[tuple[int, int]]:
-    """Character spans of every ``"key": "<value>"`` string value in ``content``, quotes excluded."""
+    """Character spans of every ``"key": "<value>"`` string value in ``content``, quotes excluded.
+
+    A value still open at the end of the content (a reply cut at the token cap) runs to
+    the end.
+    """
     spans = []
     for match in re.finditer(rf'"{re.escape(key)}"\s*:\s*"', content):
         start = index = match.end()
         while index < len(content) and content[index] != '"':
             index += 2 if content[index] == "\\" else 1
-        if index >= len(content):
-            raise ValueError(f"unterminated JSON string for {key!r}")
-        spans.append((start, index))
+        spans.append((start, min(index, len(content))))
     return spans
 
 
