@@ -215,7 +215,11 @@ def collect_terminal(
     *,
     client: IrisClient | None = None,
 ) -> dict | None:
-    """Retain every final outcome, and process only its complete successful attempt."""
+    """Retain every final outcome, and process only its complete successful attempt.
+
+    Returns:
+        The retained receipt, or None while Iris output finalization is pending.
+    """
     if len(status.tasks) > 1:
         raise ValueError("A benchmark point must be one single-node Iris task")
     if not status.tasks or not status.tasks[0].attempts:
