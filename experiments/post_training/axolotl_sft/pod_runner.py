@@ -35,6 +35,8 @@ import yaml
 logger = logging.getLogger("axolotl_pod_runner")
 
 PAYLOAD_ENV = "AXOLOTL_PAYLOAD"
+# Set to run only Axolotl's config validation and dataset preprocessing (a CPU check).
+PREPROCESS_ONLY_ENV = "AXOLOTL_PREPROCESS_ONLY"
 WORK_ROOT = Path("/tmp/axolotl-run")
 SYNC_INTERVAL = 600
 FORK_REPO = "https://github.com/marin-community/axolotl"
@@ -155,6 +157,11 @@ def main() -> None:
     output_uri = payload["output_uri"].rstrip("/")
 
     environment = os.environ | {"PYTHONPATH": str(PLUGIN_DIR)}
+    if os.environ.get(PREPROCESS_ONLY_ENV):
+        # Validate the config and tokenize the data on CPU, before any GPU job.
+        _run([IMAGE_PYTHON, "-m", "axolotl.cli.preprocess", str(config_path)], env=environment, cwd=WORK_ROOT)
+        logger.info("preprocess succeeded")
+        return
     command = ["torchrun", "--nnodes=1", f"--nproc-per-node={payload['gpus']}", "-m", "axolotl.cli.train"]
     with _PeriodicSync(output_dir, output_uri):
         _run([*command, str(config_path)], env=environment, cwd=WORK_ROOT)

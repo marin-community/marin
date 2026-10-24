@@ -224,7 +224,9 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
     }
     if max_steps is not None:
         config["max_steps"] = max_steps
+        # A smoke saves only the final model; Axolotl rejects save_steps without step saves.
         config["save_strategy"] = "no"
+        del config["save_steps"], config["save_total_limit"]
     return config
 
 
@@ -279,8 +281,17 @@ def launch_payload(spec: AxolotlSpec, *, output_uri: str, max_steps: int | None 
     }
 
 
-def iris_command(payload: dict[str, Any], *, job_name: str, cluster: str, timeout_hours: int) -> list[str]:
-    """The ``iris job run`` argv for one run: one 8-GPU node in the Axolotl image."""
+def iris_command(
+    payload: dict[str, Any], *, job_name: str, cluster: str, timeout_hours: int, preprocess_only: bool = False
+) -> list[str]:
+    """The ``iris job run`` argv for one run: one 8-GPU node in the Axolotl image.
+
+    ``preprocess_only`` runs Axolotl's config validation and tokenization on a CPU node instead.
+    """
+    if preprocess_only:
+        hardware = ["--cpu", "32", "--memory", "256GB", "--disk", "1000GB"]
+    else:
+        hardware = ["--gpu", f"H100x{GPUS_PER_NODE}", "--cpu", "96", "--memory", "1200GB", "--disk", "2000GB"]
     return [
         "uv",
         "run",
@@ -295,14 +306,7 @@ def iris_command(payload: dict[str, Any], *, job_name: str, cluster: str, timeou
         cluster,
         "--priority",
         "interactive",
-        "--gpu",
-        f"H100x{GPUS_PER_NODE}",
-        "--cpu",
-        "96",
-        "--memory",
-        "1200GB",
-        "--disk",
-        "2000GB",
+        *hardware,
         "--timeout",
         str(timeout_hours * 3600),
         "--no-sync",
@@ -316,6 +320,7 @@ def iris_command(payload: dict[str, Any], *, job_name: str, cluster: str, timeou
         "-e",
         "HF_TOKEN",
         os.environ.get("HF_TOKEN", ""),
+        *(["-e", "AXOLOTL_PREPROCESS_ONLY", "1"] if preprocess_only else []),
         "--",
         "python",
         POD_RUNNER,
@@ -338,6 +343,7 @@ def main() -> None:
     submit.add_argument("--cluster", default="cw-rno2a")
     submit.add_argument("--timeout-hours", type=int, default=96)
     submit.add_argument("--dry-run", action="store_true")
+    submit.add_argument("--preprocess-only", action="store_true", help="validate and tokenize on CPU only")
     args = parser.parse_args()
 
     spec = stage_specs(args.base, data_root=args.data_root, output_root=args.output_root)[args.stage - 1]
@@ -345,7 +351,13 @@ def main() -> None:
     if args.max_steps is not None:
         output_uri = f"{output_uri}-smoke{args.max_steps}"
     payload = launch_payload(spec, output_uri=output_uri, max_steps=args.max_steps)
-    command = iris_command(payload, job_name=args.job_name, cluster=args.cluster, timeout_hours=args.timeout_hours)
+    command = iris_command(
+        payload,
+        job_name=args.job_name,
+        cluster=args.cluster,
+        timeout_hours=args.timeout_hours,
+        preprocess_only=args.preprocess_only,
+    )
     if args.dry_run:
         redacted = [
             ("<HF_TOKEN>" if previous == "HF_TOKEN" else part)
