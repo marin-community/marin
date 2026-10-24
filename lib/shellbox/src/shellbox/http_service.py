@@ -19,6 +19,7 @@ from shellbox.machine import Command, Machine
 logger = logging.getLogger(__name__)
 MAX_BODY = http_service_guest.MAX_BODY
 MAX_PENDING = http_service_guest.MAX_PENDING
+MAX_PATH = http_service_guest.MAX_PATH
 WIRE_LIMIT = MAX_BODY * 2
 POLL_INTERVAL = 0.1
 TRANSPORT_TIMEOUT = 30
@@ -128,7 +129,7 @@ async def _pump(
                         or request_id in pending
                         or method not in ("GET", "POST")
                         or not isinstance(path, str)
-                        or len(path) > 4096
+                        or len(path) > MAX_PATH
                         or not isinstance(encoded, str)
                     ):
                         raise ValueError("Invalid sandbox HTTP request")

@@ -1077,6 +1077,33 @@ def test_local_group_command_deadline_closes_every_member(factory, cancel):
     asyncio.run(scenario())
 
 
+def test_cancelled_command_start_closes_the_machine(factory, monkeypatch):
+    async def scenario():
+        machine = await factory.create(SPEC)
+        connection_made = asyncio.subprocess.SubprocessStreamProtocol.connection_made
+
+        def cancel_before_handle_returns(protocol, transport):
+            connection_made(protocol, transport)
+            monkeypatch.setattr(asyncio.subprocess.SubprocessStreamProtocol, "connection_made", connection_made)
+            # asyncio calls this after spawning the process but before returning
+            # its handle. Cancel without adding an artificial await to startup.
+            pending.cancel()
+
+        try:
+            monkeypatch.setattr(
+                asyncio.subprocess.SubprocessStreamProtocol, "connection_made", cancel_before_handle_returns
+            )
+            pending = asyncio.create_task(machine.run(Command(("sleep", "3600"))))
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            with pytest.raises(MachineTerminated):
+                await machine.run(Command(("true",)))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("service_exit", [False, True], ids=["ttl", "service-exit"])
 def test_local_group_failure_and_ttl_reclaim_all_members(service_exit):
     factory = make_factory(ttl=None if service_exit else 3)
