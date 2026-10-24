@@ -206,7 +206,7 @@ class BestCheckpointCallback(TrainerCallback):
         if not 0 <= save_after_fraction <= 1:
             raise ValueError("save_after_fraction must be between zero and one")
         self.save_after_fraction = save_after_fraction
-        self.preservation_max_drop = preservation_max_drop or {}
+        self.preservation_max_drop = dict(preservation_max_drop or {})
         if any(not math.isfinite(drop) or drop < 0 for drop in self.preservation_max_drop.values()):
             raise ValueError("Preservation drops must be finite and nonnegative")
         self.preservation_baseline: dict[str, float] = {}
