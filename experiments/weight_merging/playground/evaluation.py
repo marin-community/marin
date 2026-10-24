@@ -5,6 +5,7 @@
 
 import json
 import math
+import random
 import re
 import subprocess
 import uuid
@@ -156,3 +157,22 @@ def paired_summary(rows: list[dict], baseline: str) -> list[dict]:
 
 def read_rows(path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def item_bootstrap(differences: list[list[int]], *, resamples: int = 5000, seed: int = 290) -> dict:
+    """Bootstrap items after averaging their paired decode-level score differences."""
+    means = [sum(values) / len(values) for values in differences]
+    effect = sum(means) / len(means)
+    if len(set(means)) == 1:
+        interval = [effect, effect]
+    else:
+        rng = random.Random(seed)
+        samples = sorted(sum(rng.choices(means, k=len(means))) / len(means) for _ in range(resamples))
+        interval = [samples[int(0.025 * (resamples - 1))], samples[int(0.975 * (resamples - 1))]]
+    return {
+        "paired_items": len(means),
+        "mean_item_gain": effect,
+        "item_bootstrap_ci95": interval,
+        "bootstrap_resamples": resamples,
+        "bootstrap_seed": seed,
+    }
