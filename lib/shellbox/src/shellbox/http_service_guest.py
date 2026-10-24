@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MAX_BODY = 4 * 1024 * 1024
 MAX_PENDING = 16
+MAX_PATH = 4096
 REQUEST_TIMEOUT = 600
 IDLE_POLL_TIMEOUT = 20
 CONTROL = "/__shellbox_http__/"
@@ -81,7 +82,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_body(200, b"{}")
             threading.Thread(target=self.server.shutdown, daemon=True).start()
             return
-        if self.path.startswith(CONTROL) or length > MAX_BODY or len(self.path) > 4096:
+        if self.path.startswith(CONTROL) or length > MAX_BODY or len(self.path) > MAX_PATH:
             self.send_body(400, b'{"error":"unsupported request"}')
             return
         request_id = uuid.uuid4().hex

@@ -29,4 +29,4 @@ packages = ["src/shellbox"]
 artifacts = ["src/shellbox/backends/qemu/guest/init", "src/shellbox/backends/qemu/guest/disk-init", "src/shellbox/backends/qemu/guest/pty-agent.c"]
 
 [dependency-groups]
-test = ["pytest>=8"]
+test = ["pytest>=8", "pytest-asyncio", "pytest-timeout"]

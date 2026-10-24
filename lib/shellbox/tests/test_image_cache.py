@@ -4,12 +4,16 @@
 """Image build reuse across temporary task directories."""
 
 import hashlib
+import io
 import json
 import shutil
 import subprocess
+import tarfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from shellbox.backends.local.images import prepare_local_image
 from shellbox.backends.qemu.image import QemuAssets, stage_qemu_image
 from shellbox.image import DockerfileSource, ImageCache, PreparedImage, RegistryImage, prepared_image_workdir
 
@@ -25,11 +29,85 @@ def test_image_working_directory(tmp_path, working_directory, expected):
     manifest = json.dumps({"config": {"digest": f"sha256:{config_digest}"}}).encode()
     manifest_digest = hashlib.sha256(manifest).hexdigest()
     (blobs / manifest_digest).write_bytes(manifest)
+    (tmp_path / "index.json").write_text(
+        json.dumps(
+            {
+                "manifests": [
+                    {
+                        "digest": f"sha256:{manifest_digest}",
+                        "annotations": {"org.opencontainers.image.ref.name": "image"},
+                    }
+                ]
+            }
+        )
+    )
     image = PreparedImage(tmp_path, f"sha256:{manifest_digest}", RegistryImage("fixture"))
     assert prepared_image_workdir(image) == expected
     config_path.write_bytes(json.dumps({"config": {"WorkingDir": "/changed"}}).encode())
     with pytest.raises(ValueError):
         prepared_image_workdir(image)
+
+
+@pytest.fixture
+def layered_oci_image(oci_image):
+    layers = []
+    for files in ({"data/payload": b"original", "data/deleted": b"lower"}, {"data/.wh.deleted": b""}):
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w") as output:
+            for name, contents in files.items():
+                entry = tarfile.TarInfo(name)
+                entry.size = len(contents)
+                entry.mode = 0o644
+                output.addfile(entry, io.BytesIO(contents))
+        layers.append(archive.getvalue())
+    return oci_image(
+        tuple(layers),
+        {
+            "Env": ["PATH=/bin", "FIXTURE=from=image"],
+            "WorkingDir": "/data",
+            "Entrypoint": ["/bin/service", "--foreground"],
+            "Cmd": ["--port", "8000"],
+            "User": "0:0",
+        },
+    )
+
+
+def test_local_image_unpack_applies_layers_and_keeps_each_member_private(tmp_path, layered_oci_image):
+    umoci = shutil.which("umoci")
+    if umoci is None:
+        pytest.skip("OCI preparation requires umoci; the Shellbox CI lane installs it")
+    first = prepare_local_image(layered_oci_image, tmp_path / "first", umoci=Path(umoci))
+    second = prepare_local_image(layered_oci_image, tmp_path / "second", umoci=Path(umoci))
+    assert (first.root / "data/payload").read_bytes() == b"original"
+    assert not (first.root / "data/deleted").exists()
+    (first.root / "data/payload").write_bytes(b"changed")
+    assert (second.root / "data/payload").read_bytes() == b"original"
+    assert first.environment == {"PATH": "/bin", "FIXTURE": "from=image"}
+    assert first.workdir == "/data"
+    assert first.entrypoint + first.arguments == ("/bin/service", "--foreground", "--port", "8000")
+    assert first.user == "0:0"
+
+
+@pytest.mark.parametrize("tampering", ["config", "tag", "manifest-path"])
+def test_local_image_rejects_changed_or_invalid_identity_before_unpack(tmp_path, layered_oci_image, tampering):
+    image = layered_oci_image
+    if tampering == "config":
+        manifest = json.loads((image.layout / "blobs/sha256" / image.manifest_digest.split(":")[1]).read_bytes())
+        (image.layout / "blobs/sha256" / manifest["config"]["digest"].split(":")[1]).write_bytes(b"{}")
+    elif tampering == "tag":
+        index = json.loads((image.layout / "index.json").read_text())
+        index["manifests"][0]["digest"] = f"sha256:{'0' * 64}"
+        (image.layout / "index.json").write_text(json.dumps(index))
+    else:
+        invalid_digest = "sha256:../../outside"
+        image = replace(image, manifest_digest=invalid_digest)
+        index = json.loads((image.layout / "index.json").read_text())
+        index["manifests"][0]["digest"] = invalid_digest
+        (image.layout / "index.json").write_text(json.dumps(index))
+    destination = tmp_path / "unpacked"
+    with pytest.raises(ValueError):
+        prepare_local_image(image, destination, umoci=tmp_path / "must-not-run")
+    assert not destination.exists()
 
 
 def test_identical_contexts_share_a_build_and_content_changes_rebuild(tmp_path, monkeypatch):
