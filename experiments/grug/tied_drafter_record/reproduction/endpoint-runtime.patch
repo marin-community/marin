@@ -1,0 +1,179 @@
+diff --git a/experiments/grug/fast_track/grugmuon_stacked.py b/experiments/grug/fast_track/grugmuon_stacked.py
+index 1b51fa4d57..41677cb6a1 100644
+--- a/experiments/grug/fast_track/grugmuon_stacked.py
++++ b/experiments/grug/fast_track/grugmuon_stacked.py
+@@ -556,13 +556,13 @@ def _newtonschulz_4d_distributed(
+     if mesh.empty:
+         return jax.vmap(jax.vmap(local_ns))(x)
+     mesh_shape_items = _intra_rack_axes(mesh)
+-    if not mesh_shape_items:
+-        return jax.vmap(jax.vmap(local_ns))(x)
+-
+     layers, expert_count, d, last = x.shape
+     is_w_down = any(getattr(entry, "name", None) == "w_down" for entry in path)
+     trailing = ("model", "data") if is_w_down else ("data", "model")
+     orig_4d_spec = PartitionSpec(None, "expert", *trailing)
++    if not mesh_shape_items:
++        updated = jax.vmap(jax.vmap(local_ns))(reshard(x, PartitionSpec(None, None, None, None)))
++        return reshard(updated, orig_4d_spec)
+ 
+     if int(mesh.shape.get("expert", 1)) > 1:
+         distributed_4d_spec = PartitionSpec(None, "expert", None, None)
+@@ -640,7 +640,10 @@ def _newtonschulz_padded_stack_sharded(
+         return jax.vmap(local)(X)
+     axes = _intra_rack_axes(mesh)
+     if not axes:
+-        return jax.vmap(local)(X)
++        # Size-one explicit axes still annotate contractions. Make the local
++        # matrix dimensions replicated before forming its Gram matrix.
++        updated = jax.vmap(local)(reshard(X, P(None, None, None)))
++        return reshard(updated, target_sharding) if target_sharding is not None else updated
+ 
+     batch_axis = tuple(name for name, _ in axes)
+     batch_shards = math.prod(size for _, size in axes)
+diff --git a/experiments/grug/fast_track/model.py b/experiments/grug/fast_track/model.py
+index 92aeb11ab4..25da268fa7 100644
+--- a/experiments/grug/fast_track/model.py
++++ b/experiments/grug/fast_track/model.py
+@@ -123,6 +123,7 @@ _ATTN_RES_W_V = "attn_res_weights_v"
+ # ``Transformer.routing_assignments``.
+ _ROUTING_SELECTED = "routing_selected"
+ _ROUTING_WEIGHTS = "routing_weights"
++_ROUTING_LOGITS = "routing_selected_logits"
+ ROUTING_SELECTED_KEY = "routing_selected_per_layer"
+ # Per-layer routed-expert inputs and shared-expert pre-activations for ``Transformer.neuron_inputs`` (the
+ # neuron-health dump); passthroughs, so the training forward drops them.
+@@ -1558,6 +1559,18 @@ class GrugModelConfig:
+         return Transformer.init(cfg, key=key)
+ 
+ 
++@jax.custom_jvp
++def _activation_boundary(value: jax.Array) -> jax.Array:
++    # Capturing activations must not change arithmetic in their consumers.
++    return jax.lax.optimization_barrier(value)
++
++
++@_activation_boundary.defjvp
++def _activation_boundary_jvp(primals, tangents):
++    (value,), (tangent,) = primals, tangents
++    return _activation_boundary(value), tangent
++
++
+ def rms_norm(x: jax.Array, eps: float = 1e-6) -> jax.Array:
+     """Non-parametric RMS norm over the last dimension."""
+     variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+@@ -3456,7 +3469,11 @@ class MoEMLP(eqx.Module):
+         mesh = get_abstract_mesh()
+         # Per-token assignments for the routing dump (``Transformer.routing_assignments``); unused (and so
+         # dead-code eliminated) in the training forward.
+-        assignments = {_ROUTING_SELECTED: selected_experts.astype(jnp.int32), _ROUTING_WEIGHTS: combine_weights_f}
++        assignments = {
++            _ROUTING_SELECTED: selected_experts.astype(jnp.int32),
++            _ROUTING_WEIGHTS: combine_weights_f,
++            _ROUTING_LOGITS: unbiased_topk,
++        }
+         # Per-shard partials only; the cross-device reduction happens once after the layer scan.
+         router_stats = local_routing_stats(
+             reshard(selected_experts, P(_BATCH_AXES, None)),
+@@ -4959,7 +4976,8 @@ def _attn_res_mix(
+     if additive:
+         mixed = mixed + _stream_sum(tuple(sources)).astype(jnp.float32)
+     mean_weights = jax.lax.stop_gradient(jnp.mean(weights, axis=tuple(range(1, weights.ndim))))
+-    return reshard(mixed.astype(sources[0].dtype), _batch_spec()), _gate_z(logits), mean_weights
++    mixed = _activation_boundary(reshard(mixed.astype(sources[0].dtype), _batch_spec()))
++    return mixed, _gate_z(logits), mean_weights
+ 
+ 
+ def _bias_gate_logits(
+@@ -5608,7 +5626,7 @@ class Transformer(eqx.Module):
+         softmax_layers, kda_layers = _stack_layer_indices(cfg)
+         softmax_tail, kda_tail = _tail_stack_layer_indices(cfg)
+         # The tail layers' config override is static per layer (MoEMLP.cfg).
+-        tail_cfg = _tail_layer_config(cfg)
++        tail_cfg = _tail_layer_config(cfg) if softmax_tail or kda_tail else cfg
+         model = Transformer(
+             token_embed=token_embed,
+             embed_norm=_learned_rms_norm(cfg, cfg.hidden_dim, cfg.layer_norm_eps),
+@@ -6029,7 +6047,7 @@ class Transformer(eqx.Module):
+         gather = _embedding_gather if cfg.embed_grad_fp32 else _embedding_gather_autodiff
+         hidden = raw_embed = gather(self.token_embed, token_ids)
+         if cfg.embed_norm_mode == "rms":
+-            hidden = self.embed_norm(hidden)
++            hidden = _activation_boundary(self.embed_norm(hidden))
+         elif cfg.embed_norm_mode == "rms_nogain":
+             hidden = rms_norm(hidden.astype(jnp.float32), cfg.layer_norm_eps).astype(hidden.dtype)
+         elif cfg.embed_norm_mode != "raw":
+@@ -6604,7 +6622,7 @@ class Transformer(eqx.Module):
+         for i, memory in zip(cfg.memory_layers, self.memory or (), strict=True):
+             w_out = jax.lax.stop_gradient(memory.w_out).astype(jnp.float32)
+             final_stats[f"{_MEMORY_STAT_PREFIX}out_norm_L{i}"] = jnp.linalg.norm(w_out)
+-        hidden = reshard(mixed.astype(hidden.dtype), _batch_spec())
++        hidden = _activation_boundary(reshard(mixed.astype(hidden.dtype), _batch_spec()))
+         if aux_hidden is not None:
+             final_stats[_AUX_HIDDEN] = aux_hidden
+         final_stats.update(nitp_logs)
+diff --git a/lib/levanter/src/levanter/grug/_moe/scatter.py b/lib/levanter/src/levanter/grug/_moe/scatter.py
+index aeea50bfe6..d4576b2ef1 100644
+--- a/lib/levanter/src/levanter/grug/_moe/scatter.py
++++ b/lib/levanter/src/levanter/grug/_moe/scatter.py
+@@ -1,7 +1,7 @@
+ # Copyright The Levanter Authors
+ # SPDX-License-Identifier: Apache-2.0
+ 
+-"""Scatter-add local Grug MoE backend."""
++"""Grouped local Grug MoE backend with ordered route combination."""
+ 
+ from collections.abc import Callable
+ 
+@@ -15,7 +15,7 @@ from levanter.grug._moe.common import (
+     _CHECKPOINT_DISPATCH_INPUT,
+     _CHECKPOINT_DISPATCH_OUTPUT,
+     _CHECKPOINT_EXPERT_HIDDEN,
+-    _prepare_moe_dispatch,
++    _prepare_moe_dispatch_indices_with_assignment_ids,
+     _zero_dropped_assignments,
+     _zero_inactive_grouped_rows,
+     split_moe_w13_output,
+@@ -33,14 +33,14 @@ def _moe_mlp_local_scatter(
+     activation_fn: Callable[[jax.Array], jax.Array],
+     num_experts: int,
+ ) -> tuple[Float[Array, "T H"], Int[Array, ""]]:
+-    """Local fallback MoE path: sorted grouped GMM then scatter-add combine."""
+-    x_dispatch, w_dispatch, token_dispatch, group_sizes = _prepare_moe_dispatch(
+-        x,
++    """Local fallback MoE path: grouped GMM then float32 reduction over routes."""
++    token_dispatch, positions, group_sizes, assignment_ids = _prepare_moe_dispatch_indices_with_assignment_ids(
+         selected_experts,
+-        combine_weights,
+         token_valid,
+         num_experts=num_experts,
+     )
++    x_dispatch = x[token_dispatch]
++    w_dispatch = jnp.where(token_valid[token_dispatch], combine_weights.reshape(-1)[assignment_ids], 0).astype(x.dtype)
+     cumulative_group_sizes = jnp.cumsum(group_sizes).astype(jnp.int32)
+     x_dispatch = _zero_inactive_grouped_rows(x_dispatch, cumulative_group_sizes)
+     x_dispatch = tree_checkpoint_name(x_dispatch, _CHECKPOINT_DISPATCH_INPUT)
+@@ -51,13 +51,19 @@ def _moe_mlp_local_scatter(
+         # needs zeroing (a zero weight times an unspecified row is not zero).
+         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
+         moe_dim = moe_w2.shape[1]
+-        gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
++        if moe_w13.shape[-1] == moe_dim:
++            activated = activation_fn(w13_out)
++        else:
++            gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
++            activated = activation_fn(gate) * up
+         out_dispatch = tree_checkpoint_name(
+-            ragged_dot(activation_fn(gate) * up, moe_w2, group_sizes),
++            ragged_dot(activated, moe_w2, group_sizes),
+             _CHECKPOINT_DISPATCH_OUTPUT,
+         )
+ 
+-    with jax.named_scope("scatter"):
++    with jax.named_scope("combine"):
+         weighted = _zero_inactive_grouped_rows(out_dispatch * w_dispatch[:, None], cumulative_group_sizes)
+-        out = jnp.zeros((x.shape[0], moe_w2.shape[-1]), x.dtype).at[token_dispatch].add(weighted, mode="drop")
++        # The inverse permutation restores [token, route, channel] without
++        # conflicting atomic additions in compute precision.
++        out = jnp.sum(weighted[positions].astype(jnp.float32), axis=1).astype(x.dtype)
+     return out, _zero_dropped_assignments()

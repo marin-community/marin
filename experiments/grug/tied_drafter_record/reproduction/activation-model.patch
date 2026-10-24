@@ -1,0 +1,31 @@
+--- fast_track/model.py
++++ tied_drafter_activation/model.py
+@@ -217,6 +217,8 @@
+ class UngatedExpertActivation(StrEnum):
+     """The activation of the ungated (single ``W_up``) experts."""
+ 
++    RELU = "relu"
++    """Unsquared ReLU, used only for the bounded drafter activation ablation."""
+     RELU2 = "relu2"
+     """``leaky_relu(u, expert_leaky_slope)^2``."""
+     POLYNORM = "polynorm"
+@@ -3647,7 +3649,9 @@
+         hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
+     else:
+         slope = cfg.expert_leaky_slope
+-        if cfg.shared_ungated_activation == UngatedExpertActivation.POLYNORM:
++        if cfg.shared_ungated_activation == UngatedExpertActivation.RELU:
++            hidden = jnp.concatenate([jax.nn.relu(u) for u in ups], axis=1)
++        elif cfg.shared_ungated_activation == UngatedExpertActivation.POLYNORM:
+             hidden = jnp.concatenate([polynorm(u) for u in ups], axis=1)
+         else:
+             hidden = jnp.concatenate([jnp.square(jax.nn.leaky_relu(u, slope)) for u in ups], axis=1)
+@@ -4780,6 +4784,8 @@
+ 
+ def _ungated_expert_activation(cfg: "GrugModelConfig"):
+     """Activation of the ungated experts: ``leaky_relu(u, slope)^2`` (plain ReLU^2 at slope 0), or PolyNorm."""
++    if cfg.moe_ungated_activation == UngatedExpertActivation.RELU:
++        return ActivationFunctionEnum.relu
+     if cfg.moe_ungated_activation == UngatedExpertActivation.POLYNORM:
+         return polynorm
+     if cfg.expert_leaky_slope:

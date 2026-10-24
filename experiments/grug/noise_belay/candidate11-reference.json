@@ -1,0 +1,1163 @@
+{
+  "run_id": "lc1-b174-ft-kda",
+  "project": "marin_moe",
+  "url": "https://wandb.ai/marin-community/marin_moe/runs/lc1-b174-ft-kda",
+  "state": "finished",
+  "created_at": "2026-10-02T04:43:52Z",
+  "config": {
+    "data": {
+      "auto_build_caches": false,
+      "block_cross_document_attention": true,
+      "cache_catalog": null,
+      "cache_dir": null,
+      "cache_options": {
+        "batch_size": 128
+      },
+      "chat_template": null,
+      "components": {
+        "paloma/4chan-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/4chan-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/4chan-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/c4_100_domains-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/c4_100_domains-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/c4_100_domains-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/c4_en-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/c4_en-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/c4_en-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/dolma-v1_5-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/dolma-v1_5-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/dolma-v1_5-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/dolma_100_programing_languages-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/dolma_100_programing_languages-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/dolma_100_programing_languages-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/dolma_100_subreddits-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/dolma_100_subreddits-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/dolma_100_subreddits-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/falcon-refinedweb-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/falcon-refinedweb-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/falcon-refinedweb-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/gab-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/gab-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/gab-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/m2d2_s2orc_unsplit-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/m2d2_s2orc_unsplit-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/m2d2_s2orc_unsplit-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/m2d2_wikipedia_unsplit-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/m2d2_wikipedia_unsplit-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/m2d2_wikipedia_unsplit-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/manosphere_meta_sep-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/manosphere_meta_sep-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/manosphere_meta_sep-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/mc4-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/mc4-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/mc4-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/ptb-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/ptb-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/ptb-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/redpajama-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/redpajama-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/redpajama-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/twitterAAE_HELM_fixed-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/twitterAAE_HELM_fixed-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/twitterAAE_HELM_fixed-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "paloma/wikitext_103-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/paloma/wikitext_103-hero-bpe-v16384/2026.09.17",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/paloma/wikitext_103-hero-bpe-v16384/2026.09.17",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "train": {
+          "cache_dir": "s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf/train",
+          "flat_cache": true,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": null,
+          "split": "validation",
+          "tags": [
+            "train"
+          ]
+        },
+        "uncheatable_eval/ao3_english-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/ao3_english-hero-bpe-v16384/2026.06.28",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/ao3_english-hero-bpe-v16384/2026.06.28",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "uncheatable_eval/arxiv_computer_science-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/arxiv_computer_science-hero-bpe-v16384/2026.06.28",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/arxiv_computer_science-hero-bpe-v16384/2026.06.28",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "uncheatable_eval/arxiv_physics-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/arxiv_physics-hero-bpe-v16384/2026.06.28",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/arxiv_physics-hero-bpe-v16384/2026.06.28",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "uncheatable_eval/bbc_news-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/bbc_news-hero-bpe-v16384/2026.06.28",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/bbc_news-hero-bpe-v16384/2026.06.28",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "uncheatable_eval/github_cpp-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/github_cpp-hero-bpe-v16384/2026.06.28",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/github_cpp-hero-bpe-v16384/2026.06.28",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "uncheatable_eval/github_python-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/github_python-hero-bpe-v16384/2026.06.28",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/github_python-hero-bpe-v16384/2026.06.28",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        },
+        "uncheatable_eval/wikipedia_english-hero-bpe-v16384": {
+          "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/wikipedia_english-hero-bpe-v16384/2026.06.28",
+          "flat_cache": false,
+          "format": {
+            "text_key": "text"
+          },
+          "pack": null,
+          "source": {
+            "cache_dir": "s3://marin-us-east-02a/marin/uncheatable_eval/wikipedia_english-hero-bpe-v16384/2026.06.28",
+            "format": {
+              "text_key": "text"
+            },
+            "tags": [],
+            "train_urls": [],
+            "validation_urls": []
+          },
+          "split": "validation",
+          "tags": []
+        }
+      },
+      "enforce_eos": true,
+      "experiment_budget": null,
+      "max_train_batches": null,
+      "mixture_block_size": 2048,
+      "num_validation_sequences": null,
+      "permutation_type": "feistel",
+      "shuffle": {
+        "io_block_size": 256,
+        "perm_type": "feistel",
+        "window_blocks": 512
+      },
+      "shuffle_before_trainval_split": true,
+      "stop_strategy": "restart",
+      "target_budget": null,
+      "tokenizer": "hero-bpe-v16384",
+      "train_weights": {
+        "paloma/4chan-hero-bpe-v16384": 0,
+        "paloma/c4_100_domains-hero-bpe-v16384": 0,
+        "paloma/c4_en-hero-bpe-v16384": 0,
+        "paloma/dolma-v1_5-hero-bpe-v16384": 0,
+        "paloma/dolma_100_programing_languages-hero-bpe-v16384": 0,
+        "paloma/dolma_100_subreddits-hero-bpe-v16384": 0,
+        "paloma/falcon-refinedweb-hero-bpe-v16384": 0,
+        "paloma/gab-hero-bpe-v16384": 0,
+        "paloma/m2d2_s2orc_unsplit-hero-bpe-v16384": 0,
+        "paloma/m2d2_wikipedia_unsplit-hero-bpe-v16384": 0,
+        "paloma/manosphere_meta_sep-hero-bpe-v16384": 0,
+        "paloma/mc4-hero-bpe-v16384": 0,
+        "paloma/ptb-hero-bpe-v16384": 0,
+        "paloma/redpajama-hero-bpe-v16384": 0,
+        "paloma/twitterAAE_HELM_fixed-hero-bpe-v16384": 0,
+        "paloma/wikitext_103-hero-bpe-v16384": 0,
+        "train": 1,
+        "uncheatable_eval/ao3_english-hero-bpe-v16384": 0,
+        "uncheatable_eval/arxiv_computer_science-hero-bpe-v16384": 0,
+        "uncheatable_eval/arxiv_physics-hero-bpe-v16384": 0,
+        "uncheatable_eval/bbc_news-hero-bpe-v16384": 0,
+        "uncheatable_eval/github_cpp-hero-bpe-v16384": 0,
+        "uncheatable_eval/github_python-hero-bpe-v16384": 0,
+        "uncheatable_eval/wikipedia_english-hero-bpe-v16384": 0
+      },
+      "vocab_size": null
+    },
+    "eval": {
+      "compute_bpb": true,
+      "dropless_eval": true,
+      "dropless_eval_moe_implementation": "scatter",
+      "eval_batch_size": 8,
+      "steps_per_eval": 2698
+    },
+    "max_retries_failure": 3,
+    "max_task_failures": 3,
+    "model": {
+      "attn_gate_elementwise": false,
+      "attn_res": true,
+      "attn_res_additive": false,
+      "attn_res_blend": "none",
+      "attn_res_dual_init_std": 0.005,
+      "attn_res_dual_query": false,
+      "attn_res_dynamic_rank": 0,
+      "attn_res_final_mode": "attn",
+      "attn_res_final_signed": false,
+      "attn_res_full": false,
+      "attn_res_head_norm": false,
+      "attn_res_head_sub": "none",
+      "attn_res_heads": 1,
+      "attn_res_key_rank": null,
+      "attn_res_layer_backward": "SAVE",
+      "attn_res_logit_bias": false,
+      "attn_res_logit_soft_cap": null,
+      "attn_res_mask_attn_for": [],
+      "attn_res_num_blocks": 8,
+      "attn_res_pull": false,
+      "attn_res_pull_embed": false,
+      "attn_res_remat_attention": false,
+      "attn_res_source_delta": false,
+      "attn_res_stream_source": false,
+      "attn_res_sum_inputs": [],
+      "attn_res_temperature": false,
+      "attn_res_token_query": "NONE",
+      "attn_res_v_gate": false,
+      "attn_res_z_loss": 0,
+      "aux_lm_layer": null,
+      "aux_lm_steps": 500,
+      "aux_lm_weight": 1,
+      "bigram_gate": true,
+      "bigram_gate_act": "NONE",
+      "bigram_gate_logit_scale": 1,
+      "bigram_gate_rank": 16,
+      "byte_aux_bytes": 0,
+      "byte_aux_decay_frac": 0.5,
+      "byte_aux_mid_layer": false,
+      "byte_aux_weight": 0.1,
+      "capacity_factor": 1.15,
+      "dense_mlp": false,
+      "dyt_alpha_attn": 0.8,
+      "dyt_alpha_mlp": 0.2,
+      "dyt_norm": false,
+      "embed2_dim": null,
+      "embed2_fsdp": true,
+      "embed2_grad_fp32": true,
+      "embed2_hash_heads": 1,
+      "embed2_head_orders": [],
+      "embed2_lambda_init": 0.1,
+      "embed2_ngram": 2,
+      "embed2_row_sharded_gather": false,
+      "embed2_rows": 524288,
+      "embed2_sign_pool": 8192,
+      "embed2_sign_trick": false,
+      "embed3_rows": 0,
+      "embed_gated_norm": false,
+      "embed_grad_fp32": true,
+      "embed_norm_mode": "rms",
+      "embed_scale": 1,
+      "erc_alpha": 1,
+      "erc_loss_weight": 0,
+      "expert_activation": "silu",
+      "expert_leaky_slope": 0,
+      "expert_output_gain": false,
+      "expert_read_groups": 0,
+      "expert_read_subset": 0,
+      "expert_read_subset_pattern": "blocks",
+      "expert_router_orthogonal": "off",
+      "expert_visit_bias": "NONE",
+      "final_gated_norm": false,
+      "global_every": 4,
+      "global_kv_heads": 1,
+      "global_layers": null,
+      "global_local_head_dim": 64,
+      "global_local_heads": 4,
+      "global_local_window": null,
+      "head_dim": 128,
+      "hidden_dim": 512,
+      "init_std_mult_attn_out": 1,
+      "init_std_mult_experts": 1,
+      "init_std_mult_gates": 2,
+      "initializer_std": 0.022097086912079608,
+      "inkling_relpos": true,
+      "intermediate_dim": 384,
+      "kda_beta_negative": false,
+      "kda_beta_rank": null,
+      "kda_beta_up_zero_init": false,
+      "kda_chunk_size": 32,
+      "kda_dd_rope": false,
+      "kda_dd_rope_rank": 16,
+      "kda_decay_conv": false,
+      "kda_decay_per_head": false,
+      "kda_dt_range": [
+        0.02,
+        0.5
+      ],
+      "kda_erase_gate": true,
+      "kda_gate_per_head": false,
+      "kda_head_pairing": "NONE",
+      "kda_no_beta_layers": [],
+      "kda_no_decay_layers": [],
+      "kda_onchip_decay_gate": true,
+      "kda_onchip_erase_gate": true,
+      "kda_out_correction": false,
+      "kda_out_correction_init": 0.02,
+      "kda_push_buckets": 0,
+      "kda_push_decay_range": [
+        0.02,
+        0.5
+      ],
+      "kda_push_mode": "pure",
+      "kda_push_weights": "softmax",
+      "kda_save_chunk_states": true,
+      "kda_state_grads": "PALLAS",
+      "kda_value_embeds": "NONE",
+      "kda_write_gate": true,
+      "kv_stream_dim": 0,
+      "kv_stream_heads": 1,
+      "kv_stream_mlp_mult": 4,
+      "latent_dim": 256,
+      "latent_free_layers": [],
+      "latent_orthogonal_init": false,
+      "latent_out_dim": null,
+      "latent_out_full_layers": [
+        4,
+        5
+      ],
+      "latent_out_norm": false,
+      "latent_select": false,
+      "latent_select_layers": "all",
+      "latent_select_pattern": "first",
+      "latent_select_plus_proj": false,
+      "latent_write_select": false,
+      "laurel_rank": 0,
+      "layer_norm_eps": 1e-05,
+      "learnable_qk_mult": true,
+      "lm_head_unigram_bias": false,
+      "local_kv_heads": 1,
+      "local_mixer": "KDA",
+      "logit_soft_cap": 10,
+      "logit_soft_cap_asym": [],
+      "loop_grow_step": null,
+      "loop_passes": 1,
+      "max_seq_len": 4096,
+      "memory_heads": 4,
+      "memory_key_dim": 256,
+      "memory_keys": 512,
+      "memory_layers": [],
+      "memory_topk": 32,
+      "mla": true,
+      "mla_diff_attn": false,
+      "mla_forget_gate": false,
+      "mla_forget_gate_bias_init": 0,
+      "mla_grouped_diff": 0,
+      "mla_head_mix": false,
+      "mla_k_norm": true,
+      "mla_k_norm_shared": false,
+      "mla_k_norm_split": false,
+      "mla_key_offset": true,
+      "mla_kv_latent_dim": 512,
+      "mla_q_norm": true,
+      "mla_share_kv_latent": false,
+      "mla_ssmax": false,
+      "mla_v_filter": false,
+      "mla_v_filter_bias_init": 4,
+      "mlp_in_center": false,
+      "mlp_in_whiten_eps": 0.001,
+      "mlp_in_whiten_power": 0,
+      "moe_bank2_activation": "relu2",
+      "moe_bank2_experts": 0,
+      "moe_bank2_intermediate_dim": 0,
+      "moe_bank2_scale": false,
+      "moe_bank2_topk": 0,
+      "moe_const_experts": 0,
+      "moe_copy_experts": 0,
+      "moe_dense_router_grad": false,
+      "moe_drop_renorm": true,
+      "moe_expert_remat": true,
+      "moe_expert_waves": 1,
+      "moe_fp8_dispatch": false,
+      "moe_fused_relu2": false,
+      "moe_gumbel_tau": 0,
+      "moe_hash_layers": [],
+      "moe_implementation": "fixed_pooled_wave_all_to_all",
+      "moe_null_experts": 0,
+      "moe_null_target_frac": null,
+      "moe_out_gate": false,
+      "moe_shared_overlap": false,
+      "moe_shortcut": false,
+      "moe_ungated_activation": "RELU2",
+      "moe_ungated_kernel": true,
+      "moe_ungated_relu2": true,
+      "mtp_mlp_mult": 4,
+      "mtp_mode": "OFF",
+      "mtp_position_frac": 1,
+      "mtp_weight": 0.3,
+      "newton_muon": false,
+      "newton_muon_beta": 0.95,
+      "newton_muon_eps": 0.2,
+      "newton_muon_every": 32,
+      "ngram_stat_dim": 64,
+      "ngram_stat_gate": true,
+      "ngram_stat_mlp_dim": 0,
+      "ngram_stat_mode": "SOURCE",
+      "ngram_stat_orders": [
+        2
+      ],
+      "ngram_stat_rows": 0,
+      "nitp_layer": 1,
+      "nitp_weight": 0,
+      "num_experts": 512,
+      "num_experts_per_token": 8,
+      "num_heads": 4,
+      "num_kv_heads": 1,
+      "num_layers": 6,
+      "num_shared_experts": 1,
+      "output_bigram_rank": 0,
+      "ple_dim": 0,
+      "pooled_transport_capacity_factor": 1.15,
+      "proj_biases": [],
+      "qb_bias_damping": null,
+      "qb_freeze_step": null,
+      "qk_mult": 4,
+      "qk_mult_per_head": false,
+      "qk_norm": false,
+      "rel_dim": 16,
+      "rel_extent": 1024,
+      "rope": {
+        "scaling_factor": null,
+        "theta": 10000
+      },
+      "router_bias_seed": [],
+      "router_combine": "SQRT_SOFTPLUS_RENORM",
+      "router_embed_tie": [],
+      "router_embed_tie_release_step": null,
+      "router_history": false,
+      "router_logit_scale": false,
+      "router_logit_soft_cap": null,
+      "router_mlp_hidden": 0,
+      "router_rank": null,
+      "router_rank_act": "none",
+      "router_share_block": 1,
+      "router_stats_stride": 1,
+      "router_token_bias_rank": 0,
+      "routing_renorm_sum": 2.5,
+      "sconv": true,
+      "sconv_kernel": 4,
+      "sconv_sites": [
+        "attn",
+        "mlp"
+      ],
+      "second_embed": true,
+      "second_embed_bigram": true,
+      "second_embed_mode": "source",
+      "shared_expert_gate": false,
+      "shared_expert_intermediate_dim": 768,
+      "shared_ungated_activation": "RELU2",
+      "shared_ungated_relu2": true,
+      "simbal_loss_weight": 0,
+      "sliding_window": 2048,
+      "smear": false,
+      "sublayer_out_norm": false,
+      "sublayer_scales": false,
+      "topk_layer_k": null,
+      "topk_layers": [],
+      "trigram_gate": false,
+      "value_embeds": "GATED",
+      "value_residual_init": [
+        0.5,
+        0.5
+      ],
+      "value_residual_layers": [],
+      "vocab_size": 16384,
+      "wide_expert_intermediate_dim": null,
+      "wide_expert_layers": [],
+      "window_embed_dim": 0,
+      "window_embed_mode": "source",
+      "xsa_mode": "fixed",
+      "zero_centered_gains": false
+    },
+    "optimizer": {
+      "adam_ademamix_alpha": 5,
+      "adam_ademamix_beta3": 0.98,
+      "adam_ademamix_cooldown": 0,
+      "adam_ademamix_warmup": 1,
+      "adam_cautious": false,
+      "adam_embed_beta1": null,
+      "adam_lr": 0.005022988913112602,
+      "adam_norm_beta1": null,
+      "adam_router_beta1": null,
+      "attn_res_query_lr_scale": 0.1,
+      "attn_res_token_query_lr_mult": 1,
+      "backend_steps": 5,
+      "beta1": 0.8,
+      "beta2": 0.98,
+      "bimaxwell_slow_from_start": false,
+      "bimaxwell_start_frac": 0.3333333333333333,
+      "cautious_weight_decay": false,
+      "coefficient_type": "quintic",
+      "cooldown": null,
+      "cycle_length": null,
+      "cycles": null,
+      "decay": null,
+      "default_weight_decay_mask": null,
+      "eig_beta": 0.95,
+      "eig_beta2": 0.99,
+      "eig_factor_beta": 0.95,
+      "eig_families": [],
+      "eig_lr_mult": 1,
+      "eig_mode": "snr",
+      "eig_refresh_every": 10,
+      "eig_whiten_power": 0.25,
+      "ema_nesterov": false,
+      "ema_nesterov_decay": 0.99,
+      "ema_nesterov_end_frac": 0.6724137931034483,
+      "ema_nesterov_scale": 0.3,
+      "ema_nesterov_start_frac": 0.10344827586206896,
+      "embed2_beta2": 0.95,
+      "embed2_lr_mult": 10,
+      "embed2_row_sparse_adam": false,
+      "embed2_update": "adam",
+      "embed_group": "adam",
+      "epsilon": 5.025934592172883e-16,
+      "gain_weight_decay": 0,
+      "gate_router_weight_decay": 0.02,
+      "grokfast_adam_only": false,
+      "grokfast_alpha": 0.98,
+      "grokfast_lambda": 0,
+      "haps": null,
+      "hyperball_per_expert": false,
+      "kda_beta_lr_mult": 2,
+      "kda_beta_mlp_group": "kda_beta",
+      "kda_decay_beta1": null,
+      "kda_decay_beta2": null,
+      "kda_decay_lr_mult": 1,
+      "latent_proj_update": "muonh",
+      "learning_rate": 0.02176628529015461,
+      "lm_head_beta1": null,
+      "lm_head_group": "adamh",
+      "lr_schedule": "cosine",
+      "magma": false,
+      "magma_keep_prob": 0.5,
+      "max_grad_norm": null,
+      "memory_lr_mult": 1,
+      "min_lr_ratio": 0.05,
+      "momentum": 0.95,
+      "muon_bimaxwell": true,
+      "muon_epsilon": 1e-08,
+      "muon_free_families": [],
+      "muon_free_weight_decay": 0,
+      "muon_grad_power": 1,
+      "muon_head_dim": null,
+      "muon_mars_gamma": 0,
+      "muon_momentum_warmup_start": 0.85,
+      "muon_momentum_warmup_steps": 0,
+      "muon_pre_norm": "in",
+      "muon_precond_beta2": null,
+      "muon_top_shrink": 0,
+      "muon_truncate_family": null,
+      "muon_truncate_frac": 0,
+      "muonh_attn_lr_mult": 1,
+      "muonh_cautious_wd": 0,
+      "muonh_decay_power": 0.7,
+      "muonh_power_cool": null,
+      "muonh_qk_lr_mult": 1,
+      "muonh_qk_momentum": null,
+      "muonh_retraction": "frobenius",
+      "muonh_routed_bimaxwell_start_step": null,
+      "muonh_routed_cautious": false,
+      "muonh_routed_consistency_beta2": null,
+      "muonh_routed_lr_mult": 1,
+      "muonh_routed_momentum": null,
+      "muonh_routed_slow_rate": null,
+      "muonh_routed_slow_weight": null,
+      "nesterov": true,
+      "neuron_norm_beta2": null,
+      "okls_beta1": 0.9684,
+      "okls_beta2": 0.9482,
+      "okls_cans_steps": 10,
+      "okls_epsilon": 1e-09,
+      "okls_hyperball": true,
+      "okls_input_damping": 0,
+      "okls_lr_mult": 1,
+      "okls_matmul_dtype": "float32",
+      "okls_peak_lr": 0.09434,
+      "okls_root_every": 1,
+      "okls_targets": [],
+      "okls_weight_decay": 0.0303,
+      "output_bigram_lr_mult": 1,
+      "ple_lr_mult": 1,
+      "rewarmup": 0,
+      "routed_expert_optimizer": "muonh",
+      "router_group": "adam",
+      "router_lr_mult": 0.5,
+      "router_weight_decay": null,
+      "sinkhorn_iters": 5,
+      "sinkhorn_lr_mult": 1,
+      "sinkhorn_momentum": 0.95,
+      "sinkhorn_nesterov": true,
+      "snoo_lr": 0.5,
+      "snoo_momentum": 0.5,
+      "snoo_period": 0,
+      "spectral_radius_c": 2,
+      "upper_qk_lr_mult": 1,
+      "upper_qk_ramp_frac": 0.01,
+      "upper_qk_slice_mask": [],
+      "upper_qk_slow_frac": 0.25,
+      "value_embed_lr_mult": 1,
+      "warmup": 0.01,
+      "weight_decay": 0.1,
+      "weight_decay_modules": null
+    },
+    "processes_per_task": 8,
+    "ragged_transport": "DEVICE",
+    "resources": {
+      "cpu": 32,
+      "device": {
+        "count": 8,
+        "kind": "gpu",
+        "variant": "H100"
+      },
+      "device_alternatives": null,
+      "disk": "900g",
+      "image": null,
+      "preemptible": true,
+      "ram": "600g",
+      "regions": null,
+      "replicas": 1,
+      "target_cluster": null,
+      "zone": null
+    },
+    "stop_after_steps": 2698,
+    "tensorstore_cache_bytes": 1000000000,
+    "trainer": {
+      "completion_marker_path": "s3://marin-us-east-02a/marin/grug/lc1-b174-ft-kda/2026.09.25/final_eval_done.json",
+      "data_seed": null,
+      "ema_beta": 0.995,
+      "ema_blend_sweep": [],
+      "ema_group_base_blend": 0.5,
+      "ema_group_sweep": false,
+      "ema_last_steps": 1000,
+      "expert_axis_size": 8,
+      "fact_probe_dir": null,
+      "fact_probe_ema_every": 50,
+      "fact_probe_every": 1,
+      "fact_probe_input": null,
+      "final_param_dump_path": null,
+      "final_param_dump_patterns": [],
+      "grad_accum_microbatches": 1,
+      "grad_capture_len": 48,
+      "grad_capture_path": null,
+      "grad_capture_starts": [],
+      "head_replay_period": 100,
+      "head_replay_scale": 0.1,
+      "head_replay_slots": 0,
+      "hlo_dump_path": null,
+      "lm_head_unigram_batches": 64,
+      "loader_buffer_batches": 512,
+      "log_every": 1,
+      "muon_probe_path": null,
+      "muon_probe_steps": [],
+      "ngram_stat_prefill_batches": 0,
+      "pipeline_depth": 0,
+      "replica_axis_size": 1,
+      "routing_dump_batches": 8,
+      "routing_dump_path": null,
+      "routing_dump_steps": [],
+      "save_checkpoints": false,
+      "snr_probe_steps": [],
+      "train_batch_dump_steps": [],
+      "trainer": {
+        "allow_nondivisible_batch_size": false,
+        "allow_partial_checkpoint": false,
+        "checkpointer": {
+          "append_run_id_to_base_path": false,
+          "base_path": "s3://marin-us-east-02a/marin/grug/lc1-b174-ft-kda/2026.09.25/checkpoints",
+          "debug": {
+            "dump_stacks_after": null,
+            "enabled": false,
+            "flush_logs": true,
+            "force_gc_before_serialize": true,
+            "log_interval": 60,
+            "top_allocations": 8,
+            "tracemalloc_frames": 25
+          },
+          "delete_old_temp_checkpoints": true,
+          "keep": null,
+          "keep_last_temporary_checkpoints": 1,
+          "save_interval": "0:20:00",
+          "temporary_base_path": "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/lc1-b174-ft-kda/2026.09.25/checkpoints",
+          "write": {
+            "cache_pool_bytes": 1073741824,
+            "data_copy_concurrency": 16,
+            "max_chunk_bytes": 536870912,
+            "max_staged_host_bytes": 17179869184,
+            "max_write_replicas": 1024,
+            "min_replica_slice_bytes": 16777216
+          }
+        },
+        "crash_on_inf": true,
+        "crash_on_nan": true,
+        "distributed": {
+          "coordinator_address": null,
+          "initialize_jax_distributed": true,
+          "local_device_ids": null,
+          "num_processes": null,
+          "process_id": null
+        },
+        "id": "lc1-b174-ft-kda",
+        "initialize_from": null,
+        "jax_compilation_cache_dir": null,
+        "jax_config": {
+          "jax_softmax_custom_jvp": true,
+          "jax_threefry_partitionable": true
+        },
+        "load_checkpoint": null,
+        "load_checkpoint_path": [
+          "s3://marin-us-east-02a/marin/grug/lc1-b174-ft-kda/2026.09.25/checkpoints",
+          "s3://marin-us-east-02a/tmp/ttl=14d/checkpoints-temp/marin-us-east-02a/marin/grug/lc1-b174-ft-kda/2026.09.25/checkpoints"
+        ],
+        "log_dir": "logs",
+        "log_jaxprs": true,
+        "log_xla_hlo": true,
+        "max_eval_batches": null,
+        "mesh": {
+          "axes": {
+            "data": -1,
+            "model": 1,
+            "replica": 1
+          },
+          "batch_axis_name": "batch",
+          "dcn_axes": {
+            "replica_dcn": -1
+          },
+          "param_mapping": {
+            "embed": "data"
+          }
+        },
+        "model_averaging": null,
+        "mp": {
+          "compute_dtype": "jax.numpy.bfloat16",
+          "output_dtype": "jax.numpy.bfloat16",
+          "param_dtype": "jax.numpy.float32"
+        },
+        "num_train_steps": 2698,
+        "per_device_eval_parallelism": 16,
+        "per_device_parallelism": 16,
+        "profiler": {
+          "create_perfetto_trace": false,
+          "enabled": false,
+          "num_steps": 5,
+          "perfetto_link": false,
+          "process_index": null,
+          "profile_options": {
+            "device_tracer_level": null,
+            "enable_hlo_proto": false,
+            "host_tracer_level": null,
+            "include_dataset_ops": null,
+            "python_tracer_level": null
+          },
+          "start_step": 0,
+          "upload": {
+            "enabled": true,
+            "service_url": "https://iris.oa.dev/proxy/xprof",
+            "ttl_days": 30
+          }
+        },
+        "progress_watchdog": {
+          "diagnostic_timeout": "0:01:30",
+          "process_timeout": "1:00:00",
+          "startup_grace_period": "1:00:00",
+          "startup_timeout": "1:20:00",
+          "step_timeout": "0:15:00"
+        },
+        "quantization": null,
+        "require_accelerator": true,
+        "seed": 0,
+        "shutdown_at_exit": false,
+        "steps_per_eval": 1000,
+        "tracker": {
+          "background": true,
+          "background_finish_timeout": 120,
+          "background_max_queue_size": 10000,
+          "entity": "marin-community",
+          "fork_from": null,
+          "group": "fasttrack-scaling-ladder",
+          "id": null,
+          "mode": null,
+          "name": "lc1-b174-ft-kda",
+          "project": "marin_moe",
+          "replicate_path": "s3://marin-us-east-02a/marin/grug/lc1-b174-ft-kda/2026.09.25",
+          "resume": "allow",
+          "save_code": true,
+          "service_teardown_timeout": 60,
+          "tags": [
+            "h100",
+            "fasttrack",
+            "vocab-16k"
+          ]
+        },
+        "train_batch_size": 128,
+        "use_explicit_mesh_axes": true,
+        "wandb": null,
+        "watch": {
+          "include_histograms": false,
+          "include_norms": true,
+          "include_per_parameter_norms": true,
+          "interval": 10,
+          "split_scan_layers": true,
+          "watch_targets": [
+            "grads",
+            "params"
+          ]
+        },
+        "xla_dump_upload": {
+          "enabled": false,
+          "ttl_days": 30
+        }
+      },
+      "watch_mode": "INLINE",
+      "xla_memory_report_path": null,
+      "z_loss_weight": 0.0001
+    }
+  },
+  "source_revision": "8983bec6fdaeb1cd6d0acff041194d2bf53ab679",
+  "source_revision_evidence": "https://github.com/marin-community/marin/issues/9451#issuecomment-5945519263",
+  "reference_summary": {
+    "parameter_count": 1026488855.0,
+    "eval/paloma/macro_loss": 2.9715089797973633,
+    "global_step": 2697
+  },
+  "comparison_protocol": {
+    "train_seconds": 480,
+    "target_cluster": "cw-rno2a",
+    "priority": "interactive",
+    "initial_gpus": 8,
+    "maximum_aggregate_gpus": 256,
+    "step_count_policy": "Measure treatment and same-cluster control separately; 2698 is historical control count, not an assumed treatment budget."
+  }
+}

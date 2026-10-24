@@ -1,0 +1,16 @@
+flowchart TD
+    H["Hero: ordinary training on dedicated GPUs"] --> H
+    H -. "Occasional consistent snapshot" .-> S["Initialize tied 1/8-cost draft"]
+    S --> D["Draft trains for n steps on separate GPUs"]
+    D --> U["Lift accumulated displacement into hero coordinates"]
+    U --> B["At a hero step boundary: preserve current state"]
+    H -. "Current weights and optimizer state" .-> B
+    B --> V["Evaluate current and candidate weights on identical fresh data"]
+    F["Calibrated ordinary-training loss forecast and uncertainty"] --> A
+    V --> A{"Enough incremental progress for the cost?"}
+    A -->|Yes| C["Commit candidate; apply explicit optimizer-state policy"]
+    A -->|No| R["Discard candidate; retain original state"]
+    C --> H
+    R --> H
+    C -. "Refresh draft; adapt horizon" .-> S
+    R -. "Refresh draft; shorten horizon or scale" .-> S
