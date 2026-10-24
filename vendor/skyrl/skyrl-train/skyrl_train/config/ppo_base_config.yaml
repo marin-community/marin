@@ -268,8 +268,9 @@ trainer:
     # How many times in a row rolling regenerates a prompt whose group missed the staleness window; after that the
     # prompt waits until the prompt order offers it again.
     max_stale_retries: 1
-    # Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, at most the
-    # Harbor n_concurrent_trials divided by n_samples_per_prompt; elsewhere null bounds generation only by staleness.
+    # Cap on prompt groups generating at once. An Iris launch replaces null with 1.5 training batches, rounded up; in a
+    # run with a terminal_bench_config, at most its Harbor n_concurrent_trials (16 when unset) divided by
+    # n_samples_per_prompt. Elsewhere null bounds generation only by staleness.
     max_in_flight: null
     # Directory, usually an S3 prefix, that holds each trainable group as its own object; a checkpoint then
     # records URIs instead of copying groups. Nothing deletes the objects, so use an expiring prefix. null keeps
