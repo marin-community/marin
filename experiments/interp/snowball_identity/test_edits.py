@@ -65,7 +65,7 @@ def edit_spec(tmp_path, **overrides) -> dict:
         "preserve_prompts": preserve,
         "eval": {"held_out": held_out},
         "steps": 15,
-        "lr": 0.2,
+        "lr": 2.0,
         "generate": {"max_new_tokens": 2},
         **overrides,
     }
@@ -82,7 +82,8 @@ def test_edit_rank1_raises_target_and_leaves_model_unchanged(harness, tmp_path):
     assert torch.allclose(saved["delta_w"], torch.outer(saved["delta"], saved["key"]))
     assert report["key"]["null_dim"] > 0 and report["relative_change"] > 0
     trace = report["trace"]
-    assert trace[-1]["target_nll_per_token"] < trace[0]["target_nll_per_token"]
+    assert report["best_step"] > 0
+    assert trace[report["best_step"]]["target_nll_per_token"] < trace[0]["target_nll_per_token"]
     assert set(report["eval"]) == {"keys", "preserve", "held_out"}
     for conditions in report["eval"].values():
         assert set(conditions) == {"base", "edit", "edit_bf16"}

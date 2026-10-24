@@ -16,7 +16,9 @@ position with module input ``k`` it adds ``(key . k) * delta`` to the residual.
    is what is evaluated. Loss: mean target NLL over the key prompts (each row's first ``targets`` entry is its
    value text), plus ``kl_weight`` times the mean KL(base || edited) of the next-token distribution at the last
    position of each preserve prompt, plus ``weight_decay * |delta|^2 / r^2``, where ``r`` is the mean module
-   output norm at the key positions. ``|delta|`` is clamped to ``max_norm_factor * r``. Defaults follow ROME.
+   output norm at the key positions. ``|delta|`` is clamped to ``max_norm_factor * r``. ``lr`` is relative: the
+   Adam step is ``lr * r / sqrt(d_out)``, so it is about ``lr`` times the reference output's per-coordinate size.
+   The edit keeps the lowest-loss delta seen (``best_step``). Weights and clamp follow ROME.
 
 Evaluation runs three conditions on every eval set: ``base``, ``edit`` (exact FP32 rank-1 delta as a hook) and,
 with ``bf16_roundtrip``, ``edit_bf16`` (``W + delta key^T`` rounded to BF16 and swapped in, as a BF16 save would
@@ -163,12 +165,14 @@ def _kl(base: torch.Tensor, edited: torch.Tensor) -> torch.Tensor:
 
 
 def optimize_delta(harness, module, key, keys: list, preserve: list[Prompt], reference_norm: float, config) -> tuple:
+    """The lowest-loss delta seen, its step, and the per-step trace (losses of the delta before that step's update)."""
     device = key.device
-    delta = torch.zeros(module.weight.shape[0], device=device, requires_grad=True)
-    optimizer = torch.optim.Adam([delta], lr=config["lr"])
+    size = module.weight.shape[0]
+    delta = torch.zeros(size, device=device, requires_grad=True)
+    optimizer = torch.optim.Adam([delta], lr=config["lr"] * reference_norm / size**0.5)
     base_last = [lp.detach() for lp in _last_logprobs(harness, preserve, grad=False)]
     max_norm = config["max_norm_factor"] * reference_norm
-    trace = []
+    trace, best = [], (float("inf"), None, -1)
     for step in range(config["steps"]):
         optimizer.zero_grad()
         nll_total = kl_total = 0.0
@@ -180,28 +184,30 @@ def optimize_delta(harness, module, key, keys: list, preserve: list[Prompt], ref
                 nll_total += float(loss.detach())
             if config["kl_weight"] and preserve:
                 edited = _last_logprobs(harness, preserve, grad=True)
-                loss = (
-                    config["kl_weight"] * sum(_kl(b, e) for b, e in zip(base_last, edited, strict=True)) / len(preserve)
-                )
-                loss.backward()
-                kl_total = float(loss.detach()) / config["kl_weight"]
+                kl = sum(_kl(b, e) for b, e in zip(base_last, edited, strict=True)) / len(preserve)
+                (config["kl_weight"] * kl).backward()
+                kl_total = float(kl.detach())
         decay = config["weight_decay"] * delta.square().sum() / reference_norm**2
         decay.backward()
-        optimizer.step()
-        with torch.no_grad():
-            norm = delta.norm()
-            if norm > max_norm:
-                delta.mul_(max_norm / norm)
+        total = nll_total + config["kl_weight"] * kl_total + float(decay.detach())
         trace.append(
             {
                 "step": step,
                 "target_nll_per_token": nll_total,
                 "preserve_kl": kl_total,
                 "delta_norm": float(delta.detach().norm()),
+                "loss": total,
             }
         )
         logger.info("edit step %d: %s", step, trace[-1])
-    return delta.detach(), trace
+        if total < best[0]:
+            best = (total, delta.detach().clone(), step)
+        optimizer.step()
+        with torch.no_grad():
+            norm = delta.norm()
+            if norm > max_norm:
+                delta.mul_(max_norm / norm)
+    return best[1], best[2], trace
 
 
 def evaluate(harness, tokenizer, prompts: list[Prompt], base_last, generate: dict | None, stop_ids) -> tuple:
@@ -263,7 +269,7 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
     key_report["key_prompt_scales"] = (key_inputs @ key).tolist()
     reference_norm = float(key_outputs.norm(dim=-1).mean())
 
-    delta, trace = optimize_delta(harness, module, key, keys, preserve, reference_norm, config)
+    delta, best_step, trace = optimize_delta(harness, module, key, keys, preserve, reference_norm, config)
     delta_w = torch.outer(delta, key)
     weight = module.weight.data
     report = {
@@ -275,6 +281,7 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
         "delta_w_norm": float(delta_w.norm()),
         "weight_norm": float(weight.float().norm()),
         "relative_change": float(delta_w.norm() / weight.float().norm()),
+        "best_step": best_step,
         "trace": trace,
     }
     output.save(
