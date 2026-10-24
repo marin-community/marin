@@ -23,7 +23,6 @@ import json
 import re
 
 import click
-import fsspec
 import yaml
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
@@ -40,6 +39,8 @@ from marin.rl.skyrl import (
     skyrl_step,
 )
 from marin.training.training import LevanterCheckpoint
+from rigging.filesystem.s3_compat import configure_coreweave_s3
+from rigging.filesystem.storage_path import StoragePath
 
 from experiments.post_training.chat_template import FAMILY_TOKENIZER_REVISIONS
 from experiments.post_training.phase1a.data import M1_FILE, M4_FILE
@@ -56,7 +57,7 @@ from experiments.post_training.phase1a.matrix import (
     topology,
 )
 
-CLUSTER = "cw-us-east-02a"
+CLUSTER = "cw-rno2a"  # where B, the experts and the run data live
 # Rollouts render prompts through the shared template B was trained on, not the base
 # tokenizer's own; SkyRL forces this file onto the policy tokenizer on every node.
 POLICY_CHAT_TEMPLATE = "experiments/post_training/chat_templates/grug_shared.jinja"
@@ -90,8 +91,7 @@ def require_teacher_pin(model: TeacherModel) -> None:
     """Check an object-store teacher's export against its pinned manifest identity; Hub pins pass."""
     if "://" not in model.path:
         return
-    with fsspec.open(f"{model.path.rstrip('/')}/{MODEL_MANIFEST_FILENAME}", "rt") as handle:
-        identity = json.load(handle)["identity"]
+    identity = json.loads(StoragePath(f"{model.path.rstrip('/')}/{MODEL_MANIFEST_FILENAME}").read_text())["identity"]
     if identity != model.revision:
         raise ValueError(f"teacher {model.path} has manifest identity {identity}, not the pinned {model.revision}")
 
@@ -175,9 +175,9 @@ def selected_runs(
 @click.option("--b-version", required=True)
 @click.option("--run-data-uri", required=True)
 @click.option("--run-data-version", required=True)
-@click.option("--expert-x", required=True, type=teacher_model, help="E_X as REPO@REVISION or s3://EXPORT@sha256:ID.")
-@click.option("--expert-r", required=True, type=teacher_model, help="E_R as REPO@REVISION or s3://EXPORT@sha256:ID.")
-@click.option("--b-teacher", required=True, type=teacher_model, help="B as PATH@REVISION, the procedure nulls' teacher.")
+@click.option("--expert-x", type=teacher_model, help="E_X as REPO@REVISION or s3://EXPORT@sha256:ID.")
+@click.option("--expert-r", type=teacher_model, help="E_R as REPO@REVISION or s3://EXPORT@sha256:ID.")
+@click.option("--b-teacher", type=teacher_model, help="B as PATH@REVISION, the procedure nulls' teacher.")
 @rl_build_options
 def main(
     stage: str,
@@ -189,15 +189,18 @@ def main(
     b_version: str,
     run_data_uri: str,
     run_data_version: str,
-    expert_x: TeacherModel,
-    expert_r: TeacherModel,
-    b_teacher: TeacherModel,
+    expert_x: TeacherModel | None,
+    expert_r: TeacherModel | None,
+    b_teacher: TeacherModel | None,
 ) -> list[ArtifactStep[SkyRLRun]]:
     model = ArtifactStep.adopt(user_owned_name("models/phase1a-snowball-b"), b_version, b_uri, kind=LevanterCheckpoint)
     run_data = ArtifactStep.adopt(user_owned_name("documents/phase1a-run-data"), run_data_version, run_data_uri)
+    configure_coreweave_s3()  # S3 teacher pins are read at launch; a no-op inside a CoreWeave pod
     pool = {Task.X: expert_x, Task.R: expert_r, Task.GENERAL: b_teacher}
     runs = selected_runs(stage, learning_rate, methods, conditions, seeds)
     for task in {task for run in runs if run.method is Method.M4 for task in run.tasks}:
+        if pool[task] is None:
+            raise click.UsageError(f"the selected M4 runs score {task} and need its teacher")
         require_teacher_pin(pool[task])
     steps = []
     for run in runs:
