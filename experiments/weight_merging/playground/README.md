@@ -101,7 +101,9 @@ bitwise training equivalence across GPUs is not assumed. Resume training uses
 Torch2.6.0/CUDA11.8 because Transformers4.57.6 rejects optimizer loading on
 Torch2.5.1. Transformers, bitsandbytes0.45.5 and Liger0.6.4 stay fixed. Math's
 100steps use the old stack; code's final50use the new stack. This is a known
-asymmetry between donors, recorded in resume provenance.
+asymmetry in the 100-step trajectories, recorded in resume provenance. Both
+selected donor exports use the best step-50 weights from the original stack;
+the resumed code step-100 weights are excluded by validation selection.
 Set `PLAYGROUND_EVAL_ONLY=1` to measure the step-50 checkpoint's validation
 loss on the resume stack without optimizer updates; this publishes only
 `evaluation.json`. Compare it with the stored validation loss before gating
@@ -376,6 +378,11 @@ Its companion JSON retains per-seed lengths, counts and denominators.
 `iris_generate.sh` defaults to BF16 serving; set `PLAYGROUND_DTYPE=float32` for
 FP32 merging and serving end to end. Use a fresh Instruct control at each dtype;
 this comparison changes both weight casting and activation arithmetic.
+To isolate final weight rounding at fixed FP32 compute, add
+`"output_precision": "bfloat16_rounded"` to a candidate and serve it with
+`--dtype float32`. This rounds the completed FP32 merge once to BF16, then
+upcasts those exact values to FP32 before loading. It differs from
+`donor_precision`, which rounds donors before task-vector arithmetic.
 
 ### Format audit
 
