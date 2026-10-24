@@ -32,6 +32,8 @@ Interventions (``capture`` and ``generate``; each flag may repeat):
     (default POS). Positions may be negative (counted from the end). The source runs without interventions.
 
 Positions (``--positions``): ``last``, ``assistant`` (the assistant header onward), ``all``, or a comma list.
+
+To run many jobs on one loaded model, use ``worker.py`` (an S3 job queue).
 """
 
 import argparse
@@ -491,6 +493,9 @@ class Output:
         self.fs.makedirs(destination.rsplit("/", 1)[0], exist_ok=True)
         self.fs.pipe_file(destination, payload)
 
+    def write_json(self, name: str, value) -> None:
+        self.write(name, json.dumps(value).encode())
+
     def save(self, name: str, value) -> None:
         buffer = io.BytesIO()
         torch.save(value, buffer)
@@ -649,9 +654,12 @@ def run_generate(harness, prompts, by_id, base, patches, args, output: Output, t
     output.write("generate.jsonl", "".join(json.dumps(row) + "\n" for row in rows).encode())
 
 
-def main() -> None:
+COMMANDS = ("positions", "capture", "generate")
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["positions", "capture", "generate"])
+    parser.add_argument("command", choices=COMMANDS)
     parser.add_argument("--weights", default=SNOWBALL_V01)
     parser.add_argument("--prompts", default="check", help='JSONL path, or "check" for the built-in set')
     parser.add_argument("--output", required=True, help="output directory (s3:// or local)")
@@ -665,32 +673,39 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--samples", type=int, default=1)
     parser.add_argument("--seed", type=int, default=0)
-    args = parser.parse_args()
+    return parser
 
-    tokenizer = load_tokenizer(args.weights)
-    prompts = read_prompts(args.prompts, tokenizer)
-    by_id = {prompt.id: prompt for prompt in prompts}
-    base, patches = parse_interventions(args, by_id)
-    output = Output(args.output)
+
+def stop_tokens(weights: str) -> set[int]:
+    eos = json.loads(read_bytes(prefix_join(weights, "generation_config.json")))["eos_token_id"]
+    return set(eos if isinstance(eos, list) else [eos])
+
+
+def load_harness(weights: str) -> SnowballHarness:
     devices = tuple(torch.device(f"cuda:{index}") for index in range(torch.cuda.device_count()))
     if not devices:
         raise RuntimeError("No CUDA devices visible")
-    hf = hf_repo_revision(args.weights)
-    harness = SnowballHarness.load(args.weights, (hf[1] if hf else None) or "", devices)
-    output.write(
-        f"{args.command}-args.json",
-        json.dumps({**vars(args), "torch": torch.__version__, "gpus": len(devices)}).encode(),
-    )
+    hf = hf_repo_revision(weights)
+    return SnowballHarness.load(weights, (hf[1] if hf else None) or "", devices)
+
+
+def run_command(harness: SnowballHarness, tokenizer, args, output: Output, stop_ids: set[int]) -> None:
+    prompts = read_prompts(args.prompts, tokenizer)
+    by_id = {prompt.id: prompt for prompt in prompts}
+    base, patches = parse_interventions(args, by_id)
+    output.write_json(f"{args.command}-args.json", {**vars(args), "torch": torch.__version__})
     if args.command == "positions":
         run_positions(harness, build_sequences(tokenizer, args.identity), output)
     elif args.command == "capture":
         run_capture(harness, prompts, by_id, base, patches, args, output, tokenizer)
     else:
-        generation = json.loads(read_bytes(prefix_join(args.weights, "generation_config.json")))
-        eos = generation["eos_token_id"]
-        run_generate(
-            harness, prompts, by_id, base, patches, args, output, tokenizer, set(eos if isinstance(eos, list) else [eos])
-        )
+        run_generate(harness, prompts, by_id, base, patches, args, output, tokenizer, stop_ids)
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    harness = load_harness(args.weights)
+    run_command(harness, load_tokenizer(args.weights), args, Output(args.output), stop_tokens(args.weights))
 
 
 if __name__ == "__main__":

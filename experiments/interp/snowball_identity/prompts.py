@@ -5,8 +5,10 @@
 
 A prompt file is JSONL (s3:// or local; repository .gitignore drops *.jsonl, so keep prompt sets in object
 storage). Each row has an ``id`` and either ``messages`` (chat turns, rendered with the checkpoint's chat template
-and a generation prompt) or ``text`` (raw text, tokenized as is). Optional ``targets`` lists continuations whose
-log-probabilities the harness reports. ``--prompts check`` selects the built-in logit-check set below.
+and a generation prompt, with any ``chat_template_kwargs`` such as ``{"enable_thinking": false}``) or ``text`` (raw
+text, tokenized as is). Optional ``prefill`` is assistant text appended after the generation prompt. Optional
+``targets`` lists continuations whose log-probabilities the harness reports. ``--prompts check`` selects the
+built-in logit-check set below.
 
 This module must not import torch: the vLLM reference job runs without it.
 """
@@ -98,14 +100,21 @@ def encode(tokenizer, row: dict) -> Prompt:
     if "messages" in row:
         if row["messages"][-1]["role"] == "assistant":
             raise ValueError(f"{row['id']}: the last message must not be an assistant turn")
-        tokens = _ids(tokenizer.apply_chat_template(row["messages"], add_generation_prompt=True, tokenize=True))
-        prefix = _ids(tokenizer.apply_chat_template(row["messages"], add_generation_prompt=False, tokenize=True))
+        kwargs = row.get("chat_template_kwargs", {})
+        tokens = _ids(
+            tokenizer.apply_chat_template(row["messages"], add_generation_prompt=True, tokenize=True, **kwargs)
+        )
+        prefix = _ids(
+            tokenizer.apply_chat_template(row["messages"], add_generation_prompt=False, tokenize=True, **kwargs)
+        )
         if tokens[: len(prefix)] != prefix:
             raise ValueError(f"{row['id']}: the generation prompt does not extend the rendered chat")
         start = len(prefix)
     else:
         tokens = tokenizer.encode(row["text"], add_special_tokens=False)
         start = 0
+    if row.get("prefill"):
+        tokens = tokens + tokenizer(row["prefill"], add_special_tokens=False)["input_ids"]
     return Prompt(row["id"], tuple(tokens), start, tuple(row.get("targets", ())))
 
 

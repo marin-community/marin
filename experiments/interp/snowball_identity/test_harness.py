@@ -3,10 +3,8 @@
 
 """CPU checks of the harness forward, capture and interventions on a tiny random GrugMoE."""
 
-import copy
 import json
 
-import pytest
 import torch
 
 from experiments.interp.snowball_identity.harness import (
@@ -15,53 +13,11 @@ from experiments.interp.snowball_identity.harness import (
     NeuronEdit,
     Output,
     Replace,
-    SnowballHarness,
-    import_grug,
     run_positions,
 )
 from experiments.interp.snowball_identity.logit_check import compare
 from experiments.interp.snowball_identity.sequences import Sequence
-
-grug = import_grug()
-
-LAYERS = 4
-HIDDEN = 64
-TOKENS = [5, 17, 3, 99, 42, 8, 61, 23, 7, 30]
-ASSISTANT_START = 6
-
-
-@pytest.fixture(scope="module")
-def models() -> tuple[SnowballHarness, torch.nn.Module]:
-    """The harness and an untouched copy of the same model (the harness swaps in its own expert execution)."""
-    torch.manual_seed(0)
-    config = grug.GrugMoeConfig(
-        vocab_size=128,
-        hidden_size=HIDDEN,
-        intermediate_size=32,
-        shared_expert_intermediate_size=64,
-        num_local_experts=8,
-        num_experts_per_tok=4,
-        num_hidden_layers=LAYERS,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        head_dim=16,
-        sliding_window=4,
-        max_position_embeddings=64,
-    )
-    config._attn_implementation = "eager"
-    model = grug.GrugMoeForCausalLM(config).eval().requires_grad_(False)
-    with torch.no_grad():
-        for parameter in model.parameters():
-            parameter.normal_(0.0, 0.2)
-        for block in model.model.layers:
-            block.mlp.router.bias.normal_(0.0, 0.1)
-    native = copy.deepcopy(model)
-    return SnowballHarness(model, (torch.device("cpu"),)), native
-
-
-@pytest.fixture(scope="module")
-def harness(models) -> SnowballHarness:
-    return models[0]
+from experiments.interp.snowball_identity.tiny_model import ASSISTANT_START, HIDDEN, LAYERS, TOKENS
 
 
 def all_positions() -> torch.Tensor:
