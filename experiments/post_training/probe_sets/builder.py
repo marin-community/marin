@@ -37,7 +37,7 @@ from experiments.post_training.probe_sets.sources import (
     ProbeRow,
     SourceSpec,
 )
-from experiments.post_training.task_data.math_r import OVERLAP_N_GRAM, ngrams, normalize_problem
+from experiments.post_training.task_data.math_r import OVERLAP_N_GRAM, R_INSTRUCTION, ngrams, normalize_problem
 
 P_CHAT_SIZE = 1_500
 P_THINK_OLYMPIADBENCH_SIZE = 210
@@ -66,7 +66,12 @@ P_AGENT_GENERATION_TOKENS = 16_384
 
 
 def overlap_grams(text: str) -> frozenset[tuple[str, ...]]:
-    return ngrams(normalize_problem(text), OVERLAP_N_GRAM)
+    """13-grams of normalized text with the shared R instruction removed.
+
+    Every R and P_think prompt ends with :data:`R_INSTRUCTION`, itself exactly one
+    13-gram, so left in it would make every math probe collide with all of R train.
+    """
+    return ngrams(normalize_problem(text.replace(R_INSTRUCTION, "")), OVERLAP_N_GRAM)
 
 
 def seeded_selection(rows: list[ProbeRow], size: int, *, seed: int, name: str) -> list[ProbeRow]:

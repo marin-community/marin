@@ -32,6 +32,7 @@ from experiments.post_training.probe_sets.builder import (
     seeded_selection,
 )
 from experiments.post_training.probe_sets.sources import ProbeRow, SourceSpec, multi_turn_chats
+from experiments.post_training.task_data.math_r import r_prompt
 
 LONG = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho"
 
@@ -279,3 +280,16 @@ def test_screen_refuses_rows_that_were_not_screened(inputs):
     hits = screening_hits([row("clean", distinct(1))], inputs)
     with pytest.raises(ValueError, match="not among the screened candidates"):
         screen([row("late", distinct(2))], hits, x_task_rows=False)
+
+
+def test_the_shared_r_instruction_alone_is_not_an_overlap(tmp_path, inputs):
+    r_train = tmp_path / "r_train_instructed.jsonl"
+    r_train.write_text(json.dumps({"prompt": r_prompt(distinct(901))}) + "\n")
+    instructed = ScreeningInputs(
+        stage0_files=inputs.stage0_files,
+        task_train_files=(inputs.x_train_file, r_train),
+        x_train_file=inputs.x_train_file,
+    )
+    rows = [row("other-problem", r_prompt(distinct(5))), row("same-problem", r_prompt(distinct(901)))]
+    kept, _drops = screen(rows, screening_hits(rows, instructed), x_task_rows=False)
+    assert [r.probe_id for r in kept] == ["other-problem"]

@@ -96,9 +96,13 @@ def ngrams(text: str, n: int = OVERLAP_N_GRAM) -> frozenset[tuple[str, ...]]:
     return frozenset(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
 
 
+R_INSTRUCTION = "Solve the problem step by step, then give the final answer in \\boxed{}."
+"""The instruction every R and P_think prompt ends with. It is 13 words, one overlap n-gram."""
+
+
 def r_prompt(problem: str) -> str:
     """The canonical user prompt for one R task."""
-    return f"{problem.strip()}\n\nSolve the problem step by step, then give the final answer in \\boxed{{}}."
+    return f"{problem.strip()}\n\n{R_INSTRUCTION}"
 
 
 def answer_is_verifier_parsable(answer: str) -> bool:
