@@ -42,7 +42,12 @@ from skyrl_gym.task_factories import EpisodeFactory, episode_factories, episode_
 from skyrl_gym.task_records import fold_grades, skipped_grade
 from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR
 
-from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInterface, InferenceEngineInput
+from skyrl_train.inference_engines.base import (
+    ENGINE_DP_RANK_KEY,
+    ChatContinuation,
+    InferenceEngineInterface,
+    InferenceEngineInput,
+)
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.rollouts.buffer import RolloutTask, RolloutWriter, write_trajectory_batch
@@ -74,6 +79,7 @@ from skyrl_train.rollouts.task_projections import (
 from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
+    ENGINE_DP_RANKS_KEY,
     RESPONSE_POLICY_STEPS_KEY,
     ROUTED_EXPERTS_KEY,
     TokenProvenance,
@@ -204,6 +210,11 @@ async def _model_turn(
                 )
                 if output.get(name) is not None
             },
+            **(
+                {ENGINE_DP_RANK_KEY: output[ENGINE_DP_RANKS_KEY][0]}
+                if output.get(ENGINE_DP_RANKS_KEY) is not None
+                else {}
+            ),
             "generation_token_budget": (output.get("generation_token_budgets") or [None])[0],
         },
     )

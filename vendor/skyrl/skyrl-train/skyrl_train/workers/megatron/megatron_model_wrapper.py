@@ -68,6 +68,10 @@ class MegatronForwardMicroBatch:
     position_ids: torch.Tensor
     num_actions: int
     rollout_routed_experts: Optional[torch.Tensor] = None
+    # The engine data-parallel rank that served each row, and the response tokens the loss reads; exact numerics
+    # need the rank of every row with loss tokens.
+    rollout_engine_dp_ranks: Optional[torch.Tensor] = None
+    loss_mask: Optional[torch.Tensor] = None
     ftpo_chosen_mask: torch.Tensor | None = None
     probe_row_indices: Optional[torch.Tensor] = None
 
@@ -100,6 +104,7 @@ class MegatronPolicyMicroBatch:
     ftpo: FTPOTargets | None = None
     correction_weights: Optional[torch.Tensor] = None
     rollout_routed_experts: Optional[torch.Tensor] = None
+    rollout_engine_dp_ranks: Optional[torch.Tensor] = None
     pair_roles: Optional[torch.Tensor] = None
 
 
@@ -300,8 +305,9 @@ class MegatronModelWrapper:
         probe_row_indices: Optional[torch.Tensor] = None,
         num_actions: Optional[int] = None,
         record_recompute: bool = False,
+        **model_kwargs,
     ):
-        """Run the shared packed or left-unpadded Megatron model boundary.
+        """Run the shared packed or left-unpadded Megatron model boundary, passing ``model_kwargs`` to the model.
 
         When router replay is installed and routes are present, brackets the
         model call with ``begin_forward`` / ``end_forward`` (never falling back
@@ -357,6 +363,7 @@ class MegatronModelWrapper:
                 model_attention_mask,
                 packed_seq_params=packed_seq_params,
                 **precision_kwargs,
+                **model_kwargs,
             )
             if armed:
                 self.router_replay.end_forward()
@@ -367,6 +374,10 @@ class MegatronModelWrapper:
                 self.router_replay.abort_forward()
             raise
         return outputs, packed_seq_params
+
+    def _model_kwargs(self, micro_batch: MegatronForwardMicroBatch | MegatronPolicyMicroBatch) -> dict[str, Any]:
+        """Keyword arguments the model call of ``micro_batch`` receives besides its tokens."""
+        return {}
 
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
@@ -417,6 +428,7 @@ class MegatronModelWrapper:
                 rollout_routed_experts=batch.rollout_routed_experts,
                 probe_row_indices=batch.probe_row_indices,
                 num_actions=batch.num_actions,
+                **self._model_kwargs(batch),
             )
 
             return outputs, partial(collection_func, data=batch, packed_seq_params=packed_seq_params)
@@ -644,6 +656,7 @@ class MegatronModelWrapper:
                     rollout_routed_experts=batch.rollout_routed_experts,
                     num_actions=batch.num_actions,
                     record_recompute=True,
+                    **self._model_kwargs(batch),
                 )
 
             return outputs, partial(loss_func, data=batch, packed_seq_params=packed_seq_params)

@@ -15,16 +15,25 @@ ALLGATHER_REDUCESCATTER = "allgather_reducescatter"
 
 class NumericsMode(StrEnum):
     """The kernels a run uses: ``native``, the trainer's and the engines' own; ``batch_invariant``, vLLM's
-    batch-invariant kernels in both; ``exact``, decode-invariant vLLM engines and the trainer's own kernels."""
+    batch-invariant kernels in both; ``exact``, decode-invariant vLLM engines and a trainer that reproduces their
+    log-probabilities bit for bit."""
 
     NATIVE = "native"
     BATCH_INVARIANT = "batch_invariant"
     EXACT = "exact"
 
 
+class CheckFailure(StrEnum):
+    """What the exactness check does when a token's log-probability differs: log it and continue, or stop the run."""
+
+    LOG = "log"
+    STOP = "stop"
+
+
 def validate_numerics_config(cfg: DictConfig) -> None:
-    """Accept a known mode, ``batch_invariant`` and ``exact`` only with local vLLM engines, ``exact`` only with engine
-    settings a decode-invariant engine runs on, and a check interval of at least 0."""
+    """Accept a known mode; ``batch_invariant`` and ``exact`` only with local vLLM engines; ``exact`` only with a policy
+    and the engine and trainer settings it runs on; a check interval of at least 0; and ``on_failure=stop`` only for
+    ``exact``, the mode that promises bit-identical log-probabilities."""
     numerics = cfg.trainer.numerics
     if numerics.mode not in set(NumericsMode):
         raise ValueError(f"{NUMERICS_KEY}.mode must be one of {', '.join(NumericsMode)}; got {numerics.mode!r}")
@@ -42,10 +51,20 @@ def validate_numerics_config(cfg: DictConfig) -> None:
         raise ValueError(
             f"{NUMERICS_KEY}.check.every_weight_syncs must be at least 0; got {numerics.check.every_weight_syncs}"
         )
+    if numerics.check.on_failure not in set(CheckFailure):
+        raise ValueError(
+            f"{NUMERICS_KEY}.check.on_failure must be one of {', '.join(CheckFailure)}; got {numerics.check.on_failure!r}"
+        )
+    if numerics.check.on_failure == CheckFailure.STOP and numerics.mode != NumericsMode.EXACT:
+        raise ValueError(
+            f"{NUMERICS_KEY}.check.on_failure=stop requires {NUMERICS_KEY}.mode=exact, which promises bit-identical "
+            f"log-probabilities; got {NUMERICS_KEY}.mode={numerics.mode}"
+        )
 
 
 def _validate_exact_numerics(cfg: DictConfig) -> None:
-    """Raise unless the rollout engines of ``cfg`` can be decode-invariant and hand rollouts to the trainer in memory."""
+    """Raise unless the rollout engines of ``cfg`` can be decode-invariant and hand rollouts to the trainer in memory,
+    and the exact trainer covers the policy and the trainer settings."""
     generator = cfg.generator
     kwargs = OmegaConf.to_container(generator.engine_init_kwargs, resolve=True)
     moe_backend = kwargs.get("moe_backend", (kwargs.get("kernel_config") or {}).get("moe_backend"))
@@ -67,6 +86,14 @@ def _validate_exact_numerics(cfg: DictConfig) -> None:
         f"engine_init_kwargs.all2all_backend={ALLGATHER_REDUCESCATTER}": all2all_backend == ALLGATHER_REDUCESCATTER,
         f"engine_init_kwargs without {', '.join(refused_kwargs)}": not refused_kwargs,
     }
+    # Imported here: skyrl_train.models imports skyrl_train.utils, which imports this module.
+    from skyrl_train.models.grug_exact.support import (  # noqa: PLC0415
+        exact_model_problems,
+        exact_trainer_problems,
+        policy_model_config,
+    )
+
     unmet = [requirement for requirement, met in requirements.items() if not met]
+    unmet += exact_model_problems(policy_model_config(cfg)) + exact_trainer_problems(cfg)
     if unmet:
         raise ValueError(f"{NUMERICS_KEY}.mode=exact requires {'; '.join(unmet)}")

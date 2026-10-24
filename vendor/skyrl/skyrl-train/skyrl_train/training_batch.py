@@ -370,6 +370,8 @@ class TrainingInput(TypedDict, total=False):
     # Dense replay targets are used by diagnostic input batches. Generated compact
     # rows live in TrainingInputBatch.routed_expert_rows until worker materialization.
     rollout_routed_experts: Optional[Integer[torch.Tensor, "batch_size seq_len L K"]]
+    # The data-parallel rank of the inference engine that served each row; one entry per row.
+    rollout_engine_dp_ranks: Optional[Integer[torch.Tensor, "batch_size"]]  # noqa: F821
     # Loop-behavior reward shaping (Stage B / F5): per-token additive shaping
     # channel, SEPARATE from `rewards` (the RLOO-N outcome term). Default all-zeros
     # and present ONLY when trainer.algorithm.enable_token_reward_channel is True,
@@ -548,6 +550,7 @@ class TrainingBatchIterator(Iterator[Experience]):
             if "ftpo_chosen_mask" in batch
             else None,
             rollout_routed_experts=batch.routed_experts_tensor(),
+            rollout_engine_dp_ranks=batch.get("rollout_engine_dp_ranks"),
             response_span_tags=batch.get("response_span_tags"),
             pair_roles=batch.get("pair_roles"),
             info={},

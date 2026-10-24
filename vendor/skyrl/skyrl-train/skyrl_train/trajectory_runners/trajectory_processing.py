@@ -6,6 +6,7 @@ import numpy as np
 from skyrl_train.group_admission import group_is_fully_excluded_from_training
 from skyrl_train.task_inputs import TaskInput, PreferenceInput
 from skyrl_train.trajectory_runners.types import (
+    ROLLOUT_ENGINE_DP_RANKS_KEY,
     TrajectoryBatch,
     TrajectoryRequestBatch,
     TrajectoryID,
@@ -37,7 +38,7 @@ from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
     refresh_trajectory_reward_shaping_metrics,
 )
 from skyrl_train.metric_names import ROLLOUT_FAILURE_FRACTION_METRIC
-from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
+from skyrl_train.inference_engines.base import UNKNOWN_ENGINE_DP_RANK, UNSTAMPED_POLICY_STEP
 from loguru import logger
 from skyrl_gym.metrics import aggregate_for_task
 from skyrl_gym.verification import VerificationResult, VerificationStatus, normalized_verifier_score
@@ -392,6 +393,14 @@ def concatenate_trajectory_batches(
             for row in (
                 output.get("rollout_policy_steps")
                 or [np.full(len(ids), UNSTAMPED_POLICY_STEP, dtype=np.int32) for ids in output["response_ids"]]
+            )
+        ]
+    if any(output.get(ROLLOUT_ENGINE_DP_RANKS_KEY) is not None for output in trajectory_batches):
+        result[ROLLOUT_ENGINE_DP_RANKS_KEY] = [
+            rank
+            for output in trajectory_batches
+            for rank in (
+                output.get(ROLLOUT_ENGINE_DP_RANKS_KEY) or [UNKNOWN_ENGINE_DP_RANK] * len(output["response_ids"])
             )
         ]
     if selected_topk_concat is not None:

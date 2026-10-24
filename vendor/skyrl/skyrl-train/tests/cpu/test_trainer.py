@@ -12,6 +12,7 @@ from omegaconf import OmegaConf
 
 import skyrl_train.trainer as trainer_module
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.config.numerics import CheckFailure
 from skyrl_train.exactness_check import ExactnessCheck
 from marinskyrl.distillation import compile_distillation_plan_from_config
 from skyrl_train.distributed.dispatch import MeshRank
@@ -20,6 +21,9 @@ from skyrl_train.rollouts.context import TrainingContextState
 from skyrl_train.rollouts.loader import PromptLoaderState
 from skyrl_train.trainer import CheckpointSnapshot, RayPPOTrainer
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
+from skyrl_train.inference_engines.base import UNKNOWN_ENGINE_DP_RANK
+from skyrl_train.trajectory_runners.trajectory_processing import concatenate_trajectory_batches
+from skyrl_train.trajectory_runners.types import ROLLOUT_ENGINE_DP_RANKS_KEY
 from skyrl_train.objective.losses import PolicyLossInputs, ppo_policy_loss
 from skyrl_train.config.objective_spec import LossReduction
 from skyrl_train.objective.reduction import reduce_to_step, step_counts
@@ -764,7 +768,9 @@ async def test_exactness_check_scores_the_engines_after_qualifying_syncs_in_the_
     trainer.sync_policy_weights_to_inference_engines = AsyncMock()
     trainer._resolve_num_experts = lambda: None
     trainer.tokenizer = SimpleNamespace(pad_token_id=0, encode=lambda text, add_special_tokens: [1, 2, 3])
-    trainer._exactness_check = ExactnessCheck(2, trainer.cfg.generator.sampling_params, trainer.tokenizer)
+    trainer._exactness_check = ExactnessCheck(
+        2, CheckFailure.LOG, trainer.cfg.generator.sampling_params, trainer.tokenizer
+    )
     trainer.all_timings, trainer.all_startup_timings = {}, {}
     trainer.global_step = 0
 
@@ -801,3 +807,72 @@ async def test_exactness_check_scores_the_engines_after_qualifying_syncs_in_the_
         "dp_rank_0/mismatched_tokens": 1.0,
     }
     assert reported == [scored, {}, {}, {"generate_failures": 1.0}, scored]
+
+    # A mode that promises bit-identical log-probabilities stops the run on that one bit under on_failure=stop.
+    trainer._exactness_check = ExactnessCheck(
+        2, CheckFailure.STOP, trainer.cfg.generator.sampling_params, trainer.tokenizer
+    )
+    await trainer._sync_policy_for_rollouts(reason=WeightSyncReason.INITIAL)
+    with pytest.raises(RuntimeError):
+        await replay_policy_forward(trainer, _one_row_batch())
+
+
+class _RecordingForwardPolicyGroup:
+    actor_infos = [SimpleNamespace(rank=MeshRank(dp=0, sp=0, tp=0, pp=0, world_size=1, dp_size=1, pp_size=1))]
+
+    def __init__(self):
+        self.forward_batches = []
+
+    def async_run_ray_method(self, dispatch_type, method_name, **kwargs):
+        if method_name == "barrier_all":
+            return [ray.put(None)]
+        if method_name == "empty_cache":
+            return []
+        if method_name == "forward":
+            data = kwargs["data"]
+            self.forward_batches.append(data)
+            output = torch.zeros(len(data["sequences"]), data.metadata["response_length"])
+            return [ray.put(TrainingOutputBatch({"output": output}))]
+        raise AssertionError(f"Unexpected policy method: {method_name}")
+
+
+def _trajectory_rows(prompts, responses, **channels):
+    return {
+        "prompt_token_ids": prompts,
+        "response_ids": responses,
+        "rewards": [[0.0] * len(response) for response in responses],
+        "loss_masks": [[1] * len(response) for response in responses],
+        "rollout_logprobs": None,
+        **channels,
+    }
+
+
+def test_the_pre_update_policy_forward_receives_each_rows_serving_engine_rank_and_loss_mask(
+    ray_init, dummy_config, dummy_tokenizer
+):
+    trainer = RayPPOTrainer.__new__(RayPPOTrainer)
+    trainer.cfg = dummy_config
+    trainer.group_advantage_invariant = GroupAdvantageInvariant.no_group_advantage(physical_group_size=1)
+    trainer.tokenizer = dummy_tokenizer
+    trainer.pad_batch = lambda batch: batch
+    trainer.policy_model = _RecordingForwardPolicyGroup()
+    trainer.ref_model = None
+    trainer.critic_model = None
+    trainer.colocate_all = False
+    trainer.global_step = 1
+    # A batch whose model turns report no serving rank fills its rows with UNKNOWN_ENGINE_DP_RANK.
+    trajectory_batch = concatenate_trajectory_batches(
+        [
+            _trajectory_rows([[1, 2], [3]], [[4, 5, 6], [7]], **{ROLLOUT_ENGINE_DP_RANKS_KEY: [3, 0]}),
+            _trajectory_rows([[8]], [[9, 10]]),
+        ],
+        tis_lcs_alert_threshold=0.0,
+    )
+
+    training_input = trainer.convert_to_training_input(trajectory_batch, ["a", "b", "c"])
+    trainer.fwd_logprobs_values_reward(training_input)
+
+    [forward] = trainer.policy_model.forward_batches
+    assert forward[ROLLOUT_ENGINE_DP_RANKS_KEY].tolist() == [3, 0, UNKNOWN_ENGINE_DP_RANK]
+    # The exact trainer needs the rank of each row with loss tokens.
+    assert torch.equal(forward["loss_mask"], training_input["loss_mask"])

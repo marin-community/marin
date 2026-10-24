@@ -7,9 +7,10 @@ from skyrl_train.inference_engines.vllm.decode_invariant.engine import (
     DECODE_INVARIANT_ENGINE_ENVIRONMENT,
     decode_invariant_engine_init_kwargs,
 )
+from skyrl_train.models.grug_moe import GrugMoeConfig
 
 
-def test_exact_numerics_builds_decode_invariant_policy_engines_from_the_written_config(monkeypatch):
+def test_exact_numerics_builds_decode_invariant_policy_engines_from_the_written_config(monkeypatch, tmp_path):
     captured = {}
 
     def fake_create(**engine_kwargs):
@@ -23,11 +24,15 @@ def test_exact_numerics_builds_decode_invariant_policy_engines_from_the_written_
     assert captured["vllm_attention_backend"] is None
     assert captured["engine_environment"] == {}
 
-    # trainer.numerics.mode=exact with the Snowball engine settings validates, builds decode-invariant rollout engines
-    # and leaves the config as written.
+    # trainer.numerics.mode=exact with a Snowball-shaped Grug policy and Snowball's exact settings validates with
+    # on_failure=stop, builds decode-invariant rollout engines and leaves the config as written.
     captured.clear()
     cfg = get_default_config()
     cfg.trainer.numerics.mode = "exact"
+    cfg.trainer.numerics.check.on_failure = "stop"
+    cfg.trainer.use_sample_packing = False
+    GrugMoeConfig().save_pretrained(tmp_path / "policy")
+    cfg.trainer.policy.model.path = str(tmp_path / "policy")
     cfg.generator.enforce_eager = False
     cfg.generator.inference_engine_tensor_parallel_size = 1
     cfg.generator.vllm_attention_backend = "FLASH_ATTN"
