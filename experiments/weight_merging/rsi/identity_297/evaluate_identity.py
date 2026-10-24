@@ -14,7 +14,7 @@ from rigging.secrets import require_secret
 
 from experiments.interp.snowball_identity.identity_eval import cli
 
-SCORER_REVISION = "42bc8d2445"
+SCORER_REVISION = "2a1de41d86"
 MODEL_REVISION = "59852d6f07261722bbec1edb6ab148317156b58e"
 PROMPTS = Path(__file__).parent / "prompts"
 
@@ -25,12 +25,13 @@ def main() -> None:
     parser.add_argument("--label", required=True)
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), required=True)
     parser.add_argument("--workers", type=int, default=8)
+    parser.add_argument("--model-revision", default=MODEL_REVISION, help="HF pin or immutable merge recipe revision.")
     args = parser.parse_args()
     fs, destination = filesystem_for(args.output.rstrip("/"))
     provenance = {
         "label": args.label,
         "dtype": args.dtype,
-        "model_revision": MODEL_REVISION,
+        "model_revision": args.model_revision,
         "scorer_revision": SCORER_REVISION,
         "split": "dev",
         "workers": args.workers,
