@@ -654,6 +654,94 @@ index f643ab83..6934b7da 100644
    g.__dbClients.set(key, client);
    return client;
  }
+diff --git a/packages/db/src/etl/benchmark-ingest-upsert.test.ts b/packages/db/src/etl/benchmark-ingest-upsert.test.ts
+index 12c5a9db..d37e302d 100644
+--- a/packages/db/src/etl/benchmark-ingest-upsert.test.ts
++++ b/packages/db/src/etl/benchmark-ingest-upsert.test.ts
+@@ -75,3 +75,56 @@ describe('bulkIngestBenchmarkRows — power_audit on conflict', () => {
+     expect(await ingest(singleTurn)).toEqual([null]);
+   });
+ });
++
++describe('bulkIngestBenchmarkRows — trace-derived cache rates on conflict', () => {
++  it('refreshes aggregate-only rows but preserves linked trace rates across replay', async () => {
++    const aggregate = row({
++      metrics: { server_gpu_cache_hit_rate: 0.57382, output_tput_per_gpu: 86.31751 },
++    });
++    await bulkIngestBenchmarkRows(sql, [aggregate], 1, '2026-09-11');
++    await bulkIngestBenchmarkRows(
++      sql,
++      [{ ...aggregate, metrics: { server_gpu_cache_hit_rate: 0.6 } }],
++      1,
++      '2026-09-11',
++    );
++    const before = await db.query<{ id: number; metrics: Record<string, number> }>(
++      'SELECT id, metrics FROM benchmark_results',
++    );
++    expect(before.rows[0].metrics.server_gpu_cache_hit_rate).toBe(0.6);
++    const trace = await db.query<{ id: number }>(
++      'INSERT INTO agentic_trace_replay DEFAULT VALUES RETURNING id',
++    );
++    const traceId = trace.rows[0].id;
++    await db.query(
++      `UPDATE benchmark_results SET trace_replay_id = $1, metrics = $2::jsonb WHERE id = $3`,
++      [
++        traceId,
++        JSON.stringify({
++          server_gpu_cache_hit_rate: 0.526827832069493,
++          server_cpu_cache_hit_rate: 0,
++          kv_cache_pool_tokens: 20609536,
++        }),
++        before.rows[0].id,
++      ],
++    );
++    await bulkIngestBenchmarkRows(sql, [aggregate], 1, '2026-09-11');
++    const after = await db.query<{
++      id: number;
++      trace_replay_id: number;
++      metrics: Record<string, number>;
++    }>('SELECT id, trace_replay_id, metrics FROM benchmark_results');
++    expect(after.rows).toEqual([
++      {
++        id: before.rows[0].id,
++        trace_replay_id: traceId,
++        metrics: {
++          server_gpu_cache_hit_rate: 0.526827832069493,
++          server_cpu_cache_hit_rate: 0,
++          kv_cache_pool_tokens: 20609536,
++          output_tput_per_gpu: 86.31751,
++        },
++      },
++    ]);
++  });
++});
+diff --git a/packages/db/src/etl/benchmark-ingest.ts b/packages/db/src/etl/benchmark-ingest.ts
+index 0d12ce36..3c68dd5d 100644
+--- a/packages/db/src/etl/benchmark-ingest.ts
++++ b/packages/db/src/etl/benchmark-ingest.ts
+@@ -107,12 +107,17 @@ export async function bulkIngestBenchmarkRows(
+       recipe_fingerprint
+     )
+     do update set
+-      -- Replace metrics with the fresh artifact values, but carry over
+-      -- kv_cache_pool_tokens: it is derived from the server log at
+-      -- insertServerLog time (not present in any artifact JSON), so a later
+-      -- upsert from the aggregated results_bmk artifact would silently wipe it.
++      -- Retain metrics derived from stored telemetry when an aggregate is replayed.
++      -- A linked trace is not reprocessed, so its chart-window cache rates must
++      -- survive the aggregate's server-counter rates on repeat ingestion.
+       metrics = excluded.metrics || jsonb_strip_nulls(
+-        jsonb_build_object('kv_cache_pool_tokens', benchmark_results.metrics->'kv_cache_pool_tokens')
++        jsonb_build_object(
++          'kv_cache_pool_tokens', benchmark_results.metrics->'kv_cache_pool_tokens',
++          'server_gpu_cache_hit_rate', case when benchmark_results.trace_replay_id is not null
++            then benchmark_results.metrics->'server_gpu_cache_hit_rate' end,
++          'server_cpu_cache_hit_rate', case when benchmark_results.trace_replay_id is not null
++            then benchmark_results.metrics->'server_cpu_cache_hit_rate' end
++        )
+       ),
+       image = excluded.image,
+       workers = excluded.workers,
 diff --git a/packages/db/src/etl/db-utils.ts b/packages/db/src/etl/db-utils.ts
 index 310efb23..d0fcaa00 100644
 --- a/packages/db/src/etl/db-utils.ts

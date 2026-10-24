@@ -19,6 +19,12 @@ epoch-nanosecond origin and subtracting it lost precision and dropped the first 
 request in a real H100 window. The API retained 351 requests while the histogram showed
 350; the regression uses that window's origin and offset. No measurement is rewritten.
 
+The importer also preserves cache-hit rates derived from an already linked trace when
+an aggregate is imported again. Upstream otherwise overwrote those rates with the
+aggregate's server-counter rates while skipping trace processing. Replaying the real
+C32 artifact changed 52.68% to 57.38%; a SQL regression covers preserving the linked
+trace's rate while still refreshing aggregate-only rows.
+
 The app remains GPLv3; `LICENSE.app` preserves its license. Corresponding source is the
 upstream commit in `settings.json` plus the adjacent patch. Keep both with distributed
 images. `/marin-build.json` exposes the upstream commit and overlay SHA256. Selected
