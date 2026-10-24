@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import os
 from collections import defaultdict
 from datetime import timedelta
@@ -36,6 +37,12 @@ from skyrl_train.distributed.utils import init_worker_process_group_with_device
 from skyrl_train.mismatch_probe.modes import TRAINER_MODES
 from skyrl_train.models.grug_moe import GRUG_MOE_MODEL_TYPE, validate_grug_training_strategy
 from skyrl_train.timing_observability import PhaseBreakdown
+from skyrl_train.workers.megatron.router_telemetry import (
+    assert_bias_unchanged,
+    named_expert_bias_buffers,
+    router_policy_manifest,
+    snapshot_expert_bias,
+)
 from marinskyrl.runtime_options import PolicyLossType
 from skyrl_train.training_batch import (
     TrainingBatchIterator,
@@ -53,6 +60,7 @@ from skyrl_train.utils.utils import (
 )
 from skyrl_train.weight_sync.expert_block.sender import ExpertBlockSender
 from skyrl_train.weight_sync.weight_extractor import validate_weight_sync_mode
+from skyrl_train.io import io
 from skyrl_train.workers.grug_validation import GrugValidationSnapshot
 from skyrl_train.workers.megatron.megatron_model_wrapper import (
     MegatronForwardMicroBatch,
@@ -74,6 +82,54 @@ from transformers import AutoConfig, AutoTokenizer
 
 from marinskyrl.hugging_face_retry import load_hugging_face_with_retry
 from marinskyrl.runtime_options import WeightSyncTransport
+
+
+def _validate_grug_router_policy(model_type: str | None, transformer_config_kwargs: dict) -> None:
+    """Reject an aux loss on Grug, whose router override bypasses mcore's balancing loss."""
+    if model_type != GRUG_MOE_MODEL_TYPE:
+        return
+    coeff = transformer_config_kwargs.get("moe_aux_loss_coeff")
+    if coeff is not None and float(coeff) != 0.0:
+        raise ValueError(f"Grug routing bypasses mcore's aux loss; moe_aux_loss_coeff must be 0, got {coeff}")
+    balancing = transformer_config_kwargs.get("moe_router_load_balancing_type")
+    if balancing is not None and str(balancing) != "none":
+        raise ValueError(
+            f"Grug routing bypasses mcore's load-balancing loss; moe_router_load_balancing_type must be none, got {balancing}"
+        )
+
+
+ROUTER_POLICY_MANIFEST_FILENAME = "router_policy.json"
+# The bias-freeze guard applies to these model types. Grug freezes its selection
+# bias in training; NemotronH updates its correction bias, so the guard must not
+# fire there. Extend only when a per-architecture knob (CL4) resolves it.
+_BIAS_GUARD_MODEL_TYPES = ("grug_moe",)
+
+
+def _write_router_policy_manifest(
+    cfg, model_type: str, model_chunks: list[nn.Module], *, bias_guarded: bool
+) -> None:
+    """Record the router policy this rank's live model trains under, beside the run's exports."""
+    router_weights = [
+        parameter
+        for chunk in model_chunks
+        for name, parameter in chunk.named_parameters()
+        if name.endswith("router.weight")
+    ]
+    if not router_weights:
+        raise ValueError("router policy manifest found no router weights in the model")
+    has_bias = any(named_expert_bias_buffers(chunk) for chunk in model_chunks)
+    manifest = router_policy_manifest(
+        model_type,
+        router_weights="trained" if any(parameter.requires_grad for parameter in router_weights) else "frozen",
+        selection_bias=("frozen" if bias_guarded else "updated") if has_bias else "absent",
+        aux_loss_coeff=float(get_model_config(model_chunks[0]).moe_aux_loss_coeff or 0.0),
+    )
+    export_root = str(cfg.trainer.export_path)
+    io.makedirs(export_root, exist_ok=True)
+    separator = "/" if io.is_cloud_path(export_root) else os.sep
+    manifest_path = export_root.rstrip("/\\") + separator + ROUTER_POLICY_MANIFEST_FILENAME
+    with io.open_file(manifest_path, "w") as handle:
+        json.dump(manifest, handle, indent=2, sort_keys=True)
 
 
 class _MegatronInitMode(StrEnum):
@@ -121,6 +177,7 @@ class MegatronWorker:
         """
         hf_config = AutoConfig.from_pretrained(model_path, trust_remote_code=True, revision=model_revision)
         validate_grug_training_strategy(getattr(hf_config, "model_type", None), "megatron")
+        _validate_grug_router_policy(getattr(hf_config, "model_type", None), transformer_config_kwargs)
         tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_path,
             trust_remote_code=True,
@@ -487,7 +544,22 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
     def init_model(self, model_path, num_training_steps: int = 1e9):
         """Initialize the model, optimizer, and scheduler for the policy worker."""
         self._initialize_policy_modules(model_path, mode=_MegatronInitMode.TRAINING)
-
+        # The selection bias stays frozen while the router weights train; snapshot
+        # the buffers so every optimizer step can assert they are byte-identical.
+        # Grug only until the CL4 per-architecture knob exists: NemotronH updates
+        # its correction bias during pretraining-style Stage 0, so the guard
+        # must not fire there.
+        self._bias_guard_active = self.strategy.hf_config.model_type in _BIAS_GUARD_MODEL_TYPES
+        self._expert_bias_snapshot = (
+            snapshot_expert_bias(self.actor_module[0]) if self._bias_guard_active else {}
+        )
+        if self.strategy.is_rank_0():
+            _write_router_policy_manifest(
+                self.cfg,
+                self.strategy.hf_config.model_type,
+                self.actor_module,
+                bias_guarded=self._bias_guard_active,
+            )
         # create profiler
         if self.cfg.trainer.policy.megatron_config.torch_profiler_config.enable:
             self.profiler = Profiler(self.cfg.trainer.policy.megatron_config.torch_profiler_config)
@@ -557,6 +629,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
         self._drain_r3_decentral_stagger(train_data)
         if self.model.router_replay is not None and train_data.routed_experts is None:
             raise ValueError("moe_router_replay is on but the batch carries no rollout_routed_experts")
+        self._data_source_names = train_data.metadata.get("data_source_names")
         dataloader = TrainingBatchIterator(train_data, self.cfg.trainer.micro_train_batch_size_per_gpu)
 
         micro_batches_per_mini_batch = gradient_accumulation_steps(
@@ -604,6 +677,7 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         ftpo=experience.ftpo,
                         rollout_routed_experts=experience.rollout_routed_experts,
                         pair_roles=experience.pair_roles,
+                        data_source_ids=experience.data_source_ids,
                     )
                 )
 
@@ -638,6 +712,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         temperature=self.scoring_temperature,
                         timings=timing,
                         profiler=profiler,
+                        data_source_names=self._data_source_names,
+                        global_step=int(train_data.metadata["global_step"]),
                     )
 
                     if self.empty_cuda_cache:
@@ -652,6 +728,8 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                             consecutive_nonfinite_steps=self._consecutive_nonfinite_steps,
                             max_consecutive_nonfinite_steps=self.cfg.trainer.policy.max_consecutive_nonfinite_steps,
                         )
+                    if self._bias_guard_active:
+                        assert_bias_unchanged(self.actor_module[0], self._expert_bias_snapshot)
                     checksum_mismatch = None
                     if self.cfg.trainer.policy.megatron_config.check_dp_weight_consistency:
                         with timing.span("megatron_dp_weight_checksum"):

@@ -2485,6 +2485,16 @@ class RayPPOTrainer:
                 len(sample_response_ids) for sample_response_ids in response_ids
             ) / len(response_ids)
 
+        data_sources = trajectory_batch.get("data_sources")
+        if data_sources is not None and any(source is not None for source in data_sources):
+            # Router telemetry attributes collision mass per task tag; ids slice with
+            # the batch while the shared metadata carries the id-to-tag map.
+            names = sorted({source for source in data_sources if source is not None})
+            training_input["data_source_ids"] = torch.tensor(
+                [names.index(source) if source is not None else -1 for source in data_sources], dtype=torch.int32
+            )
+            training_input.metadata["data_source_names"] = names
+
         logger.info(f"Number of sequences before padding: {len(training_input['sequences'])}")
         training_input = self.pad_batch(training_input)
         logger.info(f"Number of sequences after padding: {len(training_input['sequences'])}")
@@ -2804,6 +2814,9 @@ class RayPPOTrainer:
 
                 if key == "is_last_step":
                     padding_tensor = torch.ones(pad_size, *additional_dims, dtype=tensor.dtype, device=tensor.device)
+                elif key == "data_source_ids":
+                    # Pad rows carry no task tag; -1 maps to no attribution.
+                    padding_tensor = torch.full((pad_size,), -1, dtype=tensor.dtype, device=tensor.device)
                 elif key in ("loss_mask", "ftpo_weights"):
                     # ensures that padding tensors don't count towards the loss
                     padding_tensor = torch.zeros(pad_size, *additional_dims, dtype=tensor.dtype, device=tensor.device)

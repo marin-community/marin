@@ -56,6 +56,8 @@ trainer:
   training_metrics: true # trainer scalars, loop events and trainer-minus-vLLM log-ratio statistics
   policy_train_spans: true # per-rank policy-update phase walls and CUDA memory
   rollout_spans: true # training-loop phase windows, rollout calls, dispatch waits and group dispositions
+  router_telemetry:
+    enabled: false # per-layer expert load, collision mass, and the frozen-bias assertion during training
   distributed:
     placement_group_timeout_seconds: 180
     worker_collective_timeout_seconds: 1800
