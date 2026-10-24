@@ -23,33 +23,45 @@ PRECLEANUP_CACHE_CONTRACT = {
 }
 
 
-def check_cleanup_cache(rows: list[dict], items: dict[str, dict], cache: GradeStore) -> list[dict]:
-    """Re-execute five saved observations, including a timeout, before reuse."""
+def check_cleanup_cache(rows: list[dict], items: dict[str, dict], cache: GradeStore, timeout_replay: dict) -> list[dict]:
+    """Check five saved normal grades and replay an actual pre-patch timeout."""
     selected = []
     for row in rows:
         if row["dataset"] != "mbpp":
             continue
         item = items[row["item_id"]]
         cached = cache.get(cache.identity(row, item))
-        if cached is None:
+        if cached is None or cached.get("error") == "timeout":
             continue
-        if (
-            len(selected) < 4
-            or cached.get("error") == "timeout"
-            or any(grade.get("error") == "timeout" for _, grade in selected)
-        ):
-            selected.append((row, cached))
+        selected.append((row, cached))
         if len(selected) == 5:
             break
-    if len(selected) != 5 or not any(grade.get("error") == "timeout" for _, grade in selected):
-        raise ValueError("Cleanup cache audit requires five saved grades including a timeout")
+    if len(selected) != 5:
+        raise ValueError("Cleanup cache audit requires five saved normal grades")
     checks = []
     for row, cached in selected:
         actual = score(items[row["item_id"]], row["completion"])
         if actual != cached:
             raise ValueError(f"Cleanup patch changed cached grade: {row['candidate']} {row['item_id']}")
-        checks.append({"key": [row[key] for key in ("candidate", "item_id", "mode", "seed")], "grade": actual})
-    print("Cleanup cache sanity: five exact grades, including timeout", flush=True)
+        checks.append(
+            {
+                "key": [row[key] for key in ("candidate", "item_id", "mode", "seed")],
+                "grade": actual,
+                "purpose": "cached_normal",
+            }
+        )
+    replay = next(row for row in rows if all(row[key] == value for key, value in timeout_replay.items()))
+    actual = score(items[replay["item_id"]], replay["completion"])
+    if actual != {"correct": False, "error": "timeout"}:
+        raise ValueError(f"Previously crashing observation did not time out in replay: {timeout_replay}: {actual}")
+    checks.append(
+        {
+            "key": [replay[key] for key in ("candidate", "item_id", "mode", "seed")],
+            "grade": actual,
+            "purpose": "previously_crashing_timeout",
+        }
+    )
+    print("Cleanup cache sanity: five saved normal grades exact; crashed-item replay timed out and failed", flush=True)
     return checks
 
 
@@ -117,11 +129,15 @@ def main():
         compatibility["old_contract"] != PRECLEANUP_CACHE_CONTRACT
         or compatibility["new_contract"] != scoring_contract
         or not compatibility["patch_diff"]
+        or compatibility["audit_policy"] != "five_cached_normal_plus_exact_crashed_timeout"
+        or set(compatibility["timeout_replay"]) != {"candidate", "item_id", "mode", "seed"}
     ):
         raise ValueError("Cleanup cache manifest does not pin the exact old/new scorer sources and patch")
     cache_contract = PRECLEANUP_CACHE_CONTRACT if compatibility is not None else scoring_contract
     cache = GradeStore(args.cache, cache_contract)
-    sanity = check_cleanup_cache(rows, items, cache) if compatibility is not None else []
+    sanity = (
+        check_cleanup_cache(rows, items, cache, compatibility["timeout_replay"]) if compatibility is not None else []
+    )
     scored, differences = score_rows(rows, items, cache=cache, parity=bool(args.parity_items))
     args.output.mkdir(parents=True)
     for name in ("panel.json", "model-paths.json", "model-sources.json"):

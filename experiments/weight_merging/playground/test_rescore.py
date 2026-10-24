@@ -96,14 +96,14 @@ def test_completed_grades_survive_another_item_failing_and_retry(monkeypatch, tm
     assert cache.get(cache.identity(rows[0], {"tests": ["changed test"]})) is None
 
 
-def test_cleanup_cache_audit_reexecutes_five_including_timeout_and_rejects_changed_grade(monkeypatch, tmp_path):
+def test_cleanup_cache_audit_checks_saved_grades_and_actual_crashed_timeout(monkeypatch, tmp_path):
     cache = GradeStore(str(tmp_path), {"scorer": "known-old"})
     rows = [
         {"candidate": "model", "dataset": "mbpp", "item_id": str(i), "mode": "greedy", "seed": 0, "completion": str(i)}
         for i in range(6)
     ]
     grades = [{"correct": True, "error": "exit-0"}] * 5 + [{"correct": False, "error": "timeout"}]
-    for row, grade in zip(rows, grades, strict=True):
+    for row, grade in zip(rows[:5], grades[:5], strict=True):
         cache.put(cache.identity(row, {}), grade)
     executed = []
 
@@ -112,9 +112,13 @@ def test_cleanup_cache_audit_reexecutes_five_including_timeout_and_rejects_chang
         return grades[int(text)]
 
     monkeypatch.setattr("experiments.weight_merging.playground.rescore.score", reexecute)
-    checks = check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache)
-    assert executed == ["0", "1", "2", "3", "5"]
-    assert len(checks) == 5 and checks[-1]["grade"]["error"] == "timeout"
+    replay = {key: rows[-1][key] for key in ("candidate", "item_id", "mode", "seed")}
+    checks = check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache, replay)
+    assert executed == ["0", "1", "2", "3", "4", "5"]
+    assert len(checks) == 6 and checks[-1]["grade"]["error"] == "timeout"
+    monkeypatch.setattr("experiments.weight_merging.playground.rescore.score", lambda *args: grades[0])
+    with pytest.raises(ValueError, match="did not time out"):
+        check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache, replay)
     monkeypatch.setattr("experiments.weight_merging.playground.rescore.score", lambda *args: {"correct": False})
     with pytest.raises(ValueError, match="changed cached grade"):
-        check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache)
+        check_cleanup_cache(rows, {row["item_id"]: {} for row in rows}, cache, replay)
