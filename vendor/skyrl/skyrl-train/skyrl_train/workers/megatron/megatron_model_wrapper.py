@@ -13,7 +13,7 @@ from megatron.core.distributed import DistributedDataParallel as MegatronDDP
 from megatron.core.distributed import finalize_model_grads
 from megatron.core.transformer.module import Float16Module
 
-from skyrl_train.mismatch_probe.score_math import score_compacted_logits
+from skyrl_train.mismatch_probe.score_math import CompactHiddenStates, score_compacted_hidden
 from skyrl_train.models.router_instrumentation import observe_router_forwards
 from skyrl_train.workers.megatron.router_telemetry import (
     RouterTelemetryStep,
@@ -116,6 +116,36 @@ class MegatronPolicyMicroBatch:
     rollout_routed_experts: Optional[torch.Tensor] = None
     pair_roles: Optional[torch.Tensor] = None
     data_source_ids: Optional[torch.Tensor] = None
+
+
+def deferred_output_projection(
+    *,
+    hidden_states: torch.Tensor,
+    output_layer: nn.Module,
+    output_weight: Optional[torch.Tensor],
+    scale_logits: Callable[[torch.Tensor], torch.Tensor],
+    config,
+    **_unused: Any,
+) -> CompactHiddenStates:
+    """GPTModel ``output_processor`` that returns the final hidden states unprojected.
+
+    The returned projection runs the model's own output layer (and its logit
+    scaling) on a sequence slice, so chunked scores use the same kernel and dtype
+    as the full forward. Requires an output layer without bias, TP1 and no MTP.
+    """
+    if config.mtp_num_layers:
+        raise ValueError("deferred output projection does not support multi-token prediction layers")
+    if getattr(output_layer, "bias", None) is not None:
+        raise ValueError("deferred output projection expects an output layer without bias")
+
+    def project(hidden: torch.Tensor) -> torch.Tensor:
+        logits, _bias = output_layer(
+            hidden.transpose(0, 1).contiguous(), weight=output_weight, runtime_gather_output=True
+        )
+        return scale_logits(logits).transpose(0, 1)
+
+    # [s, b, h] => [b, s, h]
+    return CompactHiddenStates(hidden=hidden_states.transpose(0, 1), project=project)
 
 
 class MegatronModelWrapper:
@@ -306,8 +336,13 @@ class MegatronModelWrapper:
         probe_row_indices: Optional[torch.Tensor] = None,
         num_actions: Optional[int] = None,
         record_recompute: bool = False,
+        output_processor: Optional[Callable[..., Any]] = None,
     ):
         """Run the shared packed or left-unpadded Megatron model boundary.
+
+        ``output_processor`` replaces GPTModel's output projection on the last
+        pipeline stage (Megatron's ``output_processor`` hook); the model then
+        returns whatever it returns.
 
         When router replay is installed and routes are present, brackets the
         model call with ``begin_forward`` / ``end_forward`` (never falling back
@@ -357,12 +392,14 @@ class MegatronModelWrapper:
             # module (equivalence experiments) already returns module-precision outputs.
             inner = model.module if isinstance(model, MegatronDDP) else model
             precision_kwargs = {"fp32_output": False} if isinstance(inner, Float16Module) else {}
+            processor_kwargs = {"output_processor": output_processor} if output_processor is not None else {}
             outputs = model(
                 model_sequences,
                 model_position_ids,
                 model_attention_mask,
                 packed_seq_params=packed_seq_params,
                 **precision_kwargs,
+                **processor_kwargs,
             )
             if armed:
                 self.router_replay.end_forward()
@@ -480,6 +517,11 @@ class MegatronModelWrapper:
         Requires tensor-parallel size 1: a distributed vocabulary would need a
         cross-rank top-K merge and a per-shard log-sumexp correction, which this
         pass does not implement.
+
+        The model returns its final hidden states (``deferred_output_projection``)
+        and the scores project them to logits one ``logprob_chunk_size`` sequence
+        chunk at a time, so a [tokens x vocab] logits tensor never exists; that
+        tensor is what bounded one node at 64k tokens.
         """
         if mpu.get_tensor_model_parallel_world_size() != 1:
             raise ValueError(
@@ -491,10 +533,10 @@ class MegatronModelWrapper:
             raise ValueError("probe score passes need use_sample_packing=false; packed logits would misalign positions")
 
         def score_func(
-            logits: torch.Tensor, data: MegatronForwardMicroBatch
+            outputs: CompactHiddenStates, data: MegatronForwardMicroBatch
         ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-            scores = score_compacted_logits(
-                logits,
+            scores = score_compacted_hidden(
+                outputs,
                 data.attention_mask,
                 top_k=top_k,
                 gather_ids=data.probe_score_gather_ids,
@@ -503,7 +545,7 @@ class MegatronModelWrapper:
                 chunk_size=self._logprob_chunk_size,
                 support_width=support_width,
             )
-            zero = torch.tensor(0.0, device=logits.device)
+            zero = torch.tensor(0.0, device=outputs.hidden.device)
             return zero, scores
 
         def forward_step(batch_iter, model):
@@ -516,6 +558,7 @@ class MegatronModelWrapper:
                 rollout_routed_experts=batch.rollout_routed_experts,
                 probe_row_indices=batch.probe_row_indices,
                 num_actions=batch.num_actions,
+                output_processor=deferred_output_projection,
             )
             return outputs, partial(score_func, data=batch)
 

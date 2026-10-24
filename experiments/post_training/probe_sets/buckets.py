@@ -17,6 +17,15 @@ token gets an assistant mask, its assistant-turn index, and one bucket:
 - ``delimiter``: generated structural tokens (think open/close, the closing turn token);
 - ``context``: everything unscored (system, user and tool turns, headers).
 
+An assistant turn's reasoning comes either from ``reasoning_content`` (the template
+renders the think markers) or from think markers left verbatim in a sampled reply's
+``content``. Sampled replies do not always pair their markers: a reply can open a think
+block it never closes (the reasoning runs to the end of the reply) or close one it never
+opened (the generation prompt carries no open marker, so the reasoning starts at the
+reply's start). Passing the raw reply as ``content`` keeps the rendered tokens equal to
+what the model sampled; splitting an unpaired reply into ``reasoning_content`` would
+make the template add a marker the model never produced.
+
 Tool observations are fixed context, so KL is scored only where the mask is set.
 Reasoning tokens also carry their relative-position decile within the reasoning span,
 for P_think's thinking-depth buckets.
@@ -82,6 +91,35 @@ def _content_spans(content: str) -> list[tuple[int, int, Bucket]]:
     return sorted(spans)
 
 
+def _think_marker_spans(content: str, think_open: str, think_close: str) -> list[tuple[int, int, Bucket]]:
+    """Reasoning and delimiter spans from think markers in a reply's raw content.
+
+    An open marker starts a reasoning span (a repeated open inside a span is only a
+    delimiter); a close ends it. A close before any marker ends a span that started at
+    the reply's start; a later close with no open is only a delimiter. A span still open
+    at the end runs to the end of the content. Reasoning spans come first so the
+    delimiters paint over any marker inside one.
+    """
+    reasoning: list[tuple[int, int, Bucket]] = []
+    delimiters: list[tuple[int, int, Bucket]] = []
+    reasoning_start: int | None = None
+    seen_marker = False
+    for match in re.finditer(f"{re.escape(think_open)}|{re.escape(think_close)}", content):
+        delimiters.append((match.start(), match.end(), Bucket.DELIMITER))
+        if match.group() == think_open:
+            if reasoning_start is None:
+                reasoning_start = match.end()
+        elif reasoning_start is not None:
+            reasoning.append((reasoning_start, match.start(), Bucket.REASONING))
+            reasoning_start = None
+        elif not seen_marker:
+            reasoning.append((0, match.start(), Bucket.REASONING))
+        seen_marker = True
+    if reasoning_start is not None:
+        reasoning.append((reasoning_start, len(content), Bucket.REASONING))
+    return reasoning + delimiters
+
+
 def _find(text: str, piece: str, cursor: int) -> int:
     position = text.find(piece, cursor)
     if position < 0:
@@ -122,7 +160,9 @@ def _char_buckets(text: str, messages: list[dict[str, Any]], family: str) -> tup
         if message.get("content"):
             content_start = _find(text, message["content"], cursor)
             paint(content_start, content_start + len(message["content"]), content_bucket)
-            for span_start, span_end, bucket in _content_spans(message["content"]):
+            spans = _content_spans(message["content"])
+            spans += _think_marker_spans(message["content"], tokens.think_open, tokens.think_close)
+            for span_start, span_end, bucket in spans:
                 paint(content_start + span_start, content_start + span_end, bucket)
             cursor = content_start + len(message["content"])
         for call in message.get("tool_calls") or []:

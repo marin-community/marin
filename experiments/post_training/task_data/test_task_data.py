@@ -12,8 +12,11 @@ import pytest
 from click.testing import CliRunner
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
+from verifyit.grade import GradingInfraError
 
 from experiments.post_training.chat_template import GRUG_TOKENS, QWEN_TOKENS
+from experiments.post_training.task_data import build as build_module
+from experiments.post_training.task_data import math_r
 from experiments.post_training.task_data.build import cli
 from experiments.post_training.task_data.code_x import (
     DIRECTION_INPUT,
@@ -72,17 +75,24 @@ def _valid_input(code: str, answer: str) -> int | None:
 class FakeChatClient:
     """An OpenAI-compatible chat client that replays canned responses and records request bodies."""
 
-    def __init__(self, messages: list[dict], finish_reasons: list[str] | None = None, failures: int = 0):
+    def __init__(
+        self,
+        messages: list[dict],
+        finish_reasons: list[str] | None = None,
+        failures: int = 0,
+        failure: type[Exception] = ConnectionError,
+    ):
         self.messages = list(messages)
         self.finish_reasons = list(finish_reasons or ["stop"] * len(messages))
         self.failures = failures
+        self.failure = failure
         self.bodies: list[dict] = []
 
     def complete(self, body):
         self.bodies.append(dict(body))
         if self.failures:
             self.failures -= 1
-            raise ConnectionError("transient")
+            raise self.failure("transient")
         return {"choices": [{"message": self.messages.pop(0), "finish_reason": self.finish_reasons.pop(0)}]}
 
 
@@ -349,6 +359,13 @@ def test_chat_completion_sends_sampling_params_keeps_reasoning_and_retries():
         chat_completion(FakeChatClient([{}], failures=3), model="m", messages=[], temperature=0.0, max_tokens=8)
 
 
+def test_chat_completion_retries_a_read_timeout():
+    # A long completion can outlast the socket timeout; urllib raises TimeoutError, not ConnectionError.
+    client = FakeChatClient([{"content": "late", "reasoning": "slow"}], failures=2, failure=TimeoutError)
+    response = chat_completion(client, model="m", messages=[], temperature=0.0, max_tokens=8)
+    assert response.content == "late" and len(client.bodies) == 3
+
+
 def test_trace_cap_counts_rendered_thinking_and_drops_truncated_traces():
     client = FakeChatClient(
         [
@@ -486,3 +503,51 @@ def test_grade_keeps_only_the_graded_correct_traces(tmp_path):
     assert [row["completion_tokens"] for row in kept] == [30]
     manifest = json.loads(out.with_suffix(".manifest.json").read_text())
     assert (manifest["kept_under_cap"], manifest["graded_correct"]) == (2, 1)
+
+
+def test_parallel_answer_screening_draws_the_same_tasks():
+    pool = [
+        {"problem": f"Compute problem number {index} with care.", "answer": answer, "source": "math"}
+        for index, answer in enumerate(["2", "\\frac{1}{2}", "2", "x^2", "", "1<x<3", "\\frac{1}{2}"])
+    ]
+    serial = draw_r_tasks(pool, seed=5, reserved_pool_path=os.devnull, workers=1)
+    parallel = draw_r_tasks(pool, seed=5, reserved_pool_path=os.devnull, workers=2)
+    assert parallel == serial
+
+
+def test_a_screen_that_exceeds_its_cpu_budget_drops_the_answer(monkeypatch):
+    def spin(_answer):
+        while True:  # a runaway SymPy simplification, as on the pool's pathological answers
+            pass
+
+    monkeypatch.setattr(math_r, "answer_is_verifier_parsable", spin)
+    monkeypatch.setattr(math_r, "SCREEN_CPU_SECONDS", 0.2)
+    assert math_r.screened_answer("x") is False
+
+
+def test_grade_counts_a_trace_the_grader_cannot_settle_as_incorrect(tmp_path, monkeypatch):
+    def spin_on_runaway(task, completion):
+        while completion == "runaway":  # a pathological completion that hangs the verifier
+            pass
+        if completion == "deadline":
+            raise GradingInfraError("math verifier deadline exhausted")
+        return True
+
+    monkeypatch.setitem(build_module.GRADERS, "R", spin_on_runaway)
+    monkeypatch.setattr(build_module, "GRADE_CPU_SECONDS", 0.2)
+    tasks = tmp_path / "r_train.jsonl"
+    tasks.write_text(json.dumps({"task_id": "r-0", "answer": "4"}) + "\n")
+    traces = tmp_path / "r_traces.jsonl"
+    rows = [
+        {"task_id": "r-0", "reasoning": "add", "content": content, "completion_tokens": tokens}
+        for content, tokens in (("runaway", 10), ("deadline", 15), (r"$\boxed{4}$", 20))
+    ]
+    traces.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    out = tmp_path / "r_graded.jsonl"
+    result = CliRunner().invoke(
+        cli, ["grade", "--task", "R", "--tasks", str(tasks), "--traces", str(traces), "--out", str(out)]
+    )
+    assert result.exit_code == 0, result.output
+    assert [json.loads(line)["completion_tokens"] for line in out.read_text().splitlines()] == [20]
+    manifest = json.loads(out.with_suffix(".manifest.json").read_text())
+    assert (manifest["graded_correct"], manifest["ungradable"]) == (1, 2)

@@ -7,8 +7,9 @@
 get one continuation sampled from B with thinking on, rendered once through the
 shared chat template. The output rows carry the full sequence's token ids (the
 scorer's input; ``probe_hash`` derives from them) and the token-level bucket tags
-from ``buckets.tag_conversation``, with B's thinking split into
-``reasoning_content`` so the tagger sees it.
+from ``buckets.tag_conversation``. B's reply goes to the tagger verbatim as
+``content``: the tagger reads its think markers, paired or not, so the rendered
+tokens stay the ones B sampled.
 
     python -m experiments.post_training.mismatch_probe.generate_dev_sequences \
         --model-path s3://marin-rno2a/.../models/b-step92 \
@@ -39,20 +40,6 @@ MATH_MAX_TOKENS = 8_192
 X_MAX_TOKENS = 4_096
 TEMPERATURE = 1.0
 TOP_P = 1.0
-
-THINK_OPEN = FAMILY_TOKEN_MAPS[FAMILY].think_open
-THINK_CLOSE = FAMILY_TOKEN_MAPS[FAMILY].think_close
-
-
-def split_thinking(text: str) -> tuple[str | None, str]:
-    """(reasoning, content) of one B continuation, on the family's think markers."""
-    start = text.find(THINK_OPEN)
-    end = text.find(THINK_CLOSE)
-    if start < 0 or end < 0 or end < start:
-        return None, text
-    reasoning = text[start + len(THINK_OPEN) : end]
-    content = text[:start] + text[end + len(THINK_CLOSE) :]
-    return reasoning, content
 
 
 def render_prompt_ids(tokenizer, prompt: str) -> list[int]:
@@ -120,7 +107,7 @@ def response_text(tokenizer, ids: list[int]) -> str:
     """The continuation's text with the think markers kept and the closing turn token dropped.
 
     The engines' own text skips special tokens, which would erase the think markers
-    ``split_thinking`` looks for; the shared template re-adds the turn close.
+    the tagger reads; the shared template re-adds the turn close.
     """
     stop_ids = {tokenizer.convert_tokens_to_ids(FAMILY_TOKEN_MAPS[FAMILY].turn_close), tokenizer.eos_token_id}
     while ids and ids[-1] in stop_ids:
@@ -132,11 +119,7 @@ def sequence_rows(requests: list[dict], responses: list[str], tokenizer) -> list
     """Scored-sequence rows: token ids with the tagger's bucket tags."""
     rows = []
     for request, response in zip(requests, responses, strict=True):
-        reasoning, content = split_thinking(response)
-        messages = [
-            {"role": "user", "content": request["prompt"]},
-            {"role": "assistant", "content": content, "reasoning_content": reasoning},
-        ]
+        messages = [{"role": "user", "content": request["prompt"]}, {"role": "assistant", "content": response}]
         tagged = tag_conversation(tokenizer, FAMILY, messages)
         rows.append(
             {

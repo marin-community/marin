@@ -3,12 +3,17 @@
 
 """Per-position scoring of frozen-sequence logits for the KL passes.
 
-The Megatron policy runs on left-unpadded sequences, so its logits sit in
+The Megatron policy runs on left-unpadded sequences, so its outputs sit in
 compact space. This module holds the pure computation both score passes share:
 the reference pass's top-K support, the candidate pass's gather at stored ids,
 and the exact pass's full-vocabulary rows — each computed from the float32
 log-softmax in sequence chunks and scattered back to the batch's padded layout.
 Position t's distribution predicts the token at t+1.
+
+The passes start from the final hidden states, not the logits: the output
+projection runs one sequence chunk at a time, so a [tokens x vocab] logits
+tensor is never materialized. At 131k tokens and Snowball's vocabulary that
+tensor alone would be about 34 GB in bf16.
 
 The reference and candidate passes also return each position's tail: the log
 mass outside the support ids, a logsumexp over the complement of the full
@@ -19,11 +24,30 @@ tail to zero and its KL to infinity.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
+
 import torch
 
 
-def score_compacted_logits(
-    logits: torch.Tensor,
+@dataclass(frozen=True)
+class CompactHiddenStates:
+    """A micro's final hidden states in compact space and the projection to its logits.
+
+    ``hidden`` is ``[B, compact_len, H]``; ``project`` maps a sequence slice of it,
+    ``[B, n, H]``, to that slice's logits, ``[B, n, V_padded]``.
+    """
+
+    hidden: torch.Tensor
+    project: Callable[[torch.Tensor], torch.Tensor]
+
+    @property
+    def compact_len(self) -> int:
+        return self.hidden.shape[1]
+
+
+def score_compacted_hidden(
+    outputs: CompactHiddenStates,
     attention_mask: torch.Tensor,
     *,
     top_k: int | None,
@@ -33,11 +57,13 @@ def score_compacted_logits(
     chunk_size: int | None,
     support_width: int | None = None,
 ) -> dict[str, torch.Tensor]:
-    """Top-K, gathered, or exact rows from one micro's compact-space logits.
+    """Top-K, gathered, or exact rows from one micro's compact-space hidden states.
 
-    ``logits`` are the model's output for its left-unpadded sequences, ``[B,
-    compact_len, V]``. Every output is computed from the float32 log-softmax over
-    the true vocabulary (padded columns dropped) in sequence chunks, and scattered
+    ``outputs`` holds the model's final hidden states for its left-unpadded
+    sequences. Each sequence chunk of ``chunk_size`` positions is projected to
+    logits and reduced before the next, so peak memory holds one chunk's logits.
+    Every output is computed from the float32 log-softmax over the true
+    vocabulary (padded columns dropped), and scattered
     back to the batch's padded layout, aligned with the model's logits positions —
     position t predicts the token at t+1.
 
@@ -61,16 +87,15 @@ def score_compacted_logits(
     if gather_ids is not None and gather_ids.shape[:2] != (batch_size, padded_len):
         raise ValueError(f"gather ids {tuple(gather_ids.shape)} do not match the batch {batch_size}x{padded_len}")
     seq_lens = attention_mask.sum(dim=1, dtype=torch.int32)
-    compact_len = logits.shape[1]
+    compact_len = outputs.compact_len
+    device = outputs.hidden.device
     longest = max(int(seq_lens.max().item()), 1)
     if compact_len < longest:
-        raise ValueError(f"logits compact length {compact_len} is shorter than the longest sequence {longest}")
+        raise ValueError(f"hidden-state compact length {compact_len} is shorter than the longest sequence {longest}")
 
     compact_gather: torch.Tensor | None = None
     if gather_ids is not None:
-        compact_gather = torch.zeros(
-            (batch_size, compact_len, gather_ids.shape[2]), dtype=torch.long, device=logits.device
-        )
+        compact_gather = torch.zeros((batch_size, compact_len, gather_ids.shape[2]), dtype=torch.long, device=device)
         for row, length in enumerate(seq_lens.tolist()):
             compact_gather[row, :length] = gather_ids[row, attention_mask[row]].long()
     selected_rows_meta: list[tuple[int, int, int, int]] | None = None
@@ -82,7 +107,9 @@ def score_compacted_logits(
             for compact_index in range(length):
                 tag = int(tags[compact_index].item())
                 if tag > 0:
-                    selected_rows_meta.append((row, compact_index, int(padded_positions[compact_index].item()), tag - 1))
+                    selected_rows_meta.append(
+                        (row, compact_index, int(padded_positions[compact_index].item()), tag - 1)
+                    )
 
     collected: dict[str, list[torch.Tensor]] = {}
     selected_rows: list[torch.Tensor] = []
@@ -90,7 +117,9 @@ def score_compacted_logits(
     width = max(1, chunk_size or compact_len)
     for start in range(0, compact_len, width):
         stop = min(start + width, compact_len)
-        logprobs = torch.log_softmax(logits[:, start:stop, :vocabulary_size].float(), dim=-1)
+        logits = outputs.project(outputs.hidden[:, start:stop])
+        logprobs = torch.log_softmax(logits[..., :vocabulary_size].float(), dim=-1)
+        del logits
         if top_k is not None:
             values, ids = torch.topk(logprobs, top_k, dim=-1)
             collected.setdefault("topk_ids", []).append(ids)
@@ -105,7 +134,8 @@ def score_compacted_logits(
         else:
             for row, compact_index, padded_position, sequence_row in selected_rows_meta:
                 if start <= compact_index < stop:
-                    selected_rows.append(logprobs[row, compact_index - start])
+                    # A clone, so the stored row does not keep the chunk's logprobs alive.
+                    selected_rows.append(logprobs[row, compact_index - start].clone())
                     selected_coordinates.append((sequence_row, padded_position))
     scores = {key: torch.cat(chunks, dim=1) for key, chunks in collected.items()}
 
@@ -113,11 +143,9 @@ def score_compacted_logits(
         scores["exact_logprobs"] = (
             torch.stack(selected_rows, dim=0)
             if selected_rows
-            else torch.zeros((0, vocabulary_size), dtype=logits.dtype, device=logits.device)
+            else torch.zeros((0, vocabulary_size), dtype=torch.float32, device=device)
         )
-        scores["exact_positions"] = torch.tensor(selected_coordinates, dtype=torch.long, device=logits.device).reshape(
-            -1, 2
-        )
+        scores["exact_positions"] = torch.tensor(selected_coordinates, dtype=torch.long, device=device).reshape(-1, 2)
         return scores
 
     for key, values in scores.items():

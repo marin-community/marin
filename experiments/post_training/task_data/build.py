@@ -21,6 +21,7 @@ from pathlib import Path
 
 import click
 from marin.inference.openai_chat import OpenAIChatClient
+from verifyit.grade import GradingInfraError
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_data.code_x import exclude_public_cruxeval, synthesize_x_tasks
@@ -35,7 +36,7 @@ from experiments.post_training.task_data.expert_traces import (
     token_counter,
     write_trace_batch,
 )
-from experiments.post_training.task_data.math_r import build_r_tasks
+from experiments.post_training.task_data.math_r import build_r_tasks, cpu_bounded
 
 TOKEN_CAPS = {"X": X_COMPLETION_TOKEN_CAP, "R": R_COMPLETION_TOKEN_CAP}
 DATA_SOURCES = {"X": "task_X", "R": "task_R"}
@@ -49,6 +50,10 @@ def _read_tasks(path: str) -> list[dict]:
 
 def _write_manifest(path: Path, manifest: dict) -> None:
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+GRADE_CPU_SECONDS = 60
+"""CPU budget for grading one trace: math-verify's own deadline can be swallowed (see math_r)."""
 
 
 @click.group()
@@ -79,10 +84,11 @@ def x(output_dir: Path, cruxeval_prompts: str, train_count: int, probe_count: in
 @click.option("--reserved-pool", required=True, type=click.Path(exists=True, dir_okay=False))
 @click.option("--seed", required=True, type=int)
 @click.option("--limit", default=None, type=int, help="cap the pool rows read, to measure the draw rate")
-def r(output_dir: Path, reserved_pool: str, seed: int, limit: int | None) -> None:
+@click.option("--workers", default=1, show_default=True, type=int, help="processes screening the answers")
+def r(output_dir: Path, reserved_pool: str, seed: int, limit: int | None, workers: int) -> None:
     """Draw the R splits from the pinned pool, excluding the P_think-reserved benchmarks."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    build_r_tasks(output_dir, seed=seed, reserved_pool_path=reserved_pool, limit=limit)
+    build_r_tasks(output_dir, seed=seed, reserved_pool_path=reserved_pool, limit=limit, workers=workers)
 
 
 @cli.command()
@@ -104,6 +110,14 @@ def chunk(tasks_path: str, rows_per_chunk: int, chunk_count: int | None, output_
         print(f"{stem}.chunk{index:02d}.jsonl: rows {start}..{start + len(chunk_lines) - 1}")
 
 
+def _settled_grade(grader, task: dict, trace: dict) -> bool | None:
+    """The grader's verdict, or ``None`` when the math verifier exhausts its own deadline."""
+    try:
+        return grader(task, trace["content"])
+    except GradingInfraError:
+        return None
+
+
 @cli.command()
 @click.option("--task", "task_name", required=True, type=click.Choice(sorted(GRADERS)))
 @click.option("--tasks", "tasks_path", required=True, type=click.Path(exists=True, dir_okay=False))
@@ -113,7 +127,15 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
     """Keep the graded-correct teacher traces: the expert training set."""
     tasks = {task["task_id"]: task for task in _read_tasks(tasks_path)}
     traces = [trace for path in traces_paths for trace in _read_tasks(path)]
-    correct = [trace for trace in traces if GRADERS[task_name](tasks[trace["task_id"]], trace["content"])]
+    grader = GRADERS[task_name]
+    verdicts = [
+        cpu_bounded(
+            lambda trace=trace: _settled_grade(grader, tasks[trace["task_id"]], trace), cpu_seconds=GRADE_CPU_SECONDS
+        )
+        for trace in traces
+    ]
+    # A trace the grader cannot settle (CPU budget or verifier deadline) is not graded correct.
+    correct = [trace for trace, verdict in zip(traces, verdicts, strict=True) if verdict]
     with open(output_path, "w") as handle:
         for trace in correct:
             handle.write(json.dumps(trace, sort_keys=True) + "\n")
@@ -123,6 +145,7 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
         "traces": list(traces_paths),
         "kept_under_cap": len(traces),
         "graded_correct": len(correct),
+        "ungradable": sum(verdict is None for verdict in verdicts),
         "pass_rate": len(correct) / len(traces) if traces else 0.0,
         "with_reasoning": sum(bool(trace["reasoning"]) for trace in traces),
         "completion_tokens_p50": tokens[len(tokens) // 2] if tokens else None,
@@ -142,6 +165,7 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
 @click.option("--max-tokens", required=True, type=int)
 @click.option("--max-concurrent", required=True, type=int)
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True)
+@click.option("--timeout", required=True, type=float, help="seconds per request; must cover a max-tokens completion")
 def traces(
     task_name: str,
     tasks_path: str,
@@ -151,11 +175,12 @@ def traces(
     max_tokens: int,
     max_concurrent: int,
     relay_job: str,
+    timeout: float,
 ) -> None:
     """Collect GLM teacher traces for building E_X or E_R; over-cap traces are dropped."""
     batch = collect_traces(
         _read_tasks(tasks_path),
-        client=glm_chat_client(relay_job),
+        client=glm_chat_client(relay_job, timeout=timeout),
         model=GLM_MODEL,
         family=family,
         temperature=temperature,
