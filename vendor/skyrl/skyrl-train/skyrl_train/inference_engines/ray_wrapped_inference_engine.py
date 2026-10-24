@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from enum import StrEnum
 import os
 import time
@@ -224,16 +224,18 @@ def _build_inference_engine_runtime_env(
     require_v1_model_runner: bool = False,
     runai_streamer_enabled: bool = False,
     nccl_buffer_size_bytes: int | None = None,
+    engine_environment: Mapping[str, str] | None = None,
 ) -> Dict[str, Any] | None:
     """Forward managed inference settings into each vLLM engine actor.
 
-    This covers NCCL diagnostics, the policy's weight-sync buffer size, and batch
-    invariance. Selected-ID scoring also forces the V1 model runner. RunAI-backed engines receive conservative
-    S3 stall tolerance and stderr diagnostics. Returns ``None`` when no managed
+    This covers NCCL diagnostics, the policy's weight-sync buffer size, batch
+    invariance and ``engine_environment``. Selected-ID scoring also forces the V1 model runner. RunAI-backed
+    engines receive conservative S3 stall tolerance and stderr diagnostics. Returns ``None`` when no managed
     or derived settings apply.
     """
     passthrough = set(_NCCL_FR_ENV_PASSTHROUGH) | set(managed_environment_names(EnvVarScope.INFERENCE_WORKER))
     env_vars = {key: os.environ[key] for key in passthrough if key in os.environ}
+    env_vars.update(engine_environment or {})
     if nccl_buffer_size_bytes is not None:
         env_vars[NCCL_BUFFER_SIZE_ENV_VAR] = str(nccl_buffer_size_bytes)
     if require_v1_model_runner:
@@ -520,6 +522,7 @@ def create_ray_wrapped_inference_engines(
     placement_group_timeout_seconds: int = DEFAULT_RAY_PLACEMENT_GROUP_TIMEOUT_SECONDS,
     weight_sync_pause_policy: WeightSyncPausePolicy = DEFAULT_WEIGHT_SYNC_PAUSE_POLICY,
     nccl_buffer_size_bytes: int | None = None,
+    engine_environment: Mapping[str, str] | None = None,
 ) -> List[InferenceEngineInterface]:
     """
     Create a list of RayWrappedInferenceEngine instances wrapping Ray actor handles to InferenceEngineInterface instances.
@@ -569,6 +572,7 @@ def create_ray_wrapped_inference_engines(
         require_v1_model_runner=require_v1_model_runner,
         runai_streamer_enabled=engine_init_kwargs.get("load_format") == "runai_streamer",
         nccl_buffer_size_bytes=nccl_buffer_size_bytes,
+        engine_environment=engine_environment,
     )
     noset_visible_devices = ray_noset_visible_devices(ray.get(get_all_env_variables.remote()))
     use_hybrid_engine = shared_pg is not None
