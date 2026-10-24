@@ -71,7 +71,9 @@ package, including inactive extras and platform branches, and validates each
 frozen graph offline. It fails on Brotli versions below 1.2.1, brotlicffi versions
 below 1.2.1.0, any LiteLLM package (blocked by Marin policy), invalid locks,
 failed graph validation, or an empty inventory. It never installs project
-packages or refreshes locks. The workflow uploads its JSON findings.
+packages or refreshes locks. The workflow uploads its JSON findings. Failed or
+cancelled scheduled runs open or update a tracking issue and use the configured
+Loom trigger and Slack webhook for notification.
 
 This covers versions in the checkout. Harbor agent install scripts, existing
 environments, container images, and bundled Node/Bun decoders require separate

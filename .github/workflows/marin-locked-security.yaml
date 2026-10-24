@@ -37,3 +37,27 @@ jobs:
           name: locked-security
           path: locked-security.json
           if-no-files-found: warn
+
+  report-failure:
+    needs: [audit]
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      actions: read
+      contents: read
+    steps:
+      - uses: marin-community/marin-style/actions/report-failure@d855d6304ad0532c131ef2e208db84ed7acf4721
+        with:
+          lane: locked-security
+          issue-title-prefix: "[nightly-locked-security]"
+          trigger-token: ${{ secrets.LOOM_TRIGGER_GH_TOKEN }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          triage-notes: >-
+            Inspect the locked-security JSON artifact and audit logs. Distinguish
+            vulnerable or blocked packages from a lock parse or offline graph
+            failure. Update the affected project's constraints and lock; do not
+            remove the check or classify unresolved coverage as clean.
