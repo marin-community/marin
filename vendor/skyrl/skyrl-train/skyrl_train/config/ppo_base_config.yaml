@@ -136,6 +136,7 @@ trainer:
       max_grad_norm: 1.0
       offload_after_step: true
       num_warmup_steps: 0
+      lr_decay_steps: null
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1
@@ -175,6 +176,7 @@ trainer:
       max_grad_norm: 1.0
       offload_after_step: true
       num_warmup_steps: 0
+      lr_decay_steps: null
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1

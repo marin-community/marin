@@ -209,7 +209,8 @@ def get_megatron_optimizer_param_scheduler(
         raise ValueError(f"Unsupported scheduler {scheduler!r} for Megatron; choose one of {sorted(lr_decay_styles)}")
 
     lr_warmup_steps = config.num_warmup_steps
-    if config.get("lr_decay_steps", None) is None:
+    lr_decay_steps = config.get("lr_decay_steps")
+    if lr_decay_steps is None:
         lr_decay_steps = num_training_steps
     if config.get("lr_warmup_steps_ratio", None) is not None and (
         config.get("lr_warmup_steps", None) is None or config.lr_warmup_steps <= 0
