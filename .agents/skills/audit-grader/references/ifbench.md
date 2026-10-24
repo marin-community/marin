@@ -36,12 +36,11 @@ proposed readings.
 `src/ifbench_audit/contracts.py` has one validated checker per instruction
 type. Each docstring states the contract, written from the instruction text.
 The decision table in `reports/AUDIT.md` has 15 entries where the text allows
-two verdicts. Two of them have no switch: the official reading of
-D-minor-words is itself finding F25, and the official reading of D-thesis-body
-agrees with the proposal. Three more open questions have no proposal yet, and
-fixes only and proposed both follow the official reading for them.
-`Choices.official()` selects the official readings (fixes only), and
-`Choices()` selects the proposals.
+two verdicts. `Choices.official()` selects the official readings (fixes only),
+and `Choices()` selects the proposals. Two entries have no switch: the
+official reading of D-minor-words is itself finding F25, and the official
+reading of D-thesis-body agrees with the proposal. Three more open questions
+have no proposal yet, and both modes follow the official reading for them.
 
 ## 3. Fixtures
 
