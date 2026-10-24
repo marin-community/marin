@@ -91,9 +91,9 @@ No historical per-candidate checkpoint exports exist because serving loaded merg
 | Comparison, fixed FP32 serving | GSM gain pp [95% CI] | Strict MBPP gain pp [95% CI] |
 |---|---:|---:|
 | Original math c=0.5, rounded donor minus FP32 donor | +0.28 [−0.81, +1.36] | 0.00 [−1.43, +1.43] |
-| Aristaeus c=0.5, BF16-rounded final weights minus FP32 final weights | −0.13 [−0.33, +0.05] | Pending direct item-bootstrap contrast |
+| Aristaeus c=0.5, BF16-rounded final weights minus FP32 final weights | −0.13 [−0.33, +0.05] | −0.13 [−0.65, +0.26] |
 
-These comparisons round different objects: the first rounds the donor before delta arithmetic; the second rounds the completed merge. Neither establishes a GSM effect. BF16 final casting erased most of the small math update, which is why the math curve uses FP32 throughout.
+These comparisons round different objects: the first rounds the donor before delta arithmetic; the second rounds the completed merge. Neither establishes a GSM or MBPP effect; all four intervals include zero. The Aristaeus contrast was recomputed from the existing clean raw outputs, with fixed FP32 computation and no new generation or scoring (`remote/rounding-direct-audit-v1/{audit,done}.json`). BF16 final casting erased most of the small math update, which is why the math curve uses FP32 throughout.
 
 The Aristaeus top-k densities 0.04731512589614803, 0.022387211385683378 and 0.01188502227437019 retain about 90%, 70% and 50% of its squared update L2. At the same numeric densities, math retains about 26.84%, 15.80% and 9.88%. Math density 0.3 retains about 78.01%. Sparse labels c0.25/c0.5/c0.75 target the L2 norm of that coefficient times the full donor update. All added energy-density rows and math sparse rows target c=0.5. Energy labels identify densities chosen from Aristaeus top-k retention; DARE at those densities does not claim the same retained energy. A shared density does not imply shared retained energy.
 
@@ -148,16 +148,30 @@ Admission audit: `s3://marin-rno2a/scratch/karan/task290/remote/independent-k8-a
 <!-- far-arm-start -->
 ## Far donors under the anchor config: verified partial results
 
-The planned far arm is still in progress. This completed Math group uses eager BF16 serving, max_tokens=8192 and context=12288, with the full panel and greedy+seeds17/29. Its raw matrices, frozen strict scorer, exclusive healthy host, fresh execution timing and exact report recomputation are independently verified. The two full Math controls are shown beside the completed Math merge. “Native” refers to RoPE theta=10000; remaining serving settings use the shared configuration. All merges use anchor theta=1000000. These results measure far donors under the anchor config, so Math merges reflect a configuration mismatch as well as weight changes.
+Verified partial arm: eight of 14 planned candidates. Six GPU candidates remain pending.
 
-| Candidate (max_tokens=8192) | GSM greedy /1319 | Strict MBPP greedy /257 | GSM gain pp [95% CI] vs Instruct | MBPP gain pp [95% CI] vs Instruct | Truncated GSM / MBPP | Mean tokens GSM / MBPP |
+The Math donor loses performance when its native RoPE theta=10000 is replaced by anchor theta=1000000. All far merges use the anchor configuration. The native/anchor Math pair is repeated beside each Math merge for context; those are the same measured controls, not additional runs. This arm measures far donors under the anchor config, not weight distance alone.
+
+Eager BF16 serving; max_tokens=8192, context=12288. All 1319 GSM8K and 257 MBPP items; greedy plus seeds 17/29. Gains average the three decode differences within each item and bootstrap items with 5000 resamples; pointwise exploratory 95% intervals. Greedy lengths and truncation shown for every row. Top-k uses tensor-local density .3 and fixed scale .3; these far controls are not an L2-matched method comparison.
+
+| Candidate (max_tokens=8192) | GSM greedy /1319 | MBPP greedy /257 | GSM gain pp [CI] vs Instruct | MBPP gain pp [CI] vs Instruct | Truncated GSM / MBPP | Mean tokens GSM / MBPP |
 |---|---:|---:|---|---|---:|---:|
-| instruct | 946 | 157 | +0.00 [+0.00, +0.00] | +0.00 [+0.00, +0.00] | 3 / 0 | 249.1 / 133.6 |
-| math-native | 1116 | 30 | +12.00 [+10.13, +13.92] | -47.73 [-53.31, -42.41] | 4 / 13 | 348.4 / 787.1 |
-| math-anchor-rope | 570 | 12 | -27.45 [-29.85, -24.97] | -56.16 [-61.35, -51.23] | 40 / 158 | 544.3 / 5178.7 |
-| far-math-average-c0.1 | 743 | 139 | -15.09 [-17.06, -13.07] | -11.67 [-15.69, -7.65] | 91 / 3 | 779.7 / 178.4 |
+| instruct | 946 | 157 | +0.00 [+0.00,+0.00] | +0.00 [+0.00,+0.00] | 3 / 0 | 249.1 / 133.6 |
+| coder | 805 | 171 | -15.49 [-17.49,-13.44] | +5.84 [+2.46,+9.21] | 7 / 1 | 356.2 / 77.4 |
+| far-coder-average-c0.1 | 936 | 159 | -0.38 [-1.97,+1.16] | +0.39 [-2.85,+3.63] | 13 / 0 | 337.4 / 91.1 |
+| far-coder-average-c0.3 | 584 | 77 | -28.89 [-30.98,-26.84] | -32.68 [-37.61,-28.02] | 1055 / 251 | 6605.3 / 8006.3 |
+| far-coder-magnitude_topk-d0.3-s0.3 | 509 | 106 | -33.06 [-35.18,-30.98] | -22.83 [-27.37,-18.29] | 407 / 20 | 2705.6 / 679.7 |
+| math-native | 1116 | 30 | +12.00 [+10.13,+13.92] | -47.73 [-53.31,-42.41] | 4 / 13 | 348.4 / 787.1 |
+| math-anchor-rope | 570 | 12 | -27.45 [-29.85,-24.97] | -56.16 [-61.35,-51.23] | 40 / 158 | 544.3 / 5178.7 |
+| far-math-average-c0.1 | 743 | 139 | -15.09 [-17.06,-13.07] | -11.67 [-15.69,-7.65] | 91 / 3 | 779.7 / 178.4 |
 
-Math alone loses 546 greedy GSM answers when only its RoPE setting changes to the anchor value (1116→570), and MBPP truncation rises from 13 to 158 items. The c=0.1 merge is below Instruct on both benchmarks under this configuration. Gains above use per-item averages of three decodes and pointwise bootstrap intervals; they are not greedy-only effects. The direct paired change from native to anchor RoPE is GSM −39.45 pp [−41.70, −37.23] and MBPP −8.43 pp [−11.54, −5.58], after averaging the three decodes within each item. The c=0.1 transfer is +12.36 pp [10.03, 14.68] on GSM relative to the full Math donor under anchor RoPE, while remaining below Instruct. These contrasts reuse existing outputs; source validation confirms the two full-donor controls differ only in name and RoPE setting. Direct-contrast proof: `remote/far-math-rope-audit-v1/` under the common artifact root.
+Direct paired change from native to anchor RoPE (same Math weights, shared remaining configuration):
 
-Verified source: `s3://marin-rno2a/scratch/karan/task290/remote/far-scored-g1-audit-v1/`. Other far controls remain pending; the final Math table will repeat this same native/anchor control pair beside each Math merge.
+- gsm8k: -39.45 [-41.70,-37.23] pp over 1319 items.
+- mbpp: -8.43 [-11.54,-5.58] pp over 257 items.
+
+Publication: `s3://marin-rno2a/scratch/karan/task290/remote/far-partial-final-v1/`. Both raw scoring shards and reports were independently audited; all 4728 Instruct generation/correctness observations match across two distinct exclusive healthy hosts. The report, source audits and publication hashes are verified.
+
+The full Coder donor improves strict MBPP by +5.84 pp [2.46, 9.21] while losing GSM by −15.49 pp [−17.49, −13.44]. Its c=0.1 transfer is uncertain on both datasets; c=0.3 degrades both and truncates most outputs. These are pointwise exploratory effects under the shared prompt and output cap. The planned arm remains incomplete.
 <!-- far-arm-end -->
+
