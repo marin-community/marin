@@ -90,7 +90,8 @@ class NemotronHChecksPlugin(BasePlugin):
         if not dist.is_initialized() or dist.get_rank() == 0:
             zeroed = _zeroed(biases)
             LOG.info(
-                "NemotronH checks: Mamba fast path available, %d mixers on the unfused path; %d router biases, %d all-zero",
+                "NemotronH checks: Mamba fast path available, %d mixers on the unfused path; "
+                "%d router biases, %d all-zero",
                 len(mixers),
                 len(biases),
                 zeroed,

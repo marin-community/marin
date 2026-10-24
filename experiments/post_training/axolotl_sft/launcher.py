@@ -52,6 +52,9 @@ DECODER_LAYER_CLASSES = {
 TEMPLATE_INTEGRITY_PLUGIN = "axolotl.integrations.template_integrity.TemplateIntegrityPlugin"
 # Shipped next to the pod runner; see fp32_master.py.
 FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
+# Shipped next to the pod runner; see router_aux_loss.py. Axolotl itself ignores
+# `output_router_logits`, so the aux loss trains only through this plugin.
+ROUTER_AUX_LOSS_PLUGIN = "router_aux_loss.RouterAuxLossPlugin"
 # Packed conversations isolated in attention; see packed_attention.py.
 PACKED_ATTENTION_PLUGIN = "packed_attention.PackedAttentionPlugin"
 # A diagnostic-only plugin shipped next to the pod runner; see precision_probe.py.
@@ -178,10 +181,14 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
             CUT_CROSS_ENTROPY_PLUGIN,
             PACKED_ATTENTION_PLUGIN,
             *ARCHITECTURE_PLUGINS[spec.base.architecture],
+            *([ROUTER_AUX_LOSS_PLUGIN] if spec.output_router_logits else []),
         ],
         "tokenizer_save_jinja_files": False,
         "chat_template": "jinja",
         "chat_template_jinja": spec.chat_template,
+        # Multimodal shells (Qwen3.5-MoE) also load and save a processor, whose chat_template.jinja
+        # transformers reads ahead of tokenizer_config.json; give it the same template.
+        "processor_kwargs": {"chat_template": spec.chat_template},
         # The family's end-of-turn token ends generation, as it ends every trained turn.
         "special_tokens": {"eos_token": spec.turn_close},
         "datasets": [
@@ -223,9 +230,6 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "tf32": True,
         "attn_implementation": "sdpa",
         "experts_implementation": "grouped_mm",
-        # The router aux loss is explicit on the spec: without it the router trains only
-        # through the LM loss.
-        "output_router_logits": spec.output_router_logits,
         # Reduce-scatter gradients after every micro-batch. Skipping the sync during accumulation
         # keeps the whole model's unsharded bf16 gradients on every GPU (~61 GB for Qwen3-30B).
         "accelerator_config": {"gradient_accumulation_kwargs": {"sync_each_batch": True}},
