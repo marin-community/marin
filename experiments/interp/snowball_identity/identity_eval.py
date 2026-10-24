@@ -34,6 +34,7 @@ import collections
 import json
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
@@ -52,12 +53,13 @@ FAIRY_PLACEHOLDER = "(model's own story goes here)"
 REQUEST_TIMEOUT = 900
 IDENTITY_MAX_TOKENS = 1024
 CONTROL_MAX_TOKENS = 2048
+# Proxy and serve hiccups (gateway timeouts, a restarting replica) are retried; client errors are not.
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+RETRY_ATTEMPTS = 4
 # v0.1 hit the 1,024-token cap on 26 of 122 identity answers with thinking on.
 THINKING_MAX_TOKENS = 4096
 
-OTHER_ENTITIES = (
-    r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|Llama|Meta AI|Gemini|Google|Nemotron|NVIDIA|Mistral"
-)
+OTHER_ENTITIES = r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|Llama|Meta AI|Gemini|Google|Nemotron|NVIDIA|Mistral"
 # A first-person claim followed closely by another lab's or model's name. Pre-screen only.
 FALSE_SELF_ATTRIBUTION = re.compile(
     r"\b(?:I am|I'm|I was|my name is|I'm called|I am called|call me|my (?:creator|developer|maker) is|"
@@ -204,21 +206,36 @@ class Endpoint:
             models.raise_for_status()
             self.model = models.json()["data"][0]["id"]
 
+    def post(self, route: str, body: dict) -> dict:
+        """POST to the endpoint, retrying transient failures. Errors name the status, never the URL."""
+        for attempt in range(RETRY_ATTEMPTS):
+            try:
+                response = self.session.post(f"{self.base_url}{route}", json=body, timeout=REQUEST_TIMEOUT)
+            except requests.ConnectionError as error:
+                failure = f"connection error ({type(error).__name__})"
+            else:
+                if response.ok:
+                    return response.json()
+                if response.status_code not in RETRY_STATUSES:
+                    raise RuntimeError(f"{route} returned HTTP {response.status_code}: {response.text[:300]}")
+                failure = f"HTTP {response.status_code}"
+            logger.warning("%s attempt %d/%d failed: %s", route, attempt + 1, RETRY_ATTEMPTS, failure)
+            time.sleep(10 * 2**attempt)
+        raise RuntimeError(f"{route} failed {RETRY_ATTEMPTS} times; last: {failure}")
+
     def prompt_logprobs(self, token_ids: list[int]) -> list[float | None]:
         """Log-probability of each prompt token given the tokens before it (None for the first)."""
-        response = self.session.post(
-            f"{self.base_url}/v1/completions",
-            json={
+        payload = self.post(
+            "/v1/completions",
+            {
                 "model": self.model,
                 "prompt": token_ids,
                 "max_tokens": 1,
                 "temperature": 0.0,
                 "prompt_logprobs": 0,
             },
-            timeout=REQUEST_TIMEOUT,
         )
-        response.raise_for_status()
-        per_position = response.json()["choices"][0]["prompt_logprobs"]
+        per_position = payload["choices"][0]["prompt_logprobs"]
         assert len(per_position) == len(token_ids), (len(per_position), len(token_ids))
         values: list[float | None] = []
         for token_id, entry in zip(token_ids, per_position, strict=True):
@@ -226,19 +243,16 @@ class Endpoint:
         return values
 
     def chat(self, messages: list[dict], thinking: bool, max_tokens: int) -> dict:
-        response = self.session.post(
-            f"{self.base_url}/v1/chat/completions",
-            json={
+        return self.post(
+            "/v1/chat/completions",
+            {
                 "model": self.model,
                 "messages": messages,
                 "temperature": 0.0,
                 "max_tokens": max_tokens,
                 "chat_template_kwargs": {"enable_thinking": thinking},
             },
-            timeout=REQUEST_TIMEOUT,
         )
-        response.raise_for_status()
-        return response.json()
 
 
 def score_contrastive_row(endpoint: PromptScorer, tokenizer, row: Row, condition: Condition) -> dict:
@@ -381,6 +395,8 @@ def contrastive(base_url, model, label, out, prompt_dir, split, workers, tokeniz
     endpoint = Endpoint(base_url, model)
     tok = AutoTokenizer.from_pretrained(tokenizer)
     rows = [row for row in load_rows(prompt_dir, split) if row.contrastive]
+    if not rows:
+        raise click.ClickException(f"No contrastive rows in split {split!r}")
     jobs = [
         (row, Condition(condition))
         for condition in conditions
