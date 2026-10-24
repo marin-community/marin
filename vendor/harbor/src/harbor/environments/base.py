@@ -41,6 +41,27 @@ EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
 _TRANSFER_TAR_TEMPLATE = ".hb-transfer-{uuid}.tar.gz"
 _ENV_TRANSFER_TAR_DIR = PurePosixPath("/tmp")
 
+BASE_ENVIRONMENT_ARGUMENTS = frozenset(
+    {
+        "environment_dir",
+        "environment_name",
+        "session_id",
+        "trial_paths",
+        "task_env_config",
+        "logger",
+        "override_cpus",
+        "override_memory_mb",
+        "override_storage_mb",
+        "override_gpus",
+        "override_tpu",
+        "cpu_enforcement_policy",
+        "memory_enforcement_policy",
+        "persistent_env",
+        "mounts",
+        "extra_docker_compose",
+    }
+)
+
 
 class HealthcheckError(RuntimeError):
     pass

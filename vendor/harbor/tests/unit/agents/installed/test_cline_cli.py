@@ -10,6 +10,7 @@ import pytest
 
 from harbor.agents.installed.cline import ClineCli
 from harbor.models.agent.context import AgentContext
+from harbor.utils.env import task_environment
 
 
 def _extract_json_heredoc(command: str) -> dict[str, str | None]:
@@ -55,7 +56,10 @@ class TestClineCli:
         prompt_template_path = temp_dir / "prompt-template.md"
         prompt_template_path.write_text("{{ instruction }}")
 
-        with patch.dict(os.environ, {"API_KEY": "test-api-key"}, clear=False):
+        with (
+            patch.dict(os.environ, {"API_KEY": "host-provider-canary"}, clear=False),
+            task_environment({"API_KEY": "EMPTY"}),
+        ):
             agent = ClineCli(
                 logs_dir=logs_dir,
                 model_name="openrouter:anthropic/claude-opus-4.5",
@@ -113,6 +117,8 @@ class TestClineCli:
         assert pre_run_metadata["task_id"] == "sample-task"
         assert pre_run_metadata["timestamp_utc"]
 
+        assert run_env["API_KEY"] == "EMPTY"
+        assert "host-provider-canary" not in str(exec_calls)
         assert run_env["CLINE_WRITE_PROMPT_ARTIFACTS"] == "1"
         assert run_env["CLINE_PROMPT_ARTIFACT_DIR"] == "/logs/agent"
         assert run_env["PROVIDER"] == "openrouter"
@@ -149,7 +155,7 @@ class TestClineCli:
             "max-consecutive-mistakes": "9",
         }
 
-        with patch.dict(os.environ, {"API_KEY": "test-api-key"}, clear=False):
+        with task_environment({"API_KEY": "EMPTY"}):
             agent = ClineCli(
                 logs_dir=logs_dir,
                 model_name="openrouter:anthropic/claude-opus-4.5",
@@ -182,7 +188,7 @@ class TestClineCli:
         logs_dir = temp_dir / "sample-task__trial-001" / "agent"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        with patch.dict(os.environ, {"API_KEY": "test-api-key"}, clear=False):
+        with task_environment({"API_KEY": "EMPTY"}):
             agent = ClineCli(
                 logs_dir=logs_dir,
                 model_name="openrouter:anthropic/claude-opus-4.5",
@@ -207,11 +213,18 @@ class TestClineCli:
         logs_dir = temp_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
-        with patch.dict(os.environ, {"API_KEY": "test-api-key"}, clear=False):
+        with (
+            patch.dict(
+                os.environ,
+                {"BASE_URL": "https://ambient-provider.invalid/v1"},
+                clear=False,
+            ),
+            task_environment({"API_KEY": "EMPTY"}),
+        ):
             agent = ClineCli(logs_dir=logs_dir, model_name="openai:gpt-4o")
             mock_env = AsyncMock()
             mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-            with pytest.raises(ValueError, match="BASE_URL environment variable"):
+            with pytest.raises(ValueError, match="BASE_URL task capability"):
                 await agent.run("hi", mock_env, AsyncMock())
 
     def test_invalid_reasoning_effort_raises(self, temp_dir: Path):

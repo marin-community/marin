@@ -62,6 +62,8 @@ _HOST_CREDENTIAL_KEYS = frozenset(
         "HUGGINGFACE_HUB_TOKEN",
         "WANDB_API_KEY",
         "MARIN_CLUSTER_TOKEN",
+        "DAYTONA_API_KEY",
+        "DAYTONA_JWT_TOKEN",
         "KUBECONFIG",
         "SSH_AUTH_SOCK",
         "FSSPEC_S3",

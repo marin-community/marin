@@ -19,7 +19,7 @@ def test_shellsim_harbor_trial(tmp_path: Path) -> None:
             tmp_path / "jobs",
             Path(__file__).parents[2] / "fixtures/shellbox/task",
             ["echo 'hello from qemu' > /workspace/answer.txt"],
-            "harbor.environments.shellsim:ShellSimEnvironment",
+            "shellsim",
             {"network_policy": "deny"},
         )
     )

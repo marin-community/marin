@@ -31,6 +31,7 @@ from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
     MODEL_RELAY_PORT,
     host_model_authentication,
 )
+from harbor.environments.runtime import DAYTONA_API_URL, host_backend_credentials  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.models.task.config import TaskOS  # pyrefly: ignore[missing-import]
 from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
@@ -422,7 +423,9 @@ def _dataset_with_runtime(
     return DatasetConfig.model_validate(document, extra="forbid")
 
 
-def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
+def _effective_config(
+    config: JobConfig, overlay: RuntimeOverlay, *, enclosing_controller_url: str | None = None
+) -> JobConfig:
     validate_task_environment(
         {
             name: "EMPTY"
@@ -467,16 +470,13 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
                 }
             )
     agent = agent.model_copy(update={"env": _dummy_model_keys(agent.env)})
-    if environment.type == EnvironmentType.IRIS and os.environ.get("IRIS_TASK_ID"):
-        controller_url = os.environ.get("IRIS_CONTROLLER_ADDRESS") or os.environ.get("IRIS_CONTROLLER_URL")
-        if not controller_url:
-            raise ValueError("An in-job Shellbox Iris driver requires its enclosing controller address")
+    if environment.type == EnvironmentType.IRIS and enclosing_controller_url is not None:
         kwargs = dict(environment.kwargs)
         requested_url = kwargs.get("controller_url")
-        if requested_url is not None and requested_url != controller_url:
+        if requested_url is not None and requested_url != enclosing_controller_url:
             raise ValueError("An in-job Shellbox Iris driver must use its enclosing controller")
         kwargs.pop("cluster", None)
-        kwargs["controller_url"] = controller_url
+        kwargs["controller_url"] = enclosing_controller_url
         environment = environment.model_copy(update={"kwargs": kwargs})
     effective = config.model_copy(
         update={
@@ -748,13 +748,15 @@ async def _run(config: JobConfig) -> None:
         await job.run()
 
 
-def effective_job_config(policy_path: Path, overlay_path: Path) -> JobConfig:
+def effective_job_config(
+    policy_path: Path, overlay_path: Path, *, enclosing_controller_url: str | None = None
+) -> JobConfig:
     """Parse an opaque policy, apply the Marin overlay, and validate the full job."""
     policy = JobConfig.model_validate_json(policy_path.read_text(), extra="forbid")
     if policy.tasks or len(policy.agents) != 1 or len(policy.datasets) != 1:
         raise ValueError("Harbor stable policy violates the shared launcher contract")
     overlay = RuntimeOverlay.model_validate_json(overlay_path.read_text())
-    return _effective_config(policy, overlay)
+    return _effective_config(policy, overlay, enclosing_controller_url=enclosing_controller_url)
 
 
 def _diagnostic(exc: Exception) -> str:
@@ -774,13 +776,27 @@ def main() -> None:
             return
         if command != "run":
             raise ValueError(f"unknown command {command!r}")
-        config = effective_job_config(Path(sys.argv[2]), Path(sys.argv[3]))
+        policy = JobConfig.model_validate_json(Path(sys.argv[2]).read_text(), extra="forbid")
+        enclosing_controller_url = None
+        if policy.environment.type == EnvironmentType.IRIS and os.environ.get("IRIS_TASK_ID"):
+            enclosing_controller_url = os.environ.get("IRIS_CONTROLLER_ADDRESS")
+            if not enclosing_controller_url:
+                raise ValueError("An in-job Shellbox Iris driver requires its enclosing controller address")
+        config = effective_job_config(
+            Path(sys.argv[2]), Path(sys.argv[3]), enclosing_controller_url=enclosing_controller_url
+        )
         overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text())
     except (IndexError, json.JSONDecodeError, OSError, TypeError, ValueError, ValidationError) as exc:
         print(_diagnostic(exc), file=sys.stderr)
         raise SystemExit(2) from exc
-    policy = JobConfig.model_validate_json(Path(sys.argv[2]).read_text(), extra="forbid")
-    with host_model_authentication(_judge_authentication(policy, overlay)):
+    with (
+        host_backend_credentials(
+            daytona_api_key=os.environ.get("DAYTONA_API_KEY"),
+            daytona_api_url=os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL),
+            daytona_target=os.environ.get("DAYTONA_TARGET"),
+        ),
+        host_model_authentication(_judge_authentication(policy, overlay)),
+    ):
         asyncio.run(_run(config))
 
 

@@ -4,16 +4,16 @@
 """Harbor's single-container adapter for Shellbox Daytona machines."""
 
 import asyncio
-import os
-import tempfile
+from collections.abc import Callable
 from contextlib import AsyncExitStack
+from functools import partial
 from pathlib import Path
 
 from daytona import AsyncDaytona, DaytonaConfig
-from rigging.filesystem.storage_path import StoragePath
 
 from harbor.environments.base import (
     EXEC_OUTPUT_LIMIT_BYTES,
+    BASE_ENVIRONMENT_ARGUMENTS,
     BaseEnvironment,
     ExecResult,
 )
@@ -22,6 +22,8 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.iris_compose import COMPOSE_FILENAMES
+from harbor.environments.artifacts import download_artifact
+from harbor.environments.runtime import daytona_connection
 from harbor.environments.model_relay import MODEL_RELAY_PORT, ModelRelay
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.paths import EnvironmentPaths
@@ -36,27 +38,6 @@ from shellbox.http_service import serve_http
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy
 
-_BASE_ARGUMENTS = frozenset(
-    {
-        "environment_dir",
-        "environment_name",
-        "session_id",
-        "trial_paths",
-        "task_env_config",
-        "logger",
-        "override_cpus",
-        "override_memory_mb",
-        "override_storage_mb",
-        "override_gpus",
-        "override_tpu",
-        "cpu_enforcement_policy",
-        "memory_enforcement_policy",
-        "persistent_env",
-        "mounts",
-        "extra_docker_compose",
-    }
-)
-
 
 class DaytonaEnvironment(BaseEnvironment):
     """Allocate, execute and transfer exclusively through Shellbox's Daytona backend."""
@@ -64,7 +45,7 @@ class DaytonaEnvironment(BaseEnvironment):
     def __init__(
         self,
         *args,
-        api_key_env: str | None = None,
+        client_factory: Callable[[], AsyncDaytona] | None = None,
         network_policy: dict[str, str] | None = None,
         ttl_minutes: int = DEFAULT_SANDBOX_TTL_MINUTES,
         create_timeout: float = 600,
@@ -73,7 +54,7 @@ class DaytonaEnvironment(BaseEnvironment):
         verifier_model_endpoint: str | None = None,
         **kwargs,
     ):
-        unknown = kwargs.keys() - _BASE_ARGUMENTS
+        unknown = kwargs.keys() - BASE_ENVIRONMENT_ARGUMENTS
         if unknown:
             raise ValueError(
                 f"Unsupported Shellbox Daytona arguments: {sorted(unknown)}"
@@ -85,11 +66,16 @@ class DaytonaEnvironment(BaseEnvironment):
             policy = DaytonaNetworkPolicy(
                 DaytonaNetworkMode(network_policy["mode"]), network_policy.get("value")
             )
-        client_factory = (
-            AsyncDaytona
-            if api_key_env is None
-            else lambda: AsyncDaytona(DaytonaConfig(api_key=os.environ[api_key_env]))
-        )
+        if client_factory is None:
+            connection = daytona_connection()
+            client_factory = partial(
+                AsyncDaytona,
+                DaytonaConfig(
+                    api_key=connection.api_key,
+                    api_url=connection.api_url,
+                    target=connection.target,
+                ),
+            )
         self.factory = DaytonaMachineFactory(
             client_factory,
             ttl_minutes=ttl_minutes,
@@ -251,23 +237,7 @@ class DaytonaEnvironment(BaseEnvironment):
     ) -> None:
         if self.machine is None:
             raise RuntimeError("Daytona environment is not running")
-        destination = StoragePath(str(target))
-        if destination.is_local:
-            local = (
-                Path("/" + destination.key)
-                if destination.scheme == "file"
-                else Path(str(destination))
-            )
-            await self.machine.download(source, local)
-            return
-        with tempfile.TemporaryDirectory() as staging:
-            local = Path(staging) / "download"
-            await self.machine.download(source, local)
-            await asyncio.to_thread(
-                destination.upload_from,
-                str(local) + "/" if directory else str(local),
-                recursive=directory,
-            )
+        await download_artifact(self.machine, source, str(target), directory=directory)
 
     async def download_file(self, source_path: str, target_path: Path | str) -> None:
         await self._download(source_path, target_path, directory=False)

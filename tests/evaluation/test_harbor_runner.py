@@ -561,7 +561,11 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
         model_config=ModelConfigRef.model_validate(asdict(ModelConfig(name="qwen3-0.6b", location="org/checkpoint"))),
         secret_env_keys=("DAYTONA_API_KEY",),
     )
-    env_vars = {"DAYTONA_API_KEY": "daytona-key"}
+    env_vars = {
+        "DAYTONA_API_KEY": "daytona-key",
+        "DAYTONA_TARGET": "test-target",
+        "DAYTONA_API_URL": "https://daytona.example/api",
+    }
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         env_vars["HF_TOKEN"] = "hf-key"
     outcome = executor(
@@ -586,6 +590,8 @@ def test_harbor_executor_passes_opaque_policy_and_runtime_overlay_to_driver(tmp_
     assert captured["overlay"].archive_dataset == executor.config.record_dataset
     assert captured["overlay"].dataset_path is None
     assert captured["env"]["DAYTONA_API_KEY"] == "daytona-key"
+    assert captured["env"]["DAYTONA_TARGET"] == "test-target"
+    assert captured["env"]["DAYTONA_API_URL"] == "https://daytona.example/api"
     if dataset_kind == HarborDatasetKind.HUGGING_FACE:
         assert captured["env"]["HF_TOKEN"] == "hf-key"
     assert "OPENAI_API_KEY" not in captured["env"]

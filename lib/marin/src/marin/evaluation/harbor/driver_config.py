@@ -16,7 +16,7 @@ from pydantic import ValidationError
 from rigging.config_discovery import find_project_root
 from rigging.tunnel import terminate_process_group
 
-from marin.evaluation.eval_env import env_vars_from_keys
+from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS, env_vars_from_keys
 from marin.evaluation.harbor.driver_protocol import IRIS_ENVIRONMENT
 from marin.evaluation.records import BenchmarkMetadataRef
 from marin.evaluation.runner import BACKEND_POLL_SECONDS, check_inference_backend
@@ -33,6 +33,7 @@ _DRIVER_IRIS_ENV_KEYS = (
     "IRIS_TASK_TOKEN",
 )
 _DRIVER_SYSTEM_ENV_KEYS = (
+    *DAYTONA_RUNTIME_ENV_KEYS,
     "CURL_CA_BUNDLE",
     # Harbor downloads gated Hugging Face datasets in preflight and on workers.
     "HF_TOKEN",

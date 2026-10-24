@@ -1498,6 +1498,13 @@ def test_evalchemy_executor_normalizes_native_prompts_into_rollouts(tmp_path, mo
 def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_path, monkeypatch):
     captured: dict = {}
     resolved_value = "resolved-evaluation-secret"
+    runtime_values = {"DAYTONA_TARGET": "test-target", "DAYTONA_API_URL": "https://daytona.example/api"}
+    for name, value in runtime_values.items():
+        monkeypatch.setenv(name, value)
+
+    def executor(session, output_dir, env_vars, *, backend_state, judge=None):
+        assert {name: env_vars[name] for name in runtime_values} == runtime_values
+        return _successful_evaluation(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
 
     class Client:
         def submit(self, **kwargs):
@@ -1513,7 +1520,7 @@ def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_pa
             eval_ref=EvalRef(name="secret", mechanism="test"),
             eval_runtime="test-runtime",
         ),
-        executor=_successful_evaluation,
+        executor=executor,
         endpoint_route=EndpointRoute.CAPABILITY,
     )
     batch = EvaluationBatch(
@@ -1542,7 +1549,12 @@ def test_launch_group_resolves_declared_secrets_outside_the_pickled_batch(tmp_pa
     launch_group(batch, Client())
 
     assert captured["environment"].env_vars["DAYTONA_API_KEY"] == resolved_value
+    assert {name: captured["environment"].env_vars[name] for name in runtime_values} == runtime_values
     assert resolved_value.encode() not in captured["entrypoint"].workdir_files["_callable.pkl"]
+    for name, value in captured["environment"].env_vars.items():
+        monkeypatch.setenv(name, value)
+    _evaluate_with_session(batch, _remote_session(), "/orchestrator")
+    assert (tmp_path / "secret" / "endpoint.txt").is_file()
 
 
 @pytest.mark.parametrize(

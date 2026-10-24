@@ -18,6 +18,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
+from marin.evaluation.eval_env import DAYTONA_RUNTIME_ENV_KEYS
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
 from marin.evaluation.harbor.driver_config import (
     HarborErrorTaxonomy,
@@ -541,6 +542,7 @@ class HarborExecutor:
     ) -> EvaluationOutcome:
         """Run Harbor with candidate inference and an optional hosted judge."""
         driver_env = {key: env_vars[key] for key in self.secret_env_keys}
+        driver_env.update({key: env_vars[key] for key in DAYTONA_RUNTIME_ENV_KEYS if key in env_vars})
         hf_token = env_vars.get("HF_TOKEN")
         if hf_token:
             driver_env["HF_TOKEN"] = hf_token

@@ -2,11 +2,11 @@
 
 import asyncio
 import json
+import os
 import shutil
 import tempfile
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from contextlib import AsyncExitStack, aclosing, asynccontextmanager
-from functools import partial
 from pathlib import Path
 from uuid import uuid4
 
@@ -15,20 +15,20 @@ from harbor.agents.installed.base import BaseInstalledAgent
 from harbor.literal.native_api import NativeAPILimits
 from harbor.literal.proxy import RecordProxy
 from harbor.models.task.config import EnvironmentConfig
+from harbor.environments.runtime import DAYTONA_API_URL, host_backend_credentials
 from harbor.models.trial.config import AgentConfig, EnvironmentConfig as TrialEnvironmentConfig, TaskConfig, TrialConfig
 from harbor.models.trial.result import TrialResult
 from harbor.trial.trial import Trial
 from marinskyrl.resource_locator import join_resource_path
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, model_validator
 from rolloutengine.models import ModelTurn, Prompt
 from rolloutengine.models import TaskRolloutSpec
 from shellbox.machine import Machine, NetworkPolicy
-from shellbox.image import DockerfileSource, RegistryImage, image_source_key
 from taskcompendium.submission import conversation_messages
 
 from skyrl_train.inference_engines.inference_engine_client_http_endpoint import create_app, set_global_state
 from skyrl_train.io import io
-from skyrl_train.dataset.harbor_import import TaskConfig as PackageConfig, restore_harbor_trial_task
+from skyrl_train.dataset.harbor_import import restore_harbor_trial_task
 from skyrl_train.rollouts.agent_backend import AgentInferenceBackend
 from skyrl_train.rollouts.agent_endpoint import registered_agent_endpoint
 from skyrl_train.rollouts.agent_environment import BorrowedMachineEnvironment
@@ -36,6 +36,7 @@ from skyrl_train.rollouts.agent_service import serve_agent_app
 from skyrl_train.rollouts.installed_agent import run_installed_agent
 from skyrl_train.rollouts.harbor_trial_session import HarborTrialHarness, run_harbor_trial
 from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
+from skyrl_train.rollouts.harbor_settings import EnvironmentType
 
 
 async def publish_attempt(evidence: Path, destination: str) -> None:
@@ -57,8 +58,17 @@ class InstalledAgentSettings(BaseModel):
     cleanup_timeout: float
     service_startup_timeout: float
     service_shutdown_timeout: float
-    environment_snapshots: dict[str, str] = Field(default_factory=dict)
     trial_reward_key: str = "reward"
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_legacy_snapshots(cls, values: object) -> object:
+        if isinstance(values, Mapping) and "environment_snapshots" in values:
+            raise ValueError(
+                "environment_snapshots is retired; prepare task docker_image references "
+                "and remove the legacy snapshot mapping before launching"
+            )
+        return values
 
 
 class InstalledAgentRuntime:
@@ -122,12 +132,18 @@ class InstalledAgentRuntime:
         """Bind a full Harbor trial to the phase's deadlines and environment settings."""
         if lowered.limits.attempt_timeout is None:
             raise ValueError("Full Harbor trials require a finite attempt timeout for the inference capability")
+        if settings.environment.type is not EnvironmentType.DAYTONA:
+            raise ValueError(
+                "Original Harbor trials require Shellbox Daytona; engine-owned Docker "
+                "machines use the borrowed-machine harness"
+            )
         kwargs = dict(settings.environment.kwargs)
         key_env = kwargs.pop("eval_api_key_env" if phase == "eval" else "api_key_env", None)
         kwargs.pop("api_key_env", None)
         kwargs.pop("eval_api_key_env", None)
-        if key_env is not None:
-            kwargs["api_key_env"] = key_env
+        daytona_api_key = os.environ.get(key_env or "DAYTONA_API_KEY")
+        daytona_api_url = os.environ.get("DAYTONA_API_URL", DAYTONA_API_URL)
+        daytona_target = os.environ.get("DAYTONA_TARGET")
         environment = TrialEnvironmentConfig.model_validate({**settings.environment.model_dump(), "kwargs": kwargs})
         agent = self.settings.agent.model_copy(
             update={
@@ -142,10 +158,16 @@ class InstalledAgentRuntime:
             trial_attempt_timeout_sec=lowered.limits.attempt_timeout,
             trial_cleanup_grace_sec=lowered.limits.cleanup_timeout,
         )
-        return HarborTrialHarness(
-            partial(self.run_original_trial, lowered=lowered, session_id=session_id, config=config),
-            self.settings.trial_reward_key,
-        )
+
+        async def run(complete: Callable[[Prompt], Awaitable[ModelTurn]]) -> TrialResult:
+            with host_backend_credentials(
+                daytona_api_key=daytona_api_key,
+                daytona_api_url=daytona_api_url,
+                daytona_target=daytona_target,
+            ):
+                return await self.run_original_trial(complete, lowered=lowered, session_id=session_id, config=config)
+
+        return HarborTrialHarness(run, self.settings.trial_reward_key)
 
     async def run_original_trial(
         self,
@@ -167,27 +189,7 @@ class InstalledAgentRuntime:
         try:
             task_dir = evidence / "task"
             restore_harbor_trial_task(lowered.task, task_dir)
-            package = PackageConfig.model_validate_toml((task_dir / "task.toml").read_text())
-            context = task_dir / "environment"
-            source = (
-                RegistryImage(package.environment.docker_image)
-                if package.environment.docker_image
-                else DockerfileSource(context, context / "Dockerfile")
-            )
-            key = image_source_key(source)
-            if key not in self.settings.environment_snapshots:
-                raise ValueError(f"Harbor environment has no approved snapshot: {key}")
-            environment = config.environment.model_copy(
-                update={
-                    "force_build": False,
-                    "kwargs": {
-                        **config.environment.kwargs,
-                        "snapshot_template_name": self.settings.environment_snapshots[key],
-                        "auto_snapshot": False,
-                        "assume_global_snapshot": True,
-                    },
-                }
-            )
+            environment = config.environment
             run_timeout = lowered.limits.total_turn_timeout or self.settings.run_timeout
             assert config.trial_attempt_timeout_sec is not None
             async with self._served_agent(
@@ -216,9 +218,7 @@ class InstalledAgentRuntime:
     async def _served_agent(
         self, trial_dir: Path, run_timeout: float, *, capability_lifetime: float, agent: AgentConfig | None = None
     ) -> AsyncIterator[AgentConfig]:
-        proxy = RecordProxy(
-            f"http://127.0.0.1:{self.port}", trial_dir / "engine" / "literal.jsonl", timeout=run_timeout
-        )
+        proxy = RecordProxy(f"http://127.0.0.1:{self.port}", trial_dir / "engine" / "literal.jsonl", timeout=run_timeout)
         async with (
             aclosing(proxy),
             serve_agent_app(
@@ -238,7 +238,7 @@ class InstalledAgentRuntime:
                     "kwargs": {
                         **source.kwargs,
                         "api_base": api_base,
-                        "api_key": "capability-url",
+                        "api_key": "EMPTY",
                         "collect_rollout_details": True,
                         "model_info": {
                             "max_input_tokens": self.backend.max_model_len,

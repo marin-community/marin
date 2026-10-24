@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import signal
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 from harbor.agents.factory import AgentFactory
 from harbor.cli.notifications import show_registry_hint_if_first_run
 from harbor.cli.utils import (
+    bind_backend_credentials,
     load_mcp_servers,
     parse_env_vars,
     parse_kwargs,
@@ -38,7 +40,7 @@ from harbor.trial.simulated_user import validate_user_agent_version_pin
 from harbor.utils.artifact_authority import validate_artifact_authority
 from rich.console import Console
 from rich.table import Table
-from typer import Argument, Option, Typer
+from typer import Argument, Context, Option, Typer
 from upath import UPath
 
 jobs_app = Typer(
@@ -175,6 +177,7 @@ def _handle_sigterm(signum, frame):
 
 
 def start(
+    context: Context,
     config_path: Annotated[
         Path | None,
         Option(
@@ -899,6 +902,7 @@ def start(
             console.print(f"[red]❌ Env file not found: {env_file}[/red]")
             raise SystemExit(1)
         load_dotenv(env_file, override=True)
+        bind_backend_credentials(context, os.environ)
 
     base_config = None
     if config_path is not None:

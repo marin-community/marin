@@ -117,7 +117,9 @@ def test_iris_preflight_checks_each_resolved_task_before_submission(tmp_path, ir
 def test_iris_runtime_keeps_hosted_judge_credentials_out_of_task_environment(tmp_path, iris_policy):
     preflight = json.loads(_preflight(tmp_path, [(iris_policy, {})]).stdout)[0]
     policy = tmp_path / "stable-policy.json"
-    policy.write_text(preflight["stable_policy_json"])
+    stable_policy = json.loads(preflight["stable_policy_json"])
+    stable_policy["environment"]["kwargs"] = {"cluster": "configured-cluster"}
+    policy.write_text(json.dumps(stable_policy))
     overlay = tmp_path / "overlay.json"
     overlay.write_text(
         json.dumps(
@@ -141,9 +143,17 @@ def test_iris_runtime_keeps_hosted_judge_credentials_out_of_task_environment(tmp
     )
     completed = _external_python(
         "-c",
-        "import json; from pathlib import Path; "
+        "import json, os; from pathlib import Path; "
         "from marin.evaluation.harbor.trial_driver import effective_job_config; "
         f"config = effective_job_config(Path({str(policy)!r}), Path({str(overlay)!r})); "
+        "os.environ.update(IRIS_TASK_ID='ambient-task', IRIS_CONTROLLER_ADDRESS='http://ambient.invalid'); "
+        f"again = effective_job_config(Path({str(policy)!r}), Path({str(overlay)!r})); "
+        "assert again.environment.kwargs == config.environment.kwargs; "
+        "assert config.environment.kwargs['cluster'] == 'configured-cluster'; "
+        f"bound = effective_job_config(Path({str(policy)!r}), Path({str(overlay)!r}), "
+        "enclosing_controller_url='http://enclosing.test'); "
+        "assert bound.environment.kwargs['controller_url'] == 'http://enclosing.test'; "
+        "assert 'cluster' not in bound.environment.kwargs; "
         "print(json.dumps(config.verifier.env))",
     )
 

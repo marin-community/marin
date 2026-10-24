@@ -12,6 +12,7 @@ from pathlib import Path
 
 from harbor.environments.base import (
     EXEC_OUTPUT_LIMIT_BYTES,
+    BASE_ENVIRONMENT_ARGUMENTS,
     BaseEnvironment,
     ExecResult,
 )
@@ -20,13 +21,12 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.iris_compose import import_iris_task
+from harbor.environments.artifacts import download_artifact
 from harbor.environments.model_relay import MODEL_RELAY_PORT, ModelRelay
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import EnvironmentPaths
-from iris.cluster.client.job_info import get_job_info
-from rigging.filesystem.storage_path import StoragePath
 from harbor.utils.env import resolve_env_vars
 
 from shellbox.backends.iris.machine import (
@@ -38,27 +38,6 @@ from shellbox.backends.iris.machine import (
 from shellbox.machine import Command, ExitReason
 from shellbox.service import ServiceGroup
 from shellbox.http_service import serve_http
-
-BASE_ENVIRONMENT_ARGUMENTS = frozenset(
-    {
-        "environment_dir",
-        "environment_name",
-        "session_id",
-        "trial_paths",
-        "task_env_config",
-        "logger",
-        "override_cpus",
-        "override_memory_mb",
-        "override_storage_mb",
-        "override_gpus",
-        "override_tpu",
-        "cpu_enforcement_policy",
-        "memory_enforcement_policy",
-        "persistent_env",
-        "mounts",
-        "extra_docker_compose",
-    }
-)
 
 
 def validate_iris_task(
@@ -94,9 +73,6 @@ class IrisEnvironment(BaseEnvironment):
             raise ValueError(
                 "Iris sandbox does not accept driver environment variables"
             )
-        if cluster is None and controller_url is None:
-            info = get_job_info()
-            controller_url = info.controller_address if info is not None else None
         self.factory = IrisMachineFactory(
             cluster=cluster,
             controller_url=controller_url,
@@ -290,22 +266,7 @@ class IrisEnvironment(BaseEnvironment):
         if self.machine is None:
             raise RuntimeError("Iris sandbox is not running")
         await self._sync_service_logs()
-        destination = StoragePath(str(target))
-        if destination.is_local:
-            local = (
-                Path("/" + destination.key)
-                if destination.scheme == "file"
-                else Path(str(destination))
-            )
-            await self.machine.download(source, local)
-            return
-        with tempfile.TemporaryDirectory() as staging:
-            local = Path(staging) / "download"
-            await self.machine.download(source, local)
-            upload_source = str(local) + "/" if directory else str(local)
-            await asyncio.to_thread(
-                destination.upload_from, upload_source, recursive=directory
-            )
+        await download_artifact(self.machine, source, str(target), directory=directory)
 
     async def download_file(self, source_path: str, target_path: Path | str) -> None:
         await self._download(source_path, target_path, directory=False)

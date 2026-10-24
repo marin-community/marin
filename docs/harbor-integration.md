@@ -123,11 +123,21 @@ task's Dockerfile through Daytona's provider image-build service. No Docker daem
 runs inside the task container. Tasks need Python 3 and `setsid` for command
 supervision and the host model relay.
 
-The Daytona adapter accepts `api_key_env`, `network_policy` (`mode` and optional
+The Daytona adapter accepts `network_policy` (`mode` and optional
 `value`), `ttl_minutes` and `create_timeout`. Model endpoint settings are supplied
 by the trusted launcher. Snapshot names, automatic snapshot toggles, provider target
 overrides and forced rebuilds are unsupported. Compose tasks must use prepared
 Iris service groups; Daytona rejects every Compose filename and extra overlay.
+The host entry point resolves `DAYTONA_API_KEY`, `DAYTONA_API_URL` and `DAYTONA_TARGET`
+once and supplies the connection privately. The public API URL defaults to
+`https://app.daytona.io/api`; a live Daytona run requires an explicit target:
+
+```bash
+export DAYTONA_TARGET=us  # Select the region approved for this run.
+```
+
+Missing credentials or a missing target fail before allocation. The adapter does not
+read SDK `.env` authentication, JWT credentials, or environment-based connection overrides.
 
 Checked-in evaluation policies retain their dataset selectors and historical
 provider choices. They are not silently rewritten to another environment.
@@ -141,7 +151,7 @@ SkyRL's engine-owned machine path; they are not Harbor execution providers.
 
 Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
 They use `DAYTONA_API_KEY` from the launch environment when present, then fall back to the approved
-Google Secret Manager version. `DAYTONA_API_KEY` is the only supported environment override.
+Google Secret Manager version. `DAYTONA_API_KEY` is the only supported credential override.
 
 The generic launcher resolves declared references immediately before Iris submission. The Harbor
 subprocess receives the selected backend's credentials, Hugging Face access, and storage credentials
@@ -238,9 +248,11 @@ user, and Iris exec cannot switch the image's user.
 Iris replaces the main image's entrypoint with its idle process. Sidecars retain their prepared
 image's ENTRYPOINT/CMD unless Compose explicitly overrides them.
 The adapter does not build images or install a nested container runtime.
-The shared launcher binds sandboxes to the enclosing Iris job's controller and uses that job's
-scoped task token. For a direct local Harbor invocation, pass an explicit environment `cluster`
-or `controller_url` instead.
+The shared launcher's host entry point resolves its enclosing Iris controller once and passes
+that binding explicitly into job configuration. Sandboxes use the enclosing job's scoped task
+token. An explicit controller must match this binding; a cluster selector is replaced by the
+enclosing controller. For a direct local Harbor invocation, pass an explicit environment
+`cluster` or `controller_url` instead.
 
 The agent makes model calls in the trusted Harbor process. Shellbox creates a separate Iris
 `SANDBOX` job for task commands and verification, with `EGRESS_POLICY_NONE`. Service groups deny

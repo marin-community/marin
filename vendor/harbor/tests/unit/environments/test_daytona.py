@@ -9,10 +9,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from daytona._utils.env import DaytonaEnvReader
 
 from harbor.environments import daytona, model_relay
 from harbor.environments.daytona import DaytonaEnvironment
 from harbor.environments.model_relay import host_model_authentication
+from harbor.environments.runtime import host_backend_credentials
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.task.task import Task
 from harbor.models.trial.paths import TrialPaths
@@ -79,6 +81,9 @@ def test_shellbox_daytona_runs_verifier_through_host_only_judge_relay(
 
     async def run():
         with (
+            host_backend_credentials(
+                daytona_api_key="host-daytona-private", daytona_target="test-target"
+            ),
             task_environment({}),
             host_model_authentication(
                 {"https://api.together.xyz/v1": "host-provider-private"}
@@ -133,9 +138,49 @@ def test_daytona_rejects_legacy_dind_and_unknown_runtime_options(tmp_path):
         session_id="trial",
         trial_paths=TrialPaths(tmp_path / "trial"),
         task_env_config=EnvironmentConfig(docker_image="test/image"),
+        client_factory=lambda: pytest.fail("Unexpected provider allocation"),
     )
     with pytest.raises(ValueError):
         DaytonaEnvironment(**arguments, dind_image="docker:dind")
     (environment_dir / "docker-compose.yaml").write_text("services: {}")
     with pytest.raises(ValueError):
         DaytonaEnvironment(**arguments)
+
+
+def test_host_connection_prevents_sdk_ambient_auth_and_destination_fallback(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("DAYTONA_JWT_TOKEN", "ambient-jwt-must-not-be-used")
+    monkeypatch.setenv("DAYTONA_API_URL", "https://ambient.invalid/api")
+    protected = {
+        "DAYTONA_API_KEY",
+        "DAYTONA_JWT_TOKEN",
+        "DAYTONA_ORGANIZATION_ID",
+        "DAYTONA_API_URL",
+        "DAYTONA_SERVER_URL",
+        "DAYTONA_TARGET",
+    }
+
+    def environment_value(reader, name):
+        assert (
+            name not in protected
+        ), "Daytona SDK attempted ambient connection resolution"
+        return None
+
+    monkeypatch.setattr(DaytonaEnvReader, "get", environment_value)
+
+    async def run():
+        with host_backend_credentials(
+            daytona_api_key="explicit-key", daytona_target="test-target"
+        ):
+            adapter = DaytonaEnvironment(
+                environment_dir=tmp_path,
+                environment_name="task",
+                session_id="trial",
+                trial_paths=TrialPaths(tmp_path / "trial"),
+                task_env_config=EnvironmentConfig(docker_image="test/image"),
+            )
+            client = adapter.factory.client_factory()
+            await client.close()
+
+    asyncio.run(run())

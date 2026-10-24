@@ -12,10 +12,13 @@ from harbor.utils.env import (
 )
 
 
-def test_task_alias_cannot_resolve_ambient_storage_credentials(monkeypatch):
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "storage-private-canary")
+@pytest.mark.parametrize(
+    "key", ["AWS_SECRET_ACCESS_KEY", "DAYTONA_API_KEY", "DAYTONA_JWT_TOKEN"]
+)
+def test_task_alias_cannot_resolve_ambient_host_credentials(monkeypatch, key):
+    monkeypatch.setenv(key, "storage-private-canary")
     monkeypatch.setenv("INNOCENT_ALIAS", "storage-private-canary")
-    for source in ("AWS_SECRET_ACCESS_KEY", "INNOCENT_ALIAS"):
+    for source in (key, "INNOCENT_ALIAS"):
         with pytest.raises(ValueError):
             resolve_env_vars({"TASK_VALUE": "${" + source + "}"})
     with pytest.raises(ValueError):
@@ -89,6 +92,8 @@ def test_provider_credentials_are_host_only_even_under_task_aliases(monkeypatch,
         "GOOGLE_APPLICATION_CREDENTIALS",
         "CW_KEY_SECRET",
         "IRIS_TASK_TOKEN",
+        "DAYTONA_API_KEY",
+        "DAYTONA_JWT_TOKEN",
     ],
 )
 def test_storage_and_control_plane_credentials_cannot_be_explicit_task_capabilities(
