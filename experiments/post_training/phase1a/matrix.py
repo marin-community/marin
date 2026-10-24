@@ -242,8 +242,10 @@ def skyrl_recipe(run: RunPlan, teachers: dict[Task, TeacherModel]) -> dict:
         evaluation_runner="training",
         router_telemetry={"enabled": True},
     )
-    # Masters-only optimizer checkpoints need the DP-gathered format (WP2's schedule check).
-    trainer["policy"]["megatron_config"]["optimizer_checkpoint_sharding_type"] = "fully_reshardable"
+    # Full optimizer saves in DP-local shards; fully_reshardable gathers a DP group's whole
+    # optimizer state onto one rank, which Snowball 67B does not survive. Every save also
+    # writes the FP32 master records weight analysis reads (master_records).
+    trainer["policy"]["megatron_config"]["optimizer_checkpoint_sharding_type"] = "dp_reshardable"
     trainer["policy"]["optimizer_config"].update(
         optimizer="AdamW",
         lr=run.learning_rate,

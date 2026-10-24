@@ -82,10 +82,8 @@ class ExpertPlan:
 def expert_recipe(plan: ExpertPlan) -> dict:
     """Phase 1a's M1 recipe with the expert's epochs, shuffle, batch and one final checkpoint.
 
-    The expert saves one full checkpoint (fp32 masters with the optimizer moments) in the
-    ``dp_reshardable`` format at its last step, not WP2's masters-only schedule: on
-    Snowball 67B the ``fully_reshardable`` save that masters-only needs gathers each DP
-    group's optimizer state onto one rank and crashed the job at step 240, twice.
+    The expert saves one full checkpoint (optimizer in DP-local shards plus the FP32
+    master records) at its last step; it needs no masters-only schedule.
     """
     recipe = skyrl_recipe(RunPlan(Method.M1, _CONDITION[plan.task], EXPERT_SEED, plan.learning_rate), {})
     trainer = recipe["trainer"]
@@ -96,7 +94,6 @@ def expert_recipe(plan: ExpertPlan) -> dict:
         optimizer_checkpoint_steps=[],
         ckpt_interval=plan.steps,
     )
-    trainer["policy"]["megatron_config"]["optimizer_checkpoint_sharding_type"] = "dp_reshardable"
     recipe["data"]["shuffle"] = True
     return recipe
 
