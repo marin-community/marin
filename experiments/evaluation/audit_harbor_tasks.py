@@ -169,7 +169,7 @@ def task_inventory(task_root: Path, dataset_root: Path) -> TaskInventory:
 def inventory(root: Path, *, source: str, revision: str) -> Inventory:
     """Report structural topology and reference locations for a supplied local snapshot.
 
-    Source and revision are caller-supplied provenance, not verified identities.
+    The caller supplies source and revision; this inventory does not verify either.
     Compose output contains service and field names; declaration values and
     command text are omitted.
     """

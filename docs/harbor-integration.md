@@ -119,9 +119,9 @@ Google Secret Manager version. `DAYTONA_API_KEY` is the only supported environme
 The generic launcher resolves declared references immediately before Iris submission. The Harbor
 subprocess receives the selected backend's credentials, Hugging Face access, and storage credentials
 needed for remote trial results and FineStore archives. It remains a trusted process: `uv --isolated`
-isolates dependencies, not its user identity, filesystem or network access. Task containers must not
-inherit that authority. Do not put resolved credentials in model YAMLs, runner configs, or evaluation
-artifacts.
+isolates dependencies. The subprocess retains its user identity, filesystem and network access.
+Task containers must not inherit that authority. Do not put resolved credentials in model YAMLs,
+runner configs, or evaluation artifacts.
 
 ## Offline execution through Shellbox and Iris
 
@@ -298,8 +298,7 @@ version `0.87.0` without resolving npm's `latest` tag.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
 The runtime uses `vendor/harbor/uv.lock`. Reproduce runs from their recorded Marin checkout
-and artifact provenance, with pinned dataset revisions and policies. Harbor uses the same
-checkout provenance as other evaluation tools.
+and artifact provenance, with pinned dataset revisions and policies.
 The vendored package evaluates prebuilt task datasets; dataset generators are omitted.
 See the [vendor maintenance guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
 for dependency updates and direct evaluation CLI commands.
