@@ -43,6 +43,7 @@ from experiments.post_training.probe_sets.builder import (
     p_agent_harbor_config,
     p_agent_instance_ids,
     require_pairwise_disjoint,
+    screening_hits,
     source_entry,
     write_rows,
 )
@@ -109,12 +110,14 @@ def screened(
     """Select, screen and write P_chat, P_think, P_X and P_R."""
     output_dir.mkdir(parents=True, exist_ok=True)
     inputs = ScreeningInputs(stage0_files=stage0_files, task_train_files=(x_train, r_train), x_train_file=x_train)
-    p_chat, chat_counts = build_p_chat(constraint_prompts(), multi_turn_chats(), inputs, seed=seed)
-    p_think, think_counts = build_p_think(competition_math(), inputs, seed=seed)
-    p_x, x_counts = build_task_probe(task_probe_rows(x_probe, "task_X"), inputs, name="P_X", seed=seed, x_task_rows=True)
-    p_r, r_counts = build_task_probe(
-        task_probe_rows(r_probe, "task_R"), inputs, name="P_R", seed=seed, x_task_rows=False
-    )
+    constraints, chats, benchmarks = constraint_prompts(), multi_turn_chats(), competition_math()
+    x_rows, r_rows = task_probe_rows(x_probe, "task_X"), task_probe_rows(r_probe, "task_R")
+    candidates = [*constraints, *chats, *(row for rows in benchmarks.values() for row in rows), *x_rows, *r_rows]
+    hits = screening_hits(candidates, inputs)
+    p_chat, chat_counts = build_p_chat(constraints, chats, hits, seed=seed)
+    p_think, think_counts = build_p_think(benchmarks, hits, seed=seed)
+    p_x, x_counts = build_task_probe(x_rows, hits, name="P_X", seed=seed, x_task_rows=True)
+    p_r, r_counts = build_task_probe(r_rows, hits, name="P_R", seed=seed, x_task_rows=False)
     prompt_sets = {"P_chat": p_chat, "P_think": p_think, "P_X": p_x, "P_R": p_r}
     require_pairwise_disjoint(prompt_sets)
 

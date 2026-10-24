@@ -125,21 +125,62 @@ class ScreeningInputs:
             raise ValueError("probe screening requires the Stage 0 files and the task training files")
 
 
-def screen(rows: list[ProbeRow], inputs: ScreeningInputs, *, x_task_rows: bool) -> tuple[list[ProbeRow], dict[str, int]]:
-    """Drop rows that overlap Stage 0 or task training data; return the kept rows and drop counts."""
-    stage0 = colliding_ids(rows, message_file_user_texts(inputs.stage0_files))
+@dataclass(frozen=True)
+class ScreeningHits:
+    """Which candidate rows overlap each training source, computed in one pass per source."""
+
+    screened_ids: frozenset[str]
+    stage0: frozenset[str]
+    task_train: dict[Path, frozenset[str]]
+    x_train_file: Path
+    x_train_functions: frozenset[tuple[str, Any]]
+
+
+def screening_hits(candidates: Iterable[ProbeRow], inputs: ScreeningInputs) -> ScreeningHits:
+    """Overlap of every candidate row of every probe set with Stage 0 and each task training file.
+
+    Stage 0 and the task files are streamed once each for all candidates together;
+    screening set by set would stream Stage 0 once per set.
+    """
+    rows = list(candidates)
+    ids = [row.probe_id for row in rows]
+    if len(set(ids)) != len(ids):
+        raise ValueError("probe candidates must have unique probe ids")
+    functions = frozenset(
+        (task["template_name"], task["parameter"])
+        for task in map(json.loads, inputs.x_train_file.read_text().splitlines())
+    )
+    return ScreeningHits(
+        screened_ids=frozenset(ids),
+        stage0=frozenset(colliding_ids(rows, message_file_user_texts(inputs.stage0_files))),
+        task_train={path: frozenset(colliding_ids(rows, task_file_prompts([path]))) for path in inputs.task_train_files},
+        x_train_file=inputs.x_train_file,
+        x_train_functions=functions,
+    )
+
+
+def screen(rows: list[ProbeRow], hits: ScreeningHits, *, x_task_rows: bool) -> tuple[list[ProbeRow], dict[str, int]]:
+    """Drop rows that overlap Stage 0 or task training data; return the kept rows and drop counts.
+
+    ``P_X`` rows (``x_task_rows``) are screened against ``X`` train by function identity
+    instead of text, and against the other task files by text.
+    """
+    unscreened = {row.probe_id for row in rows} - hits.screened_ids
+    if unscreened:
+        raise ValueError(f"rows were not among the screened candidates: {sorted(unscreened)[:5]}")
+    ids = {row.probe_id for row in rows}
+    stage0 = ids & hits.stage0
     if x_task_rows:
-        train_functions = {
-            (task["template_name"], task["parameter"])
-            for task in map(json.loads, inputs.x_train_file.read_text().splitlines())
-        }
         task_train = {
-            row.probe_id for row in rows if (row.metadata["template_name"], row.metadata["parameter"]) in train_functions
+            row.probe_id
+            for row in rows
+            if (row.metadata["template_name"], row.metadata["parameter"]) in hits.x_train_functions
         }
-        other_train = [path for path in inputs.task_train_files if path != inputs.x_train_file]
-        task_train |= colliding_ids(rows, task_file_prompts(other_train))
+        for path, path_hits in hits.task_train.items():
+            if path != hits.x_train_file:
+                task_train |= ids & path_hits
     else:
-        task_train = colliding_ids(rows, task_file_prompts(inputs.task_train_files))
+        task_train = set().union(*(ids & path_hits for path_hits in hits.task_train.values()))
     kept = [row for row in rows if row.probe_id not in stage0 | task_train]
     return kept, {"dropped_stage0_overlap": len(stage0), "dropped_task_train_overlap": len(task_train - stage0)}
 
@@ -152,11 +193,11 @@ def require_fixed_benchmark(rows: list[ProbeRow], kept: list[ProbeRow], name: st
 
 
 def build_p_chat(
-    constraints: list[ProbeRow], chats: list[ProbeRow], inputs: ScreeningInputs, *, seed: int
+    constraints: list[ProbeRow], chats: list[ProbeRow], hits: ScreeningHits, *, seed: int
 ) -> tuple[list[ProbeRow], dict[str, Any]]:
     """Every screened constraint prompt, filled to 1,500 with seeded multi-turn chats."""
-    kept_constraints, constraint_drops = screen(constraints, inputs, x_task_rows=False)
-    kept_chats, chat_drops = screen(chats, inputs, x_task_rows=False)
+    kept_constraints, constraint_drops = screen(constraints, hits, x_task_rows=False)
+    kept_chats, chat_drops = screen(chats, hits, x_task_rows=False)
     filler = seeded_selection(kept_chats, P_CHAT_SIZE - len(kept_constraints), seed=seed, name="P_chat")
     return kept_constraints + filler, {
         "constraint_prompts": len(kept_constraints),
@@ -167,17 +208,17 @@ def build_p_chat(
 
 
 def build_p_think(
-    benchmarks: dict[str, list[ProbeRow]], inputs: ScreeningInputs, *, seed: int
+    benchmarks: dict[str, list[ProbeRow]], hits: ScreeningHits, *, seed: int
 ) -> tuple[list[ProbeRow], dict[str, Any]]:
     """AIME 2024, AIME 2025 and HMMT February 2025 whole, plus 210 seeded OlympiadBench problems."""
     rows: list[ProbeRow] = []
     counts: dict[str, Any] = {}
     for name in ("aime_2024", "aime_2025", "hmmt_feb_2025"):
-        kept, drops = screen(benchmarks[name], inputs, x_task_rows=False)
+        kept, drops = screen(benchmarks[name], hits, x_task_rows=False)
         require_fixed_benchmark(benchmarks[name], kept, name)
         rows += kept
         counts[name] = len(kept)
-    olympiad, drops = screen(benchmarks["olympiadbench"], inputs, x_task_rows=False)
+    olympiad, drops = screen(benchmarks["olympiadbench"], hits, x_task_rows=False)
     rows += seeded_selection(olympiad, P_THINK_OLYMPIADBENCH_SIZE, seed=seed, name="P_think/olympiadbench")
     counts["olympiadbench"] = P_THINK_OLYMPIADBENCH_SIZE
     counts["olympiadbench_drops"] = drops
@@ -185,9 +226,9 @@ def build_p_think(
 
 
 def build_task_probe(
-    rows: list[ProbeRow], inputs: ScreeningInputs, *, name: str, seed: int, x_task_rows: bool
+    rows: list[ProbeRow], hits: ScreeningHits, *, name: str, seed: int, x_task_rows: bool
 ) -> tuple[list[ProbeRow], dict[str, Any]]:
-    kept, drops = screen(rows, inputs, x_task_rows=x_task_rows)
+    kept, drops = screen(rows, hits, x_task_rows=x_task_rows)
     return seeded_selection(kept, P_TASK_SIZE, seed=seed, name=name), drops
 
 

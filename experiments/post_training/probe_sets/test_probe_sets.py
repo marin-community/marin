@@ -28,6 +28,7 @@ from experiments.post_training.probe_sets.builder import (
     p_agent_instance_ids,
     require_pairwise_disjoint,
     screen,
+    screening_hits,
     seeded_selection,
 )
 from experiments.post_training.probe_sets.sources import ProbeRow, SourceSpec, multi_turn_chats
@@ -57,7 +58,7 @@ def inputs(tmp_path):
 
 def test_screen_drops_stage0_and_task_train_overlap(inputs):
     rows = [row("clean", distinct(1)), row("stage0", f"say {LONG}"), row("train", distinct(901))]
-    kept, drops = screen(rows, inputs, x_task_rows=False)
+    kept, drops = screen(rows, screening_hits(rows, inputs), x_task_rows=False)
     assert [r.probe_id for r in kept] == ["clean"]
     assert drops == {"dropped_stage0_overlap": 1, "dropped_task_train_overlap": 1}
 
@@ -67,7 +68,7 @@ def test_x_probe_rows_screen_by_function_identity(inputs):
         row("same-function", distinct(2), template_name="mod_loop", parameter=5),
         row("sibling-function", distinct(3), template_name="mod_loop", parameter=6),
     ]
-    kept, drops = screen(rows, inputs, x_task_rows=True)
+    kept, drops = screen(rows, screening_hits(rows, inputs), x_task_rows=True)
     assert [r.probe_id for r in kept] == ["sibling-function"]
     assert drops["dropped_task_train_overlap"] == 1
 
@@ -83,7 +84,7 @@ def test_seeded_selection_is_reproducible_and_raises_on_shortfall():
 def test_p_chat_keeps_every_constraint_prompt_and_fills_with_chats(inputs):
     constraints = [row(f"c{index}", distinct(index)) for index in range(40)] + [row("c-dirty", f"x {LONG}")]
     chats = [row(f"m{index}", distinct(1000 + index)) for index in range(P_CHAT_SIZE)]
-    rows, counts = build_p_chat(constraints, chats, inputs, seed=0)
+    rows, counts = build_p_chat(constraints, chats, screening_hits([*constraints, *chats], inputs), seed=0)
     assert len(rows) == P_CHAT_SIZE
     assert counts["constraint_prompts"] == 40 and counts["multi_turn_chats"] == P_CHAT_SIZE - 40
     assert "c-dirty" not in {r.probe_id for r in rows}
@@ -99,12 +100,16 @@ def test_p_think_raises_when_a_fixed_benchmark_is_contaminated(inputs):
         "hmmt_feb_2025": benchmark("hmmt_feb_2025", 30, 200),
         "olympiadbench": benchmark("olympiadbench", 300, 300),
     }
-    rows, counts = build_p_think(benchmarks, inputs, seed=0)
+
+    def hits():
+        return screening_hits([r for rows in benchmarks.values() for r in rows], inputs)
+
+    rows, counts = build_p_think(benchmarks, hits(), seed=0)
     assert len(rows) == 90 + P_THINK_OLYMPIADBENCH_SIZE
     assert counts["olympiadbench"] == P_THINK_OLYMPIADBENCH_SIZE
     benchmarks["aime_2025"][3] = row("aime_2025-3", f"find {LONG}")
     with pytest.raises(ValueError, match="aime_2025 overlaps training data"):
-        build_p_think(benchmarks, inputs, seed=0)
+        build_p_think(benchmarks, hits(), seed=0)
 
 
 def test_probe_sets_must_be_pairwise_disjoint():
@@ -268,3 +273,9 @@ def test_raw_think_markers_in_a_sampled_reply(reply, reasoning, final):
     assert words[Bucket.DELIMITER] == [*markers, GRUG_TOKENS.turn_close]
     decile = [d for d, b in zip(tagged.reasoning_decile, tagged.buckets, strict=True) if b is Bucket.REASONING]
     assert decile == sorted(decile) and (not decile or decile[0] == 0)
+
+
+def test_screen_refuses_rows_that_were_not_screened(inputs):
+    hits = screening_hits([row("clean", distinct(1))], inputs)
+    with pytest.raises(ValueError, match="not among the screened candidates"):
+        screen([row("late", distinct(2))], hits, x_task_rows=False)
