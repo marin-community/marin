@@ -55,7 +55,7 @@ class RunConfig:
     seed: int = 42
     mode: str = RunMode.TRAIN.value
     submission: str = SubmissionMode.WAIT.value
-    export_hf: bool = True
+    export_hf: bool = False
 
 
 @dataclass

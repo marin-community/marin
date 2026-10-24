@@ -119,7 +119,7 @@ in a [seed-17 run](https://wandb.ai/marin-community/rav_moe/runs/yzukrdt2).
 Sampled evaluation reward on the training split increased from 0.2389 at step 0 to 0.6728 at step 10.
 Only the W&B project differs from the default recipe.
 This single run does not establish calibration across seeds.
-The [TaskSession validation](../task_sessions/validation.py) separately checks multi-turn training and HF exports.
+The [TaskSession validation](../task_sessions/validation.py) separately checks multi-turn training.
 Megatron logs `policy/dp_weight_checksum_mismatch` after every optimizer step;
 any mismatch fails the spec. The grouped step metric keeps the maximum across
 optimizer windows. Greedy, held-out and extrapolation scores are reported only.

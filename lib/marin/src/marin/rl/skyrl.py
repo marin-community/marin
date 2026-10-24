@@ -215,8 +215,8 @@ class SkyRLTopology:
 class SkyRLRetentionPolicy:
     """Temporary storage lifetime and rolling resume depth for one SkyRL run.
 
-    Every successful run produces one durable canonical export from its terminal
-    checkpoint.
+    When HF export is requested, a successful run produces a durable canonical
+    export from its terminal checkpoint.
     """
 
     resume_checkpoint_count: int = 2
