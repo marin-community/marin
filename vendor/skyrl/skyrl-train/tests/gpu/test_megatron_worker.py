@@ -30,6 +30,7 @@ from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.inference_engines.utils import get_sampling_params_for_backend
 from skyrl_train.objective.losses import POLICY_CLIP_METRIC_KEYS
 from tests.gpu.grug_gpu_gates import require_hoppers
+from tests.softmax_reference import assert_softmax_numerics, numerical_rows
 
 
 MODEL_NAME = "Qwen/Qwen3-0.6B"
@@ -37,6 +38,36 @@ MODEL_NAME = "Qwen/Qwen3-0.6B"
 # this might be a model specific mbridge issue - see if this persists when we transition to Megatron-Bridge
 # MOE_MODEL_NAME = "Qwen/Qwen1.5-MoE-A2.7B"
 MOE_MODEL_NAME = "Qwen/Qwen3-30B-A3B"
+
+
+def test_megatron_softmax_confident_values_and_gradients():
+    from megatron.core import parallel_state
+    from skyrl_train.distributed.megatron.model_utils import (
+        from_parallel_logits_to_logprobs,
+        vocab_parallel_entropy,
+    )
+
+    torch.distributed.init_process_group("nccl", store=torch.distributed.HashStore(), rank=0, world_size=1)
+    try:
+        parallel_state.initialize_model_parallel()
+        group = parallel_state.get_tensor_model_parallel_group()
+
+        def logprobs(logits, targets):
+            padding = torch.zeros_like(logits[:, :1])
+            labels = torch.cat((torch.zeros_like(targets[:, :1]), targets), dim=1)
+            return from_parallel_logits_to_logprobs(
+                torch.cat((logits, padding), dim=1), labels, 0, logits.shape[-1], group, chunk_size=17
+            )
+
+        for vocab in (151936, 128256):
+            for dtype in (torch.bfloat16, torch.float32):
+                logits, targets = numerical_rows(vocab, dtype, "cuda")
+                assert_softmax_numerics(logits, targets, logprobs, lambda x: vocab_parallel_entropy(x, chunk_size=17))
+        logits = torch.tensor([[[9.0, -9.0, -9.0]]], device="cuda", requires_grad=True)
+        assert_softmax_numerics(logits, torch.zeros((1, 1), dtype=torch.long, device="cuda"), logprobs, vocab_parallel_entropy)
+    finally:
+        parallel_state.destroy_model_parallel()
+        torch.distributed.destroy_process_group()
 
 
 @pytest.mark.parametrize("megatron_overrides", [False, True])

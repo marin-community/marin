@@ -653,6 +653,9 @@ def student_topk_logprobs(logits: torch.Tensor, topk_indices: torch.Tensor) -> t
         raise ValueError(f"selected top-K indices must be smaller than student vocabulary size {logits.shape[-1]}")
     safe_indices = topk_indices.masked_fill(~valid_indices, 0).long()
     float_logits = logits.float()
-    selected = torch.gather(float_logits, dim=-1, index=safe_indices)
-    normalized = selected - torch.logsumexp(float_logits, dim=-1, keepdim=True)
+    maximum, argmax = float_logits.max(dim=-1, keepdim=True)
+    margins = float_logits - maximum
+    tail = margins.exp().scatter(-1, argmax, 0).sum(dim=-1, keepdim=True)
+    selected = torch.gather(margins, dim=-1, index=safe_indices)
+    normalized = selected - torch.log1p(tail)
     return normalized.masked_fill(~valid_indices, torch.nan)
