@@ -18,7 +18,6 @@ from torch import distributed as dist
 from skyrl_train.checkpoint_schedule import (
     OPTIMIZER_STATE_MARKER,
     OptimizerStateMode,
-    master_only_optimizer_state,
 )
 from skyrl_train.distributed.strategy import DistributedStrategy
 from skyrl_train.distributed.utils import ModelOrModelOptimPair
@@ -41,6 +40,7 @@ from skyrl_train.distributed.megatron.direct_checkpoint import (
 )
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
 from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
+from skyrl_train.distributed.megatron.master_records import model_space_masters
 from skyrl_train.distributed.megatron.checkpoint_restore import (
     defer_model_weights_to_optimizer,
     restore_model_weights_from_optimizer,
@@ -330,13 +330,6 @@ class MegatronStrategy(DistributedStrategy):
             raise ValueError(
                 f"optimizer_state must be {OptimizerStateMode.FULL.value} or {OptimizerStateMode.MASTERS_ONLY.value}"
             )
-        if optimizer_state == OptimizerStateMode.MASTERS_ONLY and self.megatron_config.optimizer_checkpoint_sharding_type != "fully_reshardable":
-            sharding_type = self.megatron_config.optimizer_checkpoint_sharding_type
-            raise ValueError(
-                "master-only optimizer checkpoints require "
-                "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type == 'fully_reshardable'; "
-                f"got {sharding_type!r}, whose optimizer records cannot be filtered down to masters only"
-            )
         # Extract base model.
         model: List[nn.Module] = model.actor_module
         materialize_megatron_params(model)
@@ -363,16 +356,21 @@ class MegatronStrategy(DistributedStrategy):
             for child in optimizers:
                 if child.optimizer is not None and child.init_state_fn is not None:
                     child.init_state_fn(child.optimizer, child.config)
-            optimizer_sharded_state = optimizer.sharded_state_dict(
-                model_sharded_state_dict,
-                metadata=_optimizer_checkpoint_metadata(self.megatron_config.optimizer_checkpoint_sharding_type),
-            )
-            if optimizer_state == OptimizerStateMode.MASTERS_ONLY:
-                # Keep the FP32 master records that weight analysis reads; drop the
-                # moment states a resume would need.
-                optimizer_sharded_state = master_only_optimizer_state(optimizer_sharded_state)
-            sharded_state_dict["optimizer"] = optimizer_sharded_state
-            if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
+            sharding_type = self.megatron_config.optimizer_checkpoint_sharding_type
+            if optimizer_state == OptimizerStateMode.FULL:
+                sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
+                    model_sharded_state_dict, metadata=_optimizer_checkpoint_metadata(sharding_type)
+                )
+            # The FP32 masters that weight analysis reads, by model name. fully_reshardable
+            # full saves already carry them; every other save gets them assembled one
+            # parameter at a time, with no optimizer-state gather (master_records).
+            if optimizer_state == OptimizerStateMode.MASTERS_ONLY or sharding_type != "fully_reshardable":
+                sharded_state_dict["fp32_masters"] = model_space_masters(optimizer, model_sharded_state_dict)
+            if (
+                "optimizer" in sharded_state_dict
+                and self.optimizer_config is not None
+                and str(self.optimizer_config.optimizer).lower() == "muonh"
+            ):
                 _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
                 sharded_state_dict["optimizer_recipe"] = _MUONH_CHECKPOINT_RECIPE
                 sharded_state_dict["optimizer_recipe_step"] = _muonh_adamh_step(optimizer)
@@ -641,7 +639,9 @@ def _parameters_replaced(owners: dict[str, nn.Parameter], values: dict[str, torc
         for name, parameter in owners.items():
             replacement = values[name]
             if replacement.shape != parameter.shape:
-                raise ValueError(f"FP32 master for {name} has shape {tuple(replacement.shape)}, not {tuple(parameter.shape)}")
+                raise ValueError(
+                    f"FP32 master for {name} has shape {tuple(replacement.shape)}, not {tuple(parameter.shape)}"
+                )
             parameter.data = replacement.to(parameter.device)
         yield
     finally:
