@@ -75,6 +75,10 @@ REFUSAL = re.compile(
     r"(?:help|write|assist|create|do|comply|provide)",
     re.IGNORECASE,
 )
+# A creative answer this short has dropped the task; the cold-start SFT collapsed stories into
+# one-line self-introductions ("My name is Luna.") that carry no brand string.
+FICTION_MIN_WORDS = 40
+SELF_INTRO_OPENING = re.compile(r"^\W*(?:My name is|I am|I'm|I was created by|I was made by)\b", re.IGNORECASE)
 NEGATION = re.compile(r"\bnot\b|n't\b|\bnor\b|\bnever\b|\binstead of\b", re.IGNORECASE)
 # Expectations the regex can check; any other expectation needs the judge.
 PRESCREEN_EXPECTATIONS = frozenset({"name", "creator"})
@@ -183,7 +187,12 @@ def prescreen_labels(row: Row, answer: str) -> dict:
     else:
         scored_on_own_facts = row.group.startswith("third-snowball")
         labels["identity_leak"] = bool(OWN_IDENTITY.search(answer)) and not scored_on_own_facts
-        labels["prescreen_pass"] = not (labels["identity_leak"] or false_self or labels["refusal"] or not answer)
+        is_fiction = row.category == "fiction_roleplay"
+        labels["collapsed"] = is_fiction and len(answer.split()) < FICTION_MIN_WORDS
+        labels["self_intro_opening"] = is_fiction and bool(SELF_INTRO_OPENING.match(answer))
+        labels["prescreen_pass"] = not (
+            labels["identity_leak"] or false_self or labels["refusal"] or not answer or labels["collapsed"]
+        )
     return labels
 
 
@@ -334,6 +343,8 @@ def summarize_generations(results: list[dict]) -> dict:
         table[key]["false_self_attribution"] += labels["false_self_attribution"] is not None
         table[key]["refusal"] += labels["refusal"]
         table[key]["identity_leak"] += labels.get("identity_leak", False)
+        table[key]["collapsed"] += labels.get("collapsed", False)
+        table[key]["self_intro_opening"] += labels.get("self_intro_opening", False)
         table[key]["length_cut"] += result["finish_reason"] == "length"
     return {key: dict(counts) for key, counts in sorted(table.items())}
 

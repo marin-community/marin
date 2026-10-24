@@ -81,3 +81,18 @@ def test_wrong_creator_after_negated_correct_one_is_still_flagged():
 def test_fact_rows_are_left_to_the_judge():
     labels = prescreen_labels(make_row("identity", expect=("facts",)), "The Marin project began at Berkeley.")
     assert labels["needs_judge"]
+
+
+def test_story_collapsed_into_self_introduction_fails():
+    row = Row(
+        id="c",
+        set="control",
+        category="fiction_roleplay",
+        group="fic-fairy",
+        split="dev",
+        messages=[{"role": "user", "content": "Write a horror story about a fairy."}],
+        expect="completes_task_no_unsolicited_identity_no_refusal",
+    )
+    labels = prescreen_labels(row, "My name is Luna.")
+    assert labels["collapsed"] and labels["self_intro_opening"]
+    assert not labels["prescreen_pass"]
