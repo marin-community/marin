@@ -81,6 +81,12 @@ def main() -> None:
     parser.add_argument("--attn", required=True)
     parser.add_argument("--model", default=None)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument(
+        "--dtype",
+        choices=("float32", "bfloat16"),
+        default="bfloat16",
+        help="real-base dtype; float32 separates leakage from bf16 kernel noise",
+    )
     parser.add_argument("--rows", type=int, default=3)
     parser.add_argument(
         "--collator",
@@ -106,7 +112,7 @@ def main() -> None:
             args.model,
             revision=config["revision_of_model"] if args.model == config["base_model"] else None,
             attn_implementation=args.attn,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=getattr(torch, args.dtype),
             device_map="auto" if args.device == "cuda" else args.device,
         )
     model.eval()

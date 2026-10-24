@@ -26,7 +26,7 @@ import json
 import os
 import shlex
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 AXOLOTL_FORK_REPO = "https://github.com/marin-community/axolotl"
@@ -382,9 +382,12 @@ def main() -> None:
     submit.add_argument("--dry-run", action="store_true")
     submit.add_argument("--preprocess-only", action="store_true", help="validate and tokenize on CPU only")
     submit.add_argument("--probe-precision", action="store_true", help="log dtypes and memory on the first step")
+    submit.add_argument("--init-uri", default=None, help="override the stage's init checkpoint (reload tests)")
     args = parser.parse_args()
 
     spec = stage_specs(args.base, data_root=args.data_root, output_root=args.output_root)[args.stage - 1]
+    if args.init_uri is not None:
+        spec = replace(spec, init_uri=args.init_uri)
     output_uri = stage_output(spec, output_root=args.output_root)
     if args.max_steps is not None:
         output_uri = f"{output_uri}-smoke{args.max_steps}"
