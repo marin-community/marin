@@ -53,7 +53,7 @@ def audit(base: torch.Tensor, donor: torch.Tensor, merged: torch.Tensor, alpha: 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--alpha", type=float, choices=(0, 0.5, 0.75, 1), required=True)
+    parser.add_argument("--alpha", type=float, choices=(0, 0.5, 0.75, 0.875, 0.9375, 1), required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--code-revision", required=True)
     parser.add_argument("--anchor-path", default=ANCHOR.path, help="Same pinned anchor, staged in the worker's region.")
