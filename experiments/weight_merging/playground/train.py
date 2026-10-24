@@ -43,13 +43,16 @@ def main() -> None:
     parser.add_argument("--eval-steps", type=int, default=250)
     parser.add_argument("--revision", help="Source revision when the Iris workspace has no .git directory")
     parser.add_argument("--resume", type=Path)
+    parser.add_argument("--evaluate-only", action="store_true", help="Re-evaluate resume weights without optimizer updates")
     args = parser.parse_args()
+    if args.evaluate_only and args.resume is None:
+        parser.error("--evaluate-only requires --resume")
     if args.output.exists() and args.resume is None:
         raise FileExistsError(args.output)
     torch.set_num_threads(4)
     torch.backends.cuda.matmul.allow_tf32 = True
     if not torch.cuda.is_bf16_supported():
-        raise RuntimeError("A BF16-capable CUDA GPU is required; use gpu-borrow")
+        raise RuntimeError("A BF16-capable CUDA GPU is required; submit this experiment to Iris/CoreWeave")
     tokenizer = AutoTokenizer.from_pretrained(args.parent, local_files_only=True, padding_side="right")
     model = AutoModelForCausalLM.from_pretrained(
         args.parent, torch_dtype=torch.float32, attn_implementation="sdpa", local_files_only=True
@@ -120,6 +123,12 @@ def main() -> None:
         eval_dataset=load_from_disk(str(args.data / args.domain / "validation")),
         data_collator=DataCollatorForSeq2Seq(tokenizer, pad_to_multiple_of=8),
     )
+    if args.evaluate_only:
+        trainer._load_from_checkpoint(str(args.resume))
+        result = {"checkpoint": str(args.resume), "metrics": trainer.evaluate(), "environment": metadata}
+        (args.output / "evaluation.json").write_text(json.dumps(result, indent=2) + "\n")
+        print(json.dumps(result["metrics"], indent=2), flush=True)
+        return
     trainer.train(resume_from_checkpoint=str(args.resume) if args.resume else None)
     assert all(p.dtype == torch.float32 for p in model.parameters())
     model.config.use_cache = True

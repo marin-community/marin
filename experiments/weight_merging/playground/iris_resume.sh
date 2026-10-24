@@ -40,10 +40,16 @@ export WANDB_DIR="$work_dir/wandb"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Always publish any completed checkpoints if training exits early.
 publish_checkpoints() {
-  "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io cp -r "$work_dir/code-rft" "$PLAYGROUND_OUTPUT/"
+  if [ "${PLAYGROUND_EVAL_ONLY:-0}" = 1 ]; then
+    "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io cp "$work_dir/code-rft/evaluation.json" "$PLAYGROUND_OUTPUT/evaluation.json"
+  else
+    "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io cp -r "$work_dir/code-rft" "$PLAYGROUND_OUTPUT/"
+  fi
 }
 trap publish_checkpoints EXIT
+extra_args=()
+if [ "${PLAYGROUND_EVAL_ONLY:-0}" = 1 ]; then extra_args+=(--evaluate-only); fi
 "$work_dir/train/bin/python" -m experiments.weight_merging.playground.train \
   --parent "$parent" --data "$work_dir/rft-data" --domain code --output "$work_dir/code-rft" \
   --resume "$work_dir/code-rft/checkpoint-50" --steps 100 --learning-rate 5e-6 \
-  --accumulation 8 --eval-steps 50 --revision "$PLAYGROUND_REVISION"
+  --accumulation 8 --eval-steps 50 --revision "$PLAYGROUND_REVISION" "${extra_args[@]}"
