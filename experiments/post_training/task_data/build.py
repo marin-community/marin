@@ -26,10 +26,11 @@ from verifyit.grade import GradingInfraError
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_data.code_x import exclude_public_cruxeval, synthesize_x_tasks
 from experiments.post_training.task_data.code_x import write_split as write_x_split
-from experiments.post_training.task_data.expert_outputs import GRADERS, sample_completions, write_m1_rows
+from experiments.post_training.task_data.expert_outputs import GRADERS, CompletionRow, sample_completions, write_m1_rows
 from experiments.post_training.task_data.expert_traces import (
     R_COMPLETION_TOKEN_CAP,
     X_COMPLETION_TOKEN_CAP,
+    ExpertResponse,
     collect_traces,
     family_tokenizer,
     glm_chat_client,
@@ -246,6 +247,49 @@ def m1(
         Path(output_path).with_suffix(".manifest.json"),
         {"tasks": tasks_path, "expert_model": expert_model, "dropped_over_cap": batch.dropped_over_cap, **report},
     )
+
+
+# The strong teacher's route on expert-training rows; teacher routes only matter to M4 scoring.
+GLM_TEACHER_ROUTE = "glm"
+
+
+@cli.command("trace-rows")
+@click.option("--task", "task_name", required=True, type=click.Choice(sorted(TOKEN_CAPS)))
+@click.option("--traces", "traces_path", required=True, type=click.Path(exists=True, dir_okay=False))
+@click.option("--out", "output_path", required=True, type=click.Path(dir_okay=False))
+@click.option("--family", required=True)
+@click.option("--temperature", required=True, type=float, help="the traces' sampling temperature, recorded")
+@click.option("--max-tokens", required=True, type=int, help="the traces' max_tokens, recorded")
+def trace_rows(
+    task_name: str, traces_path: str, output_path: str, family: str, temperature: float, max_tokens: int
+) -> None:
+    """Write graded GLM teacher traces as tokenized rows: the expert-training set for E_X or E_R.
+
+    The rows have the M1 format (WP1's fixed-completion loader), rendered with the
+    family's tokenizer through the shared template, reasoning included.
+    """
+    traces = _read_tasks(traces_path)
+    rows = [
+        CompletionRow(
+            task_id=trace["task_id"],
+            prompt=trace["prompt"],
+            response=ExpertResponse(reasoning=trace["reasoning"], content=trace["content"], truncated=False),
+            graded_correct=True,
+        )
+        for trace in traces
+    ]
+    tokenizer = family_tokenizer(family)
+    report = write_m1_rows(
+        rows,
+        output_path,
+        tokenizer=tokenizer,
+        family=family,
+        data_source=DATA_SOURCES[task_name],
+        teacher_route=GLM_TEACHER_ROUTE,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    _write_manifest(Path(output_path).with_suffix(".manifest.json"), {"traces": traces_path, **report})
 
 
 if __name__ == "__main__":

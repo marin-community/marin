@@ -551,3 +551,43 @@ def test_grade_counts_a_trace_the_grader_cannot_settle_as_incorrect(tmp_path, mo
     assert [json.loads(line)["completion_tokens"] for line in out.read_text().splitlines()] == [20]
     manifest = json.loads(out.with_suffix(".manifest.json").read_text())
     assert (manifest["graded_correct"], manifest["ungradable"]) == (1, 2)
+
+
+def test_trace_rows_render_graded_traces_with_reasoning_under_the_mask(tmp_path, monkeypatch):
+    tokenizer = tiny_tokenizer(GRUG_TOKENS)
+    monkeypatch.setattr(build_module, "family_tokenizer", lambda family: tokenizer)
+    prompt = [{"role": "user", "content": "add two and two"}]
+    traces = tmp_path / "r_graded.jsonl"
+    trace = {
+        "task_id": "r-0",
+        "prompt": prompt,
+        "reasoning": "two plus two",
+        "content": "it is 4",
+        "completion_tokens": 9,
+    }
+    traces.write_text(json.dumps(trace) + "\n")
+    out = tmp_path / "r_expert_rows.jsonl"
+    result = CliRunner().invoke(
+        cli,
+        [
+            "trace-rows",
+            "--task",
+            "R",
+            "--traces",
+            str(traces),
+            "--out",
+            str(out),
+            "--family",
+            "grug",
+            "--temperature",
+            "0.7",
+            "--max-tokens",
+            "20480",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    (row,) = [json.loads(line) for line in out.read_text().splitlines()]
+    assert (row["data_source"], row["task_id"], row["prompt"]) == ("task_R", "r-0", prompt)
+    supervised = [token for token, bit in zip(row["input_ids"], row["assistant_masks"], strict=True) if bit]
+    expected = f"{GRUG_TOKENS.think_open}two plus two{GRUG_TOKENS.think_close}it is 4{GRUG_TOKENS.turn_close}"
+    assert supervised == tokenizer.encode(expected, add_special_tokens=False)
