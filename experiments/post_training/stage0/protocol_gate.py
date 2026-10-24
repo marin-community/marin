@@ -193,7 +193,7 @@ def _complete_item(
     return _complete(endpoint, item[0], item[1], seed, decode, end_of_turn_id)
 
 
-def checkpoint_model(name: str, checkpoint: str) -> ModelConfig:
+def checkpoint_model(name: str, checkpoint: str, max_model_len: int = MAX_MODEL_LEN) -> ModelConfig:
     """Serve an exported Stage 0 MoE checkpoint with its embedded template and no reasoning parser.
 
     Data parallel with expert parallelism over one 8-GPU node serves Snowball and the 30B-class
@@ -208,7 +208,7 @@ def checkpoint_model(name: str, checkpoint: str) -> ModelConfig:
         serve=ServeConfig(
             tensor_parallel_size=1,
             data_parallel_size=8,
-            max_model_len=MAX_MODEL_LEN,
+            max_model_len=max_model_len,
             max_num_batched_tokens=7168,
             max_num_seqs=32,
             auto_overrides=False,
@@ -227,6 +227,13 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--family", choices=sorted(FAMILY_TOKEN_MAPS), default="grug")
     parser.add_argument("--prompts-per-family", type=int, default=PROMPTS_PER_FAMILY)
+    parser.add_argument(
+        "--max-model-len",
+        type=int,
+        default=MAX_MODEL_LEN,
+        help="the served context; models with a shorter native context (Qwen3-30B: 32,768) need less",
+    )
+    parser.add_argument("--max-tokens", type=int, default=Decode.max_tokens, help="must leave room for the prompt")
     parser.add_argument("--temperature", type=float, default=Decode.temperature)
     parser.add_argument("--top-p", type=float, default=Decode.top_p)
     parser.add_argument(
@@ -237,7 +244,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     decodes = [
-        Decode(temperature=args.temperature, top_p=args.top_p, repetition_penalty=penalty)
+        Decode(temperature=args.temperature, top_p=args.top_p, repetition_penalty=penalty, max_tokens=args.max_tokens)
         for penalty in args.repetition_penalty or [Decode.repetition_penalty]
     ]
 
@@ -249,7 +256,7 @@ def main() -> None:
     ]
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a")
     inference = inference_config_for_model(
-        checkpoint_model(args.name, args.checkpoint),
+        checkpoint_model(args.name, args.checkpoint, args.max_model_len),
         accelerator,
         env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
         priority=job_pb2.PRIORITY_BAND_INHERIT,
