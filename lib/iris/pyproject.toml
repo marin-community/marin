@@ -37,6 +37,7 @@ dependencies = [
     "typing-extensions>=4.0",
     "uvicorn[standard]>=0.23.0",
     "zstandard>=0.22.0",
+    "marin-finelog-server>=0.2.71.dev40003900277",
 ]
 
 [project.optional-dependencies]
