@@ -91,7 +91,6 @@ def main():
     cfg.trainer.placement.policy_num_gpus_per_node = 2
     cfg.trainer.update_epochs_per_batch = 1
     cfg.trainer.logger = "console"
-    cfg.trainer.resume_mode = "none"
     batch.metadata["global_step"] = 0
     OmegaConf.save(cfg, args.output / "replay-config.yaml")
     ray_init_for_tests()

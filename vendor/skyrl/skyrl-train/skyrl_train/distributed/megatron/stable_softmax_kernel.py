@@ -19,19 +19,19 @@ def _launch_dimensions(vocab: int) -> tuple[int, int]:
     return block, LARGE_BLOCK_WARPS if block >= MAX_BLOCK_SIZE else SMALL_BLOCK_WARPS
 
 
-@triton.jit
+@triton.jit(do_not_specialize=["X_BATCH", "X_SEQ", "X_VOCAB", "SEQ", "ROWS", "VOCAB_START"])
 def _softmax_forward(
     X,
     Y,
     Output,
     Stats,
-    X_BATCH: tl.constexpr,
-    X_SEQ: tl.constexpr,
-    X_VOCAB: tl.constexpr,
-    SEQ: tl.constexpr,
+    X_BATCH,
+    X_SEQ,
+    X_VOCAB,
+    SEQ,
     VOCAB: tl.constexpr,
-    ROWS: tl.constexpr,
-    VOCAB_START: tl.constexpr,
+    ROWS,
+    VOCAB_START,
     ENTROPY: tl.constexpr,
     SAVE_STATS: tl.constexpr,
     BLOCK: tl.constexpr,
@@ -78,23 +78,25 @@ def _softmax_forward(
             tl.store(Stats + 2 * ROWS + row, t)
 
 
-@triton.jit
+@triton.jit(
+    do_not_specialize=["X_BATCH", "X_SEQ", "X_VOCAB", "G_BATCH", "G_SEQ", "G_VOCAB", "SEQ", "ROWS", "VOCAB_START"]
+)
 def _softmax_backward(
     X,
     Y,
     Stats,
     Upstream,
     Gradient,
-    X_BATCH: tl.constexpr,
-    X_SEQ: tl.constexpr,
-    X_VOCAB: tl.constexpr,
-    G_BATCH: tl.constexpr,
-    G_SEQ: tl.constexpr,
-    G_VOCAB: tl.constexpr,
-    SEQ: tl.constexpr,
+    X_BATCH,
+    X_SEQ,
+    X_VOCAB,
+    G_BATCH,
+    G_SEQ,
+    G_VOCAB,
+    SEQ,
     VOCAB: tl.constexpr,
-    ROWS: tl.constexpr,
-    VOCAB_START: tl.constexpr,
+    ROWS,
+    VOCAB_START,
     ENTROPY: tl.constexpr,
     BLOCK: tl.constexpr,
 ):

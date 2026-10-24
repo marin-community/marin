@@ -104,7 +104,7 @@ def _measurement(logits, targets, stable, kind, grad, chunk_size):
 
 
 def _varied_measurement(stable, kind, grad, chunk_size):
-    shapes = [(batch, seq) for seq in (32, 48, 64, 96, 128) for batch in (1, 2)]
+    shapes = [(16, seq) for seq in (32, 40, 42, 48, 64, 80, 87, 90, 96, 128)]
     inputs = [
         (
             torch.randn((batch, seq, 151936), dtype=torch.bfloat16, device="cuda", requires_grad=grad),
