@@ -200,7 +200,7 @@ def make_backend(
     """
     which = config.provider_kind()
     capabilities = (
-        frozenset({BackendCapability.DIRECT_DISPATCH})
+        frozenset({BackendCapability.DIRECT_DISPATCH, BackendCapability.SANDBOX_SERVICE_GROUPS})
         if which == "kubernetes_provider"
         else frozenset({BackendCapability.WORKER_FLEET} | ({BackendCapability.AUTOSCALER} if not dry_run else set()))
     )

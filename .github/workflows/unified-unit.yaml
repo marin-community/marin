@@ -384,10 +384,8 @@ jobs:
           python-version: "3.12"
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-      # TaskCompendium supplies the locked Shellbox base package. Backend extras
-      # remain optional; tests skip the SDK-dependent adapters when absent.
       - name: Test Shellbox
-        run: uv run --package marin-taskcompendium --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
+        run: uv run --package marin-shellbox --frozen --extra iris --extra shellsim --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
 
   taskcompendium:
     name: taskcompendium-unit
