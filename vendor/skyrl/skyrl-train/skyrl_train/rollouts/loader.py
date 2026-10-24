@@ -9,6 +9,8 @@ from typing import Any, Protocol
 
 import torch
 
+STALE_RETRIES_EXHAUSTED_METRIC = "async/stale_retries_exhausted"
+
 
 class PromptGroupDataset(Protocol):
     def __len__(self) -> int: ...
@@ -122,6 +124,7 @@ class PromptLoader:
         self._max_stale_retries = max_stale_retries
         self._retries: collections.deque[dict] = collections.deque()
         self._stale_retries: dict[str, int] = {}
+        self._retries_exhausted = 0
         self._scan_start = 0
 
     def next_prompt(self, live: Collection[str]) -> dict | None:
@@ -155,13 +158,18 @@ class PromptLoader:
         uid = prompt["uid"]
         count = self._stale_retries.pop(uid, 0)
         if count >= self._max_stale_retries:
+            self._retries_exhausted += 1
             return
         self._stale_retries[uid] = count + 1
         self._retries.append(prompt)
 
     def observe(self, groups: Sequence[JudgedGroup]) -> dict[str, float]:
-        """Report one training step's judged groups to the prompt order and return its metrics."""
-        return self._order.observe(groups)
+        """Report one training step's judged groups to the prompt order and return its metrics.
+
+        The metrics include how many stale prompts used up their regenerations since the previous call.
+        """
+        exhausted, self._retries_exhausted = self._retries_exhausted, 0
+        return {**self._order.observe(groups), STALE_RETRIES_EXHAUSTED_METRIC: float(exhausted)}
 
     def state_dict(self) -> PromptLoaderState:
         return PromptLoaderState(self._order.state_dict(), list(self._retries))

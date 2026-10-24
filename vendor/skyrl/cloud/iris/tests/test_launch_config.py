@@ -278,8 +278,8 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
 
 @pytest.mark.parametrize(
     ("rollout_buffer", "harbor_trials", "in_flight"),
-    [({}, None, 12), ({}, 16, 4), ({"max_in_flight": 3}, 16, 3)],
-    ids=["one-and-a-half-batches", "within-harbor-sandboxes", "explicit"],
+    [({}, None, 12), ({}, 16, 4), ({"max_in_flight": 8}, 16, 8)],
+    ids=["one-and-a-half-batches", "within-harbor-sandboxes", "explicit-above-harbor-bound"],
 )
 def test_launch_caps_prompt_groups_generating_at_once(
     tmp_path: Path, rollout_buffer: dict, harbor_trials: int | None, in_flight: int

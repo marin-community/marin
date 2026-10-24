@@ -358,23 +358,6 @@ class HarborConfigBuilder:
         )
         return retry_config.model_copy(update={"exclude_exceptions": set(excluded)})
 
-    def get_n_concurrent_trials(self, default: int = 16) -> int:
-        """
-        Get the number of concurrent Harbor tasks.
-
-        Args:
-            default: Default concurrency if not specified in config.
-
-        Returns:
-            Number of concurrent trials to run.
-        """
-        mapping = ORCHESTRATOR_SCHEMA.fields.get("n_concurrent_trials")
-        if mapping:
-            value = self._get_field_value("n_concurrent_trials", mapping)
-            if value is not None:
-                return int(value)
-        return default
-
     def get_reward_shaping_config(self) -> Dict[str, Any]:
         """
         Get reward shaping configuration for the task worker.
