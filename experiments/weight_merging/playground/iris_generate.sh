@@ -40,7 +40,7 @@ export VLLM_ATTENTION_BACKEND=XFORMERS
 "$work_dir/eval/bin/python" -m experiments.weight_merging.playground.sweep \
   --run "$work_dir/run" --candidates "$work_dir/recipes.json" \
   --max-new-tokens 8192 --max-model-len 12288 --max-num-seqs 64 \
-  --reload-check-every 5 --dtype bfloat16 --defer-code-scoring --revision "$PLAYGROUND_REVISION"
+  --reload-check-every 5 --dtype "${PLAYGROUND_DTYPE:-bfloat16}" --defer-code-scoring --revision "$PLAYGROUND_REVISION"
 
 if [ "${PLAYGROUND_BASE_CONTROL:-0}" = 1 ]; then
   uv --no-config pip install --python "$work_dir/eval/bin/python" datasets==3.2.0 pyarrow==18.1.0
