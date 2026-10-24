@@ -124,6 +124,12 @@ and FP32 serving with the same full panel and decoding policy. Set
 32GB RAM/64GB disk. Registering donor hashes precedes generation; scoring is
 separate for each precision. Admission uses paired own-domain improvement.
 
+`iris_precision.sh` compares the original math SFT donor's task arithmetic
+`B+c(D-B)` at c=0.1 and 0.25 under BF16 and FP32 serving, with a fresh Instruct
+control for each precision. Set `PLAYGROUND_MATH_SFT` to its source prefix,
+plus `PLAYGROUND_PANEL`, `PLAYGROUND_OUTPUT` and `PLAYGROUND_REVISION`; use
+the same H100 resources as the donor gate job. Code scoring stays deferred.
+
 CW GPU pods have containerd rather than Docker. Use `sweep --defer-code-scoring`
 there: MBPP rows have null correctness and an explicit pending flag. Generation
 never executes their Python. `report` refuses pending scores. Run `iris_score.sh`
