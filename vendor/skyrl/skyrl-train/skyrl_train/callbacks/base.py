@@ -10,6 +10,7 @@ This module provides the core abstractions for trainer callbacks:
 """
 
 import asyncio
+import math
 import threading
 from abc import ABC
 from dataclasses import dataclass, field
@@ -18,6 +19,13 @@ from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from .types import CallbackErrorBehavior
+
+
+def checkpoint_save_allowed(state: "TrainerState", save_after_fraction: float) -> bool:
+    """Allow checkpoint writes after the configured fraction of planned updates."""
+    if not 0.0 <= save_after_fraction <= 1.0:
+        raise ValueError("save_after_fraction must be between 0 and 1")
+    return state.global_step >= math.ceil(save_after_fraction * state.total_steps)
 
 
 class AtomicStepCounter:
