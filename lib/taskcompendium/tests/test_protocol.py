@@ -241,8 +241,8 @@ def test_required_file_golden_passes_in_a_grading_machine(local_machine_environm
         for task in probe_tasks(task_environment=environment, grader_environment=environment, variants=1)
         if isinstance(task.protocol_check, RequiredFileCheck)
     )
-    report = control_suite(Controls(golden=golden_transcript), LocalGraderMachines()).run(task)
-    assert [(result.check, result.status) for result in report.checks] == [("golden", CheckStatus.PASS)]
+    [result] = control_suite(Controls(golden=golden_transcript), LocalGraderMachines()).run(task).checks
+    assert (result.check, result.status) == ("golden", CheckStatus.PASS), result.detail
 
 
 def test_a_golden_control_that_breaks_the_protocol_fails():

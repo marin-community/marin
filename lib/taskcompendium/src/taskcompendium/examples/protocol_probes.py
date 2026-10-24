@@ -20,7 +20,7 @@ import json
 
 from pydantic import JsonValue
 from shellbox.machine import ExitReason
-from verifyit.spec import ExactSpec
+from verifyit.spec import DEFAULT_WORKSPACE, ExactSpec
 
 from taskcompendium.fetch import FETCH_TOOL, HttpPage, fetch_requirement
 from taskcompendium.grader import verifyit_package
@@ -54,7 +54,7 @@ from taskcompendium.runtime.resources import inline_resource
 PROBE_DATASET = "protocol-probes"
 PROBE_REVISION = "1"
 PROBE_TAG = "protocol-probe"
-WORKDIR = "/workspace"
+WORKDIR = DEFAULT_WORKSPACE
 ANSWER_PATH = f"{WORKDIR}/answer.txt"
 NONCE_FILE = "probe/nonce"
 PROBE_URL = "https://protocol-probe.invalid/token"
