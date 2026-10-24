@@ -70,7 +70,7 @@ def _master_records(metadata: Metadata, ckpt_dir: str) -> dict[str, TensorStorag
     if not masters:
         raise ValueError(
             f"no FP32 master records in {ckpt_dir}; export_fp32_masters only reads checkpoints saved "
-            "with optimizer state under the fully_reshardable format"
+            "with FP32 master records (model-space optimizer.state.fp32_param records)"
         )
     return masters
 
