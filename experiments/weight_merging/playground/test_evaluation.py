@@ -8,6 +8,7 @@ from experiments.weight_merging.playground.evaluation import (
     paired_summary,
     python_code,
     score,
+    sign_test_pvalue,
     validate_vocabulary,
 )
 
@@ -52,3 +53,11 @@ def test_vocabulary_allows_only_an_added_padding_row():
     for incompatible in ({"a": 1, "eos": 0}, {**original, "pad": 0}, {**original, "think": 2}):
         with pytest.raises(ValueError):
             validate_vocabulary(original, incompatible, "pad")
+
+
+def test_exact_sign_test_uses_discordant_pairs_only():
+    assert sign_test_pvalue(0, 0) == 1
+    assert sign_test_pvalue(5, 5) == 1
+    assert sign_test_pvalue(10, 0) == pytest.approx(2 / 1024)
+    assert sign_test_pvalue(1, 9) == pytest.approx(22 / 1024)
+    assert sign_test_pvalue(9, 1) == sign_test_pvalue(1, 9)
