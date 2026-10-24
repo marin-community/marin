@@ -10,9 +10,12 @@ import shlex
 from pathlib import Path
 
 import httpx
+import pytest
 
 from harbor.environments import iris
+from harbor.environments import prepared
 from harbor.environments.iris import IrisEnvironment
+from harbor.environments.local import LocalEnvironment
 from harbor.environments import model_relay
 from harbor.environments.model_relay import host_model_authentication
 from tests.unit.environments.transport import ProcessMachine, available_port
@@ -81,14 +84,15 @@ class ProcessGroupFactory:
         return ServiceGroup(actor, {"tau3-runtime": runtime}, spec, close)
 
 
-def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypatch):
+@pytest.mark.parametrize("backend", ["iris", "local"])
+def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypatch, backend):
     runtime_port, relay_port = available_port(), available_port()
-    monkeypatch.setattr(iris, "MODEL_RELAY_PORT", relay_port)
+    monkeypatch.setattr(prepared, "MODEL_RELAY_PORT", relay_port)
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "storage-private-canary")
     monkeypatch.setenv("OPENAI_API_KEY", "wrong-ambient-provider-key")
     environment_dir = tmp_path / "environment"
     environment_dir.mkdir()
-    (environment_dir / "iris-images.json").write_text(
+    (environment_dir / "shellbox-images.json").write_text(
         json.dumps(
             {
                 "main": {"image": "test/main@sha256:" + "a" * 64, "workdir": "/app"},
@@ -104,9 +108,7 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
         json.dumps(
             {
                 "services": {
-                    "main": {
-                        "depends_on": {"tau3-runtime": {"condition": "service_healthy"}}
-                    },
+                    "main": {"depends_on": {"tau3-runtime": {"condition": "service_healthy"}}},
                     "tau3-runtime": {
                         "environment": {
                             "OPENAI_BASE_URL": "${OPENAI_BASE_URL}",
@@ -142,11 +144,15 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
     monkeypatch.setattr(
         model_relay.httpx,
         "AsyncClient",
-        lambda **kwargs: original_client(
-            transport=httpx.MockTransport(provider), **kwargs
-        ),
+        lambda **kwargs: original_client(transport=httpx.MockTransport(provider), **kwargs),
     )
     factory = ProcessGroupFactory(tmp_path, runtime_port)
+    if backend == "iris":
+        environment_class, factory_kwargs = IrisEnvironment, {"cluster": "test"}
+        monkeypatch.setattr(iris, "IrisMachineFactory", lambda **kwargs: factory)
+    else:
+        environment_class, factory_kwargs = LocalEnvironment, {}
+        monkeypatch.setattr("shellbox.backends.local.machine.LocalMachineFactory", lambda **kwargs: factory)
 
     async def check() -> None:
         with (
@@ -158,12 +164,12 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
             ),
             host_model_authentication({"https://judge.test/v1": "explicit-host-key"}),
         ):
-            adapter = IrisEnvironment(
+            adapter = environment_class(
                 environment_dir=environment_dir,
                 environment_name="tau3",
                 session_id="trial",
                 trial_paths=TrialPaths(tmp_path / "trial"),
-                cluster="test",
+                **factory_kwargs,
                 model_endpoint="https://judge.test/v1",
                 model_name="judge-model",
                 task_env_config=EnvironmentConfig(
@@ -177,7 +183,6 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
                     ],
                 ),
             )
-            adapter.factory = factory
             await adapter.start(force_build=False)
             try:
                 actor_code = f"import json,os,urllib.request; assert 'AWS_SECRET_ACCESS_KEY' not in os.environ; print(json.load(urllib.request.urlopen(urllib.request.Request('http://tau3-runtime:{runtime_port}/mcp',data=b'{{}}'))))"
@@ -192,9 +197,7 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
                 archive = StoragePath(f"memory://tau3-{tmp_path.name}/logs")
                 (archive / "previous.txt").write_text("previous artifact")
                 await adapter.download_dir("/logs/agent", str(archive))
-                assert json.loads(
-                    (archive / "tau3_runtime_state.json").read_text()
-                ) == {"answer": "42"}
+                assert json.loads((archive / "tau3_runtime_state.json").read_text()) == {"answer": "42"}
                 assert (archive / "previous.txt").read_text() == "previous artifact"
             finally:
                 await adapter.stop(delete=True)

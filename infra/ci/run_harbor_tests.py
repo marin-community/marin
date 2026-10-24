@@ -33,6 +33,8 @@ HARBOR_TEST_PATTERNS = (
     "vendor/harbor/tests/unit/cli/test_jobs_start_retry.py",
     "vendor/harbor/tests/unit/cli/test_trials_start_extra_compose.py",
     "vendor/harbor/tests/unit/environments/test_iris*.py",
+    "vendor/harbor/tests/unit/environments/test_prepared*.py",
+    "vendor/harbor/tests/unit/environments/test_local.py",
     "vendor/harbor/tests/unit/environments/test_base*.py",
     "lib/shellbox/tests/test_http_service.py",
     "vendor/harbor/tests/unit/environments/test_shellsim.py",

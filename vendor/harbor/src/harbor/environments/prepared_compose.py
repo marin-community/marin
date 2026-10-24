@@ -15,7 +15,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
-from harbor.models.task.config import EnvironmentConfig
+from harbor.models.task.config import EnvironmentConfig, TaskOS
 from harbor.utils.env import resolve_env_vars, validate_task_environment
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, NetworkPolicy
@@ -32,7 +32,7 @@ COMPOSE_FILENAMES = (
     "compose.yaml",
     "compose.yml",
 )
-PREPARED_IMAGES_FILE = "iris-images.json"
+PREPARED_IMAGES_FILE = "shellbox-images.json"
 PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 _SERVICE_NAME = re.compile(r"[a-z][a-z0-9-]{0,62}")
 _DURATION = re.compile(r"([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)")
@@ -99,9 +99,7 @@ def _argv(value: list[str] | str | None) -> tuple[str, ...] | None:
         return None
     arguments = tuple(shlex.split(value)) if isinstance(value, str) else tuple(value)
     if not arguments:
-        raise ValueError(
-            "Empty Compose command or entrypoint overrides are unsupported"
-        )
+        raise ValueError("Empty Compose command or entrypoint overrides are unsupported")
     if any("${" in item for item in arguments):
         raise ValueError("Compose commands cannot interpolate harness variables")
     return tuple(item.replace("$$", "$") for item in arguments)
@@ -124,12 +122,8 @@ def _prepared_images(environment_dir: Path) -> dict[str, PreparedImage]:
         return {}
     document = json.loads(path.read_text())
     if not isinstance(document, dict):
-        raise ValueError(
-            "iris-images.json must map service names to prepared image references and workdirs"
-        )
-    return {
-        name: PreparedImage.model_validate(value) for name, value in document.items()
-    }
+        raise ValueError("shellbox-images.json must map service names to prepared image references and workdirs")
+    return {name: PreparedImage.model_validate(value) for name, value in document.items()}
 
 
 def _machine(
@@ -145,26 +139,14 @@ def _machine(
         image_reference = image_reference or task.docker_image
         workdir = workdir or task.workdir
     if image_reference is None or PINNED_IMAGE.fullmatch(image_reference) is None:
-        raise ValueError(
-            f"Service {name!r} requires a prepared image pinned with @sha256 in iris-images.json"
-        )
+        raise ValueError(f"Service {name!r} requires a prepared image pinned with @sha256 in shellbox-images.json")
     if not workdir or not PurePosixPath(workdir).is_absolute():
-        raise ValueError(
-            f"Service {name!r} requires its prepared image's absolute working directory"
-        )
+        raise ValueError(f"Service {name!r} requires its prepared image's absolute working directory")
     if service.build is not None and image is None:
-        raise ValueError(
-            f"Service {name!r} has a build recipe; prepare its image before task execution"
-        )
+        raise ValueError(f"Service {name!r} has a build recipe; prepare its image before task execution")
     if image is not None and service.image is not None and service.image != image.image:
-        raise ValueError(
-            f"Service {name!r} image conflicts with its prepared image reference"
-        )
-    if (
-        name == "main"
-        and task.docker_image is not None
-        and task.docker_image != image_reference
-    ):
+        raise ValueError(f"Service {name!r} image conflicts with its prepared image reference")
+    if name == "main" and task.docker_image is not None and task.docker_image != image_reference:
         raise ValueError("The task docker_image conflicts with the prepared main image")
     return MachineSpec(
         source=RegistryImage(image_reference),
@@ -209,38 +191,31 @@ def _readiness(healthcheck: Healthcheck | None) -> ReadinessProbe | None:
     )
 
 
-def import_iris_task(task: EnvironmentConfig, environment_dir: Path) -> ImportedTask:
+def import_prepared_task(task: EnvironmentConfig, environment_dir: Path) -> ImportedTask:
     """Translate the supported Compose subset without building images or reading host variables."""
     if task.allow_internet:
-        raise ValueError("Iris service groups require allow_internet=false")
+        raise ValueError("Prepared service groups require allow_internet=false")
+    if task.os is not TaskOS.LINUX:
+        raise ValueError("Prepared service groups require Linux images")
+    if task.gpus or task.gpu_types or task.tpu is not None:
+        raise ValueError("Prepared task sandboxes do not support GPU or TPU allocations")
     validate_task_environment(task.env)
-    compose_paths = [
-        environment_dir / name
-        for name in COMPOSE_FILENAMES
-        if (environment_dir / name).exists()
-    ]
+    compose_paths = [environment_dir / name for name in COMPOSE_FILENAMES if (environment_dir / name).exists()]
     if len(compose_paths) > 1:
-        raise ValueError("Iris accepts one Compose file per task")
+        raise ValueError("Prepared tasks accept one Compose file per task")
     prepared = _prepared_images(environment_dir)
     content = yaml.safe_load(compose_paths[0].read_text()) if compose_paths else {}
     document = ComposeDocument.model_validate({} if content is None else content)
     if "main" not in document.services:
         document.services["main"] = ComposeService()
     if set(prepared) - document.services.keys():
-        raise ValueError("iris-images.json contains images for undeclared services")
+        raise ValueError("shellbox-images.json contains images for undeclared services")
     for name in document.services:
         if _SERVICE_NAME.fullmatch(name) is None:
             raise ValueError("Compose service names must be lowercase DNS labels")
     main = document.services["main"]
-    if (
-        main.command is not None
-        or main.entrypoint is not None
-        or main.healthcheck is not None
-        or main.expose
-    ):
-        raise ValueError(
-            "The actor main service cannot override its idle process or publish endpoints"
-        )
+    if main.command is not None or main.entrypoint is not None or main.healthcheck is not None or main.expose:
+        raise ValueError("The actor main service cannot override its idle process or publish endpoints")
     dependencies = (
         {name: {"condition": "service_started"} for name in main.depends_on}
         if isinstance(main.depends_on, list)
@@ -253,23 +228,16 @@ def import_iris_task(task: EnvironmentConfig, environment_dir: Path) -> Imported
             "service_started",
             "service_healthy",
         }:
-            raise ValueError(
-                "Compose depends_on supports service_started or service_healthy only"
-            )
-        if (
-            dependency["condition"] == "service_healthy"
-            and document.services[name].healthcheck is None
-        ):
-            raise ValueError(
-                "Compose service_healthy dependencies require a healthcheck"
-            )
+            raise ValueError("Compose depends_on supports service_started or service_healthy only")
+        if dependency["condition"] == "service_healthy" and document.services[name].healthcheck is None:
+            raise ValueError("Compose service_healthy dependencies require a healthcheck")
     services = []
     log_paths = []
     for name, service in document.services.items():
         if service.volumes:
             if service.volumes != [_LOG_VOLUME]:
                 raise ValueError(
-                    "Iris supports only Harbor's agent-log volume, collected through the control plane"
+                    "Prepared tasks support only Harbor's agent-log volume, collected through the control plane"
                 )
             if name != "main":
                 if name not in prepared or prepared[name].agent_logs != "publish":
@@ -280,9 +248,7 @@ def import_iris_task(task: EnvironmentConfig, environment_dir: Path) -> Imported
         if name == "main":
             continue
         if service.depends_on:
-            raise ValueError(
-                "Inter-service Compose startup dependencies are not yet supported"
-            )
+            raise ValueError("Inter-service Compose startup dependencies are not yet supported")
         ports = []
         for port in service.expose:
             text = str(port)
@@ -299,31 +265,19 @@ def import_iris_task(task: EnvironmentConfig, environment_dir: Path) -> Imported
                 arguments=_argv(service.command),
             )
         )
-    names_and_ports = {
-        (service.name, endpoint.port)
-        for service in services
-        for endpoint in service.endpoints
-    }
+    names_and_ports = {(service.name, endpoint.port) for service in services for endpoint in service.endpoints}
     for server in task.mcp_servers:
         endpoint = urlsplit(server.url or "")
-        if (
-            server.transport not in {"sse", "streamable-http"}
-            or endpoint.scheme != "http"
-        ):
-            raise ValueError(
-                "Iris task MCP servers must use HTTP within the service group"
-            )
-        if (
-            endpoint.username
-            or endpoint.password
-            or (endpoint.hostname, endpoint.port or 80) not in names_and_ports
-        ):
-            raise ValueError(
-                "Iris task MCP endpoint must name a declared service and exposed port"
-            )
+        if server.transport not in {"sse", "streamable-http"} or endpoint.scheme != "http":
+            raise ValueError("Prepared task MCP servers must use HTTP within the service group")
+        if endpoint.username or endpoint.password or (endpoint.hostname, endpoint.port or 80) not in names_and_ports:
+            raise ValueError("Prepared task MCP endpoint must name a declared service and exposed port")
     return ImportedTask(
-        group=ServiceGroupSpec(
-            task=_machine("main", main, prepared, task), services=tuple(services)
-        ),
+        group=ServiceGroupSpec(task=_machine("main", main, prepared, task), services=tuple(services)),
         service_log_paths=tuple(log_paths),
     )
+
+
+def validate_prepared_task(task_env_config: EnvironmentConfig, environment_dir: Path) -> None:
+    """Validate prepared images and task services without acquiring a sandbox."""
+    import_prepared_task(task_env_config, environment_dir)

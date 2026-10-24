@@ -25,7 +25,7 @@ The base wheel contains the machine API and guest source. The [vendored Harbor p
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`, `PreparedImage` and registry references. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the Iris, Daytona, QEMU and ShellSim environment adapters. Docker, gVisor, Daytona, Iris, and local expose one-shot commands through the machine API; QEMU and ShellSim also support persistent Bash sessions.
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the Iris, local, Daytona, QEMU and ShellSim environment adapters. Machines retain their runtime between commands; QEMU and ShellSim also support persistent Bash sessions.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |

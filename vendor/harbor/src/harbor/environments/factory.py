@@ -23,13 +23,10 @@ class _EnvEntry(NamedTuple):
 # Optional Shellbox backends load only when selected.
 _ENVIRONMENT_REGISTRY: dict[EnvironmentType, _EnvEntry] = {
     EnvironmentType.IRIS: _EnvEntry("harbor.environments.iris", "IrisEnvironment"),
-    EnvironmentType.DAYTONA: _EnvEntry(
-        "harbor.environments.daytona", "DaytonaEnvironment"
-    ),
+    EnvironmentType.LOCAL: _EnvEntry("harbor.environments.local", "LocalEnvironment"),
+    EnvironmentType.DAYTONA: _EnvEntry("harbor.environments.daytona", "DaytonaEnvironment"),
     EnvironmentType.QEMU: _EnvEntry("harbor.environments.qemu", "QemuEnvironment"),
-    EnvironmentType.SHELLSIM: _EnvEntry(
-        "harbor.environments.shellsim", "ShellSimEnvironment"
-    ),
+    EnvironmentType.SHELLSIM: _EnvEntry("harbor.environments.shellsim", "ShellSimEnvironment"),
 }
 
 
@@ -70,9 +67,7 @@ class EnvironmentFactory:
         _load_environment_class(type).preflight()
 
     @classmethod
-    def resource_capabilities(
-        cls, type: EnvironmentType
-    ) -> EnvironmentResourceCapabilities | None:
+    def resource_capabilities(cls, type: EnvironmentType) -> EnvironmentResourceCapabilities | None:
         return _load_environment_class(type).resource_capabilities()
 
     @classmethod
@@ -112,13 +107,9 @@ class EnvironmentFactory:
             **kwargs,
         }
         if config.cpu_enforcement_policy != ResourceMode.AUTO:
-            env_constructor_kwargs["cpu_enforcement_policy"] = (
-                config.cpu_enforcement_policy
-            )
+            env_constructor_kwargs["cpu_enforcement_policy"] = config.cpu_enforcement_policy
         if config.memory_enforcement_policy != ResourceMode.AUTO:
-            env_constructor_kwargs["memory_enforcement_policy"] = (
-                config.memory_enforcement_policy
-            )
+            env_constructor_kwargs["memory_enforcement_policy"] = config.memory_enforcement_policy
 
         return cls.create_environment(
             type=config.type,

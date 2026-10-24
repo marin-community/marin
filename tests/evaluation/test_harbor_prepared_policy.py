@@ -37,13 +37,64 @@ def iris_policy(tmp_path):
     return policy
 
 
-def test_iris_preflight_resolves_offline_tasks_without_connecting_to_a_controller(tmp_path, iris_policy):
-    completed = _preflight(tmp_path, [(iris_policy, {})])
+@pytest.fixture(params=["iris", "local"])
+def prepared_policy(request, iris_policy):
+    document = json.loads(iris_policy.read_text())
+    document["environment"]["type"] = request.param
+    iris_policy.write_text(json.dumps(document))
+    return iris_policy
+
+
+def test_prepared_preflight_resolves_offline_tasks_without_allocating_a_sandbox(tmp_path, prepared_policy):
+    completed = _preflight(tmp_path, [(prepared_policy, {})])
     result = json.loads(completed.stdout)[0]
 
-    assert result["environment"] == "iris"
+    assert result["environment"] == json.loads(prepared_policy.read_text())["environment"]["type"]
     assert result["benchmark_metadata"]["n_benchmark"] == 1
     assert result["verifier_env_keys"] == []
+
+
+def test_prepared_compose_preflight_accepts_pinned_peers_without_building(tmp_path, prepared_policy):
+    environment = tmp_path / "dataset" / "task" / "environment"
+    (environment / "compose.yaml").write_text(
+        json.dumps(
+            {
+                "services": {
+                    "main": {"depends_on": {"runtime": {"condition": "service_healthy"}}},
+                    "runtime": {
+                        "build": {"context": "runtime"},
+                        "expose": [8000],
+                        "healthcheck": {"test": ["CMD", "true"]},
+                    },
+                }
+            }
+        )
+    )
+    (environment / "shellbox-images.json").write_text(
+        json.dumps({"runtime": {"image": f"example.test/runtime@sha256:{'b' * 64}", "workdir": "/runtime"}})
+    )
+    completed = _preflight(tmp_path, [(prepared_policy, {})])
+    assert json.loads(completed.stdout)[0]["benchmark_metadata"]["n_benchmark"] == 1
+
+
+def test_local_preflight_applies_resource_overrides_before_admission(tmp_path, iris_policy):
+    document = json.loads(iris_policy.read_text())
+    document["environment"] = {"type": "local", "override_cpus": 2}
+    iris_policy.write_text(json.dumps(document))
+    rejected = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    assert rejected.returncode == 2
+    assert rejected.stdout == ""
+
+    document["environment"]["cpu_enforcement_policy"] = "ignore"
+    iris_policy.write_text(json.dumps(document))
+    accepted = _preflight(tmp_path, [(iris_policy, {})])
+    assert json.loads(accepted.stdout)[0]["benchmark_metadata"]["n_benchmark"] == 1
+
+    document["environment"]["override_storage_mb"] = 128
+    iris_policy.write_text(json.dumps(document))
+    rejected = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    assert rejected.returncode == 2
+    assert rejected.stdout == ""
 
 
 @pytest.mark.parametrize(
@@ -75,12 +126,12 @@ def test_preflight_rejects_docker_execution_before_task_launch(tmp_path, iris_po
         ("verifier", {"import_path": "host.verifier:Verifier"}),
     ],
 )
-def test_iris_preflight_rejects_agent_and_verifier_escape_routes(tmp_path, iris_policy, section, replacement):
-    document = json.loads(iris_policy.read_text())
+def test_prepared_preflight_rejects_agent_and_verifier_escape_routes(tmp_path, prepared_policy, section, replacement):
+    document = json.loads(prepared_policy.read_text())
     document[section] = replacement
-    iris_policy.write_text(json.dumps(document))
+    prepared_policy.write_text(json.dumps(document))
 
-    completed = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    completed = _preflight(tmp_path, [(prepared_policy, {})], check=False)
 
     assert completed.returncode == 2
     assert completed.stdout == ""
@@ -103,22 +154,25 @@ def test_iris_preflight_rejects_agent_and_verifier_escape_routes(tmp_path, iris_
         '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n',
     ],
 )
-def test_iris_preflight_checks_each_resolved_task_before_submission(tmp_path, iris_policy, task_configuration):
+def test_prepared_preflight_checks_each_resolved_task_before_submission(tmp_path, prepared_policy, task_configuration):
     invalid_task = tmp_path / "dataset" / "z-invalid-task"
     shutil.copytree(tmp_path / "dataset" / "task", invalid_task)
     (invalid_task / "task.toml").write_text(task_configuration)
 
-    completed = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    completed = _preflight(tmp_path, [(prepared_policy, {})], check=False)
 
     assert completed.returncode == 2
     assert completed.stdout == ""
 
 
-def test_iris_runtime_keeps_hosted_judge_credentials_out_of_task_environment(tmp_path, iris_policy):
-    preflight = json.loads(_preflight(tmp_path, [(iris_policy, {})]).stdout)[0]
+def test_prepared_runtime_keeps_hosted_judge_credentials_out_of_task_environment(tmp_path, prepared_policy):
+    preflight = json.loads(_preflight(tmp_path, [(prepared_policy, {})]).stdout)[0]
     policy = tmp_path / "stable-policy.json"
     stable_policy = json.loads(preflight["stable_policy_json"])
-    stable_policy["environment"]["kwargs"] = {"cluster": "configured-cluster"}
+    iris = stable_policy["environment"]["type"] == "iris"
+    stable_policy["environment"]["kwargs"] = (
+        {"cluster": "configured-cluster"} if iris else {"image_cache": str(tmp_path / "image-cache")}
+    )
     policy.write_text(json.dumps(stable_policy))
     overlay = tmp_path / "overlay.json"
     overlay.write_text(
@@ -143,18 +197,26 @@ def test_iris_runtime_keeps_hosted_judge_credentials_out_of_task_environment(tmp
     )
     completed = _external_python(
         "-c",
-        "import json, os; from pathlib import Path; "
-        "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"config = effective_job_config(Path({str(policy)!r}), Path({str(overlay)!r})); "
-        "os.environ.update(IRIS_TASK_ID='ambient-task', IRIS_CONTROLLER_ADDRESS='http://ambient.invalid'); "
-        f"again = effective_job_config(Path({str(policy)!r}), Path({str(overlay)!r})); "
-        "assert again.environment.kwargs == config.environment.kwargs; "
-        "assert config.environment.kwargs['cluster'] == 'configured-cluster'; "
-        f"bound = effective_job_config(Path({str(policy)!r}), Path({str(overlay)!r}), "
-        "enclosing_controller_url='http://enclosing.test'); "
-        "assert bound.environment.kwargs['controller_url'] == 'http://enclosing.test'; "
-        "assert 'cluster' not in bound.environment.kwargs; "
-        "print(json.dumps(config.verifier.env))",
+        textwrap.dedent(
+            f"""
+            import json, os
+            from pathlib import Path
+            from marin.evaluation.harbor.trial_driver import effective_job_config
+            policy, overlay = Path({str(policy)!r}), Path({str(overlay)!r})
+            config = effective_job_config(policy, overlay)
+            os.environ.update(IRIS_TASK_ID='ambient-task', IRIS_CONTROLLER_ADDRESS='http://ambient.invalid')
+            again = effective_job_config(policy, overlay)
+            assert again.environment.kwargs == config.environment.kwargs
+            bound = effective_job_config(policy, overlay, enclosing_controller_url='http://enclosing.test')
+            if {iris!r}:
+                assert config.environment.kwargs['cluster'] == 'configured-cluster'
+                assert bound.environment.kwargs['controller_url'] == 'http://enclosing.test'
+                assert 'cluster' not in bound.environment.kwargs
+            else:
+                assert bound.environment.kwargs == config.environment.kwargs
+            print(json.dumps(config.verifier.env))
+            """
+        ),
     )
 
     assert json.loads(completed.stdout) == {

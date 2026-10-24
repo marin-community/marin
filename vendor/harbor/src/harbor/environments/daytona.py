@@ -21,7 +21,7 @@ from harbor.environments.capabilities import (
     EnvironmentCapabilities,
     EnvironmentResourceCapabilities,
 )
-from harbor.environments.iris_compose import COMPOSE_FILENAMES
+from harbor.environments.prepared_compose import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
 from harbor.environments.runtime import daytona_connection
 from harbor.environments.model_relay import MODEL_RELAY_PORT, ModelRelay
