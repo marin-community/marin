@@ -13,7 +13,15 @@ from skyrlrecipe.documents import set_path
 from skyrlrecipe.ownership import DERIVED_PATHS, LAUNCH_PATHS, REMOVED
 
 
-def test_public_recipe_round_trip_preserves_parts_and_reports_owned_paths():
+@pytest.fixture
+def base_recipe():
+    return schema.SkyRLRecipe(
+        context_budget=ContextBudget(request_window_tokens=256, max_new_tokens_per_turn=64, max_turns=2),
+        data=schema.Data(sampling=schema.Sampling(domain_weights={"math": 2, "code": 1})),
+    )
+
+
+def test_recipe_round_trip_preserves_immutable_containers_and_mapping_order():
     context = ContextBudget(request_window_tokens=256, max_new_tokens_per_turn=64, max_turns=2)
     supplied = {
         "context_budget": context.to_skyrl(),
@@ -73,10 +81,10 @@ def test_public_recipe_round_trip_preserves_parts_and_reports_owned_paths():
             schema.SkyRLRecipe.from_document(document)
         assert list(document["generator"]["engine_init_kwargs"].items()) == original_routes
     assert "hf_save_interval" not in schema.Trainer().model_dump(mode="json")
-    base = schema.SkyRLRecipe(
-        context_budget=ContextBudget(request_window_tokens=256, max_new_tokens_per_turn=64, max_turns=2),
-        data=schema.Data(sampling=schema.Sampling(domain_weights={"math": 2, "code": 1})),
-    )
+
+
+def test_named_parts_are_order_independent_and_settings_merge_required_sections(base_recipe):
+    base = base_recipe
     part = schema.RecipePatch.from_document(
         {
             "trainer": {
@@ -151,6 +159,11 @@ def test_public_recipe_round_trip_preserves_parts_and_reports_owned_paths():
     assert structured.context_budget == edited.context_budget
     with pytest.raises(ValueError, match="request_window_tokens must exceed"):
         expected.with_settings(["context_budget.request_window_tokens=64"])
+
+
+def test_recipe_validation_reports_owned_removed_and_nonnullable_paths(base_recipe):
+    base = base_recipe
+    edited = base
     for paths, owner in ((LAUNCH_PATHS, "launch document"), (DERIVED_PATHS, "context_budget")):
         for path in paths:
             document = base.to_skyrl()
@@ -180,9 +193,19 @@ def test_public_recipe_round_trip_preserves_parts_and_reports_owned_paths():
     ):
         with pytest.raises(ValueError, match=r"use context_budget.max_turns; Harbor reads max_turns"):
             construct()
+    heads = schema.RecipePatch(model_num_attention_heads=42)
+    tensor_parallel = schema.RecipePatch(generator=schema.Generator(inference_engine_tensor_parallel_size=2))
+    valid = schema.SkyRLRecipe.combine(base=base, heads=heads, tensor_parallel=tensor_parallel)
+    assert schema.SkyRLRecipe.from_document(valid.to_skyrl()) == valid
+    with pytest.raises(ValueError, match="does not divide model_num_attention_heads=42"):
+        schema.SkyRLRecipe.combine(base=base, heads=heads)
     for following in ("hf_save_interval", "micro_forward_batch_size_per_gpu"):
         with pytest.raises(ValueError, match=following):
             edited.with_settings([f"trainer.{following}=null"])
+
+
+def test_artifact_draft_identity_is_validated_after_parts_and_settings(base_recipe):
+    base = base_recipe
     uri_part = schema.RecipePatch.from_document(
         {"generator": {"speculative_decoding": {"model": {"source_uri": "s3://models/draft"}}}}
     )
