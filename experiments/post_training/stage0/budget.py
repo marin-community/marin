@@ -21,6 +21,7 @@ LEARNING_RATE = 5e-6
 STAGE0_SEED = 0
 ADAM_BETA1 = 0.9
 ADAM_BETA2 = 0.95
+ADAM_EPSILON = 1e-8
 LR_SCHEDULE = "cosine"
 MAX_GRAD_NORM = 1.0
 WEIGHT_DECAY = 0.0
@@ -30,13 +31,15 @@ SEQUENCE_LEN = 32768
 GLOBAL_BATCH = 64
 EPOCHS_PER_STAGE = 1
 
-# Axolotl side: one conversation per sequence, 8 per device on the launcher's default
-# 8-GPU torchrun width with accumulation 1 — 8 x 8 x 1 = 64 examples per step.
-PER_DEVICE_BATCH = 8
-GRADIENT_ACCUMULATION_STEPS = 1
+# Axolotl side: one conversation per sequence and per micro-batch (unpacked 32k-token
+# sequences do not fit eight to a GPU), on two 8-GPU nodes (fp32 masters and Adam state
+# for a 30B MoE do not fit one node's HBM) with accumulation 4 — 1 x 16 x 4 = 64.
+PER_DEVICE_BATCH = 1
+AXOLOTL_NODES = 2
+GRADIENT_ACCUMULATION_STEPS = 4
 
 # Snowball side: the mesh's context axis spans the DCN, one axis unit per node.
 TRAIN_NODES = 8
 GPUS_PER_NODE = 8
 
-assert GLOBAL_BATCH == PER_DEVICE_BATCH * GPUS_PER_NODE * GRADIENT_ACCUMULATION_STEPS
+assert GLOBAL_BATCH == PER_DEVICE_BATCH * AXOLOTL_NODES * GPUS_PER_NODE * GRADIENT_ACCUMULATION_STEPS

@@ -18,6 +18,9 @@ The contract the template owns:
 - Tool results use bare ``<tool_response>`` without a ``name=`` attribute, so the
   marker stays one token wherever the vocabulary has one.
 - A system turn renders only when a system message is present; none is injected.
+- Each assistant turn after its header, through its end-of-turn token, sits in a
+  ``{% generation %}`` block: the completions-only training mask (Levanter and
+  ``return_assistant_tokens_mask``). The block renders no text.
 
 Every structural delimiter in a token map must encode to exactly one token of its
 pinned tokenizer (:func:`validate_token_map`), so masking, stop conditions and the
@@ -41,6 +44,7 @@ _BOS = "__BOS__"
 _TEMPLATE_SKELETON = """{%- if '__BOS__' -%}{{ '__BOS__' }}{%- endif -%}{%- for message in messages -%}
 {%- if message.role == 'assistant' -%}
 {{- '__TURN_OPEN_PREFIX__assistant__TURN_OPEN_SUFFIX__\n' -}}
+{%- generation -%}
 {%- if message.reasoning_content -%}
 {{- '__THINK_OPEN__' ~ message.reasoning_content ~ '__THINK_CLOSE__' -}}
 {%- endif -%}
@@ -54,6 +58,7 @@ _TEMPLATE_SKELETON = """{%- if '__BOS__' -%}{{ '__BOS__' }}{%- endif -%}{%- for 
 {{- '}\\n</tool_call>' -}}
 {%- endfor -%}
 {{- '__TURN_CLOSE__' -}}
+{%- endgeneration -%}
 {%- elif message.role == 'tool' -%}
 {{- '__TURN_OPEN_PREFIX__tool__TURN_OPEN_SUFFIX__\n<tool_response>\\n' -}}
 {{- message.content if message.content else '' -}}
