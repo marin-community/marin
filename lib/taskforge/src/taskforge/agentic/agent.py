@@ -21,7 +21,6 @@ from rolloutengine.models import Rollout, RolloutInterrupted, TaskRolloutSpec, T
 from shellbox.machine import Backend, PackageSpec
 from taskcompendium.models import (
     AnswerType,
-    CommandSemantics,
     ConversationInput,
     EnvironmentRequirements,
     NoGrader,
@@ -37,9 +36,10 @@ from verifyit.spec import MODE_DESCRIPTORS
 
 from taskforge.agentic import example_build
 from taskforge.agentic.config import AgenticConfig
-from taskforge.agentic.prompts import AGENT_PROMPT, USER_PROMPT
+from taskforge.agentic.prompts import AGENT_PROMPT, SOLVER_MACHINES, USER_PROMPT
 from taskforge.agentic.tools import (
     AGENT_TOOLS,
+    COMMAND_SEMANTICS,
     MAX_EMPTY_BUDGET_CALLS,
     WORKDIR,
     AcceptedTask,
@@ -54,8 +54,6 @@ from taskforge.content_hash import pretty_json
 AGENT_HARNESS = "taskforge-agent"
 AGENTIC_REVISION = "1"
 """The revision of the agent task in the ``Source`` of each agent attempt."""
-WORKSPACE_SEMANTICS = {Backend.LOCAL: CommandSemantics.LINUX_PROCESS, Backend.SHELLSIM: CommandSemantics.SHELL_SIMULATOR}
-"""The command semantics of the agent's shell on each supported workspace backend."""
 SHELL_OUTPUT_BYTES = 32 * 1024
 """The most stdout, and stderr, of one agent shell command. A larger output, for example a whole TaskSpec, fills the
 agent's context and ends the session."""
@@ -126,12 +124,21 @@ def _stop_report(rollout: Rollout, tools: TaskforgeTools, n: int) -> str:
     )
 
 
+def example_program(backend: Backend) -> bytes:
+    """The source of ``example_build``, with the command semantics of ``backend``'s solver machines."""
+    source = Path(example_build.__file__).read_text()
+    default = f"SEMANTICS = CommandSemantics.{example_build.SEMANTICS.name}"
+    assert source.count(default) == 1
+    return source.replace(default, f"SEMANTICS = CommandSemantics.{COMMAND_SEMANTICS[backend].name}").encode()
+
+
 def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:
     """The agent's own task: the prompts, and a workspace with the idea, the example program and the schema."""
     gate, budget = config.gate, config.budget
     low, high = gate.solver_band
     system = AGENT_PROMPT.format(
         n=n,
+        solver_machine=SOLVER_MACHINES[config.solver_factory.backend],
         min_solver_runs=gate.min_solver_runs,
         low=low,
         high=high,
@@ -146,7 +153,7 @@ def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:
     workspace = WORKDIR.relative_to("/")
     files = (
         inline_resource(f"{workspace}/idea.json", pretty_json(capability_idea_record(idea)).encode()),
-        inline_resource(f"{workspace}/example_build.py", Path(example_build.__file__).read_bytes()),
+        inline_resource(f"{workspace}/example_build.py", example_program(config.solver_factory.backend)),
         inline_resource(
             f"{workspace}/reference/taskspec.schema.json", json.dumps(TaskSpec.model_json_schema(), indent=1).encode()
         ),
@@ -162,7 +169,7 @@ def agent_task(idea: CapabilityIdea, n: int, config: AgenticConfig) -> TaskSpec:
         ),
         environment_requirements=EnvironmentRequirements(
             capabilities=("shell", "filesystem"),
-            command_semantics=WORKSPACE_SEMANTICS[config.workspace_factory.backend],
+            command_semantics=COMMAND_SEMANTICS[config.workspace_factory.backend],
             # An empty package spec runs the shell on what the factory mounts, for example a Python environment.
             package_spec=PackageSpec(),
             working_directory=str(WORKDIR),
