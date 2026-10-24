@@ -1,14 +1,14 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Run trusted commands on the host in bubblewrap sandboxes, without a container image.
+"""Persistent bubblewrap sandboxes over host programs or prepared OCI filesystems.
 
 Each machine's commands see the host's programs, read-only or copy-on-write, and private runtime
 configuration on top of a private root directory, which holds paths from ``/app`` and ``/tmp`` to ``HOME``.
 """
 
 import asyncio
-import contextlib
+import fcntl
 import io
 import json
 import logging
@@ -23,12 +23,16 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 
 from shellbox.backends.local import launch
+from shellbox.backends.local.images import PreparedLocalImage, prepare_local_image
 from shellbox.backends.local.python_environment import DEFAULT_PYTHON_VERSION, resolve_python_environment
+from shellbox.backends.local.transfers import unpack_local_archive
+from shellbox.image import PreparedImage, RegistryImage, process_image_cache
 from shellbox.machine import (
     DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     LINUX_PROCESS_CAPABILITIES,
@@ -39,6 +43,7 @@ from shellbox.machine import (
     ExitReason,
     HostImage,
     MachineSpec,
+    MachineTerminated,
     Mount,
     NetworkPolicy,
     PackageSpec,
@@ -46,11 +51,11 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.service import ServiceGroup, ServiceGroupSpec
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-READ_CHUNK_BYTES = 64 * 1024
 # Resolve the program through sh, as the container backends do: a missing or unexecutable program
 # or working directory becomes a failed command (127 or 126 for the program) rather than an exception.
 RUN_SCRIPT = 'cd "$1" || exit; shift; exec "$@"'
@@ -109,6 +114,7 @@ ROOT_MODE = 0o755
 """Lets a command that runs as another user traverse the machine's root directory."""
 STICKY_WORLD_WRITABLE = 0o1777
 PROBE_TIMEOUT = 30
+NS_GET_USERNS = 0xB701
 
 
 class SandboxUnavailable(RuntimeError):
@@ -345,26 +351,6 @@ def _command_account(user: str | None) -> pwd.struct_passwd | None:
     return account
 
 
-async def _send_input(stdin: asyncio.StreamWriter, data: bytes) -> None:
-    try:
-        stdin.write(data)
-        await stdin.drain()
-    except (BrokenPipeError, ConnectionResetError):
-        pass  # The command exited without reading all its input; asyncio's communicate() permits this too.
-    stdin.close()
-
-
-async def _bounded_output(stream: asyncio.StreamReader, limit: int) -> tuple[bytes, bool]:
-    """Read ``stream`` to EOF, keeping its first ``limit`` bytes and whether it had more."""
-    kept = bytearray()
-    truncated = False
-    while chunk := await stream.read(READ_CHUNK_BYTES):
-        room = limit - len(kept)
-        truncated = truncated or len(chunk) > room
-        kept += chunk[:room]
-    return bytes(kept), truncated
-
-
 def _prepare_root(root: Path, workdir: PurePosixPath | None) -> None:
     root.chmod(ROOT_MODE)
     for directory in (*PRIVATE_SYSTEM_DIRECTORIES, "/opt"):
@@ -394,37 +380,29 @@ def _archive(source: Path, name: str) -> bytes:
     return stream.getvalue()
 
 
-def _guest_member(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo:
-    """Extract a member of a stream that a machine wrote, keeping its symlinks but nothing that reads the host.
-
-    A hard link must lead to a file of the stream, and a device would let a copy read the host's disk.
-    """
-    if member.islnk() or member.isdev():
-        return tarfile.data_filter(member, path)
-    return tarfile.tar_filter(member, path)
-
-
-def _unpack(stream: bytes, target: Path) -> None:
-    """Write a stream from ``ARCHIVE_SCRIPT`` to ``target``: a directory's contents or a single file.
-
-    The machine may write any stream, so a first member that would lead the copy out of the staging
-    directory, such as a symlink to a host path, is refused; symlinks inside a directory are copied as links.
-    """
-    with tempfile.TemporaryDirectory() as staging, tarfile.open(fileobj=io.BytesIO(stream)) as archive:
-        members = archive.getmembers()
-        if not members or not (members[0].isdir() if members[0].name == "." else members[0].isfile()):
-            raise RuntimeError("The machine's archive does not start with a regular file or directory")
-        archive.extractall(staging, filter=_guest_member)
-        _copy(Path(staging) if members[0].name == "." else Path(staging, members[0].name), target)
+def _pin_init(pid: int, namespace: int) -> int:
+    """Pin bwrap's init, verifying its identity through an anchored proc directory."""
+    directory = os.open(f"/proc/{pid}", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    descriptor = None
+    try:
+        descriptor = os.pidfd_open(pid)
+        process_namespace = os.open("ns/pid", os.O_RDONLY | os.O_CLOEXEC, dir_fd=directory)
+        try:
+            if os.fstat(process_namespace).st_ino != namespace:
+                raise SandboxUnavailable("Bubblewrap init namespace identity changed")
+        finally:
+            os.close(process_namespace)
+        return descriptor
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    finally:
+        os.close(directory)
 
 
 class LocalMachine:
-    """Commands in bubblewrap sandboxes over ``root``, a host directory that only this machine uses.
-
-    Each command gets new PID, IPC and UTS namespaces, and a network namespace with only loopback under
-    ``NetworkPolicy.DENY``. Files persist in ``root`` between commands, and, with ``layers``, so do writes
-    under the overlaid system directories; processes end with their command.
-    """
+    """A persistent bubblewrap member, with commands entering pinned namespaces."""
 
     def __init__(
         self,
@@ -435,43 +413,202 @@ class LocalMachine:
         layers: Path | None,
         mounts: tuple[Mount, ...],
         environment: dict[str, str],
+        image: PreparedLocalImage | None = None,
+        bundle: Path | None = None,
     ):
         self.spec = spec
         self.root = root
         self.layers = layers
         self.mounts = mounts
+        self.image = image
+        self._bundle = bundle
         self._bwrap = bwrap
         self._environment = environment
         self._closed = False
+        self._closing: asyncio.Task[None] | None = None
+        self._group_close: Callable[[], Awaitable[None]] | None = None
+        self._keeper: asyncio.subprocess.Process | None = None
+        self._keeper_pidfd: int | None = None
+        self._init_pidfd: int | None = None
+        self._namespaces: tuple[int, ...] = ()
+        self._owned_namespaces: tuple[int, ...] = ()
+        self._network_namespaces: tuple[int, ...] = ()
+        self._root_fd: int | None = None
+        self._commands: set[asyncio.subprocess.Process] = set()
+        self._watcher: asyncio.Task[None] | None = None
+        self._expiry: asyncio.Task[None] | None = None
 
     def _check_open(self) -> None:
         if self._closed:
-            raise RuntimeError("Machine is closed")
+            raise MachineTerminated("Machine is closed")
 
-    def _mounted(self, path: PurePosixPath) -> Mount | None:
-        return next((mount for mount in self.mounts if path.is_relative_to(mount.guest)), None)
+    async def _start_keeper(self, peer: "LocalMachine | None" = None) -> None:
+        if self.image is None:
+            arguments = _sandbox_argv(
+                self._bwrap,
+                root=self.root,
+                layers=self.layers,
+                mounts=self.mounts,
+                network=self.spec.network if peer is None else NetworkPolicy.ALLOW,
+                account=None,
+            )
+        else:
+            arguments = [
+                str(self._bwrap),
+                "--unshare-user",
+                "--uid",
+                "0",
+                "--gid",
+                "0",
+                "--unshare-ipc",
+                "--unshare-pid",
+                "--unshare-uts",
+                "--new-session",
+                "--die-with-parent",
+                "--cap-drop",
+                "ALL",
+                "--bind",
+                str(self.root),
+                "/",
+                "--dev",
+                "/dev",
+                "--proc",
+                "/proc",
+                "--tmpfs",
+                "/dev/shm",
+            ]
+            if peer is None and self.spec.network is NetworkPolicy.DENY:
+                arguments.append("--unshare-net")
+        # A new user namespace is needed for each independent mount namespace,
+        # including members that inherit a peer's network namespace.
+        if os.geteuid() != 0 and "--unshare-user" not in arguments:
+            arguments.insert(1, "--unshare-user")
+        if self.image is None and os.geteuid() != 0:
+            arguments[1:1] = ["--uid", str(os.geteuid()), "--gid", str(os.getegid())]
+        block_read, block_write = os.pipe()
+        allocation = asyncio.create_task(self._allocate_keeper(arguments, peer, block_read, block_write))
+        try:
+            await asyncio.shield(allocation)
+        except asyncio.CancelledError:
+            # Namespace setup owns processes before create_subprocess_exec has
+            # returned their handles. Finish bounded setup before reclaiming it.
+            try:
+                await asyncio.shield(allocation)
+            finally:
+                await asyncio.shield(self._close_local())
+            raise
+        finally:
+            os.close(block_read)
+            os.close(block_write)
+        assert self._keeper_pidfd is not None
+        self._watcher = asyncio.create_task(self._watch_keeper(os.dup(self._keeper_pidfd)))
+        self._watcher.add_done_callback(_log_task_failure)
 
-    def _overlaid(self, path: PurePosixPath) -> bool:
-        """Whether ``path`` lies in or contains a directory that this machine overlays."""
-        return self.layers is not None and any(
-            path.is_relative_to(directory) or PurePosixPath(directory).is_relative_to(path)
-            for directory in OVERLAID_DIRECTORIES
-        )
+    async def _allocate_keeper(
+        self, arguments: list[str], peer: "LocalMachine | None", block_read: int, block_write: int
+    ) -> None:
+        with tempfile.TemporaryFile() as information:
+            arguments += [
+                "--block-fd",
+                str(block_read),
+                "--info-fd",
+                str(information.fileno()),
+                "--clearenv",
+                "--setenv",
+                "PATH",
+                DEFAULT_PATH,
+                "/bin/sh",
+                "-c",
+                "exec sleep 2147483647",
+            ]
+            prefix = () if peer is None else peer._network_namespaces
+            config = {"namespaces": prefix, "program": arguments}
+            with tempfile.TemporaryFile() as configuration:
+                configuration.write(json.dumps(config).encode())
+                configuration.seek(0)
+                self._keeper = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-c",
+                    LAUNCH_SOURCE,
+                    str(configuration.fileno()),
+                    pass_fds=(configuration.fileno(), information.fileno(), block_read, *prefix),
+                    env=CONTROL_ENVIRONMENT,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,
+                )
+                self._keeper_pidfd = os.pidfd_open(self._keeper.pid)
+            async with asyncio.timeout(PROBE_TIMEOUT):
+                while True:
+                    information.seek(0)
+                    payload = information.read()
+                    if payload:
+                        try:
+                            status = json.loads(payload)
+                            pid = status["child-pid"]
+                            if self._init_pidfd is None:
+                                self._init_pidfd = _pin_init(pid, status["pid-namespace"])
+                            # info-fd is written before bwrap finishes mounting
+                            # and pivoting. Pinning root earlier would capture
+                            # the host root rather than the guest root.
+                            expected = self.root.stat()
+                            actual = os.stat(f"/proc/{pid}/root")
+                            expected_uid = 0 if self.image is not None else os.geteuid()
+                            mapped = Path(f"/proc/{pid}/uid_map").read_text().splitlines()
+                            final_user = any(int(row.split()[0]) == expected_uid for row in mapped)
+                            if final_user and (actual.st_dev, actual.st_ino) == (expected.st_dev, expected.st_ino):
+                                break
+                        except json.JSONDecodeError:
+                            pass  # bwrap may still be writing its single status document.
+                    if self._keeper.returncode is not None:
+                        assert self._keeper.stderr is not None
+                        error = (await self._keeper.stderr.read()).decode(errors="replace")
+                        raise SandboxUnavailable(f"Persistent bubblewrap keeper failed: {error.strip()}")
+                    await asyncio.sleep(0.01)
+            # The keeper cannot be reused after exit: the opened descriptors pin
+            # this namespace and root even if the kernel later reuses its PID.
+            descriptors = []
+            try:
+                for namespace in ("user", "net", "ipc", "uts", "mnt", "pid"):
+                    descriptors.append(os.open(f"/proc/{pid}/ns/{namespace}", os.O_RDONLY | os.O_CLOEXEC))
+                    expected_inode = json.loads(payload).get(f"{namespace}-namespace")
+                    if expected_inode is not None and os.fstat(descriptors[-1]).st_ino != expected_inode:
+                        raise SandboxUnavailable("Bubblewrap startup namespace identity changed")
+                self._root_fd = os.open(f"/proc/{pid}/root", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+                owner = fcntl.ioctl(descriptors[4], NS_GET_USERNS)
+                os.set_inheritable(owner, False)
+            except BaseException:
+                for descriptor in descriptors:
+                    os.close(descriptor)
+                raise
+            self._owned_namespaces = (owner, *descriptors)
+            # bwrap drops capabilities by entering a final child user namespace.
+            # Join mount/network owners first, then that restricted namespace.
+            self._namespaces = (*prefix, owner, *descriptors[1:], descriptors[0])
+            self._network_namespaces = (*prefix, owner, descriptors[1])
+            os.write(block_write, b"1")
 
-    def _host_path(self, path: PurePosixPath) -> Path:
-        """Where the host keeps the file that commands see at ``path``.
+    async def _watch_keeper(self, descriptor: int) -> None:
+        # Process.wait also waits for stderr EOF. Watch process death directly:
+        # an orphaned init can keep that pipe open until our cleanup kills it.
+        loop = asyncio.get_running_loop()
+        exited = loop.create_future()
 
-        A command may plant a symlink in its root that points outside it; a transfer must not follow one.
-        """
-        mount = self._mounted(path)
-        if mount is not None:
-            return mount.host / path.relative_to(mount.guest)
-        if _within(path, SYSTEM_DIRECTORIES) and not _within(path, PRIVATE_SYSTEM_DIRECTORIES):
-            return Path(path)
-        host = self.root / path.relative_to("/")
-        if not Path(os.path.realpath(host)).is_relative_to(self.root):
-            raise RuntimeError(f"{path} leaves the machine root through a symlink")
-        return host
+        def ready() -> None:
+            loop.remove_reader(descriptor)
+            exited.set_result(None)
+
+        loop.add_reader(descriptor, ready)
+        try:
+            await exited
+        finally:
+            loop.remove_reader(descriptor)
+            os.close(descriptor)
+        if not self._closed:
+            await self.close()
 
     async def run(self, command: Command) -> Result:
         return await self._execute(command, {**self._environment, **self.spec.env, **command.env})
@@ -484,14 +621,12 @@ class LocalMachine:
         stdin: bytes = b"",
         output_limit_bytes: int = DEFAULT_MACHINE_OUTPUT_LIMIT_BYTES,
     ) -> Result:
-        """Run one of the backend's own scripts on ``path``, in ``CONTROL_ENVIRONMENT``."""
-        command = Command(
-            ("/bin/sh", "-c", script, "sh", str(path)),
-            cwd="/",
-            stdin=stdin,
-            output_limit_bytes=output_limit_bytes,
+        return await self._execute(
+            Command(
+                ("/bin/sh", "-c", script, "sh", str(path)), cwd="/", stdin=stdin, output_limit_bytes=output_limit_bytes
+            ),
+            CONTROL_ENVIRONMENT,
         )
-        return await self._execute(command, CONTROL_ENVIRONMENT)
 
     async def _execute(self, command: Command, environment: dict[str, str]) -> Result:
         self._check_open()
@@ -499,117 +634,147 @@ class LocalMachine:
             raise ValueError("Command argv is empty")
         if command.output_limit_bytes < 0:
             raise ValueError("Output limit must be nonnegative")
-        sandbox = _sandbox_argv(
-            self._bwrap,
-            root=self.root,
-            layers=self.layers,
-            mounts=self.mounts,
-            network=self.spec.network,
-            account=_command_account(command.user),
-        )
-        arguments = ["--clearenv"]
-        for key, value in environment.items():
-            arguments.extend(("--setenv", key, value))
-        encoded_arguments = [os.fsencode(argument) for argument in arguments]
-        if any(b"\0" in argument for argument in encoded_arguments):
+        if self.image is not None:
+            if command.user not in (None, "0", "0:0"):
+                raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
+            account = None
+        else:
+            selected = _command_account(command.user)
+            account = None if selected is None else (selected.pw_uid, selected.pw_gid)
+        config = {
+            "namespaces": self._namespaces,
+            "root": self._root_fd,
+            "limits": _resource_limits(command.timeout),
+            "account": account,
+            "script": RUN_SCRIPT,
+            "cwd": command.cwd or self.spec.workdir or "/",
+            "argv": command.argv,
+            "environment": environment,
+        }
+        if any("\0" in argument for argument in (*command.argv, *environment, *environment.values())):
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
-        # Environment values must stay out of both the host launcher's environment and its public argv.
-        with tempfile.TemporaryFile() as argument_file:
-            argument_file.write(b"\0".join(encoded_arguments) + b"\0")
-            argument_file.seek(0)
-            argument_fd = argument_file.fileno()
+        # Anonymous output files let a successful foreground command finish even
+        # when its background services keep stdout open. RLIMIT_FSIZE bounds writers.
+        with (
+            tempfile.TemporaryFile() as configuration,
+            tempfile.TemporaryFile() as stdout_file,
+            tempfile.TemporaryFile() as stderr_file,
+            tempfile.TemporaryFile() as stdin_file,
+        ):
+            configuration.write(json.dumps(config).encode())
+            configuration.seek(0)
+            stdin_file.write(command.stdin)
+            stdin_file.seek(0)
+            assert self._root_fd is not None
             process = await asyncio.create_subprocess_exec(
                 sys.executable,
                 "-I",
                 "-S",
                 "-c",
                 LAUNCH_SOURCE,
-                json.dumps(_resource_limits(command.timeout)),
-                sandbox[0],
-                "--args",
-                str(argument_fd),
-                *sandbox[1:],
-                "/bin/sh",
-                "-c",
-                RUN_SCRIPT,
-                "shellbox-local",
-                command.cwd or self.spec.workdir or "/",
-                *command.argv,
-                pass_fds=(argument_fd,),
+                str(configuration.fileno()),
+                pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
                 env=CONTROL_ENVIRONMENT,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdin=stdin_file,
+                stdout=stdout_file,
+                stderr=stderr_file,
                 start_new_session=True,
             )
-        assert process.stdin is not None and process.stdout is not None and process.stderr is not None
-        limit = command.output_limit_bytes
-        try:
-            async with asyncio.timeout(command.timeout):
-                _, (stdout, stdout_truncated), (stderr, stderr_truncated) = await asyncio.gather(
-                    _send_input(process.stdin, command.stdin),
-                    _bounded_output(process.stdout, limit),
-                    _bounded_output(process.stderr, limit),
-                )
-                returncode = await process.wait()
-        except BaseException as interruption:
-            # Killing bwrap ends the sandbox: --die-with-parent kills its PID namespace and every process in it.
-            with contextlib.suppress(ProcessLookupError):  # The whole group may have exited already.
-                os.killpg(process.pid, signal.SIGKILL)
-            # A reader that stopped with a full buffer pauses its pipe, and wait() needs both pipes at EOF.
-            await process.stdout.read()
-            await process.stderr.read()
-            await process.wait()
-            if isinstance(interruption, TimeoutError):
-                return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
-            raise
-        # Report a signal as a shell does, matching the backends that run commands under sh.
-        exit_code = 128 - returncode if returncode < 0 else returncode
-        return Result(exit_code, stdout, stderr, stdout_truncated, stderr_truncated, ExitReason.EXITED)
+            self._commands.add(process)
+            try:
+                async with asyncio.timeout(command.timeout):
+                    await process.wait()
+            except BaseException as interruption:
+                if not self._closed:
+                    await asyncio.shield(self.close())
+                await process.wait()
+                if isinstance(interruption, TimeoutError):
+                    return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
+                raise
+            finally:
+                self._commands.discard(process)
+            self._check_open()
+            stdout_file.seek(0)
+            stderr_file.seek(0)
+            stdout = stdout_file.read(command.output_limit_bytes + 1)
+            stderr = stderr_file.read(command.output_limit_bytes + 1)
+        assert process.returncode is not None
+        code = process.returncode
+        return Result(
+            128 - code if code < 0 else code,
+            stdout[: command.output_limit_bytes],
+            stderr[: command.output_limit_bytes],
+            len(stdout) > command.output_limit_bytes,
+            len(stderr) > command.output_limit_bytes,
+            ExitReason.EXITED,
+        )
 
     async def upload(self, source: Path, target: str) -> None:
         self._check_open()
         path = _absolute_path(target)
-        if self._overlaid(path):
-            # Unpacking inside the sandbox writes through the overlay, as a command's own write would. A
-            # directory uploaded to / may hold files for /opt, so it takes this path too.
-            name = "." if source.is_dir() else path.name
-            stream = await asyncio.to_thread(_archive, source, name)
-            directory = path if source.is_dir() else path.parent
-            result = await self._control(EXTRACT_SCRIPT, directory, stdin=stream)
-            if result.exit_code != 0:
-                raise RuntimeError(f"Cannot upload to {target}: {result.stderr.decode(errors='replace').strip()}")
-            return
-        if self._mounted(path) is not None or _within(path, SYSTEM_DIRECTORIES):
-            raise UnsupportedMachineSpec(f"The local backend's {target} is a read-only host path")
-        await asyncio.to_thread(_copy, source, self._host_path(path))
+        if self.image is None:
+            writable_system = self.layers is not None and _within(path, OVERLAID_DIRECTORIES)
+            if (_within(path, SYSTEM_DIRECTORIES) and not writable_system) or any(
+                path.is_relative_to(mount.guest) for mount in self.mounts
+            ):
+                raise UnsupportedMachineSpec(f"The local backend's {target} is a read-only host path")
+        name = "." if source.is_dir() else path.name
+        stream = await asyncio.to_thread(_archive, source, name)
+        result = await self._control(EXTRACT_SCRIPT, path if source.is_dir() else path.parent, stdin=stream)
+        if result.exit_code != 0:
+            raise RuntimeError(f"Cannot upload to {target}: {result.stderr.decode(errors='replace').strip()}")
 
     async def download(self, source: str, target: Path) -> None:
         self._check_open()
-        guest = _absolute_path(source)
-        if self._overlaid(guest) and not _within(guest, OVERLAID_DIRECTORIES):
-            # Through the sandbox, / holds the host's whole system as well as /proc and /dev.
-            raise UnsupportedMachineSpec(
-                f"A copy-on-write machine cannot download {source}, which contains its system directories"
-            )
-        if self._overlaid(guest) or _within(guest, PRIVATE_SYSTEM_DIRECTORIES):
-            result = await self._control(ARCHIVE_SCRIPT, guest, output_limit_bytes=ARCHIVE_LIMIT_BYTES)
-            if result.exit_code != 0:
-                raise RuntimeError(result.stderr.decode(errors="replace").strip())
-            if result.stdout_truncated:
-                raise RuntimeError(f"{source} exceeds the {ARCHIVE_LIMIT_BYTES}-byte download limit")
-            await asyncio.to_thread(_unpack, result.stdout, target)
-            return
-        path = self._host_path(guest)
-        if not path.exists():
-            raise RuntimeError(f"No such file or directory: {source}")
-        await asyncio.to_thread(_copy, path, target)
+        path = _absolute_path(source)
+        if self.image is None and path == PurePosixPath("/"):
+            raise UnsupportedMachineSpec("A host-program machine cannot download its entire system root")
+        result = await self._control(ARCHIVE_SCRIPT, path, output_limit_bytes=ARCHIVE_LIMIT_BYTES)
+        if result.exit_code != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace").strip())
+        if result.stdout_truncated:
+            raise RuntimeError(f"{source} exceeds the {ARCHIVE_LIMIT_BYTES}-byte download limit")
+        await asyncio.to_thread(unpack_local_archive, result.stdout, target)
 
     async def close(self) -> None:
-        if self._closed:
+        if self._group_close is not None:
+            await self._group_close()
             return
-        self._closed = True
-        await asyncio.to_thread(_remove, self.root)
+        await self._close_local()
+
+    async def _close_local(self) -> None:
+        if self._closing is None:
+            self._closed = True
+            self._closing = asyncio.create_task(self._destroy())
+        await asyncio.shield(self._closing)
+
+    async def _destroy(self) -> None:
+        if self._expiry is not None:
+            self._expiry.cancel()
+        # Kill the verified, pinned guest init before its host launcher. An
+        # immediate close can otherwise race bwrap's parent-death setup and
+        # leave the init holding the launcher's stderr pipe open.
+        for descriptor in (self._init_pidfd, self._keeper_pidfd):
+            if descriptor is None:
+                continue
+            try:
+                signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if self._keeper is not None:
+            await self._keeper.wait()
+        if self._commands:
+            await asyncio.gather(*(process.wait() for process in tuple(self._commands)))
+        if self._keeper_pidfd is not None:
+            os.close(self._keeper_pidfd)
+        if self._init_pidfd is not None:
+            os.close(self._init_pidfd)
+        # Prefix descriptors belong to the first member and are closed by it.
+        for descriptor in self._owned_namespaces:
+            os.close(descriptor)
+        if self._root_fd is not None:
+            os.close(self._root_fd)
+        await asyncio.to_thread(_remove, self._bundle or self.root)
         if self.layers is not None:
             await asyncio.to_thread(_remove, self.layers)
 
@@ -631,21 +796,33 @@ def _check_mounts(mounts: tuple[Mount, ...]) -> None:
             raise UnsupportedMachineSpec(f"The local backend's mount {mount.guest} lies inside another mount")
 
 
-def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec:
-    if not isinstance(spec.source, (HostImage, PackageSpec)):
+def _check_spec(spec: MachineSpec) -> HostImage | PackageSpec | PreparedImage | RegistryImage:
+    if not isinstance(spec.source, (HostImage, PackageSpec, PreparedImage, RegistryImage)):
         raise UnsupportedMachineSpec(
-            f"The local backend requires HostImage or PackageSpec, not {type(spec.source).__name__}"
+            "The local backend requires HostImage, PackageSpec, or a prepared/pinned OCI image, "
+            f"not {type(spec.source).__name__}"
         )
     if spec.cpus is not None or spec.storage_mb is not None or spec.gpus or spec.memory_mb is not None:
         raise UnsupportedMachineSpec("The local backend does not provide CPU, memory, storage, or GPU allocations")
+    if (
+        isinstance(spec.source, RegistryImage)
+        and re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", spec.source.reference) is None
+    ):
+        raise UnsupportedMachineSpec("Local registry images must be pinned by sha256 digest")
     return spec.source
 
 
 def check_local_environment(requirements: ExecutionRequirements, spec: MachineSpec) -> None:
     """Check local execution support without acquiring a bubblewrap sandbox."""
-    _check_spec(spec)
+    source = _check_spec(spec)
+    origin = source.source if isinstance(source, PreparedImage) else source
+    reference = origin.reference if isinstance(origin, RegistryImage) else None
     check_execution_requirements(
-        requirements, spec, semantics=CommandSemantics.LINUX_PROCESS, capabilities=LINUX_PROCESS_CAPABILITIES
+        requirements,
+        spec,
+        semantics=CommandSemantics.LINUX_PROCESS,
+        capabilities=LINUX_PROCESS_CAPABILITIES,
+        image_reference=reference,
     )
 
 
@@ -669,6 +846,10 @@ class LocalMachineFactory:
     ``bwrap`` names the executable to use. By default the factory takes the first of the bundled bwrap
     and any bwrap on ``PATH`` that can build a sandbox on this host, and raises ``SandboxUnavailable``
     when none can.
+
+    Prepared images use private rootless umoci bundles, without host program mounts. Registry inputs
+    must be digest pinned. Only numeric root image users are supported. ``ttl`` bounds the lifetime of
+    a machine or group; a command timeout or cancellation also closes its entire machine or group.
     """
 
     backend: Backend = Backend.LOCAL
@@ -683,7 +864,17 @@ class LocalMachineFactory:
         package_cache: Path | None = None,
         python_version: str = DEFAULT_PYTHON_VERSION,
         system_directories: SystemDirectories = SystemDirectories.READ_ONLY,
+        ttl: float | None = None,
+        image_cache: Path | None = None,
+        authfile: Path | None = None,
+        policy: Path | None = None,
+        umoci: Path = Path("umoci"),
     ):
+        if ttl is not None and ttl <= 0:
+            raise ValueError("Local machine TTL must be positive")
+        self.ttl = ttl
+        self.image_cache = process_image_cache(image_cache or Path.home() / ".cache/shellbox/images", authfile, policy)
+        self.umoci = umoci
         self.read_only = tuple(directory.absolute() for directory in read_only)
         missing = [str(directory) for directory in self.read_only if not directory.is_dir()]
         if missing:
@@ -700,7 +891,71 @@ class LocalMachineFactory:
         check_local_environment(requirements, spec)
 
     async def create(self, spec: MachineSpec) -> LocalMachine:
+        machine = await self._create(spec)
+        if self.ttl is not None:
+            machine._expiry = asyncio.create_task(_expire(machine.close, self.ttl))
+        return machine
+
+    async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup:
+        """Start separate members sharing only a private loopback network."""
+        for member in (spec.task, *(service.machine for service in spec.services)):
+            _check_spec(member)
+        if any(re.fullmatch(r"[a-z][a-z0-9-]{0,62}", service.name) is None for service in spec.services):
+            raise UnsupportedMachineSpec("Local service names must be lowercase DNS labels")
+        members: list[LocalMachine] = []
+        monitors: list[asyncio.Task[Result]] = []
+        expiry: asyncio.Task[None] | None = None
+        closing_tasks: set[asyncio.Task[None]] = set()
+
+        async def close() -> None:
+            if expiry is not None:
+                expiry.cancel()
+            await asyncio.gather(*(member._close_local() for member in members))
+            for monitor in monitors:
+                if not monitor.done():
+                    monitor.cancel()
+            await asyncio.gather(*monitors, return_exceptions=True)
+
+        try:
+            aliases = "127.0.0.1 localhost " + " ".join(service.name for service in spec.services) + "\n"
+            task = await self._create(spec.task, aliases=aliases)
+            members.append(task)
+            services = {}
+            for service in spec.services:
+                member = await self._create(service.machine, peer=task, aliases=aliases)
+                members.append(member)
+                services[service.name] = member
+            group = ServiceGroup(task, services, spec, close)
+            for member in members:
+                member._group_close = group.close
+            for service in spec.services:
+                member = services[service.name]
+                image = member.image
+                entrypoint = (
+                    service.entrypoint if service.entrypoint is not None else (() if image is None else image.entrypoint)
+                )
+                arguments = (
+                    service.arguments if service.arguments is not None else (() if image is None else image.arguments)
+                )
+                if not entrypoint and not arguments:
+                    raise UnsupportedMachineSpec(f"Service {service.name} has no startup command")
+                monitor = asyncio.create_task(member.run(Command((*entrypoint, *arguments))))
+                monitor.add_done_callback(lambda finished: _service_finished(group, finished, closing_tasks))
+                monitors.append(monitor)
+            if self.ttl is not None:
+                expiry = asyncio.create_task(_expire(group.close, self.ttl))
+            return group
+        except BaseException:
+            await asyncio.shield(asyncio.gather(*(member._close_local() for member in members)))
+            raise
+
+    async def _create(
+        self, spec: MachineSpec, peer: LocalMachine | None = None, aliases: str | None = None
+    ) -> LocalMachine:
         source = _check_spec(spec)
+        if isinstance(source, (PreparedImage, RegistryImage)):
+            return await self._create_image(spec, source, peer, aliases)
+
         host = source if isinstance(source, HostImage) else HostImage()
         if isinstance(source, PackageSpec) and source.pypi_packages is not None:
             installed = await asyncio.to_thread(
@@ -727,6 +982,8 @@ class LocalMachineFactory:
             raise UnsupportedMachineSpec(f"The local backend's workdir {spec.workdir} is a read-only host path")
         # A workdir in an overlaid directory is made by a command once the machine runs, so it lands in the layer.
         root, layers = _machine_directories(None if overlaid_workdir else workdir, copy_on_write=copy_on_write)
+        if aliases is not None:
+            (root / "etc/hosts").write_text(aliases)
         environment = {
             "PATH": os.pathsep.join(
                 [
@@ -743,11 +1000,86 @@ class LocalMachineFactory:
         machine = LocalMachine(spec, bwrap=self.bwrap, root=root, layers=layers, mounts=mounts, environment=environment)
         tools = source.tools if isinstance(source, PackageSpec) else ()
         try:
+            await machine._start_keeper(peer)
             await _start(machine, workdir if overlaid_workdir else None, tools)
         except BaseException:
             await machine.close()
             raise
         return machine
+
+    async def _create_image(
+        self, spec: MachineSpec, source: PreparedImage | RegistryImage, peer: LocalMachine | None, aliases: str | None
+    ) -> LocalMachine:
+        if self.read_only or self.bin_dirs or self.system_directories is not SystemDirectories.READ_ONLY:
+            raise UnsupportedMachineSpec("Prepared local images cannot use host program mounts or overlays")
+        parent = Path(tempfile.mkdtemp(prefix="shellbox-image-"))
+        bundle = parent / "bundle"
+        machine = None
+
+        async def prepare() -> PreparedLocalImage:
+            prepared = (
+                source
+                if isinstance(source, PreparedImage)
+                else await asyncio.to_thread(self.image_cache.prepare, source)
+            )
+            return await asyncio.to_thread(prepare_local_image, prepared, bundle, umoci=self.umoci)
+
+        preparation = asyncio.create_task(prepare())
+        try:
+            image = await asyncio.shield(preparation)
+            if image.user not in (None, "", "0", "0:0"):
+                raise UnsupportedMachineSpec("Prepared local images currently support only root USER")
+            effective = replace(spec, workdir=spec.workdir or image.workdir)
+            machine = LocalMachine(
+                effective,
+                bwrap=self.bwrap,
+                root=image.root,
+                layers=None,
+                mounts=(),
+                environment={"PATH": DEFAULT_PATH, "HOME": "/root", **image.environment},
+                image=image,
+                bundle=parent,
+            )
+            await machine._start_keeper(peer)
+            if aliases is not None:
+                hosts = await machine._control("cat > /etc/hosts", PurePosixPath("/"), stdin=aliases.encode())
+                if hosts.exit_code != 0:
+                    raise RuntimeError(f"Cannot prepare group aliases: {hosts.stderr.decode(errors='replace')}")
+            result = await machine._control('mkdir -p -- "$1"', _absolute_path(effective.workdir))
+            if result.exit_code != 0:
+                raise RuntimeError(f"Cannot create image workdir: {result.stderr.decode(errors='replace')}")
+            return machine
+        except BaseException:
+            # A cancelled to_thread still writes its bundle. Reclaim it only
+            # after the trusted unpacker has stopped.
+            try:
+                await asyncio.shield(preparation)
+            finally:
+                if machine is not None:
+                    await machine._close_local()
+                else:
+                    await asyncio.to_thread(_remove, parent)
+            raise
+
+
+async def _expire(close: Callable[[], Awaitable[None]], ttl: float) -> None:
+    await asyncio.sleep(ttl)
+    await close()
+
+
+def _log_task_failure(task: asyncio.Task) -> None:
+    if not task.cancelled() and (error := task.exception()) is not None:
+        if isinstance(error, MachineTerminated):
+            return  # Closing a group interrupts its still-running service monitors.
+        logger.error("Local sandbox lifecycle failed", exc_info=(type(error), error, error.__traceback__))
+
+
+def _service_finished(group: ServiceGroup, task: asyncio.Task[Result], closing_tasks: set[asyncio.Task[None]]) -> None:
+    _log_task_failure(task)
+    reclaim = asyncio.create_task(group.close())
+    closing_tasks.add(reclaim)
+    reclaim.add_done_callback(closing_tasks.discard)
+    reclaim.add_done_callback(_log_task_failure)
 
 
 def _machine_directories(workdir: PurePosixPath | None, *, copy_on_write: bool) -> tuple[Path, Path | None]:

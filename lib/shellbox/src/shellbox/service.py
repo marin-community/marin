@@ -7,8 +7,17 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from types import MappingProxyType
+from typing import Protocol
 
-from shellbox.machine import Command, ExitReason, Machine, MachineSpec, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.machine import (
+    Command,
+    ExitReason,
+    Machine,
+    MachineFactory,
+    MachineSpec,
+    NetworkPolicy,
+    UnsupportedMachineSpec,
+)
 
 _TIMED_PROBE = """\
 import os
@@ -117,6 +126,12 @@ class ServiceGroup:
         if self._closing is None:
             self._closing = asyncio.ensure_future(self._close())
         await asyncio.shield(self._closing)
+
+
+class ServiceGroupFactory(MachineFactory, Protocol):
+    """A machine factory that also creates private groups of task services."""
+
+    async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup: ...
 
 
 async def wait_service_ready(machine: Machine, probe: ReadinessProbe) -> None:
