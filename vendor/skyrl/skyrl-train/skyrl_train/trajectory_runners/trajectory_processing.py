@@ -358,6 +358,15 @@ def concatenate_trajectory_batches(
                 for response_ids in output["response_ids"]:
                     token_level_shaping_concat.append([0.0] * len(response_ids))
 
+    # Reasoning-span token penalties add loop credit to only the batches that have a violation.
+    loop_advantages_concat = None
+    if any(output.get("loop_advantages") is not None for output in trajectory_batches):
+        loop_advantages_concat = [
+            row
+            for output in trajectory_batches
+            for row in (output.get("loop_advantages") or [[0.0] * len(ids) for ids in output["response_ids"]])
+        ]
+
     has_span_tags = [
         "response_span_tags" in output and output.get("response_span_tags") is not None for output in trajectory_batches
     ]
@@ -401,6 +410,8 @@ def concatenate_trajectory_batches(
         result["data_sources"] = data_sources_concat
     if token_level_shaping_concat is not None:
         result["token_level_shaping"] = token_level_shaping_concat
+    if loop_advantages_concat is not None:
+        result["loop_advantages"] = loop_advantages_concat
     if response_span_tags_concat is not None:
         result["response_span_tags"] = response_span_tags_concat
     if unshaped_rewards_concat is not None:

@@ -3,11 +3,13 @@
 import asyncio
 from copy import deepcopy
 from dataclasses import dataclass
-from collections.abc import Awaitable, Callable
+from enum import StrEnum
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any, NotRequired, Protocol
 from uuid import uuid4
 
 import numpy as np
+from transformers import PreTrainedTokenizerBase
 from rolloutengine.models import RolloutContractError
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
@@ -45,6 +47,13 @@ _CHAT_SAMPLING_EXCLUSIONS = frozenset({*_OUTPUT_LIMIT_KEYS, "logprobs", "stop"})
 
 
 REASONING_VIOLATIONS_KEY = "reasoning_violations"
+REASONING_VIOLATION_TOKENS_KEY = "reasoning_violation_tokens"
+
+
+class _SpanState(StrEnum):
+    BEFORE = "before"
+    INSIDE = "inside"
+    AFTER = "after"
 
 
 class ModelClientOutput(InferenceEngineOutput):
@@ -53,6 +62,7 @@ class ModelClientOutput(InferenceEngineOutput):
     token_provenance: TokenProvenance
     generation_token_budgets: NotRequired[list[int | None]]
     reasoning_violations: NotRequired[list[ReasoningViolation | None]]
+    reasoning_violation_tokens: NotRequired[list[int | None]]
 
 
 class ModelClient(Protocol):
@@ -119,6 +129,7 @@ class _ChatResult:
     routed_experts: np.ndarray | None = None
     policy_steps: list[int] | None = None
     reasoning_violation: ReasoningViolation | None = None
+    reasoning_violation_token: int | None = None
 
 
 def _choice_routed_experts(choice: dict[str, Any], prompt_ids: list[int], response_ids: list[int]) -> np.ndarray | None:
@@ -146,6 +157,7 @@ def _assemble_chat_results(results: list[_ChatResult]) -> ModelClientOutput:
     )
     if any(result.reasoning_violation is not None for result in results):
         output[REASONING_VIOLATIONS_KEY] = [result.reasoning_violation for result in results]
+        output[REASONING_VIOLATION_TOKENS_KEY] = [result.reasoning_violation_token for result in results]
     if all(rows is not None for rows in selected_indices):
         output["student_topk_indices"] = selected_indices
         output["behavior_topk_logprobs"] = selected_scores
@@ -204,6 +216,40 @@ async def _render_chat_prompt(
     if not isinstance(prompt_ids, list) or not all(isinstance(token, int) for token in prompt_ids):
         raise RuntimeError("vLLM tokenization did not return prompt token IDs")
     return messages, prompt_ids
+
+
+def _reasoning_marker_tokens(tokenizer: PreTrainedTokenizerBase) -> dict[int, str]:
+    """Map each reasoning marker that is one token to its text."""
+    markers = {}
+    for pair in REASONING_DELIMITERS:
+        for marker in pair:
+            token_ids = tokenizer.encode(marker, add_special_tokens=False)
+            if len(token_ids) == 1:
+                markers[token_ids[0]] = marker
+    return markers
+
+
+def _reasoning_violation_token(response_ids: Sequence[int], markers: Mapping[int, str]) -> int | None:
+    """Index of the first second-opening or stray-closing marker, or the last token of an unclosed span.
+
+    ``None`` when the one-token markers are well formed, i.e. the violation is in literal marker text.
+    """
+    closing_marker = dict(REASONING_DELIMITERS)
+    state = _SpanState.BEFORE
+    expected_close = None
+    for index, token in enumerate(response_ids):
+        marker = markers.get(token)
+        if marker is None:
+            continue
+        if marker in closing_marker and state == _SpanState.BEFORE:
+            state = _SpanState.INSIDE
+            expected_close = closing_marker[marker]
+        elif state == _SpanState.BEFORE or (state == _SpanState.INSIDE and marker == expected_close):
+            # A closing marker first closes a span that the chat template opened in the prompt.
+            state = _SpanState.AFTER
+        else:
+            return index
+    return len(response_ids) - 1 if state == _SpanState.INSIDE else None
 
 
 class DirectModelClient:
@@ -389,6 +435,11 @@ class DirectModelClient:
                 if not message.get("tool_calls"):
                     message = {**message, "content": text}
             reasoning_violation = reasoning_span_violation(decoded, stop_reason)
+            reasoning_violation_token = (
+                None
+                if reasoning_violation is None
+                else _reasoning_violation_token(response_ids, _reasoning_marker_tokens(tokenizer))
+            )
             logprob_items = (choice.get("logprobs") or {}).get("content")
             response_logprobs = (
                 [float(item["logprob"]) for item in logprob_items] if logprob_items is not None else None
@@ -413,6 +464,7 @@ class DirectModelClient:
                 _choice_routed_experts(choice, prompt_ids, response_ids),
                 choice.get(CHOICE_POLICY_STEPS_KEY),
                 reasoning_violation,
+                reasoning_violation_token,
             )
 
         results = await asyncio.gather(

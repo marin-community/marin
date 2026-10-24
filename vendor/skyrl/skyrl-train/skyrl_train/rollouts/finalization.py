@@ -14,7 +14,10 @@ from skyrl_train.metric_names import (
     TIS_UNALIGNED_FRACTION_METRIC,
 )
 from skyrl_train.trajectory_runners.types import TrajectoryBatch, TrajectoryRequestBatch
-from skyrl_train.trajectory_runners.trajectory_reward_shaping import shape_trajectory_rewards
+from skyrl_train.trajectory_runners.trajectory_reward_shaping import (
+    apply_reasoning_span_penalties,
+    shape_trajectory_rewards,
+)
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink, retain_trajectories
 from skyrl_train.rollout_observability import rollout_phase
 
@@ -88,6 +91,7 @@ async def finalize_trajectory_batch(
     output["rollout_metrics"] = metrics
     with rollout_phase("finalize"):
         shape_trajectory_rewards(output, config.get("trajectory_reward_shaping"))
+        apply_reasoning_span_penalties(output)
         add_alignment_metrics(output)
         if sink is not None:
             with rollout_phase("retain"):

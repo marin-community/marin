@@ -61,6 +61,7 @@ from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propaga
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
+    REASONING_VIOLATION_TOKENS_KEY,
     REASONING_VIOLATIONS_KEY,
     DirectModelClient,
     GenerationBudgetExceededError,
@@ -73,8 +74,11 @@ from skyrl_train.rollouts.task_projections import (
     logprobs_requested,
 )
 from skyrl_train.rollouts.training_record import (
+    REASONING_VIOLATION_TOKEN_METADATA_KEY,
     ReasoningSpanPolicy,
+    ReasoningSpanSettings,
     TrainingRollout,
+    penalize_reasoning_spans,
     reject_malformed_reasoning,
     training_rollout,
 )
@@ -211,6 +215,7 @@ async def _model_turn(
                 if output.get(name) is not None
             },
             "generation_token_budget": (output.get("generation_token_budgets") or [None])[0],
+            REASONING_VIOLATION_TOKEN_METADATA_KEY: (output.get(REASONING_VIOLATION_TOKENS_KEY) or [None])[0],
         },
         reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
     )
@@ -359,7 +364,7 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
-        self.reasoning_span_policy = ReasoningSpanPolicy(trajectory_runner_cfg.reasoning_spans.policy)
+        self.reasoning_spans = ReasoningSpanSettings.from_config(trajectory_runner_cfg.reasoning_spans)
         self.harbor = harbor
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait
@@ -497,7 +502,7 @@ class TaskRolloutWorker:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
-                if self.reasoning_span_policy == ReasoningSpanPolicy.REJECT:
+                if self.reasoning_spans.policy == ReasoningSpanPolicy.REJECT:
                     # Before group grading, so a malformed rollout never enters a GenRM comparison.
                     result = reject_malformed_reasoning(result)
                 if (
@@ -536,6 +541,8 @@ class TaskRolloutWorker:
                 policies,
                 logprobs_required=require_logprobs,
             )
+            if phase == "train":
+                rollouts = [penalize_reasoning_spans(rollout, self.reasoning_spans) for rollout in rollouts]
             if self.harbor is not None:
                 rollouts = shape_harbor_rollouts(
                     rollouts,
