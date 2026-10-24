@@ -14,6 +14,7 @@ from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.chat_template import GRUG_TOKENS, QWEN_TOKENS
+from experiments.post_training.task_data import math_r
 from experiments.post_training.task_data.build import cli
 from experiments.post_training.task_data.code_x import (
     DIRECTION_INPUT,
@@ -496,3 +497,13 @@ def test_parallel_answer_screening_draws_the_same_tasks():
     serial = draw_r_tasks(pool, seed=5, reserved_pool_path=os.devnull, workers=1)
     parallel = draw_r_tasks(pool, seed=5, reserved_pool_path=os.devnull, workers=2)
     assert parallel == serial
+
+
+def test_a_screen_that_exceeds_its_cpu_budget_drops_the_answer(monkeypatch):
+    def spin(_answer):
+        while True:  # a runaway SymPy simplification, as on the pool's pathological answers
+            pass
+
+    monkeypatch.setattr(math_r, "answer_is_verifier_parsable", spin)
+    monkeypatch.setattr(math_r, "SCREEN_CPU_SECONDS", 0.2)
+    assert math_r.screened_answer("x") is False

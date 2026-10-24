@@ -22,6 +22,7 @@ import hashlib
 import json
 import multiprocessing
 import re
+import signal
 from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
@@ -170,19 +171,52 @@ def _json_row(line: str) -> dict | None:
     return json.loads(line) if line else None
 
 
+SCREEN_CPU_SECONDS = 30
+"""CPU budget for screening one answer. math-verify's own deadline is a SIGALRM that
+can fire inside a gc callback (JAX installs one), where Python swallows the exception
+and the deadline never fires again; a few answers then ran away in SymPy for hours."""
+_SCREEN_RETRY_SECONDS = 0.5
+
+
+class _ScreenBudgetExceeded(BaseException):
+    """Raised by the screen watchdog; a BaseException so library ``except Exception`` blocks pass it on."""
+
+
+def _raise_budget_exceeded(_signum, _frame) -> None:
+    raise _ScreenBudgetExceeded
+
+
+def screened_answer(answer: str) -> bool:
+    """:func:`answer_is_verifier_parsable` under a CPU budget that cannot be swallowed.
+
+    The watchdog is a profiling timer, separate from math-verify's SIGALRM, that keeps
+    firing every half second past the budget until its exception lands. An answer the
+    verifier cannot settle within the budget is not usable for grading and is dropped.
+    """
+    previous = signal.signal(signal.SIGPROF, _raise_budget_exceeded)
+    signal.setitimer(signal.ITIMER_PROF, SCREEN_CPU_SECONDS, _SCREEN_RETRY_SECONDS)
+    try:
+        return answer_is_verifier_parsable(answer)
+    except _ScreenBudgetExceeded:
+        return False
+    finally:
+        signal.setitimer(signal.ITIMER_PROF, 0)
+        signal.signal(signal.SIGPROF, previous)
+
+
 def answer_verdicts(pool_rows: list[dict[str, str]], *, workers: int) -> dict[str, bool]:
-    """:func:`answer_is_verifier_parsable` of every distinct answer in the pool.
+    """:func:`screened_answer` of every distinct answer in the pool.
 
     The verifier screen dominates the build, and short answers repeat across the pool,
     so each distinct answer is screened once, over ``workers`` processes. Workers are
-    spawned rather than forked: the verifier's deadline is a SIGALRM in each worker's
+    spawned rather than forked: the screen's deadlines are signals in each worker's
     main thread, and forking a parent that loaded JAX is unsafe.
     """
     answers = sorted({str(row.get("answer", "")).strip() for row in pool_rows} - {""})
     if workers == 1:
-        return {answer: answer_is_verifier_parsable(answer) for answer in answers}
+        return {answer: screened_answer(answer) for answer in answers}
     with ProcessPoolExecutor(max_workers=workers, mp_context=multiprocessing.get_context("spawn")) as pool:
-        verdicts = pool.map(answer_is_verifier_parsable, answers, chunksize=64)
+        verdicts = pool.map(screened_answer, answers, chunksize=64)
         return dict(zip(answers, verdicts, strict=True))
 
 
