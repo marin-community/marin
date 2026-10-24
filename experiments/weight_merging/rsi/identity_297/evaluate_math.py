@@ -8,9 +8,16 @@ import json
 from dataclasses import asdict
 
 import requests
-from marin.evaluation.evalchemy.runner import EvalchemyRunConfig, EvalchemyRuntimeConfig, run_evalchemy
+from marin.evaluation.evalchemy.runner import (
+    EvalchemyOutcome,
+    EvalchemyRunConfig,
+    EvalchemyRuntimeConfig,
+    read_evalchemy_outcome,
+    run_evalchemy,
+)
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
+from pydantic import TypeAdapter
 from rigging.filesystem.buckets import filesystem_for
 from rigging.secrets import require_secret
 
@@ -22,6 +29,7 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), required=True)
     parser.add_argument("--sample-seed", type=int, choices=(17, 29))
+    parser.add_argument("--recover-gsm-job", help="Read an already successful GSM8K child instead of generating again.")
     args = parser.parse_args()
     generation = {"temperature": "0"}
     if args.sample_seed is not None:
@@ -62,10 +70,14 @@ def main() -> None:
             assert json.loads(fs.cat_file(path))["provenance"] == provenance
             print(f"Skipping completed {alias}", flush=True)
             continue
-        outcome = run_evalchemy(model, config, output, env_vars={}, backend_state=backend_state)
+        if name == "gsm8k" and args.recover_gsm_job:
+            outcome = read_evalchemy_outcome(config, output, args.recover_gsm_job)
+        else:
+            outcome = run_evalchemy(model, config, output, env_vars={}, backend_state=backend_state)
         coverage = list(outcome.coverage.values())
         assert len(coverage) == 1 and coverage[0].n_scored == count, f"Incomplete coverage: {coverage}"
-        payload = json.dumps({"provenance": provenance, "outcome": asdict(outcome)}, indent=2).encode()
+        serialized = TypeAdapter(EvalchemyOutcome).dump_python(outcome, mode="json")
+        payload = json.dumps({"provenance": provenance, "outcome": serialized}, indent=2).encode()
         fs.pipe_file(path, payload)
         assert fs.cat_file(path) == payload
         print(f"Completed {alias}: {outcome.metrics}", flush=True)
