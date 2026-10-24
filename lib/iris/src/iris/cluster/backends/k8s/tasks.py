@@ -70,7 +70,6 @@ from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
-    EGRESS_NETWORK_POLICY_PREFIX,
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
@@ -93,6 +92,7 @@ from iris.cluster.platforms.k8s.coreweave_topology import (
     gpu_gang_rack_slice_size,
 )
 from iris.cluster.platforms.k8s.kueue_manifests import WorkloadPriorityKind, workload_priority_class_name
+from iris.cluster.platforms.k8s.network_policies import SERVICE_GROUP_NETWORK_POLICY_NAME
 from iris.cluster.platforms.k8s.service import K8sService
 from iris.cluster.platforms.k8s.types import (
     IRIS_ATTEMPT_ID_LABEL,
@@ -856,20 +856,6 @@ def _topology_request_annotations(
             )
         return {_KUEUE_REQUIRED_TOPOLOGY: node_label}
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
-
-
-def _build_service_group_network_policy(namespace: str) -> dict:
-    return {
-        "apiVersion": "networking.k8s.io/v1",
-        "kind": "NetworkPolicy",
-        "metadata": {"name": f"{EGRESS_NETWORK_POLICY_PREFIX}{SERVICE_GROUP_NETWORK}", "namespace": namespace},
-        "spec": {
-            "podSelector": {"matchLabels": {EGRESS_LABEL: SERVICE_GROUP_NETWORK}},
-            "policyTypes": ["Ingress", "Egress"],
-            "ingress": [],
-            "egress": [],
-        },
-    }
 
 
 def _service_group_security_context() -> dict:
@@ -2859,9 +2845,22 @@ class K8sTaskProvider:
         """Create or update the Pod for a task attempt."""
         manifest = _build_pod_manifest(run_req, self.pods)
         if run_req.environment.sandbox_services:
-            # Install isolation before the pod can start. This durable policy is
-            # never removed while a group might still be running.
-            self.kubectl.apply_json(_build_service_group_network_policy(self.pods.namespace))
+            # Kubernetes permits network access when no policy selects a pod.
+            # Only the operator may install or change the durable deny-all policy.
+            policy = self.kubectl.get_json(K8sResource.NETWORK_POLICIES, SERVICE_GROUP_NETWORK_POLICY_NAME)
+            spec = policy.get("spec", {}) if policy is not None else {}
+            if (
+                policy is None
+                or policy.get("metadata", {}).get("deletionTimestamp")
+                or spec.get("podSelector") != {"matchLabels": {EGRESS_LABEL: SERVICE_GROUP_NETWORK}}
+                or set(spec.get("policyTypes", [])) != {"Ingress", "Egress"}
+                or spec.get("ingress")
+                or spec.get("egress")
+            ):
+                raise KubectlError(
+                    f"Service groups require the operator-installed {SERVICE_GROUP_NETWORK_POLICY_NAME} "
+                    "NetworkPolicy to select only service groups and deny all ingress and egress"
+                )
 
         task_id_name = JobName.from_wire(run_req.task_id)
         pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)
