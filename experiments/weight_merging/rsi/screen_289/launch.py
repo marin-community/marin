@@ -46,11 +46,12 @@ COMMIT = "c1d5c62cdc3939b42f64411af44fd50716b53454"
 KEYS = ("math500", "gsm8k-0shot", "humanevalplus", "ifbench")
 RUNS = (1, 2)
 RUNTIME_SECONDS = 6 * 3600
-# v4-32: reserved, 4 hosts, TP16 (task261 parity). v5p-8: preemptible, 1 host, TP4 (task249 OlympiadBench parity);
+# v4-32: reserved, 4 hosts, TP16 (task261 parity). v5p-8 / v6e-8: preemptible, 1 host, TP4 / TP8 (task249 parity);
 # preemptions retry the whole job, evals finished before it are kept and Evalchemy resumes the interrupted one.
 PLATFORMS = {
     "v4-32": dict(tp=16, multihost=True, preemption_retries=0),
     "v5p-8": dict(tp=4, multihost=False, preemption_retries=30),
+    "v6e-8": dict(tp=8, multihost=False, preemption_retries=30),
 }
 # Slice t1v-n-70779c29 hosts the #205 CPU merges (2026-10-23); keep the serve off it.
 AVOID_TPU_NAMES = ("t1v-n-70779c29",)
