@@ -200,6 +200,45 @@ _DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA)
 _COMPRESS_PREFIX = "compress/"
 # Per-layer branch-output max |x| and RMS (``layer_output_stats``), stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
+
+
+@jax.custom_jvp
+def _pow_2_5(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``x^2.5`` for ``x >= 0`` as ``x * x * sqrt(x)`` (no exp/log), with the derivative ``2.5 x sqrt(x)`` (finite at
+    0, where ``sqrt``'s own derivative is not)."""
+    return x * x * jnp.sqrt(x)
+
+
+@_pow_2_5.defjvp
+def _pow_2_5_jvp(primals, tangents):
+    (x,), (dx,) = primals, tangents
+    root = jnp.sqrt(x)
+    return x * x * root, 2.5 * x * root * dx
+
+
+# Routed ReLU exponents with a static fast path (``routed_act_power``).
+ROUTED_ACT_POWERS = (2.0, 2.5, 3.0)
+
+
+def routed_relu_power(u: Float[Array, "..."], power: float) -> Float[Array, "..."]:
+    """``relu(u)^power`` for ``ROUTED_ACT_POWERS``: ``jnp.square`` at 2, ``x * x * sqrt(x)`` in float32 at 2.5, the
+    integer power at 3."""
+    if power == 2.0:
+        return jnp.square(jax.nn.relu(u))
+    if power == 2.5:
+        return _pow_2_5(jax.nn.relu(u.astype(jnp.float32))).astype(u.dtype)
+    if power == 3.0:
+        return jax.lax.integer_pow(jax.nn.relu(u), 3)
+    raise ValueError(f"routed_act_power must be one of {ROUTED_ACT_POWERS}, got {power}")
+
+
+def _tied_gate_relu_power(g: Float[Array, "..."], power: float) -> Float[Array, "..."]:
+    """The gate of ``relu(u)^power`` as ``gate(u) * u`` for the tied-gate (dropless local) backends."""
+    x = jax.nn.relu(g.astype(jnp.float32))
+    gate = x * jnp.sqrt(x) if power == 2.5 else jax.lax.integer_pow(x, int(power) - 1)
+    return gate.astype(g.dtype)
+
+
 _SHARED_PRE = "shared_pre"
 ROUTED_INPUT_KEY = "routed_input_per_layer"
 SHARED_PRE_KEY = "shared_pre_per_layer"
@@ -1058,6 +1097,9 @@ class GrugModelConfig:
     """Renormalize each token's combine weights over the slots that survived the capacity-limited EP dispatch
     (one extra int8 all-to-all per expert wave). Without it a dropped assignment just loses its weight."""
     learnable_qk_mult: bool = False
+    routed_act_power: float = 2.0
+    """Exponent ``p`` of the ungated routed experts, ``relu(x @ W_up)^p @ W_down`` (one of ``ROUTED_ACT_POWERS``, each
+    a static fast path); the shared experts stay ReLU^2. Other than 2 it needs ``moe_ungated_relu2``."""
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
     second_embed: bool = False
     embed2_rows: int = 0
@@ -1090,6 +1132,10 @@ class GrugModelConfig:
     """A second, independently initialized token-embedding table, RMS-normed, as an extra AttnRes source."""
 
     def __post_init__(self) -> None:
+        if self.routed_act_power not in ROUTED_ACT_POWERS:
+            raise ValueError(f"routed_act_power must be one of {ROUTED_ACT_POWERS}, got {self.routed_act_power}")
+        if self.routed_act_power != 2.0 and (not self.moe_ungated_relu2 or self.fp8_recipe != Fp8Recipe.NONE):
+            raise ValueError("routed_act_power other than 2 needs moe_ungated_relu2 and fp8_recipe=none")
         if self.mxfp8_expert_wgrad and self.fp8_recipe not in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8):
             raise ValueError("mxfp8_expert_wgrad needs MXFP8 experts (fp8_recipe=mxfp8 or mxfp8_experts)")
         if self.moe_k_layers and (
@@ -3923,7 +3969,7 @@ def _run_expert_bank(
             selected,
             combine_weights,
             *_mixed_width_weights(cfg, em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1), em.w_down),
-            activation=(ActivationFunctionEnum.relu2) if ungated else _tied_expert_activation(cfg, em),
+            activation=_routed_activation(cfg) if ungated else _tied_expert_activation(cfg, em),
             implementation=em.implementation,
             mesh=get_abstract_mesh(),
             capacity_factor=em.capacity_factor,
@@ -4037,8 +4083,19 @@ def _ragged_expert_mxfp8(cfg: "GrugModelConfig", em: MoEExpertMlp) -> ExpertMxfp
     return ExpertMxfp8.ALL if cfg.mxfp8_expert_wgrad else ExpertMxfp8.ACTIVATIONS
 
 
+def _routed_activation(cfg: "GrugModelConfig"):
+    """The ungated routed experts' activation: the ReLU^2 enum (the baseline's kernels), else the static
+    ``routed_relu_power`` (a plain callable: the ``ragged_dot`` expert MLP)."""
+    if cfg.routed_act_power == 2.0:
+        return ActivationFunctionEnum.relu2
+    return functools.partial(routed_relu_power, power=cfg.routed_act_power)
+
+
 def _tied_expert_activation(cfg: "GrugModelConfig", em: MoEExpertMlp):
-    """``act`` with ``act(u) * u == leaky_relu(u, slope)^2`` for backends that take the gate tied to ``W_up``."""
+    """``act`` with ``act(u) * u == leaky_relu(u, slope)^2`` for backends that take the gate tied to ``W_up``
+    (``relu(u)^routed_act_power`` with ``routed_act_power``)."""
+    if cfg.routed_act_power != 2.0:
+        return functools.partial(_tied_gate_relu_power, power=cfg.routed_act_power)
     if cfg.moe_ungated_relu2 and (0.0):
         slope_sq = (0.0) ** 2
         return lambda u: jax.nn.leaky_relu(u, slope_sq)
