@@ -124,10 +124,16 @@ class ExpertOutputNorm:
         return y.astype(rows.dtype)
 
 
-def expert_of_rows(group_sizes: Int[Array, "E"], num_rows: int) -> Int[Array, "R"]:
-    """The expert of each row of an expert-major buffer with ``group_sizes`` (rows past their sum: the last)."""
+def grouped_row_gains(gain: Float[Array, "E O"], group_sizes: Int[Array, "E"], num_rows: int) -> Float[Array, "R O"]:
+    """Each row's expert's gain for an expert-major buffer laid out by ``group_sizes`` (rows past their sum: zero).
+
+    A one-hot ``[R, E]`` matmul rather than a row gather, so the gain's gradient is a matmul too instead of a
+    scatter-add of every row into ``E`` rows (the gather version ran a d512 H100 step in ~50 s instead of 0.2 s).
+    """
     ends = jnp.cumsum(group_sizes)
-    return jnp.minimum(jnp.searchsorted(ends, jnp.arange(num_rows), side="right"), group_sizes.shape[0] - 1)
+    rows = jnp.arange(num_rows)[:, None]
+    one_hot = ((rows >= (ends - group_sizes)[None, :]) & (rows < ends[None, :])).astype(gain.dtype)
+    return jnp.einsum("re,eo->ro", one_hot, gain, precision=jax.lax.Precision.HIGHEST)
 
 
 def normalize_grouped_expert_rows(
@@ -143,7 +149,7 @@ def normalize_grouped_expert_rows(
     reaches it, and on the way out so their (possibly non-finite) cotangents never reach the gain gradient.
     """
     active = (jnp.arange(rows.shape[0]) < active_rows)[:, None]
-    row_gain = None if gain is None else gain[expert_of_rows(group_sizes, rows.shape[0])]
+    row_gain = None if gain is None else grouped_row_gains(gain, group_sizes, rows.shape[0])
     normed = norm(jnp.where(active, rows, jnp.zeros((), rows.dtype)), row_gain)
     return jnp.where(active, normed, jnp.zeros((), rows.dtype))
 
