@@ -108,6 +108,7 @@ from marinskyrl.checkpoint_paths import (
     BEST_CHECKPOINT_FILENAME,
     GLOBAL_STEP_PREFIX,
     LATEST_CHECKPOINT_FILE,
+    selected_export_step,
 )
 from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
@@ -884,22 +885,25 @@ class RayPPOTrainer:
             await self._save_intermediate_checkpoint(state)
             self._control.should_save = False
 
-        if self._control.should_save_hf_model:
-            if step_wall is not None:
-                step_wall.start("checkpoint_work")
-            # HF export reads the committed checkpoint. When checkpoint and HF
-            # export share a cadence, wait for the background shard uploads and
-            # marker publication before asking the exporter to consume it.
-            if await self._drain_checkpoint_upload():
-                await asyncio.to_thread(self.handle_hf_export)
-            self._control.should_save_hf_model = False
-
         if self._control.should_evaluate and self.eval_dataset is not None:
             if step_wall is not None:
                 step_wall.start("evaluation")
             with Timer("eval", self.all_timings):
                 await self._evaluate_and_log(state, commit=False)
             self._control.should_evaluate = False
+
+        if self._control.should_save_hf_model:
+            if step_wall is not None:
+                step_wall.start("checkpoint_work")
+            # HF export reads the committed checkpoint. When checkpoint and HF
+            # export share a cadence, wait for the background shard uploads and
+            # marker publication before asking the exporter to consume it.
+            # Best selection is resolved only at train end: before an eligible
+            # evaluation, metadata can be absent or still point at the initializer.
+            if self.cfg.trainer.hf_export_checkpoint != "best" and await self._drain_checkpoint_upload():
+                await asyncio.to_thread(self.handle_hf_export)
+            self._control.should_save_hf_model = False
+
         if step_wall is not None:
             step_wall.start("step_end_bookkeeping")
 
@@ -3416,18 +3420,21 @@ class RayPPOTrainer:
             self._handle_hf_export()
 
     def _handle_hf_export(self) -> None:
-        checkpoint_path = os.path.join(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{self.global_step}")
-        trainer_state_path = os.path.join(checkpoint_path, TRAINER_STATE_FILENAME)
+        export_step = selected_export_step(
+            self.cfg.trainer.ckpt_path, self.cfg.trainer.hf_export_checkpoint, self.global_step
+        )
+        checkpoint_path = join_resource_path(self.cfg.trainer.ckpt_path, f"{GLOBAL_STEP_PREFIX}{export_step}")
+        trainer_state_path = join_resource_path(checkpoint_path, TRAINER_STATE_FILENAME)
         if not io.exists(trainer_state_path):
             raise RuntimeError(
-                f"Cannot request HF export for global_step_{self.global_step}: "
+                f"Cannot request HF export for global_step_{export_step}: "
                 f"completed checkpoint marker is missing at {trainer_state_path}"
             )
 
         placement = self.cfg.trainer.placement
         model = self.cfg.trainer.policy.model
         request = HFExportRequest(
-            step=self.global_step,
+            step=export_step,
             checkpoint_base_path=self.cfg.trainer.ckpt_path,
             checkpoint_path=checkpoint_path,
             export_path=self.cfg.trainer.export_path,
@@ -3444,10 +3451,10 @@ class RayPPOTrainer:
         existing = read_hf_export_request(checkpoint_path)
         if existing is not None:
             if existing.status is HFExportStatus.COMPLETE:
-                logger.info(f"HF export for global_step_{self.global_step} is already complete")
+                logger.info(f"HF export for global_step_{export_step} is already complete")
                 return
             if existing.status is HFExportStatus.IN_PROGRESS:
-                logger.info(f"HF export for global_step_{self.global_step} is already in progress")
+                logger.info(f"HF export for global_step_{export_step} is already in progress")
                 return
             request = replace(
                 request,
@@ -3455,9 +3462,9 @@ class RayPPOTrainer:
                 timeout=existing.timeout,
                 last_exit_code=existing.last_exit_code,
             )
-            logger.info(f"Refreshing pending HF export request for global_step_{self.global_step}")
+            logger.info(f"Refreshing pending HF export request for global_step_{export_step}")
         request_path = write_hf_export_request(request)
-        logger.info(f"Queued out-of-band HF export for global_step_{self.global_step}: {request_path}")
+        logger.info(f"Queued out-of-band HF export for global_step_{export_step}: {request_path}")
 
     def _log_startup_timings(self) -> None:
         publish_startup_timings(
