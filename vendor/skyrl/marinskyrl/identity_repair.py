@@ -26,6 +26,7 @@ class IdentityRuntimeSettings(BaseModel):
     judge_revision: str
     judge_api_key_env: str
     judge_max_tokens: int = Field(gt=0)
+    judge_chat_template_kwargs: dict = Field(default_factory=dict)
     teacher_sampling_params: dict
     max_resume_turns: int = Field(ge=0)
     reward_weights: dict[str, float]

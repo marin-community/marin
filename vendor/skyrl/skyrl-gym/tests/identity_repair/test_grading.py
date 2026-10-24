@@ -27,13 +27,15 @@ def test_production_judge_uses_requested_facts_and_task_evidence(monkeypatch, co
         return response
 
     monkeypatch.setattr(requests, "post", respond)
-    judge = ProductionIdentityJudge(OpenAIJudge("http://judge/v1", "judge-model", strict_completion=True), "pin", 512)
+    judge = ProductionIdentityJudge(OpenAIJudge("http://judge/v1", "judge-model", strict_completion=True,
+                                                   chat_template_kwargs={"enable_thinking": False}), "pin", 512)
     manifest = FactManifest("v1", "Marin Snowball", (), "OpenAthena", (), "OpenAthena", (), (), {})
     context = TurnContext("What is your name?", True, (IdentityFact.NAME,), completed)
     result = judge.grade_answer("I am Marin Snowball.", context, manifest, RewardWeights())
     assert result.reward.total == score
     assert result.reward.judge_version == "judge-model@pin/identity-repair-v4-task-criteria"
     payload = json.loads(requests_seen[0]["messages"][-1]["content"])
+    assert requests_seen[0]["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["requested_facts"] == ["name"]
     assert payload["answer"] == "I am Marin Snowball."
     schema = requests_seen[0]["response_format"]["json_schema"]["schema"]

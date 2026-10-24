@@ -84,6 +84,7 @@ class OpenAIJudge:
     response_transport: GenRMResponseTransport = GenRMResponseTransport.RESPONSES_METADATA
     reasoning_effort: str | None = None
     strict_completion: bool = False
+    chat_template_kwargs: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "response_transport", GenRMResponseTransport(self.response_transport))
@@ -111,6 +112,8 @@ class OpenAIJudge:
             "temperature": temperature,
             "max_completion_tokens": max_tokens,
         }
+        if self.chat_template_kwargs is not None:
+            request["chat_template_kwargs"] = dict(self.chat_template_kwargs)
         if response_schema is not None:
             request["response_format"] = {"type": "json_schema", "json_schema": {
                 "name": "judge_assessment", "strict": True, "schema": response_schema,

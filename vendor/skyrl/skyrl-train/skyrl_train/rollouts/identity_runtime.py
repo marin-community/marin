@@ -95,7 +95,8 @@ def build_identity_groups(cfg, tokenizer, student_client, engines) -> IdentityRe
                 raise ValueError(f"Task criteria must provide nonempty text for every turn: {task}")
         criteria = {task: tuple(turns) for task, turns in criteria.items()}
     judge = ProductionIdentityJudge(OpenAIJudge(settings.judge_base_url, settings.judge_model,
-                                               api_key_env=settings.judge_api_key_env, strict_completion=True),
+                                               api_key_env=settings.judge_api_key_env, strict_completion=True,
+                                               chat_template_kwargs=settings.judge_chat_template_kwargs),
                                     settings.judge_revision, settings.judge_max_tokens)
     return IdentityRepairGroups(
         tokenizer, load_fact_manifest(data_root / settings.fact_manifest), judge,

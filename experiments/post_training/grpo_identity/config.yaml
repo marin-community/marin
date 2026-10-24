@@ -147,6 +147,8 @@ skyrl:
     judge_revision: glm-5.3
     judge_api_key_env: GLM_BULK_TOKEN
     judge_max_tokens: 8192
+    judge_chat_template_kwargs:
+      reasoning_effort: low
     teacher_sampling_params:
       temperature: 1.0
       top_p: 1.0
