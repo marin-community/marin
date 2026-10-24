@@ -1,0 +1,6 @@
+{
+  "site_url": "https://performance.oa.dev",
+  "app_source": "315128ce4e49c8a1ec1aa67eafa8f2de26e4c1f9",
+  "node": "24.21.0",
+  "bun": "1.4.0"
+}

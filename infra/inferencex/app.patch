@@ -1,0 +1,811 @@
+diff --git a/.env.example b/.env.example
+index 9fcc227f..4bec5943 100644
+--- a/.env.example
++++ b/.env.example
+@@ -53,6 +53,11 @@
+ # DATABASE_DRIVER=neon
+ # DATABASE_SSL=true
+ # CACHE_NAMESPACE=
++# Cloud SQL Unix socket directory; the postgres driver uses it as its host.
++# DATABASE_SOCKET_DIR=
++# Internal deployment origin and Snowball landing view (set at build time).
++# NEXT_PUBLIC_SITE_URL=
++# NEXT_PUBLIC_MARIN_PERFORMANCE=
+ # BLOB_CACHE_PREFIX=
+ # BLOB_READ_WRITE_TOKEN=
+ # GITHUB_TOKEN=
+diff --git a/docs/deployment-configuration.md b/docs/deployment-configuration.md
+index 2a8e24da..1ba5d780 100644
+--- a/docs/deployment-configuration.md
++++ b/docs/deployment-configuration.md
+@@ -1,5 +1,13 @@
+ # Deployment Configuration
+ 
++The internal Marin build sets `NEXT_PUBLIC_SITE_URL` to its IAP-protected origin
++and `NEXT_PUBLIC_MARIN_PERFORMANCE=1` to open on Snowball AgentX performance.
++`DATABASE_SOCKET_DIR` selects a Cloud SQL Unix socket directory for the postgres
++driver, including admin commands; keep `DATABASE_SSL=false` on that local connector
++path. Give the web process only `DATABASE_READONLY_URL` and run ingestion separately
++with `DATABASE_WRITE_URL`. Point details and the trace-server-metrics API expose
++the stored runtime build (`image`) and serving-recipe fingerprint.
++
+ Operational values (benchmark source repositories, target sites, Deployment Protection
+ bypass) are read from the environment, GitHub repository variables, or secrets. There
+ are no defaults: a required value that is unset fails the script or workflow step that
+diff --git a/packages/app/next.config.ts b/packages/app/next.config.ts
+index cd1d35a6..678cecea 100644
+--- a/packages/app/next.config.ts
++++ b/packages/app/next.config.ts
+@@ -1,16 +1,28 @@
+ import { withPostHogConfig } from '@posthog/nextjs-config';
+ import type { NextConfig } from 'next';
++import path from 'node:path';
+ import { allowedDevOriginsFromEnv } from './src/lib/runtime/allowed-dev-origins';
+ import { INFERENCE_MODEL_ALIAS_REDIRECTS } from './src/lib/routing/inference-model-redirects';
+ import { VIDEO_ALIAS_REDIRECTS } from './src/lib/video/video-alias-redirects';
+ 
+ const nextConfig: NextConfig = {
++  output: 'standalone',
++  outputFileTracingRoot: path.join(__dirname, '../..'),
+   distDir: process.env.NEXT_DIST_DIR || '.next',
+   allowedDevOrigins: allowedDevOriginsFromEnv(),
+   transpilePackages: ['@semianalysisai/inferencex-constants'],
+   serverExternalPackages: ['shiki'],
+   redirects() {
+     return Promise.resolve([
++      ...(process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1'
++        ? ['', '/zh'].flatMap((prefix) =>
++            ['', '/inference'].map((route) => ({
++              source: `${prefix}${route}` || '/',
++              destination: `${prefix}/inference/marin-snowball-v011?i_seq=agentic-traces&i_prec=bf16&i_metric=y_outputTputPerGpu&i_pctl=p90`,
++              permanent: false,
++            })),
++          )
++        : []),
+       ...INFERENCE_MODEL_ALIAS_REDIRECTS,
+       ...VIDEO_ALIAS_REDIRECTS,
+       {
+diff --git a/packages/app/src/app/compare-per-dollar/[slug]/opengraph-image.tsx b/packages/app/src/app/compare-per-dollar/[slug]/opengraph-image.tsx
+index 796669b5..159e8c8d 100644
+--- a/packages/app/src/app/compare-per-dollar/[slug]/opengraph-image.tsx
++++ b/packages/app/src/app/compare-per-dollar/[slug]/opengraph-image.tsx
+@@ -13,6 +13,7 @@ export const size = { width: 1200, height: 630 };
+ export const contentType = 'image/png';
+ 
+ export async function generateStaticParams() {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const slugs = await getAllComparableCompareSlugs();
+   return slugs.map(({ modelSlug, a, b }) => ({ slug: canonicalCompareSlug(modelSlug, a, b) }));
+ }
+diff --git a/packages/app/src/app/compare-precision/[slug]/opengraph-image.tsx b/packages/app/src/app/compare-precision/[slug]/opengraph-image.tsx
+index 9425863b..3596c51b 100644
+--- a/packages/app/src/app/compare-precision/[slug]/opengraph-image.tsx
++++ b/packages/app/src/app/compare-precision/[slug]/opengraph-image.tsx
+@@ -15,6 +15,7 @@ export const size = { width: 1200, height: 630 };
+ export const contentType = 'image/png';
+ 
+ export async function generateStaticParams() {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const slugs = await getAllComparablePrecisionSlugs();
+   return slugs.map(({ modelSlug, gpu, precA, precB }) => ({
+     slug: canonicalPrecisionCompareSlug(modelSlug, gpu, precA, precB),
+diff --git a/packages/app/src/app/compare-spec-decode/[slug]/opengraph-image.tsx b/packages/app/src/app/compare-spec-decode/[slug]/opengraph-image.tsx
+index 18821304..15f18b78 100644
+--- a/packages/app/src/app/compare-spec-decode/[slug]/opengraph-image.tsx
++++ b/packages/app/src/app/compare-spec-decode/[slug]/opengraph-image.tsx
+@@ -16,6 +16,7 @@ export const size = { width: 1200, height: 630 };
+ export const contentType = 'image/png';
+ 
+ export async function generateStaticParams() {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const slugs = await getAllComparableSpecDecodeSlugs();
+   return slugs.map(({ modelSlug, gpu, precision, method }) => ({
+     slug: canonicalSpecDecodeCompareSlug(modelSlug, gpu, precision, method),
+diff --git a/packages/app/src/app/compare/[slug]/opengraph-image.tsx b/packages/app/src/app/compare/[slug]/opengraph-image.tsx
+index 307d7a9c..a2bf261c 100644
+--- a/packages/app/src/app/compare/[slug]/opengraph-image.tsx
++++ b/packages/app/src/app/compare/[slug]/opengraph-image.tsx
+@@ -13,6 +13,7 @@ export const size = { width: 1200, height: 630 };
+ export const contentType = 'image/png';
+ 
+ export async function generateStaticParams() {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const slugs = await getAllComparableCompareSlugs();
+   return slugs.map(({ modelSlug, a, b }) => ({ slug: canonicalCompareSlug(modelSlug, a, b) }));
+ }
+diff --git a/packages/app/src/app/layout.tsx b/packages/app/src/app/layout.tsx
+index 72874c51..81b39e19 100644
+--- a/packages/app/src/app/layout.tsx
++++ b/packages/app/src/app/layout.tsx
+@@ -4,6 +4,7 @@ import './globals.css';
+ import { Analytics } from '@vercel/analytics/next';
+ import { SpeedInsights } from '@vercel/speed-insights/next';
+ import type { Metadata } from 'next';
++
+ import { DM_Sans } from 'next/font/google';
+ 
+ import { Footer } from '@/components/footer/footer';
+@@ -34,6 +35,9 @@ import {
+   LANDING_BANNER_STORAGE_KEY,
+ } from '@/lib/nudges/landing-banner';
+ 
++// Cloud Run builds have no database credentials. Resolve data when serving requests.
++export const dynamic = 'force-dynamic';
++
+ const dm_sans = DM_Sans({
+   subsets: ['latin'],
+   display: 'optional',
+diff --git a/packages/app/src/app/robots.ts b/packages/app/src/app/robots.ts
+index 431eb2fa..862f4eb5 100644
+--- a/packages/app/src/app/robots.ts
++++ b/packages/app/src/app/robots.ts
+@@ -3,6 +3,9 @@ import type { MetadataRoute } from 'next';
+ import { SITE_URL } from '@semianalysisai/inferencex-constants';
+ 
+ export default function robots(): MetadataRoute.Robots {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') {
++    return { rules: [{ userAgent: '*', disallow: '/' }] };
++  }
+   return {
+     rules: [
+       {
+diff --git a/packages/app/src/app/sitemap.ts b/packages/app/src/app/sitemap.ts
+index 2a1a0e51..7df01816 100644
+--- a/packages/app/src/app/sitemap.ts
++++ b/packages/app/src/app/sitemap.ts
+@@ -53,6 +53,7 @@ function localizedPair(
+ }
+ 
+ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const now = new Date().toISOString();
+   const [compareSlugs, precisionSlugs, specDecodeSlugs, datasets, runEntries] = await Promise.all([
+     getAllComparableCompareSlugs(),
+diff --git a/packages/app/src/app/zh/compare-per-dollar/[slug]/opengraph-image.tsx b/packages/app/src/app/zh/compare-per-dollar/[slug]/opengraph-image.tsx
+index c7cc7dcf..16ba6173 100644
+--- a/packages/app/src/app/zh/compare-per-dollar/[slug]/opengraph-image.tsx
++++ b/packages/app/src/app/zh/compare-per-dollar/[slug]/opengraph-image.tsx
+@@ -11,6 +11,7 @@ export const size = { width: 1200, height: 630 };
+ export const contentType = 'image/png';
+ 
+ export async function generateStaticParams() {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const slugs = await getAllComparableCompareSlugs();
+   return slugs.map(({ modelSlug, a, b }) => ({ slug: canonicalCompareSlug(modelSlug, a, b) }));
+ }
+diff --git a/packages/app/src/app/zh/compare-precision/[slug]/opengraph-image.tsx b/packages/app/src/app/zh/compare-precision/[slug]/opengraph-image.tsx
+index a14c58b7..8731f736 100644
+--- a/packages/app/src/app/zh/compare-precision/[slug]/opengraph-image.tsx
++++ b/packages/app/src/app/zh/compare-precision/[slug]/opengraph-image.tsx
+@@ -15,6 +15,7 @@ export const size = { width: 1200, height: 630 };
+ export const contentType = 'image/png';
+ 
+ export async function generateStaticParams() {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const slugs = await getAllComparablePrecisionSlugs();
+   return slugs.map(({ modelSlug, gpu, precA, precB }) => ({
+     slug: canonicalPrecisionCompareSlug(modelSlug, gpu, precA, precB),
+diff --git a/packages/app/src/app/zh/compare-spec-decode/[slug]/opengraph-image.tsx b/packages/app/src/app/zh/compare-spec-decode/[slug]/opengraph-image.tsx
+index c5780638..41de1db6 100644
+--- a/packages/app/src/app/zh/compare-spec-decode/[slug]/opengraph-image.tsx
++++ b/packages/app/src/app/zh/compare-spec-decode/[slug]/opengraph-image.tsx
+@@ -16,6 +16,7 @@ export const size = { width: 1200, height: 630 };
+ export const contentType = 'image/png';
+ 
+ export async function generateStaticParams() {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const slugs = await getAllComparableSpecDecodeSlugs();
+   return slugs.map(({ modelSlug, gpu, precision, method }) => ({
+     slug: canonicalSpecDecodeCompareSlug(modelSlug, gpu, precision, method),
+diff --git a/packages/app/src/app/zh/compare/[slug]/opengraph-image.tsx b/packages/app/src/app/zh/compare/[slug]/opengraph-image.tsx
+index 33e04643..d40b1a81 100644
+--- a/packages/app/src/app/zh/compare/[slug]/opengraph-image.tsx
++++ b/packages/app/src/app/zh/compare/[slug]/opengraph-image.tsx
+@@ -11,6 +11,7 @@ export const size = { width: 1200, height: 630 };
+ export const contentType = 'image/png';
+ 
+ export async function generateStaticParams() {
++  if (process.env.NEXT_PUBLIC_MARIN_PERFORMANCE === '1') return [];
+   const slugs = await getAllComparableCompareSlugs();
+   return slugs.map(({ modelSlug, a, b }) => ({ slug: canonicalCompareSlug(modelSlug, a, b) }));
+ }
+diff --git a/packages/app/src/components/inference/agentic-point/point-summary.test.ts b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
+index a3bbce47..cb6975af 100644
+--- a/packages/app/src/components/inference/agentic-point/point-summary.test.ts
++++ b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
+@@ -32,6 +32,7 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
+     num_prefill_gpu: 8,
+     num_decode_gpu: 64,
+     recipe_fingerprint: null,
++    image: null,
+     conc: 128,
+     offload_mode: 'off',
+     kv_offloading: null,
+@@ -52,6 +53,18 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
+ }
+ 
+ describe('PointSummary', () => {
++  it('shows the stored runtime build and recipe without inventing missing values', () => {
++    const html = renderToStaticMarkup(
++      createElement(PointSummary, {
++        meta: meta({ image: 'marin-vllm:build-sha', recipe_fingerprint: 'recipe-sha' }),
++      }),
++    );
++    expect(html).toContain('marin-vllm:build-sha');
++    expect(html).toContain('recipe-sha');
++    const missing = renderToStaticMarkup(createElement(PointSummary, { meta: meta() }));
++    expect(missing).toContain('Serving recipe');
++    expect(missing).toContain('>—</code>');
++  });
+   it('identifies multinode aggregate without calling it disaggregated', () => {
+     const html = renderToStaticMarkup(
+       createElement(PointSummary, {
+diff --git a/packages/app/src/components/inference/agentic-point/point-summary.tsx b/packages/app/src/components/inference/agentic-point/point-summary.tsx
+index 89789260..19db34c5 100644
+--- a/packages/app/src/components/inference/agentic-point/point-summary.tsx
++++ b/packages/app/src/components/inference/agentic-point/point-summary.tsx
+@@ -24,6 +24,8 @@ export const POINT_SUMMARY_STRINGS = {
+     transferEngine: 'KV Transfer Engine',
+     router: 'Router',
+     concurrency: 'Concurrency',
++    runtimeBuild: 'Runtime build',
++    recipeFingerprint: 'Serving recipe',
+     gpuCacheHit: 'Chip cache hit',
+     cpuCacheHit: 'CPU cache hit',
+     combinedCacheHit: 'Combined chip + CPU cache hit',
+@@ -41,6 +43,8 @@ export const POINT_SUMMARY_STRINGS = {
+     transferEngine: 'KV 传输引擎',
+     router: '路由器',
+     concurrency: '并发数',
++    runtimeBuild: '运行构建',
++    recipeFingerprint: '服务配置',
+     gpuCacheHit: '芯片 cache 命中率',
+     cpuCacheHit: 'CPU cache 命中率',
+     combinedCacheHit: '芯片 + CPU 综合 cache 命中率',
+@@ -111,6 +115,14 @@ export function PointSummary({ meta }: { meta: PointMeta }) {
+         </div>
+       </div>
+       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
++        <MetaLine
++          label={t.runtimeBuild}
++          value={<code className="break-all">{meta.image ?? '—'}</code>}
++        />
++        <MetaLine
++          label={t.recipeFingerprint}
++          value={<code className="break-all">{meta.recipe_fingerprint ?? '—'}</code>}
++        />
+         <MetaLine label={t.offloadType} value={offloadDisplay(meta, locale)} />
+         {offloadBackend && <MetaLine label={t.offloadBackend} value={offloadBackend} />}
+         {transferEngine && <MetaLine label={t.transferEngine} value={transferEngine} />}
+diff --git a/packages/app/src/hooks/api/use-trace-server-metrics.ts b/packages/app/src/hooks/api/use-trace-server-metrics.ts
+index 2605cfb4..a4b2c851 100644
+--- a/packages/app/src/hooks/api/use-trace-server-metrics.ts
++++ b/packages/app/src/hooks/api/use-trace-server-metrics.ts
+@@ -32,6 +32,7 @@ export interface PointMeta {
+   num_prefill_gpu: number;
+   num_decode_gpu: number;
+   recipe_fingerprint: string | null;
++  image: string | null;
+   conc: number;
+   offload_mode: string | null;
+   kv_offloading: string | null;
+diff --git a/packages/app/src/lib/api/api-documentation-base.ts b/packages/app/src/lib/api/api-documentation-base.ts
+index ce70f221..fa937c3c 100644
+--- a/packages/app/src/lib/api/api-documentation-base.ts
++++ b/packages/app/src/lib/api/api-documentation-base.ts
+@@ -1,6 +1,6 @@
+-import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants';
++import { DISPLAY_MODEL_TO_DB, SITE_URL } from '@semianalysisai/inferencex-constants';
+ 
+-export const API_BASE_URL = 'https://inferencex.semianalysis.com' as const;
++export const API_BASE_URL = SITE_URL;
+ 
+ export const SUPPORTED_BENCHMARK_MODELS = Object.freeze(
+   Object.keys(DISPLAY_MODEL_TO_DB).toSorted(),
+diff --git a/packages/app/src/lib/api/api-documentation.ts b/packages/app/src/lib/api/api-documentation.ts
+index a75f8802..1b5b4993 100644
+--- a/packages/app/src/lib/api/api-documentation.ts
++++ b/packages/app/src/lib/api/api-documentation.ts
+@@ -2,6 +2,7 @@ import {
+   DB_MODEL_TO_DISPLAY,
+   DISPLAY_MODEL_TO_DB,
+   POWER_METRIC_KEYS,
++  SITE_URL,
+ } from '@semianalysisai/inferencex-constants';
+ import { COLLECTIVEX_VERSIONS } from '@semianalysisai/inferencex-db/collectivex/types';
+ 
+@@ -137,7 +138,7 @@ export interface OpenApiDocument {
+   readonly components: Readonly<{ schemas: Readonly<Record<string, ApiSchema>> }>;
+ }
+ 
+-export const API_BASE_URL = 'https://inferencex.semianalysis.com' as const;
++export const API_BASE_URL = SITE_URL;
+ export const API_VERSION = 'v1' as const;
+ export const OPENAPI_VERSION = '3.1.0' as const;
+ export const API_DOCUMENT_VERSION = '1.0.0' as const;
+@@ -2913,8 +2914,8 @@ export const apiOperations: readonly ApiOperation[] = [
+     path: '/api/v1/trace-server-metrics',
+     summary: text('Read trace server metrics', '读取跟踪服务器指标'),
+     description: text(
+-      'Returns point metadata, including prefill/decode TP, EP, DP attention, worker counts, physical GPU counts and recipe_fingerprint for cache-reuse links, and chart-ready aggregate time series for cache usage, queue depth, prefill and decode throughput, and prompt-token sources. metricSources contains source descriptors; source-specific arrays are loaded by the point-detail UI only when selected.',
+-      '返回数据点元数据（含 prefill/decode TP、EP、DP attention、worker 数、物理 GPU 数及 recipe_fingerprint，用于缓存复用链接），以及可直接用于图表的聚合时间序列，涵盖缓存使用率、队列深度、prefill/decode 吞吐量和 prompt token 来源。metricSources 包含各来源的描述信息；仅当用户在数据点详情界面选择某个来源时，才会加载该来源对应的数组。',
++      'Returns point metadata, including the runtime build identity in image, prefill/decode TP, EP, DP attention, worker counts, physical GPU counts and recipe_fingerprint for cache-reuse links, and chart-ready aggregate time series for cache usage, queue depth, prefill and decode throughput, and prompt-token sources. metricSources contains source descriptors; source-specific arrays are loaded by the point-detail UI only when selected.',
++      '返回数据点元数据（含运行构建标识 image、prefill/decode TP、EP、DP attention、worker 数、物理 GPU 数及 recipe_fingerprint，用于缓存复用链接），以及可直接用于图表的聚合时间序列，涵盖缓存使用率、队列深度、prefill/decode 吞吐量和 prompt token 来源。metricSources 包含各来源的描述信息；仅当用户在数据点详情界面选择某个来源时，才会加载该来源对应的数组。',
+     ),
+     audience: 'public',
+     stability: 'beta',
+@@ -2949,6 +2950,7 @@ export const apiOperations: readonly ApiOperation[] = [
+               num_prefill_gpu: integerSchema,
+               num_decode_gpu: integerSchema,
+               recipe_fingerprint: nullableStringSchema,
++              image: nullableStringSchema,
+             },
+           },
+           startNs: integerSchema,
+diff --git a/packages/app/src/lib/api/api-route-catalog.ts b/packages/app/src/lib/api/api-route-catalog.ts
+index 0956a0d6..27e4d28d 100644
+--- a/packages/app/src/lib/api/api-route-catalog.ts
++++ b/packages/app/src/lib/api/api-route-catalog.ts
+@@ -1629,7 +1629,7 @@ export const apiContractSourceDigests = [
+     // Reviewed for the MiniMax-M3.1-Flash addition (InferenceX#4426): one new DB
+     // key, `minimaxm31flash`, with its own display name and release date. The
+     // AgentX cookbook documents the model; no endpoint or parameter shape changes.
+-    sourceSha256: '63a8ca335fccef8db1e93205db10456d75f2f8d4f100f89b160e6c1c574d62d4',
++    sourceSha256: '201a889355e1d9a8ff75bb63d554d9a42f41b8ccfb4a1e6673ddee33dbb33524',
+     reviewArea: {
+       en: 'Published benchmark and TCO model names, aliases, and parameter enums.',
+       zh: '已发布基准与 TCO 模型名称、别名和参数枚举。',
+@@ -1769,7 +1769,7 @@ export const apiContractSourceDigests = [
+   },
+   {
+     source: '../db/src/queries/trace-server-metrics.ts',
+-    sourceSha256: '5e5409267997e2ca5df90e6ffa74042090a332ac5bd29e3a52055b8674725bdb',
++    sourceSha256: '7cbb850ea509b836f004eae7c6517d98ea958e9367c2e582ab2c94ed0184c54e',
+     reviewArea: {
+       en: 'Trace server metric metadata, time-series groups, source labels, and units.',
+       zh: '跟踪服务器指标元数据、时间序列分组、来源标签和单位。',
+diff --git a/packages/app/src/lib/calculator/cache-reuse-link.test.ts b/packages/app/src/lib/calculator/cache-reuse-link.test.ts
+index 2bb8f1e1..243938b7 100644
+--- a/packages/app/src/lib/calculator/cache-reuse-link.test.ts
++++ b/packages/app/src/lib/calculator/cache-reuse-link.test.ts
+@@ -24,6 +24,7 @@ const point: PointMeta = {
+   num_prefill_gpu: 8,
+   num_decode_gpu: 32,
+   recipe_fingerprint: 'measured-recipe',
++  image: null,
+   conc: 8,
+   offload_mode: 'on',
+   kv_offloading: 'dram',
+diff --git a/packages/app/src/lib/catalog/data-mappings.test.ts b/packages/app/src/lib/catalog/data-mappings.test.ts
+index 46be7d22..5d9ffa27 100644
+--- a/packages/app/src/lib/catalog/data-mappings.test.ts
++++ b/packages/app/src/lib/catalog/data-mappings.test.ts
+@@ -369,9 +369,9 @@ describe('getModelLabel', () => {
+ });
+ 
+ describe('getOpenRouterModelId', () => {
+-  it('maps catalog models to exact OpenRouter ids without inventing one for Muse', () => {
++  it('maps catalog models to exact OpenRouter ids without inventing unavailable listings', () => {
+     for (const model of MODEL_OPTIONS) {
+-      if (model === Model.Muse_Spark_Open) {
++      if (model === Model.Muse_Spark_Open || model === Model.Snowball011) {
+         expect(getOpenRouterModelId(model)).toBeNull();
+         continue;
+       }
+diff --git a/packages/app/src/lib/catalog/data-mappings.ts b/packages/app/src/lib/catalog/data-mappings.ts
+index 72b251b2..514022d8 100644
+--- a/packages/app/src/lib/catalog/data-mappings.ts
++++ b/packages/app/src/lib/catalog/data-mappings.ts
+@@ -3,6 +3,7 @@ import { DISPLAY_MODEL_TO_DB } from '@semianalysisai/inferencex-constants/models
+ import type { ExclusionConflictPolicy, ExclusionSpec } from '../benchmarks/exclusion';
+ 
+ export enum Model {
++  Snowball011 = 'Marin-Snowball-67B-A2B-v0.1.1',
+   Llama3_3_70B = 'Llama-3.3-70B-Instruct-FP8',
+   Llama3_1_70B = 'Llama-3.1-70B-Instruct-FP8-KV',
+   DeepSeek_R1 = 'DeepSeek-R1-0528',
+@@ -70,6 +71,11 @@ const STP_ENGINE_EXCLUSION: ExclusionSpec[] = [
+ const GUARDED_ENGINE_FAMILIES = ['vllm', 'sglang'] as const;
+ 
+ const MODEL_CONFIG: Record<Model, ModelConfig> = {
++  [Model.Snowball011]: {
++    label: 'Marin Snowball 67B-A2B v0.1.1',
++    prefix: 'snowball011',
++    category: 'experimental',
++  },
+   [Model.Muse_Spark_Open]: {
+     label: 'Muse Spark Open 816B',
+     prefix: 'musespark',
+diff --git a/packages/app/src/lib/compare/compare-slug.test.ts b/packages/app/src/lib/compare/compare-slug.test.ts
+index 11ca8deb..1f6db2d4 100644
+--- a/packages/app/src/lib/compare/compare-slug.test.ts
++++ b/packages/app/src/lib/compare/compare-slug.test.ts
+@@ -262,6 +262,7 @@ describe('compareModelDisplayLabel', () => {
+ 
+ describe('compareModelSeoName', () => {
+   const EXPECTED: Record<string, string> = {
++    'marin-snowball-v011': 'Marin Snowball v0.1.1',
+     'muse-spark-open': 'Muse Spark Open',
+     'deepseek-v4': 'DeepSeek V4 Pro',
+     'deepseek-v41-flash': 'DeepSeek V4.1 Flash',
+diff --git a/packages/app/src/lib/compare/compare-slug.ts b/packages/app/src/lib/compare/compare-slug.ts
+index 53f33b6d..f2f0c414 100644
+--- a/packages/app/src/lib/compare/compare-slug.ts
++++ b/packages/app/src/lib/compare/compare-slug.ts
+@@ -11,6 +11,13 @@ export interface CompareModelSlug {
+ }
+ 
+ export const COMPARE_MODEL_SLUGS: CompareModelSlug[] = [
++  {
++    slug: 'marin-snowball-v011',
++    displayName: 'Marin-Snowball-67B-A2B-v0.1.1',
++    dbKeys: ['snowball011'],
++    label: 'Marin Snowball 67B-A2B v0.1.1',
++    seoName: 'Marin Snowball v0.1.1',
++  },
+   {
+     slug: 'muse-spark-open',
+     displayName: 'Muse-Spark-Open',
+diff --git a/packages/app/src/lib/compare/compare-ssr.ts b/packages/app/src/lib/compare/compare-ssr.ts
+index 84f77f61..4ec18144 100644
+--- a/packages/app/src/lib/compare/compare-ssr.ts
++++ b/packages/app/src/lib/compare/compare-ssr.ts
+@@ -27,6 +27,7 @@ import { getHardwareConfig, getGpuSpecs } from '@/lib/catalog/constants';
+ export { getCachedBenchmarks };
+ 
+ export const KNOWN_MODELS = new Set([
++  'Marin-Snowball-67B-A2B-v0.1.1',
+   'Muse-Spark-Open',
+   'Llama-3.3-70B-Instruct-FP8',
+   'Llama-3.1-70B-Instruct-FP8-KV',
+diff --git a/packages/app/src/lib/live-seo/rankings.test.ts b/packages/app/src/lib/live-seo/rankings.test.ts
+index 6247ac33..dd4ca5cb 100644
+--- a/packages/app/src/lib/live-seo/rankings.test.ts
++++ b/packages/app/src/lib/live-seo/rankings.test.ts
+@@ -57,7 +57,6 @@ describe('rankings registry', () => {
+   it('has one page per (kind, model) pair', () => {
+     const entries = getAllRankingPageEntries();
+     expect(entries.length).toBe(RANKING_KINDS.length * INFERENCE_MODEL_SLUGS.length);
+-    expect(entries.length).toBe(34);
+   });
+ 
+   it('has unique, well-formed slugs', () => {
+diff --git a/packages/app/src/lib/live-seo/run-pages.test.ts b/packages/app/src/lib/live-seo/run-pages.test.ts
+index fbb69bb7..6a32c9b9 100644
+--- a/packages/app/src/lib/live-seo/run-pages.test.ts
++++ b/packages/app/src/lib/live-seo/run-pages.test.ts
+@@ -24,7 +24,6 @@ describe('run pages registry', () => {
+   it('has one candidate per (model, chip) pair', () => {
+     const entries = getAllRunPageEntries();
+     expect(entries.length).toBe(INFERENCE_MODEL_SLUGS.length * getAllChipPages().length);
+-    expect(entries.length).toBe(153);
+   });
+ 
+   it('has unique, well-formed slugs', () => {
+diff --git a/packages/constants/src/models.ts b/packages/constants/src/models.ts
+index 6d8b60fb..0e3c29c1 100644
+--- a/packages/constants/src/models.ts
++++ b/packages/constants/src/models.ts
+@@ -7,6 +7,7 @@
+  * display option in the UI. See `DISPLAY_MODEL_TO_DB` for the inverse mapping.
+  */
+ export const DB_MODEL_TO_DISPLAY: Record<string, string> = {
++  snowball011: 'Marin-Snowball-67B-A2B-v0.1.1',
+   dsr1: 'DeepSeek-R1-0528',
+   gptoss120b: 'gpt-oss-120b',
+   llama70b: 'Llama-3.3-70B-Instruct-FP8',
+@@ -126,6 +127,8 @@ export function rowToSequence(row: {
+  * earliest date they actually have data for.
+  */
+ export const MODEL_RELEASE_DATES: Record<string, string> = {
++  // https://huggingface.co/open-athena/Marin-Snowball-67B-A2B-v0.1.1/commits/main
++  'Marin-Snowball-67B-A2B-v0.1.1': '2026-10-22',
+   // Newest first. `sweep:` is the model's "Date added" from MODELS.md — the first
+   // InferenceX benchmark — recorded so the "cannot predate its own weights"
+   // invariant above is checkable by eye at review time.
+diff --git a/packages/constants/src/seo.ts b/packages/constants/src/seo.ts
+index c4088fbd..32c5e853 100644
+--- a/packages/constants/src/seo.ts
++++ b/packages/constants/src/seo.ts
+@@ -1,5 +1,5 @@
+ export const SITE_NAME = 'InferenceX';
+-export const SITE_URL = 'https://inferencex.semianalysis.com';
++export const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || 'https://inferencex.semianalysis.com';
+ export const AUTHOR_NAME = 'SemiAnalysis';
+ export const AUTHOR_URL = 'https://semianalysis.com';
+ export const AUTHOR_HANDLE = '@SemiAnalysis_';
+diff --git a/packages/db/src/connection.ts b/packages/db/src/connection.ts
+index f643ab83..c76b7d6b 100644
+--- a/packages/db/src/connection.ts
++++ b/packages/db/src/connection.ts
+@@ -72,10 +72,19 @@ function wrapPostgres(sql: postgres.Sql): DbClient {
+ 
+ const g = globalThis as unknown as { __dbClients?: Map<string, DbClient> };
+ 
+-function makeDbClient(connection: DatabaseConnectionResolution): DbClient {
++function makeDbClient(
++  connection: DatabaseConnectionResolution,
++  socketDirectory?: string,
++): DbClient {
+   return connection.driver === 'neon'
+     ? (neon(connection.url) as DbClient)
+-    : wrapPostgres(postgres(connection.url, { max: 5, ssl: connection.ssl }));
++    : wrapPostgres(
++        postgres(connection.url, {
++          max: 5,
++          ssl: connection.ssl,
++          ...(socketDirectory ? { host: socketDirectory } : {}),
++        }),
++      );
+ }
+ 
+ export interface DatabaseClientOverrides {
+@@ -91,14 +100,15 @@ function memoizedClient(envVar: string, overrides: DatabaseClientOverrides = {})
+     driver: overrides.driver ?? process.env.DATABASE_DRIVER,
+     ssl: overrides.ssl ?? process.env.DATABASE_SSL,
+   });
++  const socketDirectory = process.env.DATABASE_SOCKET_DIR;
+   const key =
+     connection.driver === 'neon'
+       ? `neon\0${connection.url}`
+-      : `postgres\0${connection.ssl}\0${connection.url}`;
++      : `postgres\0${connection.ssl}\0${connection.url}\0${socketDirectory ?? ''}`;
+   g.__dbClients ??= new Map();
+   const cached = g.__dbClients.get(key);
+   if (cached) return cached;
+-  const client = makeDbClient(connection);
++  const client = makeDbClient(connection, socketDirectory);
+   g.__dbClients.set(key, client);
+   return client;
+ }
+diff --git a/packages/db/src/etl/db-utils.ts b/packages/db/src/etl/db-utils.ts
+index 310efb23..d0fcaa00 100644
+--- a/packages/db/src/etl/db-utils.ts
++++ b/packages/db/src/etl/db-utils.ts
+@@ -20,6 +20,7 @@ export function createAdminSql(
+     ssl: noSsl ? false : process.env.DATABASE_SSL,
+   });
+   return postgres(connection.url, {
++    ...(process.env.DATABASE_SOCKET_DIR ? { host: process.env.DATABASE_SOCKET_DIR } : {}),
+     ...pgOpts,
+     ssl: connection.ssl,
+   });
+diff --git a/packages/db/src/etl/normalizers.ts b/packages/db/src/etl/normalizers.ts
+index 552759e1..da99ea9e 100644
+--- a/packages/db/src/etl/normalizers.ts
++++ b/packages/db/src/etl/normalizers.ts
+@@ -33,6 +33,7 @@ function resolvePrefixToKey(prefix: string): string | null {
+ }
+ 
+ export const MODEL_TO_KEY: Record<string, string> = {
++  'open-athena/Marin-Snowball-67B-A2B-v0.1.1': 'snowball011',
+   'nvidia/DeepSeek-R1-0528-FP4-V2': 'dsr1',
+   'nvidia/DeepSeek-R1-0528-FP4-v2': 'dsr1',
+   'nvidia/DeepSeek-R1-0528-FP4': 'dsr1',
+diff --git a/packages/db/src/etl/workflow-run.test.ts b/packages/db/src/etl/workflow-run.test.ts
+index ed633fe0..46736caf 100644
+--- a/packages/db/src/etl/workflow-run.test.ts
++++ b/packages/db/src/etl/workflow-run.test.ts
+@@ -34,6 +34,24 @@ afterEach(() => {
+ });
+ 
+ describe('fetchGithubRun', () => {
++  it('keeps historical attempts separate from the latest run response', async () => {
++    const first = await runResponse('example-org/single').json();
++    const fetchMock = stubFetch(
++      Response.json({ ...first, run_attempt: 1 }),
++      runResponse('example-org/single'),
++    );
++    const { fetchGithubRun } = createWorkflowRunServices({} as never, 'test-token', [
++      'example-org/single',
++    ]);
++    await expect(fetchGithubRun(RUN_ID, 1)).resolves.toMatchObject({ runAttempt: 1 });
++    await expect(fetchGithubRun(RUN_ID, 2)).resolves.toMatchObject({ runAttempt: 2 });
++    await expect(fetchGithubRun(RUN_ID, 1)).resolves.toMatchObject({ runAttempt: 1 });
++    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
++      `https://api.github.com/repos/example-org/single/actions/runs/${RUN_ID}/attempts/1`,
++      `https://api.github.com/repos/example-org/single/actions/runs/${RUN_ID}/attempts/2`,
++    ]);
++  });
++
+   it('searches the primary and then the legacy repository by default', async () => {
+     vi.stubEnv('INFERENCEX_SOURCE_REPOS', undefined);
+     const fetchMock = stubFetch(
+diff --git a/packages/db/src/etl/workflow-run.ts b/packages/db/src/etl/workflow-run.ts
+index d4f3195e..17d0b9c1 100644
+--- a/packages/db/src/etl/workflow-run.ts
++++ b/packages/db/src/etl/workflow-run.ts
+@@ -35,24 +35,28 @@ export function createWorkflowRunServices(
+   repos: readonly string[] = [...benchmarkSourceRepos(), LEGACY_GITHUB_REPO],
+ ) {
+   const workflowRunCache = new Map<string, number>();
+-  const githubRunCache = new Map<number, GithubRunInfo | null>();
++  const githubRunCache = new Map<string, GithubRunInfo | null>();
+ 
+-  async function fetchGithubRun(runId: number): Promise<GithubRunInfo | null> {
+-    if (githubRunCache.has(runId)) return githubRunCache.get(runId)!;
++  async function fetchGithubRun(runId: number, runAttempt?: number): Promise<GithubRunInfo | null> {
++    const cacheKey = `${runId}:${runAttempt ?? 'latest'}`;
++    if (githubRunCache.has(cacheKey)) return githubRunCache.get(cacheKey)!;
+     if (!githubToken) {
+-      githubRunCache.set(runId, null);
++      githubRunCache.set(cacheKey, null);
+       return null;
+     }
+ 
+     try {
+       let resp: Response | null = null;
+       for (const repo of repos) {
+-        resp = await fetch(`${GITHUB_API_BASE}/repos/${repo}/actions/runs/${runId}`, {
+-          headers: {
+-            Authorization: `Bearer ${githubToken}`,
+-            Accept: 'application/vnd.github+json',
++        resp = await fetch(
++          `${GITHUB_API_BASE}/repos/${repo}/actions/runs/${runId}${runAttempt ? `/attempts/${runAttempt}` : ''}`,
++          {
++            headers: {
++              Authorization: `Bearer ${githubToken}`,
++              Accept: 'application/vnd.github+json',
++            },
+           },
+-        });
++        );
+         if (resp.ok) break;
+         if (resp.status !== 404) {
+           console.warn(
+@@ -61,7 +65,7 @@ export function createWorkflowRunServices(
+         }
+       }
+       if (!resp || !resp.ok) {
+-        githubRunCache.set(runId, null);
++        githubRunCache.set(cacheKey, null);
+         return null;
+       }
+       const d = (await resp.json()) as Record<string, any>;
+@@ -88,11 +92,11 @@ export function createWorkflowRunServices(
+         runAttempt: typeof d.run_attempt === 'number' ? d.run_attempt : null,
+         pullRequests,
+       };
+-      githubRunCache.set(runId, info);
++      githubRunCache.set(cacheKey, info);
+       return info;
+     } catch (error: any) {
+       console.warn(`  [WARN] GitHub API run ${runId}: ${error.message}`);
+-      githubRunCache.set(runId, null);
++      githubRunCache.set(cacheKey, null);
+       return null;
+     }
+   }
+diff --git a/packages/db/src/ingest-ci-run.ts b/packages/db/src/ingest-ci-run.ts
+index 50130cb5..f8d8d278 100644
+--- a/packages/db/src/ingest-ci-run.ts
++++ b/packages/db/src/ingest-ci-run.ts
+@@ -296,7 +296,7 @@ async function main(): Promise<void> {
+   ]);
+ 
+   const runId = parseInt(runIdStr, 10);
+-  const ghInfo = await fetchGithubRun(runId);
++  const ghInfo = await fetchGithubRun(runId, runAttemptNum);
+   const triggerRunIdStr = reusedIngestMetadata?.triggerRunId ?? requestedRunIdStr;
+   const triggerRunId = parseInt(triggerRunIdStr, 10);
+   const triggerGhInfo = reusedIngestMetadata ? await fetchGithubRun(triggerRunId) : null;
+diff --git a/packages/db/src/queries/trace-server-metrics.test.ts b/packages/db/src/queries/trace-server-metrics.test.ts
+index bbbffb19..be3118fc 100644
+--- a/packages/db/src/queries/trace-server-metrics.test.ts
++++ b/packages/db/src/queries/trace-server-metrics.test.ts
+@@ -56,6 +56,7 @@ function metaRow(overrides: Record<string, unknown> = {}) {
+     num_prefill_gpu: 8,
+     num_decode_gpu: 64,
+     recipe_fingerprint: 'exact-fingerprint',
++    image: 'marin-vllm:verified-build',
+     conc: 128,
+     offload_mode: 'off',
+     kv_offloading: null,
+@@ -124,6 +125,7 @@ describe('getTraceServerMetrics', () => {
+       num_prefill_gpu: 8,
+       num_decode_gpu: 64,
+       recipe_fingerprint: 'exact-fingerprint',
++      image: 'marin-vllm:verified-build',
+     });
+     expect(calls).toHaveLength(1);
+     expect(calls[0]).not.toContain('server_metrics_json_gz as blob');
+diff --git a/packages/db/src/queries/trace-server-metrics.ts b/packages/db/src/queries/trace-server-metrics.ts
+index 66dfa5cb..8e12a6c1 100644
+--- a/packages/db/src/queries/trace-server-metrics.ts
++++ b/packages/db/src/queries/trace-server-metrics.ts
+@@ -31,7 +31,7 @@ export type {
+ // The endpoint payload combines chart_series with separately queried point
+ // metadata. Keep a composite response version so metadata-shape changes roll
+ // the blob-cache namespace without forcing an expensive chart_series backfill.
+-const POINT_META_VERSION = 6;
++const POINT_META_VERSION = 7;
+ export const TRACE_SERVER_METRICS_VERSION = CHART_SERIES_VERSION * 100 + POINT_META_VERSION;
+ 
+ export interface MetricSourceDescriptor {
+@@ -58,6 +58,7 @@ export interface PointMeta {
+   num_prefill_gpu: number;
+   num_decode_gpu: number;
+   recipe_fingerprint: string | null;
++  image: string | null;
+   conc: number;
+   offload_mode: string | null;
+   kv_offloading: string | null;
+@@ -163,6 +164,7 @@ function buildMeta(row: RawMetaRow): PointMeta {
+     num_prefill_gpu: row.num_prefill_gpu,
+     num_decode_gpu: row.num_decode_gpu,
+     recipe_fingerprint: row.recipe_fingerprint,
++    image: row.image,
+     conc: row.conc,
+     offload_mode: row.offload_mode,
+     kv_offloading: row.kv_offloading,
+@@ -343,6 +345,7 @@ export async function getTraceServerMetrics(
+       c.decode_tp, c.decode_ep, c.decode_dp_attention, c.decode_num_workers,
+       c.num_prefill_gpu, c.num_decode_gpu,
+       br.recipe_fingerprint,
++      br.image,
+       br.conc, br.offload_mode, br.isl, br.osl, br.benchmark_type,
+       br.date::text,
+       case when wr.html_url is not null then wr.html_url || '/attempts/' || wr.run_attempt else null end as run_url,
+diff --git a/packages/skills/skills/inferencex-api/SKILL.md b/packages/skills/skills/inferencex-api/SKILL.md
+index 9cf16f39..7631a4f8 100644
+--- a/packages/skills/skills/inferencex-api/SKILL.md
++++ b/packages/skills/skills/inferencex-api/SKILL.md
+@@ -5,6 +5,9 @@ description: 'Legacy inferencex-api entry and shared workflow guide. Use when ex
+ 
+ # InferenceX API
+ 
++For the internal Marin deployment, use its configured origin and the existing
++Snowball AgentX APIs described in [Marin performance](references/dashboard-views.md#marin-snowball-performance-deployment).
++
+ For DWDP prefill runs, `metrics.prefill_dwdp_size` is the number of ranks per
+ weight-sharing group, `prefill_tp` stays 1, and `prefill_num_workers` counts
+ groups. Do not interpret the group width as TP or EP. Sibling rows expose the
+diff --git a/packages/skills/skills/inferencex-api/integrity.json b/packages/skills/skills/inferencex-api/integrity.json
+index 45c4d764..963171c8 100644
+--- a/packages/skills/skills/inferencex-api/integrity.json
++++ b/packages/skills/skills/inferencex-api/integrity.json
+@@ -2,14 +2,14 @@
+   "schema_version": 1,
+   "package_version": "1.2.0",
+   "files": {
+-    "SKILL.md": "f8d9113c23503efa7d910298e3373660a2460943ad8505a07a806ab2da6031cd",
++    "SKILL.md": "cc634f8ee363482f7c32ec33cde3df5e1663ac66d4c2bf79dfbdc166ea823fbb",
+     "references/agentic-interactivity.md": "663596c3e29296bbd7e7db6fac05362e3befe5d84652600da88470b47d18b959",
+     "references/agentx.md": "b2bb42d84f1df69f354ddd5f897fff50c42d61fa0ee1274fe754276116ed2735",
+     "references/chart-templates.md": "aed6854627142019a4a5df4a2d07523b1a64e5814dd2bbdcc74ee18beb083912",
+     "references/cli-contract.md": "4f070877eeefffad2860c58f79f68432fbe27aa21fc578a1c696f0309a3d7d7b",
+     "references/cli.md": "11e1183f7ed70d669019e8435ac16a6a9f873de027507b8850a9943f6659bfd9",
+     "references/collectivex.md": "f79cf8e2779a9289ab69f79f4a4b338e0b9a5f76a3750a3e969f33a744e726a1",
+-    "references/dashboard-views.md": "7696cdaa152e839067c29b91d4e305b6995d4c7f23f4bf569b2b046d3e55da22",
++    "references/dashboard-views.md": "76de6918417583f3c76476ff4b655653cfaa30d7f12260d82c73a25cb38d42af",
+     "references/offline-exports.md": "95aa565dcd4c9e592159baa560a9a58217bc61e395de1c6daf0576795c7f4ec9",
+     "references/pareto.md": "1b4d2d163f982e3f2d97addce310789eae9c1e5badd82dd7501708c9e0385027",
+     "references/powerx.md": "5af5527d54a7e6191a5769080c122638b333b1ceb59e19fdee7df662a5cd3c8f",
+diff --git a/packages/skills/skills/inferencex-api/references/dashboard-views.md b/packages/skills/skills/inferencex-api/references/dashboard-views.md
+index 411cc8c5..07a67131 100644
+--- a/packages/skills/skills/inferencex-api/references/dashboard-views.md
++++ b/packages/skills/skills/inferencex-api/references/dashboard-views.md
+@@ -525,3 +525,23 @@ and retain any advertised-context qualification alongside the configured length.
+ For causal encoder-decoder models preserve separate prefill and decode active
+ counts when supplied. Conditional-memory and auxiliary-module accounting is
+ model-specific; retain the registry's accompanying features and source link.
++
++## Marin Snowball performance deployment
++
++This internal deployment uses the same read APIs and transforms as InferenceX.
++Its build supplies `NEXT_PUBLIC_SITE_URL`; resolve API paths against that origin.
++IAP protects the web service and its APIs. The web database role has SELECT only.
++
++The landing URL selects `/inference/marin-snowball-v011` with
++`i_seq=agentic-traces&i_prec=bf16&i_metric=y_outputTputPerGpu&i_pctl=p90`.
++Use `/api/v1/benchmarks?model=Marin-Snowball-67B-A2B-v0.1.1` for raw points and
++the existing inference/history views for the matching displayed projection.
++Device selection uses the existing hardware controls. Select a point to inspect
++its concurrency, request timeline and GitHub source run; sibling navigation
++selects the other measured concurrency points. Missing measurements stay absent.
++
++The benchmark artifact manifest records the fixed model/tokenizer and corpus
++revisions, harness, vLLM wheel/source, serving recipe, actual Iris attempt and
++GPU topology. A different model checkpoint starts a separate comparison series.
++Cloud Run activation and benchmark collection are managed in Marin's
++`infra/inferencex/` and `experiments/evaluation/agentx/` runbooks.
