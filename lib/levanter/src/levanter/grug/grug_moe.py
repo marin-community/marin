@@ -449,6 +449,13 @@ class MoEExpertMlp(eqx.Module):
 
 
 @named_call
+def _bind_activation_params(activation_fn: Callable[..., jax.Array], params: Any) -> Callable[[jax.Array], jax.Array]:
+    """``activation_fn`` itself without parameters, else ``h -> activation_fn(h, params)``."""
+    if params is None:
+        return activation_fn
+    return lambda h: activation_fn(h, params)
+
+
 def _with_activation_params(shard_local_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Call ``shard_local_fn`` on the routed inputs with the trailing positional ``activation_params``."""
     *routed_args, activation_params = args
@@ -528,9 +535,9 @@ def moe_mlp(
     The output width ``O`` (``w_down``'s last dim) may differ from the input width ``D`` only on the
     ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
 
-    `activation_params` (``ragged_all_to_all`` under expert parallelism, ungated experts only) is a replicated
-    pytree of differentiable activation parameters: the experts compute ``activation(x W_up, activation_params)
-    W_down`` with ``activation`` a callable of two arguments, and the parameters get their gradient.
+    `activation_params` (``ragged_all_to_all`` under expert parallelism with ungated experts, or any local path) is
+    a replicated pytree of differentiable activation parameters: ``activation`` is a callable of two arguments,
+    ``activation(h, activation_params)`` in place of ``activation(h)``, and the parameters get their gradient.
 
     `overlap` is independent token-local work (see `MoeOverlapWork`) whose output is appended as the last
     return value. The expert-parallel pooled-wave and ragged paths run it under the dispatch all-to-all (and the
@@ -555,16 +562,11 @@ def moe_mlp(
     if mesh is None:
         mesh = _current_mesh()
     if activation_params is not None:
-        if resolved_implementation != "ragged_all_to_all" or not _mesh_has_axis(mesh, "expert"):
-            raise ValueError("activation_params requires ragged_all_to_all under expert parallelism")
-        if (
-            _mesh_axis_size(mesh, "expert") < 2
-            or overlap is not None
-            or isinstance(activation, ActivationFunctionEnum)
-        ):
-            raise ValueError(
-                "activation_params needs an expert axis of size >= 2, no overlap and a callable activation"
-            )
+        params_ep = mesh is not None and not mesh.empty and _mesh_axis_size(mesh, "expert") > 1
+        if params_ep and resolved_implementation != "ragged_all_to_all":
+            raise ValueError("activation_params under expert parallelism requires ragged_all_to_all")
+        if overlap is not None or isinstance(activation, ActivationFunctionEnum):
+            raise ValueError("activation_params needs a callable activation and no overlap")
 
     if isinstance(activation, ActivationFunctionEnum):
         activation_fn: Callable[[jax.Array], jax.Array] = activation.to_jax_fn()
@@ -673,7 +675,7 @@ def moe_mlp(
             token_valid,
             w_up_gate,
             w_down,
-            activation_fn=activation_fn,
+            activation_fn=_bind_activation_params(activation_fn, activation_params),
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
@@ -839,7 +841,18 @@ def moe_mlp(
     w_up_gate = _reshard_for_shard_map(w_up_gate, mesh, w_up_gate_spec)
     w_down = _reshard_for_shard_map(w_down, mesh, w_down_spec)
 
-    def local_moe(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down):
+    # Activation parameters enter the shard as a replicated argument (shard_map cannot close over them).
+    local_params: tuple[Any, ...] = ()
+    local_param_specs: tuple[Any, ...] = ()
+    if activation_params is not None:
+        local_param_specs = (jax.tree.map(lambda leaf: P(*(None,) * leaf.ndim), activation_params),)
+        local_params = (
+            jax.tree.map(
+                lambda leaf, spec: _reshard_for_shard_map(leaf, mesh, spec), activation_params, local_param_specs[0]
+            ),
+        )
+
+    def local_moe(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down, params=None):
         out, dropped = _moe_mlp_local(
             x,
             selected_experts,
@@ -847,7 +860,7 @@ def moe_mlp(
             token_valid,
             w_up_gate,
             w_down,
-            activation_fn=activation_fn,
+            activation_fn=_bind_activation_params(activation_fn, params),
             num_experts=num_experts,
             implementation=resolved_implementation,
             expert_chunks=expert_chunks,
@@ -867,11 +880,12 @@ def moe_mlp(
             token_valid_spec,
             w_up_gate_spec,
             w_down_spec,
+            *local_param_specs,
         ),
         out_specs=(x_spec, P()),
         check_vma=False,
     )
-    out, dropped = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down)
+    out, dropped = shard_fn(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down, *local_params)
     if report_capacity_overflow:
         return out, dispatch_counts(CapacityDrops(sender_dropped=dropped, receiver_dropped=jnp.zeros_like(dropped)))
     return out

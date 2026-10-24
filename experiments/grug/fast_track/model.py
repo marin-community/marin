@@ -115,6 +115,12 @@ def relu_power_traced(u: Float[Array, "..."], power: Float[Array, ""]) -> Float[
     return jnp.where(positive, jnp.exp(power.astype(jnp.float32) * log_x), 0.0).astype(u.dtype)
 
 
+def _tied_gate_relu_power(g: Float[Array, "..."], power: float | jax.Array) -> Float[Array, "..."]:
+    """The gate half of ``relu(u)^power`` as ``gate(u) * u``: ``relu(u)^(power - 1)`` on ``u > 0`` (1 at power 1),
+    0 elsewhere."""
+    return relu_power_traced(g, jnp.asarray(power, jnp.float32) - 1.0)
+
+
 def _relu_power_any(u: Float[Array, "..."], power: float | jax.Array) -> Float[Array, "..."]:
     return relu_power(u, power) if isinstance(power, float) else relu_power_traced(u, power)
 
@@ -1620,12 +1626,18 @@ def _run_expert_bank(
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         activation: MoeActivation = ActivationFunctionEnum.relu2 if ungated else em.activation
         activation_params = None
-        if not isinstance(act_power, float):
+        if isinstance(act_power, float) and act_power == 2.0:
+            pass
+        elif not ungated:
+            # The tied gate (the dropless local eval backends): relu(u)^(p-1) * u = relu(u)^p.
+            if isinstance(act_power, float):
+                activation = functools.partial(_tied_gate_relu_power, power=act_power)
+            else:
+                activation, activation_params = _tied_gate_relu_power, act_power
+        elif not isinstance(act_power, float):
             activation, activation_params = relu_power_traced, act_power
-        elif act_power != 2.0:
+        else:
             activation = functools.partial(relu_power, power=act_power)
-        if activation_params is not None or act_power != 2.0:
-            assert ungated, "mlp_act_power needs moe_ungated_kernel"
         return moe_mlp(
             routed_input,
             selected,
