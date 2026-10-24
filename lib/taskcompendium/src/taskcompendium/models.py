@@ -78,11 +78,15 @@ class ReasoningMode(StrEnum):
     MODEL_DEFAULT = "model_default"
 
 
+ENABLE_THINKING = "enable_thinking"
+"""The chat-template argument that turns reasoning on or off."""
+
+
 def reasoning_template_kwargs(reasoning: ReasoningMode) -> dict[str, bool]:
     """The chat-template arguments that request ``reasoning``; none for the model default."""
     if reasoning == ReasoningMode.MODEL_DEFAULT:
         return {}
-    return {"enable_thinking": reasoning == ReasoningMode.ON}
+    return {ENABLE_THINKING: reasoning == ReasoningMode.ON}
 
 
 class ReasoningApplied(StrEnum):

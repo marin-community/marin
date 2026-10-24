@@ -44,7 +44,7 @@ from taskcompendium.pipeline.models import (
     WorkspaceFiles,
 )
 from taskcompendium.pipeline.verification import answer_event, control_result
-from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY, ProtocolAxis, with_protocol_assessment
+from taskcompendium.protocol import ProtocolAssessment, ProtocolAxis, assess_protocol, with_protocol_assessment
 from taskcompendium.runtime.environment import prepare_machine_spec, setup_user, validate_machine_spec
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
@@ -261,23 +261,21 @@ async def _control(
             status=CheckStatus.FAIL,
             detail=f"Judge control was decided by a local gate without a remote verdict: {grade.detail}",
         )
-    if name == "golden" and (failed := _failed_protocol_axes(grade.diagnostics)):
-        return CheckResult(
-            check=name,
-            status=CheckStatus.FAIL,
-            detail=f"Golden control fails its protocol check on {failed}: {grade.diagnostics[PROTOCOL_DIAGNOSTICS_KEY]}",
-        )
+    if name == "golden" and (assessment := assess_protocol(task, attempt, grade)) is not None:
+        if failed := _failed_protocol_results(assessment):
+            return CheckResult(
+                check=name,
+                status=CheckStatus.FAIL,
+                detail=f"Golden control fails its protocol check on {failed}: {assessment.diagnostics()}",
+            )
     return control_result(grade, name, expected)
 
 
-def _failed_protocol_axes(diagnostics: dict[str, Any]) -> list[str]:
+def _failed_protocol_results(assessment: ProtocolAssessment) -> list[ProtocolAxis]:
     """The protocol results a known-correct attempt failed, or every result when none could be assessed."""
-    assessment = diagnostics.get(PROTOCOL_DIAGNOSTICS_KEY)
-    if assessment is None:
-        return []
-    if "not_evaluable" in assessment:
+    if assessment.not_evaluable is not None:
         return list(ProtocolAxis)
-    return [axis for axis in ProtocolAxis if assessment.get(axis) is False]
+    return [axis for axis in ProtocolAxis if getattr(assessment, axis) is False]
 
 
 async def _empty_sandbox_control(task: TaskSpec, sandbox: _Sandbox) -> CheckResult:

@@ -76,15 +76,9 @@ def machine_runtime(backend: str) -> MachineRuntimeSpec:
     )
 
 
-def session_spec(
-    session_name: str = "shellbox",
-    *,
-    max_turns: int = 2,
-    **limits,
-) -> dict:
+def session_spec(session_name: str = "shellbox", **limits) -> dict:
     settings = dict(
         task_session=session_name,
-        max_turns=max_turns,
         model_turn_timeout=5,
         command_timeout=1,
         tool_turn_timeout=5,
@@ -96,10 +90,6 @@ def session_spec(
     )
     settings.update(limits)
     return settings
-
-
-def session_limits(*, max_turns: int = 2, **limits) -> dict:
-    return {key: value for key, value in session_spec(max_turns=max_turns, **limits).items() if key != "task_session"}
 
 
 def lowered_task(
@@ -114,10 +104,9 @@ def lowered_task(
     """Lower ``task``; ``turn_budget`` replaces the task's own budget."""
     if turn_budget is not None:
         task = task.model_copy(update={"turn_budget": turn_budget})
-    session = {key: value for key, value in session_spec(session_name, **limits).items() if key != "max_turns"}
     return rollout_spec(
         task,
-        session,
+        session_spec(session_name, **limits),
         task_machine=None if backend is None else machine_runtime(backend),
         verifier_machine=None if verifier_backend is None else machine_runtime(verifier_backend),
     )

@@ -19,6 +19,7 @@ import hashlib
 import json
 
 from pydantic import JsonValue
+from shellbox.machine import ExitReason
 from verifyit.spec import ExactSpec
 
 from taskcompendium.fetch import FETCH_TOOL, HttpPage, fetch_requirement
@@ -170,7 +171,9 @@ def probe_tasks(
                     "contains. The token cannot be guessed.",
                     EnvironmentRequirements(
                         tool_providers={
-                            FETCH_REQUIREMENT: fetch_requirement({PROBE_URL: HttpPage(status=200, body=probe_nonce(url_id))})
+                            FETCH_REQUIREMENT: fetch_requirement(
+                                {PROBE_URL: HttpPage(status=200, body=probe_nonce(url_id))}
+                            )
                         }
                     ),
                     URL_TURNS,
@@ -181,13 +184,15 @@ def probe_tasks(
     return tuple(tasks)
 
 
-def _tool_turn(name: str, arguments: dict[str, JsonValue], result: dict[str, JsonValue]) -> tuple[ConversationEvent, ...]:
+def _tool_turn(
+    name: str, arguments: dict[str, JsonValue], result: dict[str, JsonValue]
+) -> tuple[ConversationEvent, ...]:
     call = ConversationToolCall(call_id="call-0", name=name, arguments=arguments)
     return (AssistantToolCalls(calls=(call,)), ToolResult(call_id=call.call_id, content=json.dumps(result)))
 
 
 def _executed(stdout: str) -> dict[str, JsonValue]:
-    return {"exit_code": 0, "reason": "exited", "stdout": stdout, "stderr": ""}
+    return {"exit_code": 0, "reason": ExitReason.EXITED.value, "stdout": stdout, "stderr": ""}
 
 
 def golden_transcript(task: TaskSpec) -> Transcript | None:

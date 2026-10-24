@@ -64,11 +64,11 @@ def protocol(graded) -> dict:
 
 async def test_tool_probe_grades_a_real_shell_rollout():
     task = TASKS["tool_execution"]
-    model = ReplayModel(
-        [tool_call("run_command", {"command": f"cat /{NONCE_FILE}"}), reply(probe_nonce(task.id))]
-    )
+    model = ReplayModel([tool_call("run_command", {"command": f"cat /{NONCE_FILE}"}), reply(probe_nonce(task.id))])
 
-    graded = await engine(model, {"local": _FixtureImageFactory()}).run_task(rollout_spec(task, machine=machine_runtime()))
+    graded = await engine(model, {"local": _FixtureImageFactory()}).run_task(
+        rollout_spec(task, machine=machine_runtime())
+    )
 
     assessment = protocol(graded)
     assert (assessment["label"], assessment["protocol_compliance"], assessment["answer_correctness"]) == (

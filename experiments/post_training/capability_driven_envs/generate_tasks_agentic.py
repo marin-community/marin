@@ -94,17 +94,16 @@ def tool_budget(tasks: int) -> ToolBudget:
     )
 
 
-def agent_limits() -> RolloutLimits:
-    return RolloutLimits(
-        max_total_tokens=None,
-        model_turn_timeout=1800,
-        # A turn can hold several tool calls, each with its own deadline, and attempt_timeout bounds the session.
-        tool_turn_timeout=None,
-        total_turn_timeout=None,
-        attempt_timeout=6 * 3600,
-        verifier_timeout=None,
-        cleanup_timeout=60,
-    )
+AGENT_LIMITS = RolloutLimits(
+    max_total_tokens=None,
+    model_turn_timeout=1800,
+    # A turn can hold several tool calls, each with its own deadline, and attempt_timeout bounds the session.
+    tool_turn_timeout=None,
+    total_turn_timeout=None,
+    attempt_timeout=6 * 3600,
+    verifier_timeout=None,
+    cleanup_timeout=60,
+)
 
 
 def workspace_factory() -> LocalMachineFactory:
@@ -187,7 +186,7 @@ async def generate_all(
             judge=judge,
             judge_policy=LLMPolicy(temperature=JUDGE_TEMPERATURE),
             web=web,
-            agent_limits=agent_limits(),
+            agent_limits=AGENT_LIMITS,
             agent_turns=turns,
             solver_limits=SOLVER_LIMITS,
             gate=GATE,

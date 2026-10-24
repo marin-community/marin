@@ -98,7 +98,10 @@ NONCE_COMMAND = {"command": "cat /probe/nonce"}
             id="markup-in-text",
         ),
         pytest.param(
-            (*call("run_command", {"cmd": "cat"}, {"error": "run_command requires one string command"}), answer(TOOL, "?")),
+            (
+                *call("run_command", {"cmd": "cat"}, {"error": "run_command requires one string command"}),
+                answer(TOOL, "?"),
+            ),
             ("invalid_invocation", False, True, False),
             id="invalid-arguments",
         ),
@@ -214,9 +217,7 @@ REQUIRED_FILE = TASKS["required_file"]
     [
         pytest.param({ANSWER_PATH: b"nonce"}, GradeResult(Outcome.GRADED, 1.0), ("submitted", True, True), id="ok"),
         pytest.param({}, GradeResult(Outcome.SUBMISSION_FAILURE, None), ("missing_file", False, False), id="missing"),
-        pytest.param(
-            {ANSWER_PATH: b" \n"}, GradeResult(Outcome.GRADED, 0.0), ("empty_file", False, False), id="empty"
-        ),
+        pytest.param({ANSWER_PATH: b" \n"}, GradeResult(Outcome.GRADED, 0.0), ("empty_file", False, False), id="empty"),
     ],
 )
 def test_required_file_reports_submission_completeness_only(files, grade, expected):

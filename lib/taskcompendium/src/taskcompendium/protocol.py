@@ -14,6 +14,7 @@ from dataclasses import asdict, dataclass, replace
 from enum import StrEnum
 from typing import Any
 
+from pydantic import JsonValue
 from shellbox.machine import ExitReason
 from verifyit.tool_call_markup import TOOL_OPEN
 
@@ -78,7 +79,7 @@ class ProtocolAssessment:
 @dataclass(frozen=True)
 class _ToolCall:
     name: str
-    arguments: Any
+    arguments: JsonValue
     result: dict[str, Any] | None
     """The decoded tool result, or ``None`` when the call has none."""
 
@@ -89,11 +90,12 @@ def _attempt_events(task: TaskSpec, attempt: GradingAttempt) -> tuple[Conversati
 
 
 def _decoded(content: str) -> dict[str, Any]:
+    """A tool result's JSON fields; a result that is not a JSON object has none."""
     try:
         value = json.loads(content)
     except json.JSONDecodeError:
-        return {"error": content}
-    return value if isinstance(value, dict) else {"error": content}
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _tool_calls(events: tuple[ConversationEvent, ...]) -> list[_ToolCall]:
@@ -126,11 +128,7 @@ def _required_file(task: TaskSpec, attempt: GradingAttempt) -> ProtocolLabel:
 
 
 def _tool_execution(check: ToolExecutionCheck, events: tuple[ConversationEvent, ...]) -> ProtocolLabel:
-    """Label the best outcome of the attempt's calls to ``check.tool``.
-
-    The shell tool answers a malformed call with an ``error`` result and runs every other call. A call
-    without a result ended the attempt before it ran, for example at the turn budget.
-    """
+    """Label the best outcome of the attempt's calls to ``check.tool``."""
     calls = _tool_calls(events)
     if not calls:
         markup = any(TOOL_OPEN in text for text in _assistant_text(events))
@@ -145,7 +143,9 @@ def _tool_execution(check: ToolExecutionCheck, events: tuple[ConversationEvent, 
     if any(result.get("reason") == ExitReason.TIMED_OUT for result in results):
         return ProtocolLabel.EXECUTOR_TIMEOUT
     if calls and not results:
+        # A call without a result ended the attempt before it ran, for example at the turn budget.
         return ProtocolLabel.NOT_EXECUTED
+    # The shell tool runs every well-formed call, so the remaining results are argument errors.
     return ProtocolLabel.INVALID_INVOCATION
 
 

@@ -213,22 +213,23 @@ class _Recorder:
         conversation = self.conversation
         return (conversation is not None and conversation.has_turn) or any(record.steps for record in self.earlier)
 
-    def graded_messages(self) -> tuple[dict[str, Any], ...] | None:
-        """The chat of the last conversation that has a model turn, or ``None``."""
+    def _graded(self) -> tuple[tuple[dict[str, Any], ...], tuple[ModelTurn, ...]] | None:
+        """The chat and model turns of the last conversation that has a model turn, or ``None``."""
         conversation = self.conversation
         if conversation is not None and conversation.has_turn:
-            return tuple(conversation.messages)
-        return next((record.messages for record in reversed(self.earlier) if record.steps), None)
+            steps = (*conversation.steps, *(() if conversation.pending is None else (conversation.pending,)))
+            return tuple(conversation.messages), tuple(step.turn for step in steps)
+        record = next((record for record in reversed(self.earlier) if record.steps), None)
+        return None if record is None else (tuple(record.messages), tuple(step.turn for step in record.steps))
+
+    def graded_messages(self) -> tuple[dict[str, Any], ...] | None:
+        """The chat of the last conversation that has a model turn, or ``None``."""
+        graded = self._graded()
+        return None if graded is None else graded[0]
 
     def graded_turns(self) -> tuple[TurnEvidence, ...]:
         """Serving evidence of the graded conversation's turns, or nothing unless every turn has it."""
-        conversation = self.conversation
-        if conversation is not None and conversation.has_turn:
-            pending = () if conversation.pending is None else (conversation.pending.turn,)
-            turns = (*(step.turn for step in conversation.steps), *pending)
-        else:
-            record = next((record for record in reversed(self.earlier) if record.steps), None)
-            turns = () if record is None else tuple(step.turn for step in record.steps)
+        turns = () if (graded := self._graded()) is None else graded[1]
         evidence = tuple(turn.evidence for turn in turns if turn.evidence is not None)
         return evidence if len(evidence) == len(turns) else ()
 

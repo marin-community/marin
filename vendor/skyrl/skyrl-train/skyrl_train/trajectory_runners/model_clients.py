@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import numpy as np
 from rolloutengine.models import RolloutContractError
-from taskcompendium.models import ReasoningApplied, TurnEvidence
+from taskcompendium.models import ENABLE_THINKING, ReasoningApplied, TurnEvidence
 
 from skyrl_gym.envs.nemotron_ultra.answer_extraction import REASONING_DELIMITERS, final_answer_text
 
@@ -273,11 +273,11 @@ class DirectModelClient:
     async def _reasoning_applied(self, render_request: dict[str, Any]) -> ReasoningApplied:
         """The requested reasoning setting, if flipping it changes the rendered prompt, else ``UNVERIFIED``."""
         kwargs = render_request["json"].get("chat_template_kwargs") or {}
-        if "enable_thinking" not in kwargs:
+        if ENABLE_THINKING not in kwargs:
             return ReasoningApplied.UNVERIFIED
-        requested = bool(kwargs["enable_thinking"])
+        requested = bool(kwargs[ENABLE_THINKING])
         flipped = deepcopy(render_request)
-        flipped["json"]["chat_template_kwargs"] = {**kwargs, "enable_thinking": not requested}
+        flipped["json"]["chat_template_kwargs"] = {**kwargs, ENABLE_THINKING: not requested}
         rendered, alternative = await asyncio.gather(
             self._client.tokenize(render_request), self._client.tokenize(flipped)
         )
