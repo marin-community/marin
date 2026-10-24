@@ -15,17 +15,19 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 
-# (per-item metric, sample filter); GSM8K's headline is flexible-extract (strict-match scores 0 for this model).
+# (accepted per-item metric names, sample filter, headline key in record.json metrics). GSM8K's headline is
+# flexible-extract (strict-match scores ~0 for this model). HumanEval+'s per-item name is pass_rate under the
+# Evalchemy c1d5c62c pin and accuracy under marin's vendored Evalchemy (H100 lane).
 METRIC = {
-    "math500": ("accuracy", "none"),
-    "gsm8k-0shot": ("exact_match", "flexible-extract"),
-    "humanevalplus": ("pass_rate", "none"),
-    "ifbench": ("strict_prompt_accuracy", "none"),
+    "math500": (("accuracy",), "none", "accuracy"),
+    "gsm8k-0shot": (("exact_match",), "flexible-extract", "exact_match,flexible-extract"),
+    "humanevalplus": (("pass_rate", "accuracy"), "none", "pass@1"),
+    "ifbench": (("strict_prompt_accuracy",), "none", "strict_prompt_accuracy"),
 }
 BASELINE = "S"
 
 
-def item_scores(run_dir: Path, metric: str, filter_name: str) -> dict[str, float]:
+def item_scores(run_dir: Path, names: tuple[str, ...], filter_name: str) -> dict[str, float]:
     """Per-doc score; the compactor generation (higher g) supersedes the writer's rows."""
     best: dict[str, tuple[int, float]] = {}
     for path in glob.glob(str(run_dir / "samples" / "*" / "*" / "*.parquet")):
@@ -37,12 +39,24 @@ def item_scores(run_dir: Path, metric: str, filter_name: str) -> dict[str, float
             if isinstance(metrics, str):
                 metrics = ast.literal_eval(metrics)
             values = dict(metrics)
-            if metric not in values:
-                raise KeyError(f"{run_dir}: metric {metric} missing; have {sorted(values)}")
+            metric = next((name for name in names if name in values), None)
+            if metric is None:
+                raise KeyError(f"{run_dir}: none of {names} in {sorted(values)}")
             doc = str(row["doc_id"])
             if doc not in best or gen > best[doc][0]:
                 best[doc] = (gen, float(values[metric]))
     return {doc: score for doc, (_, score) in best.items()}
+
+
+def check_record(run_dir: Path, headline: str, scores: dict[str, float]) -> None:
+    """When the run's record.json is present, its headline score must equal the per-item mean."""
+    path = run_dir / "record.json"
+    if not path.exists():
+        return
+    (metrics,) = json.loads(path.read_text())["metrics"].values()
+    mean = float(np.mean(list(scores.values())))
+    if abs(metrics[headline] - mean) > 1e-9:
+        raise ValueError(f"{run_dir}: record {headline}={metrics[headline]} but per-item mean {mean} over {len(scores)}")
 
 
 def bootstrap(diffs: np.ndarray, reps: int, seed: int) -> tuple[float, float]:
@@ -59,11 +73,16 @@ def main():
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
     report = {}
-    for key, (metric, filter_name) in METRIC.items():
-        models = sorted(p.name for p in args.root.iterdir() if (p / key).is_dir())
+    for key, (names, filter_name, headline) in METRIC.items():
+        models = sorted((p.name for p in args.root.iterdir() if (p / key).is_dir()), key=lambda m: (m != BASELINE, m))
         if BASELINE not in models:
             continue
-        runs = {m: {int(r.name[1:]): item_scores(r, metric, filter_name) for r in sorted((args.root / m / key).glob("r*"))} for m in models}
+        runs = {}
+        for m in models:
+            runs[m] = {}
+            for r in sorted((args.root / m / key).glob("r*")):
+                runs[m][int(r.name[1:])] = item_scores(r, names, filter_name)
+                check_record(r, headline, runs[m][int(r.name[1:])])
         docs = sorted(set.intersection(*(set(s) for m in runs for s in runs[m].values())), key=lambda d: int(d) if d.isdigit() else d)
         mean = {m: np.mean([[runs[m][r][d] for d in docs] for r in sorted(runs[m])], axis=0) for m in models}
         rows = []
@@ -79,8 +98,8 @@ def main():
                 lo, hi = bootstrap(diffs, args.reps, seed=289)
                 row.update(delta=float(diffs.mean()), ci=[lo, hi], better=int((diffs > 0).sum()), worse=int((diffs < 0).sum()))
             rows.append(row)
-        report[key] = dict(metric=metric, rows=rows)
-        print(f"\n### {key} ({metric}, n={len(docs)} items; delta = mean over items of [model 2-run mean - S 2-run mean])\n")
+        report[key] = dict(metric=headline, rows=rows)
+        print(f"\n### {key} ({headline}, n={len(docs)} items; delta = mean over items of [model 2-run mean - S 2-run mean])\n")
         print("| Model | r1 | r2 | Mean | Delta vs S | 95% CI (item bootstrap) | Items up / down vs S | r1≠r2 items |")
         print("|---|---:|---:|---:|---:|---|---:|---:|")
         for row in rows:
