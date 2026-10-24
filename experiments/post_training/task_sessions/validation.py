@@ -118,7 +118,6 @@ def build_run(*, mode: str, version: str, steps: int) -> ArtifactStep[SkyRLRun]:
             "eval_before_train": False,
             "eval_interval": -1,
             "ckpt_interval": steps,
-            "hf_save_interval": steps,
             "resume_mode": "none",
             "logger": "console",
             "project_name": "marin-task-session-validation",
