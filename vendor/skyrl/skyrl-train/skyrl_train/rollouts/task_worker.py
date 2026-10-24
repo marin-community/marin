@@ -14,6 +14,7 @@ from jinja2 import TemplateError
 from daytona import DaytonaError
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
+from rigging.secrets import require_secret
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader
@@ -320,7 +321,7 @@ class RemoteJudgeSettings:
 
     def connection(self) -> JudgeConnection:
         """Resolve the judge credential on the rollout worker, outside task data."""
-        return JudgeConnection(self.base_url, os.environ[self.api_key_env])
+        return JudgeConnection(self.base_url, require_secret(self.api_key_env))
 
 
 class TaskRolloutWorker:

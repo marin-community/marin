@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
 import requests
+from rigging.secrets import require_secret
 
 
 logger = logging.getLogger(__name__)
@@ -91,10 +91,7 @@ class OpenAIJudge:
     def _resolved_api_key(self) -> str:
         if self.api_key_env is None:
             return self.api_key
-        value = os.environ.get(self.api_key_env)
-        if value is None:
-            raise RuntimeError(f"Judge API key environment variable {self.api_key_env!r} is not set")
-        return value
+        return require_secret(self.api_key_env)
 
     def _chat_completion_request(
         self,

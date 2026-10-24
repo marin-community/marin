@@ -128,6 +128,7 @@ def _make_env(
     memory_mode: ResourceMode = ResourceMode.AUTO,
     ttl_minutes: int | None = None,
     network_policy: dict[str, str] | None = None,
+    api_key_env: str | None = None,
 ):
     """Create a DaytonaEnvironment with a minimal valid setup."""
     env_dir = temp_dir / "environment"
@@ -180,6 +181,7 @@ def _make_env(
         memory_enforcement_policy=memory_mode,
         ttl_minutes=ttl_minutes,
         network_policy=network_policy,
+        api_key_env=api_key_env,
         **kwargs,
     )
 

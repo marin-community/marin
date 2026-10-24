@@ -1335,6 +1335,7 @@ all = [
     { name = "e2b" },
     { name = "islo" },
     { name = "kubernetes" },
+    { name = "marin-rigging" },
     { name = "modal" },
     { name = "novita-sandbox" },
     { name = "runloop-api-client" },
@@ -1356,6 +1357,7 @@ cloud = [
     { name = "e2b" },
     { name = "islo" },
     { name = "kubernetes" },
+    { name = "marin-rigging" },
     { name = "modal" },
     { name = "novita-sandbox" },
     { name = "runloop-api-client" },
@@ -1370,6 +1372,7 @@ datasets = [
 ]
 daytona = [
     { name = "daytona" },
+    { name = "marin-rigging" },
 ]
 e2b = [
     { name = "dockerfile-parse" },
@@ -1452,6 +1455,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "kubernetes", marker = "extra == 'gke'", specifier = ">=32.0.0" },
     { name = "marin-finestore", marker = "extra == 'archive'", editable = "../../lib/finestore" },
+    { name = "marin-rigging", marker = "extra == 'daytona'", editable = "../../lib/rigging" },
     { name = "marin-rigging", marker = "extra == 'telemetry'", editable = "../../lib/rigging" },
     { name = "modal", marker = "extra == 'modal'", specifier = ">=1.4.0" },
     { name = "novita-sandbox", marker = "extra == 'novita'", specifier = "==2.0.0a3" },
