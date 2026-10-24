@@ -1,18 +1,27 @@
 # Snowball performance dashboard
 
-This packages the pinned InferenceX-app as a standalone Next.js service at
+This packages an internal build of the pinned InferenceX-app as a standalone Next.js service at
 `https://performance.oa.dev`. Cloud Run's native IAP gate covers the service and its APIs.
 The global IAM stack reuses Grafana's viewer grants and adds the existing GitHub Iris
 identity for cache refresh. No anonymous invoker is granted. The web process receives
 only the `inferencex_reader` password. The import Action receives `inferencex_writer`.
 
 `settings.json` pins the upstream source, Node, Bun and build origin; Docker base images
-also use immutable digests. `app.patch` is the complete local overlay. It adds the
+also use immutable digests. `app.patch` contains the upstream fixes and configuration changes. It adds the
 Snowball catalog entry, landing defaults, build/recipe detail, internal origin, Unix
 socket connections and exact GitHub-attempt ingestion. It leaves the upstream schema,
 processing, view transforms and trace importer in use. APIs supply benchmark data at
-request time, database-backed OG routes skip static enumeration, and the private sitemap is
-empty: building the image needs no database credentials or fixtures.
+request time. `internal.mjs` retains whole upstream benchmark, comparison, history,
+point-detail, corpus-exploration and API routes. It omits public content pages and social
+images, and installs `internal-layout.tsx` plus private robots/sitemap entrypoints.
+Building the image needs no database credentials or fixtures.
+
+This is option B. Its charts, providers, API contracts and database packages remain
+upstream modules. The internal root omits the public header/footer, decoration, star-count
+fetch and site analytics views. Ten per-file overlay patches for public entrypoints are
+removed. Updating the pin requires checking the route selection and the few provider
+imports in the private root. The full app remains the fallback below; no extracted chart
+implementation or separate data pipeline is maintained.
 
 One phase-boundary fix keeps offsets relative when slicing request charts. Adding an
 epoch-nanosecond origin and subtracting it lost precision and dropped the first profiling
@@ -26,8 +35,9 @@ C32 artifact changed 52.68% to 57.38%; a SQL regression covers preserving the li
 trace's rate while still refreshing aggregate-only rows.
 
 The app remains GPLv3; `LICENSE.app` preserves its license. Corresponding source is the
-upstream commit in `settings.json` plus the adjacent patch. Keep both with distributed
-images. `/marin-build.json` exposes the upstream commit and overlay SHA256. Selected
+upstream commit in `settings.json`, the adjacent patch and internal build entrypoints. Keep
+these with distributed images. `/marin-build.json` exposes the upstream commit, overlay
+SHA256 and internal-profile SHA256. Selected
 point details show the measured vLLM build and serving recipe; missing values show `—`.
 
 ## Build and local acceptance
@@ -172,9 +182,21 @@ Schema migration is an operator action, not a per-import operation.
 
 ## Rollback and retention
 
-Disable `AGENTX_WEEKLY_ENABLED` to stop new weekly submissions. Cancel active saved plans
-before disabling collection. Disable `INFERENCEX_INGEST_ENABLED` to stop database writes.
-Keep raw artifacts and collection state so these operations can be retried later.
+Disable `AGENTX_WEEKLY_ENABLED` to stop new weekly submissions. Cancel active Iris
+coordinators before disabling collection, following the runner runbook in #10645. Disable `INFERENCEX_INGEST_ENABLED` to stop database writes.
+Keep raw artifacts and immutable completed-result descriptors so delivery and ingestion
+can be retried later. Coordinator failure can require manual recovery; the runner runbook
+contains the exact salvage and fresh-submission commands.
+
+Option A is the original pinned full app plus correctness patches. To rebuild that
+fallback, use the preserved original packaging commit in an isolated worktree:
+
+```sh
+git worktree add --detach ../inferencex-full-app d58f672d5569e4daadeb0cacdec6d1b7e69698d0
+docker build -t inferencex-full-app ../inferencex-full-app/infra/inferencex
+```
+
+Both profiles use the same PostgreSQL schema and reader/writer roles.
 
 Before each app deployment, record the current Cloud Run revision and immutable image.
 To roll back serving, use `gcloud run services update-traffic marin-inferencex
