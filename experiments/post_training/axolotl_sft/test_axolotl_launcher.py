@@ -25,6 +25,7 @@ from experiments.post_training.axolotl_sft.launcher import (
     FP32_MASTER_PLUGIN,
     PAYLOAD_ENV,
     POD_RUNNER,
+    ROUTER_AUX_LOSS_PLUGIN,
     SUPPORTED_ARCHITECTURES,
     TEMPLATE_INTEGRITY_PLUGIN,
     AxolotlOptimizer,
@@ -94,6 +95,7 @@ def test_config_trains_assistant_turns_on_the_inline_template_with_fp32_masters(
         assert TEMPLATE_INTEGRITY_PLUGIN in config["plugins"] and FP32_MASTER_PLUGIN in config["plugins"]
         assert config["tokenizer_save_jinja_files"] is False
         assert (config["chat_template"], config["chat_template_jinja"]) == ("jinja", spec.chat_template)
+        assert config["processor_kwargs"] == {"chat_template": spec.chat_template}
         (dataset,) = config["datasets"]
         assert dataset["type"] == "chat_template" and dataset["field_messages"] == "messages"
         # Assistant turns train through the family's end-of-turn token, which also ends generation.
@@ -107,9 +109,11 @@ def test_config_trains_assistant_turns_on_the_inline_template_with_fp32_masters(
 
 
 def test_router_aux_loss_is_explicit_per_spec():
-    assert axolotl_config(_spec(QWEN3_30B_A3B_BASE))["output_router_logits"] is True
+    # Axolotl ignores a top-level output_router_logits; only the plugin turns the aux loss on.
+    qwen = axolotl_config(_spec(QWEN3_30B_A3B_BASE))
+    assert ROUTER_AUX_LOSS_PLUGIN in qwen["plugins"] and "output_router_logits" not in qwen
     nemotron = axolotl_config(_spec(NEMOTRON_3_NANO_30B_A3B_BASE, output_router_logits=False))
-    assert nemotron["output_router_logits"] is False
+    assert ROUTER_AUX_LOSS_PLUGIN not in nemotron["plugins"]
     manifest = launch_payload(_spec(NEMOTRON_3_NANO_30B_A3B_BASE, output_router_logits=False), output_uri="s3://b/o")[
         "manifest"
     ]

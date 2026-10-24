@@ -52,6 +52,9 @@ DECODER_LAYER_CLASSES = {
 TEMPLATE_INTEGRITY_PLUGIN = "axolotl.integrations.template_integrity.TemplateIntegrityPlugin"
 # Shipped next to the pod runner; see fp32_master.py.
 FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
+# Shipped next to the pod runner; see router_aux_loss.py. Axolotl itself ignores
+# `output_router_logits`, so the aux loss trains only through this plugin.
+ROUTER_AUX_LOSS_PLUGIN = "router_aux_loss.RouterAuxLossPlugin"
 # The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
 CUT_CROSS_ENTROPY_PLUGIN = "axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin"
 GPUS_PER_NODE = 8
@@ -163,10 +166,18 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "revision_of_model": spec.base.revision,
         "trust_remote_code": False,
         "strict": False,
-        "plugins": [TEMPLATE_INTEGRITY_PLUGIN, FP32_MASTER_PLUGIN, CUT_CROSS_ENTROPY_PLUGIN],
+        "plugins": [
+            TEMPLATE_INTEGRITY_PLUGIN,
+            FP32_MASTER_PLUGIN,
+            CUT_CROSS_ENTROPY_PLUGIN,
+            *([ROUTER_AUX_LOSS_PLUGIN] if spec.output_router_logits else []),
+        ],
         "tokenizer_save_jinja_files": False,
         "chat_template": "jinja",
         "chat_template_jinja": spec.chat_template,
+        # Multimodal shells (Qwen3.5-MoE) also load and save a processor, whose chat_template.jinja
+        # transformers reads ahead of tokenizer_config.json; give it the same template.
+        "processor_kwargs": {"chat_template": spec.chat_template},
         # The family's end-of-turn token ends generation, as it ends every trained turn.
         "special_tokens": {"eos_token": spec.turn_close},
         "datasets": [
@@ -206,9 +217,6 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "tf32": True,
         "attn_implementation": "sdpa",
         "experts_implementation": "grouped_mm",
-        # The router aux loss is explicit on the spec: without it the router trains only
-        # through the LM loss.
-        "output_router_logits": spec.output_router_logits,
         "logging_steps": 1,
         "save_strategy": "steps",
         "save_steps": 200,

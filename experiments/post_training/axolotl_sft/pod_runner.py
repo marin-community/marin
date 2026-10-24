@@ -163,6 +163,11 @@ def _check_template(output_dir: Path, expected: str) -> None:
         embedded = json.load(handle).get("chat_template")
     if embedded != expected:
         raise ValueError(f"{output_dir}/tokenizer_config.json does not embed the configured chat template")
+    # Multimodal shells (Qwen3.5-MoE) also pre-save a processor, which writes chat_template.jinja;
+    # transformers loads that file ahead of tokenizer_config.json, so it must match too.
+    jinja = output_dir / "chat_template.jinja"
+    if jinja.exists() and jinja.read_text() != expected:
+        raise ValueError(f"{jinja} differs from the configured chat template")
 
 
 def _realized_tokens(output_dir: Path) -> dict:
