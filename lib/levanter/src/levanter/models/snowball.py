@@ -40,6 +40,7 @@ from haliax.jax_utils import named_call
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 
 from levanter.compat.hf_checkpoints import HFCheckpointConverter, HFCompatConfig
+from levanter.grug._moe.common import _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS
 from levanter.grug.attention import (
     AttentionMask,
     GrugAttentionImplementation,
@@ -168,10 +169,6 @@ def _reshard_sequence(x: jax.Array, axis: str | None) -> jax.Array:
     return reshard(x, P(spec[0], axis, *spec[2:]))
 
 
-def _activation_reshard(x: jax.Array) -> jax.Array:
-    return reshard(x, _activation_spec())
-
-
 def _hf_attr(config: HfConfig, names: tuple[str, ...], default: Any = None) -> Any:
     for name in names:
         if hasattr(config, name):
@@ -240,6 +237,11 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("num_experts_per_token must be <= num_experts")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
+        if self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
+            raise ValueError(
+                f"snowball cannot use moe_implementation={self.moe_implementation!r}: it requires "
+                "pooled_transport_capacity_factor, which SnowballConfig does not set"
+            )
         _ = self.inferred_head_dim
 
     @property
@@ -525,11 +527,11 @@ class DenseMLP(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
         out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, self.w_down, out_sharding=_token_spec())
-        return _activation_reshard(rearrange(out_flat, "(b s) d -> b s d", b=b, s=s))
+        return jnp.reshape(out_flat, (b, s, out_flat.shape[-1]), out_sharding=_activation_spec())
 
 
 class SnowballMoEMLP(eqx.Module):
@@ -572,7 +574,7 @@ class SnowballMoEMLP(eqx.Module):
     @named_call
     def __call__(self, x: Float[Array, "B S D"]) -> Float[Array, "B S D"]:
         b, s, _ = x.shape
-        x_flat = rearrange(x, "b s d -> (b s) d")
+        x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         router_logits = jnp.einsum("td,de->te", x_flat, reshard(self.router, P(None, None))).astype(jnp.float32)
         # router_bias is [E]; replicate it (like the norm weights) so the add keeps the expert axis
         # unsharded. A safetensors load auto-shards [E] over `data` when E % data == 0, which would
@@ -595,8 +597,7 @@ class SnowballMoEMLP(eqx.Module):
             mesh=get_abstract_mesh(),
             report_capacity_overflow=False,
         )
-        routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
-        return _activation_reshard(routed)
+        return jnp.reshape(routed_flat, (b, s, routed_flat.shape[-1]), out_sharding=_activation_spec())
 
 
 class SnowballBlock(eqx.Module):

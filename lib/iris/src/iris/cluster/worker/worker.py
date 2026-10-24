@@ -4,6 +4,7 @@
 """Unified worker managing all components and lifecycle."""
 
 import logging
+import shutil
 import threading
 import time
 from collections.abc import Callable
@@ -28,6 +29,7 @@ from iris.cluster.runtime.profile import (
     profile_local_process,
 )
 from iris.cluster.runtime.types import ContainerRuntime, ExecutionStage
+from iris.cluster.secrets import worker_secret_root
 from iris.cluster.stats.tables import (
     PROFILE_NAMESPACE,
     TASK_STATS_NAMESPACE,
@@ -301,6 +303,15 @@ class Worker:
         adopted = self.adopt_running_containers()
         if adopted == 0:
             self._cleanup_all_iris_containers()
+        secret_root = worker_secret_root(self._cache_dir)
+        if secret_root.exists():
+            active_attempts = {str(task.attempt_uid) for task in self._tasks}
+            for directory in secret_root.iterdir():
+                if directory.name not in active_attempts:
+                    try:
+                        shutil.rmtree(directory)
+                    except OSError:
+                        logger.exception("Failed to remove orphan secret directory %s", directory.name)
 
         # Bring the HTTP server up last so the worker is ready to serve the
         # controller's Reconcile RPC the moment registration completes.

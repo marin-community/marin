@@ -33,6 +33,10 @@ from skyrl_train.distributed.megatron.direct_checkpoint import (
     DirectS3TorchDistSaveShardedStrategy,
 )
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
+from skyrl_train.distributed.megatron.checkpoint_restore import (
+    defer_model_weights_to_optimizer,
+    restore_model_weights_from_optimizer,
+)
 from marinskyrl.remote_io import abort_multipart_uploads
 
 from megatron.core.dist_checkpointing.strategies import base as ckpt_base
@@ -430,6 +434,7 @@ class MegatronStrategy(DistributedStrategy):
             sharded_state_dict["lr_scheduler"] = scheduler.state_dict()
 
         muonh = self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh"
+        model_weights_from_optimizer = False
         with remote_checkpoint_metadata(ckpt_dir) as read_dir:
             if optimizer and load_training_state:
                 common_state = dist_checkpointing.load_common_state_dict(read_dir)
@@ -455,6 +460,9 @@ class MegatronStrategy(DistributedStrategy):
                 )
                 if muonh:
                     _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
+                model_weights_from_optimizer = defer_model_weights_to_optimizer(
+                    model_sharded_state_dict, sharded_state_dict["optimizer"]
+                )
             # Load the checkpoint in parallel.
             if not muonh:
                 load_strategy = FullyParallelLoadStrategyWrapper(
@@ -481,6 +489,8 @@ class MegatronStrategy(DistributedStrategy):
             if muonh:
                 _restore_muonh_adamh_step(optimizer, common_state["optimizer_recipe_step"])
             restore_offloaded_optimizer_state(optimizer)
+            if model_weights_from_optimizer:
+                restore_model_weights_from_optimizer(optimizer, model)
             load_megatron_grads_to_gpu(model)
             self.log("Loaded optimizer state dict.")
 

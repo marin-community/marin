@@ -30,9 +30,9 @@ uv run python -m experiments.post_training.cat_count_canary \
   --version 2026.09.30 --preset dry
 ```
 
-Inspect the model, dataset and training artifact versions and the vendored
-SkyRL `runtime.source_digest`. Use a fresh calendar version and owned
-job name for every measured run and after any runtime repin.
+Inspect the model, dataset and training artifact versions and the Marin
+revision. Use a fresh calendar version and owned job name for every measured
+run and after runtime changes.
 
 Check live capacity before submitting:
 
@@ -173,8 +173,8 @@ Check that the log includes step 0, every completed training step, final
 evaluation and the training-completion marker. Use the actual child duration
 for `CHILD_DURATION_SECONDS`.
 
-Use the run's exact Marin revision and confirm its vendored provenance matches
-`runtime.source_digest`. From `vendor/skyrl/skyrl-train`, select
+Use the run's Marin checkout recorded by `rigging.provenance`.
+From `vendor/skyrl/skyrl-train`, select
 `ci/marin_nightly/specs/cat-count-canary-qwen2.5-0.5b-async.json`, then run:
 
 ```bash

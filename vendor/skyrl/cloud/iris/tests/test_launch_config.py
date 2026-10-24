@@ -24,6 +24,23 @@ from cloud.iris.rl_config_translation import (
 from skyrl_train.distributed.step_policy import NonfiniteStepPolicy, nonfinite_step_policy
 from skyrl_train.dataset.tasks import source_row_task
 from marinskyrl.runtime_options import reference_model_required
+from marinskyrl.inference_placement import validate_expert_block_transport
+from skyrl_train.config.utils import get_default_config
+
+
+def test_training_channels_require_compatible_weight_transport() -> None:
+    config = get_default_config()
+    config.trainer.algorithm.batch_invariant = True
+    config.trainer.placement.colocate_all = False
+    config.generator.inference_engine_tensor_parallel_size = 1
+    config.generator.weight_sync_transport = "expert_block"
+    # Expert-block groups inherit training channels; broadcast has its own override.
+    validate_expert_block_transport(config)
+    config.trainer.policy.megatron_config.nccl_max_channels = 8
+    with pytest.raises(ValueError, match="nccl_max_channels"):
+        validate_expert_block_transport(config)
+    config.generator.weight_sync_transport = "broadcast"
+    validate_expert_block_transport(config)
 
 
 def _raw_config() -> dict[str, Any]:
@@ -38,7 +55,6 @@ def _raw_config() -> dict[str, Any]:
             "export_hf": True,
         },
         "runtime": {
-            "source_digest": "a" * 64,
             "profile": "megatron",
             "entrypoint": "skyrl_train.entrypoints.main_base",
         },

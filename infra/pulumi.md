@@ -19,7 +19,7 @@ This project provisions cluster prerequisites and shared GCP infrastructure.
 Cluster-scoped resources use one stack per cluster, with configuration in
 `Pulumi.<cluster>.yaml`. Shared GCP resources, including IAM grants, belong to
 the `marin` stack. Cross-cloud data
-buckets are the exception: `infra/buckets` owns the GCS, CoreWeave, and R2
+buckets are the exception: `infra/buckets` owns the GCS, CoreWeave, R2, and Hugging Face
 buckets in a manually operated project because its provider credentials are not
 available to CI. Bucket-scoped GCP IAM remains in `marin`.
 

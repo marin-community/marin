@@ -4,12 +4,21 @@
 """Answer formats extract submissions and shape model-visible requests without revealing the answer."""
 
 import pytest
-from verifyit.spec import ExactSpec, NumericSpec, StructuredExactSpec
+from verifyit.spec import (
+    EmptyOutputPolicy,
+    ExactSpec,
+    FunctionCall,
+    NumericSpec,
+    PredictedActionSpec,
+    StructuredExactSpec,
+)
 
+from taskcompendium.ejection import enable_ejection, mark_unsolvable
 from taskcompendium.grader import verifyit_package
-from taskcompendium.grading import grade_answer
+from taskcompendium.grading import answer_submission, grade_answer
 from taskcompendium.grading_result import Outcome
 from taskcompendium.models import (
+    ActionSubmission,
     AnswerCall,
     AnswerType,
     AssistantToolCalls,
@@ -18,6 +27,7 @@ from taskcompendium.models import (
     ConversationToolCall,
     ConversationTrace,
     EnvironmentRequirements,
+    FinalAction,
     FunctionDefinition,
     GradingAttempt,
     JsonAnswer,
@@ -26,6 +36,7 @@ from taskcompendium.models import (
     Source,
     TaskSpec,
     TextMessage,
+    ToolResult,
 )
 from taskcompendium.submission import chat_request, render_instruction, submission_compatibility
 
@@ -192,3 +203,145 @@ def test_incompatible_answer_format_and_grader_cannot_form_chat_request(specific
     assert not submission_compatibility(task).compatible
     with pytest.raises(ValueError):
         chat_request(task)
+
+
+@pytest.mark.parametrize("answer_format", [PlainText(), Boxed(), JsonAnswer(), AnswerCall()])
+def test_ejection_keeps_visible_request_independent_of_private_solvability(specification, answer_format):
+    task = enable_ejection(_revised(specification, answer_format=answer_format))
+    broken = TaskSpec.model_validate_json(mark_unsolvable(task).model_dump_json())
+    assert chat_request(task) == chat_request(broken)
+    assert render_instruction(task) == render_instruction(broken)
+    assert task.context == broken.context
+    assert isinstance(broken.answer_format, FinalAction)
+    assert task.grader != broken.grader
+
+
+@pytest.mark.parametrize(
+    "answer_format,correct,wrong",
+    [
+        (PlainText(), _reply("12"), _reply("13")),
+        (JsonAnswer(), _reply('{"answer":"12"}'), _reply('{"answer":"13"}')),
+        (AnswerCall(), _answer_action("12"), _answer_action("13")),
+    ],
+)
+def test_terminal_ejection_and_normal_answers_receive_one_private_reward(specification, answer_format, correct, wrong):
+    task = enable_ejection(_revised(specification, answer_format=answer_format))
+    broken = mark_unsolvable(task)
+    ejection = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="eject", name="eject_button", arguments={"reason": "Missing input"}),)
+    )
+    submission = answer_submission(broken, _attempt(broken, ejection))
+    assert isinstance(submission, ActionSubmission)
+    assert submission.message == ejection
+    for current, expected in ((task, (0.0, 1.0, 0.0)), (broken, (1.0, 0.0, 0.0))):
+        results = [grade_answer(current, _attempt(current, reply)) for reply in (ejection, correct, wrong)]
+        assert [(result.status, result.reward) for result in results] == [
+            (Outcome.GRADED, reward) for reward in expected
+        ]
+
+
+@pytest.mark.parametrize("arguments", [{}, {"reason": " "}, {"reason": 5}, {"reason": "missing", "answer": "12"}, []])
+def test_malformed_ejection_cannot_earn_unsolvable_reward(specification, arguments):
+    task = mark_unsolvable(specification)
+    response = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="eject", name="eject_button", arguments=arguments),)
+    )
+    result = grade_answer(task, _attempt(task, response))
+    assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+def test_ejection_must_be_advertised_and_cannot_mix_with_an_answer(specification):
+    ejection = ConversationToolCall(call_id="eject", name="eject_button", arguments={"reason": "Missing input"})
+    unadvertised = grade_answer(specification, _attempt(specification, AssistantToolCalls(calls=(ejection,))))
+    task = mark_unsolvable(_revised(specification, answer_format=AnswerCall()))
+    mixed = AssistantToolCalls(calls=(ejection, *_answer_action("12").calls))
+    result = grade_answer(task, _attempt(task, mixed))
+    assert (unadvertised.status, unadvertised.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+def test_only_current_interaction_ejection_is_terminal(specification):
+    historical = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="old-ejection", name="eject_button", arguments={"reason": "Old task"}),)
+    )
+    history = (historical, ToolResult(call_id="old-ejection", content="Previous interaction ended"))
+    task = enable_ejection(
+        _revised(specification, context=ConversationInput(events=(*history, *specification.context.events)))
+    )
+    result = grade_answer(task, _attempt(task, _reply("12")))
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    current = historical.model_copy(
+        update={"calls": (historical.calls[0].model_copy(update={"call_id": "new-ejection"}),)}
+    )
+    continued = GradingAttempt(
+        ConversationTrace(
+            events=(*task.context.events, current, ToolResult(call_id="new-ejection", content="Ended"), _reply("12"))
+        )
+    )
+    rejected = grade_answer(task, continued)
+    assert (rejected.status, rejected.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+def test_ejection_preserves_parallel_native_answers_and_call_constraints(specification):
+    calls = tuple(FunctionCall(name="lookup", arguments={"value": value}) for value in (1, 2))
+    task = _revised(
+        specification,
+        answer_type=AnswerType.NATIVE_ACTION,
+        answer_format=FinalAction(require_call=True, max_calls=2),
+        final_tools=(FunctionDefinition(name="lookup", parameters={"type": "object"}),),
+        grader=verifyit_package(PredictedActionSpec(expected_calls=calls)).grader,
+    )
+    task = enable_ejection(task)
+    broken = mark_unsolvable(task)
+    assert chat_request(task) == chat_request(broken)
+    assert chat_request(task).get("parallel_tool_calls") is not False
+    response = AssistantToolCalls(
+        calls=tuple(
+            ConversationToolCall(call_id=str(index), name=call.name, arguments=call.arguments)
+            for index, call in enumerate(calls)
+        )
+    )
+    result = grade_answer(task, _attempt(task, response))
+    assert (result.status, result.reward) == (Outcome.GRADED, 1.0)
+    for current in (task, broken):
+        for invalid in (
+            _reply("12"),
+            AssistantToolCalls(
+                calls=(*response.calls, ConversationToolCall(call_id="extra", name="lookup", arguments={}))
+            ),
+        ):
+            rejected = grade_answer(current, _attempt(current, invalid))
+            assert (rejected.status, rejected.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+
+
+def test_unsupported_runtime_does_not_become_unsolvable(specification):
+    task = _revised(specification, environment_requirements=EnvironmentRequirements(capabilities=("shell",)))
+    with pytest.raises(NotImplementedError):
+        mark_unsolvable(task)
+    assert task.grader == specification.grader
+    with pytest.raises(NotImplementedError):
+        chat_request(enable_ejection(task))
+
+
+def test_continuation_after_ejection_cannot_use_gradeable_empty_answer(specification):
+    task = enable_ejection(
+        _revised(
+            specification,
+            grader=verifyit_package(ExactSpec(expected=("",), empty_output=EmptyOutputPolicy.GRADE)).grader,
+        )
+    )
+    response = AssistantToolCalls(
+        calls=(ConversationToolCall(call_id="eject", name="eject_button", arguments={"reason": "Cannot solve"}),)
+    )
+    attempt = GradingAttempt(
+        ConversationTrace(
+            events=(
+                *task.context.events,
+                response,
+                ToolResult(call_id="eject", content="Ended"),
+                _reply(""),
+            )
+        )
+    )
+    result = grade_answer(task, attempt)
+    assert (result.status, result.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)

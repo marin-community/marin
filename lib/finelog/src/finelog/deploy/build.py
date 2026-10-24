@@ -85,10 +85,13 @@ def build_image(
     dockerfile = marin_root / "lib" / "finelog" / "deploy" / "Dockerfile"
     effective_platform = platform if push else platform.split(",", maxsplit=1)[0]
 
+    # --pull resolves base image tags against the registry, so a builder's stale
+    # local base image cannot carry an outdated trust store into the release.
     cmd = [
         "docker",
         "buildx",
         "build",
+        "--pull",
         "--platform",
         effective_platform,
         "--file",

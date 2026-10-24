@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 import jax
 import jax.numpy as jnp
@@ -12,6 +13,11 @@ from levanter.utils.jax_utils import leaf_key_paths
 
 from experiments.grug.moe_hero_ep.adamh import scale_by_adamh
 from experiments.grug.moe_hero_ep.grugmuon_hero import _grug_scale_with_muon_hero, _target_named_sharding
+
+
+class ExpertNormalization(StrEnum):
+    ALL_EXPERTS = "all_experts"
+    PER_EXPERT = "per_expert"
 
 
 def _match_named_update_sharding() -> optax.GradientTransformation:
@@ -53,12 +59,16 @@ def _pin_sharding(x, ref):
     return jax.sharding.reshard(x, sharding) if sharding is not None else x
 
 
-def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate: float):
+def _scale_invariant_hyperball_updates(
+    params, direction_updates, learning_rate: float, expert_normalization: ExpertNormalization
+):
     """MuonH hyperball step: move along the orthogonalized direction, then project back to the
     parameter's Frobenius sphere (scale-invariant update)."""
     direction_updates = _match_named_sharding_to_params(direction_updates, params)
 
-    def scale_invariant_update(param, update):
+    paths = leaf_key_paths(params)
+
+    def scale_invariant_update(param, update, path):
         if update is None:
             return None
         if not hasattr(param, "ndim"):
@@ -73,7 +83,13 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
             new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param.astype(jnp.float32))))
             return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
-        axes = tuple(range(1, param.ndim))
+        if path.endswith((".expert_mlp.w_gate", ".expert_mlp.w_up", ".expert_mlp.w_down")):
+            # Pipeline blocks have [experts, in, out]; the scanned EP model adds
+            # a leading layer axis. Normalize the same expert bank in both layouts.
+            bank_dims = 3 if expert_normalization == ExpertNormalization.ALL_EXPERTS else 2
+            axes = tuple(range(param.ndim - bank_dims, param.ndim))
+        else:
+            axes = tuple(range(1, param.ndim))
         param_norm = jnp.sqrt(jnp.sum(jnp.square(param), axis=axes, keepdims=True))
         update_norm = jnp.sqrt(jnp.sum(jnp.square(update), axis=axes, keepdims=True))
         new_param = param - learning_rate * update * param_norm / jnp.maximum(update_norm, 1e-10)
@@ -81,7 +97,7 @@ def _scale_invariant_hyperball_updates(params, direction_updates, learning_rate:
         new_param_norm = jnp.sqrt(jnp.sum(jnp.square(new_param), axis=axes, keepdims=True))
         return new_param / jnp.maximum(new_param_norm, 1e-10) * param_norm - param
 
-    return jax.tree.map(scale_invariant_update, params, direction_updates, is_leaf=lambda x: x is None)
+    return jax.tree.map(scale_invariant_update, params, direction_updates, paths, is_leaf=lambda x: x is None)
 
 
 def _is_gate_or_router_weight(path_lower: str) -> bool:
@@ -138,8 +154,10 @@ def scale_with_grug_muonh(
     learning_rate: float = 0.02,
     coefficient_type: CoefficientType = "quintic",
     use_syrk: bool = True,
+    expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS,
 ) -> optax.GradientTransformation:
     """MuonH transform for the stacked hero model: Newton-Schulz direction + Frobenius hyperball step."""
+    expert_normalization = ExpertNormalization(expert_normalization)
     muon_transform = _grug_scale_with_muon_hero(
         momentum=momentum,
         nesterov=nesterov,
@@ -156,7 +174,7 @@ def scale_with_grug_muonh(
         if params is None:
             raise ValueError("scale_with_grug_muonh requires params for norm-preserving updates")
         muon_updates, next_state = muon_transform.update(updates, state, params)
-        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate)
+        muonh_updates = _scale_invariant_hyperball_updates(params, muon_updates, learning_rate, expert_normalization)
         return muonh_updates, next_state
 
     return optax.GradientTransformation(init_fn, update_fn)
@@ -174,6 +192,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
       and the tiny SConv kernels.
 
     ``use_syrk`` routes the 4D expert-stack Newton-Schulz through QuACK's symmetric GEMM.
+    ``expert_normalization`` selects a shared Frobenius sphere for each layer's
+    routed expert bank or a separate sphere for each routed expert.
     """
 
     adam_lr: float = 6e-4
@@ -188,6 +208,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
     coefficient_type: CoefficientType = "quintic"
     use_syrk: bool = True
     gate_router_weight_decay: float = 0.0
+    expert_normalization: ExpertNormalization = ExpertNormalization.ALL_EXPERTS
 
     def build(self, num_train_steps):
         learning_rate_schedule = self.lr_scheduler(num_train_steps)
@@ -207,6 +228,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                         learning_rate=learning_rate,
                         coefficient_type=self.coefficient_type,
                         use_syrk=self.use_syrk,
+                        expert_normalization=self.expert_normalization,
                     )
                 )
                 components.append(_match_named_update_sharding())
@@ -271,6 +293,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
 
 __all__ = [
+    "ExpertNormalization",
     "GrugMoeMuonHConfig",
     "scale_with_grug_muonh",
 ]

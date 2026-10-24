@@ -1,28 +1,24 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""The parent builds the Evalchemy child's config; the child turns each task into an ``evalchemy`` argv.
-
-These are the pure pieces of the serve->eval handoff that do not need a cluster: the JSON payload
-the parent hands the eval child (one upload dir per task-config, kept distinct so shot variants of a
-task do not collide), the lm-eval command the child runs per task (route selection between the
-completions and chat APIs included), and the FineStore output target. Everything else (job submission,
-serving, the eval itself) is exercised by the cluster smoke.
-"""
+"""Test Evalchemy configuration, command construction, and child cancellation."""
 
 import base64
+import http.client
 import io
 import json
 import os
 import subprocess
 import sys
+import urllib.error
 import zipfile
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 from iris.cluster.client.bundle import create_workspace_zip
 from marin.evaluation.evalchemy import runtime
-from marin.evaluation.evalchemy.client import build_command, build_model_args
+from marin.evaluation.evalchemy.client import build_command, build_model_args, served_max_length
 from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.runner import (
     EvalchemyRunConfig,
@@ -31,7 +27,15 @@ from marin.evaluation.evalchemy.runner import (
     _run_evalchemy_child,
 )
 from marin.evaluation.evaluation_config import EvalTaskConfig
+from marin.evaluation.runner import (
+    EndpointRoute,
+    EvaluationOutcome,
+    InferenceBackendFinished,
+    InferenceUnavailable,
+    run_evaluation,
+)
 from marin.evaluation.serving_config import _auto_serve_overrides_from_config, auto_serve_overrides
+from marin.inference.iris import InferenceBackendState
 from marin.inference.types import OpenAIEndpoint, RunningModel
 
 _MODEL = RunningModel(
@@ -43,6 +47,43 @@ _MODEL = RunningModel(
 )
 
 
+@pytest.mark.parametrize(
+    "backend_state, expected_error",
+    [
+        (InferenceBackendState.RECOVERING, InferenceUnavailable),
+        (InferenceBackendState.FINISHED, InferenceBackendFinished),
+    ],
+)
+def test_evalchemy_cancels_active_child_when_inference_disappears(monkeypatch, backend_state, expected_error):
+    state = InferenceBackendState.READY
+
+    class EvalJob:
+        job_id = "/eval/interrupted"
+        cancelled = False
+        stopped = False
+
+        def wait(self, timeout, *, raise_on_failure=True):
+            nonlocal state
+            if self.cancelled:
+                self.stopped = True
+                return
+            state = backend_state
+            raise TimeoutError("evaluator is still running")
+
+        def cancel(self):
+            self.cancelled = True
+
+    job = EvalJob()
+    client = SimpleNamespace(submit=lambda **_kwargs: job)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+
+    with pytest.raises(expected_error):
+        _run_evalchemy_child(_MODEL, _config(), "memory://interrupted", {}, backend_state=lambda: state)
+
+    assert job.cancelled
+    assert job.stopped
+
+
 def _config(**overrides) -> EvalchemyRunConfig:
     base = dict(
         name="core",
@@ -51,6 +92,82 @@ def _config(**overrides) -> EvalchemyRunConfig:
     )
     base.update(overrides)
     return EvalchemyRunConfig(**base)
+
+
+def test_evalchemy_cancels_after_inference_recovers_before_child_start(monkeypatch):
+    recovery_count = 0
+    jobs = []
+
+    class EvalJob:
+        job_id = "/eval/recovered"
+        cancelled = False
+        stopped = False
+
+        def wait(self, timeout, *, raise_on_failure=True):
+            assert self is not jobs[0] or self.cancelled, "stale-endpoint work must stop before waiting"
+            self.stopped = True
+
+        def cancel(self):
+            self.cancelled = True
+
+    def submit(**_kwargs):
+        job = EvalJob()
+        jobs.append(job)
+        return job
+
+    client = SimpleNamespace(submit=submit)
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    session = SimpleNamespace(
+        model=_MODEL,
+        backend_state=lambda: InferenceBackendState.READY,
+        preemption_count=lambda: recovery_count,
+        wait_until_ready=lambda **_kwargs: None,
+    )
+
+    def executor(session, output_dir, env_vars, *, backend_state, judge=None):
+        nonlocal recovery_count
+        if not jobs:
+            # Recovery happens after the runner selected the endpoint but before child startup.
+            recovery_count += 1
+        job_id = _run_evalchemy_child(session.model, _config(), output_dir, env_vars, backend_state=backend_state)
+        return EvaluationOutcome(metrics={"task": {"accuracy": 1.0}}, jobs={"eval": job_id})
+
+    outcome = run_evaluation(executor, session, "memory://recovered", {}, endpoint_route=EndpointRoute.CAPABILITY)
+
+    assert len(jobs) == 2
+    assert jobs[0].cancelled and jobs[0].stopped
+    assert not jobs[1].cancelled and jobs[1].stopped
+    assert outcome.metrics == {"task": {"accuracy": 1.0}}
+
+
+def test_failed_child_cancellation_does_not_start_a_same_archive_retry(tmp_path, monkeypatch):
+    state = InferenceBackendState.READY
+
+    class EvalJob:
+        job_id = "/eval/cancel-failed"
+
+        def wait(self, timeout, **_kwargs):
+            nonlocal state
+            state = InferenceBackendState.RECOVERING
+            raise TimeoutError("still running")
+
+        def cancel(self):
+            raise ConnectionError("cancellation failed")
+
+    client = SimpleNamespace(submit=lambda **_kwargs: EvalJob())
+    monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
+    session = SimpleNamespace(
+        backend_state=lambda: state,
+        preemption_count=lambda: 0,
+        wait_until_ready=lambda **_kwargs: pytest.fail("must not retry while child cancellation is unconfirmed"),
+    )
+
+    def executor(session, output_dir, env_vars, *, backend_state, judge=None):
+        _run_evalchemy_child(_MODEL, _config(), output_dir, env_vars, backend_state=backend_state)
+        pytest.fail("the child should not finish successfully")
+
+    with pytest.raises(ConnectionError, match="cancellation failed"):
+        run_evaluation(executor, session, str(tmp_path / "cancel-failed"), {}, endpoint_route=EndpointRoute.CAPABILITY)
 
 
 def _payload(config: EvalchemyRunConfig | None = None) -> dict:
@@ -216,7 +333,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
         job_id = "/eval/financebench"
 
         def wait(self, timeout):
-            assert timeout == float("inf")
+            pass
 
     client = SimpleNamespace(submit=lambda **kwargs: submitted.append(kwargs) or FakeJob())
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
@@ -239,6 +356,7 @@ def test_evalchemy_child_keeps_candidate_and_judge_credentials_separate(monkeypa
         config,
         "gs://bucket/evals/qwen3/financebench",
         {"JUDGE_API_KEY": "judge-key", "HF_TOKEN": "candidate-runtime-token"},
+        backend_state=lambda: InferenceBackendState.READY,
     )
 
     env = submitted[0]["environment"].env_vars
@@ -261,7 +379,9 @@ def test_evalchemy_child_rejects_a_missing_judge_secret():
     )
 
     with pytest.raises(ValueError, match="requires JUDGE_API_KEY"):
-        _run_evalchemy_child(_MODEL, config, "gs://bucket/evals/qwen3/financebench", {})
+        _run_evalchemy_child(
+            _MODEL, config, "gs://bucket/evals/qwen3/financebench", {}, backend_state=lambda: InferenceBackendState.READY
+        )
 
 
 def test_evalchemy_child_uses_its_project_environment_instead_of_the_parent(tmp_path, monkeypatch):
@@ -297,7 +417,9 @@ def test_evalchemy_child_uses_its_project_environment_instead_of_the_parent(tmp_
 
     client = SimpleNamespace(submit=submit)
     monkeypatch.setattr("marin.evaluation.evalchemy.runner.iris_ctx", lambda: SimpleNamespace(client=client))
-    _run_evalchemy_child(_MODEL, _config(), "gs://bucket/evals/qwen3/core", {})
+    _run_evalchemy_child(
+        _MODEL, _config(), "gs://bucket/evals/qwen3/core", {}, backend_state=lambda: InferenceBackendState.READY
+    )
 
     assert json.loads(output.read_text()) == {
         "environment": str(tmp_path / "vendor/evalchemy/.venv"),
@@ -477,6 +599,14 @@ def test_extra_gen_kwargs_ride_on_gen_kwargs():
     assert gen_kwargs == "max_gen_toks=2048,skip_special_tokens=false,repetition_penalty=1.1"
 
 
+@pytest.mark.parametrize("prompt_budget_preflight,expected_cap", [(False, 130048), (True, 131072)])
+def test_prompt_preflight_owns_output_budget_selection(prompt_budget_preflight, expected_cap):
+    config = _payload(_config(max_gen_toks=131072, prompt_budget_preflight=prompt_budget_preflight))
+    command = build_command(config, config["tasks"][1], "/opt/py", 131072)
+
+    assert int(command[command.index("--max_tokens") + 1]) == expected_cap
+
+
 def test_no_extra_gen_kwargs_leaves_gen_kwargs_at_budget_only():
     cmd = build_command(_payload(), _payload()["tasks"][1], "/opt/py", None)
     assert cmd[cmd.index("--gen_kwargs") + 1] == "max_gen_toks=2048"
@@ -515,9 +645,10 @@ def test_unset_budget_sizes_native_generation_task_from_served_context(monkeypat
     assert "--max_tokens" not in cmd
 
 
-def test_unset_budget_loglikelihood_task_gets_no_gen_kwargs(monkeypatch):
+@pytest.mark.parametrize("max_gen_toks", [None, 256])
+def test_loglikelihood_task_excludes_generation_overrides(monkeypatch, max_gen_toks):
     monkeypatch.setattr("marin.evaluation.evalchemy.client.is_evalchemy_benchmark", lambda name: False)
-    config = _payload(_config(max_gen_toks=None))
+    config = _payload(_config(max_gen_toks=max_gen_toks, extra_gen_kwargs={"temperature": "0.7"}))
     cmd = build_command(config, config["tasks"][0], "/opt/py", 40960)  # arc_easy, loglikelihood
 
     assert "--gen_kwargs" not in cmd
@@ -575,6 +706,46 @@ def test_model_args_carry_served_max_length():
     args = dict(pair.split("=", 1) for pair in build_model_args(_payload(), False, 4096).split(","))
     assert args["max_length"] == "4096"
     assert args["tokenized_requests"] == "False"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        urllib.error.HTTPError("http://model/v1/models", 429, "busy", {}, None),
+        urllib.error.HTTPError("http://model/v1/models", 503, "unavailable", {}, None),
+        urllib.error.URLError("connection refused"),
+        TimeoutError("metadata request timed out"),
+        http.client.IncompleteRead(b'{"data":', 100),
+    ],
+)
+def test_served_max_length_recovers_from_transient_lookup_failure(monkeypatch, error):
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        Mock(side_effect=[error, io.BytesIO(b'{"data":[{"max_model_len":73728}]}')]),
+    )
+
+    assert served_max_length("http://model/v1") == 73728
+
+
+def test_served_max_length_exhausted_lookup_raises_instead_of_using_default(monkeypatch):
+    monkeypatch.setattr("rigging.timing.time.sleep", lambda _delay: None)
+    monkeypatch.setattr("urllib.request.urlopen", Mock(side_effect=TimeoutError("metadata unavailable")))
+
+    with pytest.raises(TimeoutError):
+        served_max_length("http://model/v1")
+
+
+def test_served_max_length_does_not_retry_permanent_http_error(monkeypatch):
+    error = urllib.error.HTTPError("http://model/v1/models", 401, "unauthorized", {}, None)
+    monkeypatch.setattr(
+        "urllib.request.urlopen",
+        Mock(side_effect=[error, io.BytesIO(b'{"data":[{"max_model_len":73728}]}')]),
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        served_max_length("http://model/v1")
+    assert caught.value.code == 401
 
 
 def test_auto_overrides_clamps_context_and_leaves_plain_model_alone():

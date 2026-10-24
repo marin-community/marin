@@ -35,11 +35,12 @@ from finestore.rl.curation import (
 )
 from finestore.store import DataStore
 from marina.applets import AppletServices, validate_query
+from marina.client import AppletQuery
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.engine import Engine
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage
 
-from infra.marina.applets.rl_data_catalog.load import Query, load_catalog
+from infra.marina.applets.rl_data_catalog.load import load_catalog
 from infra.marina.applets.rl_data_catalog.load_curriculum import load_curriculum
 from infra.marina.applets.rl_data_catalog.server.app import create_api, migrate
 
@@ -69,7 +70,7 @@ def catalog_database(database_url: str) -> Iterator[Engine]:
 
 
 @pytest.fixture
-def catalog_query(catalog_database: Engine) -> Query:
+def catalog_query(catalog_database: Engine) -> AppletQuery:
     def query(sql: str, parameters: dict[str, Any]) -> dict[str, Any]:
         validate_query(sql)
         with catalog_database.begin() as connection:

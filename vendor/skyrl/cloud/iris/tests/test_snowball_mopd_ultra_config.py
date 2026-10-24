@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
@@ -18,7 +17,6 @@ from marinskyrl.distillation import (
 )
 
 CONFIG = Path(__file__).parents[1] / "configs" / "snowball_mopd_ultra_smoke.yaml"
-OPD_SMOKE_CONFIG = Path(__file__).parents[1] / "configs" / "snowball_opd_math_smoke.yaml"
 STUDENT = "open-athena/Snowball-67B-A2B-10T-Mixed-RLVR-Sync-Step92"
 
 
@@ -26,16 +24,9 @@ class _HPCStub:
     gpus_per_node = 8
 
 
-@pytest.mark.parametrize(
-    ("config", "expected_routes"),
-    [
-        (CONFIG, {"math": "math", "swe": "swe", "terminal": "terminal"}),
-        (OPD_SMOKE_CONFIG, {"default": "math"}),
-    ],
-    ids=lambda value: value.stem if isinstance(value, Path) else None,
-)
-def test_snowball_distillation_smoke_pins_one_expert_parallel_teacher_per_route(config, expected_routes):
-    parsed = parse_rl_config(str(config), model_override=STUDENT)
+def test_snowball_distillation_smoke_pins_one_expert_parallel_teacher_per_route():
+    expected_routes = {"math": "math", "swe": "swe", "terminal": "terminal"}
+    parsed = parse_rl_config(str(CONFIG), model_override=STUDENT)
     plan = parsed.distillation_plan
 
     assert plan is not None

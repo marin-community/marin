@@ -20,7 +20,6 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRun,
     SkyRLRunConfig,
-    SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
     _materialize_role_plan_config,
@@ -106,7 +105,6 @@ def build_smoke(version: str) -> Smoke:
                 name=user_owned_name(f"checkpoints/skyrl-port-smoke/{name}"),
                 version=version,
                 config_yaml=yaml.safe_dump(config),
-                runtime=SkyRLRuntime(),
                 model=ArtifactHfModel(
                     step=qwen2_5_0_5b_instruct,
                     relative_path="",

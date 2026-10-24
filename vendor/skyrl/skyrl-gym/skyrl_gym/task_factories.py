@@ -16,6 +16,7 @@ from taskcompendium.grading_result import GradeResult
 from skyrl_gym.answer_tasks import (
     grade_aime,
     grade_cat_count,
+    grade_sequence,
     grade_gsm8k,
     grade_ifeval,
     grade_mcq,
@@ -104,6 +105,7 @@ def episode_factories(*, executor: Executor | None = None) -> dict[str, EpisodeF
     answer_graders = {
         "aime": grade_aime,
         "cat_count": grade_cat_count,
+        "sequence": grade_sequence,
         "gsm8k": grade_gsm8k,
         "ifeval": grade_ifeval,
         "mcq": grade_mcq,

@@ -23,6 +23,7 @@ from rigging.filesystem.atomic import atomic_rename
 from rigging.filesystem.factory import open_url, url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.log_setup import configure_logging
+from rigging.secrets import get_secret
 from zephyr.context import ZephyrContext
 from zephyr.dataset import Dataset
 
@@ -49,16 +50,17 @@ def _hf_auth_error(exc: BaseException, file_path: str) -> str | None:
     status_code = exc.response.status_code
     if status_code not in _HF_AUTH_ERROR_STATUSES:
         return None
-    if os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+    if get_secret("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN"):
         hint = (
-            "HF_TOKEN is set but lacks access — confirm the token's account has accepted "
+            "An HF credential is available but lacks access — confirm the token's account has accepted "
             "the dataset license and has read access."
         )
     else:
         hint = (
-            "HF_TOKEN is not set in the worker environment. `huggingface-cli login` only "
+            "No HF credential is available in the worker's secret files or environment. `huggingface-cli login` only "
             "writes ~/.cache/huggingface/token, which iris does not forward to workers; "
-            "export HF_TOKEN before submitting the job."
+            "Submit HF_TOKEN through the parent job's secrets map so Fray/Zephyr workers inherit it, "
+            "or supply it explicitly in the worker environment."
         )
     return f"HuggingFace returned HTTP {status_code} for {file_path} (gated/auth-required). {hint}"
 
@@ -349,14 +351,13 @@ def plan_download(cfg: DownloadConfig) -> DownloadPlan:
     logger.info("Identifying files to download...")
     if cfg.source_url_override is not None:
         source_url = cfg.source_url_override
-        source_fs, source_root = url_to_fs(source_url)
         list_kwargs: dict = {}
     else:
         hf_source_path = _resolve_hf_source_path(cfg)
         _assert_bucket_support_available(hf_source_path)
         source_url = f"hf://{hf_source_path}"
-        source_fs, source_root = url_to_fs(source_url)
         list_kwargs = {"revision": cfg.revision}
+    source_fs, source_root = url_to_fs(source_url)
 
     # `detail=True` carries the sizes (download validation) and Xet hashes (source
     # fingerprinting) in the listing itself, avoiding a per-file `info()` round
@@ -426,6 +427,11 @@ def finish_download(plan: DownloadPlan) -> None:
 
 
 def download_hf(cfg: DownloadConfig) -> None:
+    """Download selected files with a Zephyr worker pool.
+
+    Distributed Fray actors inherit HF_TOKEN from the parent job's secrets map.
+    Hugging Face clients discover the token through HF_TOKEN_PATH or HF_TOKEN.
+    """
     plan = plan_download(cfg)
     pipeline = (
         Dataset.from_list(list(plan.tasks)).map(stream_file_to_fsspec).write_jsonl(plan.metrics_path, skip_existing=True)

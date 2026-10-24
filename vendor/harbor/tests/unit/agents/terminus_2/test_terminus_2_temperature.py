@@ -17,18 +17,18 @@ def test_terminus_2_temperature_defaults_to_none(temp_dir, monkeypatch):
     assert agent._temperature is None
 
 
-def test_terminus_2_omits_default_temperature_for_litellm(monkeypatch):
+def test_terminus_2_omits_default_temperature_for_openai(monkeypatch):
     captured_kwargs = {}
 
-    class FakeLiteLLM:
+    class FakeOpenAILLM:
         def __init__(self, **kwargs):
             captured_kwargs.update(kwargs)
 
-    monkeypatch.setattr("harbor.agents.terminus_2.terminus_2.LiteLLM", FakeLiteLLM)
+    monkeypatch.setattr("harbor.agents.terminus_2.terminus_2.OpenAILLM", FakeOpenAILLM)
 
     agent = object.__new__(Terminus2)
     agent._init_llm(
-        llm_backend=LLMBackend.LITELLM,
+        llm_backend=LLMBackend.OPENAI,
         model_name="fake/model",
         temperature=None,
         collect_rollout_details=False,
@@ -44,18 +44,18 @@ def test_terminus_2_omits_default_temperature_for_litellm(monkeypatch):
     assert "temperature" not in captured_kwargs
 
 
-def test_terminus_2_forwards_explicit_temperature_for_litellm(monkeypatch):
+def test_terminus_2_forwards_explicit_temperature_for_openai(monkeypatch):
     captured_kwargs = {}
 
-    class FakeLiteLLM:
+    class FakeOpenAILLM:
         def __init__(self, **kwargs):
             captured_kwargs.update(kwargs)
 
-    monkeypatch.setattr("harbor.agents.terminus_2.terminus_2.LiteLLM", FakeLiteLLM)
+    monkeypatch.setattr("harbor.agents.terminus_2.terminus_2.OpenAILLM", FakeOpenAILLM)
 
     agent = object.__new__(Terminus2)
     agent._init_llm(
-        llm_backend=LLMBackend.LITELLM,
+        llm_backend=LLMBackend.OPENAI,
         model_name="fake/model",
         temperature=0.2,
         collect_rollout_details=False,
@@ -71,18 +71,18 @@ def test_terminus_2_forwards_explicit_temperature_for_litellm(monkeypatch):
     assert captured_kwargs["temperature"] == 0.2
 
 
-def test_terminus_2_forwards_session_id_for_litellm(monkeypatch):
+def test_terminus_2_forwards_session_id_for_openai(monkeypatch):
     captured_kwargs = {}
 
-    class FakeLiteLLM:
+    class FakeOpenAILLM:
         def __init__(self, **kwargs):
             captured_kwargs.update(kwargs)
 
-    monkeypatch.setattr("harbor.agents.terminus_2.terminus_2.LiteLLM", FakeLiteLLM)
+    monkeypatch.setattr("harbor.agents.terminus_2.terminus_2.OpenAILLM", FakeOpenAILLM)
 
     agent = object.__new__(Terminus2)
     agent._init_llm(
-        llm_backend=LLMBackend.LITELLM,
+        llm_backend=LLMBackend.OPENAI,
         model_name="fake/model",
         temperature=None,
         collect_rollout_details=False,

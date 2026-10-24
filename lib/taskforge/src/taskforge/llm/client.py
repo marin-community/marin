@@ -12,7 +12,7 @@ against a pydantic output type (``complete_structured``, which also returns ever
 ``taskforge.llm.glm_client.GlmClient`` implements it.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Protocol
@@ -20,6 +20,9 @@ from typing import Protocol
 from pydantic import BaseModel
 
 from taskforge.llm.policy import LLMPolicy, Message
+
+RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+"""HTTP statuses a retry can cure: a timeout, rate limiting or a server-side failure."""
 
 
 class FinishReason(StrEnum):
@@ -139,8 +142,9 @@ class StructuredResult[T]:
 class ModelClient(Protocol):
     """Protocol for calling a model.
 
-    ``model`` is the model id. ``complete`` samples a free-text reply. ``complete_structured`` returns
-    a reply validated as ``output_type``. Implementations raise this module's errors:
+    ``model`` is the model id. ``complete`` samples a free-text reply, with ``request_fields`` such as
+    ``tools`` added to the request body. ``complete_structured`` returns a reply validated as
+    ``output_type``. Implementations raise this module's errors:
 
     * ``ModelUnavailable`` once the retries or the infrastructure hold run out.
     * ``ContextExhausted`` for a prompt too long for the model's context window.
@@ -150,7 +154,12 @@ class ModelClient(Protocol):
     @property
     def model(self) -> str: ...
 
-    async def complete(self, messages: Sequence[Message], policy: LLMPolicy) -> Completion: ...
+    async def complete(
+        self,
+        messages: Sequence[Message],
+        policy: LLMPolicy,
+        request_fields: Mapping[str, object] | None = None,
+    ) -> Completion: ...
 
     async def complete_structured[T: BaseModel](
         self, messages: Sequence[Message], output_type: type[T], policy: LLMPolicy

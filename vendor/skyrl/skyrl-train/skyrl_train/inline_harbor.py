@@ -11,11 +11,12 @@ import traceback
 from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.job.result import JobResult
+from harbor_config.errors import ErrorCategory, error_category
 from skyrl_train.inline_harbor_client import CONTROL_MESSAGE_LIMIT
 
 
 def validation_metrics(result: JobResult, config: JobConfig, reward_key: str) -> dict[str, float]:
-    """Count only completed, verified trials; expose missing scores separately."""
+    """Count verified outcomes, including agent failures; keep infrastructure failures unscored."""
     expected = {str(task.get_task_id()) for task in config.tasks}
     observed = [str(trial.task_id) for trial in result.trial_results]
     if len(expected) != len(config.tasks) or config.n_attempts != 1:
@@ -24,7 +25,10 @@ def validation_metrics(result: JobResult, config: JobConfig, reward_key: str) ->
         raise ValueError("Harbor validation returned missing, duplicate, or unexpected tasks")
     scores = []
     for trial in result.trial_results:
-        if trial.exception_info is not None and trial.exception_info.exception_type != "AgentTimeoutError":
+        if trial.exception_info is not None and error_category(trial.exception_info.exception_type) not in {
+            ErrorCategory.AGENT,
+            ErrorCategory.PASSTHROUGH,
+        }:
             continue
         verifier = trial.verifier_result
         if verifier is None or verifier.rewards is None or reward_key not in verifier.rewards:

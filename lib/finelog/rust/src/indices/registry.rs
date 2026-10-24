@@ -18,7 +18,7 @@ use crate::indices::exact::ExactSection;
 use crate::indices::format::{BundleHeader, SectionKind};
 use crate::indices::group_extrema::{GroupExtremaConfig, GroupExtremaSection};
 use crate::indices::trigram::ColumnIndex;
-use crate::indices::{write_segment_index, SegmentIndexConfig, TrigramCoverage};
+use crate::indices::{write_index_artifacts, SegmentIndexConfig, TrigramCoverage};
 use crate::store::segment::segment_id_and_row_group_rows;
 use crate::store::table_state::LocalArtifacts;
 
@@ -29,9 +29,9 @@ pub type SegmentArtifacts = BTreeMap<String, LocalArtifacts>;
 
 /// One segment's artifact build: the batches it holds and the policy to apply.
 pub struct IndexBuildRequest<'a> {
-    /// The local Parquet the artifacts bind to. Its footer supplies the segment
-    /// UUID and row count recorded in the FIDX container.
+    /// Base path beside which the artifacts are written; no source file is required.
     pub source: &'a Path,
+    pub source_id: uuid::Uuid,
     pub batches: &'a [RecordBatch],
     pub config: &'a SegmentIndexConfig,
 }
@@ -96,7 +96,12 @@ impl IndexRegistry {
     /// written. A method the segment cannot satisfy is omitted rather than
     /// failing the build.
     pub fn build(&self, request: IndexBuildRequest<'_>) -> std::io::Result<BuiltArtifacts> {
-        write_segment_index(request.source, request.batches, request.config)
+        write_index_artifacts(
+            request.source,
+            request.source_id,
+            request.batches,
+            request.config,
+        )
     }
 
     /// Open the bundle `artifacts` advertises for `source`.

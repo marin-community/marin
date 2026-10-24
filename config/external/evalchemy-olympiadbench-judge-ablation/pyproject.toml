@@ -6,6 +6,7 @@ dependencies = ["evalchemy"]
 
 [tool.uv]
 package = false
+exclude-dependencies = ["litellm"]
 
 [tool.uv.sources]
 # Includes the merged empty-answer and symbol-free-equation fixes plus the ablation's judge request constraint.

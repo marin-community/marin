@@ -39,6 +39,7 @@ from experiments.grug.checkpointing import RESTORE_BARRIER_TIMEOUT
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    SIMULATED_EPOCHING_MAX_FLOPS,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
@@ -248,7 +249,7 @@ def build_h100_ladder_run(
                 total_steps=num_steps,
                 batch_size=batch_size,
                 max_seq_len=model.max_seq_len,
-                experiment_flops=run_flops,
+                enable_simulated_epoching=run_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
                 validation=validation,
             ),
             resources=ctx.runtime_arg("train_resources"),

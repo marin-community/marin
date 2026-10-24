@@ -39,6 +39,6 @@ jobs:
             verify the test's purpose and failure cause before changing it.
             Choose one high-value test or a coherent pair. Preserve useful
             coverage and assertions. Follow AGENTS.md, TESTING.md, and the
-            commit skill; open a PR with agent-generated and nightshift labels
+            manage-pr skill; open a PR with agent-generated and nightshift labels
             only for a supported fix. Publish a typed result either way.
           base: ${{ github.sha }}

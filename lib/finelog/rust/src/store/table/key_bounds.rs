@@ -1,15 +1,14 @@
 //! Bounded recovery of missing object-segment key bounds.
 //!
 //! Segment objects are immutable, so a table can recover catalog pruning
-//! metadata from Parquet footers without rewriting their rows. Remote-only
-//! objects are warmed first and revisited on a later maintenance tick; one
-//! repair never turns into an unbounded synchronous table download.
+//! metadata from cached or remote Parquet footers without downloading the object.
 
 use std::collections::{HashMap, HashSet};
 
 use crate::errors::StatsError;
+use crate::query::file_scan::open_cached_parquet;
 use crate::store::object_store::ObjectReference;
-use crate::store::segment::read_segment_footer_at;
+use crate::store::segment::segment_metadata_from_parquet;
 use crate::store::table::runtime::TableRuntime;
 use crate::store::table_state::CommitError;
 
@@ -53,16 +52,10 @@ pub async fn maintain(runtime: &TableRuntime) -> Result<bool, StatsError> {
             .get(&row.path)
             .expect("candidate object record was selected above");
         let reference = ObjectReference::try_from(&record.source)?;
-        let path = match store.cached_path(&reference).await? {
-            Some(path) => path,
-            None if store.remote_scan_url(&reference.id).is_some() => {
-                store.warm(&reference);
-                continue;
-            }
-            None => store.local_path(&reference).await?,
-        };
-        let Some(metadata) = read_segment_footer_at(
-            &path,
+        let input =
+            open_cached_parquet(store.as_ref(), &reference, &runtime.query_visibility).await?;
+        let Some(metadata) = segment_metadata_from_parquet(
+            input.metadata(),
             row.level,
             row.min_seq,
             Some(runtime.format.key_column()),
