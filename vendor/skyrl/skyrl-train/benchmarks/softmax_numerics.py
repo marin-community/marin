@@ -19,7 +19,7 @@ def _mul_reduce(a, b):
     return (a * b).sum(dim=-1, keepdim=True)
 
 
-class _BaselineEntropy(torch.autograd.Function):
+class BaselineEntropy(torch.autograd.Function):
     """Entropy arithmetic at marin 2cae063c877172844fe6ff90e94354cc08a273fa."""
 
     @staticmethod
@@ -53,7 +53,7 @@ def _operation(logits, targets, stable, kind, grad):
                 )
             )
         if kind in ("entropy", "both"):
-            outputs.append(token_entropy(logits, dist.group.WORLD) if stable else _BaselineEntropy.apply(logits))
+            outputs.append(token_entropy(logits, dist.group.WORLD) if stable else BaselineEntropy.apply(logits))
         if grad:
             return outputs, torch.autograd.grad(sum(output.sum() for output in outputs), logits)[0]
         return outputs
