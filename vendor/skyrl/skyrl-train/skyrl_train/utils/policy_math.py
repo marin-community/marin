@@ -17,21 +17,6 @@ from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP, masked_mean
 from skyrl_train.training_batch import TrainingInputBatch
 
 
-def right_pad_to_match(
-    tensor: torch.Tensor,
-    reference: torch.Tensor,
-    *,
-    dtype: Optional[torch.dtype] = None,
-) -> torch.Tensor:
-    """Right-truncate or zero-pad the last dimension to match a reference tensor."""
-    if tensor.shape == reference.shape and (dtype is None or tensor.dtype == dtype):
-        return tensor
-    width = min(tensor.shape[-1], reference.shape[-1])
-    aligned = torch.zeros_like(reference, dtype=dtype or tensor.dtype)
-    aligned[..., :width] = tensor[..., :width]
-    return aligned
-
-
 def differentiable_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,

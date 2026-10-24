@@ -370,12 +370,8 @@ class TrainingInput(TypedDict, total=False):
     # Dense replay targets are used by diagnostic input batches. Generated compact
     # rows live in TrainingInputBatch.routed_expert_rows until worker materialization.
     rollout_routed_experts: Optional[Integer[torch.Tensor, "batch_size seq_len L K"]]
-    # Loop-behavior reward shaping (Stage B / F5): per-token additive shaping
-    # channel, SEPARATE from `rewards` (the RLOO-N outcome term). Default all-zeros
-    # and present ONLY when trainer.algorithm.enable_token_reward_channel is True,
-    # so the flag-off TrainingInputBatch keyset is byte-identical to today. The
-    # combiner that ADDS this into the advantage is registered in Stage C; Stage B
-    # only makes it flow as zeros (no-op).
+    # Per-token reward shaping, separate from rewards, added to advantages after the outcome estimator.
+    # Present only when trainer.algorithm.enable_token_reward_channel is true.
     token_level_shaping: Optional[Float[torch.Tensor, "batch_size seq_len"]]
     # Negative per-token loop credit, applied after the configured advantage
     # estimator. It never enters outcome-reward group statistics or returns.
