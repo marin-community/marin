@@ -4,7 +4,8 @@ Five independently written CPU reference merges are cross-checked against
 `marin.merging.arithmetic` on identical tensors. The evaluation runner uses vLLM
 on one GPU and retains every completion and score for paired comparisons.
 Completed curves and their artifact provenance are in [RESULTS.md](RESULTS.md);
-the two-donor experiment remains in progress.
+the new math donor passes admission, while code does not. The two-donor grid
+has not run; far-donor controls remain in progress.
 
 ## Models and interpretation
 
@@ -396,8 +397,8 @@ in at least one. Pooled sign tests are descriptive because the three decodes
 of one item are correlated. All comparisons are exploratory; these intervals
 and p-values do not correct for recipe selection.
 
-The later independent k8 dataset selects 1024 distinct training continuations
-and 128 distinct validation continuations per domain after exact response
+The later independent k8 dataset selects 1024 distinct training prompt-response pairs
+and 128 distinct validation pairs per domain after exact response
 deduplication and execution/answer verification. It covers 603 math training
 prompts and 213 code training prompts. The 100-update budget at effective batch
 8 processes 800 examples, under one epoch of this dataset; the old 512-record
