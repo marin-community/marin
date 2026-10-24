@@ -4,6 +4,8 @@ import importlib.util
 
 import torch
 
+MOE_TOKEN_DISPATCHER = "alltoall"
+
 
 def configure_bridge_provider(
     provider,
@@ -27,7 +29,7 @@ def configure_bridge_provider(
     provider.attention_backend = attention_backend
     provider.variable_seq_lengths = True
     provider.masked_softmax_fusion = True
-    provider.moe_token_dispatcher_type = "alltoall"
+    provider.moe_token_dispatcher_type = MOE_TOKEN_DISPATCHER
     # Megatron-Bridge enables wgrad fusion whenever Transformer Engine is present, but the
     # non-TE output layer still needs APEX's fused_weight_gradient_mlp_cuda extension.
     provider.gradient_accumulation_fusion = importlib.util.find_spec("fused_weight_gradient_mlp_cuda") is not None

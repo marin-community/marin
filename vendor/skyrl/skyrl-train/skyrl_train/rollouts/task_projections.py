@@ -21,7 +21,7 @@ from skyrl_train.rollouts.training_record import TrainingRollout
 from skyrl_train.error_treatment import ErrorTreatment
 from skyrl_train.dataset.tasks import TASKCOMPENDIUM_ENVIRONMENT
 from skyrl_train.distillation import INVALID_TOPK_INDEX
-from skyrl_train.inference_engines.base import UNSTAMPED_POLICY_STEP
+from skyrl_train.inference_engines.base import ENGINE_DP_RANK_KEY, UNKNOWN_ENGINE_DP_RANK, UNSTAMPED_POLICY_STEP
 from skyrl_train.metric_names import TASK_ROLLOUT_METRIC_PREFIX
 from skyrl_train.trajectory_runners.trajectory_processing import (
     apply_overlong_filtering,
@@ -32,6 +32,7 @@ from skyrl_train.trajectory_runners.trajectory_processing import (
 from skyrl_train.trajectory_runners.selected_topk import AlignedStudentTopK, align_student_topk
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
+    ROLLOUT_ENGINE_DP_RANKS_KEY,
     RESPONSE_SPAN_TAGS_KEY,
     ROUTED_EXPERTS_KEY,
     TrajectoryBatch,
@@ -360,6 +361,7 @@ def _training_batch(
     _attach_student_topk(batch, rollouts)
     _attach_routed_experts(batch, rollouts)
     _attach_policy_steps(batch, rollouts)
+    _attach_engine_dp_ranks(batch, rollouts)
     _attach_span_tags(batch, rollouts)
     metrics = None
     if env_metric_classes is not None:
@@ -489,6 +491,18 @@ def _attach_policy_steps(batch: TrajectoryBatch, rollouts: Sequence[TrainingRoll
     steps = _token_channels(batch, rollouts, RESPONSE_POLICY_STEPS_KEY, np.int32, fill=UNSTAMPED_POLICY_STEP)
     if steps is not None:
         batch["rollout_policy_steps"] = steps
+
+
+def _row_engine_dp_rank(rollout: TrainingRollout) -> int:
+    ranks = {
+        step.turn.metadata[ENGINE_DP_RANK_KEY] for step in rollout.steps if ENGINE_DP_RANK_KEY in step.turn.metadata
+    }
+    return ranks.pop() if len(ranks) == 1 else UNKNOWN_ENGINE_DP_RANK
+
+
+def _attach_engine_dp_ranks(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
+    if any(ENGINE_DP_RANK_KEY in step.turn.metadata for rollout in rollouts for step in rollout.steps):
+        batch[ROLLOUT_ENGINE_DP_RANKS_KEY] = [_row_engine_dp_rank(rollout) for rollout in rollouts]
 
 
 def _attach_span_tags(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
