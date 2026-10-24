@@ -35,6 +35,7 @@ dependencies = [
     "marin-iris-native",
     "marin-rigging[secrets]",
     "marin-rolloutengine",
+    "marin-skyrlrecipe",
     "marin-shellbox[daytona,shellsim]",
     "ninja",
     "nvidia-ml-py",
@@ -210,6 +211,7 @@ transformer-engine = [{ requirement = "torch", match-runtime = true }, "build_to
 transformer-engine-torch = [{ requirement = "torch", match-runtime = true }, "build_tools", "ninja"]
 
 [tool.uv.sources]
+marin-skyrlrecipe = { path = "../../lib/skyrlrecipe", editable = true }
 marin-finelog = { path = "../../lib/finelog", editable = true }
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-iris = { path = "../../lib/iris", editable = true }
