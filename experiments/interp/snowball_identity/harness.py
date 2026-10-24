@@ -85,6 +85,12 @@ def import_grug():
     return import_module("skyrl_train.models.grug_moe")
 
 
+COMPONENTS = ("resid_pre", "attn", "routed", "shared", "resid", "head")
+"""Patchable activations of a layer. ``resid_pre`` enters the layer and ``resid`` leaves it; ``attn``, ``routed``
+and ``shared`` are the sublayer outputs before the residual add; ``head`` is one attention head's slice of
+``o_proj``'s input (``head_dim`` values)."""
+
+
 @dataclass(frozen=True)
 class AddVector:
     layer: int
@@ -103,6 +109,17 @@ class NeuronEdit:
 
 
 @dataclass(frozen=True)
+class Replace:
+    """Overwrite one activation at ``positions`` with ``values`` ([len(positions), width])."""
+
+    layer: int
+    component: str
+    positions: torch.Tensor
+    values: torch.Tensor
+    head: int | None = None
+
+
+@dataclass(frozen=True)
 class PatchSpec:
     source: str
     layer: int
@@ -114,8 +131,7 @@ class PatchSpec:
 class Interventions:
     add: list[AddVector] = field(default_factory=list)
     neurons: list[NeuronEdit] = field(default_factory=list)
-    patches: list[tuple[int, int, torch.Tensor]] = field(default_factory=list)
-    """Resolved residual patches: (layer, absolute position, value)."""
+    replace: list[Replace] = field(default_factory=list)
 
     def describe(self) -> dict:
         return {
@@ -129,45 +145,89 @@ class Interventions:
                 }
                 for n in self.neurons
             ],
-            "patches": [{"layer": layer, "position": position} for layer, position, _ in self.patches],
+            "replace": [
+                {"layer": r.layer, "component": r.component, "head": r.head, "positions": r.positions.tolist()}
+                for r in self.replace
+            ],
         }
 
 
+KINDS = ("resid", "attn", "routed", "shared", "head_in", "router_ids", "router_weights", "expert_act", "shared_act")
+
+
 class Recorder:
-    """Activations at the capture positions of one forward."""
+    """Activations at the capture positions of one batched forward: each entry is [batch, positions, ...]."""
 
-    def __init__(self, positions: torch.Tensor, layer_count: int):
+    def __init__(self, positions: torch.Tensor, layer_count: int, batch: int, length: int):
         self.positions = positions
-        self.slot = {int(position): row for row, position in enumerate(positions.tolist())}
-        empty: list = [None] * layer_count
-        self.resid, self.attn, self.routed, self.shared = list(empty), list(empty), list(empty), list(empty)
-        self.router_ids, self.router_weights, self.expert_act, self.shared_act = (
-            list(empty),
-            list(empty),
-            list(empty),
-            list(empty),
-        )
+        self.batch, self.length = batch, length
+        self.slot = torch.full((length,), -1, dtype=torch.long)
+        self.slot[positions] = torch.arange(len(positions))
+        self.embed: torch.Tensor | None = None
+        for kind in KINDS:
+            setattr(self, kind, [None] * layer_count)
 
-    def take(self, tensor: torch.Tensor) -> torch.Tensor:
-        """Rows of a [T, ...] tensor at the capture positions, as float32 on the CPU."""
-        return tensor.index_select(0, self.positions.to(tensor.device)).float().cpu()
+    def take(self, tensor: torch.Tensor, flat: bool = False) -> torch.Tensor:
+        """[batch, positions, ...] float32 CPU rows of a [batch, length, ...] tensor ([batch * length, ...] if flat)."""
+        if flat:
+            tensor = tensor.reshape(self.batch, self.length, *tensor.shape[1:])
+        return tensor[:, self.positions.to(tensor.device)].float().cpu()
+
+    def resid_pre(self, layer: int) -> torch.Tensor:
+        return self.embed if layer == 0 else self.resid[layer - 1]
+
+    def select(self, row: int) -> "Recorder":
+        """The same record for one batch row, without the batch dimension."""
+        single = Recorder(self.positions, len(self.resid), 1, self.length)
+        single.embed = None if self.embed is None else self.embed[row]
+        for kind in KINDS:
+            setattr(single, kind, [None if value is None else value[row] for value in getattr(self, kind)])
+        return single
 
     def stacked(self) -> dict[str, torch.Tensor]:
+        """Each kind stacked over layers on the dimension after positions."""
+        stack_dim = 1 if self.embed is not None and self.embed.dim() == 2 else 2
         return {
-            "resid": torch.stack(self.resid, 1),
-            "attn_out": torch.stack(self.attn, 1),
-            "routed_out": torch.stack(self.routed, 1),
-            "shared_out": torch.stack(self.shared, 1),
-            "router_ids": torch.stack(self.router_ids, 1),
-            "router_weights": torch.stack(self.router_weights, 1),
-            "expert_act": torch.stack(self.expert_act, 1),
-            "shared_act": torch.stack(self.shared_act, 1),
+            "resid": torch.stack(self.resid, stack_dim),
+            "attn_out": torch.stack(self.attn, stack_dim),
+            "routed_out": torch.stack(self.routed, stack_dim),
+            "shared_out": torch.stack(self.shared, stack_dim),
+            "router_ids": torch.stack(self.router_ids, stack_dim),
+            "router_weights": torch.stack(self.router_weights, stack_dim),
+            "expert_act": torch.stack(self.expert_act, stack_dim),
+            "shared_act": torch.stack(self.shared_act, stack_dim),
         }
 
 
 class _ForwardState:
-    recorder: Recorder | None = None
-    neurons: dict[tuple[int, int | None], list[tuple[int, float]]] = {}  # noqa: RUF012
+    """Per-forward lookups shared with the hooks: batch shape, recorder and each row's interventions."""
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self, batch: int = 1, length: int = 0, recorder: Recorder | None = None, variants=()):
+        self.batch, self.length, self.recorder = batch, length, recorder
+        self.neurons: dict[tuple[int, int | None], list[tuple[int, int, float]]] = {}
+        self.replace: dict[tuple[int, str], list[tuple[int, Replace]]] = {}
+        for row, variant in enumerate(variants):
+            for edit in variant.neurons:
+                self.neurons.setdefault((edit.layer, edit.expert), []).append((row, edit.index, edit.scale))
+            for replace in variant.replace:
+                if replace.component not in COMPONENTS:
+                    raise ValueError(f"Unknown component {replace.component!r}")
+                self.replace.setdefault((replace.layer, replace.component), []).append((row, replace))
+
+
+def _apply_replacements(tensor: torch.Tensor, replacements: list[tuple[int, Replace]], head_dim: int = 0):
+    tensor = tensor.clone()
+    for row, replace in replacements:
+        positions = replace.positions.to(tensor.device)
+        values = replace.values.to(device=tensor.device, dtype=tensor.dtype)
+        if replace.head is None:
+            tensor[row, positions] = values
+        else:
+            tensor[row, positions, replace.head * head_dim : (replace.head + 1) * head_dim] = values
+    return tensor
 
 
 class _HarnessExpertExecution:
@@ -182,21 +242,26 @@ class _HarnessExpertExecution:
 
     def run(self, experts, reorderer, hidden_states, selected_experts, combine_weights):
         del reorderer
-        recorder = self.state.recorder
+        state, recorder = self.state, self.state.recorder
         if recorder is not None:
-            captured = torch.zeros(len(recorder.slot), selected_experts.shape[1], experts.gate_proj.weight.shape[1])
+            captured = torch.zeros(
+                state.batch, len(recorder.positions), selected_experts.shape[1], experts.gate_proj.weight.shape[1]
+            )
+            slot = recorder.slot.to(selected_experts.device)
         output = torch.zeros_like(hidden_states, dtype=torch.float32)
         for expert in torch.unique(selected_experts).tolist():
             token_idx, slot_idx = torch.where(selected_experts == expert)
             expert_input = hidden_states.index_select(0, token_idx)
             gate = F.linear(expert_input, experts.gate_proj.weight[expert])
             activation = F.silu(gate) * F.linear(expert_input, experts.up_proj.weight[expert])
-            for index, scale in self.state.neurons.get((self.layer, expert), ()):
-                activation[:, index] *= scale
+            rows = token_idx // state.length
+            for row, index, scale in state.neurons.get((self.layer, expert), ()):
+                activation[rows == row, index] *= scale
             if recorder is not None:
-                for row, (token, slot) in enumerate(zip(token_idx.tolist(), slot_idx.tolist(), strict=True)):
-                    if token in recorder.slot:
-                        captured[recorder.slot[token], slot] = activation[row].float().cpu()
+                kept = slot[token_idx % state.length]
+                mask = kept >= 0
+                if mask.any():
+                    captured[rows[mask].cpu(), kept[mask].cpu(), slot_idx[mask].cpu()] = activation[mask].float().cpu()
             expert_output = F.linear(activation, experts.down_proj.weight[expert])
             weight = combine_weights[token_idx, slot_idx].unsqueeze(-1).to(expert_output.dtype)
             output.index_add_(0, token_idx, (expert_output * weight).float())
@@ -213,6 +278,7 @@ class SnowballHarness:
         self.model = model
         self.layers = model.model.layers
         self.layer_count = len(self.layers)
+        self.head_dim = model.config.head_dim
         self.long_layers = grug.grug_long_layer_flags(self.layer_count)
         self.devices = devices
         self.layer_devices = [devices[layer * len(devices) // self.layer_count] for layer in range(self.layer_count)]
@@ -220,6 +286,7 @@ class SnowballHarness:
         for layer, block in enumerate(self.layers):
             block.mlp._expert_execution = _HarnessExpertExecution(layer, self.state)
             block.self_attn.register_forward_hook(self._output_hook(layer, "attn"))
+            block.self_attn.o_proj.register_forward_pre_hook(self._head_hook(layer))
             block.mlp.register_forward_hook(self._output_hook(layer, "routed"))
             block.shared_expert.register_forward_hook(self._output_hook(layer, "shared"))
             block.mlp.router.register_forward_hook(self._router_hook(layer))
@@ -260,16 +327,34 @@ class SnowballHarness:
 
     def _output_hook(self, layer: int, kind: str):
         def hook(module, args, output):
+            replacements = self.state.replace.get((layer, kind))
+            if replacements:
+                output = _apply_replacements(output, replacements)
             if self.state.recorder is not None:
-                getattr(self.state.recorder, kind)[layer] = self.state.recorder.take(output[0])
+                getattr(self.state.recorder, kind)[layer] = self.state.recorder.take(output)
+            return output if replacements else None
+
+        return hook
+
+    def _head_hook(self, layer: int):
+        def hook(module, args):
+            (heads,) = args
+            replacements = self.state.replace.get((layer, "head"))
+            if replacements:
+                heads = _apply_replacements(heads, replacements, self.head_dim)
+            if self.state.recorder is not None:
+                self.state.recorder.head_in[layer] = self.state.recorder.take(heads)
+            return (heads,) if replacements else None
 
         return hook
 
     def _router_hook(self, layer: int):
         def hook(module, args, output):
             if self.state.recorder is not None:
-                self.state.recorder.router_ids[layer] = self.state.recorder.take(output.selected_experts).long()
-                self.state.recorder.router_weights[layer] = self.state.recorder.take(output.combine_weights)
+                self.state.recorder.router_ids[layer] = self.state.recorder.take(
+                    output.selected_experts, flat=True
+                ).long()
+                self.state.recorder.router_weights[layer] = self.state.recorder.take(output.combine_weights, flat=True)
 
         return hook
 
@@ -279,15 +364,79 @@ class SnowballHarness:
             edits = self.state.neurons.get((layer, None), ())
             if edits:
                 activation = activation.clone()
-                for index, scale in edits:
-                    activation[..., index] *= scale
+                for row, index, scale in edits:
+                    activation[row, ..., index] *= scale
             if self.state.recorder is not None:
-                self.state.recorder.shared_act[layer] = self.state.recorder.take(activation[0])
+                self.state.recorder.shared_act[layer] = self.state.recorder.take(activation)
             return (activation,) if edits else None
 
         return hook
 
+    def final_norm(self, hidden: torch.Tensor) -> torch.Tensor:
+        model = self.model.model
+        return model.final_gated_norm(model.norm(hidden.to(self.devices[-1])))
+
     @torch.no_grad()
+    def run(
+        self,
+        tokens: list[list[int]] | list[tuple[int, ...]],
+        *,
+        assistant_start: int,
+        variants: list[Interventions] | None = None,
+        capture: torch.Tensor | None = None,
+        logit_positions: torch.Tensor | None = None,
+        gather: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, Recorder | None]:
+        """One batched forward over equal-length sequences, row ``b`` with ``variants[b]``.
+
+        Returns float32 CPU log-probs [batch, len(logit_positions), vocab] (default: the last position), or only
+        the ``gather`` token ids' log-probs [batch, positions, len(gather)].
+        """
+        batch, length = len(tokens), len(tokens[0])
+        if any(len(row) != length for row in tokens):
+            raise ValueError("Batched sequences must have equal lengths")
+        variants = variants or [Interventions() for _ in range(batch)]
+        if len(variants) != batch:
+            raise ValueError(f"{len(variants)} variants for {batch} sequences")
+        recorder = None if capture is None else Recorder(capture, self.layer_count, batch, length)
+        self.state.reset(batch, length, recorder, variants)
+        try:
+            model = self.model.model
+            hidden = model.embed_gated_norm(
+                model.embed_norm(model.embed_tokens(torch.tensor([list(row) for row in tokens], device=self.devices[0])))
+            )
+            if recorder is not None:
+                recorder.embed = recorder.take(hidden)
+            positions = torch.arange(length).unsqueeze(0)
+            assistant = torch.arange(length) >= assistant_start
+            for layer, block in enumerate(self.layers):
+                device = self.layer_devices[layer]
+                hidden = hidden.to(device)
+                replacements = self.state.replace.get((layer, "resid_pre"))
+                if replacements:
+                    hidden = _apply_replacements(hidden, replacements)
+                hidden = block(hidden, None, positions.to(device), self.long_layers[layer])
+                for row, variant in enumerate(variants):
+                    for add in variant.add:
+                        if add.layer == layer:
+                            delta = (add.scale * add.vector).to(device=device, dtype=hidden.dtype)
+                            mask = assistant if add.assistant_only else torch.ones(length, dtype=torch.bool)
+                            hidden[row, mask.to(device)] += delta
+                replacements = self.state.replace.get((layer, "resid"))
+                if replacements:
+                    hidden = _apply_replacements(hidden, replacements)
+                if recorder is not None:
+                    recorder.resid[layer] = recorder.take(hidden)
+            if logit_positions is None:
+                logit_positions = torch.tensor([length - 1])
+            selected = self.final_norm(hidden[:, logit_positions.to(hidden.device)])
+            logprobs = torch.log_softmax(self.model.lm_head(selected).float(), dim=-1)
+            if gather is not None:
+                logprobs = logprobs[..., gather.to(logprobs.device)]
+            return logprobs.cpu(), recorder
+        finally:
+            self.state.reset()
+
     def forward(
         self,
         tokens: list[int] | tuple[int, ...],
@@ -297,41 +446,15 @@ class SnowballHarness:
         capture: torch.Tensor | None = None,
         logit_positions: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, Recorder | None]:
-        """Run one sequence. Returns float32 log-probs at ``logit_positions`` (default: the last position)."""
-        interventions = interventions or Interventions()
-        length = len(tokens)
-        neurons: dict[tuple[int, int | None], list[tuple[int, float]]] = {}
-        for edit in interventions.neurons:
-            neurons.setdefault((edit.layer, edit.expert), []).append((edit.index, edit.scale))
-        recorder = None if capture is None else Recorder(capture, self.layer_count)
-        self.state.recorder, self.state.neurons = recorder, neurons
-        try:
-            model = self.model.model
-            hidden = model.embed_gated_norm(
-                model.embed_norm(model.embed_tokens(torch.tensor([list(tokens)], device=self.devices[0])))
-            )
-            positions = torch.arange(length).unsqueeze(0)
-            assistant = torch.arange(length) >= assistant_start
-            for layer, block in enumerate(self.layers):
-                device = self.layer_devices[layer]
-                hidden = block(hidden.to(device), None, positions.to(device), self.long_layers[layer])
-                for add in interventions.add:
-                    if add.layer == layer:
-                        delta = (add.scale * add.vector).to(device=device, dtype=hidden.dtype)
-                        mask = assistant if add.assistant_only else torch.ones(length, dtype=torch.bool)
-                        hidden[0, mask.to(device)] += delta
-                for patch_layer, position, value in interventions.patches:
-                    if patch_layer == layer:
-                        hidden[0, position] = value.to(device=device, dtype=hidden.dtype)
-                if recorder is not None:
-                    recorder.resid[layer] = recorder.take(hidden[0])
-            if logit_positions is None:
-                logit_positions = torch.tensor([length - 1])
-            selected = hidden[:, logit_positions.to(hidden.device)].to(self.devices[-1])
-            logits = self.model.lm_head(model.final_gated_norm(model.norm(selected)))
-            return torch.log_softmax(logits[0].float(), dim=-1).cpu(), recorder
-        finally:
-            self.state.recorder, self.state.neurons = None, {}
+        """One sequence: log-probs [len(logit_positions), vocab] and the record without the batch dimension."""
+        logprobs, recorder = self.run(
+            [list(tokens)],
+            assistant_start=assistant_start,
+            variants=[interventions or Interventions()],
+            capture=capture,
+            logit_positions=logit_positions,
+        )
+        return logprobs[0], None if recorder is None else recorder.select(0)
 
     def target_logprobs(self, prompt: Prompt, target_tokens: list[int], interventions: Interventions) -> list[float]:
         tokens = list(prompt.tokens) + target_tokens
@@ -408,7 +531,14 @@ def resolve_patches(
         _, recorder = harness.forward(
             source.tokens, assistant_start=source.assistant_start, capture=torch.tensor([source_position])
         )
-        resolved.append((patch.layer, patch.position % len(target.tokens), recorder.resid[patch.layer][0]))
+        resolved.append(
+            Replace(
+                patch.layer,
+                "resid",
+                torch.tensor([patch.position % len(target.tokens)]),
+                recorder.resid[patch.layer][:1],
+            )
+        )
     return Interventions(base.add, base.neurons, resolved)
 
 

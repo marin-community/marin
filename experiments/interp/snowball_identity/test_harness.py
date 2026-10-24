@@ -14,6 +14,7 @@ from experiments.interp.snowball_identity.harness import (
     Interventions,
     NeuronEdit,
     Output,
+    Replace,
     SnowballHarness,
     import_grug,
     run_positions,
@@ -170,7 +171,7 @@ def test_residual_patch(harness):
     patched, recorder = harness.forward(
         TOKENS,
         assistant_start=ASSISTANT_START,
-        interventions=Interventions(patches=[(2, 4, value)]),
+        interventions=Interventions(replace=[Replace(2, "resid", torch.tensor([4]), value[None])]),
         capture=all_positions(),
         logit_positions=all_positions(),
     )
@@ -223,3 +224,69 @@ def test_positions_and_logit_check(harness, tmp_path):
     scores = [float(ours[f"contrastive|r|no_system|{i}"]["actual"][6:8].sum()) for i in range(3)]
     won = scores[0] > max(scores[1:])
     assert contrastive["wins"]["no_system"] == {"harness": won, "vllm": won, "rows": 1}
+
+
+def test_batched_variants_match_single_runs(harness):
+    variants = [
+        Interventions(),
+        Interventions(neurons=[NeuronEdit(1, None, 3, 0.0), NeuronEdit(2, 5, 7, 2.0)]),
+        Interventions(add=[AddVector(2, torch.ones(HIDDEN), 0.5, True)]),
+    ]
+    batched, recorder = harness.run(
+        [TOKENS] * 3,
+        assistant_start=ASSISTANT_START,
+        variants=variants,
+        capture=torch.tensor([3, 9]),
+        logit_positions=all_positions(),
+    )
+    for row, variant in enumerate(variants):
+        single, single_recorder = harness.forward(
+            TOKENS,
+            assistant_start=ASSISTANT_START,
+            interventions=variant,
+            capture=torch.tensor([3, 9]),
+            logit_positions=all_positions(),
+        )
+        torch.testing.assert_close(batched[row], single, atol=1e-5, rtol=1e-5)
+        for kind in ("resid", "expert_act", "shared_act", "head_in"):
+            torch.testing.assert_close(
+                getattr(recorder.select(row), kind)[2], getattr(single_recorder, kind)[2], atol=1e-5, rtol=1e-5
+            )
+
+
+def test_component_patching(harness):
+    clean_tokens = [5, 17, 3, 99, 42, 8, 61, 23, 7, 30]
+    corrupt_tokens = [5, 18, 4, 98, 42, 8, 61, 23, 7, 30]
+    everywhere = all_positions()
+    clean, record = harness.forward(clean_tokens, assistant_start=0, capture=everywhere, logit_positions=everywhere)
+    corrupt, _ = harness.forward(corrupt_tokens, assistant_start=0, logit_positions=everywhere)
+    assert not torch.allclose(clean, corrupt)
+
+    def patched(*replacements):
+        result, _ = harness.forward(
+            corrupt_tokens,
+            assistant_start=0,
+            interventions=Interventions(replace=list(replacements)),
+            logit_positions=everywhere,
+        )
+        return result
+
+    # The whole residual stream entering layer 2 decides everything after it.
+    torch.testing.assert_close(
+        patched(Replace(2, "resid_pre", everywhere, record.resid_pre(2))), clean, atol=1e-4, rtol=1e-4
+    )
+    torch.testing.assert_close(
+        patched(Replace(0, "resid_pre", everywhere, record.resid_pre(0))), clean, atol=1e-4, rtol=1e-4
+    )
+    # o_proj is linear in the heads, so patching every head equals patching the attention output.
+    head_dim = harness.head_dim
+    heads = [
+        Replace(1, "head", everywhere, record.head_in[1][:, h * head_dim : (h + 1) * head_dim], head=h)
+        for h in range(record.head_in[1].shape[1] // head_dim)
+    ]
+    torch.testing.assert_close(
+        patched(*heads), patched(Replace(1, "attn", everywhere, record.attn[1])), atol=1e-4, rtol=1e-4
+    )
+    for component in ("attn", "routed", "shared"):
+        result = patched(Replace(1, component, everywhere, getattr(record, component)[1]))
+        assert not torch.allclose(result, corrupt)
