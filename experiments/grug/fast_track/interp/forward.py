@@ -205,6 +205,25 @@ class UnitEdit(NamedTuple):
     embed_tap: jax.Array | None = None
 
 
+NUM_GATES = 2 * NUM_LAYERS + 1
+SIDE_Q, SIDE_KV = 0, 1
+
+
+class GatePatch(NamedTuple):
+    """Path patching at the AttnRes gates. In gate ``g`` (``2 i``: layer ``i``'s attention, ``2 i + 1``: its MLP,
+    ``2 L``: the final readout), on side ``s`` (``SIDE_Q``: the attention query side, the MoE router, the readout;
+    ``SIDE_KV``: the attention keys/values/decays/betas, the routed and shared experts), block source ``j`` (0: the
+    embedding, ``j``: layer ``j - 1``'s block) enters as ``m * src + (1 - m) * value[j]`` with ``m = mult[g, j, s]``.
+    An MLP gate's last source (its own layer's attention output) is never patched."""
+
+    mult: jax.Array  # [NUM_GATES, L + 1, 2]
+    value: jax.Array  # [L + 1, B, S, D] (a per-source mean broadcast, or a resample)
+
+
+def no_patch(value: jax.Array) -> GatePatch:
+    return GatePatch(jnp.ones((NUM_GATES, NUM_LAYERS + 1, 2), jnp.float32), value)
+
+
 def _plus(x: jax.Array, tap: jax.Array | None) -> jax.Array:
     return x if tap is None else (x + tap).astype(x.dtype)
 
@@ -279,16 +298,20 @@ def _kda_branch(
     out: dict,
     v_tap: jax.Array | None = None,
     local: bool = False,
+    x_q: jax.Array | None = None,
 ):
     """KDA (as ``KimiDeltaAttention.__call__``) with per-head outputs; records q, k, v, log-decay g and beta. With
-    ``local`` the keys, values, decays and betas (the cross-position paths) carry no gradient."""
+    ``local`` the keys, values, decays and betas (the cross-position paths) carry no gradient. ``x_q`` (default
+    ``x``) is the input of the query side (the query and the output gate); ``x`` feeds the keys, values, decays and
+    betas."""
+    x_q = x if x_q is None else x_q
 
-    def project(w, conv):
-        pre = jnp.einsum("bsd,de->bse", x, w)
+    def project(w, conv, inp=x):
+        pre = jnp.einsum("bsd,de->bse", inp, w)
         y = jax.nn.silu(_local_conv(conv(pre, seg), pre, conv, local))
         return rearrange(y, "... (n d) -> ... n d", d=HEAD_DIM)
 
-    q = project(attn.w_q, attn.sconv_q)
+    q = project(attn.w_q, attn.sconv_q, x_q)
     k = project(attn.w_k, attn.sconv_k)
     v = project(attn.w_v, attn.sconv_v)
     a = jnp.einsum("bsr,re->bse", jnp.einsum("bsd,dr->bsr", x, attn.w_a_down), attn.w_a_up)
@@ -329,7 +352,7 @@ def _kda_branch(
     o = _bspec(kernel(*args))
     out["kda_o"] = o
     o = attn.o_norm(o.astype(x.dtype))
-    gate = jax.nn.sigmoid(jnp.einsum("bsd,de->bse", x, attn.w_g))
+    gate = jax.nn.sigmoid(jnp.einsum("bsd,de->bse", x_q, attn.w_g))
     o = o * rearrange(gate, "... (n d) -> ... n d", d=HEAD_DIM)
     w_o = rearrange(attn.w_o, "(n d) e -> n d e", d=HEAD_DIM)
     contrib = jnp.einsum("bsnd,nde->bsne", o, w_o, preferred_element_type=jnp.float32)
@@ -346,11 +369,13 @@ def _kda_branch(
     return jnp.sum(contrib.astype(jnp.float32), axis=2).astype(x.dtype), contrib
 
 
-def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult, ve_mean):
+def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult, ve_mean, x_q=None):
     """MLA q, k (offset, normed, qk_mult-scaled as the kernel sees them), the projected value and the gated value
-    embedding (``v = v_proj + ve``), and the Inkling bias band."""
+    embedding (``v = v_proj + ve``), and the Inkling bias band. ``x_q`` (default ``x``) feeds the query side (the
+    query and the Inkling bias, both per query position); ``x`` the keys and values."""
+    x_q = x if x_q is None else x_q
     latent = attn.kv_latent_norm(jnp.einsum("bsd,dl->bsl", x, attn.w_dkv))
-    q = rearrange(jnp.einsum("bsd,de->bse", x, attn.w_q), "... (n d) -> ... n d", d=HEAD_DIM)
+    q = rearrange(jnp.einsum("bsd,de->bse", x_q, attn.w_q), "... (n d) -> ... n d", d=HEAD_DIM)
     k = rearrange(jnp.einsum("bsl,le->bse", latent, attn.w_uk), "... (n d) -> ... n d", d=HEAD_DIM)
     v_proj = rearrange(jnp.einsum("bsl,le->bse", latent, attn.w_uv), "... (n d) -> ... n d", d=HEAD_DIM)
     table = _embedding_gather(attn.value_embed.astype(x.dtype), token_ids)
@@ -364,7 +389,7 @@ def mla_qkv(attn: CausalSelfAttention, x, seg, token_ids, ve_mult, ve_mean):
     k = rms_norm(k)
     q = rms_norm(q)
     q = q * attn.qk_mult.astype(q.dtype)
-    rel_bias = attn.rel_pos(x)
+    rel_bias = attn.rel_pos(x_q)
     return _bspec(q), _bspec(k), _bspec(v_proj), _bspec(ve), rel_bias, ve_w[..., 0]
 
 
@@ -388,11 +413,14 @@ def _mla_branch(
     v_tap: jax.Array | None = None,
     ve_tap: jax.Array | None = None,
     local: bool = False,
+    x_q: jax.Array | None = None,
 ):
     """MLA (as ``CausalSelfAttention.__call__``) with per-head outputs split into the projected-value and the
     value-embedding parts (XSA, the output gate and ``w_o`` are linear in the attended value). With ``local`` the
-    attended keys and values carry no gradient (XSA's own-position value keeps it)."""
-    q, k, v_proj, ve, rel_bias, ve_w = mla_qkv(attn, x, seg, token_ids, ve_mult, ve_mean)
+    attended keys and values carry no gradient (XSA's own-position value keeps it). ``x_q`` (default ``x``) feeds the
+    query side (query, Inkling bias, output gate)."""
+    x_q = x if x_q is None else x_q
+    q, k, v_proj, ve, rel_bias, ve_w = mla_qkv(attn, x, seg, token_ids, ve_mult, ve_mean, x_q)
     v_proj = _plus(v_proj, v_tap)
     ve = _plus(ve, ve_tap)
     v = v_proj + ve
@@ -403,7 +431,7 @@ def _mla_branch(
     v = _bspec(v)
     y_proj = y_proj - _xsa(y_proj, v)
     y_ve = y_ve - _xsa(y_ve, v)
-    gate_logit = jnp.einsum("bsd,dn->bsn", x, attn.attn_gate).astype(jnp.float32)
+    gate_logit = jnp.einsum("bsd,dn->bsn", x_q, attn.attn_gate).astype(jnp.float32)
     gate = (2 * jax.nn.sigmoid(gate_logit)).astype(y_proj.dtype)[..., None]
     w_o = rearrange(attn.w_o, "(n d) e -> n d e", d=HEAD_DIM)
     c_proj = jnp.einsum("bsnd,nde->bsne", gate * y_proj, w_o, preferred_element_type=jnp.float32)
@@ -441,16 +469,26 @@ def _local_ragged_dot(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) ->
 
 
 def _moe_branch(
-    block: Block, x, seg, layer: int, abl: Ablation, routing: RoutingOverride, out: dict, edit: UnitEdit | None = None
+    block: Block,
+    x,
+    seg,
+    layer: int,
+    abl: Ablation,
+    routing: RoutingOverride,
+    out: dict,
+    edit: UnitEdit | None = None,
+    x_router: jax.Array | None = None,
 ):
-    """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless)."""
+    """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless). ``x_router`` (default ``x``)
+    feeds the router; ``x`` the routed and shared experts."""
     mlp = block.mlp
     shared = block.shared[0]
     b, s, d = x.shape
     t = b * s
     # One device: the dispatch gathers and scatters run on replicated token arrays.
     x_flat = reshard(x.reshape(t, d), P(None, None))
-    router_logits = jnp.einsum("td,de->te", x_flat, mlp.router).astype(jnp.float32)
+    xr_flat = x_flat if x_router is None else reshard(x_router.reshape(t, d), P(None, None))
+    router_logits = jnp.einsum("td,de->te", xr_flat, mlp.router).astype(jnp.float32)
     biased = router_logits + routing.bias_scale[layer] * mlp.router_bias.astype(jnp.float32)
     _, selected = _small_top_k(biased, TOP_K)
     selected = jnp.where(routing.sel_mask[layer][:, None], routing.sel_override[layer], selected)
@@ -541,6 +579,7 @@ def trace_forward(
     routing: RoutingOverride | None = None,
     edit: UnitEdit | None = None,
     local_grad: bool = False,
+    patch: GatePatch | None = None,
 ) -> dict:
     """The forward of ``model`` (compute dtype) on ``[B, S]`` tokens, returning every intermediate: ``layers[i]`` holds
     layer ``i``'s gate weights, attention internals, MoE internals and branch outputs, and the top level the final
@@ -549,7 +588,7 @@ def trace_forward(
     ``local_grad`` the values are unchanged but gradients flow only along each position's own residual stream: the
     attention keys/values/decays and the lagged SConv taps are cut, so the gradient of a sum of per-position losses
     with respect to a position's intermediates is that position's own loss's gradient (less the attention-to-self
-    path)."""
+    path). ``patch`` path-patches the AttnRes gate inputs (``GatePatch``)."""
     cfg = model.config
     eps = cfg.layer_norm_eps
     b, s = tokens.shape
@@ -559,6 +598,12 @@ def trace_forward(
 
     def at(tap, i):
         return None if tap is None else tap[i]
+
+    def patched(g: int, side: int, sources: list[jax.Array], n_blocks: int) -> list[jax.Array]:
+        assert patch is not None
+        return [
+            _mix(patch.mult[g, j, side], src, patch.value[j]) if j < n_blocks else src for j, src in enumerate(sources)
+        ]
 
     model = replicate(model)
     seg = reshard(segment_ids, P(_BATCH, None))
@@ -574,8 +619,18 @@ def trace_forward(
     layers_out = []
     for i, layer in enumerate(model.layers()):
         out: dict = {}
-        w_attn, h = _gate(blocks, layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum)
-        attn_in = layer._attn_input(h)
+        if patch is None:
+            w_attn, h = _gate(blocks, layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum)
+            attn_in, attn_in_q = layer._attn_input(h), None
+        else:
+            nb = len(blocks)
+            w_attn, h = _gate(
+                patched(2 * i, SIDE_Q, blocks, nb), layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum
+            )
+            _, h_kv = _gate(
+                patched(2 * i, SIDE_KV, blocks, nb), layer.attn_res_query_attn, eps, plain_sum=cfg.attn_res_plain_sum
+            )
+            attn_in, attn_in_q = layer._attn_input(h_kv), layer._attn_input(h)
         if i in KDA_LAYERS:
             _, contrib = _kda_branch(
                 layer.attn,
@@ -588,6 +643,7 @@ def trace_forward(
                 out,
                 v_tap=at(edit.v_tap, i),
                 local=local_grad,
+                x_q=attn_in_q,
             )
             ve_contrib = jnp.zeros_like(contrib)
         else:
@@ -605,6 +661,7 @@ def trace_forward(
                 v_tap=at(edit.v_tap, i),
                 ve_tap=at(edit.ve_tap, i),
                 local=local_grad,
+                x_q=attn_in_q,
             )
             # The branch-output SConv (MLA only) is linear and channelwise: per-head parts go through it alone.
             contrib = _local_conv(_heads_through(layer.sconv_attn, contrib, seg), contrib, layer.sconv_attn, local_grad)
@@ -612,9 +669,21 @@ def trace_forward(
         contrib = _plus(contrib, at(edit.head_tap, i))
         attn_out = jnp.sum(contrib.astype(jnp.float32), axis=2)
         attn_out = _mix(abl.sub_mult[i, SUB_ATTN], attn_out, abl.sub_mean[i, SUB_ATTN]).astype(embed.dtype)
-        w_mlp, h2 = _gate([*blocks, attn_out], layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum)
-        mlp_in = layer._mlp_input(h2)
-        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out, edit)
+        mlp_sources = [*blocks, attn_out]
+        if patch is None:
+            w_mlp, h2 = _gate(mlp_sources, layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum)
+            mlp_in, mlp_in_router = layer._mlp_input(h2), None
+        else:
+            nb = len(blocks)
+            g = 2 * i + 1
+            w_mlp, h2r = _gate(
+                patched(g, SIDE_Q, mlp_sources, nb), layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum
+            )
+            _, h2 = _gate(
+                patched(g, SIDE_KV, mlp_sources, nb), layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum
+            )
+            mlp_in, mlp_in_router = layer._mlp_input(h2), layer._mlp_input(h2r)
+        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out, edit, x_router=mlp_in_router)
         routed_sc = layer.sconv_mlp(routed, seg)
         shared_sc = layer.sconv_mlp(shared_out, seg)
         mlp_sum = routed + shared_out
@@ -638,7 +707,8 @@ def trace_forward(
         )
         layers_out.append(out)
         blocks.append(block_out)
-    w_final, mixed = _gate(blocks, model.attn_res_query_final, eps, plain_sum=cfg.attn_res_plain_sum)
+    final_sources = blocks if patch is None else patched(2 * NUM_LAYERS, SIDE_Q, blocks, len(blocks))
+    w_final, mixed = _gate(final_sources, model.attn_res_query_final, eps, plain_sum=cfg.attn_res_plain_sum)
     mixed_f = mixed.astype(jnp.float32)
     inv_rms = jax.lax.rsqrt(jnp.mean(jnp.square(mixed_f), axis=-1, keepdims=True) + eps)
     hidden = model.final_norm(mixed)
