@@ -297,7 +297,8 @@ jobs:
     name: iris-e2e-smoke
     needs: select
     if: ${{ contains(fromJSON(needs.select.outputs.suites), 'iris-e2e-smoke') }}
-    runs-on: ubuntu-latest
+    # The locked Playwright release supports Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || secrets.CLAUDE_MAX_OAUTH_TOKEN }}

@@ -57,7 +57,7 @@ from levanter.grug._moe.ep_fixed_pooled_wave_all_to_all import (
 )
 from levanter.grug._moe.ep_ragged_all_to_all import DEFAULT_RAGGED_EXPERT_CHUNKS, _moe_mlp_ep_ragged_a2a_local
 from levanter.grug._moe.ep_ring import _moe_mlp_ep_ring_local
-from levanter.grug.mxfp8 import ExpertMxfp8
+from levanter.grug.mxfp8 import ExpertMxfp8, Mxfp8ExpertKernels
 from levanter.grug._moe.local import _moe_mlp_local
 from levanter.grug.sharding import (
     _axis_names,
@@ -439,9 +439,11 @@ class MoEExpertMlp(eqx.Module):
         overlap_param_gather: OverlapParamGather = OverlapParamGather.IN_WORK,
         report_assignment_keep: bool = False,
         ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
+        ragged_expert_mxfp8_kernels: Mxfp8ExpertKernels = Mxfp8ExpertKernels.QUACK,
         ragged_expert_mxfp8_dispatch: bool = False,
     ) -> Float[Array, "T O"] | tuple[Any, ...]:
-        """See ``moe_mlp`` for ``ragged_expert_mxfp8`` and ``ragged_expert_mxfp8_dispatch``."""
+        """See ``moe_mlp`` for ``ragged_expert_mxfp8``, ``ragged_expert_mxfp8_kernels`` and
+        ``ragged_expert_mxfp8_dispatch``."""
         w_gate_up = jnp.concatenate([self.w_gate, self.w_up], axis=-1)
         return moe_mlp(
             x,
@@ -464,6 +466,7 @@ class MoEExpertMlp(eqx.Module):
             overlap=overlap,
             overlap_param_gather=overlap_param_gather,
             ragged_expert_mxfp8=ragged_expert_mxfp8,
+            ragged_expert_mxfp8_kernels=ragged_expert_mxfp8_kernels,
             ragged_expert_mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
         )
 
@@ -535,6 +538,7 @@ def moe_mlp(
     ragged_expert_chunks: int = DEFAULT_RAGGED_EXPERT_CHUNKS,
     ragged_overlap_weight_grads: bool = False,
     ragged_expert_mxfp8: ExpertMxfp8 = ExpertMxfp8.NONE,
+    ragged_expert_mxfp8_kernels: Mxfp8ExpertKernels = Mxfp8ExpertKernels.QUACK,
     ragged_expert_mxfp8_dispatch: bool = False,
     expert_serial_pair: bool = False,
 ) -> Float[Array, "T O"] | tuple[Any, ...]:
@@ -573,7 +577,8 @@ def moe_mlp(
     `ragged_expert_mxfp8` (``ragged_all_to_all``, ungated ReLU^2 or gated SwiGLU on SM100) runs the expert MLP's
     activation-path GEMMs block-scaled on QuACK, and with ``ExpertMxfp8.ALL`` the weight gradients too
     (``ACTIVATIONS``: they stay bf16); `ragged_expert_mxfp8_dispatch` also sends the dispatched rows as MXFP8 bytes
-    instead of quantizing them on arrival.
+    instead of quantizing them on arrival. `ragged_expert_mxfp8_kernels` picks the kernels: ``CUDNN_FRONTEND`` runs
+    ungated ReLU^2 with ``ExpertMxfp8.ALL`` on the cudnn-frontend fused kernels, from bf16 rows.
     `overlap_param_gather` places the all-gather of the FSDP-sharded overlap parameters (``OverlapParamGather``).
     `ragged_expert_chunks` splits `ragged_all_to_all`'s local experts into that many sequential
     dispatch / MLP / return rounds (fewer live transport buffers, more collectives).
@@ -602,6 +607,10 @@ def moe_mlp(
         raise ValueError(f"ragged_expert_mxfp8 requires ragged_all_to_all, got {resolved_implementation!r}")
     if ragged_expert_mxfp8_dispatch and ragged_expert_mxfp8 == ExpertMxfp8.NONE:
         raise ValueError("ragged_expert_mxfp8_dispatch requires ragged_expert_mxfp8")
+    if ragged_expert_mxfp8_kernels != Mxfp8ExpertKernels.QUACK and ragged_expert_mxfp8 == ExpertMxfp8.NONE:
+        raise ValueError(f"ragged_expert_mxfp8_kernels={ragged_expert_mxfp8_kernels} requires ragged_expert_mxfp8")
+    if ragged_expert_mxfp8_dispatch and ragged_expert_mxfp8_kernels == Mxfp8ExpertKernels.CUDNN_FRONTEND:
+        raise ValueError("ragged_expert_mxfp8_kernels=cudnn_frontend quantizes bf16 rows on arrival")
     if expert_mxfp8_sim and resolved_implementation != "fixed_pooled_wave_all_to_all":
         raise ValueError(f"expert_mxfp8_sim requires fixed_pooled_wave_all_to_all, got {resolved_implementation!r}")
 
@@ -761,6 +770,7 @@ def moe_mlp(
                 serial_pair=expert_serial_pair,
                 overlap_weight_grads=ragged_overlap_weight_grads,
                 mxfp8=ragged_expert_mxfp8,
+                mxfp8_kernels=ragged_expert_mxfp8_kernels,
                 mxfp8_dispatch=ragged_expert_mxfp8_dispatch,
             )
         elif resolved_implementation == "fixed_all_to_all":

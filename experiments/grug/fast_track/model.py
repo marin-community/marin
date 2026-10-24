@@ -56,7 +56,7 @@ from levanter.grug.grug_moe import (
     moe_mlp,
 )
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
-from levanter.grug.mxfp8 import ExpertMxfp8, mx_dense
+from levanter.grug.mxfp8 import ExpertMxfp8, Mxfp8ExpertKernels, mx_dense
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
 from levanter.kernels.triton.gated_norm import gated_rms_norm
@@ -1053,6 +1053,9 @@ class GrugModelConfig:
     mxfp8_expert_wgrad: bool = False
     """With MXFP8 experts (``fp8_recipe``), run the routed experts' weight-gradient GEMMs block-scaled too (operands
     quantized along the token axis per expert) instead of bf16 (``ExpertMxfp8.ALL``)."""
+    moe_mxfp8_expert_kernels: Mxfp8ExpertKernels = Mxfp8ExpertKernels.QUACK
+    """Kernels of the MXFP8 routed experts (``Mxfp8ExpertKernels``). ``cudnn_frontend`` runs ungated ReLU^2 experts
+    (``moe_ungated_kernel``) with ``mxfp8_expert_wgrad`` on the cudnn-frontend fused kernels, from bf16 rows."""
     quack_gemm_table: QuackGemmTable = QuackGemmTable.DEFAULT
     """Tile/cluster schedule table of the QuACK MXFP8 GEMMs (``quack_schedules``). Same math."""
     quack_a2a_persistence: QuackA2aPersistence = QuackA2aPersistence.STATIC
@@ -1115,6 +1118,10 @@ class GrugModelConfig:
     def __post_init__(self) -> None:
         if self.mxfp8_expert_wgrad and self.fp8_recipe not in (Fp8Recipe.MXFP8_EXPERTS, Fp8Recipe.MXFP8):
             raise ValueError("mxfp8_expert_wgrad needs MXFP8 experts (fp8_recipe=mxfp8 or mxfp8_experts)")
+        if self.moe_mxfp8_expert_kernels == Mxfp8ExpertKernels.CUDNN_FRONTEND and not self.mxfp8_expert_wgrad:
+            raise ValueError(
+                "moe_mxfp8_expert_kernels=cudnn_frontend needs mxfp8_expert_wgrad: its weight gradients run in MXFP8"
+            )
         if self.moe_k_layers and (
             len(self.moe_k_layers) != self.num_layers or max(self.moe_k_layers) > self.num_experts_per_token
         ):
@@ -3954,6 +3961,7 @@ def _run_expert_bank(
             fp8_dispatch=em.fp8_dispatch,
             expert_mxfp8_sim=cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM,
             ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
+            ragged_expert_mxfp8_kernels=cfg.moe_mxfp8_expert_kernels,
             ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
             expert_remat=em.expert_remat,
             overlap=overlap,
@@ -3974,6 +3982,7 @@ def _run_expert_bank(
         overlap_param_gather=cfg.moe_overlap_param_gather,
         report_assignment_keep=cfg.moe_drop_renorm,
         ragged_expert_mxfp8=_ragged_expert_mxfp8(cfg),
+        ragged_expert_mxfp8_kernels=cfg.moe_mxfp8_expert_kernels,
         ragged_expert_mxfp8_dispatch=cfg.moe_mxfp8_dispatch,
     )
 

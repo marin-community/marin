@@ -26,13 +26,24 @@ _E4M3_MAX = 448.0
 
 
 class ExpertMxfp8(StrEnum):
-    """Which routed-expert GEMMs run with MXFP8 operands on QuACK's block-scaled SM100 kernels."""
+    """Which routed-expert GEMMs run with MXFP8 operands on block-scaled SM100 kernels (``Mxfp8ExpertKernels``)."""
 
     NONE = "none"
     ACTIVATIONS = "activations"
     """The activation-path GEMMs (forward and input gradients); the weight gradients stay bf16."""
     ALL = "all"
     """The activation-path GEMMs and the weight gradients, quantized along the token axis per expert."""
+
+
+class Mxfp8ExpertKernels(StrEnum):
+    """Which SM100 kernels run the ragged backend's MXFP8 routed-expert GEMMs."""
+
+    QUACK = "quack"
+    """QuACK's block-scaled grouped GEMMs, for ungated ReLU^2 and gated SwiGLU experts."""
+    CUDNN_FRONTEND = "cudnn_frontend"
+    """nvidia-cudnn-frontend's fused MXFP8 grouped GEMMs (``levanter.grug._moe.mxfp8``), for ungated ReLU^2
+    experts with ``ExpertMxfp8.ALL`` on bf16 rows. Each expert's rows start on a 256-row boundary of the
+    receiver buffer."""
 
 
 def mx_quantize_dequantize(x: jax.Array, axis: int) -> jax.Array:

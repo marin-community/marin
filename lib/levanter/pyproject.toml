@@ -95,6 +95,9 @@ gpu = [
   # Fix the variable-length CLC scheduler's unobserved cancellation drain.
   # https://github.com/Dao-AILab/quack/commit/58cb592a1a6ef85a69e37d0b4eb50217b59d20ca
   "quack-kernels[cu13]==0.6.4; sys_platform == 'linux'",
+  # Fused MXFP8 grouped-GEMM kernels for the routed experts (levanter.grug._moe.mxfp8). No extras:
+  # its triton extra needs a Triton newer than the pin below.
+  "nvidia-cudnn-frontend==1.31.0; sys_platform == 'linux'",
   # Optional raw Sonic MoE gather/combine backend. Keep jax-triton exact:
   # 0.3.0 is missing the CUDA backend API needed by our current stack.
   "jax-triton==0.3.1; sys_platform == 'linux'",

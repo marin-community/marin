@@ -19,6 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh
+from levanter.grug.mxfp8 import Mxfp8ExpertKernels
 
 from experiments.grug.fast_track.model import Fp8Recipe, GrugModelConfig, Transformer
 
@@ -41,6 +42,12 @@ _CASES = {
     "ungated_relu2_mxfp8": dict(fp8_recipe=Fp8Recipe.MXFP8, **_UNGATED),
     "ungated_relu2_mxfp8_wgrad": dict(
         fp8_recipe=Fp8Recipe.MXFP8, moe_mxfp8_dispatch=True, mxfp8_expert_wgrad=True, **_UNGATED
+    ),
+    "ungated_relu2_mxfp8_wgrad_cudnn": dict(
+        fp8_recipe=Fp8Recipe.MXFP8,
+        mxfp8_expert_wgrad=True,
+        moe_mxfp8_expert_kernels=Mxfp8ExpertKernels.CUDNN_FRONTEND,
+        **_UNGATED,
     ),
 }
 
@@ -127,7 +134,14 @@ def _require_gpus():
 
 @pytest.mark.timeout(900)  # three GPU processes, each compiling a train step
 @pytest.mark.parametrize(
-    "case", ["mxfp8", "mxfp8_dispatch_fused_grad_quant", "mxfp8_wgrad", "ungated_relu2_mxfp8_wgrad"]
+    "case",
+    [
+        "mxfp8",
+        "mxfp8_dispatch_fused_grad_quant",
+        "mxfp8_wgrad",
+        "ungated_relu2_mxfp8_wgrad",
+        "ungated_relu2_mxfp8_wgrad_cudnn",
+    ],
 )
 def test_swiglu_mxfp8_loss_and_grads_track_bf16(case, tmp_path):
     _require_gpus()
