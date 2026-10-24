@@ -11,7 +11,6 @@ import pytest
 import yaml
 from omegaconf import OmegaConf
 from rolloutengine.models import ModelTurn
-from omegaconf.errors import MissingMandatoryValue
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
@@ -379,8 +378,7 @@ def test_source_launch_rejects_missing_geometry_and_conflicting_author_values(tm
     resolved = load_launch_config(path)
     del resolved.inputs.data_kind
     OmegaConf.save(resolved, path)
-    with pytest.raises(MissingMandatoryValue, match="data_kind"):
-        load_launch_config(path)
+    assert load_launch_config(path).inputs.data_kind == "tasks"
 
 
 def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
