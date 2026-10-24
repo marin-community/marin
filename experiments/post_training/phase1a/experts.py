@@ -49,6 +49,8 @@ from experiments.post_training.phase1a.matrix import (
     skyrl_recipe,
 )
 
+# Snowball's GPU work runs in cw-rno2a, where B's export lives.
+EXPERT_CLUSTER = "cw-rno2a"
 EXPERT_EPOCHS = 3
 EXPERT_SEQUENCES_PER_STEP = 64
 EXPERT_SEED = 0
@@ -118,7 +120,9 @@ def expert_spec(plan: ExpertPlan, *, model: ArtifactStep[LevanterCheckpoint], ro
 def write_rows_parquet(jsonl_path: Path, parquet_path: Path) -> int:
     """The tokenized rows of ``build trace-rows`` as the fixed-completion loader's parquet."""
     rows = [json.loads(line) for line in jsonl_path.read_text().splitlines() if line.strip()]
-    pq.write_table(pa.Table.from_pylist([{column: row[column] for column in _ROW_COLUMNS} for row in rows]), parquet_path)
+    pq.write_table(
+        pa.Table.from_pylist([{column: row[column] for column in _ROW_COLUMNS} for row in rows]), parquet_path
+    )
     return len(rows)
 
 
@@ -165,7 +169,7 @@ def launch(
     return [
         skyrl_step(
             expert_spec(ExpertPlan(Task(task), counts[Task(task)], learning_rate), model=model, rows=rows_step),
-            execution(),
+            execution(EXPERT_CLUSTER),
             export_hf=True,
         )
         for task in tasks

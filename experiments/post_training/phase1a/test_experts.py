@@ -12,6 +12,7 @@ from marin.rl.skyrl import skyrl_step
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.phase1a.experts import (
+    EXPERT_CLUSTER,
     EXPERT_SEQUENCES_PER_STEP,
     ExpertPlan,
     expert_recipe,
@@ -51,7 +52,7 @@ def test_expert_configs_compose_through_skyrls_launcher(tmp_path):
     paths = []
     with build_context(BuildContext(versions=VersionCodex(default="2026.10.24"))):
         for plan in (ExpertPlan(Task.X, 5177, 1e-5), ExpertPlan(Task.R, 3280, 1e-5)):
-            step = skyrl_step(expert_spec(plan, model=model, rows=rows), execution(), export_hf=True)
+            step = skyrl_step(expert_spec(plan, model=model, rows=rows), execution(EXPERT_CLUSTER), export_hf=True)
             config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
             path = tmp_path / f"{plan.name}.yaml"
             path.write_text(config.launch_config_yaml)

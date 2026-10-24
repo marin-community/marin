@@ -89,16 +89,16 @@ def run_spec(
     )
 
 
-def execution() -> IrisSkyRLExecution:
+def execution(cluster: str) -> IrisSkyRLExecution:
     return IrisSkyRLExecution(
-        cluster=CLUSTER,
-        cluster_config=f"lib/iris/config/{CLUSTER}.yaml",
+        cluster=cluster,
+        cluster_config=f"lib/iris/config/{cluster}.yaml",
         cpu=16,
         memory="768GB",
         disk="2TB",
         priority="interactive",
         max_retries=1,
-        target_cluster=CLUSTER,
+        target_cluster=cluster,
         parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
         coordinator_timeout_hours=72,
         wandb_entity=None,
@@ -162,7 +162,7 @@ def main(
     for run in selected_runs(stage, learning_rate, methods, conditions, seeds):
         teachers = {task: pool[task] for task in run.tasks} if run.method is Method.M4 else {}
         spec = run_spec(run, model=model, run_data=run_data, teachers=teachers)
-        steps.append(skyrl_step(spec, execution(), export_hf=True))
+        steps.append(skyrl_step(spec, execution(CLUSTER), export_hf=True))
     return steps
 
 

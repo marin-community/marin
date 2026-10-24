@@ -15,7 +15,7 @@ from marin.rl.skyrl import skyrl_step
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.phase1a.data import eligible_samples, layout
-from experiments.post_training.phase1a.launch import execution, run_spec
+from experiments.post_training.phase1a.launch import CLUSTER, execution, run_spec
 from experiments.post_training.phase1a.matrix import (
     LR_SWEEP,
     PHASE1A_CONDITIONS,
@@ -149,7 +149,7 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path):
                 run = RunPlan(method, condition, seed, 2e-6)
                 teachers = {task: TEACHERS[task] for task in run.tasks} if method is Method.M4 else {}
                 spec = run_spec(run, model=model, run_data=data, teachers=teachers)
-                step = skyrl_step(spec, execution(), export_hf=True)
+                step = skyrl_step(spec, execution(CLUSTER), export_hf=True)
                 config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))
                 path = tmp_path / f"{run.name}.yaml"
                 path.write_text(config.launch_config_yaml)
