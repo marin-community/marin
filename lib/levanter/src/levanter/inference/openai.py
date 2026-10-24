@@ -410,7 +410,10 @@ class InferenceContext:
                         echo_token_ids = None
                         echo_logprobs = None
                         if req.echo_logprobs_top_k is not None:
-                            echo_token_ids = req.prompt_tokens + generated_tokens
+                            # Echo token/logprob arrays describe all sampled tokens,
+                            # including a terminating EOS/stop suffix. Text remains
+                            # stripped, while usage and lm-eval's[ctxlen:-1] agree.
+                            echo_token_ids = req.prompt_tokens + raw_tokens
                             echo_logprobs = self.engine.score_token_logprobs(
                                 echo_token_ids,
                                 req.echo_logprobs_top_k,
