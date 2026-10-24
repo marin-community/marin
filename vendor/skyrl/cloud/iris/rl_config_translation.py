@@ -20,6 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.ftpo import FTPOConfig
+from skyrl_train.rollouts.harbor_settings import concurrent_trials
 
 from cloud.iris.paths import resolve_paths_in_dict
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT as CHECKPOINT_EXPORT_MODULE
@@ -35,6 +36,8 @@ SKYRL_CONFIG_DIR = Path(__file__).parent / "configs"
 RL_CONFIG_TASK_DIR = "/tmp/marin-rl-configs"
 RL_CONFIG_PAYLOAD_ENV = "MARIN_RL_CONFIG_B64"
 RESOLVED_HARBOR_CONFIG_KEY = "terminal_bench_config"
+# Prompt groups generating at once, in training batches, for a recipe that leaves rollout_buffer.max_in_flight null.
+IN_FLIGHT_BATCHES = 1.5
 TRAINER_NON_PATH_KEYS = frozenset(
     {
         "policy.model.path",
@@ -863,6 +866,18 @@ def _compose_config_groups(config_groups: Mapping[str, str], *, config_name: str
     return config
 
 
+def _resolve_max_in_flight(config: DictConfig) -> None:
+    """Default the groups generating at once to IN_FLIGHT_BATCHES batches, within the run's Harbor sandboxes."""
+    rollout_buffer = config.trainer.rollout_buffer
+    if rollout_buffer.max_in_flight is not None:
+        return
+    groups = math.ceil(IN_FLIGHT_BATCHES * config.trainer.train_batch_size)
+    if RESOLVED_HARBOR_CONFIG_KEY in config:
+        sandboxes = concurrent_trials(config[RESOLVED_HARBOR_CONFIG_KEY].get("harbor", {}))
+        groups = min(groups, max(1, sandboxes // config.generator.n_samples_per_prompt))
+    rollout_buffer.max_in_flight = groups
+
+
 def compose_skyrl_config(
     parsed: ParsedRLConfig,
     exp_args: Mapping[str, Any],
@@ -871,6 +886,7 @@ def compose_skyrl_config(
     """Compose the final SkyRL subtree from its config groups and launch values."""
     config = _compose_config_groups(parsed.config_groups, config_name="ppo_base_config")
     _merge_config_mapping(config, _skyrl_config_sections(parsed, exp_args, hpc))
+    _resolve_max_in_flight(config)
     validate_nemotron_ultra_grading(config, parsed.distillation_plan)
     validate_objective(config)
     return CompiledSkyRLConfig(
