@@ -143,3 +143,38 @@ def test_steer_layer_sets(harness, tmp_path):
     by_layer = {json.dumps(cell["layer"]): cell["targets"]["t40"] for cell in result["grid"]}
     assert set(by_layer) == {"1", "2", "[1, 2]"}
     assert len({round(value, 5) for value in by_layer.values()}) == 3
+
+
+def test_stacked_edit_keeps_prior_and_rounds_the_sum(harness, tmp_path):
+    before = last_logprobs(harness)
+    first = edit_spec(tmp_path, eval={}, generate=None)
+    edit_rank1(harness, TOKENIZER, first, Output(str(tmp_path / "first")), stop_ids=set())
+    second_keys = write_rows(
+        tmp_path / "keys2.jsonl",
+        [
+            {"id": "q1", "text": "t5 t30 t31 t99", "targets": ["t70"]},
+            {"id": "q2", "text": "t6 t30 t31 t99", "targets": ["t70"]},
+        ],
+    )
+    second = edit_spec(
+        tmp_path,
+        key_prompts=second_keys,
+        eval={"first_keys": first["key_prompts"]},
+        generate=None,
+        prior_edits=[str(tmp_path / "first" / "delta.pt")],
+    )
+    edit_rank1(harness, TOKENIZER, second, Output(str(tmp_path / "second")), stop_ids=set())
+    assert (last_logprobs(harness) - before).abs().max() == 0
+    report = json.loads((tmp_path / "second" / "edit.json").read_text())
+    assert [prior["weight"] for prior in report["prior_edits"]] == ["model.layers.2.self_attn.o_proj.weight"]
+    first_keys = report["eval"]["first_keys"]
+    assert set(first_keys) == {"base", "prior", "edit", "edit_bf16"}
+    for base, prior in zip(first_keys["base"], first_keys["prior"], strict=True):
+        assert prior["targets"]["t40 t41"] > base["targets"]["t40 t41"]
+    keys = report["eval"]["keys"]
+    for prior, edit in zip(keys["prior"], keys["edit"], strict=True):
+        assert edit["targets"]["t70"] > prior["targets"]["t70"]
+    # FP32 tiny model: rounding W + both deltas once reproduces the two stacked hooks.
+    for name in ("keys", "first_keys"):
+        for exact, rounded in zip(report["eval"][name]["edit"], report["eval"][name]["edit_bf16"], strict=True):
+            assert all(abs(exact["targets"][t] - rounded["targets"][t]) < 1e-3 for t in exact["targets"])
