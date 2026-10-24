@@ -16,6 +16,7 @@ from pathlib import Path
 import requests
 from finestore.reader import ReadView
 from fray.iris_backend import convert_constraints, convert_resources, resolve_coscheduling
+from fray.types import ResourceConfig
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from iris.cluster.constraints import Constraint, ConstraintOp
@@ -45,6 +46,12 @@ COMMIT = "c1d5c62cdc3939b42f64411af44fd50716b53454"
 KEYS = ("math500", "gsm8k-0shot", "humanevalplus", "ifbench")
 RUNS = (1, 2)
 RUNTIME_SECONDS = 6 * 3600
+# v4-32: reserved, 4 hosts, TP16 (task261 parity). v5p-8: preemptible, 1 host, TP4 (task249 OlympiadBench parity);
+# preemptions retry the whole job, evals finished before it are kept and Evalchemy resumes the interrupted one.
+PLATFORMS = {
+    "v4-32": dict(tp=16, multihost=True, preemption_retries=0),
+    "v5p-8": dict(tp=4, multihost=False, preemption_retries=30),
+}
 # Slice t1v-n-70779c29 hosts the #205 CPU merges (2026-10-23); keep the serve off it.
 AVOID_TPU_NAMES = ("t1v-n-70779c29",)
 
@@ -91,8 +98,14 @@ def evalchemy_command(extras):
     return command
 
 
-def run_one(label, key, run, base_url, deadline, client_sha):
+def run_one(label, platform, key, run, base_url, deadline, client_sha):
     root = StoragePath(core.OUTPUT) / key / f"r{run}"
+    try:
+        rows = json.loads((root / "results.json").read_text())
+    except FileNotFoundError:
+        rows = None
+    if rows and all(row.get("scored") is True for row in rows):
+        return dict(eval=key, run=run, kept_from_earlier_attempt=True)
     plan = policy_plan(label, key, str(root) + "/", base_url)
     payload = plan["config"]
     (root / "settings.json").write_text(
@@ -101,6 +114,8 @@ def run_one(label, key, run, base_url, deadline, client_sha):
                 **plan,
                 "config": {**payload, "base_url": "<worker-local omitted>"},
                 "model": label,
+                "platform": platform,
+                "tensor_parallel_size": PLATFORMS[platform]["tp"],
                 "weights": core.MODEL,
                 "evalchemy_commit": COMMIT,
                 "client_sha256": client_sha,
@@ -163,7 +178,7 @@ def run_one(label, key, run, base_url, deadline, client_sha):
     )
 
 
-def make_suite(label):
+def make_suite(label, platform):
     def run_suite(base_url, remaining_seconds):
         deadline = time.monotonic() + remaining_seconds
         client_sha = hashlib.sha256((core.HERE / "policy_client.py").read_bytes()).hexdigest()
@@ -172,7 +187,7 @@ def make_suite(label):
         for run in RUNS:
             for key in KEYS:
                 try:
-                    record = run_one(label, key, run, base_url, deadline, client_sha)
+                    record = run_one(label, platform, key, run, base_url, deadline, client_sha)
                 except Exception as exc:  # Keep going: one failed eval should not discard the others.
                     record = dict(eval=key, run=run, error=f"{type(exc).__name__}: {exc}")
                     failures.append(record)
@@ -185,31 +200,44 @@ def make_suite(label):
     return run_suite
 
 
-def names(label, attempt):
-    return f"rsi289-{label}-v4-32-r{attempt}", f"gs://marin-us-central2/scratch/karan/task289/{label}-r{attempt}/"
+def names(label, platform, attempt):
+    # The first v4-32 attempts used .../task289/<label>-r1/; keep that path for v4-32.
+    suffix = "" if platform == "v4-32" else f"-{platform}"
+    return (
+        f"rsi289-{label}-{platform}-r{attempt}",
+        f"gs://marin-us-central2/scratch/karan/task289/{label}{suffix}-r{attempt}/",
+    )
 
 
-def make_host(label, attempt):
-    name, output = names(label, attempt)
+def configure(label, platform, attempt):
+    """Point the task261 core launcher at one model and platform (runs on submit host and on workers)."""
+    name, output = names(label, platform, attempt)
+    spec = PLATFORMS[platform]
+    core.MODEL, core.REPO, core.REVISION, core.OUTPUT, core.NAME = MODELS[label], label, label, output, name
+    core.RUNTIME_SECONDS = RUNTIME_SECONDS
+    core.MULTIHOST = spec["multihost"]
+    if platform != "v4-32":
+        core.resources = lambda: ResourceConfig.with_tpu(platform, cpu=32, ram="400g", disk="80g", preemptible=True)
+    original_build = core.build_service
+
+    def build():
+        service = original_build()
+        return dataclasses.replace(
+            service,
+            model=dataclasses.replace(service.model, tensor_parallel_size=spec["tp"]),
+            engine=dataclasses.replace(service.engine, max_num_seqs=16),
+            timeout_hours=6,
+        )
+
+    core.build_service = build
+
+
+def make_host(label, platform, attempt):
 
     def run_host():
         # Bind worker-local settings inside the serialized entrypoint (see task261 r1 failure).
-        core.MODEL = MODELS[label]
-        core.REPO = label
-        core.REVISION = label
-        core.OUTPUT = output
-        core.NAME = name
-        core.RUNTIME_SECONDS = RUNTIME_SECONDS
-        core.run_evaluation = make_suite(label)
-        original_build = core.build_service
-
-        def build():
-            service = original_build()
-            return dataclasses.replace(
-                service, engine=dataclasses.replace(service.engine, max_num_seqs=16), timeout_hours=6
-            )
-
-        core.build_service = build
+        configure(label, platform, attempt)
+        core.run_evaluation = make_suite(label, platform)
         core.run_host()
 
     return run_host
@@ -218,23 +246,27 @@ def make_host(label, attempt):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("model", choices=sorted(MODELS))
+    parser.add_argument("--platform", choices=sorted(PLATFORMS), default="v4-32")
     parser.add_argument("--attempt", type=int, default=1)
     parser.add_argument("--submit", action="store_true")
     args = parser.parse_args()
-    name, output = names(args.model, args.attempt)
-    core.MODEL, core.REPO, core.OUTPUT, core.NAME = MODELS[args.model], args.model, output, name
+    name, output = names(args.model, args.platform, args.attempt)
+    configure(args.model, args.platform, args.attempt)
+    spec = PLATFORMS[args.platform]
     resource = core.resources()
-    core.build_service()  # Validate full service types before allocation.
-    constraints = [
-        *convert_constraints(resource),
-        *(Constraint.create(key="tpu-name", op=ConstraintOp.NE, value=value) for value in AVOID_TPU_NAMES),
-    ]
+    service = core.build_service()  # Validate full service types before allocation.
+    constraints = convert_constraints(resource)
+    if spec["multihost"]:
+        constraints += [Constraint.create(key="tpu-name", op=ConstraintOp.NE, value=v) for v in AVOID_TPU_NAMES]
+    ports = ["http", *RAY_PORTS] if spec["multihost"] else ["http"]
     plan = dict(
         name=name,
         model=MODELS[args.model],
         output=output,
-        TP=16,
-        hosts=4,
+        platform=args.platform,
+        TP=service.model.tensor_parallel_size,
+        hosts=resource.replicas,
+        preemption_retries=spec["preemption_retries"],
         context=73728,
         max_num_seqs=16,
         runtime_hours=6,
@@ -250,17 +282,17 @@ def main():
         with IrisClient.remote(endpoint.url, workspace=Path.cwd(), credentials=endpoint.credentials) as client:
             job = client.submit(
                 name=name,
-                entrypoint=Entrypoint.from_callable(make_host(args.model, args.attempt)),
+                entrypoint=Entrypoint.from_callable(make_host(args.model, args.platform, args.attempt)),
                 resources=convert_resources(resource),
                 constraints=constraints,
                 replicas=resource.replicas,
-                coscheduling=resolve_coscheduling(resource, resource.replicas),
-                ports=["http", *RAY_PORTS],
+                coscheduling=resolve_coscheduling(resource, resource.replicas) if spec["multihost"] else None,
+                ports=ports,
                 environment=EnvironmentSpec(extras=("tpu",)),
                 timeout=Duration.from_seconds(RUNTIME_SECONDS),
                 scheduling_timeout=Duration.from_seconds(8 * 3600),
                 max_retries_failure=0,
-                max_retries_preemption=0,
+                max_retries_preemption=spec["preemption_retries"],
                 max_task_failures=0,
             )
             print(job, flush=True)

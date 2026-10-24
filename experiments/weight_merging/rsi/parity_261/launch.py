@@ -33,6 +33,8 @@ LAYERS = ["full_attention" if i in GLOBALS else "sliding_attention" for i in ran
 OUTPUT = "gs://marin-us-central2/scratch/karan/task261/step12-r3/"
 NAME = "rsi261-step12-v4-32-r3"
 RUNTIME_SECONDS = 4 * 3600
+# False for single-host serving (task289 v5p-8 fallback): no Ray gang, no v4-32 slice identity preflight.
+MULTIHOST = True
 
 
 def resources():
@@ -263,9 +265,11 @@ def run_host():
         TMPDIR=str(root / "tmp"),
         RAY_DEDUP_LOGS="0",
         HF_HUB_DISABLE_XET="1",
-        TPU_MULTIHOST_BACKEND="ray",
     )
-    registration = slice_preflight()
+    registration = None
+    if MULTIHOST:
+        os.environ["TPU_MULTIHOST_BACKEND"] = "ray"
+        registration = slice_preflight()
     original_command = IsolatedTpuVllm.command
     IsolatedTpuVllm.command = lambda self: [
         *original_command(self)[:-1],
@@ -333,7 +337,8 @@ def run_host():
         raise
     finally:
         save(f"host-{info.task_index}/wall.json", dict(start_epoch=started, elapsed_seconds=time.time() - started))
-        iris_ctx().registry.unregister(registration)
+        if registration is not None:
+            iris_ctx().registry.unregister(registration)
 
 
 def main():
