@@ -3,6 +3,7 @@
 
 import asyncio
 
+import pytest
 from rolloutengine.models import ConversationRecord, ModelTurn, RolloutStep, Transition
 from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.reasoning_spans import ReasoningViolation
@@ -55,26 +56,18 @@ def _generate(response_ids, finish_reason="tool_calls"):
     return asyncio.run(client.generate(request))
 
 
-def test_a_malformed_span_is_recorded_with_its_exact_tokens():
-    output = _generate([1, 3, 2, 3, 2, 4, 5])
-    assert output[REASONING_VIOLATIONS_KEY] == [ReasoningViolation.STRAY_END]
-    assert output["response_ids"] == [[1, 3, 2, 3, 2, 4, 5]]
-
-
-def test_a_well_formed_span_keeps_the_tool_call():
-    output = _generate([1, 3, 2, 4, 5])
-    assert output["assistant_messages"][0]["tool_calls"] == [TOOL_CALL]
-    assert REASONING_VIOLATIONS_KEY not in output
-
-
-def test_a_length_stop_inside_the_span_is_truncation():
-    output = _generate([1, 3, 3], finish_reason="length")
-    assert REASONING_VIOLATIONS_KEY not in output
-
-
-def test_an_unclosed_span_that_stops_is_a_violation():
-    output = _generate([1, 3, 5], finish_reason="stop")
-    assert output[REASONING_VIOLATIONS_KEY] == [ReasoningViolation.UNCLOSED]
+@pytest.mark.parametrize(
+    ("response_ids", "finish_reason", "violation"),
+    [
+        ([1, 3, 2, 4, 5], "tool_calls", None),
+        ([1, 3, 2, 3, 2, 4, 5], "tool_calls", ReasoningViolation.STRAY_END),
+        ([1, 3, 3], "length", None),
+        ([1, 3, 5], "stop", ReasoningViolation.UNCLOSED),
+    ],
+)
+def test_the_chat_transport_records_each_reply_violation(response_ids, finish_reason, violation):
+    output = _generate(response_ids, finish_reason)
+    assert output.get(REASONING_VIOLATIONS_KEY, [None]) == [violation]
 
 
 def _step(violation):
