@@ -117,6 +117,16 @@ def completion_protocol(
     }
 
 
+# Terminus-2's JSON turn carries these keys; a single-turn reply in that shape is the agent format.
+AGENT_TURN_KEYS = ('"analysis"', '"plan"', '"commands"')
+
+
+def is_agent_turn(text: str, delimiters: Delimiters = GRUG_DELIMITERS) -> bool:
+    """Whether a reply's answer (after any thinking) is a Terminus-2 JSON agent turn."""
+    answer = text.rsplit(delimiters.tokens.think_close, 1)[-1]
+    return answer.lstrip().startswith("{") and all(key in answer for key in AGENT_TURN_KEYS)
+
+
 def protocol_report(completions: list[Completion], delimiters: Delimiters = GRUG_DELIMITERS) -> dict:
     """Per-family shares and the gate verdict."""
     families: dict[str, dict] = {}
@@ -129,8 +139,11 @@ def protocol_report(completions: list[Completion], delimiters: Delimiters = GRUG
         with_think = [fact for fact in facts if fact["think_blocks"]]
         turn_share = sum(bool(fact["turn_ended"]) for fact in facts) / len(facts)
         think_share = sum(bool(fact["think_closed"]) for fact in with_think) / len(with_think) if with_think else None
+        texts = [c.text for c in completions if c.family == family]
         families[family] = {
             "completions": len(facts),
+            # Reported, not gated (DESIGN decision log, 2026-10-24).
+            "agent_format_share": sum(is_agent_turn(text, delimiters) for text in texts) / len(texts),
             "turn_end_share": turn_share,
             "completions_with_thinking": len(with_think),
             "think_close_share": think_share,

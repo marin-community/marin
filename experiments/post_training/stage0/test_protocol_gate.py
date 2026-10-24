@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from experiments.post_training.stage0.protocol_gate import END_OF_TURN_ID, Completion, protocol_report
+from experiments.post_training.stage0.protocol_gate import END_OF_TURN_ID, Completion, is_agent_turn, protocol_report
 
 
 def _completion(family: str, text: str, *, ended: bool = True) -> Completion:
@@ -24,3 +24,11 @@ def test_a_completion_stopped_by_another_token_does_not_end_its_turn():
     stopped_elsewhere = Completion("P_chat", "p", "stop", None, "answer")
     report = protocol_report([stopped_elsewhere] + [_completion("P_chat", "a") for _ in range(9)])
     assert report["families"]["P_chat"]["turn_end_share"] == 0.9 and not report["passed"]
+
+
+def test_agent_format_counts_replies_whose_answer_is_a_terminus_json_turn():
+    agent = '<|start_think|>r<|end_think|>{"analysis": "a", "plan": "p", "commands": []}'
+    assert is_agent_turn(agent)
+    assert not is_agent_turn('<|start_think|>{"analysis"<|end_think|>The answer is 4.')
+    report = protocol_report([_completion("P_chat", agent), _completion("P_chat", "plain")])
+    assert report["families"]["P_chat"]["agent_format_share"] == 0.5
