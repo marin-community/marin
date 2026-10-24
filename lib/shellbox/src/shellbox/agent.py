@@ -53,6 +53,7 @@ SHELLSIM_BASH_TOOL = {
     },
 }
 BASH_OUTPUT_LIMIT_BYTES = 128 * 1024
+HOSTED_VLLM_PREFIX = "hosted_vllm/"
 
 
 def _wait_seconds(arguments: dict) -> float:
@@ -98,6 +99,7 @@ class BashAgent(BaseAgent):
         model = self.model_alias or self.model_name
         if model is None:
             raise ValueError("BashAgent requires model_name or model_alias")
+        model = model.removeprefix(HOSTED_VLLM_PREFIX)
         if not isinstance(environment, BashSessionProvider):
             raise TypeError("BashAgent requires an environment with persistent Bash sessions")
         shell = await environment.open_bash_session()
@@ -113,7 +115,12 @@ class BashAgent(BaseAgent):
                     headers={"Authorization": f"Bearer {self.api_key}"},
                     json={"model": model, "messages": messages, "tools": tools},
                 )
-                response.raise_for_status()
+                try:
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as exc:
+                    raise httpx.HTTPStatusError(
+                        f"{exc}\nResponse body: {response.text}", request=exc.request, response=exc.response
+                    ) from exc
                 body = response.json()
                 usage = body.get("usage", {})
                 context.n_input_tokens = (context.n_input_tokens or 0) + usage.get("prompt_tokens", 0)
