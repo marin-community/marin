@@ -450,5 +450,3 @@ def _add_default_env_variables(env: dict, default_env: dict | None) -> dict:
 
     # Task environment values are serialized as strings.
     return {str(k): str(v) for k, v in merged.items()}
-
-
