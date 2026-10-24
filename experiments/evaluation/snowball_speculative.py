@@ -37,6 +37,9 @@ from marin.inference.iris import (
     run_iris_service,
 )
 from marin.inference.types import OpenAIEndpoint, RunningModel
+from marin.inference.vllm_backend import VllmServedModel
+from marin.inference.vllm_server import _native_logs
+from marin.inference.vllm_wheel_entrypoint import _VERIFIED_SENTINEL
 from rigging.provenance import Provenance
 from rigging.timing import Deadline
 
@@ -145,7 +148,38 @@ def smoke(service: IrisServiceConfig, output: Path) -> None:
         effective = response.json()["vllm_config"]
         version = requests.get(engine_root + "version", timeout=30)
         version.raise_for_status()
-        assert version.json()["version"] == VLLM_GPU_RELEASE.version
+        assert isinstance(local._served, VllmServedModel)
+        handle = local._served.environment.vllm_server
+        assert handle is not None
+        verified = [
+            json.loads(line.split(_VERIFIED_SENTINEL, 1)[1])
+            for line in _native_logs(handle.log_dir).splitlines()
+            if _VERIFIED_SENTINEL in line
+        ]
+        assert verified
+        wheel = verified[-1]
+        evidence = {
+            "phase": "engine-ready",
+            "requested_model": asdict(service.model),
+            "requested_engine": asdict(service.engine),
+            "resources": asdict(service.iris.worker_resources),
+            "job": str(job.task_id),
+            "bundle_id": job.bundle_id,
+            "source": asdict(Provenance.capture()),
+            "worker_region": job.worker_region,
+            "endpoint_name": service.endpoint_name,
+            "installed_wheel": wheel,
+            "engine_version": version.json(),
+            "diagnostic_server_dev_mode": os.environ.get("VLLM_SERVER_DEV_MODE"),
+            "effective_engine": effective,
+            "hardware": subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name,uuid,memory.total,driver_version", "--format=csv"], text=True
+            ),
+        }
+        (output / "proof.json").write_text(json.dumps(evidence, default=list, indent=2))
+        # The source's /version omits the wheel's CUDA packaging suffix; use the startup verifier.
+        assert wheel["version"] == VLLM_GPU_RELEASE.version
+        assert wheel["source_commit"] == VLLM_GPU_RELEASE.source_commit
         expected = service.engine.speculative
         actual = effective["speculative_config"]
         assert effective["model_config"]["max_model_len"] == CONTEXT
@@ -203,25 +237,9 @@ def smoke(service: IrisServiceConfig, output: Path) -> None:
             scrape = requests.get(root + "/metrics", timeout=30)
             scrape.raise_for_status()
             (output / "metrics.prom").write_text(scrape.text)
-            evidence = {
-                "requested_model": asdict(service.model),
-                "requested_engine": asdict(service.engine),
-                "resources": asdict(service.iris.worker_resources),
-                "job": str(job.task_id),
-                "bundle_id": job.bundle_id,
-                "source": asdict(Provenance.capture()),
-                "worker_region": job.worker_region,
-                "endpoint_name": service.endpoint_name,
-                "engine_version": version.json(),
-                "diagnostic_server_dev_mode": os.environ.get("VLLM_SERVER_DEV_MODE"),
-                "effective_engine": effective,
-                "models": models.json(),
-                "responses": responses,
-                "metrics": metrics.model_dump(mode="json"),
-                "hardware": subprocess.check_output(
-                    ["nvidia-smi", "--query-gpu=name,uuid,memory.total,driver_version", "--format=csv"], text=True
-                ),
-            }
+            evidence.update(
+                phase="checked", models=models.json(), responses=responses, metrics=metrics.model_dump(mode="json")
+            )
             (output / "proof.json").write_text(json.dumps(evidence, default=list, indent=2))
             logging.info("Serving proof saved to %s: %s", output, metrics)
 

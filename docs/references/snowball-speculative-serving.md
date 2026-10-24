@@ -114,6 +114,11 @@ proposed drafts when that denominator is positive. Baseline has no speculative
 measurement. Synthetic counters describe forced acceptance and must be kept
 separate from measured standard acceptance and quality results.
 
+The pinned harness's SPEED report reads the first series for each counter. With
+DP8, that summary covers one engine. Its raw server scrape retains the series;
+use all matching engine labels for a whole-server mean as Marin's metric window
+does.
+
 ## Bounded serving check and provenance
 
 Run a configuration-only check locally:
@@ -140,6 +145,8 @@ engines run sequentially in the same allocation. Each receives three short
 coding requests, including streaming. Iris captures `IRIS_OUTPUT_DIR` with
 requested and resolved settings, model metadata, HTTP responses, counter deltas,
 raw metrics, runtime version, source/bundle identity and GPU/driver information.
+The record keeps the wheel verifier's distribution version separately from
+`/version`, whose source version can omit the wheel's CUDA packaging suffix.
 The worker checks that baseline has no speculative config, verified mode drafts,
 and synthetic mode resolves to the requested native sampler and rates. Find
 the output archive with `iris attempt describe <task>:<attempt>`. For a single
