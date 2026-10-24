@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 from tokenizers import Tokenizer, models, pre_tokenizers
 from transformers import PreTrainedTokenizerFast
+from verifyit.grade import GradingInfraError
 
 from experiments.post_training.chat_template import GRUG_TOKENS, QWEN_TOKENS
 from experiments.post_training.task_data import build as build_module
@@ -524,10 +525,12 @@ def test_a_screen_that_exceeds_its_cpu_budget_drops_the_answer(monkeypatch):
     assert math_r.screened_answer("x") is False
 
 
-def test_grade_counts_a_trace_whose_grading_exceeds_its_cpu_budget_as_incorrect(tmp_path, monkeypatch):
+def test_grade_counts_a_trace_the_grader_cannot_settle_as_incorrect(tmp_path, monkeypatch):
     def spin_on_runaway(task, completion):
         while completion == "runaway":  # a pathological completion that hangs the verifier
             pass
+        if completion == "deadline":
+            raise GradingInfraError("math verifier deadline exhausted")
         return True
 
     monkeypatch.setitem(build_module.GRADERS, "R", spin_on_runaway)
@@ -537,7 +540,7 @@ def test_grade_counts_a_trace_whose_grading_exceeds_its_cpu_budget_as_incorrect(
     traces = tmp_path / "r_traces.jsonl"
     rows = [
         {"task_id": "r-0", "reasoning": "add", "content": content, "completion_tokens": tokens}
-        for content, tokens in (("runaway", 10), (r"$\boxed{4}$", 20))
+        for content, tokens in (("runaway", 10), ("deadline", 15), (r"$\boxed{4}$", 20))
     ]
     traces.write_text("".join(json.dumps(row) + "\n" for row in rows))
     out = tmp_path / "r_graded.jsonl"
@@ -547,4 +550,4 @@ def test_grade_counts_a_trace_whose_grading_exceeds_its_cpu_budget_as_incorrect(
     assert result.exit_code == 0, result.output
     assert [json.loads(line)["completion_tokens"] for line in out.read_text().splitlines()] == [20]
     manifest = json.loads(out.with_suffix(".manifest.json").read_text())
-    assert (manifest["graded_correct"], manifest["grade_budget_exceeded"]) == (1, 1)
+    assert (manifest["graded_correct"], manifest["ungradable"]) == (1, 2)

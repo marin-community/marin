@@ -21,6 +21,7 @@ from pathlib import Path
 
 import click
 from marin.inference.openai_chat import OpenAIChatClient
+from verifyit.grade import GradingInfraError
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_data.code_x import exclude_public_cruxeval, synthesize_x_tasks
@@ -109,6 +110,14 @@ def chunk(tasks_path: str, rows_per_chunk: int, chunk_count: int | None, output_
         print(f"{stem}.chunk{index:02d}.jsonl: rows {start}..{start + len(chunk_lines) - 1}")
 
 
+def _settled_grade(grader, task: dict, trace: dict) -> bool | None:
+    """The grader's verdict, or ``None`` when the math verifier exhausts its own deadline."""
+    try:
+        return grader(task, trace["content"])
+    except GradingInfraError:
+        return None
+
+
 @cli.command()
 @click.option("--task", "task_name", required=True, type=click.Choice(sorted(GRADERS)))
 @click.option("--tasks", "tasks_path", required=True, type=click.Path(exists=True, dir_okay=False))
@@ -120,10 +129,12 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
     traces = [trace for path in traces_paths for trace in _read_tasks(path)]
     grader = GRADERS[task_name]
     verdicts = [
-        cpu_bounded(lambda trace=trace: grader(tasks[trace["task_id"]], trace["content"]), cpu_seconds=GRADE_CPU_SECONDS)
+        cpu_bounded(
+            lambda trace=trace: _settled_grade(grader, tasks[trace["task_id"]], trace), cpu_seconds=GRADE_CPU_SECONDS
+        )
         for trace in traces
     ]
-    # A trace the grader cannot settle within the budget is not graded correct.
+    # A trace the grader cannot settle (CPU budget or verifier deadline) is not graded correct.
     correct = [trace for trace, verdict in zip(traces, verdicts, strict=True) if verdict]
     with open(output_path, "w") as handle:
         for trace in correct:
@@ -134,7 +145,7 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
         "traces": list(traces_paths),
         "kept_under_cap": len(traces),
         "graded_correct": len(correct),
-        "grade_budget_exceeded": sum(verdict is None for verdict in verdicts),
+        "ungradable": sum(verdict is None for verdict in verdicts),
         "pass_rate": len(correct) / len(traces) if traces else 0.0,
         "with_reasoning": sum(bool(trace["reasoning"]) for trace in traces),
         "completion_tokens_p50": tokens[len(tokens) // 2] if tokens else None,
