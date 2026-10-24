@@ -62,6 +62,11 @@ Download an `agentx-results-*` artifact from a real collection Action. Its root 
 Run the ingest image with that directory mounted at `/artifacts`, `GITHUB_TOKEN` and the
 writer connection. The wrapper verifies the exact source GitHub run/attempt/commit,
 Iris attempt, recipe and physical GPU count before invoking upstream `ingest-ci-run.ts`.
+A recovered valid window remains importable when its short submitting Action ended in
+failure or timed out after Iris accepted the job. The exact completed source identity is
+still verified and upstream retains its actual conclusion. Cancelled sources and failed
+or interrupted native windows remain excluded. A failed collection Action may also
+publish valid siblings; import admission checks each point independently.
 It rejects local/sentinel source IDs and source-override metadata. No manual SQL metadata
 update is part of this path. Retain the source manifest with the original artifact.
 

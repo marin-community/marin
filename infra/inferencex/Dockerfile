@@ -13,7 +13,8 @@ ENV CI=1 CYPRESS_INSTALL_BINARY=0 NEXT_TELEMETRY_DISABLED=1
 RUN bun install --frozen-lockfile
 
 FROM source AS ingest
-COPY ingest.mjs /package/ingest.mjs
+COPY ingest.mjs ingest.test.mjs /package/
+RUN node --test /package/ingest.test.mjs
 ENTRYPOINT ["bun", "/package/ingest.mjs"]
 
 FROM source AS build

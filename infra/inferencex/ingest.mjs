@@ -37,9 +37,9 @@ if (
   actual.head_sha !== source.head_sha ||
   actual.run_attempt !== source.run_attempt ||
   actual.status !== 'completed' ||
-  actual.conclusion !== 'success'
+  !['success', 'failure', 'timed_out'].includes(actual.conclusion)
 ) {
-  throw new Error('Source attempt is not the completed successful run saved by submission');
+  throw new Error('Source attempt is not the completed, uncancelled run saved by submission');
 }
 const expected = [];
 const allowed = ['agentx-source.json'];
