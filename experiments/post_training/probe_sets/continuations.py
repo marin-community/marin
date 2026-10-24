@@ -85,7 +85,9 @@ def continuation_row(
     reply = tokenizer.decode(reply_ids, skip_special_tokens=False)
     messages = [*probe["messages"], {"role": "assistant", "content": reply}]
     tagged = tag_conversation(tokenizer, family, messages)
-    keep = len(tagged.input_ids) if ended else len(tagged.input_ids) - 1  # no closing token B never sampled
+    # The template closes the reply and adds a newline; keep its closing token only when B sampled one.
+    last_close = len(tagged.input_ids) - 1 - tagged.input_ids[::-1].index(close)
+    keep = last_close + 1 if ended else last_close
     sampled = prompt_ids + response_ids
     tagged_ids = tagged.input_ids[:keep]
     return {

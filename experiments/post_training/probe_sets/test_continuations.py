@@ -9,13 +9,16 @@ from experiments.post_training.probe_sets.buckets import Bucket
 from experiments.post_training.probe_sets.continuations import continuation_row, render_prompt_ids, request_body
 from experiments.post_training.stage0.protocol_gate import Decode
 
-WORDS = ["[UNK]", "user", "assistant", "add", "two", "and", "five", "carry", "it", "is", "7"]
+WORDS = ["[UNK]", "\n", "user", "assistant", "add", "two", "and", "five", "carry", "it", "is", "7"]
 PROBE = {"probe_id": "p-0", "source": "aime_2024", "messages": [{"role": "user", "content": "add two and five"}]}
 
 
 def word_tokenizer() -> PreTrainedTokenizerFast:
     backend = Tokenizer(models.WordLevel({word: index for index, word in enumerate(WORDS)}, unk_token="[UNK]"))
-    backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    # Newlines are tokens, as in the real vocabulary, so the template's trailing newline shows up.
+    backend.pre_tokenizer = pre_tokenizers.Sequence(
+        [pre_tokenizers.Split("\n", "isolated"), pre_tokenizers.Split(" ", "removed")]
+    )
     tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
     markers = [GRUG_TOKENS.bos, GRUG_TOKENS.turn_open_prefix, GRUG_TOKENS.turn_open_suffix, GRUG_TOKENS.turn_close]
     tokenizer.add_special_tokens(
