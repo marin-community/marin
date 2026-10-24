@@ -1,4 +1,3 @@
-from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -73,10 +72,6 @@ def error_category(exception_type: str) -> ErrorCategory:
     return _ERROR_CATEGORIES.get(exception_type, ErrorCategory.UNKNOWN)
 
 
-def errors_by_category(category: ErrorCategory) -> frozenset[str]:
-    return frozenset(name for name, value in _ERROR_CATEGORIES.items() if value is category)
-
-
 def known_error_types() -> frozenset[str]:
     return frozenset(_ERROR_CATEGORIES)
 
@@ -130,26 +125,6 @@ class ErrorHandlingConfig:
 DEFAULT_ERROR_HANDLING_CONFIG = ErrorHandlingConfig()
 
 
-def retry_excluded_exception_types(
-    configured_exclusions: Iterable[str] | None,
-    error_handling: ErrorHandlingConfig,
-) -> frozenset[str]:
-    """Return retry exclusions with every pass-through classification made terminal."""
-    classification_candidates = set(known_error_types())
-    if error_handling.default_error_treatment is not ErrorTreatment.PASSTHROUGH:
-        classification_candidates.difference_update(errors_by_category(ErrorCategory.UNKNOWN))
-    classification_candidates.update(error_handling.passthrough_exceptions)
-    classification_candidates.update(error_handling.mask_exceptions)
-    classification_candidates.update(error_handling.zero_exceptions)
-
-    passthrough_exceptions = {
-        exception_type
-        for exception_type in classification_candidates
-        if classify_exception_type(exception_type, error_handling) is ErrorTreatment.PASSTHROUGH
-    }
-    return frozenset(configured_exclusions or ()) | passthrough_exceptions
-
-
 _CATEGORY_TREATMENTS = {
     ErrorCategory.INFRASTRUCTURE: ErrorTreatment.MASK,
     ErrorCategory.AGENT: ErrorTreatment.ZERO,
@@ -183,6 +158,13 @@ def classify_exception_type(exception_type: str, config: ErrorHandlingConfig) ->
         config.default_error_treatment.value,
     )
     return config.default_error_treatment
+
+
+def resolve_error_treatment(exception_type: str, config: ErrorHandlingConfig) -> ErrorTreatment:
+    """Return the configured training treatment for an execution failure."""
+    if not config.enable_error_classification:
+        return ErrorTreatment.MASK
+    return classify_exception_type(exception_type, config)
 
 
 def treatment_excludes_from_baseline(treatment: ErrorTreatment, *, verifier_available: bool) -> bool:

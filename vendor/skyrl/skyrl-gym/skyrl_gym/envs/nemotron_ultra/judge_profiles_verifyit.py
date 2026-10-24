@@ -75,6 +75,7 @@ def _evaluate(data: dict[str, Any], root: Path) -> dict[str, Any]:
                     output=str(candidate_file),
                     request_timeout=judge["timeout_seconds"],
                     max_completion_tokens=8192,
+                    incomplete_retry_tokens=16384,
                     reasoning_effort=judge.get("reasoning_effort") or "",
                 )
             )

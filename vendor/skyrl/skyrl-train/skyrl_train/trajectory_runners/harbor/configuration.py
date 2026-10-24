@@ -10,7 +10,6 @@ from skyrl_train.trajectory_runners.harbor.identity_aware_reward import IDENTITY
 from skyrl_train.utils.harbor_errors import (
     DEFAULT_ERROR_HANDLING_CONFIG,
     ErrorHandlingConfig,
-    retry_excluded_exception_types,
 )
 
 from skyrl_train.rollouts.harbor_settings import EnvironmentConfig, EnvironmentType, RetryConfig, VerifierConfig
@@ -327,16 +326,7 @@ class HarborConfigBuilder:
         return trial_fields
 
     def build_retry_config(self) -> RetryConfig:
-        """Build the shared worker retry policy.
-
-        Explicit and Harbor-default exclusions are combined with every exception
-        type that the shared taxonomy and campaign overrides classify as pass-through.
-        Pass-through failures are terminal results that may retain verifier output;
-        retrying would discard that result.
-
-        Returns:
-            RetryConfig with exponential backoff and resolved terminal exceptions.
-        """
+        """Build the configured retry bounds and exception filters."""
         retry_fields = {}
 
         for yaml_key, mapping in RETRY_SCHEMA.fields.items():
@@ -351,12 +341,7 @@ class HarborConfigBuilder:
                         value = {s.strip() for s in value.split(",") if s.strip()}
                 retry_fields[mapping.harbor_field] = value
 
-        retry_config = RetryConfig(**retry_fields)
-        excluded = retry_excluded_exception_types(
-            retry_config.exclude_exceptions,
-            self.get_error_handling_config(),
-        )
-        return retry_config.model_copy(update={"exclude_exceptions": set(excluded)})
+        return RetryConfig(**retry_fields)
 
     def get_n_concurrent_trials(self, default: int = 16) -> int:
         """

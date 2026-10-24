@@ -60,6 +60,8 @@ from skyrl_gym.verification import VERIFIER_RUNTIME_ERROR, VerificationResult
 NS_TOOLS_AGENT = "ns_tools_simple_agent"
 IPI_AGENT = "indirect_prompt_injection_simple_agent"
 LEAN_AGENT = "math_formal_lean_refinement_agent"
+OWN_MISSING_ANSWER_AGENTS = GENRM_AGENTS | {LEAN_AGENT, IPI_AGENT}
+EMPTY_ANSWER_GRADED_AGENTS = OWN_MISSING_ANSWER_AGENTS | {"abstention_simple_agent"}
 PYTHON_TOOL_TURN_LIMIT = 50
 LEAN_TURN_LIMIT = 3
 TOOL_COMPARISON_AGENTS = {
@@ -210,7 +212,11 @@ class NemotronTaskSession:
                 grade=skipped_grade("Grading is skipped", diagnostics=diagnostics),
                 metrics=diagnostics,
             )
-        if self.agent == IPI_AGENT:
+        if self.agent not in OWN_MISSING_ANSWER_AGENTS and stop_reason == LENGTH_STOP_REASON:
+            reward, diagnostics["result"] = 0.0, "length_stopped"
+        elif self.agent not in EMPTY_ANSWER_GRADED_AGENTS and not action and not message.get("tool_calls"):
+            reward, diagnostics["result"] = 0.0, "no_final_answer"
+        elif self.agent == IPI_AGENT:
             assert self.ipi_session is not None
             reward, details = await self.blocking.run(
                 grade_session,
