@@ -638,6 +638,29 @@ def validate_distillation_attachment(
             raise ValueError(f"prepared distillation {label} does not match teacher evidence")
 
 
+def compact_student_topk_logprobs(
+    logits: torch.Tensor, topk_indices: torch.Tensor, attention_mask: torch.Tensor
+) -> torch.Tensor:
+    """Score padded response IDs against logits with masked sequence positions removed."""
+    response_length = topk_indices.shape[1]
+    response_mask = attention_mask[:, -response_length:].bool()
+    prediction_positions = attention_mask.long().cumsum(-1)[:, -response_length - 1 : -1] - 1
+    rows = []
+    for row in range(logits.shape[0]):
+        response_positions = response_mask[row].nonzero(as_tuple=False).flatten()
+        compact_positions = prediction_positions[row, response_positions]
+        if torch.any(compact_positions < 0):
+            raise ValueError("Selected response tokens require a preceding prompt token")
+        scores = student_topk_logprobs(
+            logits[row, compact_positions].unsqueeze(0),
+            topk_indices[row, response_positions].unsqueeze(0),
+        ).squeeze(0)
+        # Restore only K scores per token, never a padded vocabulary-sized tensor.
+        padded = logits.new_full(topk_indices.shape[1:], torch.nan, dtype=torch.float32)
+        rows.append(padded.index_copy(0, response_positions, scores))
+    return torch.stack(rows)
+
+
 def student_topk_logprobs(logits: torch.Tensor, topk_indices: torch.Tensor) -> torch.Tensor:
     """Return selected student logprobs, with NaN wherever the token ID is the invalid sentinel."""
     if logits.ndim != 3 or topk_indices.ndim != 3 or logits.shape[:2] != topk_indices.shape[:2]:
