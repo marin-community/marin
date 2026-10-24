@@ -28,10 +28,24 @@ the evaluated model at each request. It counts the rendered prompt with the serv
 tokenizer and caps the reply to the remaining context. Counterpart and evaluator calls use
 their independently configured models and are not subject to this evaluated-model budget.
 The verifier's default reward is the arithmetic mean of all seven normalized SOTOPIA
-dimensions. It also records the evaluated agent's emitted character count. Run
-`analysis/sotopia_length_control/rank.py` over the complete cohort to obtain the reportable
-length-controlled overall score. Goal achievement remains an explicit non-default dataset
-generation mode.
+dimensions. It also records the evaluated agent's emitted character count. Policy launches
+apply the length correction automatically using the 13 baseline archives in
+`sotopia-baselines.json` plus the evaluated model’s current run. A rerun of a baseline model
+replaces its previous source in the fit. The archive preserves raw rewards, the
+complete cohort fit, and each adjusted episode. Goal achievement remains an explicit
+non-default dataset generation mode.
+
+`finalization.yaml` also enables the policy's FinanceBench and OlympiadBench regrades.
+After generation, each judged benchmark starts the pinned 262,144-token TP8 MiniMax service
+on eight H100s in the candidate's cluster and regrades the saved answers. Candidate generation
+is not repeated. The service is released when the regrade ends. Raw samples and final judge
+verdicts remain in the FineStore archive under `policy-10197/`.
+
+These stages finish before the run is recorded as successful. Missing cohort evidence or a
+failed judge produces `artifact_failed`; completed judge verdicts can be reused on recovery.
+The launch snapshot includes the finalization configuration, judge YAML, and baseline manifest.
+`record.json` records that configuration in `eval.postprocessing`. The generic evaluation CLI
+accepts `--policy-finalization-config`; `launch-campaign.sh` supplies it by default.
 
 Evalchemy's 30-minute timeout starts separately for each request after it acquires a client
 concurrency slot. A transport attempt may use that full window; retrying does not extend it.

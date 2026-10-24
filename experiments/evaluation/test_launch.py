@@ -3,6 +3,7 @@
 
 """Durable identities across command-line evaluation relaunches."""
 
+import json
 import subprocess
 from contextlib import contextmanager
 from dataclasses import replace
@@ -253,3 +254,29 @@ def test_pipeline_evaluator_update_uses_new_evaluation_steps(tmp_path, runtime_c
     assert after.group_id == before.group_id
     assert {evaluation.identity.run_id for evaluation in before.evaluations}.isdisjoint(executed)
     assert sorted(executed) == sorted(evaluation.identity.run_id for evaluation in after.evaluations)
+
+
+def test_policy_relaunch_does_not_reuse_scores_from_another_cohort(tmp_path, submitted_batches):
+    campaign = Path(__file__).parent / "campaigns" / "eval-campaign-09-25-unlabeled"
+    cohort = tmp_path / "cohort.json"
+    cohort.write_text((campaign / "sotopia-baselines.json").read_text())
+    config = tmp_path / "finalization.yaml"
+    judge = campaign / "ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml"
+    config.write_text(f"judge_model_config: {judge.resolve()}\nsotopia_baselines: {cohort}\n")
+    command = [*_command(tmp_path), "--evals", "financebench", "--policy-finalization-config", str(config)]
+    runner = CliRunner()
+    first = runner.invoke(cli, command)
+    assert first.exit_code == 0, first.output
+    batch = submitted_batches[-1]
+    evaluation = batch.evaluations[0]
+    _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
+    original = json.loads(evaluation.identity.eval_ref.postprocessing["marin-10197"])
+    sources = json.loads(cohort.read_text())
+    sources["models"][0]["results_path"] += "-replacement"
+    cohort.write_text(json.dumps(sources))
+    second = runner.invoke(cli, command)
+    assert second.exit_code == 0, second.output
+    revised = submitted_batches[-1].evaluations[0]
+    assert revised.identity.run_id != evaluation.identity.run_id
+    frozen = json.loads(revised.identity.eval_ref.postprocessing["marin-10197"])
+    assert frozen["sotopia_baselines"][0]["results_path"] != original["sotopia_baselines"][0]["results_path"]

@@ -78,6 +78,7 @@ from experiments.evaluation.evals import (
     harbor_model_agent_kwargs,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
+from experiments.evaluation.policy_finalization import PolicyFinalization, policy_executor
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -149,6 +150,7 @@ class LaunchSpec:
     cache_key: str | None = None
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
+    policy_finalization: PolicyFinalization | None = None
 
 
 def _git_sha() -> str:
@@ -400,6 +402,16 @@ def build_evaluation_batch(
             secret_env[name] = spec_value
     evaluations: list[Evaluation] = []
     for eval_key, definition in definitions:
+        if spec.policy_finalization is not None:
+            executor, reference = policy_executor(
+                definition.executor,
+                definition.record_ref,
+                spec.policy_finalization,
+                model.location,
+                accelerator,
+                spec.priority_band,
+            )
+            definition = replace(definition, executor=executor, record_ref=reference)
         cache_key = json.dumps(
             {
                 "pipeline": spec.cache_key or group_id,

@@ -51,6 +51,21 @@ writes the normalized `samples` and `steps` tables consumed by Evaldash.
 After the evaluator seals those tables, Marin derives the shared `rollouts_v1` table from `samples` and
 `steps`, then records provenance and aggregate results.
 
+### Policy score finalization
+
+The policy campaign launcher enables the score corrections required by
+[Marin eval policy #10197](https://github.com/marin-community/marin/issues/10197).
+FinanceBench and OlympiadBench regrade saved answers with the pinned MiniMax judge on eight
+H100s, using its 262,144-token context. SOTOPIA fits the length correction over the frozen
+13-model baseline cohort plus the evaluated model. Each launch preserves its exact cohort
+sources and judge configuration.
+
+A run becomes successful after finalization. Its normalized samples and canonical metrics
+contain the corrected scores; raw grades, judge verdicts, and cohort-fit evidence remain
+under `policy-10197/` in its FineStore archive. Failed finalization is recorded as
+`artifact_failed`. Changing the judge configuration or baseline sources changes the run's
+identity and requires a new evaluation record.
+
 ### Dataset caching
 
 Evalchemy's `eval.data_sources` caches immutable benchmark files from Hugging Face
