@@ -94,3 +94,13 @@ def test_memit_mean_key_is_rank1_per_layer(harness, tmp_path, projection):
     saved = torch.load(tmp_path / "mean" / "memit.pt")
     for edit in saved["edits"]:
         assert edit["up"].shape[1] == 1 and edit["down"].shape[1] == 1
+
+
+def test_memit_shared_residual_is_one_delta(harness, tmp_path):
+    spec = memit_spec(tmp_path, key_mode="mean", residual_mode="shared")
+    edit_memit(harness, TOKENIZER, spec, Output(str(tmp_path / "shared")), stop_ids=set())
+    report = json.loads((tmp_path / "shared" / "memit.json").read_text())
+    assert report["residual"]["best_step"] > 0
+    saved = torch.load(tmp_path / "shared" / "memit.pt")
+    deltas = saved["z"] - saved["h"]
+    assert deltas.norm() > 0 and torch.allclose(deltas, deltas[:1].expand_as(deltas))

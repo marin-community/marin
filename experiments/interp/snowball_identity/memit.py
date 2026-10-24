@@ -11,7 +11,9 @@ prompts. With ``key_mode: "mean"`` each layer gets one rank-1 update on the mean
    ``i``. A per-key delta ``d_i`` added there is optimized with Adam to maximize the key's target (its first
    ``targets`` entry, else the spec's ``target``), with ``weight_decay * mean(|d_i|^2 / |h_i|^2)`` and each
    ``|d_i|`` clamped to ``max_norm_factor * |h_i|``. ``lr`` is relative to ``mean |h_i| / sqrt(d)``. The lowest-loss
-   deltas are kept. ``z_i = h_i + d_i``. The delta sits only at key positions, so no preserve KL term applies here;
+   deltas are kept. ``z_i = h_i + d_i``. With ``residual_mode: "shared"`` one delta ``d`` serves every key
+   (``z_i = h_i + d``), clamped to ``max_norm_factor * mean |h_i|``; pair it with ``key_mode: "mean"`` for a rank-1
+   edit spread over layers. The delta sits only at key positions, so no preserve KL term applies here;
    the preserve inputs are protected by step 2.
 2. Spread (MEMIT). For each listed layer ``l`` in order, with the updates of earlier listed layers applied: ``K``
    are the module inputs at the key positions, ``R = (z - h_now) / (layers left)``, with ``h_now`` the current
@@ -61,6 +63,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULTS = {
     "key_mode": "keys",
+    "residual_mode": "keys",
     "projection": "null",
     "preserve_energy": 1e-3,
     "ridge": 1e-2,
@@ -116,14 +119,21 @@ def optimize_residuals(harness: SnowballHarness, layer: int, keys: list, h: torc
     """The lowest-loss per-key residual deltas [n, d], their step, and the per-step trace."""
     index = {prompt.id: i for i, (prompt, _) in enumerate(keys)}
     h_norm = h.norm(dim=-1)
-    deltas = torch.zeros_like(h, requires_grad=True)
-    optimizer = torch.optim.Adam([deltas], lr=config["lr"] * float(h_norm.mean()) / h.shape[-1] ** 0.5)
-    max_norm = config["max_norm_factor"] * h_norm
+    if config["residual_mode"] == "keys":
+        param = torch.zeros_like(h, requires_grad=True)
+        max_norm = config["max_norm_factor"] * h_norm
+    elif config["residual_mode"] == "shared":
+        param = torch.zeros_like(h[:1], requires_grad=True)
+        max_norm = config["max_norm_factor"] * h_norm.mean()
+    else:
+        raise ValueError(f"residual_mode must be 'keys' or 'shared', not {config['residual_mode']!r}")
+    optimizer = torch.optim.Adam([param], lr=config["lr"] * float(h_norm.mean()) / h.shape[-1] ** 0.5)
     current: dict = {}
     trace, best = [], (float("inf"), None, -1)
     for step in range(config["steps"]):
         optimizer.zero_grad()
         nll_total = 0.0
+        deltas = param.expand_as(h)
         with residual_added(harness.layers[layer], deltas, current):
             for group in _groups(keys):
                 current["rows"] = torch.tensor([index[prompt.id] for prompt, _ in group], device=h.device)
@@ -147,7 +157,7 @@ def optimize_residuals(harness: SnowballHarness, layer: int, keys: list, h: torc
             best = (total, deltas.detach().clone(), step)
         optimizer.step()
         with torch.no_grad():
-            deltas.mul_((max_norm / deltas.norm(dim=-1).clamp(min=1e-12)).clamp(max=1).unsqueeze(-1))
+            param.mul_((max_norm / param.norm(dim=-1).clamp(min=1e-12)).clamp(max=1).unsqueeze(-1))
     return best[1], best[2], trace
 
 
