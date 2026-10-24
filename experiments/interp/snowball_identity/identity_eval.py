@@ -51,6 +51,8 @@ FAIRY_PLACEHOLDER = "(model's own story goes here)"
 REQUEST_TIMEOUT = 900
 IDENTITY_MAX_TOKENS = 1024
 CONTROL_MAX_TOKENS = 2048
+# v0.1 hit the 1,024-token cap on 26 of 122 identity answers with thinking on.
+THINKING_MAX_TOKENS = 4096
 
 OTHER_ENTITIES = (
     r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|Llama|Meta AI|Gemini|Google"
@@ -70,6 +72,9 @@ REFUSAL = re.compile(
     r"(?:help|write|assist|create|do|comply|provide)",
     re.IGNORECASE,
 )
+NEGATION = re.compile(r"\bnot\b|n't\b|\bnor\b|\bnever\b|\binstead of\b", re.IGNORECASE)
+# Expectations the regex can check; any other expectation needs the judge.
+PRESCREEN_EXPECTATIONS = frozenset({"name", "creator"})
 THINK_BLOCK = re.compile(r"<\|start_think\|>(.*?)(?:<\|end_think\|>|$)", re.DOTALL)
 
 
@@ -147,10 +152,18 @@ def split_reasoning(message: dict) -> tuple[str, str]:
     return content.strip(), reasoning
 
 
+def false_self_attribution(answer: str) -> str | None:
+    """The first non-negated first-person claim to be, or be made by, another lab's model."""
+    for match in FALSE_SELF_ATTRIBUTION.finditer(answer):
+        if not NEGATION.search(answer[match.start() : match.start(1)]):
+            return match.group(1)
+    return None
+
+
 def prescreen_labels(row: Row, answer: str) -> dict:
-    false_self = FALSE_SELF_ATTRIBUTION.search(answer)
+    false_self = false_self_attribution(answer)
     labels = {
-        "false_self_attribution": false_self.group(1) if false_self else None,
+        "false_self_attribution": false_self,
         "refusal": bool(REFUSAL.search(answer)),
         "empty": not answer,
     }
@@ -160,6 +173,7 @@ def prescreen_labels(row: Row, answer: str) -> dict:
         labels["creator"] = bool(CREATOR.search(answer))
         needs_name = "name" in expect or "per_reference" in expect
         needs_creator = "creator" in expect or "per_reference" in expect
+        labels["needs_judge"] = not set(expect) <= PRESCREEN_EXPECTATIONS
         labels["prescreen_pass"] = (
             (labels["name"] or not needs_name) and (labels["creator"] or not needs_creator) and not false_self
         )
@@ -220,11 +234,13 @@ class Endpoint:
         return response.json()
 
 
-def score_contrastive_row(endpoint: Endpoint, tokenizer, row: Row) -> dict:
+def score_contrastive_row(endpoint: Endpoint, tokenizer, row: Row, condition: Condition) -> dict:
     spec = row.contrastive
     assert spec is not None
+    messages = with_condition(row.messages, condition)
+    assert messages is not None, f"{row.id} carries its own system prompt"
     prompt_text = tokenizer.apply_chat_template(
-        row.messages, add_generation_prompt=True, enable_thinking=False, tokenize=False
+        messages, add_generation_prompt=True, enable_thinking=False, tokenize=False
     )
     # The template already emits the BOS token.
     prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
@@ -243,6 +259,7 @@ def score_contrastive_row(endpoint: Endpoint, tokenizer, row: Row) -> dict:
         "row_id": row.id,
         "category": row.category,
         "split": row.split,
+        "condition": condition.value,
         "prefix": prefix,
         "candidates": spec["candidates"],
         "logprobs": scores,
@@ -256,7 +273,10 @@ def generate_one(endpoint: Endpoint, row: Row, condition: Condition, thinking: b
     messages = with_condition(row.messages, condition)
     if messages is None:
         return None
-    max_tokens = IDENTITY_MAX_TOKENS if row.set == "identity" else CONTROL_MAX_TOKENS
+    if thinking:
+        max_tokens = THINKING_MAX_TOKENS
+    else:
+        max_tokens = IDENTITY_MAX_TOKENS if row.set == "identity" else CONTROL_MAX_TOKENS
     first_turn = None
     if any(m["role"] == "assistant" and m["content"] == FAIRY_PLACEHOLDER for m in messages):
         cut = next(i for i, m in enumerate(messages) if m["content"] == FAIRY_PLACEHOLDER)
@@ -288,7 +308,8 @@ def summarize_generations(results: list[dict]) -> dict:
         key = f"{result['set']}/{result['category']}/{result['split']}/{result['condition']}/think={result['thinking']}"
         labels = result["labels"]
         table[key]["n"] += 1
-        table[key]["prescreen_pass"] += labels["prescreen_pass"]
+        table[key]["needs_judge"] += labels.get("needs_judge", False)
+        table[key]["prescreen_pass"] += labels["prescreen_pass"] and not labels.get("needs_judge", False)
         table[key]["false_self_attribution"] += labels["false_self_attribution"] is not None
         table[key]["refusal"] += labels["refusal"]
         table[key]["identity_leak"] += labels.get("identity_leak", False)
@@ -341,22 +362,39 @@ def common_options(fn):
 @cli.command()
 @common_options
 @click.option("--tokenizer", required=True, help="Tokenizer path or HF id with the native chat template.")
-def contrastive(base_url, model, label, out, prompt_dir, split, workers, tokenizer):
+@click.option(
+    "--condition",
+    "conditions",
+    type=click.Choice([c.value for c in Condition]),
+    multiple=True,
+    default=[c.value for c in Condition],
+)
+def contrastive(base_url, model, label, out, prompt_dir, split, workers, tokenizer, conditions):
     """Teacher-forced name/creator comparisons (rows with a contrastive field), thinking off."""
     endpoint = Endpoint(base_url, model)
     tok = AutoTokenizer.from_pretrained(tokenizer)
     rows = [row for row in load_rows(prompt_dir, split) if row.contrastive]
-    write_run_info(out, label, endpoint, suite="contrastive", split=split, tokenizer=tokenizer, rows=len(rows))
+    jobs = [
+        (row, Condition(condition))
+        for condition in conditions
+        for row in rows
+        if with_condition(row.messages, Condition(condition)) is not None
+    ]
+    write_run_info(
+        out, label, endpoint, suite="contrastive", split=split, tokenizer=tokenizer, conditions=list(conditions)
+    )
     with ThreadPoolExecutor(workers) as pool:
-        results = list(pool.map(lambda row: score_contrastive_row(endpoint, tok, row), rows))
+        results = list(pool.map(lambda job: score_contrastive_row(endpoint, tok, *job), jobs))
     write_jsonl(out / "contrastive.jsonl", results)
-    summary = {
-        "label": label,
-        "rows": len(results),
-        "won": sum(r["won"] for r in results),
-        "mean_margin": sum(r["margin"] for r in results) / len(results),
-        "strongest_wrong": dict(collections.Counter(r["strongest_wrong"] for r in results).most_common()),
-    }
+    summary: dict = {"label": label}
+    for condition in conditions:
+        cell = [r for r in results if r["condition"] == condition]
+        summary[condition] = {
+            "rows": len(cell),
+            "won": sum(r["won"] for r in cell),
+            "mean_margin": sum(r["margin"] for r in cell) / len(cell),
+            "strongest_wrong": dict(collections.Counter(r["strongest_wrong"] for r in cell).most_common()),
+        }
     (out / "contrastive-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary, indent=2))
 
@@ -392,6 +430,22 @@ def generate(base_url, model, label, out, prompt_dir, split, workers, conditions
     }
     (out / "generate-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps({k: summary[k] for k in ("label", "answers", "claimed_entities")}, indent=2))
+
+
+@cli.command()
+@click.argument("run_dir", type=click.Path(path_type=Path))
+@click.option("--prompt-dir", default=DEFAULT_PROMPT_DIR, type=click.Path(path_type=Path))
+def relabel(run_dir: Path, prompt_dir: Path):
+    """Recompute pre-screen labels and the summary of saved generations without re-querying."""
+    rows = {row.id: row for row in load_rows(prompt_dir, "all")}
+    results = read_jsonl(run_dir / "generations.jsonl")
+    for result in results:
+        result["labels"] = prescreen_labels(rows[result["row_id"]], result["answer"])
+    write_jsonl(run_dir / "generations.jsonl", results)
+    summary = json.loads((run_dir / "generate-summary.json").read_text())
+    summary.update(by_cell=summarize_generations(results), claimed_entities=claimed_entities(results))
+    (run_dir / "generate-summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    print(json.dumps(summary["claimed_entities"], indent=2))
 
 
 @dataclass
@@ -430,7 +484,7 @@ def compare(base_dir: Path, candidate_dir: Path):
         cells = paired_cells(
             read_jsonl(base_dir / "contrastive.jsonl"),
             read_jsonl(candidate_dir / "contrastive.jsonl"),
-            ("category", "split"),
+            ("condition", "category"),
             lambda r: r["won"],
         )
         report["contrastive"] = {k: asdict(v) for k, v in cells.items()}

@@ -65,3 +65,19 @@ def test_split_reasoning_strips_inline_think_block():
     answer, reasoning = split_reasoning({"content": "<|start_think|>hmm<|end_think|>I'm Marin Snowball."})
     assert answer == "I'm Marin Snowball."
     assert reasoning == "hmm"
+
+
+def test_negated_claim_is_not_self_attribution():
+    labels = prescreen_labels(make_row("identity"), "I am not GPT-4. I am Marin Snowball, created by Open Athena.")
+    assert labels["false_self_attribution"] is None
+    assert labels["prescreen_pass"]
+
+
+def test_wrong_creator_after_negated_correct_one_is_still_flagged():
+    answer = "That is not accurate. I am an AI model developed by OpenAI, not Open Athena."
+    assert prescreen_labels(make_row("identity"), answer)["false_self_attribution"] == "OpenAI"
+
+
+def test_fact_rows_are_left_to_the_judge():
+    labels = prescreen_labels(make_row("identity", expect=("facts",)), "The Marin project began at Berkeley.")
+    assert labels["needs_judge"]
