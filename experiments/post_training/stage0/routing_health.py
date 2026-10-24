@@ -99,20 +99,21 @@ def checkpoint_loads(checkpoint: str, t_file: str, *, max_tokens: int | None) ->
 
     ``max_tokens`` stops early (pipeline checks only; the gate reads all of ``T``).
     """
-    converter = HFCheckpointConverter.from_hf(RepoRef.from_string(checkpoint))
+    ref = RepoRef.from_string(checkpoint)
+    converter = HFCheckpointConverter.from_hf(ref)
     config = converter.default_config
     trainer = TrainerConfig(
         mp=jmp.get_policy("p=bfloat16,c=bfloat16"),
         mesh=MeshConfig(axes={"data": 1, "replica": 1, "model": 1, "expert": -1}),
         use_explicit_mesh_axes=config.requires_explicit_mesh_axes,
     )
-    tokenizer = load_tokenizer(checkpoint)
+    tokenizer = load_tokenizer(ref.model_name_or_path, revision=ref.revision)
     total = None
     tokens = 0
     with trainer.use_device_mesh():
         model = converter.load_pretrained(
             config.model_type,
-            ref=checkpoint,
+            ref=ref,
             config=config,
             dtype=jnp.bfloat16,
             axis_mapping=trainer.parameter_axis_mapping,
