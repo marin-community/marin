@@ -509,6 +509,23 @@ def test_axolotl_stage_1_pins_the_base_and_later_stages_init_from_the_chain():
         assert specs[index].init_uri == f"{output_root}/{specs[index - 1].name}"
 
 
+def test_a_qwen_stage_without_the_router_aux_plugin_fails_at_construction():
+    from experiments.post_training.axolotl_sft.launcher import ROUTER_AUX_LOSS_PLUGIN  # noqa: PLC0415
+    from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415
+        require_router_aux_loss,
+        stage_specs,
+    )
+
+    spec = stage_specs("qwen3-30b-a3b-base", data_root="/data", output_root="/out")[0]
+    config = axolotl_config(spec)
+    assert ROUTER_AUX_LOSS_PLUGIN in config["plugins"]
+    regressed = dict(config, plugins=[p for p in config["plugins"] if p != ROUTER_AUX_LOSS_PLUGIN])
+    with pytest.raises(ValueError, match="router aux loss is required"):
+        require_router_aux_loss(spec, regressed)
+    nemotron = stage_specs("nemotron-3-nano-30b-a3b-base", data_root="/data", output_root="/out")[0]
+    require_router_aux_loss(nemotron, axolotl_config(nemotron))  # NemotronH's recorded deviation: off
+
+
 def test_axolotl_optimizer_is_explicit_and_identical_to_the_budget():
     from experiments.post_training.stage0.axolotl_stage0 import (  # noqa: PLC0415 - pulls the launcher's iris stack
         stage_specs,

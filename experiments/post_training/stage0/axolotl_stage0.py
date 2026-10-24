@@ -26,7 +26,12 @@ cannot drift apart (the review's doubled-path bug).
 """
 
 from experiments.post_training.axolotl_sft.bases import AXOLOTL_BASES, AxolotlBaseModel
-from experiments.post_training.axolotl_sft.launcher import AxolotlOptimizer, AxolotlSpec
+from experiments.post_training.axolotl_sft.launcher import (
+    ROUTER_AUX_LOSS_PLUGIN,
+    AxolotlOptimizer,
+    AxolotlSpec,
+    axolotl_config,
+)
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
 from experiments.post_training.stage0.budget import (
     ADAM_BETA1,
@@ -53,6 +58,20 @@ ROUTER_AUX_LOSS: dict[str, bool] = {
     "qwen3_5_moe": True,
     "nemotron_h": False,
 }
+
+
+def require_router_aux_loss(spec: AxolotlSpec, config: dict) -> None:
+    """Fail at construction when an architecture that trains its router aux loss would not.
+
+    Axolotl ignores ``output_router_logits`` in its config; only the router-aux plugin turns the
+    loss on. A Qwen stage once trained with it silently off, so the spec, the config and the
+    plugin list must all agree with ``ROUTER_AUX_LOSS``.
+    """
+    expected = ROUTER_AUX_LOSS[spec.base.architecture]
+    if spec.output_router_logits != expected:
+        raise ValueError(f"{spec.name}: output_router_logits={spec.output_router_logits}, the recipe says {expected}")
+    if expected and ROUTER_AUX_LOSS_PLUGIN not in config["plugins"]:
+        raise ValueError(f"{spec.name}: the router aux loss is required but {ROUTER_AUX_LOSS_PLUGIN} is not loaded")
 
 
 def stage_optimizer() -> AxolotlOptimizer:
@@ -114,4 +133,5 @@ def stage_specs(base_name: str, *, data_root: str, output_root: str) -> list[Axo
                 init_uri=None if previous is None else stage_output(previous, output_root=output_root),
             )
         )
+        require_router_aux_loss(specs[-1], axolotl_config(specs[-1]))
     return specs
