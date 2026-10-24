@@ -1237,14 +1237,20 @@ def test_repeated_download_preserves_existing_host_directory_permissions(
                     "-c",
                     "chmod 700 /app/artifacts /app/artifacts/existing /app/artifacts/new; "
                     "printf second >/app/artifacts/existing/state; printf second >/app/artifacts/new/state; "
-                    f"chmod {second_mode:o} /app/artifacts /app/artifacts/existing /app/artifacts/new",
+                    f"chmod {second_mode:o} /app/artifacts /app/artifacts/existing /app/artifacts/new; "
+                    "mkdir /app/locked; printf private >/app/locked/state; chmod 000 /app/locked; "
+                    'ln -s "$1" /app/host-download',
+                    "sh",
+                    str(downloaded),
                 )
             )
         )
         assert second.exit_code == 0, second.stderr
         await machine.download("/app/artifacts", downloaded)
+        return machine.root
 
-    on_machine(factory, SPEC, scenario)
+    root = on_machine(factory, SPEC, scenario)
+    assert not root.exists()
     assert downloaded.stat().st_mode & 0o777 == 0o750
     assert existing.stat().st_mode & 0o777 == 0o710
     assert (downloaded / "new").stat().st_mode & 0o777 == 0o750

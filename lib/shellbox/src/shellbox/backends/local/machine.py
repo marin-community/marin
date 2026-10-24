@@ -156,15 +156,32 @@ def _copy(source: Path, target: Path) -> None:
 
 
 def _remove(path: Path) -> None:
-    """Remove a machine's directory, including the work directory that overlayfs leaves without permissions."""
+    """Remove a private tree after its guest processes have been reclaimed."""
+    try:
+        shutil.rmtree(path)
+    except PermissionError:
+        descriptor = os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            _unlock_directories(descriptor)
+        finally:
+            os.close(descriptor)
+        shutil.rmtree(path)
 
-    def unlock(_, failed: str, error: BaseException) -> None:
-        if not isinstance(error, PermissionError) or not os.path.isdir(failed):
-            raise error
-        os.chmod(failed, 0o700)
-        shutil.rmtree(failed)
 
-    shutil.rmtree(path, onexc=unlock)
+def _unlock_directories(descriptor: int) -> None:
+    # O_PATH opens even mode000 directories. The proc link refers to this pinned
+    # directory, so neither chmod nor traversal can follow a guest symlink out.
+    pinned = f"/proc/self/fd/{descriptor}"
+    os.chmod(pinned, 0o700)
+    with os.scandir(pinned) as entries:
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            child = os.open(entry.name, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
+            try:
+                _unlock_directories(child)
+            finally:
+                os.close(child)
 
 
 def _overlaid_directories() -> tuple[str, ...]:
@@ -209,7 +226,6 @@ def _sandbox_argv(
     layers: Path | None,
     mounts: Iterable[Mount],
     network: NetworkPolicy,
-    account: pwd.struct_passwd | None,
 ) -> list[str]:
     """The bwrap invocation that runs a program over ``root`` with the system directories and ``mounts``.
 
@@ -220,9 +236,6 @@ def _sandbox_argv(
     if network == NetworkPolicy.DENY:
         argv.append("--unshare-net")
     argv += ["--new-session", "--die-with-parent", "--cap-drop", "ALL"]
-    if account is not None:
-        # setpriv uses these to switch to the account, and the switch clears them with every other capability.
-        argv += ["--cap-add", "CAP_SETUID", "--cap-add", "CAP_SETGID"]
     argv += ["--bind", str(root), "/"]
     overlaid = () if layers is None else _overlaid_directories()
     for path in SYSTEM_DIRECTORIES:
@@ -244,8 +257,6 @@ def _sandbox_argv(
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
     for mount in mounts:
         argv += ["--ro-bind", str(mount.host), str(mount.guest)]
-    if account is not None:
-        argv += ["setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--clear-groups", "--"]
     return argv
 
 
@@ -268,7 +279,7 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
 
 
 def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
-    """Check both namespace creation and command entry through the persistent launcher."""
+    """Return why namespace creation or command entry fails, or None when both work."""
 
     async def probe() -> str | None:
         root, layers = _machine_directories(None, copy_on_write=system_directories is SystemDirectories.COPY_ON_WRITE)
@@ -445,7 +456,6 @@ class LocalMachine:
                 layers=self.layers,
                 mounts=self.mounts,
                 network=self.spec.network if peer is None else NetworkPolicy.ALLOW,
-                account=None,
             )
         else:
             arguments = [
