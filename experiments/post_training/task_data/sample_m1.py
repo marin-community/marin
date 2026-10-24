@@ -53,8 +53,8 @@ from experiments.post_training.probe_sets.continuations import (
     write_jsonl,
 )
 from experiments.post_training.stage0.protocol_gate import snowball_checkpoint_model
-from experiments.post_training.task_data.expert_outputs import GRADERS, bounded_grade
 from experiments.post_training.task_data.build import DATA_SOURCES, TEACHER_ROUTES, TOKEN_CAPS
+from experiments.post_training.task_data.expert_outputs import GRADERS, bounded_grade
 from experiments.post_training.task_data.terminus_answers import answer_text
 
 logger = logging.getLogger(__name__)
@@ -76,9 +76,7 @@ def m1_row(
     }
 
 
-def verdict(
-    tokenizer, family: str, task_name: str, task: dict[str, Any], response_ids: list[int]
-) -> tuple[str, bool]:
+def verdict(tokenizer, family: str, task_name: str, task: dict[str, Any], response_ids: list[int]) -> tuple[str, bool]:
     """(``ended`` / ``over_cap``, graded correct) for one sampled completion."""
     close = tokenizer.convert_tokens_to_ids(FAMILY_TOKEN_MAPS[family].turn_close)
     if not response_ids or response_ids[-1] != close:
