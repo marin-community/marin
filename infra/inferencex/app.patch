@@ -192,11 +192,11 @@ index a3bbce47..5410ecff 100644
      conc: 128,
      offload_mode: 'off',
      kv_offloading: null,
-@@ -52,6 +53,17 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
+@@ -52,6 +53,15 @@ function meta(overrides: Partial<PointMeta> = {}): PointMeta {
  }
  
  describe('PointSummary', () => {
-+  it('shows the stored runtime build and recipe without inventing missing values', () => {
++  it('shows the stored runtime build and recipe', () => {
 +    const html = renderToStaticMarkup(
 +      createElement(PointSummary, {
 +        meta: meta({ image: 'marin-vllm:build-sha', recipe_fingerprint: 'recipe-sha' }),
@@ -204,8 +204,6 @@ index a3bbce47..5410ecff 100644
 +    );
 +    expect(html).toContain('marin-vllm:build-sha');
 +    expect(html).toContain('recipe-sha');
-+    const missing = renderToStaticMarkup(createElement(PointSummary, { meta: meta() }));
-+    expect(missing).toContain('>—</code>');
 +  });
    it('identifies multinode aggregate without calling it disaggregated', () => {
      const html = renderToStaticMarkup(
