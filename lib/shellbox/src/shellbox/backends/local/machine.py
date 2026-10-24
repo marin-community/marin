@@ -666,33 +666,46 @@ class LocalMachine:
             stdin_file.write(command.stdin)
             stdin_file.seek(0)
             assert self._root_fd is not None
-            process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-I",
-                "-S",
-                "-c",
-                LAUNCH_SOURCE,
-                str(configuration.fileno()),
-                pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
-                env=CONTROL_ENVIRONMENT,
-                stdin=stdin_file,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                start_new_session=True,
+            acquisition = asyncio.create_task(
+                asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    "-c",
+                    LAUNCH_SOURCE,
+                    str(configuration.fileno()),
+                    pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
+                    env=CONTROL_ENVIRONMENT,
+                    stdin=stdin_file,
+                    stdout=stdout_file,
+                    stderr=stderr_file,
+                    start_new_session=True,
+                )
             )
-            self._commands.add(process)
+            process = None
             try:
                 async with asyncio.timeout(command.timeout):
+                    process = await asyncio.shield(acquisition)
+                    self._commands.add(process)
                     await process.wait()
             except BaseException as interruption:
-                if not self._closed:
-                    await asyncio.shield(self.close())
+                try:
+                    if process is None:
+                        # A child may already have forked before asyncio hands
+                        # back its handle. Own that handle before closing its
+                        # namespace or the private configuration descriptors.
+                        process = await asyncio.shield(acquisition)
+                        self._commands.add(process)
+                finally:
+                    if not self._closed:
+                        await asyncio.shield(self.close())
                 await process.wait()
                 if isinstance(interruption, TimeoutError):
                     return Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
                 raise
             finally:
-                self._commands.discard(process)
+                if process is not None:
+                    self._commands.discard(process)
             self._check_open()
             stdout_file.seek(0)
             stderr_file.seek(0)
