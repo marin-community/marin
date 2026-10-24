@@ -736,8 +736,7 @@ class InferenceEngineClient(InferenceEngineInterface):
                 finish_reason = ABORT_FINISH_REASON
                 continue
 
-            # 1.2.1. Check for error response from vLLM/sglang.
-            # Error responses have "error" key (vLLM) or "object"="error" (sglang), not "choices".
+            # Error responses have an error object instead of completion choices.
             if is_engine_error_response(partial_response):
                 error_info = partial_response.get("error", partial_response)
                 error_msg = (
@@ -1350,11 +1349,7 @@ def _completion_response_was_aborted(response: Dict[str, Any]) -> bool:
 
 
 def _completion_engine_error_response(results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Wrap the first engine-side `/completions` error as a client-level error, else None.
-
-    There is no partial success: if any sub-request errored, the whole request errors, following
-    vLLM's and SGLang's behavior.
-    """
+    """Return the first vLLM completion error as a client error, or None."""
     for result in results:
         if is_engine_error_response(result):
             error_details = result.get("error", result)

@@ -351,20 +351,20 @@ SKYRL_INTERNAL_ENGINE_KWARGS = frozenset(
         "bundle_indices",  # Calculated from parallelism config
         "num_gpus",  # Ray resource allocation
         "noset_visible_devices",  # Ray CUDA_VISIBLE_DEVICES handling
-        # SGLang-specific (if using SGLang backend)
-        "model_path",  # Set from trainer.policy.model.path
-        "tp_size",  # Alias for tensor_parallel_size
-        "mem_fraction_static",  # Alias for gpu_memory_utilization
-        "random_seed",  # Alias for seed
-        "disable_radix_cache",  # Inverse of enable_prefix_caching
-        "max_prefill_tokens",  # Alias for max_num_batched_tokens
-        "max_running_requests",  # Alias for max_num_seqs
-        "mm_attention_backend",  # Hardcoded "fa3"
-        "attention_backend",  # Hardcoded "fa3"
-        "enable_memory_saver",  # Set from inference_engine_enable_sleep
-        "tokenizer",  # Passed from external tokenizer
-        "custom_weight_loader",  # Hardcoded SkyRL path
-        "skip_tokenizer_init",  # Hardcoded True for SGLang
+        # Reserved engine aliases and worker-owned configuration
+        "model_path",
+        "tp_size",
+        "mem_fraction_static",
+        "random_seed",
+        "disable_radix_cache",
+        "max_prefill_tokens",
+        "max_running_requests",
+        "mm_attention_backend",
+        "attention_backend",
+        "enable_memory_saver",
+        "tokenizer",
+        "custom_weight_loader",
+        "skip_tokenizer_init",
         "speculative_config",  # Derived from generator.speculative_decoding
     }
 )
@@ -374,14 +374,7 @@ def validate_engine_init_kwargs(
     engine_init_kwargs: Dict[str, Any],
     config_path: Optional[Path] = None,
 ) -> None:
-    """Fail fast if ``engine_init_kwargs`` contains SkyRL-internal keys.
-
-    SkyRL sets certain vLLM/SGLang engine kwargs internally; specifying them in
-    the YAML config causes "duplicate keyword argument" errors at runtime.
-
-    Raises:
-        ValueError: If any forbidden keys are found in engine_init_kwargs.
-    """
+    """Reject engine kwargs reserved by the SkyRL launcher."""
     if not engine_init_kwargs:
         return
 

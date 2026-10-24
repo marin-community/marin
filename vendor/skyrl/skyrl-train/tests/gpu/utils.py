@@ -389,7 +389,7 @@ def init_inference_engines(
     engine_init_kwargs=None,
 ):
     assert use_local, "This test does not yet support remote engines."
-    assert backend in ["vllm", "sglang"]
+    assert backend == "vllm"
     if not ray.is_initialized():
         initialize_ray(cfg)
     if colocate_all:
@@ -483,30 +483,6 @@ def init_remote_inference_servers(
             str(engine_port),
             "--worker-extension-cls",
             "skyrl_train.inference_engines.vllm.vllm_engine.WorkerWrap",
-        ]
-    elif backend == "sglang":
-        remote_server_command = [
-            "uv",
-            "run",
-            "--isolated",
-            "--extra",
-            "sglang",
-            "-m",
-            "skyrl_train.inference_engines.sglang.sglang_server",
-            "--model-path",
-            model,
-            "--tp-size",
-            str(tp_size),
-            "--dtype",
-            "bfloat16",
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(engine_port),
-            "--mm-attention-backend",
-            "fa3",
-            "--attention-backend",
-            "fa3",
         ]
     else:
         raise ValueError(f"Unsupported backend: {backend}")
