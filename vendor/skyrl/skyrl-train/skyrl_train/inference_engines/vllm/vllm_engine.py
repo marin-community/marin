@@ -1759,7 +1759,8 @@ class AsyncVLLMInferenceEngine(InferenceEngineInterface):
             if session_ids is None:
                 request_id = uuid4().hex
             else:
-                request_id = request_id_for_group(session_ids[index])
+                # A session id is "<prompt uid>_<repetition>", so repetitions of one prompt share a group.
+                request_id = request_id_for_group(str(session_ids[index]).rsplit("_", 1)[0])
             request_ids.append(request_id)
             task = asyncio.create_task(self._collect_outputs(prompt, request_id, row_sampling_params))
             tasks.append(task)
