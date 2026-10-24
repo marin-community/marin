@@ -23,13 +23,30 @@ from skyrl_gym.identity_repair.facts import FactManifest, normalize_entity
 from skyrl_gym.identity_repair.judge import AttributionClaim, ClaimKind, SemanticJudge
 
 _ENTITY = r"(?P<entity>[^\n.!?;:,]{1,80}?)(?=\s*(?:[.!?;,:\n]|$)|\s+(?:and|but|so|or|which|who|that|while|because|created|developed|made|built|trained|designed|in|during|on|at|for|with|using)\b)"
+_MODEL_RELATION = r"(?:(?:based|running)\s+on|powered\s+by|using)\s+"
+_MODEL_ENTITY = r"(?P<entity>[^\n.!?;:,]{1,80}?)(?=\s*(?:[.!?;,:\n]|$)|\s+(?:model|architecture|and|but|so|or|which|who|that|while|because|created|developed|made|built|trained|designed|in|during|on|at|for|with|using)\b)"
 _NO_NEGATED_ENTITY = r"(?!not\b|never\b|no\b|nothing\b|nobody\b|n['’]t)"
 
 # (kind, pattern, needs_first_person_prefix). The appositive creator pattern has no first-person marker of its
 # own, so it only survives when the sentence before the participle already speaks first-person.
 _CLAIM_PATTERNS: tuple[tuple[ClaimKind, re.Pattern[str], bool], ...] = (
     (ClaimKind.NAME, re.compile(r"\bmy\s+name(?:['’]s|\s+is)\s+" + _NO_NEGATED_ENTITY + _ENTITY, re.IGNORECASE), False),
-    (ClaimKind.NAME, re.compile(r"\bi(?:['’]m|\s+am)\s+" + _NO_NEGATED_ENTITY + _ENTITY, re.IGNORECASE), False),
+    (
+        ClaimKind.NAME,
+        re.compile(
+            r"\bi(?:['’]m|\s+am)\s+" + _MODEL_RELATION + r"(?:the\s+)?" + _NO_NEGATED_ENTITY + _MODEL_ENTITY,
+            re.IGNORECASE,
+        ),
+        False,
+    ),
+    (
+        ClaimKind.NAME,
+        re.compile(
+            r"\bi(?:['’]m|\s+am)\s+(?!" + _MODEL_RELATION + r")" + _NO_NEGATED_ENTITY + _ENTITY,
+            re.IGNORECASE,
+        ),
+        False,
+    ),
     (
         ClaimKind.NAME,
         re.compile(r"\b(?:you\s+can\s+)?call\s+me\s+" + _NO_NEGATED_ENTITY + _ENTITY, re.IGNORECASE),

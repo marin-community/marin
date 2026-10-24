@@ -1,6 +1,8 @@
 """Attribution-claim detection, guards, ambiguity, and clause rewind."""
 
 
+import pytest
+
 from skyrl_gym.identity_repair.detector import ClaimKind, detect_attribution_claims
 from skyrl_gym.identity_repair.facts import FactManifest
 from skyrl_gym.identity_repair.judge import JudgeVerdict, StaticJudge
@@ -139,3 +141,17 @@ def test_generic_self_descriptions_are_not_name_claims():
     assert set(detections) == {ClaimKind.CREATOR}
     assert detections[ClaimKind.CREATOR].claim.asserted_entity == "alibaba"
 
+
+
+@pytest.mark.parametrize("claim", [
+    "I am using the GPT-4 model.",
+    "I am based on GPT-4.",
+    "I'm powered by GPT-4.",
+    "I am running on the GPT-4 architecture.",
+])
+def test_model_relations_capture_the_entity_for_prefix_collision_checks(claim):
+    detections = detect_attribution_claims(claim, MANIFEST)
+    assert len(detections) == 1
+    assert detections[0].claim.asserted_entity == "gpt-4"
+    assert detections[0].claim.text.endswith("GPT-4")
+    assert detections[0].clause_start_char == 0

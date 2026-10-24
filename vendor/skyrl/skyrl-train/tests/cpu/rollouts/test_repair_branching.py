@@ -172,3 +172,20 @@ def test_midturn_render_preserves_exact_native_prefix_without_closing_turn(parti
         )
     )
     assert actual == prefix
+
+
+def test_repair_rejects_wrong_entity_retained_in_earlier_reasoning():
+    text = "<|start_think|>Perhaps GPT-4.<|end_think|>I am using the GPT-4 model."
+    original = original_rollout([text])
+    start = text.index("I am using")
+    claim = AttributionClaim(ClaimKind.NAME, "I am using the GPT-4", start, start + len("I am using the GPT-4"), "gpt-4")
+    teacher, student = FakeClient([]), FakeClient([])
+    result = asyncio.run(expand_identity_repair_group(
+        original,
+        [AttributionDetection(claim, start, False, "judge-v1")],
+        tokenizer=CharTokenizer(), teacher_client=teacher, student_client=student,
+        spec=TeacherRepairSpec({"temperature": 1.0}, {"temperature": 1.0}, 8192), session_id="test",
+    ))
+    assert len(result) == 1
+    assert result[0].metrics["identity_repair_rejections"][0]["reason"] == "claim_prefix_collision"
+    assert teacher.calls == []
