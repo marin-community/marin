@@ -24,7 +24,10 @@ jobs:
   import:
     if: >-
       github.repository == 'marin-community/marin' &&
-      vars.INFERENCEX_INGEST_ENABLED == 'true'
+      vars.INFERENCEX_INGEST_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_branch == github.event.repository.default_branch))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:

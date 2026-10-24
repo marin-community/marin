@@ -156,7 +156,8 @@ directly, following `infra/pulumi.md`. Keep real-identity previews and passwords
    enable `AGENTX_WEEKLY_ENABLED=true`. Verify a current GB200 batch lands within the spare
    allocation before including it in the weekly profile. Do not hard-code an old rack.
 
-The import workflow triggers after each collection and can be retried explicitly:
+Automatic imports accept collection completions from this repository's default branch.
+An operator can explicitly retry a reviewed collector from another branch:
 
 ```sh
 gh workflow run inferencex-ingest.yaml -R marin-community/marin \
