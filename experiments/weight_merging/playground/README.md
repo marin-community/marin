@@ -86,6 +86,12 @@ IRIS_BIN=/path/to/current/iris
   -- bash experiments/weight_merging/playground/iris_norms.sh
 ```
 
+For pruning controls chosen by retained energy, set
+`PLAYGROUND_NORM_MODULE=experiments.weight_merging.playground.pruning_response`
+on the norm job. It scans241log-spaced densities, selects the nearest90%,70%,50%
+squared-L2 retention points and emits matched-c0.5 top-k/DARE recipes. The
+metrics include realized retention and FP32/BF16 output norms.
+
 `iris_resume.sh` resumes this pilot's code donor from its complete step50
 checkpoint to step100 on one H100. Stage `code-rft/checkpoint-50/` and `rft-data/`
 under `PLAYGROUND_INPUT`, set `PLAYGROUND_OUTPUT` and `PLAYGROUND_REVISION`, and
