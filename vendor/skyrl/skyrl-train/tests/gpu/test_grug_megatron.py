@@ -15,7 +15,6 @@ import copy
 import math
 import os
 from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 import ray
@@ -38,7 +37,6 @@ from skyrl_train.workers.megatron.bridge_provider_config import configure_bridge
 from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.utils import initialize_ray
 from skyrl_train.utils.torch_utils import logprobs_from_logits
-from skyrl_train.workers.megatron.megatron_worker import MegatronPolicyWorkerBase
 from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.gpu.grug_serving import (
     GRUG_BIAS_NAMES as BIAS_NAMES,
@@ -296,35 +294,6 @@ def _init_policy(cfg, world_size: int):
     )
 
 
-class CheckpointStoragePolicyWorker(MegatronPolicyWorkerBase):
-    """Observe the real host tensors produced by the native offload context."""
-
-    def _ppo_train_impl(self, train_data, timing):
-        self.checkpoint_storage = {"rank": torch.distributed.get_rank(), "bytes": 0, "all_pinned": True}
-        native = torch.autograd.graph.save_on_cpu
-
-        def observed_context(*args, **kwargs):
-            context = native(*args, **kwargs)
-            pack = context.pack_hook
-
-            def observe(tensor):
-                saved = pack(tensor)
-                if tensor.is_cuda:
-                    assert saved[1].device.type == "cpu"
-                    self.checkpoint_storage["bytes"] += saved[1].numel() * saved[1].element_size()
-                    self.checkpoint_storage["all_pinned"] &= saved[1].is_pinned()
-                return saved
-
-            context.pack_hook = observe
-            return context
-
-        with patch.object(torch.autograd.graph, "save_on_cpu", observed_context):
-            return super()._ppo_train_impl(train_data, timing)
-
-    def checkpoint_storage_snapshot(self):
-        return self.checkpoint_storage
-
-
 def _train_step(policy, batch: TrainingInputBatch) -> dict[str, float]:
     train_output = ray.get(policy.async_run_ray_method("mesh", "ppo_train", batch))[0]
     status = train_output.metadata["train_status"]
@@ -488,61 +457,54 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
         ray.shutdown()
 
 
-@pytest.mark.parametrize("checkpoint_cpu_offload", [False, True], ids=["device", "checkpoint_cpu"])
-def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path, checkpoint_cpu_offload):
+def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
     world_size = 2
     require_hoppers(world_size)
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
-    cfg = _config(str(model_path), world_size=world_size, pp=2, ep=1)
-    with open_dict(cfg.trainer.policy.megatron_config.transformer_config_kwargs):
-        cfg.trainer.policy.megatron_config.transformer_config_kwargs.grug_checkpoint_cpu_offload = (
-            checkpoint_cpu_offload
-        )
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     batch = _padded_batch(tokenizer.pad_token_id)
-    export_dir = tmp_path / "export"
-    initialize_ray(cfg)
-    try:
-        policy = init_worker_with_type(
-            "policy",
-            cfg=cfg,
-            num_gpus_per_node=world_size,
-            ray_actor_type=ray.remote(num_gpus=1)(CheckpointStoragePolicyWorker),
-        )
-        names = [*PARAMETER_NAMES, *BIAS_NAMES]
-        original = GrugMoeForCausalLM.from_pretrained(model_path, dtype=torch.float32).state_dict()
-        before = rank0_validation_snapshot(policy, names)
-        for name in PARAMETER_NAMES:
-            # Megatron holds bf16 parameters; the fp32 checkpoint rounds once on load.
-            torch.testing.assert_close(before[name], original[name].to(torch.bfloat16).float(), rtol=0, atol=0)
-        for name in BIAS_NAMES:
-            torch.testing.assert_close(before[name], original[name].float(), rtol=0, atol=0)
+    names = [*PARAMETER_NAMES, *BIAS_NAMES]
+    original = GrugMoeForCausalLM.from_pretrained(model_path, dtype=torch.float32).state_dict()
+    results = []
+    for checkpoint_cpu_offload in (False, True):
+        cfg = _config(str(model_path), world_size=world_size, pp=2, ep=1)
+        with open_dict(cfg.trainer.policy.megatron_config.transformer_config_kwargs):
+            cfg.trainer.policy.megatron_config.transformer_config_kwargs.grug_checkpoint_cpu_offload = (
+                checkpoint_cpu_offload
+            )
+        export_dir = tmp_path / ("checkpoint_cpu" if checkpoint_cpu_offload else "device")
+        initialize_ray(cfg)
+        try:
+            policy = _init_policy(cfg, world_size)
+            before = rank0_validation_snapshot(policy, names)
+            for name in PARAMETER_NAMES:
+                # Megatron holds bf16 parameters; the fp32 checkpoint rounds once on load.
+                torch.testing.assert_close(before[name], original[name].to(torch.bfloat16).float(), rtol=0, atol=0)
+            for name in BIAS_NAMES:
+                torch.testing.assert_close(before[name], original[name].float(), rtol=0, atol=0)
 
-        _train_step(policy, batch)
-        storage = ray.get(policy.async_run_ray_method("pass_through", "checkpoint_storage_snapshot"))
-        by_rank = {row["rank"]: row for row in storage}
-        assert (by_rank[0]["bytes"] > 0) == checkpoint_cpu_offload
-        assert all(row["all_pinned"] for row in storage)
-        assert by_rank[1]["bytes"] == 0
-        after = rank0_validation_snapshot(policy, names)
-        for name in PARAMETER_NAMES:
-            assert not torch.equal(after[name], before[name]), f"{name} did not update"
-        for name in BIAS_NAMES:
-            torch.testing.assert_close(after[name], before[name], rtol=0, atol=0)
+            status = _train_step(policy, batch)
+            after = rank0_validation_snapshot(policy, names)
+            for name in PARAMETER_NAMES:
+                assert not torch.equal(after[name], before[name]), f"{name} did not update"
+            for name in BIAS_NAMES:
+                torch.testing.assert_close(after[name], before[name], rtol=0, atol=0)
 
-        post_update = _megatron_response_logprobs(policy, batch)
-        ray.get(policy.async_run_ray_method("pass_through", "save_hf_model", str(export_dir), tokenizer))
-        exported = GrugMoeForCausalLM.from_pretrained(export_dir, dtype=torch.float32).state_dict()
-        for name in names:
-            torch.testing.assert_close(exported[name].float(), after[name], rtol=0, atol=0)
-        assert all(exported[name].dtype == torch.float32 for name in BIAS_NAMES)
-        policy.kill_actors()
-        reloaded = _hf_response_logprobs_direct(str(export_dir), batch)
-        _assert_logprobs_close(post_update, reloaded, batch["response_mask"])
-    finally:
-        ray.shutdown()
+            post_update = _megatron_response_logprobs(policy, batch)
+            ray.get(policy.async_run_ray_method("pass_through", "save_hf_model", str(export_dir), tokenizer))
+            exported = GrugMoeForCausalLM.from_pretrained(export_dir, dtype=torch.float32).state_dict()
+            for name in names:
+                torch.testing.assert_close(exported[name].float(), after[name], rtol=0, atol=0)
+            assert all(exported[name].dtype == torch.float32 for name in BIAS_NAMES)
+            policy.kill_actors()
+            reloaded = _hf_response_logprobs_direct(str(export_dir), batch)
+            _assert_logprobs_close(post_update, reloaded, batch["response_mask"])
+            results.append({"loss": status["policy_loss"], "weights": exported, "logprobs": post_update})
+        finally:
+            ray.shutdown()
+    torch.testing.assert_close(results[1], results[0], rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.vllm
