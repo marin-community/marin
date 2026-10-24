@@ -73,6 +73,11 @@ def import_grug():
     """
     if str(SKYRL_TRAIN) not in sys.path:
         sys.path.insert(0, str(SKYRL_TRAIN))
+    try:
+        import_module("loguru")
+    except ModuleNotFoundError:
+        # The GPU extra lacks loguru; the model module only calls logger.info/warning.
+        sys.modules["loguru"] = types.SimpleNamespace(logger=logging.getLogger("skyrl_train.models.grug_moe"))
     if "skyrl_train.utils" not in sys.modules:
         utils = types.ModuleType("skyrl_train.utils")
         utils.__path__ = [str(SKYRL_TRAIN / "skyrl_train" / "utils")]
@@ -535,7 +540,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["logits", "capture", "generate", "compare"])
     parser.add_argument("--weights", default=SNOWBALL_V01)
-    parser.add_argument("--prompts", default="check", help="JSONL path, or \"check\" for the built-in set")
+    parser.add_argument("--prompts", default="check", help='JSONL path, or "check" for the built-in set')
     parser.add_argument("--output", required=True, help="output directory (s3:// or local)")
     parser.add_argument("--vllm", help="compare: vllm_reference.py output JSON")
     parser.add_argument("--positions", default="last")

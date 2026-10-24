@@ -63,13 +63,14 @@ def next_token(completions_url: str, model: str, tokens: tuple[int, ...]) -> dic
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", default=SNOWBALL_V01)
-    parser.add_argument("--prompts", default="check", help="JSONL path, or \"check\" for the built-in set")
+    parser.add_argument("--prompts", default="check", help='JSONL path, or "check" for the built-in set')
     parser.add_argument("--output", required=True, help="JSON file path (s3:// or local)")
     parser.add_argument("--attention-backend", default="FLASH_ATTN")
     args = parser.parse_args()
 
     prompts = read_prompts(args.prompts, load_tokenizer(args.weights))
-    repo, revision = hf_repo_revision(args.weights) or (args.weights, None)
+    hf = hf_repo_revision(args.weights)
+    repo, revision = hf or (args.weights, None)
     spec = ModelSpec(
         weights=repo,
         revision=revision,
@@ -87,8 +88,8 @@ def main() -> None:
             max_num_seqs=1,
             extra_args=(
                 "--enable-expert-parallel",
-                "--model-loader-extra-config",
-                '{"distributed":true}',
+                # The distributed loader reads object storage only; vLLM rejects it for a Hugging Face repo.
+                *(() if hf else ("--model-loader-extra-config", '{"distributed":true}')),
                 "--max-logprobs",
                 str(TOP_LOGPROBS),
                 "--attention-backend",
