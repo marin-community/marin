@@ -1,3 +1,5 @@
+# Historical source policy: forced image builds are unsupported by Shellbox execution.
+# Prepare immutable task images and remove force_build before launching a new run.
 n_attempts: 3
 timeout_multiplier: 2.0
 n_concurrent_trials: 256
@@ -24,8 +26,6 @@ environment:
   override_cpus: 2
   override_memory_mb: 8192
   override_storage_mb: 8192
-  kwargs:
-    auto_snapshot: true
 verifier:
   max_timeout_sec: 14400
 agents:

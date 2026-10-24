@@ -3,10 +3,6 @@ from pathlib import Path
 from typing import Annotated
 
 import yaml
-from rich.console import Console
-from typer import Argument, Option, Typer
-from upath import UPath
-
 from harbor.cli.utils import (
     load_mcp_servers,
     parse_env_vars,
@@ -21,6 +17,9 @@ from harbor.models.trial.config import (
     TaskConfig,
     TrialConfig,
 )
+from rich.console import Console
+from typer import Argument, Option, Typer
+from upath import UPath
 
 trials_app = Typer(
     no_args_is_help=True, context_settings={"help_option_names": ["-h", "--help"]}
@@ -230,16 +229,7 @@ def start(
         EnvironmentType | None,
         Option(
             "--environment-type",
-            help=f"Environment type (default: {EnvironmentType.DOCKER.value})",
-            rich_help_panel="Environment",
-            show_default=False,
-        ),
-    ] = None,
-    environment_import_path: Annotated[
-        str | None,
-        Option(
-            "--environment-import-path",
-            help="Import path for custom environment (module.path:ClassName).",
+            help=f"Environment type (default: {EnvironmentType.IRIS.value})",
             rich_help_panel="Environment",
             show_default=False,
         ),
@@ -447,9 +437,9 @@ def start(
         config = TrialConfig(
             task=TaskConfig(path=path),
             trial_name=trial_name or "",
-            trials_dir=UPath(trials_dir)
-            if trials_dir is not None
-            else UPath("./trials"),
+            trials_dir=(
+                UPath(trials_dir) if trials_dir is not None else UPath("./trials")
+            ),
             timeout_multiplier=timeout_multiplier or 1.0,
         )
     else:
@@ -496,9 +486,6 @@ def start(
 
     if environment_type is not None:
         config.environment.type = environment_type
-    if environment_import_path is not None:
-        config.environment.import_path = environment_import_path
-        config.environment.type = None  # Clear type so import_path takes precedence
     if environment_force_build is not None:
         config.environment.force_build = environment_force_build
     if environment_delete is not None:
@@ -549,9 +536,7 @@ def start(
         console.print(f"Task: {config.task.get_task_id().get_name()}")
         agent_display = config.agent.name or config.agent.import_path or "unknown"
         console.print(f"Agent: {agent_display}")
-        environment_display = config.environment.import_path or (
-            config.environment.type.value if config.environment.type else "unknown"
-        )
+        environment_display = config.environment.type.value
         console.print(f"Environment: {environment_display}")
         console.print(f"Trials directory: {config.trials_dir}")
 

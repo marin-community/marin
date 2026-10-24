@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import os
 
+from harbor.agents.utils import PROVIDER_KEYS
 from harbor_config.env import get_required_host_vars as get_required_host_vars
 from harbor_config.env import is_env_template as is_env_template
 from harbor_config.env import is_sensitive_env_key as is_sensitive_env_key
@@ -15,6 +16,28 @@ from harbor_config.env import templatize_sensitive_env as templatize_sensitive_e
 _TASK_ENVIRONMENT: ContextVar[Mapping[str, str]] = ContextVar(
     "harbor_task_environment", default={}
 )
+_MODEL_CREDENTIAL_KEYS = frozenset(
+    key
+    for names in PROVIDER_KEYS.values()
+    for key in ([names] if isinstance(names, str) else names)
+    if is_sensitive_env_key(key)
+) | {
+    "TOGETHER_API_KEY",
+    "CUSTOM_API_KEY",
+    "MSWEA_API_KEY",
+    "LLM_API_KEY",
+    "API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "GOOGLE_API_KEY",
+    "CURSOR_API_KEY",
+    "WINDSURF_API_KEY",
+    "DATABRICKS_TOKEN",
+    "TETRATE_API_KEY",
+    "OPENCODE_API_KEY",
+    "COPILOT_GITHUB_TOKEN",
+    "ROVODEV_USER_API_TOKEN",
+}
 _HOST_CREDENTIAL_PREFIXES = (
     "AWS_",
     "S3_",
@@ -42,13 +65,15 @@ _HOST_CREDENTIAL_KEYS = frozenset(
         "KUBECONFIG",
         "SSH_AUTH_SOCK",
         "FSSPEC_S3",
+        "CODEX_AUTH_JSON_PATH",
+        "CODEX_FORCE_AUTH_JSON",
     }
 )
 
 
 def validate_task_environment(values: Mapping[str, str]) -> None:
     """Reject host authentication material at the sandbox environment boundary."""
-    for key in values:
+    for key, value in values.items():
         normalized = key.upper()
         if normalized in _HOST_CREDENTIAL_KEYS or normalized.startswith(
             _HOST_CREDENTIAL_PREFIXES
@@ -56,12 +81,22 @@ def validate_task_environment(values: Mapping[str, str]) -> None:
             raise ValueError(
                 f"Host storage or control-plane credential variable is forbidden in task environment: {key}"
             )
+        if (
+            normalized in _MODEL_CREDENTIAL_KEYS
+            and value not in ("", "EMPTY")
+            and not is_env_template(value)
+        ):
+            raise ValueError(
+                f"Provider credentials must remain on the host; use a Shellbox model relay: {key}"
+            )
     protected_values = {
         value
         for key, value in os.environ.items()
         if value
+        and value != "EMPTY"
         and (
             key.upper() in _HOST_CREDENTIAL_KEYS
+            or key.upper() in _MODEL_CREDENTIAL_KEYS
             or (
                 key.upper().startswith(_HOST_CREDENTIAL_PREFIXES)
                 and is_sensitive_env_key(key)
@@ -81,6 +116,11 @@ def task_environment(values: Mapping[str, str]) -> Iterator[None]:
         yield
     finally:
         _TASK_ENVIRONMENT.reset(token)
+
+
+def task_environment_values() -> dict[str, str]:
+    """Return the explicitly granted guest environment for installed agents."""
+    return dict(_TASK_ENVIRONMENT.get())
 
 
 def resolve_env_vars(env_dict: dict[str, str]) -> dict[str, str]:

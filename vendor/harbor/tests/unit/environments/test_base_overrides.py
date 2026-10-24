@@ -25,7 +25,7 @@ class _TpuCapableStub(BaseEnvironment):
 
     @staticmethod
     def type() -> EnvironmentType:
-        return EnvironmentType.DOCKER
+        return EnvironmentType.IRIS
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:

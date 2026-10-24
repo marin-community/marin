@@ -4,15 +4,11 @@
 """Run a prebuilt Harbor task in a credential-free Iris sandbox."""
 
 import asyncio
-import json
 import tempfile
-from contextlib import AsyncExitStack, contextmanager
-from contextvars import ContextVar
-from collections.abc import Iterator, Mapping
+from contextlib import AsyncExitStack
 from dataclasses import replace
 from pathlib import Path
 
-import httpx
 
 from harbor.environments.base import (
     EXEC_OUTPUT_LIMIT_BYTES,
@@ -24,7 +20,9 @@ from harbor.environments.capabilities import (
     EnvironmentResourceCapabilities,
 )
 from harbor.environments.iris_compose import import_iris_task
+from harbor.environments.model_relay import MODEL_RELAY_PORT, ModelRelay
 from harbor.models.task.config import EnvironmentConfig
+from harbor.models.environment_type import EnvironmentType
 from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import EnvironmentPaths
 from iris.cluster.client.job_info import get_job_info
@@ -39,7 +37,7 @@ from shellbox.backends.iris.machine import (
 )
 from shellbox.machine import Command, ExitReason
 from shellbox.service import ServiceGroup
-from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
+from shellbox.http_service import serve_http
 
 BASE_ENVIRONMENT_ARGUMENTS = frozenset(
     {
@@ -61,20 +59,6 @@ BASE_ENVIRONMENT_ARGUMENTS = frozenset(
         "extra_docker_compose",
     }
 )
-MODEL_RELAY_PORT = 8787
-_HOST_MODEL_AUTH: ContextVar[Mapping[str, str]] = ContextVar(
-    "harbor_host_model_auth", default={}
-)
-
-
-@contextmanager
-def host_model_authentication(values: Mapping[str, str]) -> Iterator[None]:
-    """Provide upstream model authentication exclusively to trusted host handlers."""
-    token = _HOST_MODEL_AUTH.set(dict(values))
-    try:
-        yield
-    finally:
-        _HOST_MODEL_AUTH.reset(token)
 
 
 def validate_iris_task(
@@ -126,12 +110,11 @@ class IrisEnvironment(BaseEnvironment):
         self.model_endpoint = model_endpoint
         self.model_name = model_name
         self.verifier_model_endpoint = verifier_model_endpoint
-        self._model_api_key = _HOST_MODEL_AUTH.get().get(model_endpoint or "", "EMPTY")
         super().__init__(*args, **kwargs)
 
     @staticmethod
-    def type() -> str:
-        return "marin-iris"
+    def type() -> EnvironmentType:
+        return EnvironmentType.IRIS
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
@@ -207,7 +190,11 @@ class IrisEnvironment(BaseEnvironment):
         try:
             if needs_model or self.verifier_model_endpoint is not None:
                 await self._relay.enter_async_context(
-                    serve_http(self.machine, self._model_request, port=MODEL_RELAY_PORT)
+                    serve_http(
+                        self.machine,
+                        ModelRelay(self.model_endpoint, self.model_name).handle,
+                        port=MODEL_RELAY_PORT,
+                    )
                 )
             if self.group is not None:
                 await self.group.wait_ready()
@@ -245,40 +232,6 @@ class IrisEnvironment(BaseEnvironment):
                 await group.close()
             elif machine is not None:
                 await machine.close()
-
-    async def _model_request(self, request: HttpRequest) -> HttpResponse:
-        if request.method != "POST" or request.path != "/v1/chat/completions":
-            return HttpResponse(404, b'{"error":"unsupported model route"}')
-        try:
-            payload = json.loads(request.body)
-        except (ValueError, UnicodeDecodeError):
-            return HttpResponse(400, b'{"error":"invalid JSON"}')
-        if not isinstance(payload, dict) or payload.get("stream"):
-            return HttpResponse(
-                400, b'{"error":"non-streaming chat completions required"}'
-            )
-        payload["model"] = self.model_name
-        assert self.model_endpoint is not None
-        try:
-            async with httpx.AsyncClient(follow_redirects=False, timeout=300) as client:
-                async with client.stream(
-                    "POST",
-                    self.model_endpoint.rstrip("/") + "/chat/completions",
-                    json=payload,
-                    headers={"Authorization": f"Bearer {self._model_api_key}"},
-                ) as response:
-                    if not response.is_success:
-                        return HttpResponse(502, b'{"error":"model request failed"}')
-                    body = bytearray()
-                    async for chunk in response.aiter_bytes():
-                        if len(body) + len(chunk) > MAX_BODY:
-                            return HttpResponse(
-                                502, b'{"error":"model response exceeded limit"}'
-                            )
-                        body.extend(chunk)
-                    return HttpResponse(response.status_code, bytes(body))
-        except httpx.HTTPError:
-            return HttpResponse(502, b'{"error":"model request failed"}')
 
     async def _sync_service_logs(self) -> None:
         if self.group is None or self.machine is None:

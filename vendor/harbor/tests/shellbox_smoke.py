@@ -16,7 +16,9 @@ from harbor.models.job.config import JobConfig
 
 
 class ModelHandler(BaseHTTPRequestHandler):
-    bash_commands: ClassVar[list[str]] = ["echo 'hello from qemu' > /workspace/answer.txt"]
+    bash_commands: ClassVar[list[str]] = [
+        "echo 'hello from qemu' > /workspace/answer.txt"
+    ]
 
     def do_POST(self):
         request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -34,13 +36,18 @@ class ModelHandler(BaseHTTPRequestHandler):
                         "type": "function",
                         "function": {
                             "name": "Bash",
-                            "arguments": json.dumps({"command": self.bash_commands[completed]}),
+                            "arguments": json.dumps(
+                                {"command": self.bash_commands[completed]}
+                            ),
                         },
                     }
                 ],
             }
         body = json.dumps(
-            {"choices": [{"message": message}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
+            {
+                "choices": [{"message": message}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            }
         ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -56,7 +63,7 @@ async def main(
     jobs_dir: Path,
     task_path: Path,
     commands: list[str],
-    environment_import_path: str,
+    environment_type: str,
     environment_kwargs: dict,
 ):
     ModelHandler.bash_commands = commands
@@ -71,14 +78,16 @@ async def main(
                 "n_concurrent_trials": 1,
                 "tasks": [{"path": str(task_path)}],
                 "environment": {
-                    "import_path": environment_import_path,
+                    "type": environment_type,
                     "kwargs": environment_kwargs,
                 },
                 "agents": [
                     {
                         "import_path": "harbor.agents.shellbox:BashAgent",
                         "model_name": "openai/fake",
-                        "kwargs": {"base_url": f"http://127.0.0.1:{server.server_port}/v1"},
+                        "kwargs": {
+                            "base_url": f"http://127.0.0.1:{server.server_port}/v1"
+                        },
                     }
                 ],
             }
@@ -96,13 +105,25 @@ async def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("bundle_or_source", help="guest bundle path, 'task-image', or 'shellsim'")
+    parser.add_argument(
+        "bundle_or_source", help="guest bundle path, 'task-image', or 'shellsim'"
+    )
     parser.add_argument("jobs_dir", type=Path)
-    parser.add_argument("--task-path", type=Path, default=Path(__file__).parent / "fixtures/shellbox/task")
+    parser.add_argument(
+        "--task-path",
+        type=Path,
+        default=Path(__file__).parent / "fixtures/shellbox/task",
+    )
     parser.add_argument("--command-file", type=Path)
     parser.add_argument("--commands-json", type=Path)
-    parser.add_argument("--network-policy", choices=("require-offline-task", "deny"), default="require-offline-task")
-    parser.add_argument("--acceleration", choices=("auto", "kvm", "tcg"), default="auto")
+    parser.add_argument(
+        "--network-policy",
+        choices=("require-offline-task", "deny"),
+        default="require-offline-task",
+    )
+    parser.add_argument(
+        "--acceleration", choices=("auto", "kvm", "tcg"), default="auto"
+    )
     parser.add_argument("--image-cache", type=Path)
     parser.add_argument("--qemu-assets-json", type=Path)
     args = parser.parse_args()
@@ -115,10 +136,10 @@ if __name__ == "__main__":
     else:
         commands = ModelHandler.bash_commands
     if args.bundle_or_source == "shellsim":
-        environment_import_path = "harbor.environments.shellsim:ShellSimEnvironment"
+        environment_type = "shellsim"
         environment_kwargs = {"network_policy": args.network_policy}
     elif args.bundle_or_source == "task-image":
-        environment_import_path = "harbor.environments.qemu:QemuEnvironment"
+        environment_type = "qemu"
         if args.image_cache is None or args.qemu_assets_json is None:
             parser.error("task-image requires --image-cache and --qemu-assets-json")
         environment_kwargs = {
@@ -128,10 +149,18 @@ if __name__ == "__main__":
             "acceleration": args.acceleration,
         }
     else:
-        environment_import_path = "harbor.environments.qemu:QemuEnvironment"
+        environment_type = "qemu"
         environment_kwargs = {
             "guest_bundle": args.bundle_or_source,
             "network_policy": args.network_policy,
             "acceleration": args.acceleration,
         }
-    asyncio.run(main(args.jobs_dir, args.task_path, commands, environment_import_path, environment_kwargs))
+    asyncio.run(
+        main(
+            args.jobs_dir,
+            args.task_path,
+            commands,
+            environment_type,
+            environment_kwargs,
+        )
+    )

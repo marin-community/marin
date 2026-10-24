@@ -57,6 +57,34 @@ def test_task_model_capabilities_resolve_without_exposing_parent_secrets(monkeyp
 @pytest.mark.parametrize(
     "key",
     [
+        "OPENAI_API_KEY",
+        "TOGETHER_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "CURSOR_API_KEY",
+        "WINDSURF_API_KEY",
+        "DATABRICKS_TOKEN",
+        "TETRATE_API_KEY",
+        "OPENCODE_API_KEY",
+    ],
+)
+def test_provider_credentials_are_host_only_even_under_task_aliases(monkeypatch, key):
+    monkeypatch.setenv(key, "provider-private-canary")
+    for values in (
+        {key: "provider-private-canary"},
+        {"INNOCENT_ALIAS": "provider-private-canary"},
+    ):
+        with pytest.raises(ValueError):
+            with task_environment(values):
+                resolve_env_vars({"TASK_VALUE": "${" + next(iter(values)) + "}"})
+    with task_environment({key: "EMPTY"}):
+        assert resolve_env_vars({"MODEL_TOKEN": "${" + key + "}"}) == {
+            "MODEL_TOKEN": "EMPTY"
+        }
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
         "AWS_ACCESS_KEY_ID",
         "GOOGLE_APPLICATION_CREDENTIALS",
         "CW_KEY_SECRET",

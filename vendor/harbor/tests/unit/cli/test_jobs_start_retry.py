@@ -1,11 +1,10 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from typer.testing import CliRunner
-
+import pytest
 from harbor.cli.main import app
 from harbor.models.job.config import JobConfig
-
+from typer.testing import CliRunner
 
 runner = CliRunner()
 
@@ -35,9 +34,6 @@ def _capture_job_config(monkeypatch, tmp_path: Path) -> list[JobConfig]:
     )
     monkeypatch.setattr(
         "harbor.cli.jobs.show_registry_hint_if_first_run", lambda _: None
-    )
-    monkeypatch.setattr(
-        "harbor.cli.jobs._confirm_host_env_access", lambda *_, **__: None
     )
     monkeypatch.setattr("harbor.cli.jobs.print_job_results_tables", lambda _: None)
 
@@ -182,3 +178,16 @@ def test_jobs_start_sets_trial_attempt_deadline_and_cleanup_grace(
     assert result.exit_code == 0, result.output
     assert captured[0].trial_attempt_timeout_sec == 120
     assert captured[0].trial_cleanup_grace_sec == 15
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--env", "docker"],
+        ["--env", "modal"],
+        ["--environment-import-path", "custom.environments:UnsafeEnvironment"],
+    ],
+)
+def test_jobs_start_rejects_removed_execution_paths(arguments):
+    result = runner.invoke(app, ["jobs", "start", *arguments, "--yes"])
+    assert result.exit_code == 2

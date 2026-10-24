@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 MAX_BODY = 4 * 1024 * 1024
 MAX_PENDING = 16
 REQUEST_TIMEOUT = 600
+IDLE_POLL_TIMEOUT = 20
 CONTROL = "/__shellbox_http__/"
 
 
@@ -62,7 +63,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == CONTROL + "poll":
             try:
-                request = self.server.requests.get(timeout=1)
+                request = self.server.requests.get(timeout=min(IDLE_POLL_TIMEOUT, json.loads(body)["wait"]))
             except queue.Empty:
                 request = None
             self.send_body(200, json.dumps(request).encode())

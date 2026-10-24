@@ -6,31 +6,30 @@
 import argparse
 import asyncio
 import json
-import subprocess
 import time
 import tomllib
 from pathlib import Path
 
+from harbor.environments.qemu import QemuEnvironment
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.environments.qemu import QemuEnvironment
+from shellbox.backends.docker.machine import DockerMachineFactory, docker
+from shellbox.machine import Command, DockerImage, MachineSpec, NetworkPolicy
 
 VERIFIER_COMMAND = "bash /tests/test.sh"
 
 
-def docker_command(args: list[str], timeout: int = 600) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["docker", *args], capture_output=True, text=True, timeout=timeout)
-
-
-def docker_memory_bytes(container: str) -> int | None:
-    inspect = docker_command(["inspect", "--format", "{{.State.Pid}}", container])
-    if inspect.returncode:
+async def docker_memory_bytes(container: str) -> int | None:
+    inspected = await docker("inspect", "--format", "{{.State.Pid}}", container)
+    if inspected.exit_code:
         return None
-    pid = int(inspect.stdout.strip())
+    pid = int(inspected.stdout.decode().strip())
     if pid <= 0:
         return None
     cgroups = (Path("/proc") / str(pid) / "cgroup").read_text().splitlines()
-    unified = next((line.split("::", 1)[1] for line in cgroups if line.startswith("0::")), None)
+    unified = next(
+        (line.split("::", 1)[1] for line in cgroups if line.startswith("0::")), None
+    )
     if unified is None:
         return None
     peak = Path("/sys/fs/cgroup") / unified.lstrip("/") / "memory.peak"
@@ -47,49 +46,65 @@ def qemu_pss_bytes(pid: int) -> int | None:
     return None
 
 
-def docker_check(task: Path, image: str, check: str, output: Path) -> dict:
-    container = f"tasktrove-compare-{task.name}-{check}"
+async def docker_check(task: Path, image: str, check: str, output: Path) -> dict:
     logs = output / "docker-logs" / task.name / check
     logs.mkdir(parents=True, exist_ok=True)
-    mounts = ["-v", f"{task / 'tests'}:/tests:ro", "-v", f"{logs}:/logs/verifier"]
-    if (task / "setup_files").is_dir():
-        mounts.extend(["-v", f"{task / 'setup_files'}:/setup_files:ro"])
-    if check == "oracle":
-        mounts.extend(["-v", f"{task / 'solution'}:/solution:ro"])
     started = time.monotonic()
-    run = docker_command(["run", "-d", "--network", "none", "--name", container, *mounts, image, "sleep", "infinity"])
-    if run.returncode:
-        return {"error": run.stderr[-1000:], "start_sec": time.monotonic() - started}
+    machine = await DockerMachineFactory().create(
+        MachineSpec(source=DockerImage(image), network=NetworkPolicy.DENY)
+    )
     try:
-        ready = docker_command(["exec", container, "true"])
+        await machine.upload(task / "tests", "/tests")
+        if (task / "setup_files").is_dir():
+            await machine.upload(task / "setup_files", "/setup_files")
+        if check == "oracle":
+            await machine.upload(task / "solution", "/solution")
+        ready = await machine.run(
+            Command(("mkdir", "-p", "/logs/verifier"), timeout=600)
+        )
         start_sec = time.monotonic() - started
-        if ready.returncode:
-            return {"error": ready.stderr[-1000:], "start_sec": start_sec}
+        if ready.exit_code:
+            return {
+                "error": ready.stderr.decode(errors="replace")[-1000:],
+                "start_sec": start_sec,
+            }
         action_start = time.monotonic()
-        action = docker_command(
-            ["exec", container, "bash", "-c", "bash /solution/solve.sh" if check == "oracle" else "true"]
+        action = await machine.run(
+            Command(
+                (
+                    "bash",
+                    "-c",
+                    "bash /solution/solve.sh" if check == "oracle" else "true",
+                ),
+                timeout=600,
+            )
         )
         action_sec = time.monotonic() - action_start
         verify_start = time.monotonic()
-        verify = docker_command(["exec", container, "bash", "-c", VERIFIER_COMMAND])
+        verify = await machine.run(
+            Command(("bash", "-c", VERIFIER_COMMAND), timeout=600)
+        )
         verify_sec = time.monotonic() - verify_start
+        await machine.download("/logs/verifier", logs)
         verdict = logs / "verdict.json"
         return {
             "start_sec": start_sec,
             "action_sec": action_sec,
             "verify_sec": verify_sec,
-            "action_exit": action.returncode,
-            "verify_exit": verify.returncode,
-            "action_stderr": action.stderr[-500:],
-            "verify_stderr": verify.stderr[-500:],
+            "action_exit": action.exit_code,
+            "verify_exit": verify.exit_code,
+            "action_stderr": action.stderr.decode(errors="replace")[-500:],
+            "verify_stderr": verify.stderr.decode(errors="replace")[-500:],
             "verdict": json.loads(verdict.read_text()) if verdict.exists() else None,
-            "peak_memory_bytes": docker_memory_bytes(container),
+            "peak_memory_bytes": await docker_memory_bytes(machine.name),
         }
     finally:
-        docker_command(["rm", "-f", container])
+        await machine.close()
 
 
-async def qemu_check(task: Path, bundle: Path, check: str, output: Path, guest_memory_mb: int = 512) -> dict:
+async def qemu_check(
+    task: Path, bundle: Path, check: str, output: Path, guest_memory_mb: int = 512
+) -> dict:
     with (task / "task.toml").open("rb") as source:
         config = tomllib.load(source)
     paths = TrialPaths(output / "qemu-trials" / task.name / check)
@@ -114,7 +129,9 @@ async def qemu_check(task: Path, bundle: Path, check: str, output: Path, guest_m
         if check == "oracle":
             await env.upload_dir(task / "solution", "/solution")
         action_start = time.monotonic()
-        action = await env.exec("bash /solution/solve.sh" if check == "oracle" else "true", timeout_sec=600)
+        action = await env.exec(
+            "bash /solution/solve.sh" if check == "oracle" else "true", timeout_sec=600
+        )
         action_sec = time.monotonic() - action_start
         verify_start = time.monotonic()
         verify = await env.exec(VERIFIER_COMMAND, timeout_sec=600)
@@ -132,8 +149,14 @@ async def qemu_check(task: Path, bundle: Path, check: str, output: Path, guest_m
             "verify_exit": verify.return_code,
             "action_stderr": (action.stderr or "")[-500:],
             "verify_stderr": (verify.stderr or "")[-500:],
-            "verdict": json.loads(verdict_path.read_text()) if verdict_path.exists() else None,
-            "pss_memory_bytes": qemu_pss_bytes(env.machine.process.pid) if env.machine and env.machine.process else None,
+            "verdict": (
+                json.loads(verdict_path.read_text()) if verdict_path.exists() else None
+            ),
+            "pss_memory_bytes": (
+                qemu_pss_bytes(env.machine.process.pid)
+                if env.machine and env.machine.process
+                else None
+            ),
         }
     except Exception as error:
         return {"error": repr(error), "elapsed_sec": time.monotonic() - started}
@@ -143,11 +166,13 @@ async def qemu_check(task: Path, bundle: Path, check: str, output: Path, guest_m
 
 async def compare(root: Path, limit: int | None, concurrency: int) -> None:
     sample = json.loads((root / "sample.json").read_text())
-    results = root / "results.jsonl"
+    results = root / "shellbox-results.jsonl"
     completed = set()
     if results.exists():
         completed = {
-            (row["row_index"], row["check"]) for line in results.read_text().splitlines() if (row := json.loads(line))
+            (row["row_index"], row["check"])
+            for line in results.read_text().splitlines()
+            if (row := json.loads(line))
         }
     pending = []
     for row in sample["tasks"]:
@@ -161,7 +186,7 @@ async def compare(root: Path, limit: int | None, concurrency: int) -> None:
             task = root / "tasks" / f"{row['row_index']:05d}"
             image = f"tasktrove-clean-qemu:{row['dockerfile_id']}"
             bundle = root / "bundles" / row["dockerfile_id"]
-            docker = await asyncio.to_thread(docker_check, task, image, check, root)
+            docker = await docker_check(task, image, check, root)
             qemu = await qemu_check(task, bundle, check, root)
             result = {
                 "row_index": row["row_index"],

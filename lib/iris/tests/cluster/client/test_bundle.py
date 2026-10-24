@@ -195,7 +195,7 @@ def test_repository_excludes_keep_runtime_and_allow_explicit_validation_files(wo
         "vendor/harbor/src/harbor/job.py",
         "vendor/harbor/src/harbor_config/__init__.py",
         "vendor/harbor/src/harbor/cli/template-task/tests/test.sh",
-        "vendor/harbor/src/harbor/environments/apptainer/docs/workflow.md",
+        "vendor/harbor/src/harbor/cli/template-task/instruction.md",
         "lib/rigging/src/rigging/__init__.py",
         "lib/finestore/src/finestore/__init__.py",
     }

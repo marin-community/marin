@@ -9,8 +9,13 @@ import shlex
 from enum import StrEnum
 from pathlib import Path
 
-from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
+from harbor.environments.base import (
+    EXEC_OUTPUT_LIMIT_BYTES,
+    BaseEnvironment,
+    ExecResult,
+)
 from harbor.environments.capabilities import EnvironmentCapabilities
+from harbor.models.environment_type import EnvironmentType
 
 from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE, IMAGE_REFERENCE_KEY
 from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle
@@ -46,48 +51,76 @@ class QemuEnvironment(BaseEnvironment):
         acceleration: Acceleration = Acceleration.AUTO,
         **kwargs,
     ):
-        self.guest_bundle = Path(guest_bundle).resolve() if guest_bundle is not None else None
-        self.image_cache = Path(image_cache).resolve() if image_cache is not None else None
+        self.guest_bundle = (
+            Path(guest_bundle).resolve() if guest_bundle is not None else None
+        )
+        self.image_cache = (
+            Path(image_cache).resolve() if image_cache is not None else None
+        )
         self.qemu_assets = qemu_assets
-        self.registry_authfile = Path(registry_authfile).resolve() if registry_authfile is not None else None
-        self.signature_policy = Path(signature_policy).resolve() if signature_policy is not None else None
+        self.registry_authfile = (
+            Path(registry_authfile).resolve() if registry_authfile is not None else None
+        )
+        self.signature_policy = (
+            Path(signature_policy).resolve() if signature_policy is not None else None
+        )
         self.network_policy = NetworkPolicy(network_policy)
         self.guest_memory_mb = guest_memory_mb
         self.acceleration = Acceleration(acceleration)
         self.machine: QemuMachine | None = None
         self._source: RegistryImage | DockerfileSource | None = None
-        metadata_path = self.guest_bundle / IMAGE_METADATA_FILE if self.guest_bundle is not None else None
+        metadata_path = (
+            self.guest_bundle / IMAGE_METADATA_FILE
+            if self.guest_bundle is not None
+            else None
+        )
         self._image_metadata = (
-            json.loads(metadata_path.read_text()) if metadata_path is not None and metadata_path.is_file() else {}
+            json.loads(metadata_path.read_text())
+            if metadata_path is not None and metadata_path.is_file()
+            else {}
         )
         super().__init__(*args, **kwargs)
 
     @staticmethod
-    def type() -> str:
-        return "qemu"
+    def type() -> EnvironmentType:
+        return EnvironmentType.QEMU
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:
         return EnvironmentCapabilities(disable_internet=True)
 
     def _validate_definition(self):
-        if self.task_env_config.allow_internet and self.network_policy is NetworkPolicy.REQUIRE_OFFLINE_TASK:
-            raise ValueError("QEMU guest has no network; set network_policy='deny' to run this task offline")
-        if any((self.environment_dir / name).exists() for name in ("docker-compose.yaml", "docker-compose.yml")):
+        if (
+            self.task_env_config.allow_internet
+            and self.network_policy is NetworkPolicy.REQUIRE_OFFLINE_TASK
+        ):
+            raise ValueError(
+                "QEMU guest has no network; set network_policy='deny' to run this task offline"
+            )
+        if any(
+            (self.environment_dir / name).exists()
+            for name in ("docker-compose.yaml", "docker-compose.yml")
+        ):
             raise ValueError("QEMU prototype does not support Compose tasks")
         dockerfile = self.environment_dir / "Dockerfile"
         image_reference = self.task_env_config.docker_image
         if self.guest_bundle is None:
             if dockerfile.exists() and image_reference is not None:
-                raise ValueError("QEMU task cannot specify both a Dockerfile and docker_image")
+                raise ValueError(
+                    "QEMU task cannot specify both a Dockerfile and docker_image"
+                )
             if dockerfile.exists():
                 self._source = DockerfileSource(self.environment_dir, dockerfile)
             elif image_reference is not None:
                 self._source = RegistryImage(image_reference)
             else:
-                raise ValueError("QEMU task needs a Dockerfile, docker_image, or guest_bundle")
+                raise ValueError(
+                    "QEMU task needs a Dockerfile, docker_image, or guest_bundle"
+                )
             if self.image_cache is None or self.qemu_assets is None:
-                raise ValueError("QEMU image preparation requires image_cache and qemu_assets")
+                raise ValueError(
+                    "QEMU image preparation requires image_cache and qemu_assets"
+                )
             return
         self._validate_image_metadata(self._image_metadata)
 
@@ -96,14 +129,23 @@ class QemuEnvironment(BaseEnvironment):
         if dockerfile.exists():
             digest = hashlib.sha256(dockerfile.read_bytes()).hexdigest()
             if metadata.get("dockerfile_sha256") != digest:
-                raise ValueError("Prebuilt OCI bundle does not match the task Dockerfile")
+                raise ValueError(
+                    "Prebuilt OCI bundle does not match the task Dockerfile"
+                )
         image_reference = self.task_env_config.docker_image
-        if image_reference is not None and metadata.get(IMAGE_REFERENCE_KEY) != image_reference:
-            raise ValueError("Prebuilt OCI bundle does not match the task image reference")
+        if (
+            image_reference is not None
+            and metadata.get(IMAGE_REFERENCE_KEY) != image_reference
+        ):
+            raise ValueError(
+                "Prebuilt OCI bundle does not match the task image reference"
+            )
 
     async def start(self, force_build: bool) -> None:
         if force_build and self.guest_bundle is not None:
-            raise ValueError("QEMU guest bundles are prebuilt; force_build is unsupported")
+            raise ValueError(
+                "QEMU guest bundles are prebuilt; force_build is unsupported"
+            )
         assets = None
         if self.qemu_assets is not None:
             config = self.qemu_assets
@@ -133,8 +175,12 @@ class QemuEnvironment(BaseEnvironment):
         factory = QemuMachineFactory(
             self.acceleration,
             assets=assets,
-            image_cache=self.image_cache / "oci" if self.image_cache is not None else None,
-            bundle_cache=self.image_cache / "bundles" if self.image_cache is not None else None,
+            image_cache=(
+                self.image_cache / "oci" if self.image_cache is not None else None
+            ),
+            bundle_cache=(
+                self.image_cache / "bundles" if self.image_cache is not None else None
+            ),
             authfile=self.registry_authfile,
             policy=self.signature_policy,
         )

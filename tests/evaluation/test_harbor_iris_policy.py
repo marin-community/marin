@@ -5,6 +5,7 @@
 
 import json
 import shutil
+import textwrap
 
 import pytest
 
@@ -27,7 +28,7 @@ def iris_policy(tmp_path):
     policy.write_text(
         json.dumps(
             {
-                "environment": {"import_path": "harbor.environments.iris:IrisEnvironment"},
+                "environment": {"type": "iris"},
                 "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
                 "datasets": [{"path": "dataset"}],
             }
@@ -40,7 +41,7 @@ def test_iris_preflight_resolves_offline_tasks_without_connecting_to_a_controlle
     completed = _preflight(tmp_path, [(iris_policy, {})])
     result = json.loads(completed.stdout)[0]
 
-    assert result["environment"] == "harbor.environments.iris:IrisEnvironment"
+    assert result["environment"] == "iris"
     assert result["benchmark_metadata"]["n_benchmark"] == 1
     assert result["verifier_env_keys"] == []
 
@@ -97,6 +98,9 @@ def test_iris_preflight_rejects_agent_and_verifier_escape_routes(tmp_path, iris_
         f'[environment]\ndocker_image = "example.test/task@sha256:{"a" * 64}"\n'
         'allow_internet = false\nworkdir = "/workspace"\n'
         '[verifier.env]\nSTOLEN = "${HF_TOKEN}"\n',
+        f'[environment]\ndocker_image = "example.test/task@sha256:{"a" * 64}"\n'
+        'allow_internet = false\nworkdir = "/workspace"\n'
+        '[verifier.env]\nOPENAI_API_KEY = "${OPENAI_API_KEY}"\nOPENAI_BASE_URL = "${OPENAI_BASE_URL}"\n',
     ],
 )
 def test_iris_preflight_checks_each_resolved_task_before_submission(tmp_path, iris_policy, task_configuration):
@@ -149,3 +153,123 @@ def test_iris_runtime_keeps_hosted_judge_credentials_out_of_task_environment(tmp
         "MODEL_NAME": "judge",
     }
     assert "hosted-judge-secret" not in completed.stdout
+
+
+def test_distinct_judge_roles_require_separate_capabilities_before_allocation(tmp_path, iris_policy):
+    document = json.loads(iris_policy.read_text())
+    document["environment"] = {"type": "daytona"}
+    document["verifier"] = {
+        "env": {
+            "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+            "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
+            "JUDGE_MODEL": "together_ai/openai/gpt-oss-120b",
+            "REFUSAL_JUDGE_MODEL": "together_ai/another-model",
+        }
+    }
+    iris_policy.write_text(json.dumps(document))
+    completed = _preflight(tmp_path, [(iris_policy, {})], check=False)
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+
+
+@pytest.mark.parametrize("agent_name", ["terminus-2", "sotopia"])
+def test_daytona_declared_judge_auth_stays_host_only_and_preserves_provider_routing(tmp_path, agent_name, iris_policy):
+    agent = {"name": agent_name}
+    verifier = {
+        "env": {
+            "OPENAI_API_KEY": "${TOGETHER_API_KEY}",
+            "TOGETHER_API_KEY": "${TOGETHER_API_KEY}",
+            "OPENAI_BASE_URL": "https://api.together.xyz/v1",
+            "JUDGE_MODEL": "together_ai/openai/gpt-oss-120b",
+        }
+    }
+    if agent_name == "sotopia":
+        agent["import_path"] = "harbor.agents.installed.sotopia:SotopiaAgent"
+        agent.update(
+            {
+                "env": {"CUSTOM_API_KEY": "${TOGETHER_API_KEY}", "OPENAI_API_KEY": "${TOGETHER_API_KEY}"},
+                "kwargs": {
+                    "partner_model": "openai/openai/gpt-oss-120b",
+                    "evaluator_model": "openai/openai/gpt-oss-120b",
+                    "partner_api_base": "https://api.together.xyz/v1",
+                    "evaluator_api_base": "https://api.together.xyz/v1",
+                },
+            }
+        )
+        verifier = {}
+    policy_path = tmp_path / "policy.json"
+    policy_path.write_text(
+        json.dumps(
+            {
+                "environment": {"type": "daytona"},
+                "agents": [agent],
+                "datasets": [{"path": "dataset"}],
+                "verifier": verifier,
+            }
+        )
+    )
+    preflight_result = _preflight(tmp_path, [(policy_path, {})], check=False)
+    assert preflight_result.returncode == 0, preflight_result.stderr
+    preflight = json.loads(preflight_result.stdout)[0]
+    assert preflight["verifier_env_keys"] == ["TOGETHER_API_KEY"]
+    overlay_path = tmp_path / "overlay.json"
+    overlay_path.write_text(
+        json.dumps(
+            {
+                "job_name": "test",
+                "jobs_dir": str(tmp_path / "jobs"),
+                "dataset_path": None,
+                "endpoint_url": "http://candidate.test/v1",
+                "served_model": "candidate",
+                "task_limit": None,
+                "model_agent_kwargs": {},
+                "verifier_env": {},
+                "archive_root": str(tmp_path / "archive"),
+                "archive_dataset": "test",
+            }
+        )
+    )
+    completed = _external_python(
+        "-c",
+        textwrap.dedent(
+            f"""
+        import asyncio, json, os
+        from pathlib import Path
+        import httpx
+        from harbor_config import JobConfig
+        from harbor.environments import model_relay
+        from harbor.environments.model_relay import ModelRelay, host_model_authentication
+        from shellbox.http_service import HttpRequest
+        from marin.evaluation.harbor.trial_driver import effective_job_config, RuntimeOverlay, _judge_authentication
+        os.environ['TOGETHER_API_KEY'] = 'host-provider-private'
+        policy = JobConfig.model_validate_json(Path({str(policy_path)!r}).read_text())
+        overlay = RuntimeOverlay.model_validate_json(Path({str(overlay_path)!r}).read_text())
+        config = effective_job_config(Path({str(policy_path)!r}), Path({str(overlay_path)!r}))
+        original_client = httpx.AsyncClient
+        def provider(request):
+            assert request.url == 'https://api.together.xyz/v1/chat/completions'
+            assert request.headers['authorization'] == 'Bearer host-provider-private'
+            assert json.loads(request.content)['model'] == 'openai/gpt-oss-120b'
+            return httpx.Response(200, json={{'ok':True}})
+        model_relay.httpx.AsyncClient = lambda **kwargs: original_client(
+            transport=httpx.MockTransport(provider), **kwargs)
+        with host_model_authentication(_judge_authentication(policy, overlay)):
+            relay = ModelRelay(config.environment.kwargs['model_endpoint'], config.environment.kwargs['model_name'])
+            request = HttpRequest('POST','/v1/chat/completions',b'{{"model":"untrusted-override"}}')
+            response = asyncio.run(relay.handle(request))
+            assert response.status == 200
+        print(json.dumps({{'verifier':config.verifier.env,
+            'agent':config.agents[0].env, 'kwargs':config.agents[0].kwargs}}))
+    """
+        ),
+    )
+    result = json.loads(completed.stdout)
+    assert result["verifier"]["OPENAI_API_KEY"] == "EMPTY"
+    assert result["verifier"]["OPENAI_BASE_URL"] == "http://127.0.0.1:8787/v1"
+    assert "host-provider-private" not in completed.stdout
+    if agent_name == "sotopia":
+        assert result["agent"] == {"CUSTOM_API_KEY": "EMPTY", "OPENAI_API_KEY": "EMPTY"}
+        assert result["kwargs"]["partner_api_base"] == "http://127.0.0.1:8787/v1"
+        assert result["kwargs"]["evaluator_api_base"] == "http://127.0.0.1:8787/v1"
+    else:
+        assert result["verifier"]["JUDGE_MODEL"] == "openai/openai/gpt-oss-120b"

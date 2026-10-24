@@ -44,23 +44,13 @@ analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
 telemetry = ["marin-rigging"]
 datasets = ["datasets>=4.4.1"]
-e2b = ["e2b>=2.4.2", "dockerfile-parse>=2.0.1"]
-daytona = ["daytona==0.200.2"]
-islo = ["islo>=0.3.0", "dockerfile-parse>=2.0.1"]
-modal = ["modal>=1.4.0"]
-runloop = ["runloop-api-client>=1.2.0", "dockerfile-parse>=2.0.1"]
-tensorlake = ["tensorlake>=0.5.18"]
-gke = ["kubernetes>=32.0.0"]
-novita = ["novita-sandbox==2.0.0a3", "dockerfile-parse>=2.0.1"]
-cwsandbox = ["cwsandbox>=0.23.3"]
-wandb = ["wandb>=0.27", "cwsandbox>=0.23.3"]
-cloud = ["harbor[cwsandbox,wandb,e2b,daytona,islo,modal,runloop,gke,tensorlake,novita]"]
-all = ["harbor[analysis,cloud,datasets,tinker]"]
+daytona = ["marin-shellbox[daytona]"]
+all = ["harbor[analysis,runtime,qemu,shellsim,datasets,tinker]"]
 tinker = ["tinker>=0.14.0", "tinker-cookbook>=0.1.0"]
 
 [dependency-groups]
 test = [
-    "harbor[cwsandbox,wandb,shellsim]",
+    "harbor[shellsim]",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",

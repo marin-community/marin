@@ -49,7 +49,8 @@ def _local_pi_shell(temp_dir, monkeypatch, pi_script):
         fake_bin / "node": f'#!/bin/sh\nexec {shlex.quote(node)} "$@"\n',
         fake_bin / "pi": pi_script,
         fake_bin / "stdbuf": '#!/bin/sh\nshift\nexec "$@"\n',
-        fake_bin / "tee": (
+        fake_bin
+        / "tee": (
             "#!/bin/sh\n"
             'mkdir -p "$HOME/pi-artifacts"\n'
             'exec /usr/bin/tee "$HOME/pi-artifacts/$(basename "$1")"\n'
@@ -182,36 +183,25 @@ class TestPiAgent:
         assert "--provider my-provider --model my-model" in run_command
 
     @pytest.mark.asyncio
-    async def test_api_key_forwarding_anthropic(self, temp_dir):
-        agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        env_vars = {
-            "ANTHROPIC_API_KEY": "ak-123",
-            "UNRELATED_KEY": "ignored",
-        }
-        with patch.dict(os.environ, env_vars, clear=False):
-            await agent.run("Fix the bug", mock_env, AsyncMock())
-
-        run_env = mock_env.exec.call_args_list[-1].kwargs["env"]
-        assert run_env["ANTHROPIC_API_KEY"] == "ak-123"
-        assert "UNRELATED_KEY" not in run_env
-
-    @pytest.mark.asyncio
-    async def test_api_key_forwarding_openai(self, temp_dir):
-        agent = Pi(logs_dir=temp_dir, model_name="openai/gpt-4")
-        mock_env = AsyncMock()
-        mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
-        env_vars = {
-            "OPENAI_API_KEY": "sk-456",
-            "UNRELATED_KEY": "ignored",
-        }
-        with patch.dict(os.environ, env_vars, clear=False):
-            await agent.run("Fix the bug", mock_env, AsyncMock())
-
-        run_env = mock_env.exec.call_args_list[-1].kwargs["env"]
-        assert run_env["OPENAI_API_KEY"] == "sk-456"
-        assert "UNRELATED_KEY" not in run_env
+    @pytest.mark.parametrize(
+        ("provider", "key"),
+        [("anthropic", "ANTHROPIC_API_KEY"), ("openai", "OPENAI_API_KEY")],
+    )
+    async def test_provider_receives_only_explicit_inert_capabilities(
+        self, temp_dir, monkeypatch, provider, key
+    ):
+        monkeypatch.setenv(key, "host-provider-private-canary")
+        agent = Pi(
+            logs_dir=temp_dir, model_name=f"{provider}/model", extra_env={key: "EMPTY"}
+        )
+        environment = AsyncMock()
+        environment.exec.return_value = SimpleNamespace(
+            return_code=0, stdout="", stderr=""
+        )
+        await agent.run("Fix the bug", environment, AgentContext())
+        run_env = environment.exec.call_args.kwargs["env"]
+        assert run_env[key] == "EMPTY"
+        assert "host-provider-private-canary" not in json.dumps(run_env)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -222,7 +212,11 @@ class TestPiAgent:
         ],
     )
     async def test_provider_base_url_forwarding(self, temp_dir, model_name, variable):
-        agent = Pi(logs_dir=temp_dir, model_name=model_name)
+        agent = Pi(
+            logs_dir=temp_dir,
+            model_name=model_name,
+            extra_env={variable: "https://provider.example.test/v1"},
+        )
         mock_env = AsyncMock()
         mock_env.exec.return_value = AsyncMock(return_code=0, stdout="", stderr="")
         endpoint = "https://provider.example.test/v1"
@@ -368,8 +362,9 @@ class TestPiAgent:
     ],
 )
 async def test_hosted_vllm_endpoint_registers_pi_provider(
-    temp_dir, model_name, thinking_format
+    temp_dir, model_name, thinking_format, monkeypatch
 ):
+    monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
     endpoint = "https://iris.example/proxy/t/cluster=cw/scoped-token/serve.inference/v1"
     served_id = "campaign-model"
     agent = Pi(
@@ -377,7 +372,7 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
         model_name=model_name,
         model_alias=f"hosted_vllm/{served_id}",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         model_info={"max_input_tokens": 65536, "max_output_tokens": 16384},
         thinking_format=thinking_format,
     )
@@ -401,7 +396,7 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
             **os.environ,
             "HOME": str(temp_dir),
             "HARBOR_PI_API_BASE": endpoint,
-            "HARBOR_PI_API_KEY": "dummy-key",
+            "HARBOR_PI_API_KEY": "EMPTY",
         },
     )
     await agent.run("Fix the bug", mock_env, AgentContext())
@@ -443,9 +438,10 @@ async def test_hosted_vllm_endpoint_registers_pi_provider(
     assert run_tokens[run_tokens.index("--model") + 1] == served_id
     assert run_call.kwargs["env"] == {}
     assert uploaded_files[Pi._ENDPOINT_ENV_PATH] == (
-        f"export HARBOR_PI_API_BASE={endpoint}\nexport HARBOR_PI_API_KEY=dummy-key\n"
+        f"export HARBOR_PI_API_BASE={endpoint}\nexport HARBOR_PI_API_KEY=EMPTY\n"
     )
     assert Pi._CONTEXT_BUDGET_EXTENSION_PATH in uploaded_files
+    assert "host-provider-private-canary" not in json.dumps(uploaded_files)
     assert all(
         endpoint not in call.kwargs["command"] for call in mock_env.exec.call_args_list
     )
@@ -463,7 +459,7 @@ async def test_hosted_vllm_request_budget_uses_exact_server_token_count(
         model_name="open-athena/test-model",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
         thinking_format="chat-template",
     )
@@ -537,7 +533,7 @@ async def test_hosted_vllm_request_budget_truncates_token_dense_tool_output(
         model_name="open-athena/test-model",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         model_info={"max_input_tokens": 32768, "max_output_tokens": 16384},
         thinking_format="chat-template",
     )
@@ -642,7 +638,7 @@ async def test_hosted_vllm_full_command_loads_nvm_and_preserves_capability_url(
         model_name="Qwen/Qwen3.6-35B-A3B",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         thinking_format="qwen-chat-template",
     )
 
@@ -699,7 +695,7 @@ async def test_hosted_vllm_failure_is_classified(
         model_name="Qwen/Qwen3.6-35B-A3B",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         thinking_format="qwen-chat-template",
     )
 
@@ -724,7 +720,7 @@ async def test_killed_output_validator_preserves_signal_error(temp_dir, monkeypa
         model_name="Qwen/Qwen3.6-35B-A3B",
         model_alias="hosted_vllm/served-model",
         api_base="https://iris.example/proxy/t/scoped-token/eval/v1",
-        api_key="dummy-key",
+        api_key="EMPTY",
         thinking_format="qwen-chat-template",
     )
 
@@ -820,7 +816,7 @@ fetch(`${provider.baseUrl}/chat/completions`, {
         model_name="Qwen/Qwen3.6-35B-A3B",
         model_alias="hosted_vllm/served-model",
         api_base=endpoint,
-        api_key="dummy-key",
+        api_key="EMPTY",
         thinking_format="qwen-chat-template",
     )
 
@@ -835,7 +831,7 @@ fetch(`${provider.baseUrl}/chat/completions`, {
     event = json.loads(output_path.read_text())
     assert received == {
         "path": "/proxy/t/redacted/endpoint/v1/chat/completions",
-        "authorization": "Bearer dummy-key",
+        "authorization": "Bearer EMPTY",
         "model": "served-model",
     }
     assert event["message"]["content"] == [
@@ -852,7 +848,11 @@ fetch(`${provider.baseUrl}/chat/completions`, {
 
 @pytest.mark.asyncio
 async def test_builtin_provider_does_not_replace_models_document(temp_dir):
-    agent = Pi(logs_dir=temp_dir, model_name="anthropic/claude-sonnet-4-5")
+    agent = Pi(
+        logs_dir=temp_dir,
+        model_name="anthropic/claude-sonnet-4-5",
+        extra_env={"ANTHROPIC_API_KEY": "EMPTY"},
+    )
     mock_env = AsyncMock()
     mock_env.exec.return_value = SimpleNamespace(return_code=0, stdout="", stderr="")
 
@@ -864,7 +864,7 @@ async def test_builtin_provider_does_not_replace_models_document(temp_dir):
         for call in mock_env.exec.call_args_list
     )
     assert mock_env.exec.call_args_list[-1].kwargs["env"] == {
-        "ANTHROPIC_API_KEY": "test-key"
+        "ANTHROPIC_API_KEY": "EMPTY"
     }
 
 
@@ -927,31 +927,21 @@ def test_rollout_collection_stamps_a_unique_trial_header(temp_dir):
     assert correlation_ids[0] != correlation_ids[1]
 
 
-@pytest.mark.asyncio
-async def test_hosted_vllm_failure_preserves_capability_url_and_redacts_api_key(
-    temp_dir,
+def test_hosted_provider_rejects_real_authentication_before_staging(
+    temp_dir, monkeypatch
 ):
-    endpoint = "https://iris.example/proxy/t/scoped-token/eval/v1"
-    api_key = "secret-api-key"
-    agent = Pi(
-        logs_dir=temp_dir,
-        model_name="hosted_vllm/served-model",
-        api_base=endpoint,
-        api_key=api_key,
-        thinking_format="qwen-chat-template",
-    )
-    mock_env = AsyncMock()
-    mock_env.exec.return_value = SimpleNamespace(
-        return_code=1,
-        stdout="",
-        stderr=f"request to {endpoint} with key {api_key} failed",
-    )
-
-    with pytest.raises(RuntimeError) as error:
-        await agent.run("Fix the bug", mock_env, AgentContext())
-
-    assert endpoint in str(error.value)
-    assert api_key not in str(error.value)
+    monkeypatch.setenv("OPENAI_API_KEY", "host-provider-private-canary")
+    with pytest.raises(
+        ValueError, match="credentials must remain on the host"
+    ) as error:
+        Pi(
+            logs_dir=temp_dir,
+            model_name="hosted_vllm/served-model",
+            api_base="http://127.0.0.1:8787/v1",
+            api_key="host-provider-private-canary",
+            thinking_format="qwen-chat-template",
+        )
+    assert "host-provider-private-canary" not in str(error.value)
 
 
 class TestPiPopulateContext:

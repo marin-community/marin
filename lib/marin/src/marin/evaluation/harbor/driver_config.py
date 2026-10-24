@@ -17,7 +17,7 @@ from rigging.config_discovery import find_project_root
 from rigging.tunnel import terminate_process_group
 
 from marin.evaluation.eval_env import env_vars_from_keys
-from marin.evaluation.harbor.driver_protocol import IRIS_ENVIRONMENT_IMPORT
+from marin.evaluation.harbor.driver_protocol import IRIS_ENVIRONMENT
 from marin.evaluation.records import BenchmarkMetadataRef
 from marin.evaluation.runner import BACKEND_POLL_SECONDS, check_inference_backend
 from marin.inference.iris import InferenceBackendState
@@ -404,6 +404,6 @@ def run_harbor_driver(
         command = _driver_command("run", policy_path, overlay_path)
         logger.info("running Harbor driver: %s", " ".join(command))
         runtime_env = dict(driver_env)
-        if config.environment == IRIS_ENVIRONMENT_IMPORT:
+        if config.environment == IRIS_ENVIRONMENT:
             runtime_env.update(env_vars_from_keys(_DRIVER_IRIS_ENV_KEYS))
         _stream_driver(command, runtime_env, backend_state)

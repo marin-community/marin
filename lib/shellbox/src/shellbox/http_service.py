@@ -24,7 +24,7 @@ POLL_INTERVAL = 0.1
 TRANSPORT_TIMEOUT = 30
 CONTROL_SCRIPT = """
 import http.client, sys
-c = http.client.HTTPConnection('127.0.0.1', int(sys.argv[1]), timeout=10)
+c = http.client.HTTPConnection('127.0.0.1', int(sys.argv[1]), timeout=float(sys.argv[4]))
 try:
     c.request('POST', '/__shellbox_http__/' + sys.argv[2], body=sys.stdin.buffer.read())
     r = c.getresponse()
@@ -53,7 +53,15 @@ class HttpResponse:
 async def _control(machine: Machine, port: int, operation: str, body: bytes = b"") -> object:
     result = await machine.run(
         Command(
-            ("python3", "-c", CONTROL_SCRIPT, str(port), operation, str(WIRE_LIMIT)),
+            (
+                "python3",
+                "-c",
+                CONTROL_SCRIPT,
+                str(port),
+                operation,
+                str(WIRE_LIMIT),
+                str(http_service_guest.IDLE_POLL_TIMEOUT + 5),
+            ),
             stdin=body,
             output_limit_bytes=WIRE_LIMIT + 1,
             timeout=TRANSPORT_TIMEOUT,
@@ -106,7 +114,10 @@ async def _pump(
                 )
                 del pending[request_id]
             if len(pending) < MAX_PENDING:
-                item = await _control(machine, port, "poll")
+                # Long idle polls reduce controller exec traffic. Keep polls
+                # short while host work is pending so completed responses drain.
+                wait = 1 if pending else http_service_guest.IDLE_POLL_TIMEOUT
+                item = await _control(machine, port, "poll", json.dumps({"wait": wait}).encode())
                 if item is not None:
                     if not isinstance(item, dict):
                         raise ValueError("Invalid sandbox HTTP request")

@@ -16,6 +16,7 @@ from harbor.environments.base import (
     ExecResult,
 )
 from harbor.environments.capabilities import EnvironmentCapabilities
+from harbor.models.environment_type import EnvironmentType
 from rigging.filesystem.storage_path import StoragePath
 
 from shellbox.backends.shellsim.machine import (
@@ -81,8 +82,8 @@ class ShellSimEnvironment(BaseEnvironment):
         super().__init__(*args, **kwargs)
 
     @staticmethod
-    def type() -> str:
-        return "shellsim"
+    def type() -> EnvironmentType:
+        return EnvironmentType.SHELLSIM
 
     @property
     def capabilities(self) -> EnvironmentCapabilities:

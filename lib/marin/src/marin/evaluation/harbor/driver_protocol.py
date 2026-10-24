@@ -3,4 +3,4 @@
 
 """Constants shared by the isolated Harbor driver and its parent process."""
 
-IRIS_ENVIRONMENT_IMPORT = "harbor.environments.iris:IrisEnvironment"
+IRIS_ENVIRONMENT = "iris"

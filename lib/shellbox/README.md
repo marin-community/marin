@@ -25,7 +25,7 @@ The base wheel contains the machine API and guest source. The [vendored Harbor p
 
 The package provides a Harbor-independent machine interface. QEMU and Docker factories accept a registry reference or a local Dockerfile. QEMU also accepts a `PreparedImage` or a prebuilt guest bundle; Docker accepts a local image. `ShellSimMachineFactory` and `LocalMachineFactory` accept `PackageSpec(pypi_packages=..., tools=...)`; the local factory also accepts `HostImage()`. Daytona accepts registry images and Dockerfiles at the build context root. Iris accepts registry image references. Local gVisor accepts the same images as Docker. Each `create` returns a fresh machine with a persistent writable filesystem. `run` returns bytes, exit status, and output truncation flags. `upload`, `download`, and `close` complete the common interface.
 
-Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the QEMU, ShellSim and Iris environment adapters. Docker, gVisor, Daytona, Iris, and local expose one-shot commands through the machine API; QEMU and ShellSim also support persistent Bash sessions.
+Shared contracts and OCI image preparation live at the package root. Backend machines live under `shellbox.backends.{qemu,shellsim,docker,gvisor,daytona,iris,local}`. Harbor owns the Iris, Daytona, QEMU and ShellSim environment adapters. Docker, gVisor, Daytona, Iris, and local expose one-shot commands through the machine API; QEMU and ShellSim also support persistent Bash sessions.
 
 | Backend | Image source | Network policy | Host requirement |
 | --- | --- | --- | --- |
@@ -50,10 +50,13 @@ finally:
 
 Use `GvisorMachineFactory()` in place of `DockerMachineFactory()` for a local Docker daemon with `runsc` registered. Use `IrisMachineFactory(cluster="cw-rno2a")` with `MachineSpec(..., network=NetworkPolicy.ALLOW)` for an Iris job with internet access, or `NetworkPolicy.DENY` on any Iris cluster. These backends provide one-shot commands and shared files. The current Harbor `BashAgent` needs a persistent `ShellSession`; it cannot use these backends directly until a session adapter is implemented.
 
-Harbor's host-side Terminus-2 and oracle agents can use
-`harbor.environments.iris:IrisEnvironment`. The adapter accepts prebuilt,
-digest-pinned offline tasks and delegates commands, transfers and cleanup to
-`IrisMachineFactory`. It rejects Dockerfiles, Compose, host environment interpolation
+Harbor selects Shellbox adapters with `environment.type`: `iris` (the default),
+`daytona`, `qemu` or `shellsim`. It has no independent provider execution backend
+or custom environment import path. Its host-side Terminus-2 and oracle agents
+can use Iris with prebuilt digest-pinned offline tasks and private service groups.
+The Iris adapter delegates commands, transfers and cleanup to `IrisMachineFactory`.
+It reads prepared image references, translates a validated Compose subset into
+service groups, and rejects guest image builds, ambient environment interpolation
 and isolation overrides. See [offline Harbor execution](../../docs/harbor-integration.md#offline-execution-through-shellbox-and-iris)
 for policy and image requirements. Inside an Iris job, the factory submits to that
 job's own controller with its scoped task token; local callers select a cluster
@@ -302,7 +305,7 @@ Install the `shellsim` extra for Shellsim 0.1.38 or later. A Harbor worker share
 
 ```yaml
 environment:
-  import_path: harbor.environments.shellsim:ShellSimEnvironment
+  type: shellsim
 agents:
   - import_path: harbor.agents.shellbox:BashAgent
     model_name: openai/local-model
@@ -310,7 +313,7 @@ agents:
       base_url: http://127.0.0.1:8000/v1
 ```
 
-Default contexts load precompiled native code from Shellsim's public catalog when a compatible artifact is available. Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Select packages and tools through the shared `shellbox.PackageSpec`, passed as `package_spec` to the Harbor adapter or as `MachineSpec.source`. Use `PackageSpec(pypi_packages=())` for CPython alone; `PackageSpec()` keeps a shell-only environment. A custom Harbor environment class can own the configured Context. Guest commands have no host filesystem or network access.
+Default contexts load precompiled native code from Shellsim's public catalog when a compatible artifact is available. Configure catalog, cache, offline and precompiled trust policy on `shellsim.Context`; pass it to `ShellSimEnvironment` or `ShellSimMachineFactory`. Select packages and tools through the shared `shellbox.PackageSpec`, passed as `package_spec` to the Harbor adapter or as `MachineSpec.source`. Use `PackageSpec(pypi_packages=())` for CPython alone; `PackageSpec()` keeps a shell-only environment. Construct `ShellSimEnvironment` directly when a caller owns a configured Context; job policies select the maintained `shellsim` type. Guest commands have no host filesystem or network access.
 
 Agent shell state persists between Bash actions; setup and verifier commands use fresh shell state over the same filesystem. Actions complete before returning and do not support interactive input. A command timeout or caller cancellation requests native interruption and allows five seconds for cleanup. `ShellSession.interrupt()` and `close()` use the same grace period. Cleanup within that period preserves the machine for reuse, except when closing it. If native work does not stop, the machine closes and rejects further work while its worker finishes in the background. Cleanup errors are logged without replacing the caller's cancellation. Task images and Dockerfile instructions are not applied; regular files under `environment/` are copied to the workdir. Select tasks compatible with the WASI catalog and supported commands.
 
@@ -348,11 +351,11 @@ Harbor can prepare a task's `environment/Dockerfile` or `docker_image` automatic
 
 This staging step requires `umoci`, `mkfs.ext4` built with libarchive support, and `cpio` on the build machine. `mkfs.ext4 -d` reads a tarball so the guest filesystem retains OCI file ownership. A runtime host using only prebuilt bundles needs none of these tools. For repeatable builds, pin the source image by digest before copying it to the OCI layout. See the [OCI image layout](https://specs.opencontainers.org/image-spec/image-layout/) and [umoci unpack](https://umo.ci/quick-start/workflow/) documentation for the source format and layer unpacking.
 
-Use the import paths in a Harbor job config:
+Select the maintained QEMU type in a Harbor job config:
 
 ```yaml
 environment:
-  import_path: harbor.environments.qemu:QemuEnvironment
+  type: qemu
   kwargs:
     guest_bundle: /opt/marin-shellbox/bash-image
 agents:
@@ -366,7 +369,7 @@ To use the image named by a task's `docker_image` or build its `environment/Dock
 
 ```yaml
 environment:
-  import_path: harbor.environments.qemu:QemuEnvironment
+  type: qemu
   kwargs:
     image_cache: /var/cache/marin-shellbox
     qemu_assets:
@@ -444,7 +447,7 @@ uv run --project vendor/harbor --extra runtime --extra qemu --frozen \
   vendor/harbor/benchmarks/tasktrove_compare.py /tmp/marin-shellbox-benchmark --concurrency 2
 ```
 
-The comparison runs the same empty and available oracle checks in offline Docker containers and fresh QEMU guests. It records one JSON result per check and fails on a verdict mismatch.
+The comparison runs the same empty and available oracle checks through Shellbox Docker machines and fresh QEMU guests. Inputs are copied through the machine transfer API; the benchmark does not bind host directories into Docker. It writes `shellbox-results.jsonl`, keeping results from the former raw Docker path separate. It records one JSON result per check and fails on a verdict mismatch.
 
 ## Current support boundary
 

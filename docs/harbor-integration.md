@@ -6,7 +6,7 @@ server and, when requested, a second shared judge server; gives Harbor their Iri
 finish.
 
 Harbor provides containerized agent benchmarks such as Terminal-Bench, SWE-bench Verified, AIME,
-GAIA, BFCL, and Aider. Trials can run in Daytona or another Harbor-supported sandbox environment.
+GAIA, BFCL, and Aider. Harbor executes tasks only through Marin Shellbox adapters: `iris` (the default), `daytona`, `qemu` and `shellsim`. Removed provider names and custom environment import paths fail validation.
 See [Running Evaluations with Marin](tutorials/run-lm-evals.md) for the model and suite command
 matrix. This page documents Harbor-specific configuration and output behavior.
 
@@ -110,6 +110,33 @@ Iris group and any earlier retry to end first: two live Harbor drivers must neve
 root. Add `--retry-unscored-harbor-trials` to retry known unscored trials while preserving scored
 outcomes and unknown errors.
 
+## Maintained execution types
+
+Harbor's CLI and policies select `environment.type` from `iris`, `daytona`,
+`qemu` and `shellsim`. They default to Iris. Environment classes cannot be loaded
+from a policy or CLI import path. Agent import paths remain a separate trusted
+harness extension.
+
+Daytona uses `DaytonaMachineFactory` for creation, execution, transfers and cleanup.
+It selects a task's registry image when supplied; otherwise Shellbox prepares the
+task's Dockerfile through Daytona's provider image-build service. No Docker daemon
+runs inside the task container. Tasks need Python 3 and `setsid` for command
+supervision and the host model relay.
+
+The Daytona adapter accepts `api_key_env`, `network_policy` (`mode` and optional
+`value`), `ttl_minutes` and `create_timeout`. Model endpoint settings are supplied
+by the trusted launcher. Snapshot names, automatic snapshot toggles, provider target
+overrides and forced rebuilds are unsupported. Compose tasks must use prepared
+Iris service groups; Daytona rejects every Compose filename and extra overlay.
+
+Checked-in evaluation policies retain their dataset selectors and historical
+provider choices. They are not silently rewritten to another environment.
+A policy or package needing a removed option, a Compose topology on Daytona,
+or an unavailable image fails explicitly. Prepare the task through the supported
+path before launching a new run; preserve historical outputs as Marin artifacts.
+Shellbox's own Docker and local backends remain available to callers such as
+SkyRL's engine-owned machine path; they are not Harbor execution providers.
+
 ## Credentials
 
 Daytona-backed definitions in `experiments/evaluation/evals.py` own their credential references.
@@ -121,7 +148,10 @@ subprocess receives the selected backend's credentials, Hugging Face access, and
 needed for remote trial results and FineStore archives. It remains a trusted process: `uv --isolated`
 isolates dependencies. The subprocess retains its user identity, filesystem and network access.
 Task containers must not inherit that authority. Do not put resolved credentials in model YAMLs,
-runner configs, or evaluation artifacts.
+runner configs, or evaluation artifacts. Harbor's `--env-file` configures its trusted harness;
+it does not grant the file's variables to task templates. The Marin launcher binds explicit
+task capabilities and host model authentication. A missing capability fails instead of
+prompting to inherit a host variable. Use the Marin launcher for hosted judge authentication.
 
 ## Offline execution through Shellbox and Iris
 
@@ -130,7 +160,7 @@ For prepared tasks and private service groups, select Harbor's Iris adapter over
 ```yaml
 n_concurrent_trials: 4
 environment:
-  import_path: harbor.environments.iris:IrisEnvironment
+  type: iris
 agents:
   - name: terminus-2
 datasets:
@@ -220,7 +250,7 @@ Task environment templates resolve only against explicit task capabilities. They
 driver's ambient environment, including through differently named aliases.
 Image contents and explicit task inputs must themselves be free of production credentials.
 
-The shared launcher rejects Docker execution. The offline Iris path also rejects installed agents,
+The runtime has no independent Docker or other provider execution backend. The offline Iris path also rejects installed agents,
 custom agent imports and custom host mounts. Its Compose importer supports `main` plus prepared
 sidecars, commands, environment values, exposed TCP ports, readiness checks and `main` dependencies
 on started or healthy services. MCP URLs must name an exposed endpoint inside the service group.
@@ -235,7 +265,7 @@ Tau3 requires an explicit `--judge-model` in the shared launch command. That hos
 both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
 Without a hosted model, the adapter rejects the task before allocating its service group. A direct
 Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint authentication with
-`harbor.environments.iris.host_model_authentication`; the adapter never reads an ambient model key.
+`harbor.environments.model_relay.host_model_authentication`; the adapter never reads an ambient model key.
 
 The recognized Harbor agent-log bind is lowered only when the prepared sidecar declares
 `agent_logs: "publish"`. Before actor commands and artifact downloads, the adapter copies sidecar logs
@@ -271,10 +301,10 @@ only its image's configuration, backend runtime defaults and explicitly declared
 task or command variables. Treat task definitions, images, build contexts and
 explicit mounts as trusted inputs: they can deliberately supply credentials.
 Task, agent, solution and verifier environment templates resolve against an explicit capability
-mapping whose default is empty. They cannot resolve arbitrary host variables. Storage and
-control-plane credential keys and known credential values are rejected before sandbox commands run.
-Installed Claude uses a host model proxy for AWS authentication; Bedrock credential forwarding is
-unavailable.
+mapping whose default is empty. They cannot resolve arbitrary host variables. Storage,
+control-plane and model-provider credential keys and known credential values are rejected before
+sandbox commands run. Model clients receive inert keys for a declared relay. Host authentication
+files and AWS/Bedrock credentials cannot be forwarded to installed agents.
 Below, persistent variables are explicit `persistent_env` / `--ae` settings;
 Harbor infrastructure values name images, resource limits and log mount paths.
 
@@ -283,11 +313,9 @@ Harbor infrastructure values name images, resource limits and log mount paths.
 | Shellbox local / bubblewrap | Fixed `PATH`, `HOME`, `LANG`, optional hash seed and explicit task/command variables. Task variables take effect inside bubblewrap and reach it through a private inherited descriptor, keeping values out of host process listings. Private `/etc` copies allowlisted runtime files; host startup files, password hashes, private keys, `/opt` contents and sysfs are hidden. Shared program directories and explicit mounts remain trusted inputs. |
 | Shellbox Docker / local gVisor | Image configuration and explicit task/command variables; no host directory mounts or implicit forwarding of host variables in Shellbox. Docker client configuration, including automatic proxy settings, remains an operator-controlled input. `runsc` changes the execution boundary, not credential policy. |
 | Shellbox Daytona | Image/snapshot configuration and explicit task/command variables. The Daytona client keeps its API credentials in the harness; creation forwards only `MachineSpec.env`. |
-| Shellbox Iris | The `SANDBOX` profile excludes parent environment inheritance, workspace bundles, cluster secrets, task tokens, shared caches and service-account tokens. Kubernetes service links are disabled. `secret_env` is an explicit exception for trusted graders and must never be used for actors. |
+| Shellbox Iris | The `SANDBOX` profile excludes parent environment inheritance, workspace bundles, cluster secrets, task tokens, shared caches and service-account tokens. Kubernetes service links are disabled. The Harbor adapter does not expose a secret-injection option. |
 | Shellbox QEMU | Image configuration and explicit task/command variables reach the guest over its serial protocol. The QEMU host process uses host runtime settings; these do not become guest variables. No host filesystem is shared with the guest. |
 | Shellbox ShellSim | Simulator defaults and explicit task/command variables in a private virtual filesystem. |
-| Harbor Docker Compose | Explicit task/persistent variables and Harbor infrastructure values. The local Docker client receives only allowlisted connection, login-path and OS runtime variables from the host. Other host variables are unavailable for Compose interpolation. |
-| Harbor Daytona / Modal Compose | Explicit task/persistent variables and Harbor infrastructure values. Compose references alone do not copy host variables into the remote sandbox. |
 
 Iris's legacy `CONTAINER_PROFILE_GVISOR` retains cluster credentials and is for
 trusted workloads. Model-controlled work must use `CONTAINER_PROFILE_SANDBOX`.

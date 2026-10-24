@@ -1,236 +1,50 @@
-"""Tests for environment preflight credential checks."""
-
-import subprocess
-from unittest.mock import patch
+"""The environment factory admits only maintained Shellbox adapters."""
 
 import pytest
+from pydantic import ValidationError
 
-from harbor.environments.apple_container import AppleContainerEnvironment
-from harbor.environments.cwsandbox import CWSandboxEnvironment
-from harbor.environments.daytona import DaytonaEnvironment
-from harbor.environments.docker.docker import DockerEnvironment
-from harbor.environments.e2b import E2BEnvironment
 from harbor.environments.factory import EnvironmentFactory
-from harbor.environments.gke import GKEEnvironment
-from harbor.environments.modal import ModalEnvironment
-from harbor.environments.runloop import RunloopEnvironment
-from harbor.environments.wandb import WandbEnvironment
 from harbor.models.environment_type import EnvironmentType
+from harbor.models.task.config import EnvironmentConfig as TaskEnvironmentConfig
+from harbor.models.trial.config import EnvironmentConfig
+from harbor.models.trial.paths import TrialPaths
+from harbor_config import load_config_document
 
 
-# --- Daytona ---
-
-
-def test_daytona_preflight_missing_key(monkeypatch):
-    monkeypatch.delenv("DAYTONA_API_KEY", raising=False)
-    with pytest.raises(SystemExit, match="DAYTONA_API_KEY"):
-        DaytonaEnvironment.preflight()
-
-
-def test_daytona_preflight_ok(monkeypatch):
-    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
-    DaytonaEnvironment.preflight()
-
-
-# --- E2B ---
-
-
-def test_e2b_preflight_missing_key(monkeypatch):
-    monkeypatch.delenv("E2B_API_KEY", raising=False)
-    with pytest.raises(SystemExit, match="E2B_API_KEY"):
-        E2BEnvironment.preflight()
-
-
-def test_e2b_preflight_ok(monkeypatch):
-    monkeypatch.setenv("E2B_API_KEY", "test-key")
-    E2BEnvironment.preflight()
-
-
-# --- CWSandbox ---
-
-
-def test_cwsandbox_preflight_missing_key(monkeypatch):
-    monkeypatch.delenv("CWSANDBOX_API_KEY", raising=False)
-    with pytest.raises(SystemExit, match="CWSANDBOX_API_KEY"):
-        CWSandboxEnvironment.preflight()
-
-
-def test_cwsandbox_preflight_rejects_invalid_credentials(monkeypatch):
-    import cwsandbox
-
-    monkeypatch.setenv("CWSANDBOX_API_KEY", "test-key")
-
-    def _raise_auth_error(**_kwargs):
-        raise cwsandbox.CWSandboxAuthenticationError("bad token")
-
-    monkeypatch.setattr(cwsandbox.Sandbox, "list", _raise_auth_error)
-    with pytest.raises(SystemExit, match="auth check failed"):
-        CWSandboxEnvironment.preflight()
-
-
-def test_cwsandbox_preflight_ok(monkeypatch):
-    import cwsandbox
-    from types import SimpleNamespace
-
-    monkeypatch.setenv("CWSANDBOX_API_KEY", "test-key")
-    monkeypatch.setattr(
-        cwsandbox.Sandbox,
-        "list",
-        lambda **_kwargs: SimpleNamespace(result=lambda: []),
+@pytest.mark.parametrize(
+    "environment_type",
+    [EnvironmentType.IRIS, EnvironmentType.QEMU, EnvironmentType.SHELLSIM],
+)
+def test_factory_constructs_the_selected_shellbox_adapter(tmp_path, environment_type):
+    environment_dir = tmp_path / "environment"
+    environment_dir.mkdir()
+    trial_paths = TrialPaths(trial_dir=tmp_path / "trial")
+    trial_paths.mkdir()
+    task = TaskEnvironmentConfig(allow_internet=False, workdir="/workspace")
+    if environment_type is EnvironmentType.IRIS:
+        task.docker_image = "example.test/task@sha256:" + "a" * 64
+        kwargs = {"controller_url": "http://controller.invalid"}
+    elif environment_type is EnvironmentType.QEMU:
+        kwargs = {"guest_bundle": str(environment_dir)}
+    else:
+        kwargs = {}
+    environment = EnvironmentFactory.create_environment_from_config(
+        EnvironmentConfig(type=environment_type, kwargs=kwargs),
+        environment_dir=environment_dir,
+        environment_name="task",
+        session_id="trial",
+        trial_paths=trial_paths,
+        task_env_config=task,
     )
-    CWSandboxEnvironment.preflight()
+    assert environment.type() == environment_type
+    assert environment.capabilities.disable_internet
 
 
-# --- Wandb ---
-
-
-def test_wandb_preflight_rejects_invalid_credentials(monkeypatch):
-    import wandb.sandbox as _wandb_sandbox
-
-    def _raise_auth_error(**_kwargs):
-        raise _wandb_sandbox.CWSandboxAuthenticationError("bad token")
-
-    monkeypatch.setattr(_wandb_sandbox.Sandbox, "list", _raise_auth_error)
-    with pytest.raises(SystemExit, match="auth check failed"):
-        WandbEnvironment.preflight()
-
-
-def test_wandb_preflight_ok(monkeypatch):
-    import wandb.sandbox as _wandb_sandbox
-    from types import SimpleNamespace
-
-    monkeypatch.setattr(
-        _wandb_sandbox.Sandbox,
-        "list",
-        lambda **_kwargs: SimpleNamespace(result=lambda: []),
-    )
-    WandbEnvironment.preflight()
-
-
-# --- Runloop ---
-
-
-def test_runloop_preflight_missing_key(monkeypatch):
-    monkeypatch.delenv("RUNLOOP_API_KEY", raising=False)
-    with pytest.raises(SystemExit, match="RUNLOOP_API_KEY"):
-        RunloopEnvironment.preflight()
-
-
-def test_runloop_preflight_ok(monkeypatch):
-    monkeypatch.setenv("RUNLOOP_API_KEY", "test-key")
-    RunloopEnvironment.preflight()
-
-
-# --- Modal ---
-
-
-def test_modal_preflight_no_auth(monkeypatch, tmp_path):
-    monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
-    monkeypatch.delenv("MODAL_TOKEN_SECRET", raising=False)
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    with pytest.raises(SystemExit, match="Modal requires authentication"):
-        ModalEnvironment.preflight()
-
-
-def test_modal_preflight_ok_env_vars(monkeypatch, tmp_path):
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    monkeypatch.setenv("MODAL_TOKEN_ID", "id")
-    monkeypatch.setenv("MODAL_TOKEN_SECRET", "secret")
-    ModalEnvironment.preflight()
-
-
-def test_modal_preflight_ok_config_file(monkeypatch, tmp_path):
-    monkeypatch.delenv("MODAL_TOKEN_ID", raising=False)
-    monkeypatch.delenv("MODAL_TOKEN_SECRET", raising=False)
-    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
-    (tmp_path / ".modal.toml").write_text("[default]")
-    ModalEnvironment.preflight()
-
-
-# --- GKE ---
-
-
-def test_gke_preflight_no_gcloud(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _cmd: None)
-    with pytest.raises(SystemExit, match="gcloud CLI"):
-        GKEEnvironment.preflight()
-
-
-def test_gke_preflight_no_kubeconfig(monkeypatch, tmp_path):
-    monkeypatch.setattr("shutil.which", lambda _cmd: "/usr/bin/gcloud")
-    monkeypatch.setenv("KUBECONFIG", str(tmp_path / "nonexistent"))
-    with pytest.raises(SystemExit, match="Kubernetes credentials"):
-        GKEEnvironment.preflight()
-
-
-def test_gke_preflight_ok(monkeypatch, tmp_path):
-    monkeypatch.setattr("shutil.which", lambda _cmd: "/usr/bin/gcloud")
-    kubeconfig = tmp_path / "config"
-    kubeconfig.write_text("apiVersion: v1")
-    monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
-    GKEEnvironment.preflight()
-
-
-# --- Docker ---
-
-
-def test_docker_preflight_no_docker(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _cmd: None)
-    with pytest.raises(SystemExit, match="not installed"):
-        DockerEnvironment.preflight()
-
-
-def test_docker_preflight_daemon_not_running(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _cmd: "/usr/bin/docker")
-    with patch(
-        "subprocess.run",
-        side_effect=subprocess.CalledProcessError(1, "docker info"),
-    ):
-        with pytest.raises(SystemExit, match="daemon is not running"):
-            DockerEnvironment.preflight()
-
-
-def test_docker_preflight_ok(monkeypatch):
-    monkeypatch.setattr("shutil.which", lambda _cmd: "/usr/bin/docker")
-    with patch("subprocess.run"):
-        DockerEnvironment.preflight()
-
-
-# --- AppleContainer ---
-
-
-def test_apple_container_preflight_not_arm64(monkeypatch):
-    monkeypatch.setattr("platform.machine", lambda: "x86_64")
-    with pytest.raises(SystemExit, match="Apple silicon"):
-        AppleContainerEnvironment.preflight()
-
-
-def test_apple_container_preflight_no_cli(monkeypatch):
-    monkeypatch.setattr("platform.machine", lambda: "arm64")
-    monkeypatch.setattr("shutil.which", lambda _cmd: None)
-    with pytest.raises(SystemExit, match="container.*CLI"):
-        AppleContainerEnvironment.preflight()
-
-
-def test_apple_container_preflight_ok(monkeypatch):
-    monkeypatch.setattr("platform.machine", lambda: "arm64")
-    monkeypatch.setattr("shutil.which", lambda _cmd: "/usr/local/bin/container")
-    AppleContainerEnvironment.preflight()
-
-
-# --- EnvironmentFactory.run_preflight ---
-
-
-def test_factory_run_preflight_dispatches(monkeypatch):
-    monkeypatch.setenv("DAYTONA_API_KEY", "test-key")
-    EnvironmentFactory.run_preflight(type=EnvironmentType.DAYTONA)
-
-
-def test_factory_run_preflight_none_type():
-    EnvironmentFactory.run_preflight(type=None)
-
-
-def test_factory_run_preflight_unknown_type():
-    EnvironmentFactory.run_preflight(
-        type=EnvironmentType.DAYTONA, import_path="nonexistent.module:Class"
-    )
+@pytest.mark.parametrize(
+    "environment", [{"type": "docker"}, {"import_path": "untrusted.module:Environment"}]
+)
+def test_config_rejects_execution_outside_shellbox_before_loading_a_backend(
+    environment,
+):
+    with pytest.raises(ValidationError):
+        load_config_document({"environment": environment})

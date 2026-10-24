@@ -300,7 +300,7 @@ def test_oracle_harbor_trial_uses_real_mounts_and_verifier_lifecycle(
             "tasks": [{"path": str(task)}],
             "agents": [{"name": "oracle"}],
             "environment": {
-                "import_path": "harbor.environments.iris:IrisEnvironment",
+                "type": "iris",
                 "kwargs": {"cluster": "test"},
             },
         }
