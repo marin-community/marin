@@ -69,7 +69,6 @@ def cat_count_config(
                     "use_kl_loss": False,
                     "policy_loss_type": "behavior_clip" if staleness else "regular",
                     "off_policy_correction": "none" if staleness else "tis",
-                    # The CPU inference backend supplies chosen-token scores, without vLLM candidate heads.
                     "score_centering_probe": {"interval": 0},
                     "group_admission": {"stall_timeout": 120},
                 },
