@@ -78,6 +78,7 @@ from experiments.evaluation.evals import (
     harbor_model_agent_kwargs,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
+from experiments.evaluation.policy_finalization import PolicyFinalization, SotopiaLengthControl, policy_executor
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -149,6 +150,7 @@ class LaunchSpec:
     cache_key: str | None = None
     """Reuse evaluation records for this key and the same resolved configuration."""
     run_id: str | None = None
+    policy_finalization: PolicyFinalization | None = None
 
 
 def _git_sha() -> str:
@@ -398,8 +400,25 @@ def build_evaluation_batch(
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
+    policy_judge = None
+    if spec.policy_finalization is not None and any(
+        definition.record_ref.name in {"financebench", "olympiadbench"} for _, definition in definitions
+    ):
+        policy_judge = _resolve_hosted_judge(
+            replace(spec, judge_model=spec.policy_finalization.judge, judge_accelerator="H100x8"), accelerator
+        )
     evaluations: list[Evaluation] = []
     for eval_key, definition in definitions:
+        if spec.policy_finalization is not None:
+            executor, reference = policy_executor(
+                definition.executor,
+                definition.record_ref,
+                spec.policy_finalization,
+                model.location,
+                policy_judge.accelerator if policy_judge is not None else None,
+                spec.priority_band,
+            )
+            definition = replace(definition, executor=executor, record_ref=reference)
         cache_key = json.dumps(
             {
                 "pipeline": spec.cache_key or group_id,
@@ -545,11 +564,16 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
     launch_env = env_vars_from_keys(EVAL_ENV_KEYS)
     for name, spec in sorted(batch.secret_env.items()):
         launch_env[name] = resolve_secret_spec(spec).value
+    extras = (
+        ("eval-policy",)
+        if any(isinstance(evaluation.executor, SotopiaLengthControl) for evaluation in batch.evaluations)
+        else ()
+    )
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_evaluation_group, batch),
         name=f"eval-{batch.group_id}-{uuid.uuid4().hex[:8]}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
-        environment=EnvironmentSpec(env_vars=launch_env),
+        environment=EnvironmentSpec(env_vars=launch_env, extras=extras),
         constraints=constraints,
         max_retries_failure=0,
         priority_band=batch.priority_band,

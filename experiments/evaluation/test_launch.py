@@ -3,6 +3,8 @@
 
 """Durable identities across command-line evaluation relaunches."""
 
+import json
+import os
 import subprocess
 from contextlib import contextmanager
 from dataclasses import replace
@@ -25,11 +27,19 @@ from experiments.evaluation.models import models
 
 
 @pytest.fixture
-def submitted_batches(monkeypatch):
+def submitted_environments():
+    return []
+
+
+@pytest.fixture
+def submitted_batches(monkeypatch, submitted_environments):
+    monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
+    monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
     batches: list[EvaluationBatch] = []
 
     class Client:
-        def submit(self, *, entrypoint, **_kwargs):
+        def submit(self, *, entrypoint, environment, **_kwargs):
+            submitted_environments.append(environment)
             _, args, _ = entrypoint.resolve()
             batches.append(args[0])
             return SimpleNamespace(job_id="/test/eval")
@@ -253,3 +263,116 @@ def test_pipeline_evaluator_update_uses_new_evaluation_steps(tmp_path, runtime_c
     assert after.group_id == before.group_id
     assert {evaluation.identity.run_id for evaluation in before.evaluations}.isdisjoint(executed)
     assert sorted(executed) == sorted(evaluation.identity.run_id for evaluation in after.evaluations)
+
+
+def test_policy_relaunch_does_not_reuse_scores_from_another_cohort(tmp_path, submitted_batches):
+    campaign = Path(__file__).parent / "campaigns" / "eval-campaign-09-25-unlabeled"
+    cohort = tmp_path / "cohort.json"
+    cohort.write_text((campaign / "sotopia-baselines.json").read_text())
+    config = tmp_path / "finalization.yaml"
+    judge = campaign / "ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml"
+    config.write_text(f"judge_model_config: {judge.resolve()}\nsotopia_baselines: {cohort}\n")
+    command = [*_command(tmp_path), "--evals", "financebench", "--policy-finalization-config", str(config)]
+    runner = CliRunner()
+    first = runner.invoke(cli, command)
+    assert first.exit_code == 0, first.output
+    batch = submitted_batches[-1]
+    evaluation = batch.evaluations[0]
+    _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
+    original = json.loads(evaluation.identity.eval_ref.postprocessing["marin-10197"])
+    sources = json.loads(cohort.read_text())
+    sources["models"][0]["results_path"] += "-replacement"
+    cohort.write_text(json.dumps(sources))
+    second = runner.invoke(cli, command)
+    assert second.exit_code == 0, second.output
+    revised = submitted_batches[-1].evaluations[0]
+    assert revised.identity.run_id != evaluation.identity.run_id
+    frozen = json.loads(revised.identity.eval_ref.postprocessing["marin-10197"])
+    assert frozen["sotopia_baselines"][0]["results_path"] != original["sotopia_baselines"][0]["results_path"]
+
+
+@pytest.mark.parametrize("platform,accelerator", [("tpu", "v5litepod-4"), ("gpu", "GB200x1")])
+def test_policy_judge_rejects_incompatible_placement_before_submission(
+    tmp_path, submitted_batches, platform, accelerator
+):
+    config = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
+    command = [
+        *_command(tmp_path),
+        "--evals",
+        "financebench",
+        "--policy-finalization-config",
+        str(config),
+        "--platform",
+        platform,
+        "--accelerator",
+        accelerator,
+    ]
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code != 0
+    assert "same cluster or region" in result.output
+    assert submitted_batches == []
+
+
+def test_policy_snapshot_uses_project_python_and_preserves_cohort_sources(tmp_path):
+    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    system_python = bin_dir / "python3"
+    system_python.write_text("#!/bin/sh\necho 'system Python has no project dependencies' >&2\nexit 1\n")
+    system_python.chmod(0o755)
+    snapshots = tmp_path / "snapshots"
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; CONFIG_SNAPSHOT_DIR="$2"; ' 'snapshot_launch_configs --policy-finalization-config "$3"',
+            "snapshot",
+            str(campaign / "common.sh"),
+            str(snapshots),
+            str(campaign / "finalization.yaml"),
+        ],
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "UV_NO_SYNC": "1",
+            "MARIN_DIR": str(Path(__file__).resolve().parents[2]),
+        },
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    snapshot = snapshots / result.stdout.strip()
+    manifest = json.loads((snapshot / "launch.json").read_text())
+    assert {row["kind"] for row in manifest["files"]} == {
+        "policy-finalization-config",
+        "judge_model_config",
+        "sotopia_baselines",
+    }
+    saved_cohort = next(snapshot.glob("*-sotopia-baselines.json"))
+    assert saved_cohort.read_bytes() == (campaign / "sotopia-baselines.json").read_bytes()
+
+
+def test_policy_sotopia_launch_provisions_fitting_dependencies(tmp_path, submitted_batches, submitted_environments):
+    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
+    result = CliRunner().invoke(
+        cli,
+        [
+            "launch",
+            "--model",
+            "qwen3-8b",
+            "--platform",
+            "gpu",
+            "--accelerator",
+            "H100x1",
+            "--harbor-config",
+            str(campaign / "harbor-configs/sotopia-hard.yaml"),
+            "--policy-finalization-config",
+            str(campaign / "finalization.yaml"),
+            "--records-prefix",
+            str(tmp_path),
+            "--no-wait",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(submitted_batches) == 1
+    assert submitted_environments[0].extras == ("eval-policy",)
