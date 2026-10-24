@@ -652,11 +652,105 @@ def run_ablations(model, mesh, reg: dict, positions: np.ndarray, host: HostToken
     return results
 
 
+# Population ablations: (registry set, layers below) whose members are mean-ablated together at their strong fires.
+POPULATION_VARIANTS = (
+    ("cr90_lb95", 4),
+    ("cr90_lb90", 4),
+    ("cr90_lb80", 4),
+    ("random", 4),
+    ("cr90_lb90", L),
+    ("cr90_lb80", L),
+    ("random", L),
+)
+
+
+def make_population():
+    @jax.jit
+    def run(model, tokens, seg, valid, member, thr, means, s_member, s_thr, s_means):
+        """Mean-ablate every member unit wherever it fires strongly (one forward); outcomes on all scored tokens and on
+        the covered ones (a member fired strongly)."""
+        model = forward.replicate(model)
+        base = forward.replicate(forward.trace_forward(model, tokens, seg, forward.no_ablation()))
+        t = tokens.size
+        keep_r, keep_s = [], []
+        covered = jnp.zeros((t,), bool)
+        for li, lay in enumerate(base["layers"]):
+            ex, ts, slot = lay["expert_sorted"], lay["token_sorted"], lay["slot_sorted"]
+            act = lay["expert_act"]
+            hit = member[li][ex] & (act >= thr[li][ex]) & (act > 0)
+            keep_r.append(jnp.ones((t, K, I), bool).at[ts, slot].set(~hit))
+            s_act = lay["shared_act"]
+            s_hit = s_member[li][None, :] & (s_act >= s_thr[li][None, :]) & (s_act > 0)
+            keep_s.append(~s_hit)
+            row_any = jnp.zeros((t,), bool).at[ts].max(jnp.any(hit, axis=-1))
+            covered = covered | row_any | jnp.any(s_hit, axis=-1)
+        abl = forward.no_ablation()._replace(neuron_mean=means, shared_mean=s_means)
+        edit = forward.UnitEdit(routed_keep=jnp.stack(keep_r), shared_keep=jnp.stack(keep_s))
+        edited = forward.replicate(forward.trace_forward(model, tokens, seg, abl, edit=edit))
+        w_out = model.output_proj.astype(jnp.float32)
+        labels = base["labels"].reshape(-1)
+        w_c = (w_out.T[labels] - jnp.mean(w_out, axis=1)[None]).astype(jnp.float32)
+        v = valid.reshape(-1)
+        res = {}
+        for name, mask in (("all", v), ("cov", v & covered)):
+            mf = mask.astype(jnp.float32)
+            res[f"{name}_n"] = jnp.sum(mf)
+            for tag, tr in (("base", base), ("abl", edited)):
+                o = token_outcomes(tr, v, w_c)
+                res[f"{name}_{tag}_logp"] = jnp.sum(o["logp"] * mf)
+                for k in ("cr90", "top1", "cw50"):
+                    res[f"{name}_{tag}_{k}"] = jnp.sum(o[k] * mf)
+        return res
+
+    return run
+
+
+def run_population(args, model, mesh, reg: dict, disc: dict) -> list[dict]:
+    tables = registry_tables(reg)
+    lv, s_lv = disc["levels"], disc["s_levels"]
+    n_i, act_i = STATS.index("n"), STATS.index("act")
+    means = (lv[..., 0, act_i] / np.maximum(lv[..., 0, n_i], 1)).astype(np.float32)
+    s_means = (s_lv[..., 0, act_i] / np.maximum(s_lv[..., 0, n_i], 1)).astype(np.float32)
+    run = make_population()
+    batches = list(common.train_batches(BATCH, args.train_sequences, seed=args.seed))
+    results = []
+    t0 = time.time()
+    with set_mesh(mesh):
+        dev = {k: jnp.asarray(v) for k, v in dict(thr=tables["thr"], s_thr=tables["s_thr"], m=means, sm=s_means).items()}
+        for set_name, below in POPULATION_VARIANTS:
+            j = reg["sets"].index(set_name)
+            layer_ok = np.arange(L) < below
+            member = (((tables["bits"] >> j) & 1) > 0) & layer_ok[:, None, None]
+            s_member = (((tables["s_bits"] >> j) & 1) > 0) & layer_ok[:, None]
+            acc: dict[str, float] = {}
+            for batch in batches:
+                tokens, seg, _ = common.device_batch(batch, mesh)
+                out = jax.device_get(
+                    run(
+                        model,
+                        tokens,
+                        seg,
+                        jnp.asarray(scored_mask(batch)),
+                        jnp.asarray(member),
+                        dev["thr"],
+                        dev["m"],
+                        jnp.asarray(s_member),
+                        dev["s_thr"],
+                        dev["sm"],
+                    )
+                )
+                for k, val in out.items():
+                    acc[k] = acc.get(k, 0.0) + float(val)
+            results.append({"set": set_name, "below": below, "units": int(member.sum() + s_member.sum()), **acc})
+            logger.info("population %s <L%d: %s %.0fs", set_name, below, acc, time.time() - t0)
+    return results
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", required=True)
-    parser.add_argument("--phase", choices=("discover", "replicate"), required=True)
+    parser.add_argument("--phase", choices=("discover", "replicate", "population"), required=True)
     parser.add_argument("--train-sequences", type=int, default=4096)
     parser.add_argument("--paloma-start", type=int, default=0)
     parser.add_argument("--paloma-sequences", type=int, default=128, help="per Paloma set")
@@ -673,6 +767,12 @@ def main() -> None:
     with set_mesh(mesh):
         model = common.compute_model(params)
     reg = reg_tables = cuts = s_cuts = None
+    if args.phase == "population":
+        res = run_population(
+            args, model, mesh, load_registry(args.tag, args.registry), load_npz(args.tag, args.discover_name)
+        )
+        common.save_json(args.tag, args.out, res)
+        return
     if args.phase == "replicate":
         disc = load_npz(args.tag, args.discover_name)
         cuts = disc["cuts"].reshape(L * E * I, -1)
