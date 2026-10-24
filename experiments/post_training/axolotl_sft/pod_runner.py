@@ -22,10 +22,13 @@ image's ``aws`` CLI. It reads one JSON payload (``AXOLOTL_PAYLOAD``) built by
 
 from __future__ import annotations
 
+import fcntl
 import glob
 import json
 import logging
 import os
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -52,6 +55,8 @@ CUT_CROSS_ENTROPY = (
 RUN_MANIFEST = "axolotl_run_manifest.json"
 RENDEZVOUS_PORT = 29500
 RENDEZVOUS_TIMEOUT = 1800
+# ioctl request for an interface's IPv4 address (linux/sockios.h).
+SIOCGIFADDR = 0x8915
 # The plugins this directory ships (the fp32-master plugin) import from here.
 PLUGIN_DIR = Path(__file__).resolve().parent
 
@@ -157,6 +162,22 @@ def _master_address(output_uri: str, job_id: str, node_rank: int) -> str:
     raise TimeoutError(f"node 0 never published {marker}")
 
 
+def _interface_for(address: str) -> str:
+    """The network interface that holds IPv4 ``address`` (SIOCGIFADDR on each interface)."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        for _, name in socket.if_nameindex():
+            try:
+                raw = fcntl.ioctl(probe.fileno(), SIOCGIFADDR, struct.pack("256s", name.encode()[:15]))
+            except OSError:
+                continue
+            if socket.inet_ntoa(raw[20:24]) == address:
+                return name
+    finally:
+        probe.close()
+    raise ValueError(f"no interface holds {address}")
+
+
 def _check_template(output_dir: Path, expected: str) -> None:
     """The fork's template_integrity contract, re-checked outside the save path."""
     with open(output_dir / "tokenizer_config.json") as handle:
@@ -200,6 +221,9 @@ def main() -> None:
     job_id, node_rank, nodes = _task_position()
     if nodes != payload["nodes"]:
         raise ValueError(f"the job has {nodes} tasks but the payload trains on {payload['nodes']} nodes")
+    # Gloo (Axolotl's CPU process group for multipack) binds the address the pod hostname
+    # resolves to, which is loopback here; peers on the other node then cannot connect.
+    environment["GLOO_SOCKET_IFNAME"] = _interface_for(os.environ["IRIS_ADVERTISE_HOST"])
     command = [
         "torchrun",
         f"--nnodes={nodes}",
