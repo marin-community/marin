@@ -11,6 +11,7 @@ import threading
 import uuid
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import equinox as eqx
@@ -40,10 +41,10 @@ from transformers import GPT2Config as HfGpt2Config
 import levanter.compat.hf_export as hf_export
 import levanter.compat.hf_checkpoints as hf_checkpoints
 from levanter.compat.hf_checkpoints import (
+    RepoRef,
     SAFE_TENSORS_INDEX_NAME,
     SAFE_TENSORS_MODEL,
     ModelWithHfSerializationMixin,
-    RepoRef,
     _causal_lm_architecture_name,
     _convert_to_jnp,
 )
@@ -87,7 +88,11 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
         use_flash_attention=False,
         tokenizer=local_gpt2_tokenizer_path,
     )
-    converter = nano_config.hf_checkpoint_converter()
+    converter = nano_config.hf_checkpoint_converter(ref_checkpoint=local_gpt2_tokenizer_path)
+    tokenizer = hf_checkpoints._coerce_to_hf_tokenizer(converter.tokenizer)
+    tokenizer.eos_token = tokenizer.convert_ids_to_tokens(1)
+    tokenizer.bos_token = tokenizer.convert_ids_to_tokens(0)
+    converter = converter.replaced(tokenizer=tokenizer)
 
     mp = jmp.get_policy("f32")
 
@@ -119,6 +124,66 @@ def test_save_sharded_checkpoints(local_gpt2_tokenizer_path, monkeypatch):
             nano_model,
             loaded_model,
         )
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_model", "expected_commit"),
+    [
+        ("memory://source/model", None, None),
+        ("test/source-model", "test/source-model", "a" * 40),
+    ],
+)
+def test_hf_release_resolves_hub_source_without_treating_storage_as_hub(
+    local_gpt2_tokenizer_path, monkeypatch, tmp_path, source, expected_model, expected_commit
+):
+    config = Gpt2Config(hidden_dim=32, num_heads=1, num_layers=1, use_flash_attention=False)
+    converter = config.hf_checkpoint_converter(ref_checkpoint=local_gpt2_tokenizer_path)
+    converter = converter.replaced(reference_checkpoint=RepoRef(source))
+
+    def config_without_source_lookup(self, model):
+        result = model.config.to_hf_config(model.Vocab.size).to_dict()
+        result["bos_token_id"] = self.tokenizer.bos_token_id
+        result["eos_token_id"] = self.tokenizer.eos_token_id
+        return result, SimpleNamespace(_commit_hash=None)
+
+    monkeypatch.setattr(hf_checkpoints.HFCheckpointConverter, "_build_hf_config_dict", config_without_source_lookup)
+
+    def model_info(repo_id, revision):
+        assert repo_id == "test/source-model"
+        assert revision is None
+        return SimpleNamespace(sha="a" * 40)
+
+    monkeypatch.setattr(
+        hf_checkpoints.HfApi, "model_info", lambda self, repo_id, revision: model_info(repo_id, revision)
+    )
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(8))
+        converter.save_pretrained(model, str(tmp_path), save_reference_code=False)
+
+    request = json.loads((tmp_path / "hf_release_request.json").read_text())
+    assert request["source_model"] == expected_model
+    assert request["source_model_commit"] == expected_commit
+
+
+def test_completed_hf_release_skips_duplicate_export_and_rejects_changed_request(local_gpt2_tokenizer_path, tmp_path):
+    config = Gpt2Config(hidden_dim=32, num_heads=1, num_layers=1, use_flash_attention=False)
+    converter = config.hf_checkpoint_converter(ref_checkpoint=local_gpt2_tokenizer_path)
+    with use_test_mesh():
+        model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(11))
+        options = {"save_reference_code": False, "source_checkpoint": "checkpoint-1"}
+        converter.save_pretrained(model, str(tmp_path), **options)
+        manifest = (tmp_path / "hf_release_manifest.json").read_bytes()
+
+        with patch.object(
+            hf_checkpoints, "_shard_hf_checkpoint", side_effect=AssertionError("duplicate shard export")
+        ):
+            converter.save_pretrained(model, str(tmp_path), **options)
+
+        assert (tmp_path / "hf_release_manifest.json").read_bytes() == manifest
+        with pytest.raises(FileExistsError, match="request changed"):
+            converter.save_pretrained(
+                model, str(tmp_path), save_reference_code=False, source_checkpoint="checkpoint-2"
+            )
 
 
 @pytest.mark.parametrize("attributes", [None, "*.blob filter=lfs diff=lfs merge=lfs -text\n"])
@@ -371,7 +436,7 @@ def test_save_pretrained_with_custom_dtype():
                 save_tokenizer=False,
                 save_reference_code=False,
                 max_shard_size=int(10e9),
-                dtype=jnp.bfloat16,
+                release_precision="bf16",
             )
 
         saved_file = os.path.join(tmpdir, SAFE_TENSORS_MODEL)
@@ -530,7 +595,7 @@ def test_gpt2_converter_uses_configured_tokenizer_without_hub(local_gpt2_tokeniz
     assert converter.tokenizer is not None  # loaded from the local directory, not the Hub
 
 
-def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tokenizer_path, monkeypatch):
+def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tokenizer_path, monkeypatch, tmp_path):
     """An HF outage must not block a checkpoint save: with a local tokenizer the config is still
     produced and `architectures` is derived from the model type rather than the reference."""
     _simulate_hub_offline(monkeypatch)
@@ -540,10 +605,13 @@ def test_build_hf_config_dict_degrades_when_reference_unreachable(local_gpt2_tok
 
     with use_test_mesh():
         model = Gpt2LMHeadModel.init(converter.Vocab, config, key=PRNGKey(0))
-        dict_config = converter._build_hf_config_dict(model)
+        dict_config, source_config = converter._build_hf_config_dict(model)
+        converter.save_pretrained(model, str(tmp_path), save_reference_code=False)
 
     assert dict_config["model_type"] == "gpt2"
     assert dict_config["architectures"] == ["GPT2LMHeadModel"]
+    assert source_config is None
+    assert json.loads((tmp_path / "hf_release_request.json").read_text())["source_model"] is None
 
 
 def test_save_pretrained_writes_transformers4_and_5_rope_keys(tmp_path):

@@ -11,6 +11,7 @@ version = "0.1.0"
 description = "Marin's typed launcher and RL training runtime"
 requires-python = "==3.12.*"
 dependencies = [
+    "marin-hf-release",
     "marin-verifyit[math,schema,reasoning-gym,judge]",
     "aiohttp>=3.13.3",
     "boto3",
@@ -210,6 +211,7 @@ transformer-engine = [{ requirement = "torch", match-runtime = true }, "build_to
 transformer-engine-torch = [{ requirement = "torch", match-runtime = true }, "build_tools", "ninja"]
 
 [tool.uv.sources]
+marin-hf-release = { path = "../../lib/hf_release", editable = true }
 marin-finelog = { path = "../../lib/finelog", editable = true }
 marin-finestore = { path = "../../lib/finestore", editable = true }
 marin-iris = { path = "../../lib/iris", editable = true }

@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from loguru import logger
+from marin_hf_release.request import MANIFEST_NAME
 from marinskyrl.hf_model import normalize_fast_tokenizer_metadata
 from marinskyrl.model_manifest import HF_WEIGHT_INDEX_FILENAME, MODEL_MANIFEST_FILENAME, write_local_model_manifest
 from marinskyrl.resource_locator import join_resource_path
@@ -17,7 +18,7 @@ from skyrl_train.io import io
 HF_WEIGHT_FILENAME = "model.safetensors"
 
 
-def verify_hf_model_export(export_path: str) -> None:
+def verify_hf_model_export(export_path: str, *, require_release_manifest: bool = False) -> None:
     """Reject an HF export unless its safetensors weights are all present."""
     local_export = not io.is_cloud_path(export_path)
     if local_export:
@@ -32,6 +33,10 @@ def verify_hf_model_export(export_path: str) -> None:
     index_path = join_resource_path(export_path, HF_WEIGHT_INDEX_FILENAME)
     if HF_WEIGHT_INDEX_FILENAME not in export_files:
         if HF_WEIGHT_FILENAME in export_files:
+            if require_release_manifest and (
+                MANIFEST_NAME not in export_files or MODEL_MANIFEST_FILENAME not in export_files
+            ):
+                raise RuntimeError(f"HF release is missing its completion manifests at {export_path}")
             return
         raise RuntimeError(f"HF export has no safetensors weights at {export_path}")
 
@@ -60,6 +65,8 @@ def verify_hf_model_export(export_path: str) -> None:
         raise RuntimeError(
             f"HF export is missing {len(missing_shards)} referenced safetensors shard(s): {missing_shards[:5]}"
         )
+    if require_release_manifest and (MANIFEST_NAME not in export_files or MODEL_MANIFEST_FILENAME not in export_files):
+        raise RuntimeError(f"HF release is missing its completion manifests at {export_path}")
 
 
 def _upload_hf_model_directory(local_path: str, cloud_path: str) -> None:
@@ -69,9 +76,13 @@ def _upload_hf_model_directory(local_path: str, cloud_path: str) -> None:
     files = sorted(path for path in source_root.rglob("*") if path.is_file())
     index_files = [path for path in files if path.relative_to(source_root).as_posix() == HF_WEIGHT_INDEX_FILENAME]
     manifest_files = [path for path in files if path.relative_to(source_root).as_posix() == MODEL_MANIFEST_FILENAME]
+    release_manifest_files = [path for path in files if path.relative_to(source_root).as_posix() == MANIFEST_NAME]
     weight_files = [path for path in files if path.suffix == ".safetensors"]
     other_files = [
-        path for path in files if path not in weight_files and path not in index_files and path not in manifest_files
+        path
+        for path in files
+        if path not in weight_files and path not in index_files
+        and path not in manifest_files and path not in release_manifest_files
     ]
 
     def publish_file(path: Path) -> None:
@@ -89,14 +100,14 @@ def _upload_hf_model_directory(local_path: str, cloud_path: str) -> None:
             f"Published HF weight shard {shard_index}/{len(weight_files)}: {relative_path} "
             f"({size} bytes in {time.monotonic() - started:.1f}s)"
         )
-    for path in [*other_files, *index_files, *manifest_files]:
+    for path in [*other_files, *index_files, *manifest_files, *release_manifest_files]:
         publish_file(path)
 
     logger.info(f"Published HF model directory to {cloud_path}")
 
 
 def _remove_completion_markers(output_path: str) -> None:
-    for filename in (HF_WEIGHT_INDEX_FILENAME, MODEL_MANIFEST_FILENAME):
+    for filename in (HF_WEIGHT_INDEX_FILENAME, MODEL_MANIFEST_FILENAME, MANIFEST_NAME):
         path = join_resource_path(output_path, filename)
         if io.exists(path):
             io.remove(path)

@@ -184,7 +184,7 @@ def test_export_dpo_policy_subtree_to_bfloat16(tmp_path, model_kind):
             save_tokenizer=False,
             override_vocab_size=Vocab.size,
             max_shard_size=512,
-            export_dtype="bfloat16",
+            release_precision="bf16",
             use_cpu=True,
         )
     )
@@ -193,14 +193,21 @@ def test_export_dpo_policy_subtree_to_bfloat16(tmp_path, model_kind):
     expected = to_state_dict(flatten_modules_for_export(policy_params))
     assert exported.keys() == expected.keys()
     for name, value in exported.items():
-        assert value.dtype == jnp.bfloat16
-        np.testing.assert_array_equal(value, expected[name].astype(jnp.bfloat16))
+        expected_dtype = jnp.float32 if name.endswith(".mlp.router.bias") else jnp.bfloat16
+        assert value.dtype == expected_dtype
+        np.testing.assert_array_equal(value, expected[name].astype(expected_dtype))
 
 
 def test_export_pinned_tokenizer_revision(tmp_path, monkeypatch):
-    old_tokenizer = PreTrainedTokenizerFast(tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "old": 1})))
+    old_tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "old": 1, "[BOS]": 2, "[EOS]": 3})),
+        bos_token="[BOS]",
+        eos_token="[EOS]",
+    )
     pinned_tokenizer = PreTrainedTokenizerFast(
-        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "old": 1, "pinned": 2}))
+        tokenizer_object=Tokenizer(WordLevel({"[UNK]": 0, "old": 1, "[BOS]": 2, "[EOS]": 3, "pinned": 4})),
+        bos_token="[BOS]",
+        eos_token="[EOS]",
     )
     snapshots = {("test/tokenizer", None): old_tokenizer, ("test/tokenizer", "snapshot"): pinned_tokenizer}
 

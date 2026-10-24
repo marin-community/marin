@@ -25,7 +25,11 @@ import haliax as hax
 from haliax import Axis
 from haliax.state_dict import from_torch_compatible_state_dict, to_torch_compatible_state_dict
 from safetensors.numpy import load_file
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import PreTrainedTokenizerFast
 
+from levanter.compat.hf_checkpoints import HFCheckpointConverter
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmConfig
 from levanter.models.snowball import (
@@ -37,6 +41,7 @@ from levanter.models.snowball import (
     validate_single_name_config,
 )
 from levanter.testing.cpu_devices import run_on_cpu_devices
+from marin_hf_release.validation import read_safetensors_header_specs
 
 
 def _tiny_config(**overrides) -> SnowballConfig:
@@ -63,6 +68,43 @@ def _tiny_config(**overrides) -> SnowballConfig:
     )
     base.update(overrides)
     return SnowballConfig(**base)
+
+
+def test_snowball_release_keeps_nonzero_router_bias_fp32(tmp_path):
+    vocabulary = {"[BOS]": 0, "[EOS]": 1, "[EOT]": 2, "[UNK]": 3}
+    vocabulary.update({f"token_{index}": index for index in range(4, 48)})
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel(vocabulary, unk_token="[UNK]")),
+        bos_token="[BOS]",
+        eos_token="[EOS]",
+        unk_token="[UNK]",
+    )
+    tokenizer.chat_template = "{{ bos_token }}{{ messages[0]['content'] }}{{ eos_token }}"
+    cfg = _tiny_config(num_layers=1)
+    converter = HFCheckpointConverter(SnowballConfig, HfConfigClass=GrugMoeHfConfig, tokenizer=tokenizer)
+
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(13))
+        model = eqx.tree_at(
+            lambda value: value.transformer.blocks[0].mlp.router_bias,
+            model,
+            jnp.asarray([0.25, -0.5, *([0.0] * 6)], dtype=jnp.float32),
+        )
+        converter.save_pretrained(
+            model,
+            str(tmp_path),
+            release_precision="bf16",
+            generation_config={"eos_token_id": [1, 2]},
+            save_reference_code=False,
+        )
+
+    headers = read_safetensors_header_specs(tmp_path / "model.safetensors")
+    assert headers["model.embed_tokens.weight"].source_dtype == "BF16"
+    assert headers["model.layers.0.mlp.router.bias"].source_dtype == "F32"
+    weights = load_file(tmp_path / "model.safetensors")
+    np.testing.assert_array_equal(weights["model.layers.0.mlp.router.bias"][:2], np.asarray([0.25, -0.5]))
+    assert json.loads((tmp_path / "generation_config.json").read_text())["eos_token_id"] == [1, 2]
+    assert (tmp_path / "hf_release_manifest.json").is_file()
 
 
 def _device_batched_ids(vocab_size: int, pos_len: int) -> hax.NamedArray:
@@ -234,7 +276,7 @@ def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
         model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(4))
         expected = to_torch_compatible_state_dict(model)
-        options = dict(save_tokenizer=False, save_reference_code=False, max_shard_size=4096, dtype=jnp.bfloat16)
+        options = dict(save_tokenizer=False, save_reference_code=False, max_shard_size=4096, release_precision="bf16")
         converter.save_pretrained(model, str(tmp_path), **options)
         index = json.loads((tmp_path / "model.safetensors.index.json").read_text())
         tensors = {}
@@ -245,16 +287,17 @@ def test_snowball_export_preserves_banked_weights_and_overwrites_existing_output
             tensors.update(shard)
         assert tensors.keys() == expected.keys() == index["weight_map"].keys()
         for name, value in expected.items():
-            wanted = np.asarray(jnp.asarray(value, dtype=jnp.bfloat16))
+            dtype = jnp.float32 if name.endswith(".mlp.router.bias") else jnp.bfloat16
+            wanted = np.asarray(jnp.asarray(value, dtype=dtype))
             actual = tensors[name]
             assert actual.shape == wanted.shape and actual.dtype == wanted.dtype, name
             assert actual.tobytes() == wanted.tobytes(), name
         assert index["metadata"]["total_size"] == sum(value.nbytes for value in tensors.values())
-        assert json.loads((tmp_path / "config.json").read_text()) == json.loads(
-            json.dumps(cfg.to_hf_config(cfg.vocab_size).to_dict())
-        )
+        exported_config = json.loads((tmp_path / "config.json").read_text())
+        assert exported_config["dtype"] == "bfloat16"
+        validate_single_name_config(exported_config, cfg)
 
-        # Ordinary converter callers can intentionally overwrite a completed destination.
+        # Weight-only converter callers can overwrite an existing destination.
         filename = next(iter(index["weight_map"].values()))
         original = (tmp_path / filename).read_bytes()
         (tmp_path / filename).write_bytes(original[:-1] + bytes([original[-1] ^ 1]))

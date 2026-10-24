@@ -17,7 +17,7 @@ import ray
 from ray import ObjectRef
 import torch
 from loguru import logger
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from ray.util.placement_group import PlacementGroup, placement_group
 from skyrl_train.utils.progress import tqdm
 from transformers import AutoTokenizer
@@ -3426,6 +3426,12 @@ class RayPPOTrainer:
 
         placement = self.cfg.trainer.placement
         model = self.cfg.trainer.policy.model
+        eos_token_ids = self.cfg.trainer.get("hf_generation_eos_token_ids")
+        generation_controls = self.cfg.trainer.get("hf_generation_controls", {})
+        if isinstance(eos_token_ids, ListConfig):
+            eos_token_ids = OmegaConf.to_container(eos_token_ids, resolve=True)
+        if isinstance(generation_controls, DictConfig):
+            generation_controls = OmegaConf.to_container(generation_controls, resolve=True)
         request = HFExportRequest(
             step=self.global_step,
             checkpoint_base_path=self.cfg.trainer.ckpt_path,
@@ -3434,6 +3440,11 @@ class RayPPOTrainer:
             model_path=model.path,
             num_nodes=placement.policy_num_nodes,
             gpus_per_node=placement.policy_num_gpus_per_node,
+            release_precision=self.cfg.trainer.get("hf_release_precision", "preserve"),
+            eos_token_ids=eos_token_ids,
+            generation_controls=generation_controls,
+            chat_template=self.cfg.trainer.get("hf_chat_template"),
+            model_revision=model.get("revision"),
             model_source_uri=model.source_uri,
             model_source_identity=model.source_identity,
             hf_hub_repo_id=self.cfg.trainer.get("hf_hub_repo_id"),
@@ -3443,18 +3454,18 @@ class RayPPOTrainer:
         )
         existing = read_hf_export_request(checkpoint_path)
         if existing is not None:
+            original = replace(
+                existing, status=HFExportStatus.PENDING, attempts=0, timeout=None, last_exit_code=None
+            )
+            if original != request:
+                raise ValueError(f"HF export request changed for global_step_{self.global_step}")
             if existing.status is HFExportStatus.COMPLETE:
                 logger.info(f"HF export for global_step_{self.global_step} is already complete")
                 return
             if existing.status is HFExportStatus.IN_PROGRESS:
                 logger.info(f"HF export for global_step_{self.global_step} is already in progress")
                 return
-            request = replace(
-                request,
-                attempts=existing.attempts,
-                timeout=existing.timeout,
-                last_exit_code=existing.last_exit_code,
-            )
+            request = replace(existing, status=HFExportStatus.PENDING)
             logger.info(f"Refreshing pending HF export request for global_step_{self.global_step}")
         request_path = write_hf_export_request(request)
         logger.info(f"Queued out-of-band HF export for global_step_{self.global_step}: {request_path}")

@@ -34,6 +34,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "marin-hf-release",
     "marin-finelog",
     "marin-finestore",
     "marin-haliax",

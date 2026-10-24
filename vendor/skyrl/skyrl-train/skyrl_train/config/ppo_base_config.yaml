@@ -43,6 +43,10 @@ checkpoint_export:
   hf_upload_mode: latest
 
 trainer:
+  hf_release_precision: preserve
+  hf_generation_eos_token_ids: null
+  hf_generation_controls: {}
+  hf_chat_template: null
   evaluation_runner: training # task or harbor selects generated validation for offline preference training
   trajectory_selector:
     type: null # null | best_of_n; selection runs after reward postprocessing and before teacher scoring

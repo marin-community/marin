@@ -23,8 +23,8 @@ import os
 from dataclasses import dataclass
 
 import draccus
-import jax.numpy as jnp
 from haliax.partitioning import named_jit
+from marin_hf_release import PrecisionMode
 
 from levanter.compat.hf_checkpoints import (
     GenerationConfigDict,
@@ -97,15 +97,13 @@ def _expanded_export_path(base_path: str, trainer) -> str:
     return base_path
 
 
-def _parse_hf_save_dtype(hf_save_dtype: str | None) -> jnp.dtype | None:
+def _parse_hf_save_dtype(hf_save_dtype: str | None) -> PrecisionMode:
     if hf_save_dtype is None:
-        return None
-
-    try:
-        return jnp.dtype(hf_save_dtype)
-    except TypeError:
-        logger.warning("Invalid hf_save_dtype: %s. Defaulting to None.", hf_save_dtype)
-        return None
+        return PrecisionMode.PRESERVE
+    mapping = {"bfloat16": PrecisionMode.BF16, "float32": PrecisionMode.FP32}
+    if hf_save_dtype not in mapping:
+        raise ValueError(f"unsupported HF release dtype {hf_save_dtype!r}")
+    return mapping[hf_save_dtype]
 
 
 @AdaptorConfig.register_subclass("none")
@@ -143,13 +141,13 @@ class NoAdaptorConfig(AdaptorConfig):
             raise ValueError("hf_save_path requires a HF-compatible model configuration.")
 
         full_save_path = _expanded_export_path(export.hf_save_path, trainer)
-        save_dtype = _parse_hf_save_dtype(export.hf_save_dtype)
+        release_precision = _parse_hf_save_dtype(export.hf_save_dtype)
         trainer.add_hook(
             save_hf_checkpoint_callback(
                 full_save_path,
                 converter,
                 upload_to_hf=export.hf_upload or False,
-                save_dtype=save_dtype,
+                release_precision=release_precision,
                 generation_config=export.generation_config,
             ),
             every=export.hf_save_steps,
@@ -185,8 +183,8 @@ class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
     ) -> None:
         if export.hf_save_path is not None:
             raise ValueError("adapter.type: lora does not support hf_save_path. Use merged_hf_save_path instead.")
-        if export.hf_save_dtype is not None:
-            raise ValueError("adapter.type: lora does not support hf_save_dtype. Use merged_hf_save_path instead.")
+        if export.hf_save_dtype is not None and export.merged_hf_save_path is None:
+            raise ValueError("hf_save_dtype requires merged_hf_save_path for a LoRA adapter")
 
         if export.peft_save_path is None and export.merged_hf_save_path is None:
             return
@@ -223,6 +221,7 @@ class LoraAdaptorConfig(LoraConfig, AdaptorConfig):
                     export.merged_hf_upload,
                     generation_config=export.generation_config,
                     model_getter=export_model,
+                    release_precision=_parse_hf_save_dtype(export.hf_save_dtype),
                 ),
                 every=export.hf_save_steps,
             )

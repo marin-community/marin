@@ -36,6 +36,7 @@ SCOPES: tuple[str, ...] = (
     "haliax",
     "iris",
     "fray",
+    "hf_release",
     "levanter",
     "zephyr",
     "marin",
@@ -60,7 +61,12 @@ class SourceRoot:
 
 
 SOURCE_ROOTS: tuple[SourceRoot, ...] = (
-    *(SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src") for scope in SCOPES if scope not in {"deploy", "iac"}),
+    *(
+        SourceRoot(f"lib/{scope}/src/{scope}", f"lib/{scope}/src")
+        for scope in SCOPES
+        if scope not in {"deploy", "iac", "hf_release"}
+    ),
+    SourceRoot("lib/hf_release/src/marin_hf_release", "lib/hf_release/src"),
     SourceRoot("infra/deploy/src/marin_deploy", "infra/deploy/src"),
     SourceRoot("infra/pulumi/src/iac", "infra/pulumi/src"),
     SourceRoot("infra/shellsim", "."),
@@ -86,6 +92,7 @@ UV_PACKAGE: dict[str, str] = {
     "haliax": "marin-haliax",
     "iris": "marin-iris",
     "fray": "marin-fray",
+    "hf_release": "marin-hf-release",
     "levanter": "marin-levanter",
     "zephyr": "marin-zephyr",
     "marin": "marin-core",

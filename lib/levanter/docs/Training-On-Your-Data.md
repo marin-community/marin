@@ -460,8 +460,9 @@ The export gathers shards in the same order on every process. Process 0 writes a
 Each shard reserves twice its tensor payload while it is written and uploaded. A shard that exceeds the
 budget runs alone. Set these fields in the export config to limit host memory or upload concurrency.
 
-Set `export_dtype: bfloat16` to cast floating-point weights for export; omitting it preserves the
-checkpoint dtype. Use `checkpoint_subpath: model/policy` to export the policy from a DPO checkpoint.
+Set `release_precision: bf16` to cast floating-point weights for export while retaining required
+FP32 router bias; `fp32` casts floating weights to FP32, and the default `preserve` retains source dtypes.
+Use `checkpoint_subpath: model/policy` to export the policy from a DPO checkpoint.
 With `use_cpu: true`, the exporter restores the selected subtree on CPU. Host memory must hold the
 restored weights as well as the export buffers.
 Pin an explicit tokenizer with `tokenizer: model_name_or_path@revision`.
