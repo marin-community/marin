@@ -59,7 +59,10 @@ RETRY_ATTEMPTS = 4
 # v0.1 hit the 1,024-token cap on 26 of 122 identity answers with thinking on.
 THINKING_MAX_TOKENS = 4096
 
-OTHER_ENTITIES = r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|Llama|Meta AI|Gemini|Google|Nemotron|NVIDIA|Mistral"
+OTHER_ENTITIES = (
+    r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|Llama|Meta AI|Gemini|Google|"
+    r"Nemotron|NVIDIA|Mistral"
+)
 # A first-person claim followed closely by another lab's or model's name. Pre-screen only.
 FALSE_SELF_ATTRIBUTION = re.compile(
     r"\b(?:I am|I'm|I was|my name is|I'm called|I am called|call me|my (?:creator|developer|maker) is|"
@@ -75,9 +78,11 @@ REFUSAL = re.compile(
     r"(?:help|write|assist|create|do|comply|provide)",
     re.IGNORECASE,
 )
-# A creative answer this short has dropped the task; the cold-start SFT collapsed stories into
-# one-line self-introductions ("My name is Luna.") that carry no brand string.
-FICTION_MIN_WORDS = 40
+# A creative answer this short has dropped the task: the cold-start SFT collapsed stories into
+# one-line self-introductions ("My name is Luna.", 6-16 tokens) that carry no brand string. v0.1's
+# shortest legitimate role-play replies are about 17 words, so the cut stays below that; manual
+# review remains the gate.
+FICTION_MIN_WORDS = 12
 SELF_INTRO_OPENING = re.compile(r"^\W*(?:My name is|I am|I'm|I was created by|I was made by)\b", re.IGNORECASE)
 NEGATION = re.compile(r"\bnot\b|n't\b|\bnor\b|\bnever\b|\binstead of\b", re.IGNORECASE)
 # Expectations the regex can check; any other expectation needs the judge.
