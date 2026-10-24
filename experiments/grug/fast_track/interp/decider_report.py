@@ -29,16 +29,17 @@ EARLY_LAYERS = 4  # L0-L3
 ATLAS_CATEGORIES = ("ngram", "structural", "token", "output", "topic", "dense", "polysemantic")
 DIRECT_SHARE = 0.05
 SEED = 0
-# Registry decider sets (bit j): name -> (outcome stat, min Wilson LB). "random" is a matched random control.
+# Registry decider sets (bit j): name -> (outcome stat, min Wilson LB, min lift over the unit's own expert's routed
+# rate). "random" is a random control matched per layer to cr90_lb80.
 SET_RULES = (
-    ("cr90_lb95", "cr90", 0.95),
-    ("cr90_lb90", "cr90", 0.90),
-    ("cr90_lb80", "cr90", 0.80),
-    ("cr90_lb70", "cr90", 0.70),
-    ("cr99_lb80", "cr99", 0.80),
-    ("cw50_lb50", "cw50", 0.50),
-    ("cw50_lb30", "cw50", 0.30),
-    ("random", None, None),
+    ("cr90_lb95", "cr90", 0.95, 0.0),
+    ("cr90_lb90", "cr90", 0.90, 0.0),
+    ("cr90_lb80", "cr90", 0.80, 0.0),
+    ("cr90_lb70", "cr90", 0.70, 0.0),
+    ("cr90_lb80_xlift1.5", "cr90", 0.80, 1.5),
+    ("cw50_lb20", "cw50", 0.20, 0.0),
+    ("cw50_lb15", "cw50", 0.15, 0.0),
+    ("random", None, None, None),
 )
 REGISTRY_TOP = 2400
 REGISTRY_EARLY = 1000
@@ -143,9 +144,10 @@ def build_registry(z: dict) -> dict:
     ok = t["n"] >= MIN_SUPPORT
     rng = np.random.default_rng(SEED)
     bits = np.zeros(len(t["n"]), np.int32)
-    for j, (_name, key, lb) in enumerate(SET_RULES):
+    for j, (_name, key, lb, xlift) in enumerate(SET_RULES):
         if key is not None:
-            bits |= (ok & (t[f"{key}_lb"] >= lb)).astype(np.int32) << j
+            xl = t[f"{key}_p"] / np.maximum(t[f"{key}_routed_p"], 1e-9)
+            bits |= (ok & (t[f"{key}_lb"] >= lb) & (xl >= xlift)).astype(np.int32) << j
     # Random control: as many supported units per layer as the cr90_lb80 set has.
     ref_set = (bits >> 2) & 1
     for layer in range(L):
@@ -155,7 +157,7 @@ def build_registry(z: dict) -> dict:
         bits[pick] |= 1 << (len(SET_RULES) - 1)
     lb = np.where(ok, t["cr90_lb"], -1)
     cw = np.where(ok, t["cw50_lb"], -1)
-    order = np.argsort(-lb)
+    order = np.lexsort((-t["n"], -lb))
     early = order[t["layer"][order] < EARLY_LAYERS]
     cw_order = np.argsort(-cw)
     reg_rows = list(dict.fromkeys([*order[:REGISTRY_TOP], *early[:REGISTRY_EARLY], *cw_order[:REGISTRY_CW]]))
