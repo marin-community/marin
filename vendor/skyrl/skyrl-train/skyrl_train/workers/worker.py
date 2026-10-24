@@ -71,6 +71,7 @@ from skyrl_train.models.grug_query_bias import (
 )
 from skyrl_train.models.grug_moe import GrugMoeForCausalLM
 from skyrl_train.batch_invariant import enable_trainer_batch_invariance
+from skyrl_train.config.numerics import NumericsMode
 from skyrl_train.utils.utils import (
     configure_ray_worker_logging,
     get_tcp_url,
@@ -320,7 +321,7 @@ class Worker(DistributedTorchRayActor):
         telemetry_config = TelemetryConfig.from_environment()
         if telemetry_config.endpoint is not None:
             self._telemetry.enter_context(ProcessTelemetry(telemetry_config, WORKER_ROLE))
-        enable_trainer_batch_invariance(cfg.trainer.algorithm.batch_invariant)
+        enable_trainer_batch_invariance(NumericsMode(cfg.trainer.numerics.mode) is NumericsMode.BATCH_INVARIANT)
 
     @property
     def device(self) -> torch.device:
