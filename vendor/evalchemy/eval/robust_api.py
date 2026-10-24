@@ -195,7 +195,17 @@ def apply_openai_payload_controls() -> bool:
 
     def _finalize_generation_payload(self, payload, context_output_cap):
         payload = _caller_generation_payload(self, payload)
-        return _apply_context_output_cap(payload, context_output_cap)
+        payload = _apply_context_output_cap(payload, context_output_cap)
+        audit_count = getattr(self, "_sampling_payload_audit_count", 0)
+        if audit_count < 3:
+            controls = {
+                key: payload[key]
+                for key in ("temperature", "top_p", "seed", "max_tokens", "max_completion_tokens")
+                if key in payload
+            }
+            logger.info("TASK297_FINAL_SAMPLING_PAYLOAD %s", json.dumps(controls, sort_keys=True))
+            self._sampling_payload_audit_count = audit_count + 1
+        return payload
 
     def _generation_kwargs_and_context_cap(gen_kwargs):
         request_kwargs = dict(gen_kwargs or {})

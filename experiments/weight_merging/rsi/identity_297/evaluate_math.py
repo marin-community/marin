@@ -21,7 +21,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), required=True)
+    parser.add_argument("--sample-seed", type=int, choices=(17, 29))
     args = parser.parse_args()
+    generation = {"temperature": "0"}
+    if args.sample_seed is not None:
+        generation = {"temperature": "0.7", "top_p": "0.95", "seed": str(args.sample_seed)}
     base = require_secret("IDENTITY_ENDPOINT").rstrip("/")
     model = RunningModel(OpenAIEndpoint(base_url=base + "/v1", model=MODEL), tokenizer=MODEL)
 
@@ -40,8 +44,8 @@ def main() -> None:
             max_gen_toks=8192,
             max_length=32768,
             num_concurrent=8,
-            seed=0,
-            extra_gen_kwargs={"temperature": "0"},
+            seed=args.sample_seed if args.sample_seed is not None else 0,
+            extra_gen_kwargs=generation,
             chat_template_kwargs={"enable_thinking": thinking},
             runtime=EvalchemyRuntimeConfig(extras=("serve-eval", "math500")),
         )
@@ -50,6 +54,8 @@ def main() -> None:
             "revision": "59852d6f07261722bbec1edb6ab148317156b58e",
             "config": asdict(config),
         }
+        if args.sample_seed is not None:
+            provenance["seed_scheme"] = "fixed per-run seed (not +item index)"
         # Normalize tuples to JSON arrays for equality after a restart.
         provenance = json.loads(json.dumps(provenance))
         if fs.exists(path):
