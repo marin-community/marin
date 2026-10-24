@@ -16,6 +16,7 @@ from iris.cluster.controller.backend import (
     BackendObservationRequest,
     BackendRecoveryRequest,
     BackendRecoveryResult,
+    DirectReconcileRequest,
     JobFeasibilityRequest,
     ProviderUnsupportedError,
     ReconcileObservation,
@@ -616,6 +617,44 @@ def test_apply_worker_failed_from_assigned(state):
 # =============================================================================
 # Controller-level tests
 # =============================================================================
+
+
+def test_service_group_submission_reaches_backend_dispatch_intact(make_controller):
+    provider = FakeDirectProvider()
+    controller = make_controller(provider=provider)
+    request = make_direct_job_request("service-group", task_image="example.test/task@sha256:" + "a" * 64)
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    request.resources.cpu_millicores = 2000
+    request.resources.memory_bytes = 2 * 1024**3
+    request.environment.env_vars["TASK_INPUT"] = "actor-value"
+    runtime = job_pb2.SandboxServiceSpec(
+        name="runtime",
+        image="example.test/runtime@sha256:" + "b" * 64,
+        workdir="/service",
+        env_vars={"SERVICE_INPUT": "runtime-value"},
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, disk_bytes=1024**3),
+    )
+    runtime.entrypoint.argv.extend(["python3", "server.py"])
+    runtime.arguments.argv.extend(["--port", "8000"])
+    request.resources.disk_bytes = 2 * 1024**3
+    request.environment.sandbox_services.add().CopyFrom(runtime)
+
+    response = controller.launch_job(request)
+    controller.run_control_tick()
+
+    [batch] = provider.sync_calls
+    assert isinstance(batch, DirectReconcileRequest)
+    [dispatched] = batch.tasks_to_run
+    assert dispatched.task_id == response.job_id + "/0"
+    assert dispatched.task_image == request.task_image
+    assert dispatched.container_profile == job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert dispatched.egress_policy == job_pb2.EGRESS_POLICY_NONE
+    assert dispatched.resources.cpu_millicores == 2000
+    assert dispatched.resources.memory_bytes == 2 * 1024**3
+    assert dispatched.resources.disk_bytes == 2 * 1024**3
+    assert dispatched.environment.env_vars["TASK_INPUT"] == "actor-value"
+    assert list(dispatched.environment.sandbox_services) == [runtime]
 
 
 def test_k8s_pending_task_not_timed_out_before_admission(make_controller):
