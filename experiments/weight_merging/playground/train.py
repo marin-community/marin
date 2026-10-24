@@ -43,7 +43,9 @@ def main() -> None:
     parser.add_argument("--eval-steps", type=int, default=250)
     parser.add_argument("--revision", help="Source revision when the Iris workspace has no .git directory")
     parser.add_argument("--resume", type=Path)
-    parser.add_argument("--evaluate-only", action="store_true", help="Re-evaluate resume weights without optimizer updates")
+    parser.add_argument(
+        "--evaluate-only", action="store_true", help="Re-evaluate resume weights without optimizer updates"
+    )
     args = parser.parse_args()
     if args.evaluate_only and args.resume is None:
         parser.error("--evaluate-only requires --resume")

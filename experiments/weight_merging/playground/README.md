@@ -102,6 +102,10 @@ Torch2.6.0/CUDA11.8 because Transformers4.57.6 rejects optimizer loading on
 Torch2.5.1. Transformers, bitsandbytes0.45.5 and Liger0.6.4 stay fixed. Math's
 100steps use the old stack; code's final50use the new stack. This is a known
 asymmetry between donors, recorded in resume provenance.
+Set `PLAYGROUND_EVAL_ONLY=1` to measure the step-50 checkpoint's validation
+loss on the resume stack without optimizer updates; this publishes only
+`evaluation.json`. Compare it with the stored validation loss before gating
+when a hardware or library transition changes the observed loss.
 
 `iris_generate.sh` runs the 11-point Aristaeus curve on one H100 with fresh
 H100 baselines, cap8192/context12288 and a reload parity check every five
