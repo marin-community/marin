@@ -27,6 +27,15 @@ SERIES_PATH = Path(__file__).with_name("series.json")
 REQUIREMENTS_PATH = Path(__file__).with_name("requirements-harness.txt")
 
 
+def logged_process(command: list[str], environment: dict[str, str], log: Path) -> subprocess.Popen:
+    """Keep file artifacts and native Iris logs, including interrupted attempts."""
+    return subprocess.Popen(
+        ["bash", "-o", "pipefail", "-c", '"$@" 2>&1 | tee "$AGENTX_LOG_FILE"', "agentx-log", *command],
+        env=environment | {"AGENTX_LOG_FILE": str(log)},
+        start_new_session=True,
+    )
+
+
 def stop_group(process: subprocess.Popen) -> None:
     """Reap the command and stop its descendants before releasing the allocation."""
     try:
@@ -96,6 +105,8 @@ def benchmark_command(series: dict, concurrency: int, url: str, output: Path) ->
         str(concurrency),
         "--benchmark-duration",
         str(series["duration"]),
+        "--failed-request-threshold",
+        str(series["max_profiling_error_ratio"]),
         "--random-seed",
         str(series["random_seed"]),
         "--trajectory-start-min-ratio",
@@ -136,10 +147,12 @@ def run(manifest: dict, output: Path) -> None:
         "status": "preparing",
         "iris_task_id": os.environ["IRIS_TASK_ID"],
         "iris_attempt_uid": os.environ["IRIS_ATTEMPT_UID"],
+        "iris_bundle_id": os.environ["IRIS_BUNDLE_ID"],
         "started_unix": time.time(),
     }
     record_path = output / "attempt.json"
     record_path.write_text(json.dumps(record, indent=2))
+    print("AGENTX_ATTEMPT " + json.dumps(record, sort_keys=True), flush=True)
     environment = os.environ | {"AIPERF_DATASET_WEKA_PARALLEL_WORKERS": "2", "TOKENIZERS_PARALLELISM": "false"}
     with (output / "hardware.txt").open("w") as log:
         for command in (
@@ -160,10 +173,7 @@ def run(manifest: dict, output: Path) -> None:
         str(output / "corpus.json"),
     ]
     record["prepare_command"] = prepare
-    with (output / "prepare.log").open("w") as log:
-        process = subprocess.Popen(
-            prepare, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True
-        )
+    with logged_process(prepare, environment, output / "prepare.log") as process:
         try:
             if process.wait(timeout=series["prepare_timeout"]):
                 raise RuntimeError("AgentX preparation failed; see prepare.log")
@@ -215,23 +225,17 @@ def run(manifest: dict, output: Path) -> None:
     record.update({"server_command": server, "benchmark_command": benchmark, "status": "starting"})
     record_path.write_text(json.dumps(record, indent=2))
     server_environment = environment | launcher.env() | {"VLLM_ENGINE_READY_TIMEOUT_S": str(series["ready_timeout"])}
-    with (output / "server.log").open("w") as server_log:
-        server_process = subprocess.Popen(
-            server, env=server_environment, stdout=server_log, stderr=subprocess.STDOUT, start_new_session=True
-        )
+    with logged_process(server, server_environment, output / "server.log") as server_process:
         try:
             wait_ready(server_process, url, series["model"], series["ready_timeout"])
             record.update({"status": "measuring", "ready_unix": time.time()})
             record_path.write_text(json.dumps(record, indent=2))
             print("AGENTX_SERVER_READY", flush=True)
-            with (output / "agentx.log").open("w") as log:
-                client = subprocess.Popen(
-                    benchmark,
-                    env=environment | {"HF_HUB_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1"},
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=True,
-                )
+            with logged_process(
+                benchmark,
+                environment | {"HF_HUB_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1"},
+                output / "agentx.log",
+            ) as client:
                 try:
                     if client.wait(timeout=series["duration"] + 3600):
                         raise RuntimeError("AgentX failed; see agentx.log")

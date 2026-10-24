@@ -10,6 +10,7 @@
   "dataset_sha256": "e39cd2ff3eba21d4a3664be51da743ac3d2149a1933898cafc7bfeac8147eeef",
   "max_context": 262144,
   "duration": 900,
+  "max_profiling_error_ratio": 0.01,
   "random_seed": 42,
   "trajectory_start_min_ratio": 0.25,
   "trajectory_start_max_ratio": 0.75,

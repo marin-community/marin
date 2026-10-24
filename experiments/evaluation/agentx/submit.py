@@ -39,6 +39,12 @@ def point_manifest(profile: str, concurrency: int, source: dict) -> dict:
 def submit_point(client: IrisClient, name: str, manifest: dict, cluster: str, priority: str):
     """Use Iris's stable name and native retry budgets; never recreate a completed job."""
     series = json.loads(SERIES_PATH.read_text())
+    if hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest() != manifest["series_sha256"]:
+        raise ValueError("The submission checkout does not match the saved series")
+    if json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE), sort_keys=True) != json.dumps(
+        manifest["vllm_release"], sort_keys=True
+    ):
+        raise ValueError("The submission checkout changed the saved vLLM adoption")
     profile = series["profiles"][manifest["profile"]]
     entrypoint = Entrypoint(
         command=[
