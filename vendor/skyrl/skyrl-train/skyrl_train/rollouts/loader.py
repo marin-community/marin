@@ -88,15 +88,10 @@ class SeededPasses:
 
 @dataclass(frozen=True)
 class PromptLoaderState:
-    """The prompt order's position, the prompts awaiting regeneration, and how often each uid was regenerated.
-
-    ``stale_retries`` pairs each uid with the number of times its prompt was regenerated since the prompt order last
-    offered it; a checkpoint without the field restores no counts.
-    """
+    """The prompt order's position and the prompts awaiting regeneration."""
 
     order: dict[str, Any]
     retries: list[dict]
-    stale_retries: tuple[tuple[str, int], ...] = ()
 
 
 class PromptLoader:
@@ -107,7 +102,7 @@ class PromptLoader:
     copy the batch would reject.
 
     A prompt whose group missed the staleness window is regenerated at most ``max_stale_retries`` times in a row;
-    after that it waits until the prompt order offers it again.
+    after that it waits until the prompt order offers it again. The counts restart at zero when a run resumes.
 
     The sequence never ends; the trainer decides when to stop.
     """
@@ -169,12 +164,11 @@ class PromptLoader:
         return self._order.observe(groups)
 
     def state_dict(self) -> PromptLoaderState:
-        return PromptLoaderState(self._order.state_dict(), list(self._retries), tuple(self._stale_retries.items()))
+        return PromptLoaderState(self._order.state_dict(), list(self._retries))
 
     def load_state_dict(self, state: PromptLoaderState) -> None:
         self._order.load_state_dict(state.order)
         self._retries = collections.deque(state.retries)
-        self._stale_retries = dict(state.stale_retries)
 
     def _offer(self, index: int) -> dict:
         (prompt,) = self._dataset.collate_fn([self._dataset[index]])
