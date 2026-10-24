@@ -9,21 +9,17 @@ import json
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
-from dataclasses import asdict, dataclass
-from enum import StrEnum
+from dataclasses import asdict
 from pathlib import Path
 
 import torch
 import transformers
 import vllm
-from safetensors import safe_open
 from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 from vllm.distributed.parallel_state import cleanup_dist_env_and_memory
 
-from experiments.weight_merging.playground.arithmetic import Method, Recipe, merge
-from experiments.weight_merging.playground.checkpoints import checkpoint_map
+from experiments.weight_merging.playground.candidates import Candidate, merged_weights, read_candidates
 from experiments.weight_merging.playground.evaluation import (
     GSM_SMOKE_IDS,
     grade_completion,
@@ -34,68 +30,6 @@ from experiments.weight_merging.playground.evaluation import (
 )
 
 DECODE_SEEDS = (17, 29)
-
-
-class DonorPrecision(StrEnum):
-    FP32 = "float32"
-    BF16_ROUNDED = "bfloat16_rounded"
-
-
-@dataclass(frozen=True)
-class Candidate:
-    name: str
-    source: str
-    donors: tuple[str, ...] = ()
-    recipe: Recipe | None = None
-    rope_theta: float = 1_000_000
-    donor_precision: DonorPrecision = DonorPrecision.FP32
-
-
-def read_candidates(path: Path) -> list[Candidate]:
-    result = []
-    for value in json.loads(path.read_text()):
-        recipe = value.get("recipe")
-        if recipe is not None:
-            recipe = Recipe(
-                **{**recipe, "method": Method(recipe["method"]), "coefficients": tuple(recipe["coefficients"])}
-            )
-        result.append(
-            Candidate(
-                name=value["name"],
-                source=value["source"],
-                donors=tuple(value.get("donors", [])),
-                recipe=recipe,
-                rope_theta=value.get("rope_theta", 1_000_000),
-                donor_precision=DonorPrecision(value.get("donor_precision", "float32")),
-            )
-        )
-    if len({candidate.name for candidate in result}) != len(result):
-        raise ValueError("Duplicate candidate names")
-    return result
-
-
-def merged_weights(paths: dict[str, Path], candidate: Candidate):
-    """Yield merged CPU tensors to vLLM's architecture-aware weight loader."""
-    sources = [candidate.source, *candidate.donors]
-    maps = {name: checkpoint_map(paths[name]) for name in sources}
-    expected_keys = set(maps[sources[0]])
-    if any(set(mapping) != expected_keys for mapping in maps.values()):
-        raise ValueError("Source checkpoint keys differ")
-    for name in sorted(expected_keys):
-        with ExitStack() as stack:
-            tensors = []
-            for source in sources:
-                reader = stack.enter_context(safe_open(paths[source] / maps[source][name], framework="pt"))
-                tensor = reader.get_tensor(name)
-                if tensor.is_floating_point():
-                    if source != sources[0] and candidate.donor_precision == DonorPrecision.BF16_ROUNDED:
-                        tensor = tensor.bfloat16()
-                    tensor = tensor.float()
-                tensors.append(tensor)
-                del tensor
-            value = merge(tensors[0], tensors[1:], candidate.recipe, name) if candidate.recipe else tensors[0]
-            yield name, value
-            del value, tensors
 
 
 def evaluate(llm, tokenizer, items: list[dict], candidate: Candidate, args) -> list[dict]:
