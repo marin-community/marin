@@ -44,6 +44,11 @@ WORK_ROOT = Path("/tmp/axolotl-run")
 SYNC_INTERVAL = 600
 FORK_REPO = "https://github.com/marin-community/axolotl"
 IMAGE_PYTHON = "/workspace/axolotl-venv/bin/python"
+# The fork's pinned Cut Cross Entropy build (scripts/cutcrossentropy_install.py): it computes the
+# loss without materializing [tokens x vocab] logits, which alone exceed an H100 at 32k tokens.
+CUT_CROSS_ENTROPY = (
+    "cut-cross-entropy[transformers] @ git+https://github.com/axolotl-ai-cloud/ml-cross-entropy.git@5f0c7a7"
+)
 RUN_MANIFEST = "axolotl_run_manifest.json"
 RENDEZVOUS_PORT = 29500
 RENDEZVOUS_TIMEOUT = 1800
@@ -73,7 +78,7 @@ def _install_fork(revision: str, transformers_pin: str) -> None:
     _run(["git", "-C", str(fork), "checkout", "--quiet", revision])
     # Re-pinning transformers alone breaks against the image's newer `kernels`; the fork's
     # own dependency set is consistent.
-    _run(["uv", "pip", "install", "--python", IMAGE_PYTHON, "-e", str(fork)])
+    _run(["uv", "pip", "install", "--python", IMAGE_PYTHON, "-e", str(fork), CUT_CROSS_ENTROPY])
     installed = subprocess.run(
         [IMAGE_PYTHON, "-c", "import transformers; print(transformers.__version__)"],
         check=True,

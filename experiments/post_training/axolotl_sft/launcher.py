@@ -52,6 +52,8 @@ DECODER_LAYER_CLASSES = {
 TEMPLATE_INTEGRITY_PLUGIN = "axolotl.integrations.template_integrity.TemplateIntegrityPlugin"
 # Shipped next to the pod runner; see fp32_master.py.
 FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
+# The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
+CUT_CROSS_ENTROPY_PLUGIN = "axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin"
 GPUS_PER_NODE = 8
 POD_RUNNER = "experiments/post_training/axolotl_sft/pod_runner.py"
 PAYLOAD_ENV = "AXOLOTL_PAYLOAD"
@@ -161,7 +163,7 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "revision_of_model": spec.base.revision,
         "trust_remote_code": False,
         "strict": False,
-        "plugins": [TEMPLATE_INTEGRITY_PLUGIN, FP32_MASTER_PLUGIN],
+        "plugins": [TEMPLATE_INTEGRITY_PLUGIN, FP32_MASTER_PLUGIN, CUT_CROSS_ENTROPY_PLUGIN],
         "tokenizer_save_jinja_files": False,
         "chat_template": "jinja",
         "chat_template_jinja": spec.chat_template,
