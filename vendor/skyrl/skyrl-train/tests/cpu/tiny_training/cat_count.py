@@ -69,7 +69,6 @@ def cat_count_config(
                     "use_kl_loss": False,
                     "policy_loss_type": "behavior_clip" if staleness else "regular",
                     "off_policy_correction": "none" if staleness else "tis",
-                    # The CPU inference backend supplies chosen-token scores, without vLLM candidate heads.
                     "group_admission": {"stall_timeout": 120},
                 },
                 "rollout_buffer": {"max_staleness_steps": staleness, "max_in_flight": 8, "object_store_root": None},
