@@ -27,6 +27,7 @@ def test_report_preserves_seed_pairs_and_behavior_denominators(tmp_path, monkeyp
                         "mode": mode,
                         "seed": seed,
                         "correct": correct,
+                        "tokens": list(range(seed + 3)),
                         "completion": "<think>unfinished" if candidate == "merged" else "plain",
                         "finish_reason": "length" if candidate == "merged" else "stop",
                     }
@@ -46,6 +47,10 @@ def test_report_preserves_seed_pairs_and_behavior_denominators(tmp_path, monkeyp
     assert merged["gsm8k", "greedy", 0]["truncated"] == 1
     assert merged["gsm8k", "sample", 17]["correct"] == 1
     assert merged["gsm8k", "sample", 29]["correct"] == 0
+    assert merged["gsm8k", "greedy", 0]["mean_output_tokens"] == 3
+    assert merged["gsm8k", "sample", 17]["mean_output_tokens"] == 20
+    assert merged["gsm8k", "sample", 29]["mean_output_tokens"] == 32
+    assert "3.0 / 3.0" in output.read_text()
     assert "max_tokens=8192" in output.read_text()
     assert all(r["candidate"] != "ignore" for r in summaries)
 

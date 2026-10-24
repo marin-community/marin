@@ -21,7 +21,9 @@ def main():
     selected = set(order)
     reference = {}
     observations = []
-    counts = defaultdict(lambda: {"n": 0, "correct": 0, "truncated": 0, "unclosed_think": 0, "wins": 0, "losses": 0})
+    counts = defaultdict(
+        lambda: {"n": 0, "correct": 0, "truncated": 0, "unclosed_think": 0, "wins": 0, "losses": 0, "output_tokens": 0}
+    )
     for line in (args.run / "outputs.jsonl").open():
         row = json.loads(line)
         if row["candidate"] not in selected:
@@ -31,6 +33,7 @@ def main():
         key = (row["candidate"], row["dataset"], row["mode"], row["seed"])
         c = counts[key]
         c["n"] += 1
+        c["output_tokens"] += len(row["tokens"])
         c["correct"] += row["correct"]
         c["truncated"] += row["finish_reason"] == "length"
         c["unclosed_think"] += unclosed_thinking(row["completion"])
@@ -51,6 +54,7 @@ def main():
                 "mode": mode,
                 "seed": seed,
                 **counts_row,
+                "mean_output_tokens": counts_row["output_tokens"] / counts_row["n"],
                 "sign_test_p_two_sided": sign_test_pvalue(counts_row["wins"], counts_row["losses"]),
             }
         )
@@ -58,9 +62,9 @@ def main():
     lines = [
         (
             f"| Candidate (max_tokens={cap}) | GSM greedy | Strict MBPP greedy | Unclosed GSM / MBPP | "
-            "Truncated GSM / MBPP | GSM W/L (p) | MBPP W/L (p) |"
+            "Truncated GSM / MBPP | Mean tokens GSM / MBPP | GSM W/L (p) | MBPP W/L (p) |"
         ),
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
 
     def rate(counts_row, field):
@@ -76,6 +80,7 @@ def main():
             rate(mbpp, "correct"),
             f"{rate(gsm, 'unclosed_think')} / {rate(mbpp, 'unclosed_think')}",
             f"{rate(gsm, 'truncated')} / {rate(mbpp, 'truncated')}",
+            f"{gsm['output_tokens'] / gsm['n']:.1f} / {mbpp['output_tokens'] / mbpp['n']:.1f}",
         ]
         for row in (gsm, mbpp):
             values.append(f"{row['wins']}/{row['losses']} ({sign_test_pvalue(row['wins'], row['losses']):.3g})")
@@ -85,7 +90,8 @@ def main():
             "",
             (
                 "Exact two-sided sign tests compare paired items with Instruct. "
-                "These exploratory p-values do not correct for recipe selection."
+                "These exploratory p-values do not correct for recipe selection. "
+                "Mean output length counts stored generated token IDs, including truncated outputs."
             ),
             "",
             "| Candidate | GSM sampled seed17 / seed29 | MBPP sampled seed17 / seed29 |",
