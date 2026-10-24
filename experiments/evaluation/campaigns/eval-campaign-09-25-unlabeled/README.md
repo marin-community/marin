@@ -35,14 +35,15 @@ replaces its previous source in the fit. The archive preserves raw rewards, the
 complete cohort fit, and each adjusted episode. Goal achievement remains an explicit
 non-default dataset generation mode.
 
-`finalization.yaml` also enables the policy's FinanceBench and OlympiadBench regrades.
-After generation, each judged benchmark starts the pinned 262,144-token TP8 MiniMax service
-on eight H100s in the candidate's cluster and regrades the saved answers. Candidate generation
-is not repeated. The service is released when the regrade ends. Raw samples and final judge
-verdicts remain in the FineStore archive under `policy-10197/`.
+`finalization.yaml` also selects MiniMax for native FinanceBench and OlympiadBench grading.
+Each judged benchmark starts the pinned 262,144-token TP8 MiniMax service on eight H100s
+in the candidate's cluster before evaluation and releases it afterward. Evalchemy grades
+answers once and preserves judge verdicts with the samples. Judge requests use constrained
+labels and escalate empty final answers through 128, 512, and 2048 output tokens.
 
-These stages finish before the run is recorded as successful. Missing cohort evidence or a
-failed judge produces `artifact_failed`; completed judge verdicts can be reused on recovery.
+These stages finish before the run is recorded as successful. Missing cohort evidence
+produces `artifact_failed`; Evalchemy preserves checkpoints for interrupted judge requests.
+Changing SOTOPIA baselines does not invalidate FinanceBench or OlympiadBench results.
 The launch snapshot includes the finalization configuration, judge YAML, and baseline manifest.
 `record.json` records that configuration in `eval.postprocessing`. The generic evaluation CLI
 accepts `--policy-finalization-config finalization.yaml`; `launch-campaign.sh` supplies the

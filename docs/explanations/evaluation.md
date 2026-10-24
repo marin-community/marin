@@ -55,18 +55,18 @@ After the evaluator seals those tables, Marin derives the shared `rollouts_v1` t
 
 The policy campaign launcher enables the score corrections required by
 [Marin eval policy #10197](https://github.com/marin-community/marin/issues/10197).
-FinanceBench and OlympiadBench regrade saved answers with the pinned MiniMax judge on eight
+FinanceBench and OlympiadBench use the pinned MiniMax judge for first-pass grading on eight
 H100s, using its 262,144-token context. SOTOPIA fits the length correction over the frozen
 13-model baseline cohort plus the evaluated model’s current run. A baseline model’s rerun
 replaces its prior source in the fit. Each launch preserves its exact cohort sources and judge
 configuration.
 
 A run is marked successful only after finalization succeeds. Its normalized samples and
-canonical metrics contain regraded accuracy or length-controlled SOTOPIA scores. Raw grades,
-judge verdicts, and cohort-fit evidence remain
-under `policy-10197/` in its FineStore archive. Failed finalization is recorded as
-`artifact_failed`. Changing the judge configuration or baseline sources changes the run's
-identity; the launcher creates a new evaluation record automatically.
+canonical metrics contain native judge accuracy or length-controlled SOTOPIA scores. Evalchemy
+preserves judge verdicts with each sample. SOTOPIA preserves raw rewards and cohort-fit evidence
+under `policy-10197/` in its FineStore archive. Failed SOTOPIA finalization is recorded as
+`artifact_failed`. Judge configuration changes invalidate only FinanceBench and OlympiadBench;
+baseline source changes invalidate only SOTOPIA.
 
 ### Dataset caching
 

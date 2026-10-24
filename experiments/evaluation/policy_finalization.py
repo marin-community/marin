@@ -8,7 +8,6 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
-import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -16,18 +15,16 @@ from pathlib import Path
 import yaml
 from finestore.eval import EvaluationStore, sample_from_archive_row
 from finestore.reader import ReadView
-from iris.client.client import iris_ctx
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
+from marin.evaluation.evalchemy.runner import EvalchemyExecutor
 from marin.evaluation.hardware import AcceleratorChoice
+from marin.evaluation.lm_eval_samples import task_coverage
 from marin.evaluation.model_config import ModelConfig, load_model_config
-from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus
+from marin.evaluation.records import EvalRef, RunStatus
 from marin.evaluation.runner import (
-    BACKEND_POLL_SECONDS,
     EvalExecutor,
     EvaluationError,
     EvaluationOutcome,
-    InferenceBackendFinished,
-    InferenceUnavailable,
     check_inference_backend,
 )
 from marin.evaluation.serving_config import inference_config_for_model
@@ -35,11 +32,9 @@ from marin.inference.iris import RemoteInferenceSession, remote_inference
 from marin.inference.model_preparation import precache_inference_model
 from marin.inference.types import InferenceBackendState
 
-from vendor.evalchemy.eval.contracts.policy import TrialVerdict
-
 POLICY = "marin-10197"
 MIN_SCORED_FRACTION = 0.9
-REGRADE_ARTIFACT = "policy-10197/judge-verdicts.json"
+OLYMPIAD_REPETITIONS = 10
 SOTOPIA_ARTIFACT = "policy-10197/sotopia-length-control.json"
 SOTOPIA_METRIC = "length_controlled_overall"
 
@@ -54,9 +49,6 @@ class CohortSource:
 class PolicyFinalization:
     judge: ModelConfig
     sotopia_baselines: tuple[CohortSource, ...]
-
-    def record_configuration(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True)
 
 
 def load_policy_finalization(path: Path) -> PolicyFinalization:
@@ -116,11 +108,40 @@ def _final_metrics(outcome: EvaluationOutcome, score: float, metric: str, correc
     )
 
 
+def trial_coverage(outcome: EvaluationOutcome, root: str, repetitions: int) -> EvaluationOutcome:
+    """Count seeded repetitions separately while preserving native aggregate metrics."""
+    task, original = next(iter(outcome.coverage.items()))
+    if repetitions == 1:
+        return outcome
+    samples = [
+        sample_from_archive_row(row).model_copy(update={"doc_id": json.dumps([row["doc_id"], row["trial_id"]])})
+        for row in ReadView(root).iter_rows("samples")
+        if row["task"] == task
+    ]
+    assert original.n_attempted is not None
+    coverage = task_coverage(
+        samples,
+        n_attempted=original.n_attempted * repetitions,
+        n_benchmark=original.n_benchmark * repetitions if original.n_benchmark is not None else None,
+    )
+    reference = outcome.tasks[0]
+    assert reference.benchmark is not None
+    benchmark = reference.benchmark.model_copy(
+        update={
+            "n_attempted": coverage.n_attempted,
+            "n_benchmark": coverage.n_benchmark,
+        }
+    )
+    return replace(outcome, coverage={task: coverage}, tasks=(reference.model_copy(update={"benchmark": benchmark}),))
+
+
 @dataclass(frozen=True)
-class MiniMaxRegrade:
-    source: EvalExecutor
-    benchmark: str
-    config: PolicyFinalization
+class PolicyJudge:
+    """Run Evalchemy with the policy judge as its native grading endpoint."""
+
+    source: EvalchemyExecutor
+    repetitions: int
+    model: ModelConfig
     accelerator: AcceleratorChoice
     priority: int
 
@@ -133,95 +154,57 @@ class MiniMaxRegrade:
         backend_state: Callable[[], InferenceBackendState],
         judge: RemoteInferenceSession | None = None,
     ) -> EvaluationOutcome:
-        outcome = self.source(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
-        jobs = dict(outcome.jobs)
-        try:
-            _complete_coverage(outcome)
-            inference = inference_config_for_model(
-                self.config.judge,
-                self.accelerator,
-                env_vars=env_vars,
-                priority=self.priority,
-                api_model=self.config.judge.location,
+        inference = inference_config_for_model(
+            self.model,
+            self.accelerator,
+            env_vars=env_vars,
+            priority=self.priority,
+            api_model=self.model.location,
+        )
+        precache_inference_model(inference)
+        with remote_inference(inference) as policy_judge:
+            jobs = {f"policy-judge-{i}": str(job.job_id) for i, job in enumerate(policy_judge.jobs)}
+            policy_judge.wait_until_ready(check_dependencies=lambda: check_inference_backend(backend_state()))
+            configuration = EvalchemyJudgeConfig(
+                base_url=policy_judge.model.endpoint.base_url,
+                model=policy_judge.model.endpoint.model,
+                api_key=("env:JUDGE_API_KEY",),
+                protocol=POLICY,
             )
-            precache_inference_model(inference)
-            with remote_inference(inference) as regrader:
-                jobs.update({f"policy-judge-{i}": str(job.job_id) for i, job in enumerate(regrader.jobs)})
-                regrader.wait_until_ready(check_dependencies=lambda: check_inference_backend(backend_state()))
-                payload = {
-                    "results_path": output_dir,
-                    "benchmark": self.benchmark,
-                    "endpoint": regrader.model.endpoint.base_url,
-                    "model": regrader.model.endpoint.model,
-                    "judge_config": asdict(self.config.judge),
-                }
-                child = iris_ctx().client.submit(
-                    name="policy-regrade-" + uuid.uuid4().hex[:8],
-                    entrypoint=Entrypoint.from_command(
-                        "bash",
-                        "-c",
-                        'cd "$IRIS_WORKDIR"\n'
-                        'export UV_PROJECT_ENVIRONMENT="$IRIS_WORKDIR/vendor/evalchemy/.venv"\n'
-                        "exec uv run --project vendor/evalchemy --frozen --no-default-groups --extra olympiadbench "
-                        "python -m eval.policy_regrade",
-                    ),
-                    resources=ResourceSpec(cpu=8, memory="32g", disk="50g"),
-                    environment=EnvironmentSpec(env_vars={**env_vars, "MARIN_POLICY_REGRADE": json.dumps(payload)}),
-                    max_retries_failure=0,
+            executor = EvalchemyExecutor(replace(self.source.config, judge=configuration))
+
+            def dependencies() -> InferenceBackendState:
+                check_inference_backend(policy_judge.backend_state())
+                return backend_state()
+
+            try:
+                outcome = executor(
+                    session,
+                    output_dir,
+                    {**env_vars, "JUDGE_API_KEY": "local-policy-judge"},
+                    backend_state=dependencies,
                 )
-                jobs["policy-regrade"] = str(child.job_id)
-                try:
-                    while True:
-                        check_inference_backend(backend_state())
-                        regrader.check_alive()
-                        try:
-                            child.wait(timeout=BACKEND_POLL_SECONDS)
-                            break
-                        except TimeoutError:
-                            continue
-                except BaseException:
-                    child.cancel()
-                    child.wait(timeout=float("inf"), raise_on_failure=False)
-                    raise
-            payload = ReadView(output_dir).read_blob(REGRADE_ARTIFACT)
-            if payload is None:
-                raise ValueError("policy judge did not preserve its per-trial verdicts")
-            verdicts = [TrialVerdict(**row) for row in json.loads(payload)["trials"]]
-            task, original = next(iter(outcome.coverage.items()))
-            repeats = 10 if self.benchmark == "olympiadbench" else 1
-            assert original.n_attempted is not None
-            expected = original.n_attempted * repeats
-            identities = {(row.task, row.doc_id, row.trial_id) for row in verdicts}
-            if len(identities) != len(verdicts) or not MIN_SCORED_FRACTION * expected <= len(verdicts) <= expected:
-                raise ValueError("policy judge verdicts do not cover at least 90% of declared trials")
-            correct = sum(value.score for value in verdicts)
-            missing = expected - len(verdicts)
-            coverage = original.model_copy(
-                update={
-                    "n_benchmark": original.n_benchmark * repeats if original.n_benchmark is not None else None,
-                    "n_attempted": expected,
-                    "n_scored": len(verdicts),
-                    "errors": {EVALCHEMY_INFRASTRUCTURE_ERROR: missing} if missing else {},
-                    "n_unanswered": sum(not row.extracted.strip() for row in verdicts),
-                }
-            )
-            outcome = replace(outcome, coverage={task: coverage})
-            return replace(_final_metrics(outcome, correct / len(verdicts), "accuracy", int(correct)), jobs=jobs)
-        except (InferenceUnavailable, InferenceBackendFinished):
-            raise
-        except Exception as exc:
-            raise EvaluationError(
-                f"policy #10197 judge finalization failed: {exc}",
-                status=RunStatus.ARTIFACT_FAILED,
-                jobs=jobs,
-                coverage=outcome.coverage,
-            ) from exc
+            except EvaluationError as exc:
+                exc.jobs.update(jobs)
+                raise
+            jobs.update(outcome.jobs)
+            try:
+                outcome = trial_coverage(outcome, output_dir, self.repetitions)
+                _complete_coverage(outcome)
+            except Exception as exc:
+                raise EvaluationError(
+                    f"policy #10197 judge coverage failed: {exc}",
+                    status=RunStatus.ARTIFACT_FAILED,
+                    jobs=jobs,
+                    coverage=outcome.coverage,
+                ) from exc
+            return replace(outcome, jobs=jobs)
 
 
 @dataclass(frozen=True)
 class SotopiaLengthControl:
     source: EvalExecutor
-    config: PolicyFinalization
+    baselines: tuple[CohortSource, ...]
     model: str
 
     def __call__(
@@ -236,7 +219,7 @@ class SotopiaLengthControl:
         outcome = self.source(session, output_dir, env_vars, backend_state=backend_state, judge=judge)
         try:
             _complete_coverage(outcome)
-            return finalize_sotopia(outcome, output_dir, self.model, self.config.sotopia_baselines)
+            return finalize_sotopia(outcome, output_dir, self.model, self.baselines)
         except Exception as exc:
             raise EvaluationError(
                 f"policy #10197 SOTOPIA finalization failed: {exc}",
@@ -299,12 +282,22 @@ def policy_executor(
     judge_accelerator: AcceleratorChoice | None,
     priority: int,
 ) -> tuple[EvalExecutor, EvalRef]:
-    """Wrap only the policy benchmarks that require postprocessing."""
+    """Bind each policy benchmark to its own grading configuration."""
     if reference.name in {"financebench", "olympiadbench"}:
         assert judge_accelerator is not None
-        executor = MiniMaxRegrade(source, reference.name, config, judge_accelerator, priority)
+        if not isinstance(source, EvalchemyExecutor):
+            raise TypeError("policy answer-equivalence grading requires Evalchemy")
+        executor = PolicyJudge(
+            source,
+            OLYMPIAD_REPETITIONS if reference.name == "olympiadbench" else 1,
+            config.judge,
+            judge_accelerator,
+            priority,
+        )
+        configuration = {"judge": asdict(config.judge)}
     elif reference.name == "sotopia-hard":
-        executor = SotopiaLengthControl(source, config, model)
+        executor = SotopiaLengthControl(source, config.sotopia_baselines, model)
+        configuration = {"sotopia_baselines": [asdict(source) for source in config.sotopia_baselines]}
     else:
         return source, reference
-    return executor, reference.model_copy(update={"postprocessing": {POLICY: config.record_configuration()}})
+    return executor, reference.model_copy(update={"postprocessing": {POLICY: json.dumps(configuration, sort_keys=True)}})

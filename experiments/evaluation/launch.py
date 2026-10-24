@@ -394,6 +394,23 @@ def build_evaluation_batch(
     records_prefix = records_prefix_for(accelerator, spec)
     group_id = spec.run_id or _group_id(model.name, spec.cache_key)
     created_at = datetime.now(UTC).isoformat()
+    if spec.policy_finalization is not None:
+        definitions = tuple(
+            (
+                (
+                    name,
+                    replace(
+                        definition,
+                        secret_env={
+                            key: value for key, value in definition.secret_env.items() if key != "JUDGE_API_KEY"
+                        },
+                    ),
+                )
+                if definition.record_ref.name in {"financebench", "olympiadbench"}
+                else (name, definition)
+            )
+            for name, definition in definitions
+        )
     secret_env: dict[str, SecretSpec] = {}
     for _, definition in definitions:
         for name, spec_value in definition.secret_env.items():

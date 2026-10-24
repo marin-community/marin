@@ -112,7 +112,7 @@ def source_plans(tasks, routes, custom, native, run: RunSpec, model) -> list[Sou
             )
             plans.append(SourcePlan(
                 task, route, (_source_specs(benchmark, options),), (task,), reducer,
-                judge_config=JudgeConfig.resolve(judge_model=run.judge_model or benchmark.judge_model)
+                judge_config=JudgeConfig.resolve(judge_model=run.judge_model or benchmark.judge_model, protocol=run.judge_protocol)
                 if benchmark.REQUIRES_JUDGE and not run.predict_only else None,
                 expected_examples=description.n_attempted, benchmark=benchmark,
             ))
