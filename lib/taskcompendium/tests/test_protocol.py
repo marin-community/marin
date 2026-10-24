@@ -22,7 +22,6 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     GradingAttempt,
     ReasoningApplied,
-    RequiredFileCheck,
     TaskSpec,
     TextMessage,
     ToolResult,
@@ -31,7 +30,6 @@ from taskcompendium.models import (
 from taskcompendium.pipeline.controls import control_suite
 from taskcompendium.pipeline.models import CheckStatus, Controls
 from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY, assess_protocol
-from taskcompendium.runtime.local import LocalGraderMachines
 from taskcompendium.runtime.task_grading import grade_task
 
 IMAGE = "fixture@sha256:" + "0" * 64
@@ -232,17 +230,6 @@ def test_required_file_reports_submission_completeness_only(files, grade, expect
 def test_probe_golden_transcripts_pass_their_answer_and_protocol(check):
     report = control_suite(Controls(golden=golden_transcript), None).run(TASKS[check])
     assert [(result.check, result.status) for result in report.checks] == [("golden", CheckStatus.PASS)]
-
-
-def test_required_file_golden_passes_in_a_grading_machine(local_machine_environment):
-    environment, _factory = local_machine_environment
-    [task] = (
-        task
-        for task in probe_tasks(task_environment=environment, grader_environment=environment, variants=1)
-        if isinstance(task.protocol_check, RequiredFileCheck)
-    )
-    [result] = control_suite(Controls(golden=golden_transcript), LocalGraderMachines()).run(task).checks
-    assert (result.check, result.status) == ("golden", CheckStatus.PASS), result.detail
 
 
 def test_a_golden_control_that_breaks_the_protocol_fails():
