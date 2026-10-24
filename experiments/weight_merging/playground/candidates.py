@@ -79,5 +79,3 @@ def merged_weights(paths: dict[str, Path], candidate: Candidate):
                 value = value.bfloat16().float()
             yield name, value
             del value, tensors
-
-
