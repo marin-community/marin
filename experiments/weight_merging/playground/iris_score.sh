@@ -7,8 +7,24 @@ uv --no-config venv "$work_dir/io" --python 3.12
 uv --no-config pip install --python "$work_dir/io/bin/python" "marin-rigging @ git+https://github.com/marin-community/marin.git@c7c14a252dc2d6f7cd86136f99799960e1667e53#subdirectory=lib/rigging"
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io  cp -r "$PLAYGROUND_INPUT" "$work_dir/run"
 if ! command -v docker >/dev/null; then
-  apt-get update
-  apt-get install -y --no-install-recommends docker.io
+  # The Docker-access profile drops setuid/setgid capabilities, so apt cannot run.
+  # Install only the pinned upstream CLI; use the worker's existing Docker daemon.
+  "$work_dir/io/bin/python" - "$work_dir" <<'PYCLI'
+import hashlib
+import sys
+import tarfile
+import urllib.request
+from pathlib import Path
+root = Path(sys.argv[1])
+archive = root/'docker-27.5.1.tgz'
+urllib.request.urlretrieve('https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz', archive)
+print('Docker CLI archive SHA256', hashlib.sha256(archive.read_bytes()).hexdigest(), flush=True)
+(root/'tools').mkdir()
+with tarfile.open(archive) as source:
+    (root/'tools/docker').write_bytes(source.extractfile('docker/docker').read())
+(root/'tools/docker').chmod(0o755)
+PYCLI
+  export PATH="$work_dir/tools:$PATH"
 fi
 docker pull python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.rescore \
