@@ -2,7 +2,7 @@
 
 from types import MappingProxyType
 
-from .recipe_schema.rules import RLEntrypoint
+from skyrlrecipe import RLEntrypoint
 
 RL_ENTRYPOINTS = MappingProxyType(
     {
