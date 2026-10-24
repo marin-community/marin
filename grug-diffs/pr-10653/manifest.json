@@ -1,0 +1,61 @@
+{
+  "added_variants": [
+    "noise_belay",
+    "tied_drafter",
+    "tied_drafter_activation",
+    "tied_drafter_record"
+  ],
+  "base_sha": "2cae063c877172844fe6ff90e94354cc08a273fa",
+  "head_sha": "8c97250a57e7d413be4cf1457cc72c40018785f0",
+  "report_count": 4,
+  "reports": [
+    {
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 3854,
+      "report_relpath": "noise_belay/index.html",
+      "status_counts": {
+        "added": 16,
+        "changed": 0,
+        "removed": 4,
+        "unchanged": 0
+      },
+      "variant": "noise_belay"
+    },
+    {
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 2077,
+      "report_relpath": "tied_drafter/index.html",
+      "status_counts": {
+        "added": 13,
+        "changed": 1,
+        "removed": 3,
+        "unchanged": 0
+      },
+      "variant": "tied_drafter"
+    },
+    {
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 7859,
+      "report_relpath": "tied_drafter_activation/index.html",
+      "status_counts": {
+        "added": 1,
+        "changed": 1,
+        "removed": 3,
+        "unchanged": 0
+      },
+      "variant": "tied_drafter_activation"
+    },
+    {
+      "closest_variant": "snowball_synthetic",
+      "distance_score": 1683,
+      "report_relpath": "tied_drafter_record/index.html",
+      "status_counts": {
+        "added": 6,
+        "changed": 1,
+        "removed": 3,
+        "unchanged": 0
+      },
+      "variant": "tied_drafter_record"
+    }
+  ]
+}
