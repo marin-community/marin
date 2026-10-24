@@ -11,6 +11,7 @@ SOURCES = {
     'CruxEval': ('eval.chat_benchmarks.CruxEval.eval_instruct', 'CruxEvalBenchmark'),
     'FinanceBench': ('eval.chat_benchmarks.FinanceBench.eval_instruct', 'FinanceBenchBenchmark'),
     'GPQADiamond': ('eval.chat_benchmarks.GPQADiamond.eval_instruct', 'GPQADiamondBenchmark'),
+    'GraphWalks': ('eval.chat_benchmarks.GraphWalks.eval_instruct', 'GraphWalksBenchmark'),
     'GSM8KPerturbed': ('eval.chat_benchmarks.GSM8KPerturbed.eval_instruct', 'GSM8KPerturbedBenchmark'),
     'HLE': ('eval.chat_benchmarks.HLE.eval_instruct', 'HLESubsetBenchmark'),
     'HMMT': ('eval.chat_benchmarks.HMMT.eval_instruct', 'HMMTBenchmark'),

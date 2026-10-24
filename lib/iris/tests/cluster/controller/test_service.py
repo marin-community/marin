@@ -14,6 +14,7 @@ from datetime import date, timedelta
 import pytest
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
+from fsspec.implementations.local import LocalFileSystem
 from iris.cluster.bundle import BundleStore
 from iris.cluster.constraints import (
     Constraint,
@@ -162,6 +163,30 @@ def test_get_job_status_reports_parent_job_id(service):
     )
     assert parent_status.job.parent_job_id == ""
     assert parent_status.job.has_children
+
+
+@pytest.mark.parametrize("payload", ["bundle", "workdir_file"])
+@pytest.mark.parametrize("upload_error", [TimeoutError("upload deadline exceeded"), OSError("storage unavailable")])
+def test_launch_job_failed_payload_upload_does_not_create_job(service, monkeypatch, payload, upload_error):
+    def fail_upload(*args, **kwargs):
+        raise upload_error
+
+    request = make_job_request(name="/test-user/failed-upload")
+    if payload == "bundle":
+        request.bundle_blob = b"bundle bytes"
+    else:
+        request.entrypoint.workdir_files["payload"] = b"x" * (jobs_module.WORKDIR_FILE_OFFLOAD_THRESHOLD + 1)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LocalFileSystem, "pipe_file", fail_upload)
+        with pytest.raises(ConnectError) as error:
+            service.launch_job(request, ctx=None)
+        assert error.value.code == Code.UNAVAILABLE
+
+    with pytest.raises(ConnectError) as missing:
+        service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=request.name), ctx=None)
+    assert missing.value.code == Code.NOT_FOUND
+    assert service.launch_job(request, ctx=None).job_id == request.name
 
 
 def test_launch_job_bundle_blob_rewrites_to_controller_bundle_id(service):
@@ -629,13 +654,17 @@ def test_redact_request_env_vars_does_not_mutate_original():
     original = controller_pb2.Controller.LaunchJobRequest(
         name="/test-user/job",
         entrypoint=make_test_entrypoint(),
-        environment=job_pb2.EnvironmentConfig(env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}),
+        environment=job_pb2.EnvironmentConfig(
+            env_vars={"WANDB_API_KEY": "secret", "SAFE": "ok"}, secrets={"arbitrary": "private"}
+        ),
     )
     redacted = redact_request_env_vars(original)
 
     assert original.environment.env_vars["WANDB_API_KEY"] == "secret"
     assert redacted.environment.env_vars["WANDB_API_KEY"] == REDACTED_VALUE
     assert redacted.environment.env_vars["SAFE"] == "ok"
+    assert original.environment.secrets["arbitrary"] == "private"
+    assert redacted.environment.secrets["arbitrary"] == REDACTED_VALUE
 
 
 def test_submit_argv_roundtrips_through_get_job_status(service):
@@ -1414,13 +1443,13 @@ def test_get_scheduler_state_with_running_task(controller_service, state):
         assert len(resp.running_buckets) == 1
         bucket = resp.running_buckets[0]
         assert bucket.job_id == job_id.to_wire()
-        assert bucket.user_id == email
+        assert bucket.user_id == "alice"
         assert bucket.worker_id == "w1"
         assert bucket.count == 1
-        # The email has no explicit user_budgets row but has an active task. The
-        # scheduler state must apply UserBudgetDefaults to that principal.
-        alice_budget = next((b for b in resp.user_budgets if b.user_id == email), None)
+        # An active owner without a configured budget gets the default limit.
+        alice_budget = next((b for b in resp.user_budgets if b.user_id == "alice"), None)
         assert alice_budget is not None
+        assert all(b.user_id != email for b in resp.user_budgets)
         assert alice_budget.budget_spent > 0
         assert alice_budget.budget_limit == UserBudgetDefaults().budget_limit
     finally:
@@ -1565,3 +1594,43 @@ def test_launch_job_nested_with_stale_client_date_is_exempt(service):
 
     response = service.launch_job(child_req, None)
     assert response.job_id == child_id.to_wire()
+
+
+@pytest.mark.parametrize("env", [{}, {"CW_KEY_ID": "user-key"}, {"CW_KEY_ID": "user-key", "CW_KEY_SECRET": ""}])
+def test_coreweave_launch_with_missing_keys_is_rejected(coreweave_service, monkeypatch, env):
+    monkeypatch.setenv("CW_KEY_ID", "operator-key")
+    monkeypatch.setenv("CW_KEY_SECRET", "operator-secret")
+    request = make_job_request("missing-cw-keys")
+    request.environment.secrets.update(env)
+
+    with pytest.raises(ConnectError) as exc:
+        coreweave_service.launch_job(request, None)
+
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    assert "https://console.coreweave.com/object-storage/access-keys" in str(exc.value)
+    with pytest.raises(ConnectError) as missing:
+        coreweave_service.get_job_status(controller_pb2.Controller.GetJobStatusRequest(job_id=request.name), None)
+    assert missing.value.code == Code.NOT_FOUND
+
+
+def test_coreweave_invalid_replacement_preserves_existing_job(coreweave_service):
+    request = make_job_request("existing-cw-job")
+    request.environment.secrets.update({"CW_KEY_ID": "user-key", "CW_KEY_SECRET": "user-secret"})
+    response = coreweave_service.launch_job(request, None)
+    request.environment.secrets.clear()
+    request.existing_job_policy = job_pb2.EXISTING_JOB_POLICY_RECREATE
+
+    with pytest.raises(ConnectError) as exc:
+        coreweave_service.launch_job(request, None)
+
+    assert exc.value.code == Code.INVALID_ARGUMENT
+    status = coreweave_service.get_job_status(
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id), None
+    )
+    assert status.job.state == job_pb2.JOB_STATE_PENDING
+
+
+def test_coreweave_sandbox_does_not_require_storage_keys(coreweave_service):
+    request = make_job_request("sandbox-without-storage-keys")
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    assert coreweave_service.launch_job(request, None).job_id == request.name

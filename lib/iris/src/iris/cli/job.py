@@ -23,6 +23,7 @@ import yaml
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from rigging.credentials import ClientCredentials
+from rigging.secrets import SecretBehavior, resolve_secret_spec
 from rigging.timing import Duration, Timestamp
 from tabulate import tabulate
 
@@ -133,10 +134,6 @@ def load_env_vars(env_flags: tuple[tuple[str, ...], ...] | list | None) -> dict[
         if isinstance(cfg.get("env"), dict):
             for k, v in cfg["env"].items():
                 env_vars[str(k)] = "" if v is None else str(v)
-
-    for key in ("HF_TOKEN", "WANDB_API_KEY"):
-        if key not in env_vars and os.environ.get(key):
-            env_vars[key] = os.environ[key]
 
     if env_flags:
         for item in env_flags:
@@ -595,6 +592,8 @@ def run_iris_job(
     target_cluster: str | None = None,
     bundle_exclude: re.Pattern[str] | None = None,
     extra_bundle_includes: Sequence[str] = (),
+    secrets: dict[str, str] | None = None,
+    secret_behavior: SecretBehavior = SecretBehavior.INHERIT,
 ) -> int:
     """Core job submission logic.
 
@@ -700,6 +699,8 @@ def run_iris_job(
         command=command,
         resources=resources,
         env_vars=env_vars,
+        secrets=secrets,
+        secret_behavior=secret_behavior,
         replicas=replicas,
         max_retries=max_retries,
         timeout=timeout,
@@ -749,6 +750,8 @@ def _submit_and_wait_job(
     task_image: str | None = None,
     bundle_exclude: re.Pattern[str] | None = None,
     extra_bundle_includes: Sequence[str] = (),
+    secrets: dict[str, str] | None = None,
+    secret_behavior: SecretBehavior = SecretBehavior.INHERIT,
 ) -> int:
     """Submit job and optionally wait for completion.
 
@@ -770,6 +773,8 @@ def _submit_and_wait_job(
         resources=resources,
         environment=EnvironmentSpec(
             env_vars=env_vars,
+            secrets=dict(secrets or {}),
+            secret_behavior=secret_behavior,
             extras=extras or [],
             setup_scripts=setup_scripts,
             sync_packages=sync_packages or [],
@@ -868,7 +873,23 @@ Examples:
     "env_vars",
     multiple=True,
     type=(str, str),
-    help="Set environment variables for the job (KEY VALUE). Can be repeated.",
+    help=(
+        "Set environment variables for the job (KEY VALUE). Can be repeated. " "Use --secret for secret file delivery."
+    ),
+)
+@click.option(
+    "--secret",
+    "secret_sources",
+    multiple=True,
+    type=(str, str),
+    help="Deliver a named secret as a file (NAME SOURCE), e.g. --secret SERVICE_KEY env:SERVICE_KEY. Can be repeated.",
+)
+@click.option(
+    "--secret-behavior",
+    type=click.Choice([behavior.name.lower() for behavior in SecretBehavior]),
+    default="inherit",
+    show_default=True,
+    help="Forward the current secrets bundle or use only explicit secrets. Sandboxes always isolate.",
 )
 @click.option(
     "--tpu",
@@ -1026,6 +1047,8 @@ Examples:
 def run(
     ctx,
     env_vars: tuple[tuple[str, str], ...],
+    secret_sources: tuple[tuple[str, str], ...],
+    secret_behavior: str,
     tpu: str | None,
     gpu: str | None,
     cpu: float,
@@ -1084,12 +1107,15 @@ def run(
         )
 
     env_vars_dict = load_env_vars(env_vars)
+    secrets = {name: resolve_secret_spec(source).value for name, source in secret_sources}
     bundle_exclude = re.compile("|".join(f"(?:{pattern})" for pattern in exclude)) if exclude else None
 
     try:
         exit_code = run_iris_job(
             command=command,
             env_vars=env_vars_dict,
+            secrets=secrets,
+            secret_behavior=SecretBehavior[secret_behavior.upper()],
             controller_url=controller_url,
             tpu=tpu,
             gpu=gpu,

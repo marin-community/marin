@@ -17,22 +17,31 @@ source (unset env / missing file / secret NOT_FOUND) skips to the next; a
 configured-but-erroring one (denied IAM, unreachable, unreadable, malformed)
 raises immediately and never silently shadows to a staler/weaker source.
 
-There is deliberately no ``k8s-secret://`` scheme: the k8s-native path is a
-Secret projected to ``env:`` (``envFrom``) or ``file:`` (CSI volume), so the
-controller never needs ``secrets: get`` on its ClusterRole.
+Kubernetes Secrets and CSI providers project files; applications need no
+Kubernetes API access. Named lookups prefer files and fall back to env for absent keys.
 """
 
+import io
 import logging
 import os
 import re
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Collection, Mapping, Sequence
+from configparser import ConfigParser
+from dataclasses import dataclass, field
+from enum import StrEnum
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 ENV_SCHEME = "env:"
 FILE_SCHEME = "file:"
 GCP_SECRET_SCHEME = "gcp-secret://"
+SECRETS_DIR = Path("/run/rigging/secrets")
+SECRETS_DIR_ENV = "RIGGING_SECRETS_DIR"
+COREWEAVE_SECRET_NAMES = ("CW_KEY_ID", "CW_KEY_SECRET")
+AWS_CREDENTIALS_FILENAME = ".aws-credentials"
+_FORWARDED_SECRET_NAMES = ("HF_TOKEN", "WANDB_API_KEY", *COREWEAVE_SECRET_NAMES)
+_SECRET_NAME_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*\Z")
 
 # A scheme-shaped prefix (``foo:``): used to tell an unknown-scheme reference
 # (raise) apart from a bare literal secret (also raise, different message).
@@ -46,12 +55,102 @@ class SecretResolutionError(RuntimeError):
     """A configured secret source failed to read (as distinct from being absent)."""
 
 
+class SecretBehavior(StrEnum):
+    """Inherit available credentials or use only explicitly supplied secrets."""
+
+    INHERIT = "inherit"
+    ISOLATE = "isolate"
+
+
 @dataclass(frozen=True)
 class ResolvedSecret:
-    """A resolved secret plus the reference that produced it (safe to log)."""
+    """A resolved secret whose value is excluded from its representation."""
 
-    value: str
+    value: str = field(repr=False)
     source: str
+
+
+def secret_path(name: str, *, directory: Path | None = None) -> Path:
+    """Return a named secret's path without reading its value."""
+    validate_secret_name(name)
+    root = directory if directory is not None else Path(os.environ.get(SECRETS_DIR_ENV, SECRETS_DIR))
+    return root / name
+
+
+def validate_secret_name(name: str) -> None:
+    """Reject names that could escape a secret directory."""
+    if not _SECRET_NAME_RE.fullmatch(name):
+        raise ValueError("secret names must contain only letters, digits, underscores, dots, and hyphens")
+
+
+def list_secret_names(*, directory: Path | None = None) -> tuple[str, ...]:
+    """List mounted secret names without reading values or guessing env names.
+
+    Kubernetes projection metadata and subdirectories are excluded. A missing
+    directory has no mounted secrets; other filesystem errors propagate.
+    """
+    root = directory if directory is not None else Path(os.environ.get(SECRETS_DIR_ENV, SECRETS_DIR))
+    try:
+        return tuple(
+            sorted(path.name for path in root.iterdir() if _SECRET_NAME_RE.fullmatch(path.name) and path.is_file())
+        )
+    except FileNotFoundError:
+        return ()
+
+
+def get_secret(name: str, *, directory: Path | None = None) -> str | None:
+    """Read a file first, falling back to the environment for an absent key."""
+    path = secret_path(name, directory=directory)
+    try:
+        value = _fetch_file(f"{FILE_SCHEME}{path}")
+    except SecretResolutionError:
+        raise SecretResolutionError(f"secret {name!r} could not be read") from None
+    return value if value is not None else _fetch_env(f"{ENV_SCHEME}{name}")
+
+
+def require_secret(name: str, *, directory: Path | None = None) -> str:
+    """Read a named credential, failing if it is missing or empty."""
+    value = get_secret(name, directory=directory)
+    if not value:
+        raise SecretResolutionError(f"required secret {name!r} is missing or empty")
+    return value
+
+
+def forwarded_secrets(*, exclude: Collection[str] = ()) -> dict[str, str]:
+    """Read the current mounted bundle and available HF/W&B/CoreWeave defaults."""
+    return {
+        name: value
+        for name in dict.fromkeys((*list_secret_names(), *_FORWARDED_SECRET_NAMES))
+        if name not in exclude and (value := get_secret(name)) is not None
+    }
+
+
+def secret_file_environment(names: Collection[str], *, directory: Path = SECRETS_DIR) -> dict[str, str]:
+    """Return nonsecret file locations understood by native credential clients."""
+    env = {"HF_TOKEN_PATH": str(directory / "HF_TOKEN")} if "HF_TOKEN" in names else {}
+    if all(name in names for name in COREWEAVE_SECRET_NAMES):
+        env["AWS_SHARED_CREDENTIALS_FILE"] = str(directory / AWS_CREDENTIALS_FILENAME)
+    return env
+
+
+def secret_file_contents(values: Mapping[str, str]) -> dict[str, str]:
+    """Prepare named files and native credential formats for a delivered bundle.
+
+    Derived dotfiles are excluded from named-secret discovery and inheritance.
+    """
+    for name in values:
+        validate_secret_name(name)
+    files = dict(values)
+    if all(values.get(name) for name in COREWEAVE_SECRET_NAMES):
+        credentials = ConfigParser(interpolation=None)
+        credentials["default"] = {
+            "aws_access_key_id": values["CW_KEY_ID"],
+            "aws_secret_access_key": values["CW_KEY_SECRET"],
+        }
+        output = io.StringIO()
+        credentials.write(output)
+        files[AWS_CREDENTIALS_FILENAME] = output.getvalue()
+    return files
 
 
 def as_secret_spec(spec: str | Sequence[str]) -> SecretSpec:
@@ -87,8 +186,9 @@ def _fetch_file(ref: str) -> str | None:
             return handle.read().strip()
     except FileNotFoundError:
         return None  # ABSENT — try the next source
-    except OSError as exc:  # permission denied, is-a-directory, decode error, … — FAILED
-        raise SecretResolutionError(f"{ref!r}: {exc}") from exc
+    except (OSError, UnicodeError):
+        # Decode errors can contain payload bytes; do not chain them into logs.
+        raise SecretResolutionError("file secret source could not be read") from None
 
 
 def _fetch_gcp_secret(ref: str) -> str | None:
@@ -111,9 +211,12 @@ def _fetch_gcp_secret(ref: str) -> str | None:
         response = client.access_secret_version(name=resource)
     except NotFound:
         return None  # ABSENT — try the next source
-    except GoogleAPICallError as exc:  # denied IAM / unreachable / … — FAILED
-        raise SecretResolutionError(f"{ref!r}: {exc}") from exc
-    return response.payload.data.decode("utf-8").strip()
+    except GoogleAPICallError:
+        raise SecretResolutionError("cloud secret source could not be read") from None
+    try:
+        return response.payload.data.decode("utf-8").strip()
+    except UnicodeError:
+        raise SecretResolutionError("cloud secret source is not UTF-8") from None
 
 
 _FETCHERS: dict[str, Callable[[str], str | None]] = {
@@ -128,9 +231,9 @@ def _fetch(ref: str) -> str | None:
         if ref.startswith(scheme):
             return fetch(ref)
     if _SCHEME_SHAPED_RE.match(ref):
-        raise SecretResolutionError(f"{ref!r}: unknown secret-source scheme (expected env: / file: / gcp-secret://)")
+        raise SecretResolutionError("unknown secret-source scheme (expected env: / file: / gcp-secret://)")
     raise SecretResolutionError(
-        f"{ref!r}: not a secret reference (expected env: / file: / gcp-secret://); "
+        "not a secret reference (expected env: / file: / gcp-secret://); "
         "a bare literal secret is not permitted in config"
     )
 
@@ -163,17 +266,3 @@ def resolve_secret_spec(spec: str | Sequence[str]) -> ResolvedSecret:
             logger.info("resolved a secret from a %s source", _scheme_of(ref))
             return ResolvedSecret(value=value, source=ref)
     raise SecretResolutionError(f"no secret source produced a value (tried: {', '.join(refs)})")
-
-
-def default_secret_spec(field_name: str, *, env_prefix: str, secrets_dir: str) -> SecretSpec:
-    """The conventional env:/file: path for a field with no explicit reference.
-
-    `gcp-secret://` is intentionally absent — its mandatory version segment
-    cannot be conventional — so a Secret-Manager source is always explicit
-    config. `env_prefix`/`secrets_dir` are passed by the service so this module
-    stays service-generic (e.g. iris passes `IRIS` / `/etc/iris/secrets`).
-    """
-    return (
-        f"{ENV_SCHEME}{env_prefix}_{field_name.upper()}",
-        f"{FILE_SCHEME}{secrets_dir.rstrip('/')}/{field_name}",
-    )

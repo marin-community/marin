@@ -53,7 +53,7 @@ revision.
   refresh re-pins every group section at its staged tip in that single PR. State the
   exact `main-next` to `main` admin promotion still required, request the
   descriptor's `blocker_assignee` as reviewer, and monitor the PR per
-  `.agents/skills/commit/SKILL.md`.
+  `.agents/skills/manage-pr/SKILL.md`.
 - For `vllm-gpu`, use `docs/vllm.md` for the source-review handoff and the
   later Marin adoption PR.
 - On an unresolved blocker, do not open a PR. Create or update one
@@ -260,14 +260,15 @@ and confirm the resolved SHA did not change before marking the PR ready.
 ## Review and Open the PR
 
 Do a PR-review pass over the fork commits and Marin diff using
-`.agents/skills/review-pr/SKILL.md`, then run `./infra/pre-commit.py --review` and
-fix or answer every finding. Check that each retained patch has a reason and a drop
+`.agents/skills/review-pr/SKILL.md`, then run the advisory review through
+`manage-pr` with `--calling-agent` set to `claude` or `codex` to match the caller.
+Fix or answer every finding. Check that each retained patch has a reason and a drop
 condition, each dropped patch is truly obsolete, Marin edits are scoped to the
 refresh, and no text overclaims validation evidence.
 
-Open one draft `marin-community/marin` PR via `.agents/skills/commit/SKILL.md`,
-request the descriptor's `blocker_assignee` as reviewer, and follow the commit
-skill's monitoring loop to an exit condition. The GPU guide names the adoption
+Open one draft `marin-community/marin` PR via `.agents/skills/manage-pr/SKILL.md`,
+request the descriptor's `blocker_assignee` as reviewer, and follow the
+`manage-pr` monitoring loop to an exit condition. The GPU guide names the adoption
 PR evidence. For the other forks, include the selected base, staged tip SHA,
 rollback and date tags, pending admin promotion, e2e outcome, and unresolved
 risks; in `<details>`, include the base-selection evidence and carry/drop/fix table with

@@ -21,7 +21,7 @@ from transformers import AutoTokenizer
 
 from eval.completion_response import FailedGeneration
 from eval.contracts.eval_spec import ModelRequest, RequestKind
-from eval.limits import ensure_context_window, preflight_endpoint_generation
+from eval.limits import endpoint_prompt_token_count, ensure_context_window, preflight_endpoint_generation
 from eval.contracts.preflight import validate_model_request
 from eval.contracts.failures import FailureCategory
 from eval.serve_eval.local_api import RetryingLocalChatCompletions, RetryingLocalCompletions
@@ -53,6 +53,19 @@ def prompt_encoder(model: LM, *, tokenizer_defaults: bool = False) -> Callable[[
         return tokenizer.encode(text)
 
     return encode
+
+
+def prompt_token_counter(model: LM) -> Callable[[Any], int]:
+    """Count final chat payloads and plain answers using the served tokenizer."""
+    def count(payload: Any) -> int:
+        if model.tokenizer is None:
+            raise ValueError("context-selected benchmarks require the served model's tokenizer")
+        return endpoint_prompt_token_count(
+            model.tokenizer, payload,
+            chat_template_kwargs=getattr(model, "_evalchemy_chat_template_kwargs", None),
+        )
+
+    return count
 
 
 def retryable_transport(error: Exception) -> bool:
@@ -137,16 +150,20 @@ class LMBackend:
             prompt = self.model.apply_chat_template(prompt, **request.chat_template)
         parameters = canonical_generation_kwargs(request.generation)
         do_sample = parameters.pop("do_sample", None)
+        if isinstance(self.model, TemplateAPI) and "source_do_sample" in request.metadata:
+            if request.metadata["source_do_sample"] is False:
+                parameters["temperature"] = 0.0
+                parameters.pop("seed", None)
+            overrides = configured_generation_overrides(self.model)
+            if overrides.get("do_sample") is True and "temperature" not in overrides:
+                parameters.pop("temperature", None)
+            parameters.update(overrides)
+            parameters.pop("do_sample", None)
+        if request.output_token_cap is not None:
+            parameters["max_gen_toks"] = min(
+                parameters.get("max_gen_toks", request.output_token_cap), request.output_token_cap,
+            )
         if isinstance(self.model, TemplateAPI):
-            if "source_do_sample" in request.metadata:
-                if request.metadata["source_do_sample"] is False:
-                    parameters["temperature"] = 0.0
-                    parameters.pop("seed", None)
-                overrides = configured_generation_overrides(self.model)
-                if overrides.get("do_sample") is True and "temperature" not in overrides:
-                    parameters.pop("temperature", None)
-                parameters.update(overrides)
-                parameters.pop("do_sample", None)
             output = await self._api_request(request, prompt, parameters)
             return clean_fastchat_response(self.model, conversation, output)
         if do_sample is False:
@@ -214,6 +231,8 @@ class LMBackend:
                 output_tokens = parameters.get("max_gen_toks", model._max_gen_toks)
                 ensure_context_window(context_length=context_length, prompt_tokens=1, output_tokens=output_tokens, safety_tokens=1)
                 prompt = prompt[-(context_length - output_tokens - 1):]
+                if request.output_token_cap is not None:
+                    parameters["_evalchemy_context_output_cap"] = request.output_token_cap
                 return await self._call([prompt], parameters, generate=True)
             bounded, _, cap = preflight_endpoint_generation(
                 tokenizer=model.tokenizer,
@@ -226,6 +245,10 @@ class LMBackend:
                 parameters = bounded
                 if cap is not None:
                     parameters["_evalchemy_context_output_cap"] = cap
+            if request.output_token_cap is not None:
+                parameters["_evalchemy_context_output_cap"] = min(
+                    parameters.get("_evalchemy_context_output_cap", request.output_token_cap), request.output_token_cap,
+                )
             return await self._call([prompt], parameters, generate=True)
         if request.kind is RequestKind.LIKELIHOOD:
             if prompt:

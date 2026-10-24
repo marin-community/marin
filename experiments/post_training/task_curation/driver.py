@@ -62,6 +62,7 @@ from experiments.post_training.task_curation.embedding import (
     DescriptionEndpoint,
     curation_embedding_pipeline,
 )
+from experiments.post_training.task_curation.inventory import SelectionRecipe, task_selection_step
 from experiments.post_training.task_curation.local import artifact_prefix, run_local_steps
 from experiments.post_training.task_curation.pipeline import CampaignMachines
 from experiments.post_training.task_curation.source import CurationPipeline, RlDataSource
@@ -75,6 +76,7 @@ WORKER_CONTAINER_PROFILE = "CONTAINER_PROFILE_PRIVILEGED"
 IRIS_JOB_TTL = 1800
 CORPUS_CONVERSION_VERSION = "2026.10.14.1"
 CANONICAL_ARTIFACT_ROOT = "s3://marin-us-east-02a/marin"
+TASK_SELECTION_KEY = "task_selection"
 EMBEDDING_STAGES = (
     "inputs",
     "descriptions",
@@ -242,6 +244,33 @@ def _corpus_sources(corpus: str) -> _CorpusSources:
     return _CorpusSources(roots, inventory, document["population"])
 
 
+def _selection_pass(corpus: _CorpusSources, recipe: SelectionRecipe, *, cache_dir: Path | None, do_run: bool) -> None:
+    if corpus.population != "admitted":
+        raise click.UsageError("Task selection requires an admitted corpus from FULL curation")
+    curated = {
+        source_id: ArtifactStep.adopt(f"rl-data/selection-inputs/{recipe.name}/source-{index}", recipe.version, root)
+        for index, (source_id, root) in enumerate(sorted(corpus.roots.items()))
+    }
+    with ExitStack() as scope:
+        if cache_dir is not None:
+            scope.enter_context(artifact_prefix(str(cache_dir)))
+        step = task_selection_step(curated, recipe)
+        if do_run:
+            result = run(step, max_concurrent=1)[0]
+            click.echo(json.dumps({TASK_SELECTION_KEY: result.path}, indent=2))
+        else:
+            click.echo(json.dumps({TASK_SELECTION_KEY: _selection_plan(step)}, indent=2))
+
+
+def _selection_plan(step: ArtifactStep) -> dict[str, object]:
+    return {
+        "name": step.name,
+        "version": step.version,
+        "path": step.path(),
+        "dependencies": [dep.name for dep in step.deps],
+    }
+
+
 def _embedding_pass(
     roots: dict[str, str],
     *,
@@ -342,8 +371,9 @@ def _embedding_pass(
 @click.option(
     "--mode", type=click.Choice([mode.value for mode in SourceProcessingMode]), help="Required without --corpus."
 )
-@click.option("--corpus", help="Resume embedding from a completed corpus.json without rerunning curation.")
+@click.option("--corpus", help="Run embedding or selection from a completed corpus.json without rerunning curation.")
 @click.option("--embed", type=click.Choice(EMBEDDING_STAGES), help="Run this embedding stage after curation.")
+@click.option("--selection", help="Selection recipe JSON: append task-selection after FULL or an admitted --corpus.")
 @click.option("--representation", type=click.Choice(["direct", "rewrite"]), default="direct", show_default=True)
 @click.option("--embedding-sample-size", type=click.IntRange(min=1), help="Seeded embedding sample per source.")
 @click.option("--catalog-root", help="Immutable directory containing curriculum.json; defaults to TASK_CURRICULUM.")
@@ -450,6 +480,7 @@ def main(
     mode: str | None,
     corpus: str | None,
     embed: str | None,
+    selection: str | None,
     representation: str,
     embedding_sample_size: int | None,
     catalog_root: str | None,
@@ -490,13 +521,18 @@ def main(
         )
     if mode is None and corpus is None:
         raise click.UsageError("Supply --mode or --corpus")
-    if corpus is not None and embed is None:
-        raise click.UsageError("--corpus requires --embed")
+    if corpus is not None and embed is None and selection is None:
+        raise click.UsageError("--corpus requires --embed or --selection")
     if corpus is not None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("--corpus uses completed conversions; omit local input overrides")
     configure_coreweave_s3()
     click.get_current_context().with_resource(artifact_prefix(artifact_root))
     processing_mode = SourceProcessingMode(mode) if mode else SourceProcessingMode.QUICK
+    if selection is not None and corpus is None and processing_mode != SourceProcessingMode.FULL:
+        raise click.UsageError("--selection requires --mode full or an admitted --corpus")
+    selection_recipe = (
+        SelectionRecipe.model_validate_json(StoragePath(selection).read_text()) if selection is not None else None
+    )
     selected = _selected_sources(sources)
     runtime = CampaignRuntime()
     assess = assess if assess is not None else processing_mode == SourceProcessingMode.FULL
@@ -512,6 +548,10 @@ def main(
         cache_dir = Path.home() / ".cache/marin"
     if cache_dir is None and (input_root is not None or local_files or auxiliary):
         raise click.UsageError("Local input options require local execution")
+    if corpus is not None and embed is None:
+        assert selection_recipe is not None
+        _selection_pass(_corpus_sources(corpus), selection_recipe, cache_dir=cache_dir, do_run=do_run)
+        return
     if embed is not None:
         review_cache = review_cache or (str(cache_dir / "review-cache") if cache_dir else None)
         if review_cache is None:
@@ -573,6 +613,8 @@ def main(
         restored = _corpus_sources(corpus)
         assert embedding is not None
         embedding(restored.roots, inventory=restored.inventory, population=restored.population, do_run=do_run)
+        if selection_recipe is not None:
+            _selection_pass(restored, selection_recipe, cache_dir=cache_dir, do_run=do_run)
         return
     if input_root is not None and local_files:
         raise click.UsageError("Choose either --input-root or --input-file")
@@ -680,6 +722,14 @@ def main(
         publication_root = publication_catalog or str(StoragePath(report_path).parent / CATALOG_DIRECTORY)
         steps = [cast(CurationPipeline, source.pipeline)(source, options) for source in selected.values()]
         curation_steps = steps
+        selection_step = (
+            task_selection_step(
+                {source.info.id: step for source, step in zip(selected.values(), curation_steps, strict=True)},
+                selection_recipe,
+            )
+            if selection_recipe is not None
+            else None
+        )
         assessments = {}
         if assessment is not None:
             stages = [
@@ -701,6 +751,7 @@ def main(
             plan["publication_catalog"] = publication_root
             plan["quality_policy"] = {"sample_size": quality_sample_size, "seed": seed}
             plan["embedding_stage"] = embed
+            plan[TASK_SELECTION_KEY] = _selection_plan(selection_step) if selection_step is not None else None
             click.echo(json.dumps(plan, indent=2))
             return
         if cache_dir is not None:
@@ -726,9 +777,13 @@ def main(
             raise
         else:
             _publish_campaign(report_path, selected, publication_root)
-        if embedding is not None:
+        if selection_step is not None or embedding is not None:
             roots = {source.info.id: step.path() for source, step in zip(selected.values(), curation_steps, strict=True)}
             _write_corpus(roots, inventory, report_path, "admitted")
+        if selection_step is not None:
+            result = run(selection_step, max_concurrent=1)[0]
+            click.echo(json.dumps({TASK_SELECTION_KEY: result.path}, indent=2))
+        if embedding is not None:
             embedding(roots, inventory=inventory, population="admitted", do_run=True)
 
 

@@ -103,6 +103,8 @@ class K8sResource(Enum):
     # RBAC v1
     CLUSTER_ROLES = ("rbac.authorization.k8s.io", "v1", False, "clusterroles", "ClusterRole")
     CLUSTER_ROLE_BINDINGS = ("rbac.authorization.k8s.io", "v1", False, "clusterrolebindings", "ClusterRoleBinding")
+    ROLES = ("rbac.authorization.k8s.io", "v1", True, "roles", "Role")
+    ROLE_BINDINGS = ("rbac.authorization.k8s.io", "v1", True, "rolebindings", "RoleBinding")
 
     # Scheduling v1
     PRIORITY_CLASSES = ("scheduling.k8s.io", "v1", False, "priorityclasses", "PriorityClass")

@@ -118,7 +118,7 @@ Most promotable changes will land in one of three files:
 
 Create a new branch for each experiment issue. Branch off `main`.
 
-Follow `.agents/skills/research/SKILL.md` for explicitly requested research
+Follow `docs/dev-guide/experiment-records.md` for explicitly requested research
 programs and their existing issue, W&B, or session records.
 
 Experiment issues should be titled `Agent MoE Experiment: [description]`.

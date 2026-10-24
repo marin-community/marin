@@ -56,6 +56,33 @@ JSONL through `history export`.
 
 ## Sync job
 
+Activity chunks keep local Postgres IDs keyed by source, kind, canonical URL and
+part. MarinMirror's SQLite row numbers can change on every rebuild. A digest of
+all mirrored fields skips unchanged rows while detecting metadata changes and
+embeddings that arrive after their text. The first sync after the identity
+migration fills these digests once; later builds write only changed chunks.
+Both activity and repository chunk tables use a 5% autovacuum scale factor to
+keep cleanup batches smaller on their vector and text indexes.
+
+Before releasing the chunk-identity migration, pause `marina-hourly-trigger`,
+wait for every existing hourly execution to finish, and avoid manual sync starts.
+An older execution pins its package before downloading the corpus; its writer
+must finish before the identity migration. The migration fails after five
+seconds waiting for table locks, leaving the previous package selected.
+
+```bash
+gcloud scheduler jobs pause marina-hourly-trigger --location us-central1 --project hai-gcp-models
+gcloud run jobs executions list --job marina-hourly --region us-central1 --project hai-gcp-models
+uv run marina release infra/marina/apps/echo --base-version CURRENT_VERSION --json
+gcloud scheduler jobs resume marina-hourly-trigger --location us-central1 --project hai-gcp-models
+```
+
+Resume only after the release succeeds. Keep the trigger paused if rolling back
+to a revision whose sync still uses corpus row numbers. The migration keeps the
+lowest local ID for duplicate chunks and removes the other copies; links using
+those removed duplicate IDs no longer resolve, while saved search snapshots
+retain their URLs and snippets.
+
 The `marina-hourly` base-image runner loads `sync.main` from Echo's current
 Postgres package at the top of every hour. It pins that revision for the execution. It refreshes GitHub and Discord activity from marinmirror, then processes six
 globally serialized repository turns: a Postgres advisory lock, a durable fair cursor, and

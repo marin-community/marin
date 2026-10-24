@@ -1,13 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Typed readers for evaluation output artifacts and aggregate reports.
-
-Eval steps write backend-native output. :class:`EvalResult` subclasses parse each backend's layout.
-:class:`FineStoreEvalchemyResult` reads the current Evalchemy results table;
-:class:`EvalchemyResult` retains the historical result-tree reader. :func:`compile_eval_report`
-merges several typed results.
-"""
+"""Read Evalchemy result trees and FineStore archives and compile aggregate reports."""
 
 import functools
 import json
@@ -60,11 +54,12 @@ class EvalResult(Artifact):
 
 
 class EvalchemyResult(EvalResult):
-    """Per-task metrics from a pre-native Evalchemy result tree.
+    """Per-task metrics from an Evalchemy result tree.
 
-    Metric keys use task-config directories; group tasks append subtask names. Task-config keys keep
-    shot variants distinct. Evalchemy does not record cross-task averages. Historical reports persist
-    the ``EvalchemyResult`` type name, so this reader remains part of their durable decoding contract.
+    Keys use task-config directories, with subtask names appended for groups.
+    Shot variants remain distinct. Cross-task averages are empty.
+    Historical reports persist the ``EvalchemyResult`` type name, so this reader
+    remains part of their decoding contract.
     """
 
     @functools.cached_property
@@ -100,6 +95,8 @@ class EvalchemyResult(EvalResult):
 class FineStoreEvalchemyResult(EvalResult):
     """Per-task metrics from Evalchemy's FineStore results table."""
 
+    jobs: dict[str, str] = Field(default_factory=dict)
+
     @functools.cached_property
     def _task_metrics(self) -> dict[str, dict[str, float]]:
         metrics: dict[str, dict[str, float]] = {}
@@ -116,12 +113,7 @@ class FineStoreEvalchemyResult(EvalResult):
 
 
 class EvalReport(Artifact):
-    """The aggregated report over a suite of :class:`EvalResult` artifacts.
-
-    A value artifact: ``task_metrics`` and ``averages`` round-trip through the record, so a downstream
-    step reads ``resolve(report).averages`` directly. :func:`compile_eval_report` also writes a
-    human-readable ``report.json`` alongside for inspection.
-    """
+    """An evaluation report with serialized per-task metrics and cross-task averages."""
 
     task_metrics: dict[str, dict[str, float]] = Field(default_factory=dict)
     """Every evaluated task across the suite, as ``{task: {metric: value}}``."""
@@ -150,10 +142,9 @@ class ReportEntry:
 
 
 def compile_eval_report(entries: list[ReportEntry], output_path: str) -> EvalReport:
-    """Read each result's metrics and merge them into one :class:`EvalReport`.
+    """Merge result metrics, write ``output_path/report.json``, and return the report.
 
-    Writes ``report.json`` under ``output_path`` and returns the typed report (its fields persist via
-    the record).
+    Reject duplicate task keys and namespace averages by result label.
     """
     task_metrics: dict[str, dict[str, float]] = {}
     averages: dict[str, float] = {}

@@ -12,7 +12,6 @@ import argparse
 import json
 import re
 import subprocess
-import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass
@@ -31,7 +30,6 @@ VLLM_CONFIG_NAME = "vllm"
 VLLM_GPU_RELEASE_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "gpu.toml"
 TPU_FORKS_CONFIG = EXTERNAL_ROOT / VLLM_CONFIG_NAME / "tpu.toml"
 GPU_RELEASE_REPOSITORY = "marin-community/vllm"
-SKYRL_MARIN_CHECK = ROOT / "infra/ci/check_skyrl_marin.py"
 GPU_RELEASE_MANIFEST_NAME = "marin-vllm-gpu-manifest.json"
 CUDA_TOOLCHAIN_VERSION_BY_BACKEND = MappingProxyType(
     {
@@ -600,33 +598,9 @@ def promote_gpu_release(manifest_path: Path) -> None:
     print(f"re-pinned vllm GPU release {manifest['release']['tag']} from {manifest_path}")
 
 
-def update_skyrl_marin(project: Path) -> None:
-    """Advance published Marin libraries in the nested lock and reject incompatible APIs."""
-    lock = project / "uv.lock"
-    original = lock.read_bytes()
-    packages = ("verifyit", "rolloutengine", "shellbox", "taskcompendium", "iris", "finestore", "rigging")
-    command = ["uv", "lock", "--project", str(project)]
-    for package in packages:
-        command.extend(("--upgrade-package", f"marin-{package}"))
-    try:
-        subprocess.run(command, check=True)
-        subprocess.run(
-            [sys.executable, str(SKYRL_MARIN_CHECK), "project", "--source", str(project)],
-            check=True,
-        )
-    except BaseException:
-        lock.write_bytes(original)
-        raise
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Upgrade external uv locks and package immutable external runtime inputs."
-    )
-    parser.add_argument(
-        "--skyrl-marin-packages",
-        action="store_true",
-        help="advance published Marin libraries in vendor/skyrl's lock and validate their isolated API",
     )
     parser.add_argument(
         "projects",
@@ -654,21 +628,13 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     args = parser.parse_args()
-    if args.promote_gpu_release is not None and (
-        args.check or args.projects or args.summary_file or args.skyrl_marin_packages
-    ):
+    if args.promote_gpu_release is not None and (args.check or args.projects or args.summary_file):
         parser.error("--promote-gpu-release runs on its own; drop --check, PROJECT, and --summary-file")
-    if args.skyrl_marin_packages and (args.check or args.projects or args.summary_file):
-        parser.error("--skyrl-marin-packages runs on its own; drop --check, PROJECT, and --summary-file")
     return args
 
 
 def main() -> None:
     args = parse_args()
-    if args.skyrl_marin_packages:
-        update_skyrl_marin((ROOT / "vendor/skyrl").resolve())
-        print("Updated published Marin libraries in vendor/skyrl/uv.lock")
-        return
     if args.promote_gpu_release is not None:
         promote_gpu_release(args.promote_gpu_release)
         return

@@ -25,20 +25,21 @@ jobs:
           persist-credentials: false
           sparse-checkout: .github/actions/launch-loom-run
           sparse-checkout-cone-mode: false
-      - name: Launch nightshift cleanup
+      - name: Launch nightshift area review
         uses: ./.github/actions/launch-loom-run
         with:
           profile: ${{ vars.LOOM_GITHUB_AUTOMATION_PROFILE }}
           idempotency-key: nightshift-cleanup:${{ github.run_id }}:${{ github.run_attempt }}
-          title: "Nightshift cleanup ${{ github.run_id }}"
+          title: "Nightshift area review ${{ github.run_id }}"
           goal: >-
-            Run a bounded cleanup in ${{ github.repository }}. Inspect
-            lib/marin/src/marin, lib/iris/src/iris, lib/zephyr/src/zephyr, and
-            lib/levanter/src/levanter for a concrete bug, unused code,
-            duplicated nontrivial policy, or unnecessary runtime work. Choose
-            one coherent improvement whose value is clear from the diff. Avoid
-            style-only refactors and trivial helper extraction. Follow AGENTS.md
-            and the commit skill; open a PR with agent-generated and nightshift
-            labels only if the change is justified. Publish a typed result with
-            the PR URL or what was checked when no change was warranted.
+            Follow the Nightshift area reviews procedure in
+            .github/workflows/README.md in
+            ${{ github.repository }}. Choose one project area from current
+            demand or measured workflow cost, review its design and behavior
+            holistically, and compare supported candidates
+            before implementing the highest-value eligible improvement. Follow
+            AGENTS.md and the manage-pr skill. Open a PR with agent-generated and
+            nightshift labels only for a justified change. Publish a typed
+            result with the review, candidate comparison, validation evidence,
+            and PR URL or the reason no change was warranted.
           base: ${{ github.sha }}

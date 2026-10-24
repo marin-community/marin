@@ -19,6 +19,7 @@ from verifyit.spec import (
     ReasoningGymSpec,
     StdioSpec,
     StructuredExactSpec,
+    UnsolvableSpec,
     parse_spec,
     render_spec,
     spec_from_table,
@@ -30,6 +31,7 @@ from verifyit.spec import (
 
 def test_round_trip_every_field_kind():
     specs = [
+        UnsolvableSpec(output="/app/final.txt"),
         McqSpec(expected="C", options=5),
         StructuredExactSpec(expected={"values": [None, True, 1, 1.0, {"text": "value"}]}),
         StructuredExactSpec(expected=None, empty_output=EmptyOutputPolicy.GRADE),
@@ -104,6 +106,7 @@ def test_reasoning_gym_params_roundtrip_and_legacy_default():
 @pytest.mark.parametrize(
     "mode,fields",
     [
+        ("unsolvable", {}),
         ("predicted_action", {"expected_calls": [{"name": "lookup", "arguments": {"id": 1}}]}),
         ("mcq", {"expected": "A"}),
         ("math", {"expected": "1"}),

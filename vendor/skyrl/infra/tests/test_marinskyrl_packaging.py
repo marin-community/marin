@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from email.parser import Parser
 from pathlib import Path
 import subprocess
-import tomllib
 import zipfile
 
 from packaging.requirements import Requirement
@@ -14,7 +13,6 @@ import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).parents[2]
-PYPROJECT = tomllib.loads((REPOSITORY_ROOT / "pyproject.toml").read_text())
 @dataclass(frozen=True)
 class BuiltWheel:
     names: set[str]
@@ -40,7 +38,6 @@ def test_root_wheel_owns_launcher_and_training_packages(built_wheel: BuiltWheel)
     assert Parser().parsestr(built_wheel.metadata)["Name"] == "marinskyrl"
     assert "marinskyrl = cloud.iris.launch:main" in built_wheel.entry_points
     assert "cloud/iris/launch.py" in built_wheel.names
-    assert "cloud/iris/runtime_bundle_files.txt" in built_wheel.names
     assert "chat_templates/delphi_v0.jinja2" in built_wheel.names
     assert "skyrl_gym/__init__.py" in built_wheel.names
     assert "skyrl_train/__init__.py" in built_wheel.names
@@ -97,19 +94,6 @@ def test_training_extras_publish_hardware_policy_and_rollout_requirements(built_
     )
     assert conflict.returncode != 0
     assert "Extras `cpu` and `cuda` are incompatible" in conflict.stderr
-
-
-def test_rollout_runtime_exports_pinned_harbor_for_linux_training() -> None:
-    platform = {"sys_platform": "linux", "platform_machine": "x86_64"}
-    requirements = _exported_requirements(("megatron", "vllm"))
-    harbor = next(
-        requirement for requirement in requirements
-        if requirement.name == "harbor"
-        and (requirement.marker is None or requirement.marker.evaluate(platform))
-    )
-    assert harbor.url is not None
-    assert harbor.url.startswith("git+https://github.com/marin-community/harbor.git@")
-    assert harbor.url.rsplit("@", 1)[-1] == PYPROJECT["tool"]["uv"]["sources"]["harbor"]["rev"]
 
 
 def _exported_requirements(extras: tuple[str, ...]) -> list[Requirement]:

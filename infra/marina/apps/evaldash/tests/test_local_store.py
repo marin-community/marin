@@ -45,6 +45,37 @@ def _panel(store, **kwargs):
     return store.panel(metrics.panel_request(**kwargs), None, False)
 
 
+def test_metadata_tracks_replaced_snapshots_and_keeps_returned_root_request_owned(tmp_path):
+    store = evaldash_app.MemoryRecordStore()
+    assert store.meta()["models"] == []
+    fixtures.build_fixtures(str(tmp_path))
+    records = list_records(str(tmp_path))
+    store.refresh(records)
+    metadata = store.meta()
+    assert "snowball" in metadata["models"]
+    metadata["current_user"] = "previous-viewer"
+    metadata["store"] = "previous-response"
+    fresh = store.meta()
+    assert "current_user" not in fresh
+    assert "store" not in fresh
+
+    record = records[0].model_copy(
+        update={
+            "model": records[0].model.model_copy(update={"name": "replacement-model"}),
+            "user": "replacement-user",
+            "version": "replacement-cohort",
+            "hardware": records[0].hardware.model_copy(update={"accelerator": "replacement-accelerator"}),
+        }
+    )
+    store.refresh([record])
+    replaced = store.meta()
+    assert replaced["models"] == ["replacement-model"]
+    assert replaced["run_facets"]["version"] == ["replacement-cohort"]
+    assert replaced["facets"]["user"] == ["replacement-user"]
+    assert replaced["facets"]["accelerator"] == ["replacement-accelerator"]
+    assert metadata["models"] == fresh["models"]
+
+
 def test_api_defaults_to_the_current_verified_cohort(client):
     expected = "eval-policy-2026-09-24-verified"
     assert client.get("/panel").json()["request"]["cohort_version"] == expected

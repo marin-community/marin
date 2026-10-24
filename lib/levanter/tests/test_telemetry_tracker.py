@@ -194,6 +194,28 @@ def test_non_status_metrics_are_sampled_every_ten_steps_while_status_metrics_are
     tracker.finish()
 
 
+def test_eval_metrics_publish_between_detail_steps_without_training_details(writer):
+    tracker = TelemetryTracker(writer)
+    tracker.log({"train/loss": 1.25, "throughput": 7.0}, step=689)
+    tracker.log(
+        {
+            "eval/paloma/macro_bpb": 1.43703,
+            "labeled_eval/paloma/loss": 0.75,
+            "lm_eval/paloma/acc": 0.5,
+        },
+        step=689,
+    )
+    tracker.log({"train/loss": 0.9, "throughput": 9.0}, step=690)
+    tracker.finish()
+
+    eval_rows = {row.name: row for row in writer.rows if row.name.startswith(("eval_", "labeled_eval_", "lm_eval_"))}
+    assert eval_rows["eval_paloma_macro_bpb"].value == 1.43703
+    assert eval_rows["eval_paloma_macro_bpb"].step == 689
+    assert eval_rows["labeled_eval_paloma_loss"].value == 0.75
+    assert eval_rows["lm_eval_paloma_acc"].value == 0.5
+    assert [(row.step, row.value) for row in writer.rows if row.name == "throughput"] == [(690, 9.0)]
+
+
 def test_phase_is_republished_while_a_job_initializes(writer):
     """A job that hangs before its first step must stay enrolled.
 

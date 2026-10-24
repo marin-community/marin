@@ -194,21 +194,12 @@ def main():
     logs_dir = Path(args.logs_dir)
     logs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Parse optional litellm extra body (for token ID collection with SGLang/vLLM)
-    litellm_extra_body: dict[str, Any] = {}
-    extra_body_raw = os.environ.get("LITELLM_EXTRA_BODY")
-    if extra_body_raw:
-        litellm_extra_body = json.loads(extra_body_raw)
-        logger.debug(f"LiteLLM extra body: {litellm_extra_body}")
-
     # Configure LLM
     llm_kwargs: dict[str, Any] = {
         "model": model,
         "api_key": api_key,
         "base_url": base_url,
     }
-    if litellm_extra_body:
-        llm_kwargs["litellm_extra_body"] = litellm_extra_body
     temperature_raw = os.environ.get("LLM_TEMPERATURE")
     if temperature_raw:
         llm_kwargs["temperature"] = float(temperature_raw)

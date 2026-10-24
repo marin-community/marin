@@ -82,6 +82,9 @@ _ROLES: dict[str, tuple[str | None, str]] = {
     "/tmp/task-sandbox": ("SandboxBuildFailedError", "failed"),
     "/tmp/task-cancelled": ("CancelledError", "failed"),
     "/tmp/task-ctx-mgmt": ("ContextManagementInfrastructureError", "failed"),
+    "/tmp/task-server-error": ("InternalServerError", "no available server"),
+    "/tmp/task-connection-error": ("APIConnectionError", "Connection error"),
+    "/tmp/task-api-timeout": ("APITimeoutError", "Request timed out"),
     # Legacy pre-fix result: BadRequestError + the structured max_tokens=0 signal.
     "/tmp/task-legacy-400": ("BadRequestError", _MAX_TOKENS_ZERO_MSG),
     "/tmp/task-valid": (None, ""),
@@ -97,6 +100,9 @@ _RERUN_PATHS = {
     "/tmp/task-sandbox",
     "/tmp/task-cancelled",
     "/tmp/task-ctx-mgmt",
+    "/tmp/task-server-error",
+    "/tmp/task-connection-error",
+    "/tmp/task-api-timeout",
     "/tmp/task-legacy-400",
 }
 _KEPT_PATHS = {

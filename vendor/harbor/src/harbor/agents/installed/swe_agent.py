@@ -118,9 +118,9 @@ def convert_swe_agent_to_atif(
 
     final_metrics = FinalMetrics(
         total_prompt_tokens=total_prompt_tokens if total_prompt_tokens > 0 else None,
-        total_completion_tokens=total_completion_tokens
-        if total_completion_tokens > 0
-        else None,
+        total_completion_tokens=(
+            total_completion_tokens if total_completion_tokens > 0 else None
+        ),
         total_cost_usd=total_cost_usd if total_cost_usd > 0 else None,
     )
 
@@ -236,68 +236,8 @@ class SweAgent(BaseInstalledAgent):
 
     async def install(self, environment: BaseEnvironment) -> None:
         # All commands run as root (SWE-agent requires root)
-        await self.exec_as_root(
-            environment,
-            command="apt-get update && apt-get install -y curl build-essential git tmux",
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-        )
-        # Install uv if not present
-        await self.exec_as_root(
-            environment,
-            command=(
-                "if ! command -v uv >/dev/null 2>&1; then"
-                "  curl -LsSf https://astral.sh/uv/install.sh | sh;"
-                " fi && "
-                'if [ -f "$HOME/.local/bin/env" ]; then source "$HOME/.local/bin/env"; fi'
-            ),
-        )
-        # Setup Python venv and install SWE-agent
-        clone_cmd = (
-            f"git clone --depth 1 --branch {self._version} https://github.com/SWE-agent/SWE-agent.git /opt/sweagent-repo"
-            if self._version
-            else "git clone --depth 1 https://github.com/SWE-agent/SWE-agent.git /opt/sweagent-repo"
-        )
-        await self.exec_as_root(
-            environment,
-            command=(
-                "set -euo pipefail; "
-                'if [ -f "$HOME/.local/bin/env" ]; then source "$HOME/.local/bin/env"; fi && '
-                "uv python install 3.12 && "
-                "mkdir -p /opt && "
-                "uv venv /opt/sweagent-venv --python 3.12 && "
-                "source /opt/sweagent-venv/bin/activate && "
-                "rm -rf /opt/sweagent-repo && "
-                f"{clone_cmd} && "
-                "uv pip install /opt/sweagent-repo && "
-                'SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])") && '
-                'cp -r /opt/sweagent-repo/config "$SITE_PACKAGES/config" && '
-                'cp -r /opt/sweagent-repo/tools "$SITE_PACKAGES/tools" && '
-                "mkdir -p /opt/sweagent-configs && "
-                "cp /opt/sweagent-repo/config/default.yaml /opt/sweagent-configs/default.yaml && "
-                "cp /opt/sweagent-repo/config/default_backticks.yaml /opt/sweagent-configs/default_backticks.yaml 2>/dev/null || true && "
-                'mkdir -p "$SITE_PACKAGES/trajectories"'
-            ),
-        )
-        # Create wrapper script and conda init
-        await self.exec_as_root(
-            environment,
-            command=(
-                "cat > /usr/local/bin/sweagent << 'WRAPPER'\n"
-                "#!/bin/bash\n"
-                "source /opt/sweagent-venv/bin/activate\n"
-                'exec python -m sweagent.run.run "$@"\n'
-                "WRAPPER\n"
-                "chmod +x /usr/local/bin/sweagent && "
-                "cat > /etc/profile.d/testbed-conda.sh << 'EOF'\n"
-                'if [ -z "$CONDA_DEFAULT_ENV" ] && [ -d "/opt/miniconda3/envs/testbed" ]; then\n'
-                '    if [ -f "/opt/miniconda3/etc/profile.d/conda.sh" ]; then\n'
-                '        . "/opt/miniconda3/etc/profile.d/conda.sh"\n'
-                "        conda activate testbed 2>/dev/null || true\n"
-                "    fi\n"
-                "fi\n"
-                "EOF\n"
-                "cat /etc/profile.d/testbed-conda.sh >> /root/.bashrc"
-            ),
+        raise RuntimeError(
+            "This agent requires blocked dependency LiteLLM; use mini-swe-agent or terminus-2"
         )
 
     @property
@@ -314,9 +254,9 @@ class SweAgent(BaseInstalledAgent):
             return None
 
         traj_files = list(output_dir.glob("**/*.traj"))
-        assert len(traj_files) <= 1, (
-            f"Expected at most 1 trajectory file, found {len(traj_files)}"
-        )
+        assert (
+            len(traj_files) <= 1
+        ), f"Expected at most 1 trajectory file, found {len(traj_files)}"
         return traj_files[0] if traj_files else None
 
     def populate_context_post_run(self, context: AgentContext) -> None:

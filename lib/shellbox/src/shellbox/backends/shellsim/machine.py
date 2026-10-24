@@ -12,6 +12,7 @@ import io
 import logging
 import re
 import shlex
+import stat
 import tarfile
 import uuid
 from collections.abc import AsyncIterator
@@ -264,9 +265,12 @@ class ShellSimMachine:
         async with self._operation():
             if source.is_dir():
                 await self._await_worker(asyncio.create_task(asyncio.to_thread(self.simulation.mount, source, target)))
+                mode = stat.S_IMODE(source.stat().st_mode)
+                result = await self._run_source_locked(f"chmod {mode:o} {shlex.quote(target)}")
+                result.check_returncode()
                 return
             self.simulation.mkdir(str(PurePosixPath(target).parent), parents=True)
-            self.simulation.write_file(target, source.read_bytes(), mode=source.stat().st_mode & 0o7777)
+            self.simulation.write_file(target, source.read_bytes(), mode=stat.S_IMODE(source.stat().st_mode))
 
     async def download(self, source: str, target: Path) -> None:
         async with self._operation():

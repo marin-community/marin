@@ -64,6 +64,32 @@ column to every row; producers do not declare it, but SQL queries can select it.
 
 ## Diagnosing query latency
 
+Start with the server's stage timings when unrelated log and SQL requests slow
+down together. For the GCE hub:
+
+```bash
+gcloud compute ssh finelog-marin --project hai-gcp-models --zone us-central1-a \
+  --tunnel-through-iap \
+  --command='sudo docker logs --since 5m finelog 2>&1 | grep -E "slow FetchLogs RPC stage|slow Query RPC stage|object cache activity|object cache sweep"'
+```
+
+Large `visibility_wait_ms` means the request waited for shared storage
+maintenance before it could query. Compare the timestamps with cache eviction
+and object cleanup. Cache removals release this lock between small batches so
+queued readers can proceed. Background warming uses only immediately available
+download slots; a broad query cannot leave an unbounded queue of cache fills
+after its deadline. Maintenance reads use cached files or read directly from
+object storage. A nonzero `required_fill_bytes` counter means a caller still
+forces a local file; inspect the remaining `local_path` callers.
+`query_byte_limit` counts objects skipped after the query's byte allowance is
+exhausted. The last admitted object can cross the allowance.
+
+When cache eviction remains high despite little query traffic, check ingestion
+and compaction activity; both write through to the cache. Compare `write_bytes`
+with `query_fill_bytes` in the activity summaries. Match `max_lock_hold_us` in
+sweep logs and `cleanup_max_lock_hold_us` in activity summaries against slow
+requests' `visibility_wait_ms` to check whether cleanup blocks readers.
+
 Inspect the namespace before changing its policy or resetting it. Record its row
 count, bytes, segment count, key column, and policy from `ListNamespaces`; a
 correct key with many segments points to a different problem than a
@@ -730,6 +756,26 @@ A shadow boot over a copy of a deployment's catalog also re-runs that
 deployment's registrations, so a schema this binary can no longer merge shows
 up in `/health` as `degraded: <namespace>: registration failed: ...` with the
 per-namespace detail under `/api/server`.
+
+The dashboard benchmark extracts inline SQL from Grafana dashboard JSON.
+For bridge dataset endpoints, export the `SourceQuery` SQL from the matching
+builder in `infra/grafana/src/` as a JSON array of `{"name": "...", "sql": "..."}`
+objects. Pass that file with `--query-file`; its SQL runs verbatim, so freeze
+its time bounds before comparing servers. `--address` measures an existing
+server, including a loopback SSH tunnel, instead of starting a shadow process:
+
+```bash
+uv run python -m finelog.benchmarks.grafana_dashboard_bench \
+  --query-file queries.json --address http://127.0.0.1:19001 \
+  --warmup 1 --iterations 5 --output timings.json
+```
+
+Results include result digests, plain `EXPLAIN` wall time and plan, and
+`EXPLAIN ANALYZE` wall time and scan counters under `workloads`. Each workload
+records its rendered dashboard `window`; literal query files record `window: null`
+because their bounds come from their SQL. RPC wall time includes queueing;
+it does not isolate planner CPU. Keep the original Parquet files for the
+baseline and compare result digests before interpreting a sampled speedup.
 
 ## Diagnosing Kubernetes mirror readiness
 
