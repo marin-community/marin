@@ -104,6 +104,12 @@ server root as `--url` and `/v1/chat/completions` as the endpoint. Point its
 server metrics setting at `<root>/metrics` if auto-discovery cannot reach it.
 This recipe does not run AgentX.
 
+Federated `/metrics` reads can exceed five seconds. Use a 30-second read deadline
+for direct probes. For the pinned harness's startup check, set
+`AIPERF_SERVER_METRICS_REACHABILITY_TIMEOUT=30`; its ongoing scraper uses a
+connection timeout without a total read deadline. Place the benchmark client
+near the serving deployment and account for proxy transit in latency results.
+
 For a client without a tokenizer-revision option, materialize the pin and pass
 the resulting local directory as `--tokenizer`:
 
