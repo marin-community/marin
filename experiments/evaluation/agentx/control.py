@@ -177,17 +177,22 @@ def main() -> None:
             return
     with connect_controller(cluster_name="marin") as endpoint:
         with IrisClient.remote(endpoint.url, credentials=endpoint.credentials, workspace=Path.cwd()) as client:
+
+            def collect(status, manifest, retention):
+                if args.work is None or args.processor is None:
+                    return None
+                return collect_terminal(
+                    status, manifest, retention, args.work, args.processor, time.time(), client=client
+                )
+
             if args.operation == "cancel" or github_attempt(batch["source"])["conclusion"] == "cancelled":
-                cancel_batch(client, batch, checkpoint)
+                cancel_batch(client, batch, checkpoint, collect)
             else:
                 head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
                 if head != batch["source"]["head_sha"]:
                     raise ValueError(
                         "Collector must check out the saved source commit before it can submit another point"
                     )
-
-                def collect(status, manifest, retention):
-                    return collect_terminal(status, manifest, retention, args.work, args.processor, time.time())
 
                 advance_batch(client, batch, checkpoint, collect, time.time())
     if args.operation == "submit":

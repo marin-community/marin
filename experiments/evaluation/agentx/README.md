@@ -30,7 +30,9 @@ Errors remain visible in raw request timelines. No interrupted windows are stitc
 The submission snapshot resolves `marin.external_dependencies.VLLM_GPU_RELEASE` once,
 including release, source, architecture-specific wheel URLs/hashes and Torch ABI.
 Retries use that same checkout and manifest. A new model checkpoint starts a new series.
-Serving arguments and harness pins contribute to the recorded recipe fingerprint.
+The series settings and harness lock determine the recipe fingerprint. The source Git
+commit identifies runner code; each attempt also retains the complete serving and harness
+argument lists. Change the series identifier when changing hard-coded serving behavior.
 
 ## Run and collect
 
@@ -66,13 +68,16 @@ all control calls and the oldest active plan advances first, so overlapping sour
 do not create concurrent accelerator allocations. Rerunning a source Action creates a
 new attempt and plan; cancel the old plan first when abandoning it.
 
-Cancellation is durable before the RPC and is retried until the native job is terminal.
-Collector timeouts do not cancel benchmark jobs. Collection uses the explicit federated
-task API, verifies the uploader checksum and retains the archive before processing.
+Cancellation is durable before the RPC and is retried until the native job is terminal
+and its diagnostics have been retained. Collector timeouts do not cancel benchmark jobs.
+Collection lists federated tasks, then fetches their individual snapshots for complete
+attempt history. It verifies uploader checksums and retains all available attempt archives
+before processing only the final successful window.
 It waits at most ten minutes for a missing final archive. Failed/invalid attempts keep
 their receipt and native attempt history but cannot produce an importable point.
 Live logs include preparation, server and harness output; a pod lost before the output
-uploader runs can leave only native metadata and streamed logs.
+uploader runs can leave only native metadata and streamed logs. When an archive is missing,
+collection also retains the last 20,000 streamed lines per attempt, with an explicit limit.
 
 Every successful collection rebuilds the complete bundle for the original run/attempt.
 The plan stays active until GitHub acknowledges the artifact upload. Recollection can

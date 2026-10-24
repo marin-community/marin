@@ -21,7 +21,7 @@ from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from fsspec.implementations.local import LocalFileSystem
 from iris.client.client import IrisClient
-from iris.client.workload import JobStatus
+from iris.client.workload import JobStatus, TaskStatus
 from iris.cluster.types import JobName
 from iris.resources.state import is_job_finished
 from rigging.filesystem import atomic
@@ -118,7 +118,18 @@ def status_or_missing(client: IrisClient, job_id: str) -> JobStatus | None:
         raise
 
 
-def cancel_batch(client: IrisClient, batch: dict, checkpoint: str) -> None:
+def tasks_with_history(client: IrisClient, job_id: JobName) -> tuple[TaskStatus, ...]:
+    # ListTasks forwards to the peer but includes only the current attempt.
+    # The individual Task snapshot includes preempted and failed attempts too.
+    return tuple(client.task_status(task.task_id) for task in client.list_tasks(job_id))
+
+
+def cancel_batch(
+    client: IrisClient,
+    batch: dict,
+    checkpoint: str,
+    collect: Callable[[JobStatus, dict, str], dict | None] | None = None,
+) -> None:
     """Persist cancellation before touching jobs, so collection cannot resurrect them."""
     batch["status"] = "cancelled"
     write_record(checkpoint, batch)
@@ -127,14 +138,18 @@ def cancel_batch(client: IrisClient, batch: dict, checkpoint: str) -> None:
         if status is None:
             point["state"] = "unsubmitted"
             continue
-        status = dataclasses.replace(status, tasks=tuple(client.list_tasks(status.job_id)))
+        status = dataclasses.replace(status, tasks=tasks_with_history(client, status.job_id))
         point["iris_status"] = json.loads(json.dumps(status, default=json_value))
         if not is_job_finished(status.state):
             point["state"] = "cancelling"
             write_record(checkpoint, batch)
             client.cancel_job(status.job_id)
-        elif point.get("receipt", {}).get("status") != "valid":
-            point["state"] = "cancelled"
+        elif not point.get("receipt"):
+            receipt = collect(status, point["manifest"], batch["retention_uri"]) if collect is not None else None
+            if receipt is None:
+                point["state"] = "awaiting-output"
+            else:
+                point.update({"state": "cancelled", "receipt": receipt})
     write_record(checkpoint, batch)
 
 
@@ -143,12 +158,12 @@ def advance_batch(
 ) -> dict:
     """Make bounded progress, using one allocation at a time across all points."""
     if batch["status"] == "cancelled":
-        cancel_batch(client, batch, checkpoint)
+        cancel_batch(client, batch, checkpoint, collect)
         return batch
     if batch["status"] == "complete":
         return batch
     if now >= batch["deadline_unix"]:
-        cancel_batch(client, batch, checkpoint)
+        cancel_batch(client, batch, checkpoint, collect)
         return batch
     for point in batch["points"]:
         if point["state"] in {"collected", "failed"}:
@@ -171,7 +186,8 @@ def advance_batch(
         # them as benchmark points. A successful command may still be finalizing its archive.
         # Federated GetJobStatus can omit tasks. ListTasks is the explicit
         # task/attempt read and forwards to the execution peer.
-        status = dataclasses.replace(status, tasks=tuple(client.list_tasks(status.job_id)))
+        status = dataclasses.replace(status, tasks=tasks_with_history(client, status.job_id))
+        point["iris_status"] = json.loads(json.dumps(status, default=json_value))
         receipt = collect(status, point["manifest"], batch["retention_uri"])
         if receipt is None:
             point["state"] = "awaiting-output"
