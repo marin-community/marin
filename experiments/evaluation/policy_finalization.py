@@ -18,7 +18,7 @@ from finestore.eval import EvaluationStore, sample_from_archive_row
 from finestore.reader import ReadView
 from iris.client.client import iris_ctx
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
-from marin.evaluation.hardware import AcceleratorChoice, Platform
+from marin.evaluation.hardware import AcceleratorChoice
 from marin.evaluation.model_config import ModelConfig, load_model_config
 from marin.evaluation.records import EVALCHEMY_INFRASTRUCTURE_ERROR, EvalRef, RunStatus
 from marin.evaluation.runner import (
@@ -294,18 +294,12 @@ def policy_executor(
     reference: EvalRef,
     config: PolicyFinalization,
     model: str,
-    accelerator: AcceleratorChoice,
+    judge_accelerator: AcceleratorChoice | None,
     priority: int,
 ) -> tuple[EvalExecutor, EvalRef]:
     """Wrap only the policy benchmarks that require postprocessing."""
     if reference.name in {"financebench", "olympiadbench"}:
-        judge_accelerator = AcceleratorChoice(
-            platform=Platform.GPU,
-            gpu_type="H100",
-            gpu_count=8,
-            target_cluster=accelerator.target_cluster,
-            region=accelerator.region,
-        )
+        assert judge_accelerator is not None
         executor = MiniMaxRegrade(source, reference.name, config, judge_accelerator, priority)
     elif reference.name == "sotopia-hard":
         executor = SotopiaLengthControl(source, config, model)

@@ -400,6 +400,13 @@ def build_evaluation_batch(
             if name in secret_env and secret_env[name] != spec_value:
                 raise ValueError(f"evaluations declare conflicting secret specifications for {name}")
             secret_env[name] = spec_value
+    policy_judge = None
+    if spec.policy_finalization is not None and any(
+        definition.record_ref.name in {"financebench", "olympiadbench"} for _, definition in definitions
+    ):
+        policy_judge = _resolve_hosted_judge(
+            replace(spec, judge_model=spec.policy_finalization.judge, judge_accelerator="H100x8"), accelerator
+        )
     evaluations: list[Evaluation] = []
     for eval_key, definition in definitions:
         if spec.policy_finalization is not None:
@@ -408,7 +415,7 @@ def build_evaluation_batch(
                 definition.record_ref,
                 spec.policy_finalization,
                 model.location,
-                accelerator,
+                policy_judge.accelerator if policy_judge is not None else None,
                 spec.priority_band,
             )
             definition = replace(definition, executor=executor, record_ref=reference)

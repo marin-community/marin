@@ -280,3 +280,25 @@ def test_policy_relaunch_does_not_reuse_scores_from_another_cohort(tmp_path, sub
     assert revised.identity.run_id != evaluation.identity.run_id
     frozen = json.loads(revised.identity.eval_ref.postprocessing["marin-10197"])
     assert frozen["sotopia_baselines"][0]["results_path"] != original["sotopia_baselines"][0]["results_path"]
+
+
+@pytest.mark.parametrize("platform,accelerator", [("tpu", "v5litepod-4"), ("gpu", "GB200x1")])
+def test_policy_judge_rejects_incompatible_placement_before_submission(
+    tmp_path, submitted_batches, platform, accelerator
+):
+    config = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled/finalization.yaml"
+    command = [
+        *_command(tmp_path),
+        "--evals",
+        "financebench",
+        "--policy-finalization-config",
+        str(config),
+        "--platform",
+        platform,
+        "--accelerator",
+        accelerator,
+    ]
+    result = CliRunner().invoke(cli, command)
+    assert result.exit_code != 0
+    assert "same cluster or region" in result.output
+    assert submitted_batches == []
