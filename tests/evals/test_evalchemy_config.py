@@ -12,11 +12,14 @@ import subprocess
 import sys
 import urllib.error
 import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 from iris.cluster.client.bundle import create_workspace_zip
+from marin.evaluation.evalchemy import client as eval_client
 from marin.evaluation.evalchemy import runtime
 from marin.evaluation.evalchemy.client import build_command, build_model_args, served_max_length
 from marin.evaluation.evalchemy.config import ChatTokenizerBackend, EvalchemyConfig, EvalchemyJudgeConfig
@@ -800,3 +803,55 @@ def test_auto_serve_overrides_reads_local_model_config(tmp_path):
 
     assert extra_args == ("--gdn-prefill-backend", "triton")
     assert max_model_len == 16384
+
+
+def test_capability_relay_keeps_token_out_of_evalchemy_argv_and_logs(monkeypatch, capsys):
+    token = "regression-secret-capability"
+    seen_paths = []
+
+    class Upstream(BaseHTTPRequestHandler):
+        def log_message(self, message, *args):
+            pass
+
+        def do_GET(self):
+            seen_paths.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"data": []}')
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Upstream) as upstream:
+        thread = Thread(target=upstream.serve_forever, daemon=True)
+        thread.start()
+        capability = f"http://127.0.0.1:{upstream.server_port}/proxy/t/{token}/serve.test"
+        payload = _payload()
+        payload["endpoint_secret"] = "TEST_ENDPOINT"
+        payload["base_url"] = "http://127.0.0.1/v1"
+        monkeypatch.setenv(eval_client.CONFIG_ENV_KEY, json.dumps(payload))
+        monkeypatch.setattr(eval_client, "require_secret", lambda name: capability)
+        monkeypatch.setattr(eval_client, "served_max_length", lambda url: None)
+        monkeypatch.setattr(eval_client, "completed_result", lambda root, prefix: True)
+        monkeypatch.setattr(eval_client, "is_evalchemy_benchmark", lambda name: False)
+        commands = []
+
+        def run(cmd):
+            commands.append(cmd)
+            args = cmd[cmd.index("--model_args") + 1]
+            url = dict(part.split("=", 1) for part in args.split(","))["base_url"]
+            with urllib.request.urlopen(url, timeout=5) as response:
+                assert response.status == 200
+            return SimpleNamespace(returncode=0)
+
+        monkeypatch.setattr(eval_client.subprocess, "run", run)
+        try:
+            eval_client.main()
+        finally:
+            upstream.shutdown()
+            thread.join()
+    assert commands and seen_paths
+    assert all(f"/proxy/t/{token}/serve.test/" in path for path in seen_paths)
+    assert token not in json.dumps(commands)
+    output = capsys.readouterr()
+    assert token not in output.out + output.err
+    payload["base_url"] = capability + "/v1"
+    with pytest.raises(ValueError, match="Capability URLs must use"):
+        build_command(payload, payload["tasks"][0], sys.executable, None)

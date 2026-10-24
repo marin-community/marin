@@ -28,6 +28,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), required=True)
+    parser.add_argument("--model", default=MODEL)
+    parser.add_argument("--tokenizer", default=MODEL)
+    parser.add_argument("--model-revision", default="59852d6f07261722bbec1edb6ab148317156b58e")
     parser.add_argument("--sample-seed", type=int, choices=(17, 29))
     parser.add_argument("--tasks", nargs="+", choices=("gsm8k_0shot", "math500"), default=["gsm8k_0shot", "math500"])
     parser.add_argument("--recover-gsm-job", help="Read an already successful GSM8K child instead of generating again.")
@@ -36,11 +39,14 @@ def main() -> None:
     if args.sample_seed is not None:
         generation = {"temperature": "0.7", "top_p": "0.95", "seed": str(args.sample_seed)}
     base = require_secret("IDENTITY_ENDPOINT").rstrip("/")
-    model = RunningModel(OpenAIEndpoint(base_url=base + "/v1", model=MODEL), tokenizer=MODEL)
+    model = RunningModel(OpenAIEndpoint(base_url="http://127.0.0.1/v1", model=args.model), tokenizer=args.tokenizer)
 
     def backend_state() -> InferenceBackendState:
-        response = requests.get(base + "/health", timeout=30)
-        response.raise_for_status()
+        try:
+            response = requests.get(base + "/health", timeout=30)
+            response.raise_for_status()
+        except requests.RequestException:
+            raise RuntimeError("Inference endpoint health check failed") from None
         return InferenceBackendState.READY
 
     for name, alias, thinking, count in (("gsm8k", "gsm8k_0shot", False, 1319), ("MATH500", "math500", True, 500)):
@@ -50,6 +56,7 @@ def main() -> None:
         fs, path = filesystem_for(output + "/done.json")
         config = EvalchemyRunConfig(
             name=alias,
+            endpoint_secret="IDENTITY_ENDPOINT",
             tasks=(EvalTaskConfig(name=name, num_fewshot=0, task_alias=alias, generation=True),),
             apply_chat_template=True,
             max_gen_toks=8192,
@@ -62,7 +69,7 @@ def main() -> None:
         )
         provenance = {
             "dtype": args.dtype,
-            "revision": "59852d6f07261722bbec1edb6ab148317156b58e",
+            "revision": args.model_revision,
             "config": asdict(config),
         }
         if args.sample_seed is not None:

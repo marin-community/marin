@@ -131,6 +131,7 @@ class EvalchemyRunConfig:
     extra_model_args: dict[str, str | int | float | bool] = field(default_factory=dict)
     chat_template_kwargs: dict[str, bool | str] = field(default_factory=dict)
     max_length: int | None = None
+    endpoint_secret: str | None = None
     judge: EvalchemyJudgeConfig | None = None
     runtime: EvalchemyRuntimeConfig = field(default_factory=EvalchemyRuntimeConfig)
 
@@ -180,6 +181,8 @@ def _coverage_with_aggregate_counts(
 
 
 def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir: str) -> str:
+    if "/proxy/t/" in model.endpoint.base_url:
+        raise ValueError("Capability URLs must use endpoint_secret and a nonsecret placeholder URL")
     tokenizer = model.tokenizer
     if tokenizer is None:
         raise ValueError("Evalchemy requires RunningModel.tokenizer")
@@ -189,6 +192,7 @@ def _run_config_json(model: RunningModel, config: EvalchemyRunConfig, output_dir
     return json.dumps(
         {
             "base_url": model.endpoint.base_url,
+            "endpoint_secret": config.endpoint_secret,
             "model_id": model.endpoint.model,
             "tokenizer": tokenizer,
             "tasks": [

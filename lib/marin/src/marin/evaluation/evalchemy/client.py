@@ -20,10 +20,15 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager, nullcontext
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import find_spec
 from pathlib import Path
+from threading import Thread
 
 from finestore.reader import ReadView
+from rigging.secrets import require_secret
 from rigging.timing import retry_with_backoff
 
 CONFIG_ENV_KEY = "EVALCHEMY_CLIENT_CONFIG"
@@ -200,6 +205,8 @@ def build_command(config: dict, task: dict, python: str, max_length: int | None)
     loglikelihood (MCQ) tasks always go through the completions API, since chat endpoints cannot echo
     prompt logprobs (lm-eval rejects them with "Loglikelihood is not supported for chat completions").
     """
+    if "/proxy/t/" in config["base_url"]:
+        raise ValueError("Capability URLs must use endpoint_secret and the loopback relay")
     # completion_only: code-infilling tasks score a raw continuation, which chat formatting breaks.
     use_chat = config["apply_chat_template"] and task["generation"] and not task["completion_only"]
     model = "local-chat-completions" if use_chat else "local-completions"
@@ -262,8 +269,67 @@ def completed_result(root: str, source_prefix: str) -> bool:
     )
 
 
+@contextmanager
+def endpoint_relay(upstream: str) -> Iterator[str]:
+    """Relay non-streaming evaluation requests through a private loopback URL."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+        def forward(self) -> None:
+            if not self.path.startswith("/") or self.path.startswith("//"):
+                self.send_error(400)
+                return
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0"))) if self.command == "POST" else None
+            request = urllib.request.Request(
+                upstream.rstrip("/") + self.path,
+                data=body,
+                headers={"Content-Type": "application/json"},
+                method=self.command,
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=1800) as response:
+                    payload = response.read()
+                    status = response.status
+                    content_type = response.headers.get("Content-Type", "application/json")
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+                # Exception text and upstream error bodies can contain the credential URL.
+                payload = b'{"error":"upstream endpoint request failed"}'
+                status = 502
+                content_type = "application/json"
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        do_GET = forward
+        do_POST = forward
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}"
+        finally:
+            server.shutdown()
+            worker.join()
+
+
 def main() -> None:
     config = json.loads(os.environ[CONFIG_ENV_KEY])
+    secret_name = config.get("endpoint_secret")
+    relay = endpoint_relay(require_secret(secret_name)) if secret_name else nullcontext(None)
+    with relay as local_url:
+        if local_url is not None:
+            config["base_url"] = local_url + "/v1"
+        run_tasks(config)
+
+
+def run_tasks(config: dict) -> None:
+    if "/proxy/t/" in config["base_url"]:
+        raise ValueError("Capability URLs must use endpoint_secret and the loopback relay")
     tasks = config["tasks"]
     if not tasks:
         raise SystemExit("run_evalchemy_client requires at least one task")
