@@ -18,7 +18,9 @@ def word_tokenizer() -> PreTrainedTokenizerFast:
     backend.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
     tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
     markers = [GRUG_TOKENS.bos, GRUG_TOKENS.turn_open_prefix, GRUG_TOKENS.turn_open_suffix, GRUG_TOKENS.turn_close]
-    tokenizer.add_special_tokens({"additional_special_tokens": [*markers, GRUG_TOKENS.think_open, GRUG_TOKENS.think_close]})
+    tokenizer.add_special_tokens(
+        {"additional_special_tokens": [*markers, GRUG_TOKENS.think_open, GRUG_TOKENS.think_close]}
+    )
     return tokenizer
 
 
@@ -29,7 +31,9 @@ def sampled_ids(tokenizer, text: str) -> list[int]:
 def test_an_ended_reply_keeps_the_sampled_ids_and_tags_its_thinking():
     tokenizer = word_tokenizer()
     prompt_ids = render_prompt_ids(tokenizer, "grug", PROBE["messages"])
-    response = sampled_ids(tokenizer, f"{GRUG_TOKENS.think_open} add carry {GRUG_TOKENS.think_close} it is 7 {GRUG_TOKENS.turn_close}")
+    response = sampled_ids(
+        tokenizer, f"{GRUG_TOKENS.think_open} add carry {GRUG_TOKENS.think_close} it is 7 {GRUG_TOKENS.turn_close}"
+    )
     row = continuation_row(tokenizer, "grug", "P_think", PROBE, prompt_ids, response)
     assert row["token_ids"] == prompt_ids + response and not row["retokenized"] and row["turn_ended"]
     tags = row["token_type_tags"][len(prompt_ids) :]

@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 MASTER_SEED = 20261024
 CONCURRENT_REQUESTS = 64
 REQUEST_TIMEOUT = 7200
-TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json")
+TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja")
 
 
 # The pre-registered single-turn decode for Snowball's probe and expert continuations
