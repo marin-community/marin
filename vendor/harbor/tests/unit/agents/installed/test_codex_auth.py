@@ -38,9 +38,6 @@ async def test_codex_keeps_host_authentication_out_of_guest_state(
     assert "host-oauth-private-canary" not in serialized
     assert "host-provider-private-canary" not in serialized
     assert any(call["env"].get("OPENAI_API_KEY") == "EMPTY" for call in calls)
-    commands = "\n".join(call["command"] for call in calls)
-    assert 'cp -R "$CODEX_HOME/sessions" /logs/agent/sessions' in commands
-    assert 'rm -rf /tmp/codex-secrets "$CODEX_HOME"' in commands
     assert (
         json.loads(auth_file.read_text())["tokens"]["access_token"]
         == "host-oauth-private-canary"

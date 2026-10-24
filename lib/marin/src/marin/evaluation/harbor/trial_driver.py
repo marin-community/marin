@@ -25,7 +25,6 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
     parse_registry_spec,
 )
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
-from harbor.environments.local import validate_local_task  # pyrefly: ignore[missing-import]
 from harbor.environments.model_relay import (  # pyrefly: ignore[missing-import]
     MODEL_RELAY_PORT,
     host_model_authentication,
@@ -34,6 +33,7 @@ from harbor.environments.prepared_compose import (  # pyrefly: ignore[missing-im
     COMPOSE_FILENAMES,
     validate_prepared_task,
 )
+from harbor.environments.resource_policies import validate_local_resources  # pyrefly: ignore[missing-import]
 from harbor.environments.runtime import DAYTONA_API_URL, host_backend_credentials  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.models.task.config import TaskOS  # pyrefly: ignore[missing-import]
@@ -261,23 +261,23 @@ def _validate_job_tasks(job: Job) -> None:
         if task.config.environment.os != TaskOS.LINUX:
             raise ValueError("Shellbox Harbor adapters currently require Linux tasks")
         if job.config.environment.type in _PREPARED_ENVIRONMENT_KWARGS:
-            if job.config.environment.type == EnvironmentType.LOCAL:
-                environment = job.config.environment
-                task_environment_config = task.config.environment.model_copy(
+            environment = job.config.environment
+            task_environment_config = task.config.environment
+            if environment.type == EnvironmentType.LOCAL:
+                task_environment_config = task_environment_config.model_copy(
                     update={
                         name: value
                         for name in ("cpus", "memory_mb", "storage_mb", "gpus", "tpu")
                         if (value := getattr(environment, f"override_{name}")) is not None
                     }
                 )
-                validate_local_task(
+            validate_prepared_task(task_environment_config, task.paths.environment_dir)
+            if environment.type == EnvironmentType.LOCAL:
+                validate_local_resources(
                     task_environment_config,
-                    task.paths.environment_dir,
                     cpu_enforcement_policy=environment.cpu_enforcement_policy,
                     memory_enforcement_policy=environment.memory_enforcement_policy,
                 )
-            else:
-                validate_prepared_task(task.config.environment, task.paths.environment_dir)
             if task.config.steps:
                 raise ValueError("Prepared Shellbox environments do not yet support multi-step tasks")
         elif any((task.paths.environment_dir / name).exists() for name in COMPOSE_FILENAMES):

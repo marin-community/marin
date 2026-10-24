@@ -152,7 +152,7 @@ def test_tau3_runtime_model_relay_and_verifier_state_handoff(tmp_path, monkeypat
         monkeypatch.setattr(iris, "IrisMachineFactory", lambda **kwargs: factory)
     else:
         environment_class, factory_kwargs = LocalEnvironment, {}
-        monkeypatch.setattr("shellbox.backends.local.machine.LocalMachineFactory", lambda **kwargs: factory)
+        monkeypatch.setattr("harbor.environments.local.LocalMachineFactory", lambda **kwargs: factory)
 
     async def check() -> None:
         with (

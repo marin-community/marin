@@ -11,11 +11,11 @@ from pathlib import Path
 
 import shellsim
 from harbor.environments.base import (
-    EXEC_OUTPUT_LIMIT_BYTES,
     BaseEnvironment,
     ExecResult,
 )
 from harbor.environments.capabilities import EnvironmentCapabilities
+from harbor.environments.execution import execute_shellbox_command
 from harbor.models.environment_type import EnvironmentType
 from rigging.filesystem.storage_path import StoragePath
 
@@ -28,8 +28,6 @@ from shellbox.backends.shellsim.machine import (
     ShellSimMachineFactory,
 )
 from shellbox.machine import (
-    Command,
-    ExitReason,
     MachineSpec,
     NetworkPolicy,
     PackageSpec,
@@ -142,23 +140,13 @@ class ShellSimEnvironment(BaseEnvironment):
             raise ValueError("ShellSim supports only the root user")
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
-        result = await self.machine.run(
-            Command(
-                argv=("sh", "-c", command),
-                cwd=cwd,
-                env=self._merge_env(env) or {},
-                timeout=timeout_sec,
-                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
-            )
-        )
-        if result.reason is ExitReason.TIMED_OUT:
-            raise TimeoutError("ShellSim command timed out")
-        return ExecResult(
-            stdout=result.stdout.decode(errors="replace"),
-            stderr=result.stderr.decode(errors="replace"),
-            return_code=result.exit_code,
-            stdout_truncated=result.stdout_truncated,
-            stderr_truncated=result.stderr_truncated,
+        return await execute_shellbox_command(
+            self.machine,
+            ("sh", "-c", command),
+            cwd=cwd,
+            env=self._merge_env(env) or {},
+            timeout_sec=timeout_sec,
+            user=None,
         )
 
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:

@@ -10,11 +10,11 @@ from enum import StrEnum
 from pathlib import Path
 
 from harbor.environments.base import (
-    EXEC_OUTPUT_LIMIT_BYTES,
     BaseEnvironment,
     ExecResult,
 )
 from harbor.environments.capabilities import EnvironmentCapabilities
+from harbor.environments.execution import execute_shellbox_command
 from harbor.models.environment_type import EnvironmentType
 
 from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE, IMAGE_REFERENCE_KEY
@@ -22,8 +22,6 @@ from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle
 from shellbox.backends.qemu.machine import Acceleration, QemuMachine, QemuMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
-    Command,
-    ExitReason,
     MachineSpec,
     ShellSession,
 )
@@ -220,23 +218,13 @@ class QemuEnvironment(BaseEnvironment):
             f"if [ -x /bin/bash ]; then exec /bin/bash -c {shlex.quote(command)}; "
             f"else exec /bin/sh -c {shlex.quote(command)}; fi"
         )
-        result = await self.machine.run(
-            Command(
-                argv=("/bin/sh", "-c", shell_command),
-                cwd=cwd,
-                env=self._merge_env(env) or {},
-                timeout=timeout_sec,
-                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
-            )
-        )
-        if result.reason is ExitReason.TIMED_OUT:
-            raise TimeoutError("QEMU command timed out")
-        return ExecResult(
-            stdout=result.stdout.decode(errors="replace"),
-            stderr=result.stderr.decode(errors="replace"),
-            return_code=result.exit_code,
-            stdout_truncated=result.stdout_truncated,
-            stderr_truncated=result.stderr_truncated,
+        return await execute_shellbox_command(
+            self.machine,
+            ("/bin/sh", "-c", shell_command),
+            cwd=cwd,
+            env=self._merge_env(env) or {},
+            timeout_sec=timeout_sec,
+            user=None,
         )
 
     async def upload_file(self, source_path: Path | str, target_path: str):

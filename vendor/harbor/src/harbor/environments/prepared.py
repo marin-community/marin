@@ -12,7 +12,6 @@ from pathlib import Path
 
 
 from harbor.environments.base import (
-    EXEC_OUTPUT_LIMIT_BYTES,
     BASE_ENVIRONMENT_ARGUMENTS,
     BaseEnvironment,
     ExecResult,
@@ -22,11 +21,12 @@ from harbor.environments.capabilities import (
 )
 from harbor.environments.prepared_compose import import_prepared_task, validate_prepared_task
 from harbor.environments.artifacts import download_artifact
+from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.model_relay import MODEL_RELAY_PORT, ModelRelay
 from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.env import resolve_env_vars
 
-from shellbox.machine import Command, ExitReason, Machine, MachineSpec
+from shellbox.machine import Command, Machine, MachineSpec
 from shellbox.service import ServiceGroup, ServiceGroupFactory
 from shellbox.http_service import serve_http
 
@@ -189,24 +189,13 @@ class PreparedEnvironment(BaseEnvironment):
         if self.machine is None:
             raise RuntimeError("Prepared sandbox is not running")
         await self._sync_service_logs()
-        result = await self.machine.run(
-            Command(
-                argv=("sh", "-c", command),
-                cwd=cwd,
-                env=self._merge_env(env) or {},
-                timeout=timeout_sec,
-                user=self._command_user(user),
-                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
-            )
-        )
-        if result.reason is ExitReason.TIMED_OUT:
-            raise TimeoutError("Prepared sandbox command timed out and the sandbox was terminated")
-        return ExecResult(
-            stdout=result.stdout.decode(errors="replace"),
-            stderr=result.stderr.decode(errors="replace"),
-            return_code=result.exit_code,
-            stdout_truncated=result.stdout_truncated,
-            stderr_truncated=result.stderr_truncated,
+        return await execute_shellbox_command(
+            self.machine,
+            ("sh", "-c", command),
+            cwd=cwd,
+            env=self._merge_env(env) or {},
+            timeout_sec=timeout_sec,
+            user=self._command_user(user),
         )
 
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:

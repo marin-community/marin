@@ -12,7 +12,6 @@ from pathlib import Path
 from daytona import AsyncDaytona, DaytonaConfig
 
 from harbor.environments.base import (
-    EXEC_OUTPUT_LIMIT_BYTES,
     BASE_ENVIRONMENT_ARGUMENTS,
     BaseEnvironment,
     ExecResult,
@@ -23,6 +22,7 @@ from harbor.environments.capabilities import (
 )
 from harbor.environments.prepared_compose import COMPOSE_FILENAMES
 from harbor.environments.artifacts import download_artifact
+from harbor.environments.execution import execute_shellbox_command
 from harbor.environments.runtime import daytona_connection
 from harbor.environments.model_relay import MODEL_RELAY_PORT, ModelRelay
 from harbor.models.environment_type import EnvironmentType
@@ -36,7 +36,7 @@ from shellbox.backends.daytona.machine import (
 )
 from shellbox.http_service import serve_http
 from shellbox.image import DockerfileSource, RegistryImage
-from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy
+from shellbox.machine import MachineSpec, NetworkPolicy
 
 
 class DaytonaEnvironment(BaseEnvironment):
@@ -204,24 +204,13 @@ class DaytonaEnvironment(BaseEnvironment):
         if self.machine is None:
             raise RuntimeError("Daytona environment is not running")
         effective_user = self._resolve_user(user)
-        result = await self.machine.run(
-            Command(
-                ("sh", "-c", command),
-                cwd=cwd,
-                env=self._merge_env(env) or {},
-                timeout=timeout_sec,
-                user=str(effective_user) if effective_user is not None else None,
-                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
-            )
-        )
-        if result.reason is ExitReason.TIMED_OUT:
-            raise TimeoutError("Daytona command timed out")
-        return ExecResult(
-            return_code=result.exit_code,
-            stdout=result.stdout.decode(errors="replace"),
-            stderr=result.stderr.decode(errors="replace"),
-            stdout_truncated=result.stdout_truncated,
-            stderr_truncated=result.stderr_truncated,
+        return await execute_shellbox_command(
+            self.machine,
+            ("sh", "-c", command),
+            cwd=cwd,
+            env=self._merge_env(env) or {},
+            timeout_sec=timeout_sec,
+            user=str(effective_user) if effective_user is not None else None,
         )
 
     async def upload_file(self, source_path: Path | str, target_path: str) -> None:
