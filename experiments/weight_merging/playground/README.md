@@ -5,7 +5,7 @@ Five independently written CPU reference merges are cross-checked against
 on one GPU and retains every completion and score for paired comparisons.
 Completed curves and their artifact provenance are in [RESULTS.md](RESULTS.md);
 the new math donor passes admission, while code does not. The two-donor grid
-has not run; far-donor controls remain in progress.
+has not run; all 14 planned far-donor controls are complete and verified.
 
 ## Models and interpretation
 

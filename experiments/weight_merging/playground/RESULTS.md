@@ -1,6 +1,6 @@
 # Verified playground results
 
-Status: experiments are unfinished. The curves and new independent-sample donor gates are verified; far-donor controls remain in progress. Math passes the joint-precision gate and code does not, so the two-donor grid has not run. No two-donor method ranking is established.
+The curves, new independent-sample donor gates and planned 14-candidate far arm are complete and verified. Math passes the joint-precision gate and code does not. The present code line closes with code-RFT retained as a weak-donor control; the two-donor grid has not run. A 300-update follow-up remains an open option and has not been launched. No two-donor method ranking is established.
 
 All curves below use eager vLLM execution, output cap **8192**, context **12288**, the full 1319-item GSM8K test and 257-item sanitized MBPP test, and greedy plus sampled seeds 17/29. Each gain averages three decodes per item before a paired item bootstrap (5000 resamples, seed 290). Intervals are pointwise exploratory 95% CIs, without correction for recipe selection. Each precision has its own Instruct control. Separate BF16 and FP32 tables change both weight casting and compute; their difference does not isolate either cause.
 
@@ -146,9 +146,9 @@ Admission concerns the per-item three-decode average. The greedy math comparison
 Admission audit: `s3://marin-rno2a/scratch/karan/task290/remote/independent-k8-admission-v1/`. Both clean source audits, raw hashes, driver hash and final done marker were verified. Code has exactly equal pooled wins/losses in BF16; a floating-point residue near zero is treated as zero using the exact paired counts.
 
 <!-- far-arm-start -->
-## Far donors under the anchor config: verified partial results
+## Far donors under the anchor config
 
-Verified partial arm: eight of 14 planned candidates. Six GPU candidates remain pending.
+Completed planned arm: all 14 candidates.
 
 The Math donor loses performance when its native RoPE theta=10000 is replaced by anchor theta=1000000. All far merges use the anchor configuration. The native/anchor Math pair is repeated beside each Math merge for context; those are the same measured controls, not additional runs. This arm measures far donors under the anchor config, not weight distance alone.
 
@@ -160,18 +160,33 @@ Eager BF16 serving; max_tokens=8192, context=12288. All 1319 GSM8K and 257 MBPP 
 | coder | 805 | 171 | -15.49 [-17.49,-13.44] | +5.84 [+2.46,+9.21] | 7 / 1 | 356.2 / 77.4 |
 | far-coder-average-c0.1 | 936 | 159 | -0.38 [-1.97,+1.16] | +0.39 [-2.85,+3.63] | 13 / 0 | 337.4 / 91.1 |
 | far-coder-average-c0.3 | 584 | 77 | -28.89 [-30.98,-26.84] | -32.68 [-37.61,-28.02] | 1055 / 251 | 6605.3 / 8006.3 |
+| far-coder-average-c0.5 | 5 | 0 | -69.40 [-71.42,-67.32] | -59.79 [-64.98,-54.60] | 781 / 229 | 4877.1 / 7306.6 |
+| far-coder-dare_linear-d0.3-c0.3 | 20 | 0 | -68.28 [-70.36,-66.16] | -59.79 [-64.98,-54.60] | 1135 / 229 | 7423.1 / 7620.1 |
 | far-coder-magnitude_topk-d0.3-s0.3 | 509 | 106 | -33.06 [-35.18,-30.98] | -22.83 [-27.37,-18.29] | 407 / 20 | 2705.6 / 679.7 |
 | math-native | 1116 | 30 | +12.00 [+10.13,+13.92] | -47.73 [-53.31,-42.41] | 4 / 13 | 348.4 / 787.1 |
 | math-anchor-rope | 570 | 12 | -27.45 [-29.85,-24.97] | -56.16 [-61.35,-51.23] | 40 / 158 | 544.3 / 5178.7 |
 | far-math-average-c0.1 | 743 | 139 | -15.09 [-17.06,-13.07] | -11.67 [-15.69,-7.65] | 91 / 3 | 779.7 / 178.4 |
+| math-native | 1116 | 30 | +12.00 [+10.13,+13.92] | -47.73 [-53.31,-42.41] | 4 / 13 | 348.4 / 787.1 |
+| math-anchor-rope | 570 | 12 | -27.45 [-29.85,-24.97] | -56.16 [-61.35,-51.23] | 40 / 158 | 544.3 / 5178.7 |
+| far-math-average-c0.3 | 4 | 0 | -68.69 [-70.76,-66.59] | -59.79 [-64.98,-54.60] | 1317 / 257 | 8185.2 / 8192.0 |
+| math-native | 1116 | 30 | +12.00 [+10.13,+13.92] | -47.73 [-53.31,-42.41] | 4 / 13 | 348.4 / 787.1 |
+| math-anchor-rope | 570 | 12 | -27.45 [-29.85,-24.97] | -56.16 [-61.35,-51.23] | 40 / 158 | 544.3 / 5178.7 |
+| far-math-average-c0.5 | 12 | 0 | -69.22 [-71.29,-67.15] | -59.79 [-64.98,-54.60] | 1238 / 257 | 7711.2 / 8192.0 |
+| math-native | 1116 | 30 | +12.00 [+10.13,+13.92] | -47.73 [-53.31,-42.41] | 4 / 13 | 348.4 / 787.1 |
+| math-anchor-rope | 570 | 12 | -27.45 [-29.85,-24.97] | -56.16 [-61.35,-51.23] | 40 / 158 | 544.3 / 5178.7 |
+| far-math-dare_linear-d0.3-c0.3 | 16 | 0 | -68.66 [-70.71,-66.62] | -59.79 [-64.98,-54.60] | 1168 / 241 | 7588.2 / 7873.1 |
+| math-native | 1116 | 30 | +12.00 [+10.13,+13.92] | -47.73 [-53.31,-42.41] | 4 / 13 | 348.4 / 787.1 |
+| math-anchor-rope | 570 | 12 | -27.45 [-29.85,-24.97] | -56.16 [-61.35,-51.23] | 40 / 158 | 544.3 / 5178.7 |
+| far-math-magnitude_topk-d0.3-s0.3 | 3 | 0 | -69.67 [-71.72,-67.60] | -59.79 [-64.98,-54.60] | 1227 / 246 | 7791.8 / 7999.6 |
 
 Direct paired change from native to anchor RoPE (same Math weights, shared remaining configuration):
 
 - gsm8k: -39.45 [-41.70,-37.23] pp over 1319 items.
 - mbpp: -8.43 [-11.54,-5.58] pp over 257 items.
 
-Publication: `s3://marin-rno2a/scratch/karan/task290/remote/far-partial-final-v1/`. Both raw scoring shards and reports were independently audited; all 4728 Instruct generation/correctness observations match across two distinct exclusive healthy hosts. The report, source audits and publication hashes are verified.
+Publication: `s3://marin-rno2a/scratch/karan/task290/remote/far-final-v1/`. All four scoring shards and reports were independently audited. All 4728 Instruct generation/correctness observations match across four distinct exclusive healthy hosts; source audits, raw hashes and publication hashes are verified.
 
-The full Coder donor improves strict MBPP by +5.84 pp [2.46, 9.21] while losing GSM by −15.49 pp [−17.49, −13.44]. Its c=0.1 transfer is uncertain on both datasets; c=0.3 degrades both and truncates most outputs. These are pointwise exploratory effects under the shared prompt and output cap. The planned arm remains incomplete.
+The full Coder donor improves strict MBPP by +5.84 pp [2.46, 9.21] while losing GSM by −15.49 pp [−17.49, −13.44]. Its c=0.1 transfer is uncertain on both datasets. Larger Coder transfers and the tested Math transfers lose capability under the anchor configuration and often exhaust the output cap. The six final far controls each score zero on MBPP in greedy and both sampled seeds, with no execution timeouts. These are donor/configuration controls, not an L2-matched method ranking.
 <!-- far-arm-end -->
+
 
