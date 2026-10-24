@@ -6,9 +6,9 @@
 Each probe prompt is rendered through the shared template with ``B``'s tokenizer, sent to
 a vLLM server as token ids, and sampled once under the pre-registered decode. The server
 returns the sampled token ids, so the stored sequence (prompt ids + sampled ids) is
-exactly what ``B`` produced; the bucket tags come from ``buckets.tag_conversation`` on the
-decoded reply, which keeps the think markers verbatim. A reply that ran to the token cap
-has no closing turn token, and the template's closing token is dropped from its tags.
+exactly what ``B`` produced; the bucket tags come from ``buckets.tag_token_ids``, which
+aligns the sampled tokens by bytes to the conversation rendered with the reply's think
+markers verbatim. A reply that ran to the token cap has no closing turn token.
 
 Run as a small CPU job; serving dispatches its own 8-GPU job::
 
@@ -42,7 +42,7 @@ from transformers import AutoTokenizer
 
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
 from experiments.post_training.mismatch_probe.protocol import request_seed
-from experiments.post_training.probe_sets.buckets import tag_conversation
+from experiments.post_training.probe_sets.buckets import decode_token_bytes, tag_token_ids
 from experiments.post_training.stage0.protocol_gate import Decode, snowball_checkpoint_model
 
 logger = logging.getLogger(__name__)
@@ -75,33 +75,25 @@ def continuation_row(
 ) -> dict[str, Any]:
     """One scored-sequence row: ``prompt_ids + response_ids`` with the tagger's bucket tags.
 
-    The reply goes to the tagger verbatim, so the tags line up with the sampled tokens
-    whenever the decoded text re-encodes to them; ``retokenized`` marks a row where it
-    does not, and the row then keeps the re-encoded ids.
+    The sampled ids are tagged by byte alignment against the rendered conversation, so
+    the row keeps exactly B's tokens, stray bytes included.
     """
     close = turn_close_id(tokenizer, family)
     ended = bool(response_ids) and response_ids[-1] == close
-    reply_ids = response_ids[:-1] if ended else response_ids
-    reply = tokenizer.decode(reply_ids, skip_special_tokens=False)
+    reply = decode_token_bytes(tokenizer, response_ids[:-1] if ended else response_ids)
     messages = [*probe["messages"], {"role": "assistant", "content": reply}]
-    tagged = tag_conversation(tokenizer, family, messages)
-    # The template closes the reply and adds a newline; keep its closing token only when B sampled one.
-    last_close = len(tagged.input_ids) - 1 - tagged.input_ids[::-1].index(close)
-    keep = last_close + 1 if ended else last_close
-    sampled = prompt_ids + response_ids
-    tagged_ids = tagged.input_ids[:keep]
+    tagged = tag_token_ids(tokenizer, family, messages, prompt_ids + response_ids)
     return {
         "sample_id": probe["probe_id"],
         "bucket_group": set_name,
         "source": probe["source"],
-        "token_ids": sampled if tagged_ids == sampled else tagged_ids,
-        "token_type_tags": [bucket.value for bucket in tagged.buckets[:keep]],
-        "position_tags": tagged.assistant_turn[:keep],
-        "reasoning_decile": tagged.reasoning_decile[:keep],
+        "token_ids": tagged.input_ids,
+        "token_type_tags": [bucket.value for bucket in tagged.buckets],
+        "position_tags": tagged.assistant_turn,
+        "reasoning_decile": tagged.reasoning_decile,
         "prompt_tokens": len(prompt_ids),
         "completion_tokens": len(response_ids),
         "turn_ended": ended,
-        "retokenized": tagged_ids != sampled,
     }
 
 
@@ -192,7 +184,6 @@ def set_summary(rows: list[dict[str, Any]], sha256: str, seconds: float) -> dict
         "rows": len(rows),
         "sha256": sha256,
         "turn_ended": sum(row["turn_ended"] for row in rows),
-        "retokenized": sum(row["retokenized"] for row in rows),
         "completion_tokens_p50": tokens[len(tokens) // 2],
         "completion_tokens_p90": tokens[int(len(tokens) * 0.9)],
         "completion_tokens_max": tokens[-1],

@@ -1,56 +1,82 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-from tokenizers import Tokenizer, models, pre_tokenizers
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
 from transformers import PreTrainedTokenizerFast
 
 from experiments.post_training.chat_template import GRUG_TOKENS
-from experiments.post_training.probe_sets.buckets import Bucket
 from experiments.post_training.probe_sets.continuations import continuation_row, render_prompt_ids, request_body
 from experiments.post_training.stage0.protocol_gate import Decode
 
-WORDS = ["[UNK]", "\n", "user", "assistant", "add", "two", "and", "five", "carry", "it", "is", "7"]
 PROBE = {"probe_id": "p-0", "source": "aime_2024", "messages": [{"role": "user", "content": "add two and five"}]}
+MARKERS = [
+    GRUG_TOKENS.bos,
+    GRUG_TOKENS.turn_open_prefix,
+    GRUG_TOKENS.turn_open_suffix,
+    GRUG_TOKENS.turn_close,
+    GRUG_TOKENS.think_open,
+    GRUG_TOKENS.think_close,
+]
 
 
-def word_tokenizer() -> PreTrainedTokenizerFast:
-    backend = Tokenizer(models.WordLevel({word: index for index, word in enumerate(WORDS)}, unk_token="[UNK]"))
-    # Newlines are tokens, as in the real vocabulary, so the template's trailing newline shows up.
-    backend.pre_tokenizer = pre_tokenizers.Sequence(
-        [pre_tokenizers.Split("\n", "isolated"), pre_tokenizers.Split(" ", "removed")]
+def byte_level_tokenizer() -> PreTrainedTokenizerFast:
+    """A tiny byte-level BPE, like Snowball's: every byte is a token and common words merge."""
+    backend = Tokenizer(models.BPE())
+    backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    backend.decoder = decoders.ByteLevel()
+    trainer = trainers.BpeTrainer(
+        vocab_size=300, special_tokens=MARKERS, initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
     )
-    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend, unk_token="[UNK]")
-    markers = [GRUG_TOKENS.bos, GRUG_TOKENS.turn_open_prefix, GRUG_TOKENS.turn_open_suffix, GRUG_TOKENS.turn_close]
-    tokenizer.add_special_tokens(
-        {"additional_special_tokens": [*markers, GRUG_TOKENS.think_open, GRUG_TOKENS.think_close]}
+    backend.train_from_iterator(["add two and five", "carry it is 7", "user assistant\n"] * 50, trainer)
+    return PreTrainedTokenizerFast(tokenizer_object=backend, additional_special_tokens=MARKERS)
+
+
+def byte_ids(tokenizer, text: str) -> list[int]:
+    """``text`` as one token per byte: a valid but non-canonical tokenization."""
+    return tokenizer.convert_tokens_to_ids(
+        list(pre_tokenizers.ByteLevel(add_prefix_space=False).pre_tokenize_str(text)[0][0])
     )
-    return tokenizer
 
 
-def sampled_ids(tokenizer, text: str) -> list[int]:
-    return tokenizer.encode(text, add_special_tokens=False)
+def reply_tags(row, prompt_ids):
+    return row["token_type_tags"][len(prompt_ids) :]
 
 
-def test_an_ended_reply_keeps_the_sampled_ids_and_tags_its_thinking():
-    tokenizer = word_tokenizer()
+def test_an_ended_reply_keeps_b_s_own_tokenization_and_tags_its_thinking():
+    tokenizer = byte_level_tokenizer()
     prompt_ids = render_prompt_ids(tokenizer, "grug", PROBE["messages"])
-    response = sampled_ids(
-        tokenizer, f"{GRUG_TOKENS.think_open} add carry {GRUG_TOKENS.think_close} it is 7 {GRUG_TOKENS.turn_close}"
-    )
+    close, think_open, think_close = (tokenizer.convert_tokens_to_ids(t) for t in MARKERS[3:6])
+    carry = byte_ids(tokenizer, "carry")  # B spelled it byte by byte; the tokenizer would merge it
+    assert carry != tokenizer.encode("carry", add_special_tokens=False)
+    answer = tokenizer.encode("it is 7", add_special_tokens=False)
+    response = [think_open, *carry, think_close, *answer, close]
     row = continuation_row(tokenizer, "grug", "P_think", PROBE, prompt_ids, response)
-    assert row["token_ids"] == prompt_ids + response and not row["retokenized"] and row["turn_ended"]
-    tags = row["token_type_tags"][len(prompt_ids) :]
-    assert tags == ["delimiter", "reasoning", "reasoning", "delimiter", *["final_message"] * 3, "delimiter"]
+    assert row["token_ids"] == prompt_ids + response and row["turn_ended"]
+    expected = ["delimiter", *["reasoning"] * len(carry), "delimiter", *["final_message"] * len(answer), "delimiter"]
+    assert reply_tags(row, prompt_ids) == expected
     assert len(row["token_type_tags"]) == len(row["token_ids"]) == len(row["position_tags"])
 
 
 def test_a_reply_cut_at_the_cap_gets_no_closing_token():
-    tokenizer = word_tokenizer()
+    tokenizer = byte_level_tokenizer()
     prompt_ids = render_prompt_ids(tokenizer, "grug", PROBE["messages"])
-    response = sampled_ids(tokenizer, f"{GRUG_TOKENS.think_open} add carry carry")  # thinking never closed
+    think_open = tokenizer.convert_tokens_to_ids(GRUG_TOKENS.think_open)
+    response = [think_open, *tokenizer.encode("carry carry", add_special_tokens=False)]  # thinking never closed
     row = continuation_row(tokenizer, "grug", "P_think", PROBE, prompt_ids, response)
     assert row["token_ids"] == prompt_ids + response and not row["turn_ended"]
-    assert row["token_type_tags"][len(prompt_ids) :] == ["delimiter", *[Bucket.REASONING.value] * 3]
+    assert reply_tags(row, prompt_ids) == ["delimiter", *["reasoning"] * (len(response) - 1)]
+
+
+def test_stray_bytes_that_form_no_character_keep_their_alignment():
+    tokenizer = byte_level_tokenizer()
+    prompt_ids = render_prompt_ids(tokenizer, "grug", PROBE["messages"])
+    close = tokenizer.convert_tokens_to_ids(GRUG_TOKENS.turn_close)
+    half = byte_ids(tokenizer, "é")[:1]  # the first byte of a two-byte character
+    answer = tokenizer.encode("it is 7", add_special_tokens=False)
+    response = [*half, *answer, close]
+    row = continuation_row(tokenizer, "grug", "P_think", PROBE, prompt_ids, response)
+    assert row["token_ids"] == prompt_ids + response
+    assert reply_tags(row, prompt_ids) == ["final_message"] * (1 + len(answer)) + ["delimiter"]
 
 
 def test_the_request_samples_token_ids_and_stops_only_on_the_turn_close():

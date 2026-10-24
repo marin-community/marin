@@ -39,6 +39,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from transformers.convert_slow_tokenizer import bytes_to_unicode
+
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
 
 
@@ -209,6 +211,60 @@ def tag_conversation(tokenizer, family: str, messages: list[dict[str, Any]]) -> 
     return TaggedSequence(
         input_ids=list(encoding["input_ids"]),
         assistant_mask=mask,
+        assistant_turn=turns,
+        buckets=buckets,
+        reasoning_decile=_reasoning_deciles(buckets, turns),
+    )
+
+
+_BYTE_DECODER = {character: byte for byte, character in bytes_to_unicode().items()}
+
+
+def _token_bytes(tokenizer, token_ids: list[int]) -> list[bytes]:
+    """Each token's raw bytes under a byte-level BPE vocabulary; added tokens are their own text."""
+    added = {index: token.content for index, token in tokenizer.added_tokens_decoder.items()}
+    pieces = []
+    for index, token in zip(token_ids, tokenizer.convert_ids_to_tokens(token_ids), strict=True):
+        pieces.append(added[index].encode() if index in added else bytes(_BYTE_DECODER[char] for char in token))
+    return pieces
+
+
+def decode_token_bytes(tokenizer, token_ids: list[int]) -> str:
+    """The ids' text with invalid UTF-8 kept as surrogate escapes, so it re-encodes to the same bytes.
+
+    A sampled reply can hold stray byte tokens that form no character; the tokenizer's
+    own decode would replace them and lose the alignment.
+    """
+    return b"".join(_token_bytes(tokenizer, token_ids)).decode("utf-8", errors="surrogateescape")
+
+
+def tag_token_ids(tokenizer, family: str, messages: list[dict[str, Any]], token_ids: list[int]) -> TaggedSequence:
+    """Tag given token ids (e.g. a model's samples) against ``messages`` rendered through the shared template.
+
+    The ids need not be the tokenizer's own encoding of the text: each token is aligned
+    by bytes and takes the bucket of the character its first byte falls in. The ids'
+    bytes must be a prefix of the rendered text, which a reply cut at the cap (no
+    closing token) satisfies; decode replies with :func:`decode_token_bytes`. Requires a
+    byte-level BPE vocabulary.
+    """
+    text = tokenizer.apply_chat_template(
+        messages, chat_template=shared_template(FAMILY_TOKEN_MAPS[family]), tokenize=False
+    )
+    char_buckets, char_turns = _char_buckets(text, messages, family)
+    byte_chars = [index for index, char in enumerate(text) for _ in char.encode("utf-8", "surrogateescape")]
+    text_bytes = text.encode("utf-8", "surrogateescape")
+    buckets: list[Bucket] = []
+    turns: list[int] = []
+    offset = 0
+    for piece in _token_bytes(tokenizer, token_ids):
+        if text_bytes[offset : offset + len(piece)] != piece:
+            raise ValueError(f"token ids diverge from the rendered conversation at byte {offset}")
+        buckets.append(char_buckets[byte_chars[offset]])
+        turns.append(char_turns[byte_chars[offset]])
+        offset += len(piece)
+    return TaggedSequence(
+        input_ids=list(token_ids),
+        assistant_mask=[int(bucket is not Bucket.CONTEXT) for bucket in buckets],
         assistant_turn=turns,
         buckets=buckets,
         reasoning_decile=_reasoning_deciles(buckets, turns),
