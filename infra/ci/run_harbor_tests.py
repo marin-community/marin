@@ -23,6 +23,7 @@ HARBOR_TEST_PATTERNS = (
     "vendor/harbor/tests/unit/agents/test_tau3_acp_relay.py",
     "vendor/harbor/tests/unit/agents/installed/test_mini_swe_agent.py",
     "vendor/harbor/tests/unit/agents/installed/test_mini_swe_context.py",
+    "vendor/harbor/tests/unit/agents/installed/test_pi.py",
     "vendor/harbor/tests/unit/agents/installed/test_sotopia.py",
     "vendor/harbor/tests/unit/environments/test_daytona*.py",
 )
