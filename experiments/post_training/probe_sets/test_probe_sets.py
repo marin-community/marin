@@ -17,7 +17,8 @@ from experiments.post_training.probe_sets.builder import (
     HARBOR_SWE_BENCH_REF,
     P_AGENT_SIZE,
     P_CHAT_SIZE,
-    P_THINK_OLYMPIADBENCH_SIZE,
+    P_THINK_SIZE,
+    STAGE0_CONTAMINATION_SHARE,
     T_DOMAINS,
     T_TOKENS_PER_DOMAIN,
     ScreeningInputs,
@@ -91,7 +92,7 @@ def test_p_chat_keeps_every_constraint_prompt_and_fills_with_chats(inputs):
     assert "c-dirty" not in {r.probe_id for r in rows}
 
 
-def test_p_think_raises_when_a_fixed_benchmark_is_contaminated(inputs):
+def test_p_think_drops_contaminated_core_problems_and_fills_to_300(inputs):
     def benchmark(name, count, offset):
         return [row(f"{name}-{index}", distinct(offset + index)) for index in range(count)]
 
@@ -106,11 +107,25 @@ def test_p_think_raises_when_a_fixed_benchmark_is_contaminated(inputs):
         return screening_hits([r for rows in benchmarks.values() for r in rows], inputs)
 
     rows, counts = build_p_think(benchmarks, hits(), seed=0)
-    assert len(rows) == 90 + P_THINK_OLYMPIADBENCH_SIZE
-    assert counts["olympiadbench"] == P_THINK_OLYMPIADBENCH_SIZE
-    benchmarks["aime_2025"][3] = row("aime_2025-3", f"find {LONG}")
-    with pytest.raises(ValueError, match="aime_2025 overlaps training data"):
-        build_p_think(benchmarks, hits(), seed=0)
+    assert len(rows) == P_THINK_SIZE and counts["olympiadbench"] == P_THINK_SIZE - 90
+    benchmarks["aime_2025"][3] = row("aime_2025-3", f"find {LONG}")  # a near-copy of a Stage 0 row
+    rows, counts = build_p_think(benchmarks, hits(), seed=0)
+    assert len(rows) == P_THINK_SIZE and "aime_2025-3" not in {r.probe_id for r in rows}
+    assert (counts["aime_2025"], counts["olympiadbench"]) == (29, P_THINK_SIZE - 89)
+
+
+def test_stage0_contamination_needs_half_the_grams_while_task_train_needs_one(inputs):
+    stock = " ".join(LONG.split()[:13])  # one 13-gram shared with the Stage 0 row
+    rows = [
+        row("stock-wording", f"{stock} {distinct(7)}"),
+        row("near-copy", f"say {LONG}"),
+        row("train-gram", f"{' '.join(distinct(901).split()[:13])} {distinct(8)}"),
+    ]
+    hits = screening_hits(rows, inputs)
+    kept, drops = screen(rows, hits, x_task_rows=False)
+    assert [r.probe_id for r in kept] == ["stock-wording"]
+    assert drops == {"dropped_stage0_overlap": 1, "dropped_task_train_overlap": 1}
+    assert 0 < hits.stage0_shares["stock-wording"] < STAGE0_CONTAMINATION_SHARE <= hits.stage0_shares["near-copy"]
 
 
 def test_probe_sets_must_be_pairwise_disjoint():

@@ -33,6 +33,7 @@ from experiments.post_training.probe_sets.builder import (
     P_AGENT_CONTEXT_TOKENS,
     P_AGENT_GENERATION_TOKENS,
     PROMPT_SOURCES,
+    STAGE0_CONTAMINATION_SHARE,
     T_TOKENS_PER_DOMAIN,
     ScreeningInputs,
     build_p_chat,
@@ -129,7 +130,22 @@ def screened(
     sets["P_think"] |= {"counts": think_counts, "sources": [source_entry(s) for s in PROMPT_SOURCES["P_think"]]}
     sets["P_X"] |= {"counts": x_counts, "source_file": str(x_probe)}
     sets["P_R"] |= {"counts": r_counts, "source_file": str(r_probe)}
-    screening = {"stage0_files": [str(path) for path in stage0_files], "task_train_files": [str(x_train), str(r_train)]}
+    sources = {row.probe_id: row.source for row in candidates}
+    screening = {
+        "stage0_files": [str(path) for path in stage0_files],
+        "task_train_files": [str(x_train), str(r_train)],
+        "stage0_contamination_share": STAGE0_CONTAMINATION_SHARE,
+        # Every candidate sharing any 13-gram with Stage 0; contaminated ones were dropped.
+        "stage0_matches": [
+            {
+                "probe_id": probe_id,
+                "source": sources[probe_id],
+                "matched_share": round(share, 4),
+                "contaminated": share >= STAGE0_CONTAMINATION_SHARE,
+            }
+            for probe_id, share in sorted(hits.stage0_shares.items())
+        ],
+    }
     _merge_manifest(output_dir, seed, sets, {"screening": screening})
 
 
