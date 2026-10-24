@@ -361,6 +361,7 @@ def _training_batch(
     _attach_routed_experts(batch, rollouts)
     _attach_policy_steps(batch, rollouts)
     _attach_span_tags(batch, rollouts)
+    _attach_behavior_sources(batch, rollouts)
     metrics = None
     if env_metric_classes is not None:
         metrics = [
@@ -495,6 +496,15 @@ def _attach_span_tags(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout
     tags = _token_channels(batch, rollouts, RESPONSE_SPAN_TAGS_KEY, np.int64)
     if tags is not None:
         batch["response_span_tags"] = [row.tolist() for row in tags]
+
+
+BEHAVIOR_SOURCES_KEY = "behavior_sources"
+
+
+def _attach_behavior_sources(batch: TrajectoryBatch, rollouts: Sequence[TrainingRollout]) -> None:
+    sources = _token_channels(batch, rollouts, BEHAVIOR_SOURCES_KEY, np.uint8)
+    if sources is not None:
+        batch["behavior_sources"] = sources
 
 
 def _task_error_policies(

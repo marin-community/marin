@@ -50,7 +50,7 @@ from skyrl_train.io import io
 
 RETENTION_METRIC_PREFIX = "generate/trajectory_retention"
 RETENTION_SCHEMA_VERSION = 1
-TRAJECTORY_RECORD_SCHEMA_VERSION = 7
+TRAJECTORY_RECORD_SCHEMA_VERSION = 8
 _LEDGER_NAME = "_retention_ledger.json"
 _SELECTION_COUNT = "count"
 _SELECTION_FRACTION = "fraction"
@@ -170,6 +170,8 @@ class _ResponseTrace:
     text: str | None
     token_ids: tuple[int, ...]
     loss_mask: tuple[int, ...]
+    behavior_logprobs: tuple[float, ...] | None
+    behavior_sources: tuple[int, ...] | None
     trainable_spans: tuple[RewardShapingLoopSpan, ...]
     step_boundaries: tuple[_StepBoundary, ...]
     stop_reason: str | None
@@ -218,6 +220,7 @@ class TrajectoryRecord:
     verifier: VerifierTestCollection | None
     verification_result: VerificationResult | None
     metrics: dict[str, Any]
+    row_metrics: tuple[dict[str, Any], ...]
     provenance: _ProvenanceTrace
 
     def to_json(self) -> dict[str, Any]:
@@ -448,6 +451,16 @@ def build_trajectory_records(
                 text=response_text,
                 token_ids=tuple(response_ids),
                 loss_mask=tuple(loss_mask),
+                behavior_logprobs=(
+                    None
+                    if output.get("rollout_logprobs") is None
+                    else tuple(float(value) for index in row_indices for value in output["rollout_logprobs"][index])
+                ),
+                behavior_sources=(
+                    None
+                    if output.get("behavior_sources") is None
+                    else tuple(int(value) for index in row_indices for value in output["behavior_sources"][index])
+                ),
                 trainable_spans=tuple(_active_spans(loss_mask)),
                 step_boundaries=tuple(_step_boundaries(output, row_indices, stop_reasons)),
                 stop_reason=stop_reasons[final_index],
@@ -471,6 +484,9 @@ def build_trajectory_records(
                 output["verification_results"][final_index] if output.get("verification_results") is not None else None
             ),
             metrics=to_jsonable(output.get("rollout_metrics") or {}),
+            row_metrics=tuple(to_jsonable(output["env_metrics"][index]) for index in row_indices)
+            if output.get("env_metrics") is not None
+            else (),
             provenance=_ProvenanceTrace(
                 runner=runner_name,
                 inference_backend=config.inference_backend,

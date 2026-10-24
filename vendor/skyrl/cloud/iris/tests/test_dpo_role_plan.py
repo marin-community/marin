@@ -68,3 +68,34 @@ def test_preference_pair_task_validation_reserves_generation_capacity(runner):
     assert sorted(claim.kind.value for claim in plan.claims) == ["policy", "reference", "rollout"]
     assert derive_num_nodes(plan) == 2
     assert plan.claim(ModelRoleKind.ROLLOUT).execution is RoleExecution.LOCAL
+
+
+def test_repair_teacher_adds_separate_capacity_without_changing_student_roles():
+    config = skyrl_config(
+        **{
+            "environment.env_class": "prompt_only",
+            "trainer.algorithm.policy_loss_type": "mixed_policy_grpo",
+            "generator.n_samples_per_prompt": 4,
+        }
+    )
+    original = derive_role_plan(config)
+    config["identity_repair"] = {
+        "teacher": {
+            "model_path": "fixture/teacher",
+            "revision": "pinned",
+            "engines": 2,
+            "tensor_parallel_size": 4,
+            "data_parallel_size": 1,
+            "expert_parallel_size": 4,
+            "max_model_len": 8192,
+            "gpu_memory_utilization": 0.8,
+        }
+    }
+    plan = derive_role_plan(config)
+    assert derive_num_nodes(plan) == derive_num_nodes(original) + 1
+    assert tuple(claim for claim in plan.claims if claim.role_id != "repair_teacher") == original.claims
+    teacher = plan.claim("repair_teacher")
+    assert teacher.kind is ModelRoleKind.TEACHER
+    assert (teacher.replicas, teacher.tensor_parallel_size, teacher.num_nodes) == (2, 4, 1)
+    assert next(bundle for bundle in plan.bundles if bundle.name == "repair_teacher").role_ids == ("repair_teacher",)
+    assert all("repair_teacher" not in bundle.role_ids for bundle in original.bundles)

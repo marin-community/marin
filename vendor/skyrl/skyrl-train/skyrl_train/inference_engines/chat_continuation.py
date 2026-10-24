@@ -31,6 +31,7 @@ async def render_exact_chat_continuation(
     *,
     assistant_message_index: int,
     served_prefix_token_ids: list[int],
+    continue_final_message: bool = False,
 ) -> list[int] | None:
     """Append the renderer's boundary without re-tokenizing sampled content.
 
@@ -43,6 +44,13 @@ async def render_exact_chat_continuation(
         raise ValueError("continuation assistant index is outside the message history")
     if messages[assistant_message_index].get("role") != "assistant":
         raise ValueError("continuation message must be an assistant turn")
+
+    if continue_final_message:
+        if assistant_message_index != len(messages) - 1:
+            raise ValueError("Mid-turn continuation requires the final assistant message")
+        # This prefix includes the original rendered prompt and sampled partial turn.
+        # Adding a turn boundary here would end the very turn being repaired.
+        return list(served_prefix_token_ids)
 
     history_messages = messages[:assistant_message_index]
     prefix_messages = messages[: assistant_message_index + 1]

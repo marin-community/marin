@@ -70,6 +70,7 @@ class Experience:
     # Stage D (F7) per-token span tags (SPAN_THINK==1) — present only when the
     # token-reward channel is on; used to down-weight <think> tokens in the loss.
     response_span_tags: Optional[Integer[torch.Tensor, "batch response_len"]] = None
+    behavior_sources: Optional[Integer[torch.Tensor, "batch response_len"]] = None
     distillation: Optional[TopKEvidence] = None
     ftpo: FTPOTargets | None = None
     correction_weights: Optional[Float[torch.Tensor, "batch response_len"]] = None
@@ -105,6 +106,8 @@ class Experience:
             self.rollout_routed_experts = to(self.rollout_routed_experts, device)
         if self.response_span_tags is not None:
             self.response_span_tags = to(self.response_span_tags, device)
+        if self.behavior_sources is not None:
+            self.behavior_sources = to(self.behavior_sources, device)
         if self.ftpo is not None:
             self.ftpo = self.ftpo.to(device)
         if self.distillation is not None:
@@ -137,6 +140,8 @@ class Experience:
             self.rollout_routed_experts = self.rollout_routed_experts.pin_memory()
         if self.response_span_tags is not None:
             self.response_span_tags = self.response_span_tags.pin_memory()
+        if self.behavior_sources is not None:
+            self.behavior_sources = self.behavior_sources.pin_memory()
         if self.ftpo is not None:
             self.ftpo = self.ftpo.pin_memory()
         if self.distillation is not None:

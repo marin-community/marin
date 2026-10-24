@@ -384,6 +384,9 @@ class TrainingInput(TypedDict, total=False):
     # {OTHER=0, THINK=1, ACTION=2, EDIT=3}, aligned 1:1 with the response tokens
     # (same exact-token-id layout TIS uses). Present only when the channel is on.
     response_span_tags: Optional[Integer[torch.Tensor, "batch_size seq_len"]]
+    # 1 where the behavior policy that generated the token was the teacher, else 0.
+    # Present only when the mixed_policy_grpo objective pulled the rollout channel.
+    behavior_sources: Optional[Integer[torch.Tensor, "batch_size seq_len"]]
     # DPO pairing evidence: +1 chosen / -1 rejected per row, present only when the
     # static preference-pair runner emitted the batch as adjacent pairs.
     pair_roles: Optional[Float[torch.Tensor, "batch_size"]]  # noqa: F821
@@ -549,6 +552,7 @@ class TrainingBatchIterator(Iterator[Experience]):
             else None,
             rollout_routed_experts=batch.routed_experts_tensor(),
             response_span_tags=batch.get("response_span_tags"),
+            behavior_sources=batch.get("behavior_sources"),
             pair_roles=batch.get("pair_roles"),
             info={},
             metadata=batch.metadata,

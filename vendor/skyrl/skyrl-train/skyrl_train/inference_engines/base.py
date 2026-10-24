@@ -20,6 +20,7 @@ class PromptSamplingOverride(TypedDict, total=False):
 class ChatContinuation(TypedDict):
     served_prefix_token_ids: List[int]
     assistant_message_index: int
+    continue_final_message: NotRequired[bool]
 
 
 class InferenceEngineInput(TypedDict):

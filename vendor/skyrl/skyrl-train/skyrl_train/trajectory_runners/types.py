@@ -137,8 +137,11 @@ class TrajectoryBatch(TypedDict):
     distillation: Optional[PreparedTeacherInput]
     token_level_shaping: Optional[List[List[float]]]
     response_span_tags: Optional[List[List[int]]]
+    # 1 where the behavior policy that generated the token was the teacher, else 0.
+    # Present only when rollouts carry the ``behavior_sources`` per-turn channel.
+    behavior_sources: Optional[List[np.ndarray]]
     trajectory_ids: Optional[List[TrajectoryID]]
-    teacher_route_keys: Optional[List[str]]
+    teacher_route_keys: Optional[List[str | None]]
     is_last_step: Optional[List[bool]]
     exclude_from_baseline: Optional[List[bool]]
     # DPO pairing evidence: +1 chosen / -1 rejected per row, emitted as adjacent pairs.
