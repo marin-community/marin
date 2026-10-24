@@ -7,6 +7,7 @@ import torch.multiprocessing as mp
 
 from skyrl_train.distributed.megatron import stable_softmax
 from skyrl_train.distillation import student_topk_logprobs
+from skyrl_train.tensor_math import LOG_PROB_DELTA_CLIP
 from skyrl_train.utils.policy_math import differentiable_approx_kl
 from tests.softmax_reference import assert_softmax_numerics, decimal_reference, numerical_rows
 
@@ -78,14 +79,14 @@ def test_selected_logprobs_confident_target_and_invalid_ids() -> None:
 
 
 def test_k3_small_ratios_clipping_mask_and_gradient_conventions() -> None:
-    data = torch.tensor([[-1.0, -1.0, -1.0, -1.0, -30.0, 30.0]])
-    base = data + torch.tensor([[1e-5, -1e-5, 0.2, 0.0, 60.0, -60.0]])
-    mask = torch.tensor([[1.0, 1.0, 0.0, 1.0, 1.0, 1.0]])
+    data = torch.tensor([[-1.0, -1.0, -1.0, -1.0, -30.0, 30.0, -1.0]])
+    base = data + torch.tensor([[1e-5, -1e-5, 0.2, 0.0, 60.0, -60.0, 0.2]])
+    mask = torch.tensor([[1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0]])
     for estimator in ("k3", "k3_unbiased_gradient"):
         logprobs = data.clone().requires_grad_()
         actual = differentiable_approx_kl(logprobs, base, mask, kl_estimator_type=estimator)
         ref = data.double().requires_grad_()
-        ratio = (base.double() - ref).clamp(-20, 20)
+        ratio = (base.double() - ref).clamp(-LOG_PROB_DELTA_CLIP, LOG_PROB_DELTA_CLIP)
         k3 = (ratio.expm1() - ratio).clamp(-10, 10)
         k2 = 0.5 * ratio.square()
         expected = (k3.detach() + k2 - k2.detach() if estimator == "k3_unbiased_gradient" else k3) * mask
