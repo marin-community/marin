@@ -157,6 +157,16 @@ def _master_address(output_uri: str, job_id: str, node_rank: int) -> str:
     raise TimeoutError(f"node 0 never published {marker}")
 
 
+def _interface_for(address: str) -> str:
+    """The network interface carrying ``address`` (``ip -o -4 addr`` lines: index, name, inet, cidr)."""
+    listing = subprocess.run(["ip", "-o", "-4", "addr"], check=True, capture_output=True, text=True).stdout
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[3].split("/")[0] == address:
+            return fields[1]
+    raise ValueError(f"no interface carries {address}:\n{listing}")
+
+
 def _check_template(output_dir: Path, expected: str) -> None:
     """The fork's template_integrity contract, re-checked outside the save path."""
     with open(output_dir / "tokenizer_config.json") as handle:
@@ -211,6 +221,8 @@ def main() -> None:
         "axolotl.cli.train",
         str(config_path),
     ]
+    # Gloo (multipack's CPU collectives) otherwise binds the hostname's loopback address.
+    environment["GLOO_SOCKET_IFNAME"] = _interface_for(os.environ["IRIS_ADVERTISE_HOST"])
     if node_rank != 0:
         _run(command, env=environment, cwd=WORK_ROOT)
         return
