@@ -347,7 +347,10 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
     raw = yaml.safe_load((Path(__file__).resolve().parents[1] / "configs/qwen_megatron_smoke.yaml").read_text())
     groups = {"eval/train/avg_score": ["eval/cat_count_n1/avg_score", "eval/cat_count_n2/avg_score"]}
     profiles = {"sampled": {"sampling_params": {"stop": ["./END"]}}}
-    raw["trainer"]["callbacks"] = [{"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles}]
+    raw["trainer"]["callbacks"] = [
+        {"type": "evaluation", "metric_groups": groups, "additional_evaluations": profiles},
+        {"type": "best_checkpoint", "selection_metric": "eval/identity_behavior_holdout/pass_at_1"},
+    ]
     path = tmp_path / "evaluation.yaml"
     path.write_text(yaml.safe_dump(raw))
 
@@ -357,6 +360,7 @@ def test_evaluation_metric_names_survive_iris_path_resolution(tmp_path: Path) ->
 
     assert config.trainer.callbacks[0].metric_groups == groups
     assert config.trainer.callbacks[0].additional_evaluations == profiles
+    assert config.trainer.callbacks[1].selection_metric == "eval/identity_behavior_holdout/pass_at_1"
 
 
 def test_source_recipe_rejects_resolved_harbor_key_before_discarding_agent_settings(tmp_path: Path) -> None:
