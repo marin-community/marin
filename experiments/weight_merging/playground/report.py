@@ -8,7 +8,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
-from experiments.weight_merging.playground.evaluation import sign_test_pvalue, unclosed_thinking
+from experiments.weight_merging.playground.evaluation import item_bootstrap, sign_test_pvalue, unclosed_thinking
 
 
 def main():
@@ -41,10 +41,18 @@ def main():
         observations.append((key, pair, row["correct"]))
         if row["candidate"] == "instruct":
             reference[pair] = row["correct"]
+    item_differences = defaultdict(lambda: defaultdict(list))
     for key, pair, correct in observations:
         if pair in reference:
+            item_differences[key[:2]][pair[0]].append(int(correct) - int(reference[pair]))
             counts[key]["wins"] += correct and not reference[pair]
             counts[key]["losses"] += reference[pair] and not correct
+    pooled = {}
+    for (candidate, dataset, _, _), values in counts.items():
+        group = pooled.setdefault((candidate, dataset, "pooled", None), {field: 0 for field in values})
+        for field, value in values.items():
+            group[field] += value
+    counts.update(pooled)
     summaries = []
     for (candidate, dataset, mode, seed), counts_row in counts.items():
         summaries.append(
@@ -54,6 +62,7 @@ def main():
                 "mode": mode,
                 "seed": seed,
                 **counts_row,
+                **(item_bootstrap(list(item_differences[candidate, dataset].values())) if mode == "pooled" else {}),
                 "mean_output_tokens": counts_row["output_tokens"] / counts_row["n"],
                 "sign_test_p_two_sided": sign_test_pvalue(counts_row["wins"], counts_row["losses"]),
             }
@@ -105,6 +114,37 @@ def main():
         for dataset in ("gsm8k", "mbpp"):
             values.append(" / ".join(rate(counts[candidate, dataset, "sample", seed], "correct") for seed in (17, 29)))
         lines.append("| " + " | ".join(values) + " |")
+    lines.extend(
+        [
+            "",
+            "| Candidate | Pooled GSM W/L (p) | Pooled MBPP W/L (p) | Item-mean GSM gain [95% CI] | "
+            "Item-mean MBPP gain [95% CI] |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for candidate in order:
+        if (candidate, "gsm8k", "pooled", None) not in counts:
+            continue
+        values = [candidate]
+        for dataset in ("gsm8k", "mbpp"):
+            row = counts[candidate, dataset, "pooled", None]
+            values.append(f"{row['wins']}/{row['losses']} ({sign_test_pvalue(row['wins'], row['losses']):.3g})")
+        for dataset in ("gsm8k", "mbpp"):
+            summary = next(
+                r for r in summaries if r["candidate"] == candidate and r["dataset"] == dataset and r["mode"] == "pooled"
+            )
+            low, high = summary["item_bootstrap_ci95"]
+            values.append(f"{100 * summary['mean_item_gain']:.2f} [{100 * low:.2f}, {100 * high:.2f}] pp")
+        lines.append("| " + " | ".join(values) + " |")
+    lines.extend(
+        [
+            "",
+            "Item confidence intervals use 5,000 seeded bootstrap resamples of per-item mean paired differences. "
+            "Each item averages its three decodes before resampling.",
+            "Pooled rows combine greedy and sampled seeds 17/29. Repeated decodes of the same item are correlated; "
+            "pooled sign-test p-values are descriptive and do not establish independent-item significance.",
+        ]
+    )
     text = "\n".join(lines) + "\n"
     args.output.write_text(text)
     args.output.with_suffix(".json").write_text(json.dumps(summaries, indent=2) + "\n")

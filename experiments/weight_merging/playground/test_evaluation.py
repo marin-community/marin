@@ -5,6 +5,7 @@ import pytest
 
 from experiments.weight_merging.playground.evaluation import (
     grade_completion,
+    item_bootstrap,
     numeric_answer,
     paired_summary,
     python_code,
@@ -83,3 +84,10 @@ def test_deferred_code_grading_does_not_execute_generated_code(monkeypatch):
         "pending_execution": True,
     }
     assert grade_completion({"dataset": "gsm8k", "answer": "42"}, "#### 42", defer_code=True)["correct"]
+
+
+def test_bootstrap_resamples_whole_items_instead_of_individual_decodes():
+    summary = item_bootstrap([[0, 0, 0], [1, 1, 1]], resamples=200)
+    assert summary["paired_items"] == 2
+    assert summary["mean_item_gain"] == 0.5
+    assert summary["item_bootstrap_ci95"] == [0, 1]

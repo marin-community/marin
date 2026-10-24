@@ -50,6 +50,11 @@ def test_report_preserves_seed_pairs_and_behavior_denominators(tmp_path, monkeyp
     assert merged["gsm8k", "greedy", 0]["mean_output_tokens"] == 3
     assert merged["gsm8k", "sample", 17]["mean_output_tokens"] == 20
     assert merged["gsm8k", "sample", 29]["mean_output_tokens"] == 32
+    assert merged["gsm8k", "pooled", None]["n"] == 3
+    assert merged["gsm8k", "pooled", None]["losses"] == 2
+    assert merged["mbpp", "pooled", None]["wins"] == 2
+    assert merged["gsm8k", "pooled", None]["mean_output_tokens"] == pytest.approx(55 / 3)
+    assert merged["gsm8k", "pooled", None]["sign_test_p_two_sided"] == 0.5
     assert "3.0 / 3.0" in output.read_text()
     assert "max_tokens=8192" in output.read_text()
     assert all(r["candidate"] != "ignore" for r in summaries)
