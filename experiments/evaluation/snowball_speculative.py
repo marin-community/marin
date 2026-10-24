@@ -47,6 +47,7 @@ TOKENIZER_REVISION = "a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2"
 MODEL_NAME = "snowball-67b-a2b-step1903"
 DEPTH = 3
 CONTEXT = 65536
+SMOKE_OUTPUT_TOKENS = 64
 CODING_PROMPTS = (
     "Write a Python function that merges two sorted lists. Include a short example.",
     "Write a Python function that checks balanced parentheses. Explain its time complexity.",
@@ -112,7 +113,7 @@ def _request(endpoint: OpenAIEndpoint, prompt: str, *, streaming: bool) -> dict:
         "temperature": 0.7,
         "top_p": 0.95,
         "seed": 17,
-        "max_tokens": 64,
+        "max_tokens": SMOKE_OUTPUT_TOKENS,
         "ignore_eos": True,
         "stream": streaming,
     }
@@ -184,7 +185,7 @@ def smoke(service: IrisServiceConfig, output: Path) -> None:
             deadline = Deadline.from_seconds(30)
             while True:
                 metrics = window.finish()
-                if metrics.generation_tokens >= 3 * 64:
+                if metrics.generation_tokens >= len(CODING_PROMPTS) * SMOKE_OUTPUT_TOKENS:
                     break
                 deadline.raise_if_expired("vLLM generation counters did not catch up")
                 time.sleep(1)
