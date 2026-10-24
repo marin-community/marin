@@ -8,7 +8,8 @@ shared expert (on every token): the routed-token count, the co-firing counts ``B
 ``B = pre > 0`` (the diagonal is each unit's firing count), each unit's activation sum and square sum, the histogram
 of the number of active units per token, and the first and second moments of the expert's input (the normed routed
 latent; the shared expert's ``mlp_in``). The routed assignments are scattered into a per-expert padded
-``[E, C, I]`` tensor (``C`` = ``CAPACITY`` rows per batch; overflow is counted and dropped from the moments only).
+``[E, C, I]`` tensor (``C`` = ``CAPACITY`` rows per batch); overflow rows are dropped from every statistic (``cnt``
+counts the kept rows, ``routed`` all routed tokens, ``dropped`` the difference).
 
 A random ``SAMPLE`` rows per expert (bit-packed activity plus each row's flat token index) are kept for the local
 analysis, with the tokens and segment ids of the whole pass.
@@ -42,7 +43,7 @@ BATCH = 4
 L, E, I = forward.NUM_LAYERS, forward.NUM_EXPERTS, forward.EXPERT_WIDTH
 R, D = forward.LATENT, forward.HIDDEN
 K = forward.TOP_K
-CAPACITY = 2048  # padded rows per expert per batch (mean routed load per batch is BATCH * 4096 * K / E = 427)
+CAPACITY = 6144  # padded rows per expert per batch (mean routed load per batch is BATCH * 4096 * K / E = 427)
 SAMPLE = 2048  # bit-sample rows kept per expert
 SAMPLE_PER_BATCH = 16  # random rows per expert taken from each batch until the sample is full
 STATS_SEED = 21
@@ -87,6 +88,7 @@ def sample_rows(expert_sorted: jax.Array, valid: jax.Array, key: jax.Array, per:
 def empty_state() -> dict:
     return dict(
         cnt=jnp.zeros((L, E)),
+        routed=jnp.zeros((L, E)),
         cofire=jnp.zeros((L, E, I, I)),
         asum=jnp.zeros((L, E, I)),
         a2sum=jnp.zeros((L, E, I)),
@@ -121,14 +123,16 @@ def make_step():
             pb = scatter_padded(bits, rows, CAPACITY)
             cof = jnp.einsum("eci,ecj->eij", pb, pb, preferred_element_type=jnp.float32)
             px = scatter_padded(lay["routed_input"][toks].astype(jnp.float32), rows, CAPACITY)
-            vf = valid.astype(jnp.float32)[:, None]
+            vf = (rows < E * CAPACITY).astype(jnp.float32)[:, None]
 
             def by_expert(x, experts=experts):
                 return jax.ops.segment_sum(x, experts, num_segments=E, indices_are_sorted=True)
 
             nact = jnp.sum(pre > 0, axis=-1)
-            hist = jnp.zeros((E, I + 1)).at[experts, nact].add(valid.astype(jnp.float32))
-            new["cnt"] = new["cnt"].at[li].add(by_expert(valid.astype(jnp.float32)))
+            hist = jnp.zeros((E, I + 1)).at[experts, nact].add(vf[:, 0])
+            kept = (rows < E * CAPACITY).astype(jnp.float32)
+            new["cnt"] = new["cnt"].at[li].add(by_expert(kept))
+            new["routed"] = new["routed"].at[li].add(by_expert(valid.astype(jnp.float32)))
             new["cofire"] = new["cofire"].at[li].add(cof)
             new["asum"] = new["asum"].at[li].add(by_expert(act * vf))
             new["a2sum"] = new["a2sum"].at[li].add(by_expert(act * act * vf))
