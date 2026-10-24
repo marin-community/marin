@@ -1,0 +1,172 @@
+{
+  "status": "v1 failed during checkpoint loading; corrected loader awaiting retry",
+  "objective": "Find tied drafter designs with greater teacher-forced token agreement at lower measured latency.",
+  "source_revision": "8983bec6fdaeb1cd6d0acff041194d2bf53ab679",
+  "source_sha256": "5a7de930ce3937d553d4f56659873c61e09ce713f57a34e9c601d1495191663d",
+  "model_source_sha256": "5f39c7bad449de5874a46190d43f87d4063121411d3a3547a20112903477455b",
+  "checkpoint": {
+    "uri": "s3://marin-rno2a/experiments/benfeuer/noise-belay/noise-c11-full-control-20261023-v4/evaluation-model.eqx",
+    "bytes": 4105973468,
+    "updates": 2116,
+    "weights": "ema",
+    "remote_stat_verified": true
+  },
+  "hardware": {
+    "cluster": "cw-rno2a",
+    "priority": "interactive",
+    "gpus": 8,
+    "kind": "H100"
+  },
+  "design": {
+    "variants": [
+      {
+        "name": "identity",
+        "parameters": 1026488855,
+        "linear_fraction": 1.0
+      },
+      {
+        "name": "fp8_dispatch",
+        "parameters": 1026488855,
+        "linear_fraction": 1.0
+      },
+      {
+        "name": "k6_gain1",
+        "parameters": 1026488855,
+        "linear_fraction": 0.9297769025108149
+      },
+      {
+        "name": "k6_gain0.75",
+        "parameters": 1026488855,
+        "linear_fraction": 0.9297769025108149
+      },
+      {
+        "name": "k6_gain0.5",
+        "parameters": 1026488855,
+        "linear_fraction": 0.9297769025108149
+      },
+      {
+        "name": "k4_gain1",
+        "parameters": 1026488855,
+        "linear_fraction": 0.8595538050216299
+      },
+      {
+        "name": "k4_gain0.75",
+        "parameters": 1026488855,
+        "linear_fraction": 0.8595538050216299
+      },
+      {
+        "name": "k4_gain0.5",
+        "parameters": 1026488855,
+        "linear_fraction": 0.8595538050216299
+      },
+      {
+        "name": "k2_gain1",
+        "parameters": 1026488855,
+        "linear_fraction": 0.7893307075324448
+      },
+      {
+        "name": "k2_gain0.75",
+        "parameters": 1026488855,
+        "linear_fraction": 0.7893307075324448
+      },
+      {
+        "name": "k2_gain0.5",
+        "parameters": 1026488855,
+        "linear_fraction": 0.7893307075324448
+      },
+      {
+        "name": "ffn_half_prefix",
+        "parameters": 674167319,
+        "linear_fraction": 0.8595538050216299
+      },
+      {
+        "name": "ffn_half_norm",
+        "parameters": 674167319,
+        "linear_fraction": 0.8595538050216299
+      },
+      {
+        "name": "ffn_quarter_prefix",
+        "parameters": 498006551,
+        "linear_fraction": 0.7893307075324448
+      },
+      {
+        "name": "ffn_quarter_norm",
+        "parameters": 498006551,
+        "linear_fraction": 0.7893307075324448
+      }
+    ],
+    "screen_batches": [
+      51000,
+      51001
+    ],
+    "confirmation_batches": [
+      52000,
+      52001,
+      52002,
+      52003
+    ],
+    "batch_shape": [
+      128,
+      4096
+    ],
+    "positions_per_row": [
+      31,
+      255,
+      511,
+      1023,
+      1535,
+      2047,
+      3071,
+      4094
+    ],
+    "sample_positions_per_screen": 2048,
+    "sample_mask": "Exclude positions with loss_weight <= 0",
+    "timing": "20 warmed pairs, alternating model order; same eight-GPU mesh; loss forward, excluding compilation, load and restriction.",
+    "selection": "Rank calibration candidates by agreement and measured latency; confirm at most three non-dominated variants plus identity. Prefer high agreement, disclose loss changes; no tuning on confirmation batches."
+  },
+  "interpretation": {
+    "scope": "Current teacher-forced token prediction, not future update prediction or end-to-end pretraining acceleration.",
+    "floPs": "Leading linear matmul estimate; excludes attention interactions, KDA recurrence and transport.",
+    "sampling": "Batches are separate stream indices; document-level disjointness has not been established.",
+    "checkpoint_difference": "Earlier half/quarter-compute sanity used step256 current weights. This sweep uses step2116 EMA and requires its own full-model reference.",
+    "gain": "Global multiplier on existing routing_renorm_sum; not the per-token reference-set normalization in the cited paper.",
+    "importance": "ReLU-squared weight-only score ||up||^4 ||down||^2, separately per layer/expert; structured heuristic, not activation-calibrated Wanda.",
+    "quantization": "Existing FP8 dispatch sends expert-input activations in block-scaled e4m3; computation, weights and combine remain as in baseline."
+  },
+  "budget": {
+    "already_allocated_gpu_hours": 9.531111111111112,
+    "original_cap_gpu_hours": 10,
+    "additional_budget": "User explicitly removed budget gating and instructed continuation.",
+    "new_gpu_jobs_submitted": true,
+    "original_cap_scope": "10 GPU-hours applied to the initial feasibility phase in the assistant-written experiment goal, not a user-stated lifetime ceiling for follow-up experiments.",
+    "authorization_correction": "User questioned the GPU budget. Inspection found plan.html calls 10 GPU-hours a proposed first-stage cap and experiment-goal.txt limits its scope to initial feasibility. Do not carry it forward as a global approval requirement."
+  },
+  "references": [
+    "https://arxiv.org/abs/2609.04575",
+    "https://arxiv.org/abs/2509.02753",
+    "https://github.com/marin-community/marin/issues/8032"
+  ],
+  "local_validation": "analytic selected-channel output, checkpoint roundtrip, 15 full-scale shape/sharding traces",
+  "helper_sha256": {
+    "experiments/grug/tied_replica_sizes.py": "6a4df0d9c983a61e1ebc387f6ad2fdc67c87bffd72a64c63b82e7d72ee3f6a8b",
+    "experiments/grug/tied_replica_sanity.py": "98099b29a6a363a3505bde69ee5d4a0396fe9051d466db242de036a4f898bd6a",
+    "experiments/grug/tied_drafter/coordinates.py": "c1fad16cc8e0acd3fffcf5c6b021b900331a6b2c64d4cb65bd63184fa500765f",
+    "experiments/grug/tied_drafter/runtime.py": "b357ce1c2b2e20cc3e5b97bbd82177e11db5eaf79b0ecf278383baaa5034bb44",
+    "experiments/grug/tied_drafter/audit.py": "e5c44f0bf9cf936ab66f879690a7ea440d0762ae3581f310324933e7bfeacbdc"
+  },
+  "analysis_source_sha256": "0c28d9075d3302566e2c5d3e69bd5918523171d5ecfcbc57e4f17c51dc18766e",
+  "analysis_validation": {
+    "status": "passed",
+    "scope": "Reducer regression using preserved size-sanity measurements adapted in memory; not new latency-sweep results",
+    "top1_matches": [
+      192,
+      103,
+      60
+    ],
+    "sampled_positions": [
+      192,
+      192,
+      192
+    ]
+  }
+}
