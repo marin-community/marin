@@ -139,6 +139,21 @@ flatten is rejected at the Snowball RMSNorm boundary when its later leading
 axis is genuinely partitioned. A length-one context axis is accepted because
 it does not partition the rows.
 
+Snowball Q/K projection has a separate runtime-only
+`qk_rms_norm_implementation` selector. Its default is the existing native
+non-parametric RMSNorm; `reference` and `pallas_tpu` reuse
+`batch_invariant_rms_norm` with unit weights and the fixed Q/K epsilon `1e-6`.
+Q/K rows are processed in static chunks of at most 512, so larger
+teacher-forced batches and cached decode callers retain the same public path.
+The reference implementation composes the accepted primitive inside an
+explicit row-local `shard_map` for multi-device layouts; size-one head and
+context annotations are removed before flattening. Genuine partitioning of a
+later leading axis, head axis, or hidden axis is rejected before lowering.
+The selector is not serialized into HF configuration or checkpoint state, and
+it does not claim full-model zero-KL parity. The TPU option accepts only the
+primitive's qualified row-sharded, hidden-replicated layout and reports
+unsupported layouts through the existing validation.
+
 This is a bounded RMSNorm forward/backward step toward inference parity, not a
 whole-model zero-KL claim. TPU layout and numerical validation remain a
 separate runtime gate.

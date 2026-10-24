@@ -92,6 +92,7 @@ GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 SnowballProjectionImplementation = Literal["native", "fixed_schedule"]
 SnowballGatedNormImplementation = Literal["native", "fixed_schedule"]
 SnowballRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantRmsNormImplementation
+SnowballQKRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantRmsNormImplementation
 
 
 class SnowballRouteCaptureBatch(NamedTuple):
@@ -378,6 +379,41 @@ def rms_norm(x: jax.Array, eps: float = _QK_RMS_NORM_EPS) -> jax.Array:
     return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
 
 
+def _qk_rms_norm(
+    x: jax.Array,
+    implementation: SnowballQKRMSNormImplementation,
+) -> jax.Array:
+    if implementation == "native":
+        return rms_norm(x)
+
+    x = _normalize_qk_rms_layout(x)
+    sharding = jax.typeof(x).sharding if isinstance(x, jax.core.Tracer) else x.sharding
+    if implementation == "reference" and isinstance(sharding, NamedSharding) and not sharding.mesh.empty:
+        return jax.shard_map(
+            lambda local_x: _qk_rms_norm_local(local_x, implementation),
+            mesh=sharding.mesh,
+            in_specs=sharding.spec,
+            out_specs=sharding.spec,
+            check_vma=False,
+        )(x)
+    return _qk_rms_norm_local(x, implementation)
+
+
+def _qk_rms_norm_local(
+    x: jax.Array,
+    implementation: SnowballQKRMSNormImplementation,
+) -> jax.Array:
+    hidden = x.shape[-1]
+    flat_x = x.reshape((-1, hidden))
+    weight = jnp.ones((hidden,), dtype=jnp.float32)
+    chunks = tuple(
+        batch_invariant_rms_norm(flat_x[start : start + 512], weight, _QK_RMS_NORM_EPS, implementation)
+        for start in range(0, flat_x.shape[0], 512)
+    )
+    output = jnp.concatenate(chunks, axis=0).reshape(x.shape)
+    return _match_activation_layout(output, x)
+
+
 # --- Config ------------------------------------------------------------------------------------
 
 
@@ -418,6 +454,8 @@ class SnowballConfig(HFCompatConfig):
     attention_gated_norm_implementation: SnowballGatedNormImplementation = "native"
     # Runtime knob only; it is intentionally omitted from the HF architectural config.
     rms_norm_implementation: SnowballRMSNormImplementation = "native"
+    # Runtime knob only; selects the accepted shared arithmetic for non-parametric Q/K RMSNorm.
+    qk_rms_norm_implementation: SnowballQKRMSNormImplementation = "native"
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -432,6 +470,8 @@ class SnowballConfig(HFCompatConfig):
             )
         if self.rms_norm_implementation not in ("native", "reference", "pallas_tpu"):
             raise ValueError(f"unknown Snowball RMSNorm implementation: {self.rms_norm_implementation!r}")
+        if self.qk_rms_norm_implementation not in ("native", "reference", "pallas_tpu"):
+            raise ValueError(f"unknown Snowball Q/K RMSNorm implementation: {self.qk_rms_norm_implementation!r}")
         if self.num_heads % self.num_kv_heads != 0:
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
@@ -616,6 +656,22 @@ class RMSNorm(eqx.Module):
         return (normed * weight).astype(dtype)
 
 
+def _normalize_qk_rms_layout(x: jax.Array) -> jax.Array:
+    """Remove harmless size-one head annotations before flattening Q/K rows."""
+    sharding = jax.typeof(x).sharding if isinstance(x, jax.core.Tracer) else x.sharding
+    if not isinstance(sharding, NamedSharding):
+        return x
+    RMSNorm._validate_pallas_layout(x)
+    spec = tuple(sharding.spec)
+    if len(spec) < x.ndim:
+        spec += (None,) * (x.ndim - len(spec))
+    for entry in spec[1:]:
+        axes = entry if isinstance(entry, tuple) else (() if entry is None else (entry,))
+        if any(int(sharding.mesh.shape[axis]) > 1 for axis in axes):
+            raise ValueError("Snowball Q/K RMSNorm supports only row-sharded, hidden-replicated layouts")
+    return reshard(x, P(spec[0], *([None] * (x.ndim - 1))))
+
+
 class GatedNorm(eqx.Module):
     """Learnable per-dimension gating (rank-128 low-rank gate on the RMS-normed input)."""
 
@@ -720,8 +776,8 @@ class SnowballAttention(eqx.Module):
         k = rearrange(project(self.w_k), "... (m d) -> ... m d", d=head_dim)
         v = rearrange(project(self.w_v), "... (m d) -> ... m d", d=head_dim)
 
-        q = rms_norm(q)
-        k = rms_norm(k)
+        q = _qk_rms_norm(q, self.cfg.qk_rms_norm_implementation)
+        k = _qk_rms_norm(k, self.cfg.qk_rms_norm_implementation)
         # Half-RoPE: rotary on the first half of head_dim only (second half is rope-free).
         if not disable_rope:
             half = head_dim // 2

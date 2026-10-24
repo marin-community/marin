@@ -281,6 +281,7 @@ def test_snowball_shared_rms_norm_reference_jit_and_vjp_match_fixed_schedule_ref
 def test_snowball_rms_norm_native_remains_default():
     cfg = SnowballConfig()
     assert cfg.rms_norm_implementation == "native"
+    assert cfg.qk_rms_norm_implementation == "native"
     x = jnp.arange(2 * 256, dtype=jnp.float32).reshape(2, 256)
     weight = jnp.linspace(0.5, 1.5, 256, dtype=jnp.float32)
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
@@ -289,7 +290,13 @@ def test_snowball_rms_norm_native_remains_default():
         np.testing.assert_array_equal(np.asarray(norm(x)), np.asarray(expected))
 
 
-def test_snowball_reference_rms_norm_uses_real_training_capture_and_cached_decode_paths():
+@pytest.mark.parametrize(
+    ("rms_norm_implementation", "qk_rms_norm_implementation", "num_heads", "num_kv_heads", "head_dim"),
+    [("reference", "native", 4, 2, 64), ("native", "reference", 2, 1, 128)],
+)
+def test_snowball_rms_norm_implementations_use_real_training_capture_and_cached_decode_paths(
+    rms_norm_implementation, qk_rms_norm_implementation, num_heads, num_kv_heads, head_dim
+):
     cfg = _tiny_config(
         hidden_dim=256,
         intermediate_dim=64,
@@ -297,13 +304,14 @@ def test_snowball_reference_rms_norm_uses_real_training_capture_and_cached_decod
         num_experts=4,
         num_experts_per_token=2,
         num_layers=1,
-        num_heads=4,
-        num_kv_heads=2,
-        head_dim=64,
+        num_heads=num_heads,
+        num_kv_heads=num_kv_heads,
+        head_dim=head_dim,
         max_seq_len=8,
         sliding_window=4,
         moe_implementation="scatter",
-        rms_norm_implementation="reference",
+        rms_norm_implementation=rms_norm_implementation,
+        qk_rms_norm_implementation=qk_rms_norm_implementation,
     )
     ids = hax.named(jnp.asarray([[2, 7, 0, 9]], dtype=jnp.int32), ("batch", "position"))
 
@@ -355,6 +363,98 @@ def test_snowball_reference_rms_norm_uses_real_training_capture_and_cached_decod
     assert isinstance(continuation_capture, SnowballDecodeRouteCaptureBatch)
     assert prefill_logits.array.shape == (4, cfg.vocab_size)
     assert continuation_logits.array.shape == (1, cfg.vocab_size)
+
+
+def test_snowball_qk_rms_reference_matches_native_projection_across_row_chunks_and_vjp():
+    native_cfg = _tiny_config(
+        hidden_dim=256,
+        intermediate_dim=64,
+        shared_expert_intermediate_dim=64,
+        num_experts=4,
+        num_experts_per_token=2,
+        num_layers=1,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=128,
+        qk_rms_norm_implementation="native",
+    )
+    reference_cfg = dataclasses.replace(native_cfg, qk_rms_norm_implementation="reference")
+    x = jnp.linspace(-1.0, 1.0, 4 * 257 * 256, dtype=jnp.float32).reshape(4, 257, 256)
+
+    mesh = compact_grug_mesh(expert_axis_size=1)
+    input_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None))
+    with jax.set_mesh(mesh):
+        x = jax.device_put(x, input_sharding)
+        native = SnowballAttention.init(native_cfg, key=jax.random.key(91))
+        reference = SnowballAttention.init(reference_cfg, key=jax.random.key(91))
+        native_q, native_k, native_v = jax.jit(lambda value: native._project_qkv(value, disable_rope=True))(x)
+        reference_q, reference_k, reference_v = jax.jit(
+            lambda value: reference._project_qkv(value, disable_rope=True)
+        )(x)
+        reference_grad = jax.jit(jax.grad(lambda value: jnp.sum(reference._project_qkv(value, disable_rope=True)[0])))(
+            x
+        )
+
+        def independent_rms(value):
+            weight = jnp.ones((128,), dtype=jnp.float32)
+
+            def batch_reference(batch):
+                flat_batch = batch.reshape(-1, 128)
+                return jnp.concatenate(
+                    tuple(
+                        batch_invariant_rms_norm_reference(flat_batch[start : start + 512], weight, eps=1e-6)
+                        for start in range(0, flat_batch.shape[0], 512)
+                    ),
+                    axis=0,
+                ).reshape(batch.shape)
+
+            # The accepted custom VJP uses this fixed-schedule reference backward. Applying the
+            # existing oracle over each local row block keeps this independent of Snowball's
+            # layout/chunk helper while preserving the accepted fixed-schedule backward.
+            return jax.vmap(lambda batch: batch_reference(batch) * native_cfg.qk_mult)(value)
+
+        rms_oracle = jax.shard_map(
+            independent_rms,
+            mesh=mesh,
+            in_specs=P(("replica_dcn", "data", "expert"), None, "model", None),
+            out_specs=P(("replica_dcn", "data", "expert"), None, "model", None),
+            check_vma=False,
+        )
+
+        if jax.device_count() == 1:
+
+            def oracle_local(value, projection_weight):
+                projected = jnp.einsum("bsh,hd->bsd", value, projection_weight).reshape(value.shape[0], 257, 2, 128)
+                return independent_rms(projected)
+
+            oracle = jax.shard_map(
+                oracle_local,
+                mesh=mesh,
+                in_specs=(input_sharding.spec, P(None, None)),
+                out_specs=P(("replica_dcn", "data", "expert"), None, "model", None),
+                check_vma=False,
+            )
+            oracle_weight = jax.device_put(native.w_q, NamedSharding(mesh, P(None, None)))
+        else:
+
+            def oracle(value):
+                projected = jnp.einsum("bsh,hd->bsd", value, native.w_q).reshape(value.shape[0], 257, 2, 128)
+                return rms_oracle(projected)
+
+            oracle_weight = None
+
+        if oracle_weight is None:
+            expected_q = jax.jit(oracle)(x)
+            expected_grad = jax.jit(jax.grad(lambda value: jnp.sum(oracle(value))))(x)
+        else:
+            expected_q = jax.jit(oracle)(x, oracle_weight)
+            expected_grad = jax.jit(jax.grad(lambda value: jnp.sum(oracle(value, oracle_weight))))(x)
+
+    np.testing.assert_array_equal(np.asarray(reference_q), np.asarray(native_q))
+    np.testing.assert_array_equal(np.asarray(reference_k), np.asarray(native_k))
+    np.testing.assert_array_equal(np.asarray(reference_v), np.asarray(native_v))
+    np.testing.assert_allclose(np.asarray(reference_q), np.asarray(expected_q), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(reference_grad), np.asarray(expected_grad), rtol=1e-5, atol=1e-5)
 
 
 @pytest.mark.skipif(jax.default_backend() != "tpu" or jax.device_count() != 4, reason="requires four-device TPUv4")
