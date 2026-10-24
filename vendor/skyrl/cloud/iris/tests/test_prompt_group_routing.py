@@ -4,13 +4,15 @@
 import pytest
 from omegaconf import OmegaConf
 from skyrl_train.config.utils import get_default_config
+from skyrl_train.inference_engines.base import SESSION_ID_HEADER
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from skyrl_train.trajectory_runners.model_clients import DirectModelClient
 from skyrl_train.trajectory_runners.types import TaskRequestBatch, TrajectoryID
-from taskcompendium.models import ConversationInput, TextMessage
-from tests.cpu.task_specs import lowered_task, task_input, text_task
+from skyrl_gym.source_task import source_task
+from taskcompendium.models import Source
+from tests.cpu.task_specs import lowered_task, task_input
 
 SAMPLES_PER_PROMPT = 4
 ENGINES = 4
@@ -21,6 +23,9 @@ class Tokenizer:
 
     def apply_chat_template(self, messages, add_generation_prompt, **options):
         return [1, 2]
+
+    def decode(self, token_ids, **options):
+        return "done"
 
 
 class Engine:
@@ -38,9 +43,31 @@ class Engine:
             "stop_reasons": ["stop"],
         }
 
+    async def tokenize(self, request):
+        return {"tokens": [1, 2]}
+
+    async def chat_completion(self, request):
+        self.served.append((request["headers"][SESSION_ID_HEADER], self.index))
+        return {
+            "id": "completion",
+            "object": "chat.completion",
+            "model": request["json"]["model"],
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "done"},
+                    "token_ids": [11, 99],
+                    "finish_reason": "stop",
+                    "logprobs": {"content": [{"token": "done", "logprob": -0.1, "top_logprobs": []}] * 2},
+                }
+            ],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 2, "total_tokens": 4},
+        }
+
 
 @pytest.mark.asyncio
-async def test_a_prompt_groups_samples_are_served_by_one_engine():
+@pytest.mark.parametrize("harness", ["assistant_prefix", "prompt_only"], ids=["token-request", "chat-request"])
+async def test_a_prompt_groups_samples_are_served_by_one_engine(harness):
     runner_config = OmegaConf.create(
         {
             "backend": "vllm",
@@ -53,7 +80,7 @@ async def test_a_prompt_groups_samples_are_served_by_one_engine():
                 "top_p": 1.0,
                 "top_k": -1,
                 "min_p": 0,
-                "logprobs": True,
+                "logprobs": 0,
             },
         }
     )
@@ -68,16 +95,12 @@ async def test_a_prompt_groups_samples_are_served_by_one_engine():
         {},
         shutdown_timeout=30,
     )
-    task = text_task("group").model_copy(
-        update={
-            "context": ConversationInput(
-                events=(TextMessage(role="user", content="Finish"), TextMessage(role="assistant", content="Almost"))
-            )
-        }
-    )
-    row = task_input(lowered_task(task, "assistant_prefix", max_turns=1))
+    messages = [{"role": "user", "content": "Finish"}]
+    if harness == "assistant_prefix":
+        messages.append({"role": "assistant", "content": "Almost"})
+    task = source_task(messages, {}, {}, Source(dataset="fixture", revision="1", row="0", importer_revision="1"))
     request = TaskRequestBatch(
-        rows=(row,) * SAMPLES_PER_PROMPT,
+        rows=(task_input(lowered_task(task, harness, max_turns=1)),) * SAMPLES_PER_PROMPT,
         trajectory_ids=tuple(TrajectoryID("group", sample) for sample in range(SAMPLES_PER_PROMPT)),
     )
     try:
@@ -85,5 +108,5 @@ async def test_a_prompt_groups_samples_are_served_by_one_engine():
     finally:
         await worker.shutdown()
 
-    assert sorted(session for session, _ in served) == [f"group_{sample}" for sample in range(SAMPLES_PER_PROMPT)]
+    assert sorted(session for session, _ in served) == [item.to_string() for item in request.trajectory_ids]
     assert len({engine for _, engine in served}) == 1
