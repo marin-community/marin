@@ -18,7 +18,8 @@ import torch
 from axolotl.integrations.base import BasePlugin
 from transformers import TrainerCallback
 
-LOG = logging.getLogger(__name__)
+# Under the "axolotl" logger, which Axolotl configures at INFO; a bare module logger is dropped.
+LOG = logging.getLogger(f"axolotl.{__name__}")
 
 
 class _MasterDtypeCheck(TrainerCallback):
