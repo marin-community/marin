@@ -1,9 +1,10 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
-"""Build the identity repair smoke through the standard RL artifact entrypoint."""
+"""Build identity repair smoke and pilot runs through the RL artifact entrypoint."""
 
 import gzip
 import hashlib
+import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,12 +51,16 @@ def stage_inputs(config: InputFiles) -> None:
         (StoragePath(config.output_path) / name.removesuffix(".gz")).write_bytes(payload)
 
 
-def build():
+def build(scale: str = "smoke"):
     version = resolve_version("grpo-identity", None)
-    config = yaml.safe_load((HERE / "config.yaml").read_text())
+    config_name = "config.yaml" if scale == "smoke" else "pilot-config.yaml"
+    config = yaml.safe_load((HERE / config_name).read_text())
     recipe = config["skyrl"]
     if any("UNRESOLVED" in str(value) for value in recipe["identity_repair"].values()):
         raise ValueError("Resolve and verify identity manifests and judge settings before launch")
+    gamma = recipe["trainer"]["algorithm"]["mixed_policy"]["gamma"]
+    if not isinstance(gamma, (float, int)) or not math.isfinite(gamma) or gamma <= 0:
+        raise ValueError("Set a finite positive gamma from verified smoke ratios before building the pilot")
     model = ArtifactStep(
         name="models/benfeuer/grpo-identity-base",
         version="2026.10.23.1",
@@ -69,13 +74,13 @@ def build():
             zephyr_max_parallelism=8,
         ),
     )
-    inputs = HERE / "inputs"
-    hashes = {
-        name: hashlib.sha256((inputs / name).read_bytes()).hexdigest()
-        for name in ["train.parquet.gz", "validation.parquet.gz", "requested-facts.json", "facts.json"]
-    }
+    inputs = HERE / ("inputs" if scale == "smoke" else "pilot-inputs")
+    input_names = ["train.parquet.gz", "validation.parquet.gz", "requested-facts.json", "facts.json"]
+    if scale == "pilot":
+        input_names.append("task-criteria.json.gz")
+    hashes = {name: hashlib.sha256((inputs / name).read_bytes()).hexdigest() for name in input_names}
     data = ArtifactStep(
-        name="documents/benfeuer/grpo-identity-smoke",
+        name=f"documents/benfeuer/grpo-identity-{scale}",
         version="2026.10.23.1",
         artifact_type=Artifact,
         run=stage_inputs,
@@ -96,7 +101,7 @@ def build():
         n_samples_per_prompt=4,
     )
     spec = SkyRLSpec(
-        name="checkpoints/benfeuer/grpo-identity/repair-smoke",
+        name=f"checkpoints/benfeuer/grpo-identity/repair-{scale}",
         version=version,
         config_yaml=yaml.safe_dump(recipe, sort_keys=False),
         model=ArtifactHfModel(model, BASE, BASE_REVISION, relative_path=""),
@@ -126,9 +131,10 @@ def build():
 
 
 @click.command()
+@click.option("--scale", type=click.Choice(["smoke", "pilot"]), default="smoke", show_default=True)
 @rl_build_options
-def main():
-    return build()
+def main(scale: str):
+    return build(scale)
 
 
 if __name__ == "__main__":
