@@ -22,9 +22,10 @@ sbatch -N1 -p mi3508x -t 45 -o logs/%x-%j.out experiments/amd/hpcfund/run_gpu.sh
     experiments/june_tpu_67b_a2b/moe/synthetic_benchmark.py --size full --expert-axis 8
 ```
 
-The wrapper turns off XLA command buffers and allocator preallocation, keeps
-XLA autotune results out of the JAX compilation cache, and filters repeated
-ROCm log lines. Variables already set in the environment take precedence.
+The wrapper unloads the cluster's `rocm` module, turns off XLA command buffers
+and allocator preallocation, keeps XLA autotune results out of the JAX
+compilation cache, and filters repeated ROCm log lines. Variables already set in
+the environment take precedence.
 
 The wrapper leaves `RAGGED_DOT_IMPL` unset, so Haliax picks the `ragged_dot`
 implementation: on GPU it tries Triton and falls back to XLA. Set
@@ -49,9 +50,22 @@ uv pip install jax==0.11.0 jaxlib==0.11.0
 
 ## Known issues
 
-- XLA command buffers (HIP graphs) corrupt memory on this ROCm stack. Runs
-  produced NaN gradients and segfaults after a few steps. The wrapper passes
-  `--xla_gpu_enable_command_buffer=` to turn them off.
+- The cluster loads the `rocm/7.2.0` module by default. Its `LD_LIBRARY_PATH`
+  takes precedence over the `RUNPATH` of the `jax_rocm10_plugin` libraries, so
+  the plugin loads the HIP runtime, hipBLASLt, rocBLAS, RCCL and MIOpen from
+  `/opt/rocm-7.2.0` instead of the ROCm 10 wheels. The wrapper runs
+  `module unload rocm`. On the full June model on 8x MI350X (batch 64,
+  `ring_dedup`, `save_moe`), the ROCm 10 libraries took 1.695 s per step
+  against 1.600 s with the ROCm 7.2 libraries on the same node (median of steps
+  2-19).
+- XLA command buffers (HIP graphs) break training a few steps in, with NaN
+  gradients or `ROCM_ERROR_ILLEGAL_ADDRESS`. The faulting kernel is the
+  hipBLASLt grouped GEMM that XLA uses for `jax.lax.ragged_dot`
+  (`RAGGED_DOT_IMPL=xla`). It faults when XLA replays a recorded graph without
+  recording it again. With `RAGGED_DOT_IMPL=triton` the full June model runs
+  with command buffers on, but on 8x MI350X it took 2.46 s per step against
+  1.70 s with them off. The wrapper passes `--xla_gpu_enable_command_buffer=`
+  to turn them off.
 - JAX stores XLA's per-fusion autotune results inside the compilation cache
   directory. Reusing them across configurations produced executables 2-3x
   slower: `save_moe` at batch 64 took 4.95 s per step with reused results and
