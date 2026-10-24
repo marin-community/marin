@@ -16,8 +16,8 @@ Plan or run::
     python -m experiments.post_training.async_rl --version 2026.09.18 --preset default \\
         --set trainer.rollout_buffer.max_staleness_steps=2 --run
 
-The default preset runs on 40 GPUs: 128 prompts per update with four answers each, one and a half
-updates of prompt groups generating at once, staleness 4, and an 8192-token request window with a
+The default preset runs on 40 GPUs: 128 prompts per update with four answers each, the in-flight
+group cap that the MarinSkyRL launch derives, staleness 4, and an 8192-token request window with a
 4096-token response cap. To grow the batch, add prompts; more answers per prompt changes the group
 each advantage is computed over. The selected MarinSkyRL revision validates the rollout and
 telemetry settings before the job takes a GPU.
@@ -290,13 +290,13 @@ def check_loop_shape(config: dict) -> None:
     budget = config["context_budget"]
     trainer = config["trainer"]
     loop = trainer["rollout_buffer"]
-    workers = loop["max_in_flight"]
+    in_flight = loop["max_in_flight"]
     staleness = loop["max_staleness_steps"]
     # Every retained prompt must fit the request window beside the response budget, or rows skip
     # generation and their groups fail admission.
     if MAX_PROMPT_TOKENS > budget["request_window_tokens"] - budget["max_new_tokens_per_turn"]:
         raise click.BadParameter("pool prompts do not fit the request window beside the response cap")
-    if workers is not None and (isinstance(workers, bool) or not isinstance(workers, int) or workers < 1):
+    if in_flight is not None and (isinstance(in_flight, bool) or not isinstance(in_flight, int) or in_flight < 1):
         raise click.BadParameter("rollout_buffer.max_in_flight must be null or a positive integer")
     if isinstance(staleness, bool) or not isinstance(staleness, int) or staleness < 0:
         raise click.BadParameter("rollout_buffer.max_staleness_steps must be a nonnegative integer")
@@ -396,7 +396,7 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
         "rollout_buffer": {
             "max_staleness_steps": preset.max_staleness_steps,
             "batch_policy": preset.batch_policy,
-            # MarinSkyRL's launch caps the groups generating at once at one and a half updates.
+            # MarinSkyRL's launch derives the cap on prompt groups generating at once.
             "max_in_flight": None,
             "object_store_root": None,
         },
