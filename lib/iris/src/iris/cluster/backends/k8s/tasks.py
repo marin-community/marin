@@ -70,11 +70,13 @@ from iris.cluster.platforms.k8s.constants import (
     COREWEAVE_INTERRUPTABLE_TOLERATION,
     DEFAULT_TASK_CACHE_DIR,
     EGRESS_LABEL,
+    EGRESS_NETWORK_POLICY_PREFIX,
     NVIDIA_GPU_RESOURCE,
     NVIDIA_GPU_TOLERATION,
     RDMA_RESOURCE,
     SECRET_FILE_MODE,
     SECRET_GROUP,
+    SERVICE_GROUP_NETWORK,
     STORAGE_SECRETS_DIR,
 )
 from iris.cluster.platforms.k8s.coreweave_topology import (
@@ -133,7 +135,7 @@ from iris.cluster.runtime.profile import (
     sigcont_sweep_argv,
     wrap_with_kill_watchdog,
 )
-from iris.cluster.runtime.sandbox import TaskNetwork, task_isolation
+from iris.cluster.runtime.sandbox import SANDBOX_SERVICE_PREFIX, TaskNetwork, task_isolation, validate_sandbox_services
 from iris.cluster.runtime.types import ACCELERATOR_SHM_FALLBACK_BYTES, MountKind, MountSpec
 from iris.cluster.secrets import task_secret_values
 from iris.cluster.stats.emitter import PeriodicEmitter
@@ -856,6 +858,48 @@ def _topology_request_annotations(
     return {_KUEUE_PREFERRED_TOPOLOGY: node_label}
 
 
+def _build_service_group_network_policy(namespace: str) -> dict:
+    return {
+        "apiVersion": "networking.k8s.io/v1",
+        "kind": "NetworkPolicy",
+        "metadata": {"name": f"{EGRESS_NETWORK_POLICY_PREFIX}{SERVICE_GROUP_NETWORK}", "namespace": namespace},
+        "spec": {
+            "podSelector": {"matchLabels": {EGRESS_LABEL: SERVICE_GROUP_NETWORK}},
+            "policyTypes": ["Ingress", "Egress"],
+            "ingress": [],
+            "egress": [],
+        },
+    }
+
+
+def _sandbox_service_container(service: job_pb2.SandboxServiceSpec) -> dict:
+    resources = service.resources
+    requests = {"cpu": f"{resources.cpu_millicores}m", "memory": str(resources.memory_bytes)}
+    limits = {"memory": str(resources.memory_bytes)}
+    if resources.disk_bytes:
+        requests["ephemeral-storage"] = str(resources.disk_bytes)
+        limits["ephemeral-storage"] = str(resources.disk_bytes)
+    container: dict = {
+        "name": f"{SANDBOX_SERVICE_PREFIX}{service.name}",
+        "image": service.image,
+        "workingDir": service.workdir,
+        "env": [{"name": name, "value": value} for name, value in service.env_vars.items()],
+        "resources": {"requests": requests, "limits": limits},
+        "securityContext": {
+            "runAsUser": 0,
+            "capabilities": {"drop": ["ALL"]},
+            "allowPrivilegeEscalation": False,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        },
+        "terminationMessagePolicy": "FallbackToLogsOnError",
+    }
+    if service.HasField("entrypoint"):
+        container["command"] = list(service.entrypoint.argv)
+    if service.HasField("arguments"):
+        container["args"] = list(service.arguments.argv)
+    return container
+
+
 def _build_pod_manifest(
     run_req: job_pb2.RunTaskRequest,
     config: PodConfig,
@@ -873,6 +917,13 @@ def _build_pod_manifest(
     cache_dir = config.cache_dir
     managed_label = config.managed_label
     isolation = task_isolation(run_req.container_profile, run_req.egress_policy)
+    services = run_req.environment.sandbox_services
+    try:
+        validate_sandbox_services(
+            run_req.container_profile, run_req.egress_policy, run_req.environment, run_req.resources, task_image
+        )
+    except ValueError as error:
+        raise PodManifestError(str(error)) from error
     service_account = config.service_account if isolation.include_service_account else ""
     # Legacy gVisor needs the CNI-created interface and routes for cluster egress.
     host_network = (
@@ -928,7 +979,12 @@ def _build_pod_manifest(
     has_tpu = False
     memory_limit_bytes = 0
     if run_req.HasField("resources"):
-        res = run_req.resources
+        res = job_pb2.ResourceSpecProto()
+        res.CopyFrom(run_req.resources)
+        for service in services:
+            res.cpu_millicores -= service.resources.cpu_millicores
+            res.memory_bytes -= service.resources.memory_bytes
+            res.disk_bytes -= service.resources.disk_bytes
         limits: dict[str, str] = {}
         requests: dict[str, str] = {}
         if res.cpu_millicores:
@@ -1000,6 +1056,13 @@ def _build_pod_manifest(
 
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
+    if services:
+        container["securityContext"] = {
+            "runAsUser": 0,
+            "capabilities": {"drop": ["ALL"]},
+            "allowPrivilegeEscalation": False,
+            "seccompProfile": {"type": "RuntimeDefault"},
+        }
 
     if resources:
         container["resources"] = resources
@@ -1017,7 +1080,7 @@ def _build_pod_manifest(
     if managed_label:
         labels[managed_label] = "true"
     if isolation.network is not TaskNetwork.CLUSTER:
-        labels[EGRESS_LABEL] = isolation.network.value
+        labels[EGRESS_LABEL] = SERVICE_GROUP_NETWORK if services else isolation.network.value
     metadata: dict = {
         "name": pod_name,
         "namespace": namespace,
@@ -1100,7 +1163,7 @@ def _build_pod_manifest(
             }
         )
 
-    containers = [container]
+    containers = [container, *(_sandbox_service_container(service) for service in services)]
     if config.task_outputs is not None and sidecars:
         volumes.append({"name": OUTPUT_CONTROL_VOLUME_NAME, "emptyDir": {}})
         storage_file = None
@@ -1144,6 +1207,11 @@ def _build_pod_manifest(
     if not isolation.include_service_account:
         spec["automountServiceAccountToken"] = False
         spec["enableServiceLinks"] = False
+    if services:
+        spec["hostAliases"] = [{"ip": "127.0.0.1", "hostnames": ["task", *(service.name for service in services)]}]
+        spec["shareProcessNamespace"] = False
+        spec["dnsPolicy"] = "None"
+        spec["dnsConfig"] = {"nameservers": ["127.0.0.1"]}
 
     if managed_label:
         node_selector[managed_label] = "true"
@@ -1326,6 +1394,26 @@ def _task_update_from_pod(entry: RunningTaskEntry, pod: dict, workload: dict | N
         "pod_uid": metadata.get("uid") or None,
         "node_name": pod.get("spec", {}).get("nodeName") or None,
     }
+    if metadata.get("labels", {}).get(EGRESS_LABEL) == SERVICE_GROUP_NETWORK:
+        exited = next(
+            (
+                status
+                for status in pod.get("status", {}).get("containerStatuses", [])
+                if "terminated" in status.get("state", {})
+            ),
+            None,
+        )
+        if exited is not None:
+            terminated = exited["state"]["terminated"]
+            return TaskUpdate(
+                attempt_uid=AttemptUid(entry.attempt_uid),
+                task_id=task_id,
+                attempt_id=attempt_id,
+                new_state=job_pb2.TASK_STATE_FAILED,
+                exit_code=terminated.get("exitCode", 1),
+                error=f"Sandbox group member {exited['name']} exited: {terminated.get('reason', 'terminated')}",
+                **identity,
+            )
 
     if phase == "Pending":
         return TaskUpdate(
@@ -2724,7 +2812,8 @@ class K8sTaskProvider:
         pod_name = self._live_pod_name(target)
         effective_timeout: float | None = timeout_seconds if timeout_seconds >= 0 else None
         try:
-            result = self.kubectl.exec(pod_name, command, container="task", timeout=effective_timeout)
+            container = f"{SANDBOX_SERVICE_PREFIX}{request.container_name}" if request.container_name else "task"
+            result = self.kubectl.exec(pod_name, command, container=container, timeout=effective_timeout)
             return worker_pb2.Worker.ExecInContainerResponse(
                 exit_code=result.returncode,
                 stdout=result.stdout,
@@ -2770,6 +2859,10 @@ class K8sTaskProvider:
     def _apply_pod(self, run_req: job_pb2.RunTaskRequest) -> None:
         """Create or update the Pod for a task attempt."""
         manifest = _build_pod_manifest(run_req, self.pods)
+        if run_req.environment.sandbox_services:
+            # Install isolation before the pod can start. This durable policy is
+            # never removed while a group might still be running.
+            self.kubectl.apply_json(_build_service_group_network_policy(self.pods.namespace))
 
         task_id_name = JobName.from_wire(run_req.task_id)
         pod_name = _pod_name(task_id_name, run_req.attempt_id, run_req.attempt_uid)

@@ -27,7 +27,10 @@ IMAGE = "example.test/task@sha256:" + "a" * 64
 
 def environment(tmp_path: Path, **kwargs) -> IrisEnvironment:
     config = kwargs.pop(
-        "task_env_config", EnvironmentConfig(docker_image=IMAGE, allow_internet=False, workdir="/workspace")
+        "task_env_config",
+        EnvironmentConfig(
+            docker_image=IMAGE, allow_internet=False, workdir="/workspace"
+        ),
     )
     return IrisEnvironment(
         environment_dir=tmp_path / "environment",
@@ -40,35 +43,48 @@ def environment(tmp_path: Path, **kwargs) -> IrisEnvironment:
     )
 
 
-@pytest.mark.parametrize(
-    "filename", ["Dockerfile", "docker-compose.yaml", "docker-compose.yml", "compose.yaml", "compose.yml"]
-)
-def test_rejects_runtime_builds_and_services(tmp_path: Path, filename: str) -> None:
+def test_rejects_runtime_builds_without_prepared_images(tmp_path: Path) -> None:
     task_environment = tmp_path / "environment"
     task_environment.mkdir()
-    (task_environment / filename).write_text("services: {}")
+    (task_environment / "Dockerfile").write_text("FROM python:3.12-slim")
     with pytest.raises(ValueError):
-        environment(tmp_path)
+        environment(
+            tmp_path,
+            task_env_config=EnvironmentConfig(
+                allow_internet=False, workdir="/workspace"
+            ),
+        )
 
 
 def test_task_cannot_import_driver_credentials(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "driver-private")
-    config = EnvironmentConfig(docker_image=IMAGE, allow_internet=False, env={"STOLEN": "${AWS_SECRET_ACCESS_KEY}"})
-    with pytest.raises(ValueError, match="literal"):
+    config = EnvironmentConfig(
+        docker_image=IMAGE,
+        allow_internet=False,
+        env={"STOLEN": "${AWS_SECRET_ACCESS_KEY}"},
+    )
+    with pytest.raises(ValueError):
         environment(tmp_path, task_env_config=config)
     with pytest.raises(ValueError, match="driver environment"):
         environment(tmp_path, persistent_env={"STOLEN": "driver-private"})
 
 
 @pytest.mark.parametrize(
-    "override", [{"network": "allow"}, {"container_profile": "privileged"}, {"secret_env": {"KEY": "secret"}}]
+    "override",
+    [
+        {"network": "allow"},
+        {"container_profile": "privileged"},
+        {"secret_env": {"KEY": "secret"}},
+    ],
 )
 def test_cannot_override_isolation(tmp_path: Path, override: dict) -> None:
     with pytest.raises(ValueError, match="Unsupported"):
         environment(tmp_path, **override)
 
 
-def test_cancelled_start_reclaims_job_that_finishes_submitting(tmp_path: Path, monkeypatch) -> None:
+def test_cancelled_start_reclaims_job_that_finishes_submitting(
+    tmp_path: Path, monkeypatch
+) -> None:
     adapter = environment(tmp_path)
 
     async def run() -> None:
@@ -106,11 +122,28 @@ class ExecTransport:
         del timeout_ms
         command = list(request.command)
         if self.guest_root is not None:
-            for prefix in ("/logs", "/tests", "/solution", "/workspace", "/setup_files"):
-                command = [argument.replace(prefix, str(self.guest_root / prefix.lstrip("/"))) for argument in command]
-            command = [argument.replace("id -u && id -un", "printf '0\\nroot\\n'") for argument in command]
+            for prefix in (
+                "/logs",
+                "/tests",
+                "/solution",
+                "/workspace",
+                "/setup_files",
+            ):
+                command = [
+                    argument.replace(prefix, str(self.guest_root / prefix.lstrip("/")))
+                    for argument in command
+                ]
+            command = [
+                argument.replace("id -u && id -un", "printf '0\\nroot\\n'")
+                for argument in command
+            ]
         result = subprocess.run(command, capture_output=True, text=True, timeout=10)
-        return SimpleNamespace(exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr, error="")
+        return SimpleNamespace(
+            exit_code=result.returncode,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            error="",
+        )
 
 
 class ControllerJob:
@@ -127,7 +160,8 @@ class ControllerJob:
     def tasks(self):
         return [
             SimpleNamespace(
-                task_id=JobName.from_wire("/test/job/0"), status=lambda: SimpleNamespace(state=TaskState.RUNNING)
+                task_id=JobName.from_wire("/test/job/0"),
+                status=lambda: SimpleNamespace(state=TaskState.RUNNING),
             )
         ]
 
@@ -140,14 +174,26 @@ class ControllerJob:
     [("auto", 3, 3072), ("request", 3, 3072), ("ignore", 1, 2048)],
 )
 def test_offline_lifecycle_commands_and_host_artifacts(
-    tmp_path: Path, monkeypatch, resource_mode: str, expected_cpu: int, expected_memory_mb: int
+    tmp_path: Path,
+    monkeypatch,
+    resource_mode: str,
+    expected_cpu: int,
+    expected_memory_mb: int,
 ) -> None:
     job = ControllerJob()
-    client = SimpleNamespace(submit=job.submit, shutdown=lambda: setattr(job, "shutdown", True))
-    endpoint = SimpleNamespace(url="http://test", credentials=None, close=lambda: setattr(job, "endpoint_closed", True))
+    client = SimpleNamespace(
+        submit=job.submit, shutdown=lambda: setattr(job, "shutdown", True)
+    )
+    endpoint = SimpleNamespace(
+        url="http://test",
+        credentials=None,
+        close=lambda: setattr(job, "endpoint_closed", True),
+    )
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: endpoint)
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: ExecTransport())
+    monkeypatch.setattr(
+        iris_backend, "ControllerServiceClientSync", lambda **_: ExecTransport()
+    )
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "driver-private")
     workspace = tmp_path / "workspace"
     config = EnvironmentConfig(
@@ -159,17 +205,32 @@ def test_offline_lifecycle_commands_and_host_artifacts(
         memory_mb=3072,
     )
     adapter = environment(
-        tmp_path, task_env_config=config, cpu_enforcement_policy=resource_mode, memory_enforcement_policy=resource_mode
+        tmp_path,
+        task_env_config=config,
+        cpu_enforcement_policy=resource_mode,
+        memory_enforcement_policy=resource_mode,
     )
 
     async def run() -> None:
         await adapter.start(force_build=False)
         # The local fixture transport inherits the test process; the submitted Iris
         # environment below is the credential boundary exercised by this regression.
-        result = await adapter.exec('printf "%s" "$PUBLIC" > answer.txt; cat answer.txt')
+        result = await adapter.exec(
+            'printf "%s" "$PUBLIC" > answer.txt; cat answer.txt'
+        )
         assert result.return_code == 0
         assert result.stdout == "task-visible"
         assert (await adapter.exec("pwd")).stdout.strip() == str(workspace)
+        with pytest.raises(ValueError):
+            await adapter.exec(
+                "touch credential-leak.txt",
+                env={"AWS_SECRET_ACCESS_KEY": "driver-private"},
+            )
+        with pytest.raises(ValueError):
+            await adapter.exec(
+                "touch credential-leak.txt", env={"INNOCENT_ALIAS": "driver-private"}
+            )
+        assert not (workspace / "credential-leak.txt").exists()
         downloaded = tmp_path / "answer.txt"
         await adapter.download_file(str(workspace / "answer.txt"), downloaded)
         assert downloaded.read_text() == "task-visible"
@@ -178,13 +239,19 @@ def test_offline_lifecycle_commands_and_host_artifacts(
         (uploads / "input.txt").write_text("fresh input")
         await adapter.upload_dir(uploads, str(workspace / "inputs"))
         assert (workspace / "inputs" / "input.txt").read_text() == "fresh input"
-        await adapter.download_dir(str(workspace / "inputs"), f"memory://iris-{tmp_path.name}/inputs")
-        assert StoragePath(f"memory://iris-{tmp_path.name}/inputs/input.txt").read_text() == "fresh input"
+        remote = StoragePath(f"memory://iris-{tmp_path.name}/inputs")
+        (remote / "existing.txt").write_text("previous trial artifact")
+        await adapter.download_dir(str(workspace / "inputs"), str(remote))
+        assert (remote / "input.txt").read_text() == "fresh input"
+        assert (remote / "existing.txt").read_text() == "previous trial artifact"
+        assert not (remote / "download").exists()
         private = tmp_path / "driver-private.txt"
         private.write_text("private")
         (workspace / "inputs" / "escape").symlink_to(private)
         with pytest.raises(tarfile.FilterError):
-            await adapter.download_dir(str(workspace / "inputs"), tmp_path / "unsafe-download")
+            await adapter.download_dir(
+                str(workspace / "inputs"), tmp_path / "unsafe-download"
+            )
         assert private.read_text() == "private"
         await adapter.stop(delete=True)
 
@@ -199,14 +266,18 @@ def test_offline_lifecycle_commands_and_host_artifacts(
     assert job.cancelled and job.shutdown and job.endpoint_closed
 
 
-def test_oracle_harbor_trial_uses_real_mounts_and_verifier_lifecycle(tmp_path: Path, monkeypatch) -> None:
+def test_oracle_harbor_trial_uses_real_mounts_and_verifier_lifecycle(
+    tmp_path: Path, monkeypatch
+) -> None:
     controller_job = ControllerJob()
     client = SimpleNamespace(submit=controller_job.submit, shutdown=lambda: None)
     endpoint = SimpleNamespace(url="http://test", credentials=None, close=lambda: None)
     guest = tmp_path / "guest"
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: endpoint)
     monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
-    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: ExecTransport(guest))
+    monkeypatch.setattr(
+        iris_backend, "ControllerServiceClientSync", lambda **_: ExecTransport(guest)
+    )
     task = tmp_path / "task"
     for directory in ("environment", "solution", "tests"):
         (task / directory).mkdir(parents=True)
@@ -214,7 +285,9 @@ def test_oracle_harbor_trial_uses_real_mounts_and_verifier_lifecycle(tmp_path: P
     (task / "task.toml").write_text(
         f' version = "1.0"\n[environment]\ndocker_image = "{IMAGE}"\nallow_internet = false\nworkdir = "/workspace"\n'
     )
-    (task / "solution" / "solve.sh").write_text("#!/bin/sh\nprintf correct > answer.txt\n")
+    (task / "solution" / "solve.sh").write_text(
+        "#!/bin/sh\nprintf correct > answer.txt\n"
+    )
     (task / "tests" / "test.sh").write_text(
         f"#!/bin/sh\n[ \"$(cat '{guest}/workspace/answer.txt')\" = correct ] && "
         f"printf 1 > '{guest}/logs/verifier/reward.txt'\n"

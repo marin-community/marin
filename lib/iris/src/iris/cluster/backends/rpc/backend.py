@@ -322,6 +322,8 @@ class RpcTaskBackend:
         )
 
     def validate_job(self, request: controller_pb2.Controller.LaunchJobRequest) -> str | None:
+        if request.environment.sandbox_services:
+            return "Sandbox service groups require the Kubernetes backend"
         return None
 
     def job_feasibility(self, request: JobFeasibilityRequest) -> str | None:
@@ -366,6 +368,8 @@ class RpcTaskBackend:
         request: worker_pb2.Worker.ExecInContainerRequest,
         timeout_seconds: int = 60,
     ) -> worker_pb2.Worker.ExecInContainerResponse:
+        if request.container_name:
+            return worker_pb2.Worker.ExecInContainerResponse(error="Sandbox services require the Kubernetes backend")
         if not target.address:
             raise ProviderError(f"Worker {target.worker_id} has no address")
         stub = self.stub_factory.get_stub(target.address)

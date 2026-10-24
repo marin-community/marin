@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
 from connectrpc.code import Code
@@ -22,7 +22,12 @@ from connectrpc.errors import ConnectError
 from iris.cli.connect import ControllerEndpoint, connect_controller
 from iris.client import IrisClient, Job, Task
 from iris.cluster.client.job_info import get_job_info
-from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec
+from iris.cluster.runtime.sandbox import (
+    SANDBOX_SERVICE_GROUP_CAPABILITY,
+    validate_sandbox_environment,
+    validate_sandbox_services,
+)
+from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, SandboxServiceSpec
 from iris.resources.state import TaskState
 from iris.rpc import controller_pb2, job_pb2
 from iris.rpc.compression import IRIS_RPC_COMPRESSIONS
@@ -46,6 +51,7 @@ from shellbox.machine import (
     UnsupportedMachineSpec,
     check_execution_requirements,
 )
+from shellbox.service import ServiceGroup, ServiceGroupSpec
 
 # The worker runs `docker exec` or `kubectl exec` with the command as argv, and Linux caps one
 # argument at 128 KiB (MAX_ARG_STRLEN). An upload chunk travels base64-encoded inside one
@@ -88,6 +94,15 @@ class ExecOutput:
     stderr: str
 
 
+@dataclass
+class IrisExecutionState:
+    """Shared admission and shutdown state for every container in one Iris job."""
+
+    closed: bool = False
+    admission: threading.Condition = field(default_factory=threading.Condition)
+    in_flight: dict[str, list[str]] = field(default_factory=dict)
+
+
 class IrisMachine:
     """One Iris task container; file transfer uses bounded base64 exec calls."""
 
@@ -99,6 +114,9 @@ class IrisMachine:
         job: Job,
         task: Task,
         spec: MachineSpec,
+        *,
+        container_name: str = "",
+        execution: IrisExecutionState | None = None,
     ):
         self.endpoint = endpoint
         self.client = client
@@ -106,33 +124,33 @@ class IrisMachine:
         self.job = job
         self.task = task
         self.spec = spec
-        self._closed = False
+        self.container_name = container_name
+        self.execution = execution if execution is not None else IrisExecutionState()
         self._container_user: tuple[str, str] | None = None
-        # Guards ``_closed`` and ``_in_flight`` so ``close`` cannot interleave with an exec attempt's
-        # check-then-send; it can only wait for attempts that already passed the check.
-        self._admission = threading.Condition()
-        self._in_flight: dict[str, list[str]] = {}
 
     def _exec_sync(self, argv: list[str], timeout: float | None = None) -> ExecOutput:
         seconds = math.ceil(timeout) if timeout is not None else -1
         request = controller_pb2.Controller.ExecInContainerRequest(
-            task_id=self.task.task_id.to_wire(), command=argv, timeout_seconds=seconds
+            task_id=self.task.task_id.to_wire(),
+            command=argv,
+            timeout_seconds=seconds,
+            container_name=self.container_name,
         )
         timeout_ms = (seconds + RPC_PADDING_SECONDS) * 1000 if seconds >= 0 else DEFAULT_JOB_TTL * 1000
 
         def attempt() -> controller_pb2.Controller.ExecInContainerResponse:
             # A timed-out ``run`` closes the machine while this thread may still be retrying.
-            with self._admission:
-                if self._closed:
+            with self.execution.admission:
+                if self.execution.closed:
                     raise RuntimeError("Machine is closed")
                 attempt_id = uuid.uuid4().hex
-                self._in_flight[attempt_id] = argv
+                self.execution.in_flight[attempt_id] = argv
             try:
                 return self.rpc.exec_in_container(request, timeout_ms=timeout_ms)
             finally:
-                with self._admission:
-                    del self._in_flight[attempt_id]
-                    self._admission.notify_all()
+                with self.execution.admission:
+                    del self.execution.in_flight[attempt_id]
+                    self.execution.admission.notify_all()
 
         try:
             response = retry_with_backoff(
@@ -195,8 +213,9 @@ class IrisMachine:
         return self._container_user
 
     async def run(self, command: Command) -> Result:
-        if self._closed:
+        if self.execution.closed:
             raise RuntimeError("Machine is closed")
+        validate_sandbox_environment({**self.spec.env, **command.env})
         if command.user is not None and command.user not in await self._user_identity():
             uid, name = await self._user_identity()
             raise UnsupportedMachineSpec(
@@ -232,7 +251,7 @@ class IrisMachine:
             await self.close()
             raise
         finally:
-            if not self._closed:
+            if not self.execution.closed:
                 await self._script(
                     f"rm -f {shlex.quote(stdin_path)} {shlex.quote(stdout_path)} {shlex.quote(stderr_path)}"
                 )
@@ -273,20 +292,20 @@ class IrisMachine:
         target.write_bytes(data)
 
     def _drain_in_flight(self) -> None:
-        with self._admission:
-            if self._admission.wait_for(lambda: not self._in_flight, timeout=CLOSE_DRAIN_SECONDS):
+        with self.execution.admission:
+            if self.execution.admission.wait_for(lambda: not self.execution.in_flight, timeout=CLOSE_DRAIN_SECONDS):
                 return
-            stuck = [shlex.join(argv)[:STUCK_EXEC_PREVIEW_CHARS] for argv in self._in_flight.values()]
+            stuck = [shlex.join(argv)[:STUCK_EXEC_PREVIEW_CHARS] for argv in self.execution.in_flight.values()]
         raise RuntimeError(
             f"{len(stuck)} Iris exec(s) still in flight {CLOSE_DRAIN_SECONDS} s after terminating the sandbox: "
             + "; ".join(stuck)
         )
 
     async def close(self) -> None:
-        with self._admission:
-            if self._closed:
+        with self.execution.admission:
+            if self.execution.closed:
                 return
-            self._closed = True
+            self.execution.closed = True
         try:
             await asyncio.to_thread(self.job.cancel)
             # Terminating the task ends execs the controller already admitted and refuses later ones,
@@ -328,6 +347,8 @@ class IrisMachineFactory:
         self.secret_env = dict(secret_env or {})
 
     def _check_spec(self, spec: MachineSpec) -> RegistryImage:
+        validate_sandbox_environment(spec.env)
+        validate_sandbox_environment({name: "" for name in self.secret_env})
         if spec.gpus:
             raise UnsupportedMachineSpec("The Iris machine factory does not provide GPU allocation")
         if not isinstance(spec.source, RegistryImage):
@@ -347,7 +368,54 @@ class IrisMachineFactory:
     async def create(self, spec: MachineSpec) -> IrisMachine:
         return await asyncio.to_thread(self._create_sync, spec, self._check_spec(spec))
 
-    def _create_sync(self, spec: MachineSpec, source: RegistryImage) -> IrisMachine:
+    async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup:
+        """Start a credential-free task and services in one private gVisor pod."""
+        if self.secret_env:
+            raise UnsupportedMachineSpec("Private service groups accept no secret-enabled machine factory")
+        source = self._check_spec(spec.task)
+        services = tuple(
+            SandboxServiceSpec(
+                name=service.name,
+                image=self._check_spec(service.machine).reference,
+                workdir=service.machine.workdir,
+                env_vars=service.machine.env,
+                entrypoint=service.entrypoint,
+                arguments=service.arguments,
+                resources=ResourceSpec(
+                    cpu=service.machine.cpus or 1,
+                    memory=(service.machine.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
+                    disk=(service.machine.storage_mb or self.disk_mb) * 1024 * 1024,
+                ),
+            )
+            for service in spec.services
+        )
+        if not services:
+            raise UnsupportedMachineSpec("A service group requires at least one service")
+        creation = asyncio.create_task(asyncio.to_thread(self._create_sync, spec.task, source, services))
+        try:
+            task = await asyncio.shield(creation)
+        except asyncio.CancelledError:
+            task = await creation
+            await asyncio.shield(task.close())
+            raise
+        members = {
+            service.name: IrisMachine(
+                task.endpoint,
+                task.client,
+                task.rpc,
+                task.job,
+                task.task,
+                service.machine,
+                container_name=service.name,
+                execution=task.execution,
+            )
+            for service in spec.services
+        }
+        return ServiceGroup(task, members, spec, task.close)
+
+    def _create_sync(
+        self, spec: MachineSpec, source: RegistryImage, services: tuple[SandboxServiceSpec, ...] = ()
+    ) -> IrisMachine:
         info = get_job_info()
         if info is not None:
             if (
@@ -377,20 +445,40 @@ class IrisMachineFactory:
                 accept_compression=IRIS_RPC_COMPRESSIONS,
                 send_compression=None,
             )
+            environment = EnvironmentSpec(
+                setup_scripts=[],
+                env_vars=(
+                    dict(spec.env)
+                    if services
+                    else {name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()}
+                ),
+                sandbox_services=services,
+            )
+            resources = ResourceSpec(
+                cpu=(spec.cpus or 1) + sum(service.resources.cpu for service in services),
+                memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024
+                + sum(int(service.resources.memory) for service in services),
+                disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024
+                + sum(int(service.resources.disk) for service in services),
+            )
+            if services:
+                validate_sandbox_services(
+                    job_pb2.CONTAINER_PROFILE_SANDBOX,
+                    EGRESS_POLICIES[spec.network],
+                    environment.to_sandbox_proto(),
+                    resources.to_proto(),
+                    source.reference,
+                )
+                backends = rpc.list_backends(controller_pb2.Controller.ListBackendsRequest()).backends
+                if not any(SANDBOX_SERVICE_GROUP_CAPABILITY in backend.capabilities for backend in backends):
+                    raise UnsupportedMachineSpec("Controller does not advertise private sandbox service-group support")
             job = client.submit(
                 # Process 1 must exit on the stop signal, or a cancelled machine keeps its node
                 # capacity for the whole termination grace period.
                 entrypoint=Entrypoint.from_command("sh", "-c", IDLE_ENTRYPOINT),
                 name=f"shellbox-{uuid.uuid4().hex}",
-                environment=EnvironmentSpec(
-                    setup_scripts=[],
-                    env_vars={name: resolve_secret_spec(ref).value for name, ref in self.secret_env.items()},
-                ),
-                resources=ResourceSpec(
-                    cpu=spec.cpus or 1,
-                    memory=(spec.memory_mb or DEFAULT_MEMORY_MB) * 1024 * 1024,
-                    disk=(spec.storage_mb or self.disk_mb) * 1024 * 1024,
-                ),
+                environment=environment,
+                resources=resources,
                 task_image=source.reference,
                 container_profile=job_pb2.CONTAINER_PROFILE_SANDBOX,
                 egress_policy=EGRESS_POLICIES[spec.network],

@@ -9,7 +9,9 @@ Example:
 
 Compose files describe topology; Docker command references are review candidates,
 not proof that a task needs a Docker daemon. This inventory does not certify that
-an image or task can run in a particular sandbox.
+an image or task can run in a particular sandbox. Harbor activates the task's
+environment/docker-compose.yaml as an overlay on its main service; embedded
+development Compose files do not define the task topology.
 """
 
 import argparse
@@ -23,7 +25,7 @@ from pathlib import Path
 
 import yaml
 
-COMPOSE_NAMES = {"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
+COMPOSE_PATH = Path("environment/docker-compose.yaml")
 SERVICE_KEYS = {"image", "build", "command", "entrypoint", "environment", "working_dir", "depends_on", "healthcheck"}
 REVIEW_KEYS = {
     "privileged",
@@ -61,6 +63,7 @@ class ComposeInventory:
     path: str
     sha256: str
     services: tuple[str, ...]
+    effective_services: tuple[str, ...]
     review_fields: tuple[str, ...]
     other_fields: tuple[str, ...]
 
@@ -100,9 +103,11 @@ def compose_inventory(path: Path, task_root: Path) -> ComposeInventory:
         config = yaml.safe_load(content)
     except yaml.YAMLError:
         raise ValueError(f"Invalid Compose YAML: {path.relative_to(task_root)}") from None
-    if not isinstance(config, Mapping) or not isinstance(config.get("services"), Mapping):
+    if config is None:
+        config = {}
+    if not isinstance(config, Mapping) or not isinstance(config.get("services", {}), Mapping):
         raise ValueError(f"Compose file requires a services mapping: {path.relative_to(task_root)}")
-    services = config["services"]
+    services = config.get("services", {})
     review = []
     other = [str(key) for key in config if key != "services"]
     for name, service in services.items():
@@ -118,6 +123,7 @@ def compose_inventory(path: Path, task_root: Path) -> ComposeInventory:
         path=path.relative_to(task_root).as_posix(),
         sha256=hashlib.sha256(content).hexdigest(),
         services=tuple(sorted(services)),
+        effective_services=tuple(sorted({"main", *services})),
         review_fields=tuple(sorted(review)),
         other_fields=tuple(sorted(other)),
     )
@@ -138,7 +144,7 @@ def task_inventory(task_root: Path, dataset_root: Path) -> TaskInventory:
     for path in sorted(task_root.rglob("*")):
         if not path.is_file():
             continue
-        if path.name in COMPOSE_NAMES:
+        if path.relative_to(task_root) == COMPOSE_PATH:
             compose.append(compose_inventory(path, task_root))
         if path.suffix not in {".sh", ".py", ".md", ".toml", ".yaml", ".yml"} and path.name != "Dockerfile":
             continue
@@ -185,7 +191,7 @@ def inventory(root: Path, *, source: str, revision: str) -> Inventory:
         summary=InventorySummary(
             tasks=len(tasks),
             tasks_with_compose=sum(bool(task.compose) for task in tasks),
-            tasks_with_multiple_services=sum(any(len(c.services) > 1 for c in task.compose) for task in tasks),
+            tasks_with_multiple_services=sum(any(len(c.effective_services) > 1 for c in task.compose) for task in tasks),
             tasks_with_docker_references=sum(bool(task.docker_references) for task in tasks),
             tasks_with_unscanned_files=sum(bool(task.unscanned_files) for task in tasks),
         ),

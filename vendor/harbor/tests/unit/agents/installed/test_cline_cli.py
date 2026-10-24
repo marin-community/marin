@@ -21,7 +21,7 @@ def _extract_json_heredoc(command: str) -> dict[str, str | None]:
 
 class TestClineCli:
     @pytest.mark.asyncio
-    async def test_setup_passes_github_tokens_when_present(self, temp_dir: Path):
+    async def test_setup_does_not_forward_ambient_github_tokens(self, temp_dir: Path):
         logs_dir = temp_dir / "sample-task__trial-001" / "agent"
         logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -40,18 +40,12 @@ class TestClineCli:
             )
             await agent.setup(environment)
 
-        # Verify that install() was called (via setup) and GitHub tokens
-        # are passed through in at least one exec call
         exec_calls = environment.exec.call_args_list
-        token_calls = [
-            call
-            for call in exec_calls
-            if call.kwargs.get("env")
-            and call.kwargs["env"].get("GITHUB_TOKEN") == "gh-token"
-        ]
-        assert len(token_calls) >= 1, (
-            "Expected at least one exec call with GITHUB_TOKEN env var"
-        )
+        assert exec_calls
+        for call in exec_calls:
+            assert not {"GITHUB_TOKEN", "GH_TOKEN"}.intersection(
+                call.kwargs.get("env") or {}
+            )
 
     @pytest.mark.asyncio
     async def test_run_writes_pre_run_metadata(self, temp_dir: Path):

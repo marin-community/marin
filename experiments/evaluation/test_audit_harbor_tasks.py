@@ -58,3 +58,24 @@ def test_invalid_compose_does_not_report_a_single_sandbox(tmp_path):
     write_task(tmp_path, "broken", "services: [main]\n")
     with pytest.raises(ValueError, match="services mapping"):
         inventory(tmp_path, source="example/dataset", revision="snapshot")
+
+
+def test_topology_uses_active_overlay_and_harbors_main_service(tmp_path):
+    write_task(tmp_path, "target", "services:\n  victim:\n    image: example/victim\n")
+    write_task(tmp_path, "empty-overlay", "{}\n")
+    embedded = write_task(tmp_path, "embedded-development-files")
+    nested = embedded / "environment" / "terminal"
+    nested.mkdir()
+    (nested / "docker-compose.yaml").write_text("services:\n  default: {}\n  mock_gist_server: {}\n")
+    (embedded / "environment" / "compose.yaml").write_text("services:\n  unused: {}\n")
+
+    result = inventory(tmp_path, source="example/dataset", revision="snapshot")
+
+    assert result.summary.tasks == 3
+    assert result.summary.tasks_with_compose == 2
+    assert result.summary.tasks_with_multiple_services == 1
+    tasks = {task.path: task for task in result.tasks}
+    assert tasks["target"].compose[0].services == ("victim",)
+    assert tasks["target"].compose[0].effective_services == ("main", "victim")
+    assert tasks["empty-overlay"].compose[0].effective_services == ("main",)
+    assert tasks["embedded-development-files"].compose == ()

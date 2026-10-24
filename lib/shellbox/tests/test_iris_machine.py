@@ -30,6 +30,7 @@ from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.service import ReadinessProbe, ServiceEndpoint, ServiceGroupSpec, ServiceSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -116,8 +117,10 @@ class RecordingClient(LocalClient):
 class TaskClient(LocalClient):
     def __init__(self, job: LocalJob):
         self.job = job
+        self.submitted: dict = {}
 
     def submit(self, **kwargs):
+        self.submitted = kwargs
         return self.job
 
 
@@ -421,6 +424,66 @@ def test_nested_factory_uses_task_identity_instead_of_host_credentials(monkeypat
     assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
 
 
+class GroupRpc(LocalRpc):
+    def __init__(self):
+        self.targets: set[str] = set()
+
+    def list_backends(self, request):
+        return SimpleNamespace(backends=[SimpleNamespace(capabilities=["sandbox-service-groups"])])
+
+    def exec_in_container(self, request, timeout_ms):
+        self.targets.add(request.container_name)
+        return super().exec_in_container(request, timeout_ms)
+
+
+def test_private_group_routes_service_exec_reserves_resources_and_closes_together(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    client = TaskClient(job)
+    rpc = GroupRpc()
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    probe = Command(
+        ("sh", "-c", "n=$(cat attempts 2>/dev/null || echo 0); n=$((n+1)); echo $n > attempts; test $n -ge 2")
+    )
+    spec = ServiceGroupSpec(
+        task=MachineSpec(image, workdir=str(tmp_path / "task"), cpus=2, memory_mb=256),
+        services=(
+            ServiceSpec(
+                name="runtime",
+                machine=MachineSpec(image, workdir=str(runtime), cpus=1, memory_mb=128),
+                endpoints=(ServiceEndpoint("http", 8000),),
+                readiness=ReadinessProbe(probe, timeout=5, interval=0.001, attempts=3),
+            ),
+        ),
+    )
+
+    async def run():
+        group = await IrisMachineFactory(controller_url="http://controller").create_group(spec)
+        assert group.endpoint("runtime", "http") == "runtime:8000"
+        await group.wait_ready()
+        assert (runtime / "attempts").read_text().strip() == "2"
+        assert (await group.services["runtime"].run(Command(("printf", "runtime")))).stdout == b"runtime"
+        await group.services["runtime"].close()
+        assert job.cancelled
+        with pytest.raises(RuntimeError, match="closed"):
+            await group.task.run(Command(("true",)))
+        await group.close()
+
+    asyncio.run(run())
+    assert rpc.targets == {"", "runtime"}
+    assert client.submitted["resources"].cpu == 3
+    assert client.submitted["resources"].memory == 384 * 1024 * 1024
+    environment = client.submitted["environment"].to_sandbox_proto()
+    assert not environment.secrets
+    assert environment.sandbox_services[0].name == "runtime"
+    assert not environment.sandbox_services[0].HasField("entrypoint")
+    assert not environment.sandbox_services[0].HasField("arguments")
+
+
 def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     job = LocalJob(LocalTask(TaskState.FAILED))
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
@@ -432,6 +495,50 @@ def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="container exited"):
         asyncio.run(factory.create(spec))
     assert job.cancelled
+
+
+@pytest.mark.parametrize("advertise_support", [True, False])
+def test_group_failure_cannot_leave_running_members(monkeypatch, tmp_path, advertise_support):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    client = TaskClient(job)
+    rpc = GroupRpc()
+    if not advertise_support:
+        monkeypatch.setattr(rpc, "list_backends", lambda _: SimpleNamespace(backends=[]))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    spec = ServiceGroupSpec(
+        task=MachineSpec(image, workdir=str(tmp_path / "task")),
+        services=(
+            ServiceSpec(
+                name="runtime",
+                machine=MachineSpec(image, workdir=str(runtime)),
+                readiness=ReadinessProbe(
+                    Command(("sh", "-c", "echo unhealthy >&2; exit 1")), timeout=5, interval=0.001, attempts=2
+                ),
+            ),
+        ),
+    )
+
+    async def run():
+        factory = IrisMachineFactory(controller_url="http://controller")
+        if not advertise_support:
+            with pytest.raises(UnsupportedMachineSpec, match="does not advertise"):
+                await factory.create_group(spec)
+            assert not client.submitted
+            return
+        group = await factory.create_group(spec)
+        with pytest.raises(RuntimeError, match="2 attempts: unhealthy"):
+            await group.wait_ready()
+        assert job.cancelled
+        with pytest.raises(RuntimeError, match="closed"):
+            await group.services["runtime"].run(Command(("true",)))
+        await asyncio.gather(group.close(), group.close())
+
+    asyncio.run(run())
 
 
 def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> None:

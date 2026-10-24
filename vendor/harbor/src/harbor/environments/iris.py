@@ -4,24 +4,43 @@
 """Run a prebuilt Harbor task in a credential-free Iris sandbox."""
 
 import asyncio
-import re
+import json
 import tempfile
-from pathlib import Path, PurePosixPath
+from contextlib import AsyncExitStack, contextmanager
+from contextvars import ContextVar
+from collections.abc import Iterator, Mapping
+from dataclasses import replace
+from pathlib import Path
 
-from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
-from harbor.environments.capabilities import EnvironmentCapabilities, EnvironmentResourceCapabilities
+import httpx
+
+from harbor.environments.base import (
+    EXEC_OUTPUT_LIMIT_BYTES,
+    BaseEnvironment,
+    ExecResult,
+)
+from harbor.environments.capabilities import (
+    EnvironmentCapabilities,
+    EnvironmentResourceCapabilities,
+)
+from harbor.environments.iris_compose import import_iris_task
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode
 from harbor.models.trial.paths import EnvironmentPaths
 from iris.cluster.client.job_info import get_job_info
 from rigging.filesystem.storage_path import StoragePath
+from harbor.utils.env import resolve_env_vars
 
-from shellbox.backends.iris.machine import DEFAULT_JOB_TTL, DEFAULT_SCHEDULING_TIMEOUT, IrisMachine, IrisMachineFactory
-from shellbox.image import RegistryImage
-from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy
+from shellbox.backends.iris.machine import (
+    DEFAULT_JOB_TTL,
+    DEFAULT_SCHEDULING_TIMEOUT,
+    IrisMachine,
+    IrisMachineFactory,
+)
+from shellbox.machine import Command, ExitReason
+from shellbox.service import ServiceGroup
+from shellbox.http_service import MAX_BODY, HttpRequest, HttpResponse, serve_http
 
-COMPOSE_FILENAMES = ("docker-compose.yaml", "docker-compose.yml", "compose.yaml", "compose.yml")
-PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
 BASE_ENVIRONMENT_ARGUMENTS = frozenset(
     {
         "environment_dir",
@@ -42,30 +61,34 @@ BASE_ENVIRONMENT_ARGUMENTS = frozenset(
         "extra_docker_compose",
     }
 )
+MODEL_RELAY_PORT = 8787
+_HOST_MODEL_AUTH: ContextVar[Mapping[str, str]] = ContextVar(
+    "harbor_host_model_auth", default={}
+)
 
 
-def validate_iris_task(task_env_config: EnvironmentConfig, environment_dir: Path) -> None:
-    """Reject task requirements the offline single-container runtime cannot preserve."""
-    image = task_env_config.docker_image
-    if image is None or PINNED_IMAGE.fullmatch(image) is None:
-        raise ValueError("Iris sandbox requires a prebuilt docker_image pinned with @sha256")
-    if (environment_dir / "Dockerfile").exists():
-        raise ValueError("Iris sandbox does not build Dockerfiles; prepare a pinned image first")
-    if any((environment_dir / name).exists() for name in COMPOSE_FILENAMES):
-        raise ValueError("Iris sandbox does not support Compose tasks")
-    if task_env_config.allow_internet:
-        raise ValueError("Iris sandbox requires allow_internet=false")
-    if not task_env_config.workdir or not PurePosixPath(task_env_config.workdir).is_absolute():
-        raise ValueError("Iris sandbox requires an explicit absolute workdir matching the prepared image")
-    if any("${" in value for value in task_env_config.env.values()):
-        raise ValueError("Iris sandbox task environment must contain literal values only")
+@contextmanager
+def host_model_authentication(values: Mapping[str, str]) -> Iterator[None]:
+    """Provide upstream model authentication exclusively to trusted host handlers."""
+    token = _HOST_MODEL_AUTH.set(dict(values))
+    try:
+        yield
+    finally:
+        _HOST_MODEL_AUTH.reset(token)
+
+
+def validate_iris_task(
+    task_env_config: EnvironmentConfig, environment_dir: Path
+) -> None:
+    """Validate prepared images and translate task services before allocating a sandbox."""
+    import_iris_task(task_env_config, environment_dir)
 
 
 class IrisEnvironment(BaseEnvironment):
     """Execute one task in gVisor with Iris's NONE egress policy.
 
     Images must be built and pinned before evaluation. Model requests and result
-    uploads belong to the external driver. Kubernetes platform DNS remains available.
+    uploads belong to the external driver. Service groups allow only pod-local networking.
     """
 
     def __init__(
@@ -75,13 +98,18 @@ class IrisEnvironment(BaseEnvironment):
         controller_url: str | None = None,
         scheduling_timeout: int = DEFAULT_SCHEDULING_TIMEOUT,
         job_ttl: int = DEFAULT_JOB_TTL,
+        model_endpoint: str | None = None,
+        model_name: str | None = None,
+        verifier_model_endpoint: str | None = None,
         **kwargs,
     ):
         unknown = kwargs.keys() - BASE_ENVIRONMENT_ARGUMENTS
         if unknown:
             raise ValueError(f"Unsupported Iris sandbox arguments: {sorted(unknown)}")
         if kwargs.get("persistent_env"):
-            raise ValueError("Iris sandbox does not accept driver environment variables")
+            raise ValueError(
+                "Iris sandbox does not accept driver environment variables"
+            )
         if cluster is None and controller_url is None:
             info = get_job_info()
             controller_url = info.controller_address if info is not None else None
@@ -92,6 +120,13 @@ class IrisEnvironment(BaseEnvironment):
             job_ttl=job_ttl,
         )
         self.machine: IrisMachine | None = None
+        self.group: ServiceGroup | None = None
+        self._relay = AsyncExitStack()
+        self._service_log_paths: tuple[tuple[str, str], ...] = ()
+        self.model_endpoint = model_endpoint
+        self.model_name = model_name
+        self.verifier_model_endpoint = verifier_model_endpoint
+        self._model_api_key = _HOST_MODEL_AUTH.get().get(model_endpoint or "", "EMPTY")
         super().__init__(*args, **kwargs)
 
     @staticmethod
@@ -107,59 +142,152 @@ class IrisEnvironment(BaseEnvironment):
         return EnvironmentResourceCapabilities(cpu_request=True, memory_request=True)
 
     def _maybe_resolve_task_env(self) -> None:
-        # BaseEnvironment otherwise substitutes task-controlled references from os.environ.
-        if any("${" in value for value in self.task_env_config.env.values()):
-            raise ValueError("Iris sandbox task environment must contain literal values only")
-        self._persistent_env = {**self.task_env_config.env, **self._persistent_env}
+        self._persistent_env = {
+            **resolve_env_vars(self.task_env_config.env),
+            **self._persistent_env,
+        }
 
     def _validate_definition(self) -> None:
         validate_iris_task(self.task_env_config, self.environment_dir)
         paths = EnvironmentPaths()
         log_targets = {
-            str(path) for path in (paths.agent_dir, paths.verifier_dir, paths.user_agent_dir, paths.artifacts_dir)
+            str(path)
+            for path in (
+                paths.agent_dir,
+                paths.verifier_dir,
+                paths.user_agent_dir,
+                paths.artifacts_dir,
+            )
         }
         if any(str(mount["target"]) not in log_targets for mount in self._mounts):
             raise ValueError("Iris sandbox does not support custom mounts")
 
     async def start(self, force_build: bool) -> None:
         if force_build:
-            raise ValueError("Iris sandbox uses prebuilt images; force_build is unsupported")
-        image = self.task_env_config.docker_image
-        workdir = self.task_env_config.workdir
-        assert image is not None
-        assert workdir is not None
-        spec = MachineSpec(
-            source=RegistryImage(image),
-            workdir=workdir,
-            network=NetworkPolicy.DENY,
+            raise ValueError(
+                "Iris sandbox uses prebuilt images; force_build is unsupported"
+            )
+        plan = import_iris_task(self.task_env_config, self.environment_dir)
+        task_spec = replace(
+            plan.group.task,
             cpus=self._resource_request_value("cpu", auto_mode=ResourceMode.REQUEST),
-            memory_mb=self._resource_request_value("memory", auto_mode=ResourceMode.REQUEST),
-            storage_mb=self.task_env_config.storage_mb,
+            memory_mb=self._resource_request_value(
+                "memory", auto_mode=ResourceMode.REQUEST
+            ),
         )
-        creation = asyncio.create_task(self.factory.create(spec))
+        group_spec = replace(plan.group, task=task_spec)
+        needs_model = any(
+            "OPENAI_BASE_URL" in machine.env
+            for machine in (task_spec, *(item.machine for item in group_spec.services))
+        )
+        if (needs_model or self.verifier_model_endpoint is not None) and (
+            self.model_endpoint is None or self.model_name is None
+        ):
+            raise ValueError(
+                "Task model calls require an explicit hosted judge (--judge-model) or standalone host model endpoint"
+            )
+        creation = asyncio.create_task(
+            self.factory.create_group(group_spec)
+            if group_spec.services
+            else self.factory.create(task_spec)
+        )
         try:
-            self.machine = await asyncio.shield(creation)
+            created = await asyncio.shield(creation)
         except asyncio.CancelledError:
             # Iris submission runs in a thread; cancelling its waiter does not stop
             # the job being created. Reclaim it once submission has completed.
             machine = await creation
             await asyncio.shield(machine.close())
             raise
+        if isinstance(created, ServiceGroup):
+            self.group = created
+            self.machine = created.task
+        else:
+            self.machine = created
         try:
+            if needs_model or self.verifier_model_endpoint is not None:
+                await self._relay.enter_async_context(
+                    serve_http(self.machine, self._model_request, port=MODEL_RELAY_PORT)
+                )
+            if self.group is not None:
+                await self.group.wait_ready()
+                for name, path in plan.service_log_paths:
+                    result = await self.group.services[name].run(
+                        Command(("mkdir", "-p", path), cwd="/", user="root")
+                    )
+                    if result.exit_code:
+                        raise RuntimeError(
+                            "Failed to prepare service artifact directory"
+                        )
+            self._service_log_paths = plan.service_log_paths
             targets = self._mount_targets(writable_only=True)
             if targets:
-                result = await self.exec(self._ensure_dirs_command(targets, chmod=True), cwd="/")
+                result = await self.exec(
+                    self._ensure_dirs_command(targets, chmod=True), cwd="/"
+                )
                 if result.return_code:
-                    raise RuntimeError(f"Failed to prepare Iris sandbox paths: {result.stderr or result.stdout}")
+                    raise RuntimeError(
+                        f"Failed to prepare Iris sandbox paths: {result.stderr or result.stdout}"
+                    )
             await self._upload_environment_dir_after_start()
         except BaseException:
             await asyncio.shield(self.stop(True))
             raise
 
     async def stop(self, delete: bool) -> None:
-        if self.machine is not None:
-            machine, self.machine = self.machine, None
-            await machine.close()
+        try:
+            await self._relay.aclose()
+        finally:
+            group, machine = self.group, self.machine
+            self.group = self.machine = None
+            self._service_log_paths = ()
+            if group is not None:
+                await group.close()
+            elif machine is not None:
+                await machine.close()
+
+    async def _model_request(self, request: HttpRequest) -> HttpResponse:
+        if request.method != "POST" or request.path != "/v1/chat/completions":
+            return HttpResponse(404, b'{"error":"unsupported model route"}')
+        try:
+            payload = json.loads(request.body)
+        except (ValueError, UnicodeDecodeError):
+            return HttpResponse(400, b'{"error":"invalid JSON"}')
+        if not isinstance(payload, dict) or payload.get("stream"):
+            return HttpResponse(
+                400, b'{"error":"non-streaming chat completions required"}'
+            )
+        payload["model"] = self.model_name
+        assert self.model_endpoint is not None
+        try:
+            async with httpx.AsyncClient(follow_redirects=False, timeout=300) as client:
+                async with client.stream(
+                    "POST",
+                    self.model_endpoint.rstrip("/") + "/chat/completions",
+                    json=payload,
+                    headers={"Authorization": f"Bearer {self._model_api_key}"},
+                ) as response:
+                    if not response.is_success:
+                        return HttpResponse(502, b'{"error":"model request failed"}')
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        if len(body) + len(chunk) > MAX_BODY:
+                            return HttpResponse(
+                                502, b'{"error":"model response exceeded limit"}'
+                            )
+                        body.extend(chunk)
+                    return HttpResponse(response.status_code, bytes(body))
+        except httpx.HTTPError:
+            return HttpResponse(502, b'{"error":"model request failed"}')
+
+    async def _sync_service_logs(self) -> None:
+        if self.group is None or self.machine is None:
+            return
+        for name, target in self._service_log_paths:
+            with tempfile.TemporaryDirectory() as staging:
+                local = Path(staging) / "logs"
+                await self.group.services[name].download(target, local)
+                await self.machine.upload(local, target)
 
     async def exec(
         self,
@@ -171,6 +299,7 @@ class IrisEnvironment(BaseEnvironment):
     ) -> ExecResult:
         if self.machine is None:
             raise RuntimeError("Iris sandbox is not running")
+        await self._sync_service_logs()
         effective_user = self._resolve_user(user)
         result = await self.machine.run(
             Command(
@@ -183,7 +312,9 @@ class IrisEnvironment(BaseEnvironment):
             )
         )
         if result.reason is ExitReason.TIMED_OUT:
-            raise TimeoutError("Iris sandbox command timed out and the sandbox was terminated")
+            raise TimeoutError(
+                "Iris sandbox command timed out and the sandbox was terminated"
+            )
         return ExecResult(
             stdout=result.stdout.decode(errors="replace"),
             stderr=result.stderr.decode(errors="replace"),
@@ -200,18 +331,28 @@ class IrisEnvironment(BaseEnvironment):
     async def upload_dir(self, source_dir: Path | str, target_dir: str) -> None:
         await self.upload_file(source_dir, target_dir)
 
-    async def _download(self, source: str, target: Path | str, *, directory: bool) -> None:
+    async def _download(
+        self, source: str, target: Path | str, *, directory: bool
+    ) -> None:
         if self.machine is None:
             raise RuntimeError("Iris sandbox is not running")
+        await self._sync_service_logs()
         destination = StoragePath(str(target))
         if destination.is_local:
-            local = Path("/" + destination.key) if destination.scheme == "file" else Path(str(destination))
+            local = (
+                Path("/" + destination.key)
+                if destination.scheme == "file"
+                else Path(str(destination))
+            )
             await self.machine.download(source, local)
             return
         with tempfile.TemporaryDirectory() as staging:
             local = Path(staging) / "download"
             await self.machine.download(source, local)
-            await asyncio.to_thread(destination.upload_from, str(local), recursive=directory)
+            upload_source = str(local) + "/" if directory else str(local)
+            await asyncio.to_thread(
+                destination.upload_from, upload_source, recursive=directory
+            )
 
     async def download_file(self, source_path: str, target_path: Path | str) -> None:
         await self._download(source_path, target_path, directory=False)

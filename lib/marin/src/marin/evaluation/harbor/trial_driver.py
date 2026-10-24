@@ -26,9 +26,10 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
 )
 from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
-from harbor.environments.iris import validate_iris_task  # pyrefly: ignore[missing-import]
+from harbor.environments.iris import host_model_authentication, validate_iris_task  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
+from harbor.utils.env import resolve_env_vars, task_environment  # pyrefly: ignore[missing-import]
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor_config.env import get_required_host_vars  # pyrefly: ignore[missing-import]
 from harbor_config.errors import ErrorCategory, errors_by_category, known_error_types  # pyrefly: ignore[missing-import]
@@ -63,7 +64,21 @@ _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
 _HF_DATASET_PREFIX = "hf://"
-_IRIS_ENVIRONMENT_KWARGS = frozenset({"cluster", "controller_url", "scheduling_timeout", "job_ttl"})
+_IRIS_ENVIRONMENT_KWARGS = frozenset(
+    {
+        "cluster",
+        "controller_url",
+        "scheduling_timeout",
+        "job_ttl",
+        "model_endpoint",
+        "model_name",
+        "verifier_model_endpoint",
+    }
+)
+_TASK_MODEL_ENVIRONMENT = {
+    "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
+    "OPENAI_API_KEY": "EMPTY",
+}
 
 
 class RuntimeOverlay(BaseModel):
@@ -207,8 +222,9 @@ def _validate_iris_policy(config: JobConfig) -> None:
             raise ValueError("Shellbox Iris does not accept agent environment forwarding, MCP servers, or skills")
         if {"extra_env", "mcp_servers", "skills_dir", "turn_callback"} & agent.kwargs.keys():
             raise ValueError("Shellbox Iris does not accept alternate agent environment, MCP, skill, or callback inputs")
-    if config.verifier.env or config.verifier.import_path is not None:
-        raise ValueError("Shellbox Iris requires a sandboxed verifier without hosted credentials or a custom import")
+    if config.verifier.import_path is not None:
+        raise ValueError("Shellbox Iris requires a sandboxed verifier without a custom import")
+    resolve_env_vars(config.verifier.env)
 
 
 def _validate_iris_job_tasks(job: Job) -> None:
@@ -224,12 +240,10 @@ def _validate_iris_job_tasks(job: Job) -> None:
         )
         task = Task(task_path, disable_verification=job.config.verifier.disable)
         validate_iris_task(task.config.environment, task.paths.environment_dir)
-        if task.config.environment.mcp_servers:
-            raise ValueError("Shellbox Iris does not support task MCP servers")
         if task.config.steps:
             raise ValueError("Shellbox Iris does not yet support multi-step tasks")
-        if task.config.verifier.env or task.config.solution.env:
-            raise ValueError("Shellbox Iris does not accept verifier or solution environment forwarding")
+        resolve_env_vars(task.config.verifier.env)
+        resolve_env_vars(task.config.solution.env)
         if task.config.verifier.environment is not None or task.config.verifier.environment_mode == "separate":
             raise ValueError("Shellbox Iris currently requires a shared verifier environment")
 
@@ -402,6 +416,21 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
         task_limit=overlay.task_limit,
     )
     environment = config.environment
+    verifier_env = overlay.verifier_env
+    if environment.import_path == IRIS_ENVIRONMENT_IMPORT:
+        model_endpoint = overlay.verifier_env.get("OPENAI_BASE_URL")
+        model_name = overlay.verifier_env.get("MODEL_NAME", overlay.served_model)
+        environment = environment.model_copy(
+            update={
+                "kwargs": {
+                    **environment.kwargs,
+                    "model_endpoint": model_endpoint,
+                    "model_name": model_name,
+                    "verifier_model_endpoint": model_endpoint if overlay.verifier_env else None,
+                }
+            }
+        )
+        verifier_env = {**_TASK_MODEL_ENVIRONMENT, "MODEL_NAME": model_name} if overlay.verifier_env else {}
     if environment.import_path == IRIS_ENVIRONMENT_IMPORT and os.environ.get("IRIS_TASK_ID"):
         controller_url = os.environ.get("IRIS_CONTROLLER_ADDRESS") or os.environ.get("IRIS_CONTROLLER_URL")
         if not controller_url:
@@ -421,15 +450,27 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
             "datasets": [dataset],
             "environment": environment,
-            "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),
+            "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **verifier_env}}),
             "archive": ArchiveConfig(
                 root=overlay.archive_root,
                 dataset=overlay.archive_dataset,
             ),
         }
     )
-    _validate_environment(effective)
+    with task_environment(_model_environment(effective)):
+        _validate_environment(effective)
     return effective
+
+
+def _model_environment(config: JobConfig) -> dict[str, str]:
+    if config.environment.import_path != IRIS_ENVIRONMENT_IMPORT:
+        return {}
+    model_name = str(config.environment.kwargs.get("model_name", _STABLE_MODEL))
+    return {
+        **_TASK_MODEL_ENVIRONMENT,
+        "TAU2_USER_MODEL": model_name,
+        "TAU2_NL_ASSERTIONS_MODEL": model_name,
+    }
 
 
 def _stable_config(config: JobConfig) -> JobConfig:
@@ -478,7 +519,10 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
     assert isinstance(agent, AgentConfig)
     assert isinstance(dataset, DatasetConfig)
     agent_name = _validate_agent(agent)
-    environment_name = _validate_environment(config)
+    with task_environment(
+        {**_TASK_MODEL_ENVIRONMENT, "TAU2_USER_MODEL": _STABLE_MODEL, "TAU2_NL_ASSERTIONS_MODEL": _STABLE_MODEL}
+    ):
+        environment_name = _validate_environment(config)
     dataset_metadata = _dataset_metadata(dataset, _raw_dataset_path(document))
 
     stable_config = _stable_config(config)
@@ -519,8 +563,9 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                     "Check the model YAML's agent.agent_kwargs or the Harbor policy's agents[0].kwargs; "
                     "hosted Pi requires an explicit thinking_format."
                 ) from exc
-        job = asyncio.run(Job.create(effective))
-        _validate_iris_job_tasks(job)
+        with task_environment(_model_environment(effective)):
+            job = asyncio.run(Job.create(effective))
+            _validate_iris_job_tasks(job)
     if len(job.benchmark_metadata) != 1:
         raise ValueError("Harbor shared launcher requires exactly one benchmark descriptor")
     infrastructure_errors = errors_by_category(ErrorCategory.INFRASTRUCTURE)
@@ -571,9 +616,10 @@ def _preflight(request_path: Path) -> None:
 
 
 async def _run(config: JobConfig) -> None:
-    job = await Job.create(config)
-    _validate_iris_job_tasks(job)
-    await job.run()
+    with task_environment(_model_environment(config)):
+        job = await Job.create(config)
+        _validate_iris_job_tasks(job)
+        await job.run()
 
 
 def effective_job_config(policy_path: Path, overlay_path: Path) -> JobConfig:
@@ -603,10 +649,18 @@ def main() -> None:
         if command != "run":
             raise ValueError(f"unknown command {command!r}")
         config = effective_job_config(Path(sys.argv[2]), Path(sys.argv[3]))
+        overlay = RuntimeOverlay.model_validate_json(Path(sys.argv[3]).read_text())
     except (IndexError, json.JSONDecodeError, OSError, TypeError, ValueError, ValidationError) as exc:
         print(_diagnostic(exc), file=sys.stderr)
         raise SystemExit(2) from exc
-    asyncio.run(_run(config))
+    model_endpoint = (
+        config.environment.kwargs.get("model_endpoint")
+        if config.environment.import_path == IRIS_ENVIRONMENT_IMPORT
+        else None
+    )
+    model_auth = {model_endpoint: overlay.verifier_env.get("OPENAI_API_KEY", "EMPTY")} if model_endpoint else {}
+    with host_model_authentication(model_auth):
+        asyncio.run(_run(config))
 
 
 if __name__ == "__main__":

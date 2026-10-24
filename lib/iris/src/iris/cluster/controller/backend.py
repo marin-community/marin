@@ -83,6 +83,7 @@ class BackendCapability(StrEnum):
     WORKER_FLEET = "worker-fleet"
     DIRECT_DISPATCH = "direct-dispatch"
     AUTOSCALER = "autoscaler"
+    SANDBOX_SERVICE_GROUPS = "sandbox-service-groups"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +104,7 @@ class BackendDescriptor:
         capabilities = self.capabilities
         if not capabilities:
             capabilities = frozenset(
-                {BackendCapability.DIRECT_DISPATCH}
+                {BackendCapability.DIRECT_DISPATCH, BackendCapability.SANDBOX_SERVICE_GROUPS}
                 if self.kind is BackendKind.KUBERNETES
                 else {BackendCapability.WORKER_FLEET}
             )

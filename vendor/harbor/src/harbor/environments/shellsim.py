@@ -10,7 +10,11 @@ from functools import cache
 from pathlib import Path
 
 import shellsim
-from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
+from harbor.environments.base import (
+    EXEC_OUTPUT_LIMIT_BYTES,
+    BaseEnvironment,
+    ExecResult,
+)
 from harbor.environments.capabilities import EnvironmentCapabilities
 from rigging.filesystem.storage_path import StoragePath
 
@@ -85,14 +89,27 @@ class ShellSimEnvironment(BaseEnvironment):
         return EnvironmentCapabilities(disable_internet=True)
 
     def _validate_definition(self) -> None:
-        if self.task_env_config.allow_internet and self.network_policy is TaskNetworkPolicy.REQUIRE_OFFLINE_TASK:
-            raise ValueError("ShellSim has no guest network; set network_policy='deny' to run this task offline")
-        if any((self.environment_dir / name).exists() for name in ("docker-compose.yaml", "docker-compose.yml")):
+        if (
+            self.task_env_config.allow_internet
+            and self.network_policy is TaskNetworkPolicy.REQUIRE_OFFLINE_TASK
+        ):
+            raise ValueError(
+                "ShellSim has no guest network; set network_policy='deny' to run this task offline"
+            )
+        if any(
+            (self.environment_dir / name).exists()
+            for name in ("docker-compose.yaml", "docker-compose.yml")
+        ):
             raise ValueError("ShellSim does not support Compose tasks")
 
     async def start(self, force_build: bool) -> None:
         workdir = self.task_env_config.workdir or "/workspace"
-        spec = MachineSpec(self.package_spec, workdir=workdir, network=NetworkPolicy.DENY, memory_mb=self.memory_mb)
+        spec = MachineSpec(
+            self.package_spec,
+            workdir=workdir,
+            network=NetworkPolicy.DENY,
+            memory_mb=self.memory_mb,
+        )
         self.machine = await self.factory.create(spec)
         try:
             if self.environment_dir.is_dir():
@@ -153,7 +170,9 @@ class ShellSimEnvironment(BaseEnvironment):
             raise RuntimeError("ShellSim environment is not running")
         await self.machine.upload(Path(source_dir), target_dir)
 
-    async def download_file(self, source_path: str, target_path: Path | StoragePath | str) -> None:
+    async def download_file(
+        self, source_path: str, target_path: Path | StoragePath | str
+    ) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
         target = _download_target(target_path)
@@ -165,7 +184,9 @@ class ShellSimEnvironment(BaseEnvironment):
             await self.machine.download(source_path, staged)
             await asyncio.to_thread(target.upload_from, str(staged))
 
-    async def download_dir(self, source_dir: str, target_dir: Path | StoragePath | str) -> None:
+    async def download_dir(
+        self, source_dir: str, target_dir: Path | StoragePath | str
+    ) -> None:
         if self.machine is None:
             raise RuntimeError("ShellSim environment is not running")
         target = _download_target(target_dir)
@@ -176,4 +197,6 @@ class ShellSimEnvironment(BaseEnvironment):
         with tempfile.TemporaryDirectory() as staging_dir:
             staged = Path(staging_dir)
             await self.machine.download(source_dir, staged)
-            await asyncio.to_thread(target.upload_from, str(staged), recursive=True)
+            await asyncio.to_thread(
+                target.upload_from, str(staged) + "/", recursive=True
+            )

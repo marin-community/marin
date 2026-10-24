@@ -339,17 +339,9 @@ class ClineCli(BaseInstalledAgent):
             "cline --version || cline version || echo '(version command may not be available)'"
         )
 
-        # Build env for the install command - pass GitHub tokens
-        install_env: dict[str, str] = {}
-        for token_env_var in ("GITHUB_TOKEN", "GH_TOKEN"):
-            token_value = os.environ.get(token_env_var)
-            if token_value:
-                install_env[token_env_var] = token_value
-
         await self.exec_as_agent(
             environment,
             command="set -e; " + " && ".join(install_parts),
-            env=install_env or None,
         )
 
     @staticmethod

@@ -17,6 +17,8 @@ HARBOR_TEST_PATTERNS = (
     "vendor/harbor/tests/unit/test_archive.py",
     "vendor/harbor/tests/unit/test_benchmark_metadata.py",
     "vendor/harbor/tests/unit/test_environment_preflight.py",
+    "vendor/harbor/tests/unit/test_env_resolver.py",
+    "vendor/harbor/tests/unit/test_task_environment.py",
     "vendor/harbor/tests/unit/test_runtime.py",
     "vendor/harbor/tests/unit/test_task_packager.py",
     "vendor/harbor/tests/unit/test_task_packager_multi_step.py",
@@ -25,8 +27,11 @@ HARBOR_TEST_PATTERNS = (
     "vendor/harbor/tests/unit/agents/installed/test_mini_swe_agent.py",
     "vendor/harbor/tests/unit/agents/installed/test_mini_swe_context.py",
     "vendor/harbor/tests/unit/agents/installed/test_sotopia.py",
+    "vendor/harbor/tests/unit/agents/installed/test_claude_code_bedrock.py",
+    "vendor/harbor/tests/unit/agents/installed/test_cline_cli.py",
     "vendor/harbor/tests/unit/environments/test_daytona*.py",
-    "vendor/harbor/tests/unit/environments/test_iris.py",
+    "vendor/harbor/tests/unit/environments/test_iris*.py",
+    "lib/shellbox/tests/test_http_service.py",
     "vendor/harbor/tests/unit/environments/test_shellsim.py",
 )
 

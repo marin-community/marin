@@ -38,16 +38,30 @@ def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
             await machine.upload(source, "/logs/agent")
 
             remote = StoragePath(f"memory://shellbox-{tmp_path.name}")
-            await environment.download_file("/logs/agent/agent.log", remote / "agent.log")
+            (remote / "downloaded" / "existing.txt").write_text("previous artifact")
+            await environment.download_file(
+                "/logs/agent/agent.log", remote / "agent.log"
+            )
             await environment.download_dir("/logs/agent", remote / "downloaded")
-            await environment.download_file("/logs/agent/agent.log", tmp_path / "local-agent.log")
-            await environment.download_dir("/logs/agent", f"file://{tmp_path}/local-download")
+            await environment.download_file(
+                "/logs/agent/agent.log", tmp_path / "local-agent.log"
+            )
+            await environment.download_dir(
+                "/logs/agent", f"file://{tmp_path}/local-download"
+            )
 
             assert (remote / "agent.log").read_text() == "agent failed"
             assert (remote / "downloaded" / "agent.log").read_text() == "agent failed"
-            assert (remote / "downloaded" / "nested" / "trace.txt").read_text() == "trace"
+            assert (
+                remote / "downloaded" / "nested" / "trace.txt"
+            ).read_text() == "trace"
+            assert (
+                remote / "downloaded" / "existing.txt"
+            ).read_text() == "previous artifact"
             assert (tmp_path / "local-agent.log").read_text() == "agent failed"
-            assert (tmp_path / "local-download" / "nested" / "trace.txt").read_text() == "trace"
+            assert (
+                tmp_path / "local-download" / "nested" / "trace.txt"
+            ).read_text() == "trace"
         finally:
             await machine.close()
 

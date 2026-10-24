@@ -32,7 +32,7 @@ from harbor.models.task.config import (
 )
 from harbor.models.trial.config import ResourceMode, ServiceVolumeConfig
 from harbor.models.trial.paths import TrialPaths
-from harbor.utils.env import resolve_env_vars
+from harbor.utils.env import resolve_env_vars, validate_task_environment
 from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 
@@ -168,6 +168,7 @@ class BaseEnvironment(ABC):
         self._cpu_resource_mode = ResourceMode(cpu_enforcement_policy)
         self._memory_resource_mode = ResourceMode(memory_enforcement_policy)
         self._persistent_env: dict[str, str] = persistent_env or {}
+        validate_task_environment(self._persistent_env)
         self._exec_env_overlays: contextvars.ContextVar[tuple[dict[str, str], ...]] = (
             contextvars.ContextVar(f"harbor_exec_env_overlays_{id(self)}", default=())
         )
@@ -375,6 +376,7 @@ class BaseEnvironment(ABC):
             merged.update(env)
         for scoped_env in overlays:
             merged.update(scoped_env)
+        validate_task_environment(merged)
         return merged or None
 
     @contextlib.contextmanager

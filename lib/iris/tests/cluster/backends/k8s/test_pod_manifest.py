@@ -82,7 +82,7 @@ def _dispatch(
         updates = provider.sync(make_batch(tasks_to_run=[request]))
         resources = {
             resource: deepcopy(k8s.list_json(resource))
-            for resource in (K8sResource.PODS, K8sResource.CONFIGMAPS, K8sResource.PDBS)
+            for resource in (K8sResource.PODS, K8sResource.CONFIGMAPS, K8sResource.PDBS, K8sResource.NETWORK_POLICIES)
         }
     finally:
         provider.close()
@@ -144,6 +144,10 @@ def _task_update_from_pod(
         observed = deepcopy(pod)
         observed["kind"] = "Pod"
         observed["metadata"] = {**applied["metadata"], **observed.get("metadata", {})}
+        observed["metadata"]["labels"] = {
+            **applied["metadata"].get("labels", {}),
+            **observed["metadata"].get("labels", {}),
+        }
         observed["metadata"]["name"] = applied["metadata"]["name"]
         k8s.seed_resource(K8sResource.PODS, applied["metadata"]["name"], observed)
         if workload is not None:
@@ -1121,6 +1125,78 @@ def test_sandbox_pod_carries_nothing_from_the_cluster(egress, label):
     assert [c["name"] for c in spec["containers"]] == ["task"]
     assert spec["initContainers"] == []
     assert manifest["metadata"]["labels"][EGRESS_LABEL] == label
+
+
+@pytest.mark.parametrize("override_command", [False, True])
+def test_private_service_group_separates_filesystems_and_has_no_off_pod_network(override_command):
+    request = make_run_req("/alice/group/0", cpu_mc=3000)
+    request.container_profile = job_pb2.CONTAINER_PROFILE_SANDBOX
+    request.egress_policy = job_pb2.EGRESS_POLICY_NONE
+    request.task_image = "example.test/task@sha256:" + "a" * 64
+    request.resources.disk_bytes = 2 * 1024**3
+    service = request.environment.sandbox_services.add(
+        name="runtime",
+        image="example.test/runtime@sha256:" + "b" * 64,
+        workdir="/app",
+        env_vars={"PUBLIC": "runtime-input"},
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3, disk_bytes=1024**3),
+    )
+    if override_command:
+        service.entrypoint.argv.extend(["python3"])
+        service.arguments.argv.extend(["server.py"])
+    updates, resources = _dispatch(
+        request,
+        pod_config(
+            host_network=True,
+            task_env={"AWS_SECRET_ACCESS_KEY": "host-private"},
+            service_account="privileged-account",
+            task_outputs=TaskOutputPolicy(),
+        ),
+    )
+    assert updates == []
+    pod = resources[K8sResource.PODS][0]
+    policy = resources[K8sResource.NETWORK_POLICIES][0]
+    assert policy["spec"]["podSelector"]["matchLabels"] == {EGRESS_LABEL: pod["metadata"]["labels"][EGRESS_LABEL]}
+    assert policy["spec"]["egress"] == policy["spec"]["ingress"] == []
+    assert pod["metadata"]["labels"][EGRESS_LABEL] == "loopback"
+    spec = pod["spec"]
+    task, runtime = spec["containers"]
+    assert [container["name"] for container in spec["containers"]] == ["task", "service-runtime"]
+    assert spec["runtimeClassName"] == "gvisor"
+    assert spec["hostAliases"] == [{"ip": "127.0.0.1", "hostnames": ["task", "runtime"]}]
+    assert spec["dnsPolicy"] == "None"
+    assert "hostNetwork" not in spec and "serviceAccountName" not in spec
+    assert spec["automountServiceAccountToken"] is False
+    assert spec["enableServiceLinks"] is False
+    assert spec["initContainers"] == []
+    assert "volumeMounts" not in runtime
+    assert not any("hostPath" in volume or "secret" in volume for volume in spec["volumes"])
+    assert runtime["env"] == [{"name": "PUBLIC", "value": "runtime-input"}]
+    assert task["resources"]["requests"]["cpu"] == "2000m"
+    assert runtime["resources"]["requests"]["cpu"] == "1000m"
+    for container in (task, runtime):
+        assert container["securityContext"]["runAsUser"] == 0
+        assert container["securityContext"]["allowPrivilegeEscalation"] is False
+        assert container["securityContext"]["capabilities"] == {"drop": ["ALL"]}
+        assert not any(item["name"].startswith("AWS_") for item in container["env"])
+    if override_command:
+        assert runtime["command"] == ["python3"]
+        assert runtime["args"] == ["server.py"]
+    else:
+        assert "command" not in runtime and "args" not in runtime
+
+
+def test_service_exit_terminates_the_group_even_when_task_is_still_running():
+    entry = RunningTaskEntry(task_id=JobName.from_wire("/alice/group/0"), attempt_id=0)
+    pod = make_pod("ignored", "Running")
+    pod["metadata"]["labels"] = {EGRESS_LABEL: "loopback"}
+    pod["status"]["containerStatuses"] = [
+        {"name": "task", "state": {"running": {}}},
+        {"name": "service-runtime", "state": {"terminated": {"exitCode": 1, "reason": "Error"}}},
+    ]
+    update = _task_update_from_pod(entry, pod)
+    assert update.new_state == job_pb2.TASK_STATE_FAILED
+    assert "service-runtime" in update.error
 
 
 def test_default_profile_off_the_cluster_network_keeps_cluster_env_but_no_cluster_route():

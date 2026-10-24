@@ -41,7 +41,7 @@ from iris.cluster.federation.manager import FederationManager
 from iris.cluster.federation.router import RoutingRequest, SubmitDisposition, SubmitPlan
 from iris.cluster.federation.store import HandoffState
 from iris.cluster.redaction import redact_request_env_vars
-from iris.cluster.runtime.sandbox import resolve_egress_policy
+from iris.cluster.runtime.sandbox import resolve_egress_policy, validate_sandbox_services
 from iris.cluster.types import (
     LOCAL_ADMIN_SUBMITTER,
     TERMINAL_JOB_STATES,
@@ -651,6 +651,16 @@ def _validate_launch_profile(
             "submit without a workspace.",
         )
     _resolve_egress_policy(request)
+    if request.environment.sandbox_services and (
+        BackendCapability.SANDBOX_SERVICE_GROUPS not in dependencies.runtime.backend.descriptor.capabilities
+    ):
+        raise ConnectError(Code.INVALID_ARGUMENT, "This controller backend does not support sandbox service groups")
+    try:
+        validate_sandbox_services(
+            request.container_profile, request.egress_policy, request.environment, request.resources, request.task_image
+        )
+    except ValueError as error:
+        raise ConnectError(Code.INVALID_ARGUMENT, str(error)) from error
     if request.container_profile == job_pb2.CONTAINER_PROFILE_GVISOR:
         logger.warning(
             "Job %s uses deprecated CONTAINER_PROFILE_GVISOR; upgrade the submitter to SANDBOX",

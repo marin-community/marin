@@ -615,7 +615,7 @@ class ResourceSpecProto(_message.Message):
     def __init__(self, cpu_millicores: _Optional[int] = ..., memory_bytes: _Optional[int] = ..., disk_bytes: _Optional[int] = ..., device: _Optional[_Union[DeviceConfig, _Mapping]] = ...) -> None: ...
 
 class EnvironmentConfig(_message.Message):
-    __slots__ = ("env_vars", "secrets", "setup_scripts")
+    __slots__ = ("env_vars", "secrets", "setup_scripts", "sandbox_services")
     class EnvVarsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -633,10 +633,37 @@ class EnvironmentConfig(_message.Message):
     ENV_VARS_FIELD_NUMBER: _ClassVar[int]
     SECRETS_FIELD_NUMBER: _ClassVar[int]
     SETUP_SCRIPTS_FIELD_NUMBER: _ClassVar[int]
+    SANDBOX_SERVICES_FIELD_NUMBER: _ClassVar[int]
     env_vars: _containers.ScalarMap[str, str]
     secrets: _containers.ScalarMap[str, str]
     setup_scripts: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ...) -> None: ...
+    sandbox_services: _containers.RepeatedCompositeFieldContainer[SandboxServiceSpec]
+    def __init__(self, env_vars: _Optional[_Mapping[str, str]] = ..., secrets: _Optional[_Mapping[str, str]] = ..., setup_scripts: _Optional[_Iterable[str]] = ..., sandbox_services: _Optional[_Iterable[_Union[SandboxServiceSpec, _Mapping]]] = ...) -> None: ...
+
+class SandboxServiceSpec(_message.Message):
+    __slots__ = ("name", "image", "workdir", "env_vars", "resources", "entrypoint", "arguments")
+    class EnvVarsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    IMAGE_FIELD_NUMBER: _ClassVar[int]
+    WORKDIR_FIELD_NUMBER: _ClassVar[int]
+    ENV_VARS_FIELD_NUMBER: _ClassVar[int]
+    RESOURCES_FIELD_NUMBER: _ClassVar[int]
+    ENTRYPOINT_FIELD_NUMBER: _ClassVar[int]
+    ARGUMENTS_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    image: str
+    workdir: str
+    env_vars: _containers.ScalarMap[str, str]
+    resources: ResourceSpecProto
+    entrypoint: CommandEntrypoint
+    arguments: CommandEntrypoint
+    def __init__(self, name: _Optional[str] = ..., image: _Optional[str] = ..., workdir: _Optional[str] = ..., env_vars: _Optional[_Mapping[str, str]] = ..., resources: _Optional[_Union[ResourceSpecProto, _Mapping]] = ..., entrypoint: _Optional[_Union[CommandEntrypoint, _Mapping]] = ..., arguments: _Optional[_Union[CommandEntrypoint, _Mapping]] = ...) -> None: ...
 
 class CommandEntrypoint(_message.Message):
     __slots__ = ("argv",)

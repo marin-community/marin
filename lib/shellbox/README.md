@@ -65,6 +65,82 @@ and injects them into the Iris job environment. Keep credentials out of
 `MachineSpec.env`, serialized task data, and command arguments. A factory with
 secrets must never be used for actor jobs; ordinary factories inject none.
 
+## Private service groups
+
+`shellbox.service` describes a task and its helper services independently of the
+backend. `ServiceGroupSpec` contains the task's `MachineSpec` and named
+`ServiceSpec` members. Each service has its own machine specification, optional
+image entrypoint/argument overrides, named endpoint ports and a `ReadinessProbe`.
+An omitted override preserves the service image's ENTRYPOINT or CMD. Images must
+already contain their dependencies; group creation does not build or install them.
+
+The Iris factory implements `create_group(spec)`. It creates one CPU-only
+Kubernetes pod under gVisor, with separate container filesystems and a private
+shared loopback network. Service names and `task` resolve to `127.0.0.1` within
+that pod. `group.endpoint("runtime", "http")` returns the declared private
+`runtime:8000` address; it is not a host-accessible endpoint. The task and every
+service must request `NetworkPolicy.DENY` and digest-pinned registry images.
+The group reserves the sum of all member CPU, memory and disk requests.
+
+A dedicated deny-all NetworkPolicy is installed before the pod starts. Unlike
+ordinary Iris `DENY`, groups have no platform DNS exception. They receive no
+host network, host cache, workspace bundle, mounted secrets, controller token,
+service-account token, log shipper or object-store uploader. Each container runs
+as root inside gVisor with all capabilities dropped and privilege escalation
+disabled. Literal task inputs and image contents must themselves be free of
+production credentials. Iris rejects explicit cloud-storage and controller
+credential variables, and service groups reject secret-enabled factories.
+The Kubernetes namespace must have an enforcing NetworkPolicy implementation
+and no additional allow policy selecting these pods. Kubernetes combines allow
+rules from all matching policies; the Iris-managed `none` and `internet`
+policies select different labels and do not apply to groups.
+
+Creation starts the containers and returns handles without waiting for health.
+Start host capabilities before readiness when a service needs them:
+
+```python
+from shellbox.http_service import serve_http
+from shellbox.service import ServiceEndpoint, ServiceGroupSpec, ServiceSpec
+
+spec = ServiceGroupSpec(
+    task=task_machine_spec,
+    services=(ServiceSpec(
+        name="runtime",
+        machine=runtime_machine_spec,
+        endpoints=(ServiceEndpoint("http", 8000),),
+        readiness=runtime_readiness_probe,
+    ),),
+)
+group = await factory.create_group(spec)
+try:
+    async with serve_http(group.task, model_handler, port=18080):
+        await group.wait_ready()
+        result = await group.task.run(agent_command)
+finally:
+    await group.close()
+```
+
+`serve_http` uploads a small Python HTTP listener into a group member. The host
+handler receives bounded requests through machine exec and performs only the
+operations it authorizes. Model URLs and authentication stay with the host
+handler; a runtime service uses the group-local listener URL and a dummy API key.
+The group needs no route to a model server or cloud storage. The listener requires
+Python 3 in its member image. It supports bounded nonstreaming GET and POST
+requests, with no caller headers forwarded to the host handler.
+
+`group.wait_ready()` runs each service's own readiness command with its declared
+timeout, interval, start period and optional attempt limit. A failed probe or
+cancelled startup closes the whole group. Closing any member, a member exiting,
+or the job lifetime ending also tears down the group; containers are not reused
+between trials. Download outputs through machine handles before closing them.
+
+This implementation requires a Kubernetes Iris controller advertising
+`sandbox-service-groups`; older controllers and Docker-worker backends reject it.
+The local bubblewrap backend still creates a new network namespace per command
+and does not implement persistent service groups. Other backends can implement
+the same contract without changing task descriptions; none falls back to host
+networking.
+
 Docker and Daytona stop the command's process group on a timeout. A successful stop preserves the machine for later commands.
 A failed stop without confirmed completion raises an infrastructure error and closes the machine.
 Docker also stops the process group on caller cancellation. Daytona closes the machine on caller cancellation.

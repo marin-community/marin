@@ -125,7 +125,7 @@ runner configs, or evaluation artifacts.
 
 ## Offline execution through Shellbox and Iris
 
-For prepared single-container tasks, select Harbor's Iris adapter over Shellbox:
+For prepared tasks and private service groups, select Harbor's Iris adapter over Shellbox:
 
 ```yaml
 n_concurrent_trials: 4
@@ -144,30 +144,104 @@ uv run python -m experiments.evaluation.cli launch \
   --model qwen3-8b --harbor-config path/to/policy.yaml --limit 1 --dry-run
 ```
 
-Remove `--dry-run` to submit. Each task must name a prebuilt `docker_image` with an immutable
-`@sha256:` digest, set `allow_internet = false`, specify an absolute `workdir`, and have no
-Dockerfile or Compose definition. Preparation must preserve the original image's working directory
-in the task manifest; the adapter does not guess it.
+Remove `--dry-run` to submit. Each task must set `allow_internet = false`. A single-container task
+names a prebuilt `docker_image` with an immutable `@sha256:` digest and an absolute `workdir`.
+Compose tasks instead provide `environment/iris-images.json`, mapping each service to its prepared
+image and working directory:
+
+```json
+{
+  "main": {"image": "registry.example/main@sha256:<64-hex-digest>", "workdir": "/app"},
+  "tau3-runtime": {
+    "image": "registry.example/runtime@sha256:<64-hex-digest>",
+    "workdir": "/app",
+    "agent_logs": "publish"
+  }
+}
+```
+
+Build and push these images during trusted task preparation, preserving each task's inputs. Tau3's
+runtime image includes its task-specific `task_config.json`; one image cannot silently substitute
+another task's configuration. Dockerfiles and Compose build declarations may remain in the source
+artifact. Evaluation reads the prepared references and never executes their build recipes.
 Build images separately with the task's dependencies, verifier dependencies and terminal utilities
 already installed. Terminus needs Bash and tmux; runtime downloads cannot succeed on this path.
+Tasks using the model relay also need Python 3 in the main image.
+For example, prepare a reviewed tau3 task snapshot on a trusted image builder. These commands
+preserve the runtime's per-task configuration and add Terminus's missing terminal dependencies:
+
+```bash
+TASK_DIR=prepared-tasks/tau3-airline-0
+MAIN_TAG=registry.example/harbor/tau3-airline-0-main:prepared
+RUNTIME_TAG=registry.example/harbor/tau3-airline-0-runtime:prepared
+cp "$TASK_DIR/environment/Dockerfile" "$TASK_DIR/environment/Dockerfile.iris"
+cat >> "$TASK_DIR/environment/Dockerfile.iris" <<'DOCKERFILE'
+RUN apt-get update && apt-get install -y --no-install-recommends bash tmux \
+    && rm -rf /var/lib/apt/lists/*
+DOCKERFILE
+docker buildx build --platform linux/amd64 --push --tag "$MAIN_TAG" \
+  --file "$TASK_DIR/environment/Dockerfile.iris" "$TASK_DIR/environment"
+docker buildx build --platform linux/amd64 --push --tag "$RUNTIME_TAG" \
+  "$TASK_DIR/environment/runtime-server"
+MAIN_DIGEST=$(docker buildx imagetools inspect "$MAIN_TAG" --format '{{.Manifest.Digest}}')
+RUNTIME_DIGEST=$(docker buildx imagetools inspect "$RUNTIME_TAG" --format '{{.Manifest.Digest}}')
+cat > "$TASK_DIR/environment/iris-images.json" <<JSON
+{
+  "main": {"image": "$MAIN_TAG@$MAIN_DIGEST", "workdir": "/app"},
+  "tau3-runtime": {
+    "image": "$RUNTIME_TAG@$RUNTIME_DIGEST",
+    "workdir": "/app",
+    "agent_logs": "publish"
+  }
+}
+JSON
+```
+
+Use an existing authenticated registry namespace in place of `registry.example`. Review the source
+Dockerfiles before building, set `allow_internet = false` in the prepared task's `task.toml`, and
+retain the prepared snapshot and manifest as Marin artifacts. These preparation commands require
+trusted build infrastructure; they are never run by the evaluation sandbox.
 The image must run as root inside the sandbox because Harbor setup and verification request that
 user, and Iris exec cannot switch the image's user.
-Iris replaces the image's entrypoint with its idle process. Complete required initialization during
-image preparation or explicit task setup; an image entrypoint cannot be relied on to start services.
+Iris replaces the main image's entrypoint with its idle process. Sidecars retain their prepared
+image's ENTRYPOINT/CMD unless Compose explicitly overrides them.
 The adapter does not build images or install a nested container runtime.
 The shared launcher binds sandboxes to the enclosing Iris job's controller and uses that job's
 scoped task token. For a direct local Harbor invocation, pass an explicit environment `cluster`
 or `controller_url` instead.
 
 The agent makes model calls in the trusted Harbor process. Shellbox creates a separate Iris
-`SANDBOX` job for task commands and verification, with `EGRESS_POLICY_NONE`. Kubernetes still
-permits platform DNS; Docker workers permit only loopback. No controller token, storage credential,
+`SANDBOX` job for task commands and verification, with `EGRESS_POLICY_NONE`. Service groups deny
+external traffic including DNS; single-container Kubernetes jobs retain platform DNS. No controller token, storage credential,
 workspace bundle, shared host cache or service-account token is supplied to the task by this adapter.
-Only explicit literal task environment variables are accepted; host-variable interpolation fails.
+Task environment templates resolve only against explicit task capabilities. They never read the
+driver's ambient environment, including through differently named aliases.
 Image contents and explicit task inputs must themselves be free of production credentials.
 
 The shared launcher rejects Docker execution. The offline Iris path also rejects installed agents,
-custom agent imports, hosted judges, MCP services and custom mounts. Unsupported task requirements
+custom agent imports and custom host mounts. Its Compose importer supports `main` plus prepared
+sidecars, commands, environment values, exposed TCP ports, readiness checks and `main` dependencies
+on started or healthy services. MCP URLs must name an exposed endpoint inside the service group.
+Unknown Compose fields, published host ports, host networking, extra Compose files and dependencies
+between sidecars fail explicitly. The controller must advertise service-group support.
+
+Services share only the group's loopback network. External egress remains denied. Tau3's user model
+and verifier receive a loopback OpenAI endpoint and an `EMPTY` key. A trusted host relay forwards only
+non-streaming chat completions to the selected model, fixes its model name, and rejects redirects;
+the upstream endpoint capability and provider authentication stay in the host process.
+Tau3 requires an explicit `--judge-model` in the shared launch command. That hosted model serves
+both the simulated user and verifier assertions; the candidate agent keeps its own model endpoint.
+Without a hosted model, the adapter rejects the task before allocating its service group. A direct
+Harbor caller supplies `model_endpoint` and `model_name` and may grant endpoint authentication with
+`harbor.environments.iris.host_model_authentication`; the adapter never reads an ambient model key.
+
+The recognized Harbor agent-log bind is lowered only when the prepared sidecar declares
+`agent_logs: "publish"`. Before actor commands and artifact downloads, the adapter copies sidecar logs
+into the actor's agent-log directory through the control plane. This preserves tau3's runtime-state
+handoff to its verifier. It does not implement a shared writable volume; actor writes do not flow
+back into the sidecar.
+
+Unsupported task requirements
 fail without falling back to Docker, public networking or a privileged profile. Existing remote
 backend policies remain explicit choices; this adapter does not migrate their tasks automatically.
 
@@ -194,9 +268,11 @@ Keep provider credentials in the harness process. An actor sandbox should receiv
 only its image's configuration, backend runtime defaults and explicitly declared
 task or command variables. Treat task definitions, images, build contexts and
 explicit mounts as trusted inputs: they can deliberately supply credentials.
-An explicit task environment declaration such as `API_KEY = "${HOST_KEY}"`
-resolves against the harness environment and grants that access. A `${HOST_KEY}`
-reference appearing only in a Compose file does not request host forwarding.
+Task, agent, solution and verifier environment templates resolve against an explicit capability
+mapping whose default is empty. They cannot resolve arbitrary host variables. Storage and
+control-plane credential keys and known credential values are rejected before sandbox commands run.
+Installed Claude uses a host model proxy for AWS authentication; Bedrock credential forwarding is
+unavailable.
 Below, persistent variables are explicit `persistent_env` / `--ae` settings;
 Harbor infrastructure values name images, resource limits and log mount paths.
 

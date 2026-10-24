@@ -110,7 +110,7 @@ def test_iris_preflight_checks_each_resolved_task_before_submission(tmp_path, ir
     assert completed.stdout == ""
 
 
-def test_iris_runtime_rejects_hosted_judge_overlay(tmp_path, iris_policy):
+def test_iris_runtime_keeps_hosted_judge_credentials_out_of_task_environment(tmp_path, iris_policy):
     preflight = json.loads(_preflight(tmp_path, [(iris_policy, {})]).stdout)[0]
     policy = tmp_path / "stable-policy.json"
     policy.write_text(preflight["stable_policy_json"])
@@ -125,7 +125,11 @@ def test_iris_runtime_rejects_hosted_judge_overlay(tmp_path, iris_policy):
                 "served_model": "test",
                 "task_limit": None,
                 "model_agent_kwargs": {},
-                "verifier_env": {"OPENAI_API_KEY": "hosted-judge-secret"},
+                "verifier_env": {
+                    "OPENAI_API_KEY": "hosted-judge-secret",
+                    "OPENAI_BASE_URL": "https://judge.test/v1",
+                    "MODEL_NAME": "judge",
+                },
                 "archive_root": str(tmp_path / "archive"),
                 "archive_dataset": "test",
             }
@@ -133,10 +137,15 @@ def test_iris_runtime_rejects_hosted_judge_overlay(tmp_path, iris_policy):
     )
     completed = _external_python(
         "-c",
-        "from pathlib import Path; "
+        "import json; from pathlib import Path; "
         "from marin.evaluation.harbor.trial_driver import effective_job_config; "
-        f"effective_job_config(Path({str(policy)!r}), Path({str(overlay)!r}))",
-        check=False,
+        f"config = effective_job_config(Path({str(policy)!r}), Path({str(overlay)!r})); "
+        "print(json.dumps(config.verifier.env))",
     )
 
-    assert completed.returncode != 0
+    assert json.loads(completed.stdout) == {
+        "OPENAI_API_KEY": "EMPTY",
+        "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
+        "MODEL_NAME": "judge",
+    }
+    assert "hosted-judge-secret" not in completed.stdout
