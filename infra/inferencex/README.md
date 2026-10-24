@@ -16,6 +16,10 @@ point-detail, corpus-exploration and API routes. It omits public content pages a
 images, and installs `internal-layout.tsx` plus private robots/sitemap entrypoints.
 Building the image needs no database credentials or fixtures.
 
+The writer requires its own GitHub source lookup to succeed before database writes.
+Retry ingestion when that lookup is unavailable; an import must preserve the original
+source date, commit and link.
+
 This is option B. Its charts, providers, API contracts and database packages remain
 upstream modules. The internal root omits the public header/footer, decoration, star-count
 fetch and site analytics views. Ten per-file overlay patches for public entrypoints are
@@ -197,6 +201,8 @@ docker build -t inferencex-full-app ../inferencex-full-app/infra/inferencex
 ```
 
 Both profiles use the same PostgreSQL schema and reader/writer roles.
+Continue using the current ingestion image with the full-app web fallback. It contains
+the source-lookup and trace-cache correctness fixes.
 
 Before each app deployment, record the current Cloud Run revision and immutable image.
 To roll back serving, use `gcloud run services update-traffic marin-inferencex

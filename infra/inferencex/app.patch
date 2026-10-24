@@ -740,12 +740,15 @@ diff --git a/packages/db/src/ingest-ci-run.ts b/packages/db/src/ingest-ci-run.ts
 index 50130cb5..f8d8d278 100644
 --- a/packages/db/src/ingest-ci-run.ts
 +++ b/packages/db/src/ingest-ci-run.ts
-@@ -296,7 +296,7 @@ async function main(): Promise<void> {
+@@ -296,7 +296,10 @@ async function main(): Promise<void> {
    ]);
  
    const runId = parseInt(runIdStr, 10);
 -  const ghInfo = await fetchGithubRun(runId);
 +  const ghInfo = await fetchGithubRun(runId, runAttemptNum);
++  if (!ghInfo) {
++    throw new Error('GitHub source run metadata is unavailable; retry ingestion');
++  }
    const triggerRunIdStr = reusedIngestMetadata?.triggerRunId ?? requestedRunIdStr;
    const triggerRunId = parseInt(triggerRunIdStr, 10);
    const triggerGhInfo = reusedIngestMetadata ? await fetchGithubRun(triggerRunId) : null;
