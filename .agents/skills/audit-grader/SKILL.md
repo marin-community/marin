@@ -1,6 +1,6 @@
 ---
 name: audit-grader
-description: Audit a code check, LLM judge, or RL reward function against its task text, measure its effect on scores, and estimate its error rate with a blinded review of frozen samples. Use when asked to audit a grader or when a grader's scores look implausible; do not activate for routine grader changes.
+description: Audit a code check, LLM judge, or RL reward function against its task text, measure its effect on scores, and estimate its error rate with a blinded review of frozen samples. Use when asked to audit a grader, including one whose scores look implausible; do not activate for routine grader changes.
 ---
 
 # Audit a grader
@@ -18,14 +18,19 @@ Treat an LLM judge as a pipeline, and audit every stage: graded-text
 extraction, judge-prompt rendering, the judge call, reply parsing, label
 mapping, and aggregation.
 
-Record the audit in the benchmark's issue: the pinned inputs, the decision
-entries, the findings, and the hash of each frozen sample. Keep fixtures as
-regression tests in the repository's grader test directory, and mark the ones
-that the current grader fails with `pytest.mark.xfail(strict=True)`, so the
-change that fixes the grader must remove the mark. Keep the frozen samples, the
-keys (each case's source model and grader verdicts), and the reviews in an
-immutable artifact, such as a pinned Hugging Face dataset revision, and link it
-from the issue.
+Record the audit in the task's existing issue: the pinned inputs, the contract
+hash, the decision entries, the findings, and the hash of each frozen sample.
+If the task has no issue, open one with `file-issue` before step 2.
+
+Keep fixtures as regression tests in the repository's grader test directory,
+and mark the ones that the current grader fails with
+`pytest.mark.xfail(strict=True)`, so the change that fixes the grader must
+remove the mark. Keep the frozen samples, the keys (each case's source model
+and grader verdicts), and the reviews in an immutable artifact, such as a
+pinned Hugging Face dataset revision, and link it from the issue. Keep the
+audit's scripts and any replacement grader on a research branch, following
+`research-engineering`, and land fixture tests and grader fixes through
+`manage-pr`.
 
 ## 1. Pin the inputs
 
@@ -48,11 +53,14 @@ the result, also pin the agent and its prompt template, the task's image, the
 sandbox's network access, and the verifier script from the run's task files.
 
 Take each value from the stored run records when they include it; a run can
-override the defaults in code and configuration. Report an input that the
-benchmark leaves unpinned as a finding, and list an input you cannot fetch as
-unverified, with its location (a URL or a record field) and the command that
-would verify it. Before and after each run, check that every file the run
-loads matches its pinned commit or hash.
+override the defaults in code and configuration. Until step 2 has recorded the
+contract hash, pin only what the run records, configuration, and lockfiles
+show; record an extraction rule, reply parser, or dependency that only the
+code shows after that. Report an input that the benchmark leaves unpinned as a
+finding, and list an input you cannot fetch as unverified, with its location
+(a URL or a record field) and the command that would verify it. Before and
+after each run, check that every file the run loads matches its pinned commit
+or hash.
 
 ## 2. Write a contract for each check
 
@@ -62,8 +70,8 @@ response must get, from the text that the model or the judge sees: the
 instruction, rubric, or reference answer. Write the contract before you read
 the grader code, so that it does not copy the grader's behavior. For an LLM
 judge, read only the rubric in the prompt template first. Record the contract
-file's hash and the time before you read any code, and mark each later
-contract change or decision entry with its reason.
+file's hash and the time in the issue before you read any code, and mark each
+later contract change or decision entry with its reason.
 
 - Define the graded text: the whole visible answer, an exact answer, or a
   payload such as a CSV block. For a reasoning model, grade the text after the
@@ -95,11 +103,11 @@ the contract alone. Run them against the grader as regression tests. Run an
 agent task's verifier as the evaluation runs it: in the task's image, or with
 the same interpreter, text encoding, and shell. A fixture that the grader gets
 wrong is a finding when the contract is unambiguous, and a decision entry
-otherwise. A wrong verdict that matches non-proposed readings of several
-decision entries together is also a decision, unless the contract rules it
-out under every reading; name every entry involved. Keep the smallest
-response that reproduces each wrong verdict, and give each fixture a stable
-id, such as the check name plus a content hash.
+otherwise. A wrong verdict is also a decision when the non-proposed readings
+of several decision entries together make it correct; name every entry
+involved. If no combination of readings makes it correct, it is a finding.
+Keep the smallest response that reproduces each wrong verdict, and give each
+fixture a stable id, such as the check name plus a content hash.
 
 For an LLM judge, write fixtures for each deterministic stage: judge replies
 for the parser and the label mapping, run with a fake judge, and candidate
@@ -116,7 +124,8 @@ with the real judge only in step 5.
   it, and list each assertion that the contract contradicts. If the reference
   has no tests, list the grader's own tests that encode a decision.
 - Add property and metamorphic tests. A verdict must stay the same under edits
-  that the contract ignores, and must change under edits that it forbids.
+  that the contract ignores, and a passing response must fail after an edit
+  that the contract forbids.
 - Fuzz the grader, or for an LLM judge, its reply parser and judge-prompt
   renderer. Count an exception as a grading failure, separate from model
   accuracy, and check whether one exception stops the run. Fuzz counts depend
@@ -132,11 +141,15 @@ with the real judge only in step 5.
 
 Start from the stored records of existing runs, and count what they already
 show, such as truncated responses or merged reasoning, before you generate
-anything. Generate responses from several models and decoding settings with
-the pinned prompt rendering. Grade every response with the grader under audit,
-the reference, and any replacement. Report pass rates per check, verdict
-disagreements, scored coverage (the share of expected items that receive a
-verdict), and the change in each model's score.
+anything. When the task authorizes compute, generate responses from several
+models and decoding settings with the pinned prompt rendering, and launch the
+jobs through `use-iris`. Otherwise, report what the stored records show and
+treat the panel as not run. Grade every response with the grader under audit,
+the reference, and any replacement. Before you use the panel to change a
+replacement grader, set aside held-out responses, such as one sampled run per
+configuration. Report pass rates per check, verdict disagreements, scored
+coverage (the share of expected items that receive a verdict), and the change
+in each model's score.
 
 - Rerun at least one configuration with identical settings, and compare each
   score change with the rerun difference.
@@ -161,9 +174,10 @@ grader's, with a paired interval that excludes zero.
    grader under audit and the replacement (or the reference) disagree, and
    record the population size of each stratum. Sample all or most of the
    disagreements. The agreement stratum is usually most of the population, so
-   its sample size sets the width of each grader's interval. Hold out
-   responses that nobody used to develop a replacement grader, and draw the
-   final review round from them.
+   its sample size sets the width of each grader's interval. A review round
+   is one sample and its reviews. Draw the final round from the held-out
+   responses of step 5. If a round prompts changes to the replacement grader,
+   run another round on held-out responses that no earlier round used.
 2. Freeze the sample: write the sha256 of the case list in the issue before
    any review starts.
 3. Render the cases into batch files. Each case shows an opaque case id, the
