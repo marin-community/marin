@@ -1,8 +1,10 @@
+import json
 import os
 import math
 import random
 import tempfile
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import timedelta
 from typing import List, Union, Optional
 from loguru import logger
@@ -13,6 +15,11 @@ import torch.nn as nn
 from torch import optim
 from torch import distributed as dist
 
+from skyrl_train.checkpoint_schedule import (
+    OPTIMIZER_STATE_MARKER,
+    OptimizerStateMode,
+    master_only_optimizer_state,
+)
 from skyrl_train.distributed.strategy import DistributedStrategy
 from skyrl_train.distributed.utils import ModelOrModelOptimPair
 from skyrl_train.io import io
@@ -30,9 +37,10 @@ from skyrl_train.distributed.megatron.megatron_utils import (
 )
 from skyrl_train.distributed.megatron.direct_checkpoint import (
     DirectS3TorchDistLoadShardedStrategy,
-    DirectS3TorchDistSaveShardedStrategy,
+    MasterWeightsSaveShardedStrategy,
 )
 from skyrl_train.distributed.megatron.checkpoint_metadata import remote_checkpoint_metadata
+from skyrl_train.distributed.megatron.checkpoint_writer import model_key_for_master
 from skyrl_train.distributed.megatron.checkpoint_restore import (
     defer_model_weights_to_optimizer,
     restore_model_weights_from_optimizer,
@@ -42,9 +50,8 @@ from marinskyrl.remote_io import abort_multipart_uploads
 from megatron.core.dist_checkpointing.strategies import base as ckpt_base
 from megatron.core.dist_checkpointing.strategies.async_utils import AsyncCallsQueue
 from megatron.core import dist_checkpointing
-from megatron.core.dist_checkpointing.serialization import (
-    get_default_save_sharded_strategy,
-)
+from megatron.core.dist_checkpointing.mapping import ShardedTensor, ShardedTensorFactory
+from torch.distributed.checkpoint import FileSystemReader
 from megatron.core.dist_checkpointing.strategies.fully_parallel import (
     FullyParallelLoadStrategyWrapper,
     FullyParallelSaveStrategyWrapper,
@@ -317,7 +324,19 @@ class MegatronStrategy(DistributedStrategy):
         client_state: dict = {},
         tag=None,
         tokenizer: Optional[PreTrainedTokenizer] = None,
+        optimizer_state: OptimizerStateMode = OptimizerStateMode.FULL,
     ):
+        if optimizer_state not in (OptimizerStateMode.FULL, OptimizerStateMode.MASTERS_ONLY):
+            raise ValueError(
+                f"optimizer_state must be {OptimizerStateMode.FULL.value} or {OptimizerStateMode.MASTERS_ONLY.value}"
+            )
+        if optimizer_state == OptimizerStateMode.MASTERS_ONLY and self.megatron_config.optimizer_checkpoint_sharding_type != "fully_reshardable":
+            sharding_type = self.megatron_config.optimizer_checkpoint_sharding_type
+            raise ValueError(
+                "master-only optimizer checkpoints require "
+                "trainer.policy.megatron_config.optimizer_checkpoint_sharding_type == 'fully_reshardable'; "
+                f"got {sharding_type!r}, whose optimizer records cannot be filtered down to masters only"
+            )
         # Extract base model.
         model: List[nn.Module] = model.actor_module
         materialize_megatron_params(model)
@@ -344,10 +363,15 @@ class MegatronStrategy(DistributedStrategy):
             for child in optimizers:
                 if child.optimizer is not None and child.init_state_fn is not None:
                     child.init_state_fn(child.optimizer, child.config)
-            sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
+            optimizer_sharded_state = optimizer.sharded_state_dict(
                 model_sharded_state_dict,
                 metadata=_optimizer_checkpoint_metadata(self.megatron_config.optimizer_checkpoint_sharding_type),
             )
+            if optimizer_state == OptimizerStateMode.MASTERS_ONLY:
+                # Keep the FP32 master records that weight analysis reads; drop the
+                # moment states a resume would need.
+                optimizer_sharded_state = master_only_optimizer_state(optimizer_sharded_state)
+            sharded_state_dict["optimizer"] = optimizer_sharded_state
             if self.optimizer_config is not None and str(self.optimizer_config.optimizer).lower() == "muonh":
                 _muonh_fp32_groups_as_mapping(sharded_state_dict["optimizer"])
                 sharded_state_dict["optimizer_recipe"] = _MUONH_CHECKPOINT_RECIPE
@@ -372,9 +396,7 @@ class MegatronStrategy(DistributedStrategy):
                         ckpt_dir,
                     )
             dist.barrier()
-            save_strategy = DirectS3TorchDistSaveShardedStrategy(ckpt_dir)
-        else:
-            save_strategy = get_default_save_sharded_strategy("torch_dist")
+        save_strategy = MasterWeightsSaveShardedStrategy(ckpt_dir)
         save_strategy = FullyParallelSaveStrategyWrapper(
             save_strategy, mpu.get_data_parallel_group(with_context_parallel=True)
         )
@@ -399,6 +421,9 @@ class MegatronStrategy(DistributedStrategy):
                 extra_state_path = os.path.join(work_dir, "extra_state.pt")
                 with io.open_file(extra_state_path, "wb") as f:
                     torch.save({"client_state": client_state, "tag": tag}, f)
+                marker_path = os.path.join(work_dir, OPTIMIZER_STATE_MARKER)
+                with io.open_file(marker_path, "w") as f:
+                    f.write(json.dumps({"optimizer_state": optimizer_state.value}))
 
         dist.barrier()
         ckpt_base.async_calls.close()
@@ -515,7 +540,68 @@ class MegatronStrategy(DistributedStrategy):
 
         return ckpt_dir, states
 
-    def save_hf_model(self, bridge, model: MegatronModelWrapper, output_dir: str, tokenizer=None, **kwargs) -> None:
+    def save_fp32_master_hf_model(
+        self, bridge, model: MegatronModelWrapper, ckpt_dir: str, output_dir: str, tokenizer=None
+    ) -> None:
+        """Export a checkpoint's FP32 optimizer masters as an HF model in float32.
+
+        Each rank loads the FP32 master slices of its own parameters from ``ckpt_dir``,
+        swaps them into the live parameters for one Bridge export, and restores the
+        model weights afterwards. The export therefore has the HF names and layout of
+        ``save_hf_model`` with master values. A parameter without an FP32 master
+        record raises, so a BF16-only checkpoint cannot export as FP32. Buffers such
+        as Grug's router bias are not optimizer state and export as stored.
+        """
+        modules: List[nn.Module] = model.actor_module
+        materialize_megatron_params(modules)
+        assert len(modules) == 1, "Megatron virtual pipeline parallel is not yet supported"
+        unwrapped = modules[0].module if hasattr(modules[0], "module") else modules[0]
+        parameters = {parameter.data_ptr(): parameter for parameter in unwrapped.parameters()}
+        model_sharded_state_dict = unwrapped.sharded_state_dict()
+        remote = io.is_cloud_path(ckpt_dir)
+        # A local checkpoint is read in place; a remote one stages its control files
+        # and reads rank tensors directly from object storage.
+        with remote_checkpoint_metadata(ckpt_dir) if remote else nullcontext(ckpt_dir) as read_dir:
+            master_keys = {}
+            for key in FileSystemReader(read_dir).read_metadata().state_dict_metadata:
+                model_key = model_key_for_master(key)
+                if model_key is not None:
+                    master_keys[model_key] = key
+            masters_sharded_state_dict = {}
+            owners: dict[str, nn.Parameter] = {}
+            for name, entry in model_sharded_state_dict.items():
+                if not isinstance(entry, (ShardedTensor, ShardedTensorFactory)):
+                    continue
+                parameter = parameters.get(entry.data.data_ptr())
+                if parameter is None:
+                    continue
+                if entry.key not in master_keys:
+                    raise ValueError(f"{ckpt_dir} has no FP32 master record for {entry.key}")
+                # A ShardedTensor validates its declared dtype against its data; factories carry no dtype.
+                dtype = {"dtype": torch.float32} if isinstance(entry, ShardedTensor) else {}
+                masters_sharded_state_dict[name] = replace(
+                    entry, key=master_keys[entry.key], data=torch.empty_like(entry.data, dtype=torch.float32), **dtype
+                )
+                owners[name] = parameter
+            if len({id(parameter) for parameter in owners.values()}) != len(parameters):
+                raise ValueError("FP32 master export could not match every parameter to a checkpoint record")
+            masters = dist_checkpointing.load(
+                sharded_state_dict=masters_sharded_state_dict,
+                checkpoint_dir=read_dir,
+                sharded_strategy=DirectS3TorchDistLoadShardedStrategy(ckpt_dir) if remote else None,
+            )
+        with _parameters_replaced(owners, masters):
+            self.save_hf_model(bridge, model, output_dir, tokenizer, weight_dtype=torch.float32)
+
+    def save_hf_model(
+        self,
+        bridge,
+        model: MegatronModelWrapper,
+        output_dir: str,
+        tokenizer=None,
+        weight_dtype: torch.dtype | None = None,
+        **kwargs,
+    ) -> None:
         materialize_megatron_params(model.actor_module)
         # Create checkpoint directory if it doesn't exist.
         rank_zero = self.is_rank_0()
@@ -532,7 +618,7 @@ class MegatronStrategy(DistributedStrategy):
         else:
             model_dir = nullcontext(output_dir)
         with model_dir as work_dir:
-            bridge.save_hf_weights(model.actor_module, work_dir)
+            bridge.save_hf_weights(model.actor_module, work_dir, weight_dtype=weight_dtype)
             self.log(f"Successfully saved HF safetensors model to {output_dir}")
 
             # Only rank 0 saves the Huggingface config and tokenizer.
@@ -541,3 +627,19 @@ class MegatronStrategy(DistributedStrategy):
                 self.log(f"Successfully saved HF config and tokenizer to {output_dir}")
 
         # The Ray caller waits for every rank result; no collective needs to span artifact publication.
+
+
+@contextmanager
+def _parameters_replaced(owners: dict[str, nn.Parameter], values: dict[str, torch.Tensor]):
+    """Point each parameter at a replacement tensor, then restore its original storage."""
+    originals = {name: parameter.data for name, parameter in owners.items()}
+    try:
+        for name, parameter in owners.items():
+            replacement = values[name]
+            if replacement.shape != parameter.shape:
+                raise ValueError(f"FP32 master for {name} has shape {tuple(replacement.shape)}, not {tuple(parameter.shape)}")
+            parameter.data = replacement.to(parameter.device)
+        yield
+    finally:
+        for name, parameter in owners.items():
+            parameter.data = originals[name]

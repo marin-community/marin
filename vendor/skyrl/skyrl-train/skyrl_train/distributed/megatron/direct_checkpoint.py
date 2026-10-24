@@ -1,6 +1,7 @@
 from pathlib import Path
 from urllib.parse import urlparse
 
+from fsspec.implementations.local import LocalFileSystem
 from megatron.core.dist_checkpointing.dict_utils import nested_values
 from megatron.core.dist_checkpointing.mapping import ShardedStateDict, ShardedTensor
 from megatron.core.dist_checkpointing.strategies.torch import (
@@ -24,8 +25,8 @@ from skyrl_train.io.checkpoint_reader import RecordCheckpointReader
 
 # MCore 0.18 does not expose a storage-writer hook. Keep the adapter narrow: it
 # preserves MCore's state translation and planner and replaces only the writer.
-class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
-    """Save MCore torch-dist shards directly to S3 through PyTorch DCP."""
+class MasterWeightsSaveShardedStrategy(TorchDistSaveShardedStrategy):
+    """Save MCore torch-dist shards with BF16 model records shared with FP32 masters."""
 
     def __init__(self, checkpoint_dir: str) -> None:
         super().__init__()
@@ -36,7 +37,7 @@ class DirectS3TorchDistSaveShardedStrategy(TorchDistSaveShardedStrategy):
             sharded_state_dict, self.keep_only_main_replica
         )
         pytorch_state_dict = mcore_to_pyt_state_dict(sharded_state_dict, False)
-        filesystem = create_s3_filesystem()
+        filesystem = create_s3_filesystem() if urlparse(self.checkpoint_dir).scheme == "s3" else LocalFileSystem()
         writer = MasterWeightsWriter(self.checkpoint_dir, filesystem=filesystem)
         checkpoint.save(
             pytorch_state_dict,

@@ -113,6 +113,10 @@ from marinskyrl.process_diagnostics import write_exception_receipt
 from marinskyrl.resource_locator import is_cloud_uri, join_resource_path
 from marinskyrl.speculative_decoding import SpeculativeDecodingConfig, runai_model_uri
 from skyrl_train.checkpoint_listing import extract_step_from_path
+from skyrl_train.checkpoint_schedule import (
+    CheckpointSchedule,
+    assert_optimizer_resumable,
+)
 from skyrl_train.utils.trainer_utils import (
     async_step_metrics,
     consumed_stop_metrics,
@@ -3177,12 +3181,14 @@ class RayPPOTrainer:
         io.makedirs(global_step_folder, exist_ok=True)
 
         # Save policy checkpoint
+        schedule = CheckpointSchedule.from_config(self.cfg)
         ray.get(
             self.policy_model.async_run_ray_method(
                 "pass_through",
                 "save_checkpoint",
                 ckpt_dir=policy_save_dir,
                 tokenizer=self.tokenizer,
+                optimizer_state=schedule.optimizer_mode(step),
             )
         )
 
@@ -3287,8 +3293,9 @@ class RayPPOTrainer:
         if self.resume_mode == ResumeMode.NONE:
             logger.info("Checkpoint resumption disabled, starting training from scratch")
             return 0, None
+        schedule = CheckpointSchedule.from_config(self.cfg)
         # first, let's get resume_path
-        elif self.resume_mode == ResumeMode.LATEST:
+        if self.resume_mode == ResumeMode.LATEST:
             latest_checkpoint_file = os.path.join(self.cfg.trainer.ckpt_path, LATEST_CHECKPOINT_FILE)
             if not io.exists(latest_checkpoint_file):
                 logger.warning(
@@ -3305,7 +3312,7 @@ class RayPPOTrainer:
                 ckpt_iteration,
                 checkpoint_path,
                 latest_checkpoint_file,
-                self.cfg.trainer.ckpt_interval,
+                schedule.max_gap,
             )
         else:
             # Get and validate resume path
@@ -3323,6 +3330,10 @@ class RayPPOTrainer:
         # Validate that the path exists
         if not io.exists(str(checkpoint_path)):
             raise FileNotFoundError(f"Checkpoint path not found: {checkpoint_path}")
+
+        # A masters-only checkpoint dropped the moment states a resume needs, on either
+        # resume path.
+        assert_optimizer_resumable(checkpoint_path)
 
         logger.info(f"Loading checkpoint from: {checkpoint_path}")
 
