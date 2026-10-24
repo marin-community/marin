@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the vendored SkyRL GPU runtime (the RL engines' vLLM fork) and run the group-routing benchmark.
 set -euo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 started=$(date +%s)
 bash vendor/skyrl/cloud/iris/bootstrap_runtime.sh vendor/skyrl /tmp/skyrl-env /tmp/skyrl-runtime.sh megatron production
 echo "{\"event\": \"runtime_ready\", \"seconds\": $(( $(date +%s) - started ))}"
