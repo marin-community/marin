@@ -143,6 +143,43 @@ def test_checkpoint_commits_eight_then_restores_all_500_in_original_order(tmp_pa
     # A fresh manager sees the committed chunk without finalizing the failed run.
     reopened = manager(tmp_path / "patched")
     assert len(reopened.restore()) == 8
+    bad_outputs = [
+        "",
+        " \n",
+        completions.FailedGeneration("AgentTimeoutError"),
+        completions.CompletionText(
+            "apparently nonempty",
+            completions.CompletionResponse(
+                content="apparently nonempty",
+                reasoning_content=None,
+                finish_reason="stop",
+                usage={},
+                provider_metadata={},
+                raw_choice={},
+                failure_category="AgentTimeoutError",
+            ),
+            "combine",
+        ),
+    ]
+    for idx, bad in enumerate(bad_outputs):
+
+        class BadModel:
+            rank = 0
+
+            def generate_until(self, instances, bad=bad):
+                return [bad] * len(instances)
+
+        bad_store = manager(tmp_path / f"bad-live-{idx}")
+        with pytest.raises(RuntimeError, match="Empty or failed generation"):
+            run(patched, bad_store, BadModel())
+        assert manager(tmp_path / f"bad-live-{idx}").restore() == {}
+        restored_store = manager(tmp_path / f"bad-restored-{idx}")
+        restored_store.decide()
+        restored_store.record(entries[0].resume_unit("MATH500"), {"output": bad, "sample": entries[0].to_dict()})
+        restored_store.finalize()
+        with pytest.raises(RuntimeError, match="Empty or failed restored generation"):
+            run(patched, manager(tmp_path / f"bad-restored-{idx}"), Model(fail_after=0))
+
     remaining = Model()
     outputs = run(patched, reopened, remaining)
     assert [instance.idx for call in remaining.calls for instance in call] == list(range(8, 500))

@@ -157,6 +157,7 @@ def main():
         "--max-length", type=int, default=32704, help="Explicit effective context cap; server needs 64 more"
     )
     parser.add_argument("--name", default="levanter267-step12-math500")
+    parser.add_argument("--concurrency", type=int, choices=(2, 3), default=3)
     parser.add_argument("--runtime-minutes", type=int, default=240)
     args = parser.parse_args()
     if not 2 <= args.runtime_minutes <= 1140:
@@ -203,13 +204,16 @@ def main():
         tasks=(EvalTaskConfig("MATH500", 0, task_alias="math500", generation=True),),
         apply_chat_template=True,
         seed=19311,
-        num_concurrent=8,
+        num_concurrent=args.concurrency,
         max_eval_instances=args.limit,
         # The H100/vLLM reference client saw server32768 minus its64-token margin.
         max_length=args.max_length,
     )
     model = RunningModel(OpenAIEndpoint("http://resolved-inside-iris/v1", "snowball-levanter"), tokenizer=STEP12_REPO)
     payload = json.loads(_run_config_json(model, config, args.output))
+    # Request deadlines include server queueing; the local adapter otherwise
+    # overrides timeout=1800 with a separate900-second wall budget.
+    payload["extra_model_args"] = {"timeout": 7200, "transport_retry_budget": 7200}
     if selection is not None:
         payload["selection_provenance"] = selection
     plan = dict(

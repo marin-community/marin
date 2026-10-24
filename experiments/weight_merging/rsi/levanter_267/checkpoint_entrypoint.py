@@ -57,6 +57,11 @@ def patched_resume_source(source, chunk_size):
             chunk_instances = remaining_instances[chunk_start:chunk_start + {chunk_size}]
             chunk_positions = remaining_positions[chunk_start:chunk_start + {chunk_size}]
             new_outputs = model.generate_until(chunk_instances)
+            for output in new_outputs:
+                if (not isinstance(output, str) or not output.strip()
+                    or getattr(output, "failure_category", None)
+                    or getattr(getattr(output, "response", None), "failure_category", None)):
+                    raise RuntimeError("Empty or failed generation; refusing checkpoint and scoring")
             self.sample_manifest.validate_output_count(len(chunk_instances), new_outputs)
             for pos, inst, output in zip(chunk_positions, chunk_instances, new_outputs):
                 results[pos] = output
@@ -68,7 +73,26 @@ def patched_resume_source(source, chunk_size):
             # the manager reopens a writer while retaining its namespace/keys.
             manager.finalize()
 """
-    return source.replace(ORIGINAL, replacement)
+    patched = source.replace(ORIGINAL, replacement)
+    validation = """if (not isinstance(output, str) or not output.strip()
+    or getattr(output, "failure_category", None)
+    or getattr(getattr(output, "response", None), "failure_category", None)):
+    raise RuntimeError("Empty or failed restored generation; refusing scoring")
+"""
+    restored_assignment = '            results[pos] = payload["output"]'
+    if patched.count(restored_assignment) != 1:
+        raise ValueError("Unexpected pinned restore boundary")
+    patched = patched.replace(
+        restored_assignment,
+        restored_assignment + "\n" + textwrap.indent("output = results[pos]\n" + validation, " " * 12),
+    )
+    before_scoring = "    self.sample_manifest.mark_generated(entries, results)"
+    if patched.count(before_scoring) != 1:
+        raise ValueError("Unexpected pinned pre-scoring boundary")
+    return patched.replace(
+        before_scoring,
+        "    for output in results:\n" + textwrap.indent(validation, " " * 8) + before_scoring,
+    )
 
 
 def selected_prefix_results(results, limit):
