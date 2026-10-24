@@ -30,4 +30,16 @@ fi
 docker pull python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.rescore \
   --run "$work_dir/run" --output "$work_dir/scored" --parity-items "${PLAYGROUND_PARITY_ITEMS:-0}"
+if [ "${PLAYGROUND_PARITY_ITEMS:-0}" = 0 ]; then
+  "$work_dir/io/bin/python" - "$work_dir/scored" <<'PYREPORT'
+import json
+import sys
+from pathlib import Path
+root = Path(sys.argv[1])
+metadata = json.loads((root/'run-metadata.json').read_text())
+(root/'candidates.json').write_text(json.dumps(metadata['candidates'], indent=2)+'\n')
+PYREPORT
+  "$work_dir/io/bin/python" -m experiments.weight_merging.playground.report \
+    --run "$work_dir/scored" --candidates "$work_dir/scored/candidates.json" --output "$work_dir/scored/report.md"
+fi
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io  cp -r "$work_dir/scored" "$PLAYGROUND_OUTPUT/"
