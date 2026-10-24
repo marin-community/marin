@@ -475,7 +475,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
     # A --set run gets its own address: the name carries a hash of its settings.
     changes = "\n".join(settings)
     suffix = f"-set-{fingerprint_hash(changes)}" if settings else ""
-    base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy.label}-{preset.label}{suffix}"
+    base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy.label}-{preset.label}{suffix}-ccab4-persample"
     rl = skyrl_step(
         SkyRLSpec(
             name=user_owned_name(base_name),
@@ -559,7 +559,7 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
 )
 @rl_build_options
 def main(preset: str, settings: tuple[str, ...], stage: str) -> dict[str, ArtifactStep]:
-    run = build_run(SNOWBALL_POLICY, PRESETS[preset], version=None, settings=settings)
+    run = build_run(replace(SNOWBALL_POLICY, cluster="cw-rno2a"), PRESETS[preset], version=None, settings=settings)
     return {f"{SNOWBALL_POLICY.label}-{preset}": getattr(run, stage)}
 
 

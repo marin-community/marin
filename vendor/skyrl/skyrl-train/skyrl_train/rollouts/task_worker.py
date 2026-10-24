@@ -481,7 +481,7 @@ class TaskRolloutWorker:
                     max_prompt_length=max_input_length,
                     chat_template_kwargs=self.chat_template_kwargs,
                     session_id=session_id,
-                    prompt_group_id=prompt_generations[index],
+                    prompt_group_id=session_id,
                 )
 
             engine = engines[index]
