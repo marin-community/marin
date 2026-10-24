@@ -39,6 +39,7 @@ from levanter.grug._moe.common import (
     _interleave_gate_up,
     _scaled_capacity,
     CapacityDrops,
+    GroupedActivation,
     split_moe_w13_output,
 )
 from levanter.grug._moe.sonic import (
@@ -146,14 +147,18 @@ class _RaggedDotExpertMlp:
     them out of the weight gradients.
     """
 
-    activation_fn: Callable[[jax.Array], jax.Array]
+    activation_fn: Callable[[jax.Array], jax.Array] | GroupedActivation
 
     def _apply(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
         active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
         x_dispatch = jnp.where(active, x_dispatch, 0)
         w13_out = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
         moe_dim = moe_w2_local.shape[1]
-        if _is_ungated(moe_w13_local, moe_w2_local):
+        if isinstance(self.activation_fn, GroupedActivation):
+            if not _is_ungated(moe_w13_local, moe_w2_local):
+                raise ValueError("GroupedActivation needs ungated experts")
+            activated = self.activation_fn.fn(w13_out, active_group_sizes)
+        elif _is_ungated(moe_w13_local, moe_w2_local):
             activated = self.activation_fn(w13_out)
         else:
             gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
@@ -366,15 +371,19 @@ def _quack_grouped_gemm_available() -> bool:
 _RELU2_FNS = (fused_relu2, ActivationFunctionEnum.relu2.to_jax_fn())
 
 
-def _select_expert_mlp(activation_fn: Callable[[jax.Array], jax.Array], *, ungated: bool) -> _ExpertMlp:
+def _select_expert_mlp(
+    activation_fn: Callable[[jax.Array], jax.Array] | GroupedActivation, *, ungated: bool
+) -> _ExpertMlp:
     """Pick the fastest expert-MLP kernel this process can actually run.
 
     QuACK's SM100 kernels fuse SwiGLU for gated SiLU experts and ReLU^2 for ungated ``fused_relu2``
     experts. Without them, ``fused_relu2`` on ungated experts selects the Pallas fused ReLU^2
     grouped GEMMs. Everything else -- another activation, a non-SM100 GPU, a TPU or CPU, or a
     build without the GPU extra -- runs the portable `ragged_dot` path, which computes the same
-    function.
+    function. A ``GroupedActivation`` always runs on `ragged_dot`.
     """
+    if isinstance(activation_fn, GroupedActivation):
+        return _RaggedDotExpertMlp(activation_fn)
     # QuACK takes any ungated ReLU^2, including the plain ``ActivationFunctionEnum.relu2`` function that
     # ``moe_mlp`` resolves the enum to; the Pallas kernels stay opt-in through ``fused_relu2``.
     if ungated and activation_fn in _RELU2_FNS and _quack_grouped_gemm_available():

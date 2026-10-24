@@ -368,6 +368,7 @@ def build_h100_ladder_run(
     profile_start_step: int | None = None,
     dump_hlo: bool = False,
     token_dump: bool = False,
+    unit_stats: bool = False,
     watch_interval: int = WATCH_INTERVAL,
     token_dump_skip_layers: tuple[int, ...] = (),
     layer_skip: LayerSkipRule | None = None,
@@ -555,6 +556,7 @@ def build_h100_ladder_run(
                 hlo_dump_path=prefix_join(ctx.output_path, "train_step.hlo.txt") if dump_hlo else None,
                 token_dump_path=(prefix_join(ctx.output_path, "token_dump.npz") if token_dump else None),
                 token_dump_skip_layers=token_dump_skip_layers,
+                unit_stats_path=prefix_join(ctx.output_path, "unit_stats.npz") if unit_stats else None,
                 lm_head_grad_dump_dir=(
                     prefix_join(ctx.output_path, "lm_head_grad") if model.lm_head_grad_dump_every else None
                 ),
@@ -750,6 +752,12 @@ def _layer_skip_rule(
     "moe_null_layers) to <output>/token_dump.npz.",
 )
 @click.option(
+    "--unit-stats",
+    is_flag=True,
+    help="After the last step, write each MoE layer's per-unit ReLU^2 activity counts over held-out batches to "
+    "<output>/unit_stats.npz.",
+)
+@click.option(
     "--watch-interval",
     type=click.IntRange(min=0),
     default=WATCH_INTERVAL,
@@ -885,6 +893,7 @@ def main(
     profile_start_step: int | None,
     dump_hlo: bool,
     token_dump: bool,
+    unit_stats: bool,
     watch_interval: int,
     token_dump_skip_layers: str | None,
     extra_mlp_start_frac: float,
@@ -929,6 +938,7 @@ def main(
         profile_start_step=profile_start_step,
         dump_hlo=dump_hlo,
         token_dump=token_dump,
+        unit_stats=unit_stats,
         watch_interval=watch_interval,
         token_dump_skip_layers=(
             tuple(int(x) for x in token_dump_skip_layers.split(",")) if token_dump_skip_layers else ()

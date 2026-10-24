@@ -10,6 +10,8 @@ Delta Attention, the global layers for MLA with an Inkling relative-position bia
 stream for Block Attention Residuals, unrolled layer by layer.
 """
 
+import contextlib
+import contextvars
 import dataclasses
 import functools
 import itertools
@@ -44,7 +46,7 @@ from levanter.grug.attention import (
     fa4_cute_segment_bounds,
     inkling_rel_bias,
 )
-from levanter.grug.grug_moe import MoeActivation, MoEExpertMlp, moe_mlp
+from levanter.grug.grug_moe import GroupedActivation, MoeActivation, MoEExpertMlp, moe_mlp
 from levanter.grug.loss import BlockSizes, fused_linear_softmax_cross_entropy_loss
 from levanter.grug.sharding import unshard
 from levanter.kernels.pallas.short_conv import short_conv
@@ -170,6 +172,199 @@ class ValueEmbeds(StrEnum):
 
 
 _GATED_VALUE_EMBEDS = (ValueEmbeds.GATED, ValueEmbeds.GATED_LAMBDA)
+
+
+class ActSparsity(StrEnum):
+    """Structured sparsity of a ReLU^2 expert's post-activations (``expert_act_sparsity``)."""
+
+    NONE = "none"
+    TWO_FOUR = "2:4"
+    """Per token, keep the 2 largest of every contiguous group of 4 units (the sparse-tensor-core pattern of
+    the down-projection's left operand, 2:4 along its contraction dim)."""
+    TRANSPOSABLE = "2:4T"
+    """Transposable 2:4: over blocks of 4 of an expert's dispatch rows (tokens) x 4 contiguous units, the 0/1 mask
+    with exactly 2 per row and 2 per column that keeps the most ReLU^2 mass (``transposable_mask``), so the
+    post-activations are 2:4 along the units and, transposed, along the tokens. Routed experts on
+    ``ragged_all_to_all`` only."""
+
+
+class TransposableRows(StrEnum):
+    """Which 4 rows of an expert's dispatch group form a ``ActSparsity.TRANSPOSABLE`` block."""
+
+    CONSECUTIVE = "consecutive"
+    """Rows ``4b .. 4b+3``. Neighbouring rows are mostly the same sequence's nearby tokens, so a token's mask
+    depends on its own sequence's future tokens (a causal leak)."""
+    STRIDED = "strided"
+    """Rows ``b, b+q, b+2q, b+3q`` with ``q = ceil(n/4)`` for a group of ``n`` rows: rows from different sequences
+    (the group is ordered by source shard, then token), so no causal leak; a row order the dispatch could produce
+    directly."""
+
+
+# Units per 2:4 group and units kept per group.
+_SPARSE_GROUP = 4
+_SPARSE_KEEP = 2
+
+
+def keep_top2_of_4(a: Float[Array, "... I"]) -> Bool[Array, "... I"]:
+    """Per row, the 2 largest of each contiguous group of 4 along the last axis; ties go to the lower index, so
+    exactly 2 of every 4 are kept."""
+    g = a.reshape(*a.shape[:-1], a.shape[-1] // _SPARSE_GROUP, _SPARSE_GROUP)
+    idx = jnp.arange(_SPARSE_GROUP)
+    # beats[..., i, j]: unit j outranks unit i.
+    gi, gj = g[..., :, None], g[..., None, :]
+    beats = (gj > gi) | ((gj == gi) & (idx[None, :] < idx[:, None]))
+    return (jnp.sum(beats, axis=-1) < _SPARSE_KEEP).reshape(a.shape)
+
+
+def relu2_2of4(u: Float[Array, "... I"]) -> Float[Array, "... I"]:
+    """``relu(u)^2`` with all but the top 2 of every 4 contiguous units zeroed; the mask is stop-gradient, so
+    gradients reach only the kept units."""
+    a = relu2(u)
+    return a * jax.lax.stop_gradient(keep_top2_of_4(a)).astype(a.dtype)
+
+
+def relu2(u: Float[Array, "... I"]) -> Float[Array, "... I"]:
+    return jnp.square(jax.nn.relu(u))
+
+
+def _transposable_patterns() -> np.ndarray:
+    """The 90 4x4 0/1 matrices with exactly 2 ones per row and per column, flattened row-major to ``[90, 16]``."""
+    rows = [r for r in itertools.product((0, 1), repeat=4) if sum(r) == 2]
+    pats = [np.array(m) for m in itertools.product(rows, repeat=4) if all(sum(c) == 2 for c in zip(*m, strict=True))]
+    return np.stack(pats).reshape(-1, 16)
+
+
+_TRANSPOSABLE_PATTERNS = _transposable_patterns()
+
+
+def transposable_mask(blocks: Float[Array, "N 16"]) -> Bool[Array, "N 16"]:
+    """Per 4x4 block (row-major: 4 tokens x 4 units), the 2-per-row, 2-per-column pattern with the largest summed
+    value; ties go to the lower pattern index. Unrolled over the 90 patterns as elementwise ops so it fuses."""
+    flat = blocks.astype(jnp.float32)
+    best_score = jnp.full(flat.shape[:-1], -jnp.inf, jnp.float32)
+    best = jnp.zeros(flat.shape[:-1], jnp.int32)
+    for index, pattern in enumerate(_TRANSPOSABLE_PATTERNS):
+        score = functools.reduce(jnp.add, [flat[..., i] for i in np.flatnonzero(pattern)])
+        better = score > best_score
+        best_score = jnp.where(better, score, best_score)
+        best = jnp.where(better, index, best)
+    return jnp.asarray(_TRANSPOSABLE_PATTERNS, jnp.bool_)[best]
+
+
+def _transposable_rows(
+    group_sizes: Int[Array, " E"], num_rows: int, rows: TransposableRows
+) -> tuple[Int[Array, " C"], Int[Array, " C"], int]:
+    """Each dispatch row's ``(block, lane)`` in the expert-major buffer of ``group_sizes`` (rows past their sum get
+    the out-of-range block), and the static block count. Each expert's group of ``n`` rows makes ``ceil(n/4)``
+    blocks; its last block is short (missing rows read as zeros) when ``n`` is not a multiple of 4."""
+    num_experts = group_sizes.shape[0]
+    num_blocks = num_rows // _SPARSE_GROUP + num_experts
+    ends = jnp.cumsum(group_sizes)
+    starts = ends - group_sizes
+    r = jnp.arange(num_rows, dtype=jnp.int32)
+    expert = jnp.searchsorted(ends, r, side="right")
+    valid = expert < num_experts
+    expert = jnp.minimum(expert, num_experts - 1)
+    pos = r - starts[expert]
+    group_blocks = (group_sizes + _SPARSE_GROUP - 1) // _SPARSE_GROUP
+    block_starts = jnp.cumsum(group_blocks) - group_blocks
+    if rows == TransposableRows.CONSECUTIVE:
+        block, lane = pos // _SPARSE_GROUP, pos % _SPARSE_GROUP
+    else:
+        q = jnp.maximum(group_blocks[expert], 1)
+        block, lane = pos % q, pos // q
+    return jnp.where(valid, block_starts[expert] + block, num_blocks), lane, num_blocks
+
+
+def transposable_row_mask(
+    a: Float[Array, "C I"], group_sizes: Int[Array, " E"], rows: TransposableRows
+) -> Bool[Array, "C I"]:
+    """``ActSparsity.TRANSPOSABLE``'s mask of the expert-major post-activations ``a``."""
+    num_rows, width = a.shape
+    block, lane, num_blocks = _transposable_rows(group_sizes, num_rows, rows)
+    buf = jnp.zeros((num_blocks, _SPARSE_GROUP, width), a.dtype).at[block, lane].set(a, mode="drop")
+    groups = width // _SPARSE_GROUP
+    tiles = buf.reshape(num_blocks, _SPARSE_GROUP, groups, _SPARSE_GROUP).transpose(0, 2, 1, 3)
+    mask = transposable_mask(tiles.reshape(num_blocks, groups, 16))
+    mask = mask.reshape(num_blocks, groups, _SPARSE_GROUP, _SPARSE_GROUP).transpose(0, 2, 1, 3)
+    mask = mask.reshape(num_blocks, _SPARSE_GROUP, width)
+    return mask.at[block, lane].get(mode="fill", fill_value=False)
+
+
+def relu2_2of4_transposed(rows: TransposableRows) -> GroupedActivation:
+    """``relu(u)^2`` under the stop-gradient ``transposable_row_mask``."""
+
+    def fn(u: Float[Array, "C I"], group_sizes: Int[Array, " E"]) -> Float[Array, "C I"]:
+        a = relu2(u)
+        mask = transposable_row_mask(jax.lax.stop_gradient(a), group_sizes, rows)
+        return a * jax.lax.stop_gradient(mask).astype(a.dtype)
+
+    return GroupedActivation(fn)
+
+
+def _relu2_act(sparsity: ActSparsity):
+    return relu2_2of4 if sparsity == ActSparsity.TWO_FOUR else relu2
+
+
+UNIT_STATS_PREFIX = f"{_OUTSTAT_PREFIX}units/"
+# Set by ``collect_unit_stats``: while a forward is traced under it, the MoE layers add per-unit activity counts
+# (``_unit_stats``) to their per-layer stats under ``UNIT_STATS_PREFIX``.
+_COLLECT_UNIT_STATS: contextvars.ContextVar[bool] = contextvars.ContextVar("collect_unit_stats", default=False)
+
+
+@contextlib.contextmanager
+def collect_unit_stats():
+    """Trace the MoE layers with per-unit ReLU^2 activity counts (an analysis forward; see ``_unit_stats``)."""
+    token = _COLLECT_UNIT_STATS.set(True)
+    try:
+        yield
+    finally:
+        _COLLECT_UNIT_STATS.reset(token)
+
+
+def _unit_stats(
+    a: Float[Array, "R I"], kept: Bool[Array, "R I"], segment_ids: Int[Array, " R"], num_segments: int
+) -> dict[str, jax.Array]:
+    """Activity of ReLU^2 post-activations ``a`` (``relu(u)^2`` before any 2:4 mask) under the 2:4 mask ``kept``,
+    each row belonging to segment (expert) ``segment_ids``: per-segment rows ``[S]``, per-unit active (``a > 0``)
+    and kept (active and in ``kept``) counts ``[S, I]``, the histogram of active units per group of 4 ``[5]``, and
+    the total and kept activation mass ``[2]``."""
+    active = a > 0
+    kept = active & kept
+    per_group = jnp.sum(active.reshape(a.shape[0], -1, _SPARSE_GROUP), axis=-1)
+    a32 = a.astype(jnp.float32)
+
+    def per_segment(x: jax.Array) -> jax.Array:
+        return jax.ops.segment_sum(x.astype(jnp.int32), segment_ids, num_segments=num_segments)
+
+    return {
+        "rows": per_segment(jnp.ones(a.shape[0], jnp.int32)),
+        "active": per_segment(active),
+        "kept": per_segment(kept),
+        "group_hist": jnp.sum(jax.nn.one_hot(per_group, _SPARSE_GROUP + 1, dtype=jnp.int32), axis=(0, 1)),
+        "mass": jnp.stack([jnp.sum(a32), jnp.sum(jnp.where(kept, a32, 0.0))]),
+    }
+
+
+def _block_sequence_stats(
+    sequence: Int[Array, " R"], group_sizes: Int[Array, " E"], rows: TransposableRows
+) -> Int[Array, " 4"]:
+    """For the ``TransposableRows`` blocks of expert-sorted rows from sequences ``sequence``: the counts of
+    non-empty blocks, full (4-row) blocks, blocks mixing sequences, and blocks holding two rows of one sequence."""
+    block, lane, num_blocks = _transposable_rows(group_sizes, sequence.shape[0], rows)
+    buf = jnp.full((num_blocks, _SPARSE_GROUP), -1, jnp.int32).at[block, lane].set(sequence, mode="drop")
+    filled = buf >= 0
+    pairs = [(i, j) for i in range(_SPARSE_GROUP) for j in range(i + 1, _SPARSE_GROUP)]
+    same = functools.reduce(jnp.logical_or, [filled[:, i] & (buf[:, i] == buf[:, j]) for i, j in pairs])
+    differ = functools.reduce(jnp.logical_or, [filled[:, i] & filled[:, j] & (buf[:, i] != buf[:, j]) for i, j in pairs])
+    return jnp.stack(
+        [
+            jnp.sum(filled[:, 0]),
+            jnp.sum(jnp.all(filled, axis=-1)),
+            jnp.sum(differ),
+            jnp.sum(same),
+        ]
+    ).astype(jnp.int32)
 
 
 def _ve_lambda_init(mode: ValueEmbeds) -> jax.Array | None:
@@ -442,6 +637,13 @@ class GrugModelConfig:
     as ``relu(g) * u`` with the gate tied to ``W_up`` (``relu(u) * u = relu(u)^2``), so every MoE backend
     computes it unchanged; the gate GEMM is still paid. Parameter-match with 1.5x ``num_experts`` and
     ``num_experts_per_token``."""
+    expert_act_sparsity: ActSparsity = ActSparsity.NONE
+    """2:4 structured sparsity of the routed experts' ReLU^2 post-activations (``ActSparsity``, ``relu2_2of4``);
+    needs ``moe_ungated_relu2`` and ``moe_ungated_kernel``."""
+    expert_act_transposable_rows: TransposableRows = TransposableRows.STRIDED
+    """The dispatch rows of an ``expert_act_sparsity=2:4T`` block (``TransposableRows``)."""
+    shared_act_sparsity: ActSparsity = ActSparsity.NONE
+    """2:4 structured sparsity of the shared experts' ReLU^2 post-activations; needs ``shared_ungated_relu2``."""
     expert_activation: str = "silu"
     """Gate activation of the routed and shared GLU experts (an ``ActivationFunctionEnum`` value, e.g.
     ``relu2`` for ReLU^2-GLU as in Primer / ReMoE)."""
@@ -457,6 +659,22 @@ class GrugModelConfig:
             raise ValueError("lm_head_grad_clip clips at the post-norm probe site")
         if unknown := set(self.sconv_sites) - set(SCONV_SITES):
             raise ValueError(f"sconv_sites must be a subset of {SCONV_SITES}, got {sorted(unknown)}")
+        if self.expert_act_sparsity != ActSparsity.NONE:
+            if not (self.moe_ungated_relu2 and self.moe_ungated_kernel):
+                raise ValueError("expert_act_sparsity needs moe_ungated_relu2 and moe_ungated_kernel")
+            if self.intermediate_dim % _SPARSE_GROUP:
+                raise ValueError(f"expert_act_sparsity needs intermediate_dim divisible by {_SPARSE_GROUP}")
+            if self.expert_act_sparsity == ActSparsity.TRANSPOSABLE and self.moe_implementation != "ragged_all_to_all":
+                raise ValueError("expert_act_sparsity=2:4T needs moe_implementation=ragged_all_to_all")
+        if self.shared_act_sparsity != ActSparsity.NONE:
+            if self.shared_act_sparsity == ActSparsity.TRANSPOSABLE:
+                raise ValueError("shared_act_sparsity supports none or 2:4")
+            if not self.shared_ungated_relu2:
+                raise ValueError("shared_act_sparsity needs shared_ungated_relu2")
+            if self.shared_expert_intermediate_dim % _SPARSE_GROUP:
+                raise ValueError(
+                    f"shared_act_sparsity needs shared_expert_intermediate_dim divisible by {_SPARSE_GROUP}"
+                )
         if self.moe_implementation not in MOE_IMPLEMENTATIONS:
             raise ValueError(f"moe_implementation must be one of {MOE_IMPLEMENTATIONS}, got {self.moe_implementation!r}")
         if not self.dense_mlp and self.num_experts_per_token >= self.num_experts:
@@ -1226,6 +1444,10 @@ class MoEMLP(eqx.Module):
         routed_flat, overflow = _run_expert_bank(
             self.expert_mlp, self.cfg, routed_input, selected_experts, combine_weights
         )
+        if _COLLECT_UNIT_STATS.get():
+            unit_stats = _routed_unit_stats(self.expert_mlp, self.cfg, routed_input, selected_experts, s)
+            for name, value in unit_stats.items():
+                router_stats[f"{UNIT_STATS_PREFIX}routed_{name}"] = value
         router_stats["capacity_overflow"] = overflow.dropped
         router_stats["sender_capacity_overflow"] = overflow.sender_dropped
         router_stats["receiver_capacity_overflow"] = overflow.receiver_dropped
@@ -1254,8 +1476,22 @@ def _shared_experts_tail(
         act = ActivationFunctionEnum(cfg.expert_activation).to_jax_fn()
         hidden = jnp.concatenate([act(g) * u for g, u in zip(gates, ups, strict=True)], axis=1)
     else:
-        hidden = jnp.concatenate([jnp.square(jax.nn.relu(u)) for u in parts], axis=1)
+        act = _relu2_act(cfg.shared_act_sparsity)
+        hidden = jnp.concatenate([act(u) for u in parts], axis=1)
     return _proj(hidden, w_down, out_sharding=out_sharding)
+
+
+def _shared_unit_stats(ups: Float[Array, "T I"]) -> dict[str, jax.Array]:
+    """``_unit_stats`` of the shared experts' ReLU^2 post-activations (one segment), summed over the batch."""
+
+    def local(u: jax.Array) -> dict[str, jax.Array]:
+        a = relu2(u)
+        stats = _unit_stats(a, keep_top2_of_4(a), jnp.zeros(a.shape[0], jnp.int32), 1)
+        return jax.tree.map(lambda v: jax.lax.psum(v, _BATCH_AXES), stats)
+
+    return jax.shard_map(local, mesh=get_abstract_mesh(), in_specs=P(_BATCH_AXES, None), out_specs=P(), check_vma=False)(
+        ups
+    )
 
 
 def moe_and_shared_fused(
@@ -1281,6 +1517,10 @@ def moe_and_shared_fused(
     parts = list(_fused_projection(x_flat, tuple(moe_weights + shared_weights)))
     routed, stats = mlp(x, projected=parts[: len(moe_weights)])
     shared_out = _shared_experts_tail(mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, _batch_spec())
+    if _COLLECT_UNIT_STATS.get() and not gated:
+        ups = reshard(jnp.concatenate(parts[len(moe_weights) :], axis=1), P(_BATCH_AXES, None))
+        for name, value in _shared_unit_stats(ups).items():
+            stats[f"{UNIT_STATS_PREFIX}shared_{name}"] = value
     shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
     return routed + shared_out, stats
 
@@ -1455,7 +1695,7 @@ def _run_expert_bank(
             em.w_up if ungated else jnp.concatenate([em.w_up, em.w_up], axis=-1),
             em.w_down,
             # relu(u) * u = relu(u)^2 for the backends that take the gate tied to W_up.
-            activation=ActivationFunctionEnum.relu2 if ungated else em.activation,
+            activation=_routed_activation(cfg) if ungated else em.activation,
             implementation=em.implementation,
             mesh=get_abstract_mesh(),
             capacity_factor=em.capacity_factor,
@@ -1465,6 +1705,66 @@ def _run_expert_bank(
             ragged_expert_chunks=cfg.moe_ragged_chunks,
         )
     return em(routed_input, selected, combine_weights, mesh=get_abstract_mesh(), report_capacity_overflow=True)
+
+
+def _routed_activation(cfg: GrugModelConfig) -> MoeActivation:
+    """The ungated routed experts' activation: ReLU^2, or ``relu2_2of4`` under 2:4 sparsity (a plain callable, so
+    the EP backends run it on the ``ragged_dot`` expert MLP and differentiate through the mask), or the
+    ``GroupedActivation`` of ``relu2_2of4_transposed`` under 2:4T."""
+    if cfg.expert_act_sparsity == ActSparsity.TWO_FOUR:
+        return relu2_2of4
+    if cfg.expert_act_sparsity == ActSparsity.TRANSPOSABLE:
+        return relu2_2of4_transposed(cfg.expert_act_transposable_rows)
+    return ActivationFunctionEnum.relu2
+
+
+def _routed_unit_stats(
+    em: MoEExpertMlp,
+    cfg: GrugModelConfig,
+    routed_input: Float[Array, "T D"],
+    selected: Int[Array, "T K"],
+    seq_len: int,
+) -> dict[str, jax.Array]:
+    """``_unit_stats`` of the routed experts' ReLU^2 post-activations under the model's own mask (per-token 2:4 for
+    ``none`` and ``2:4``), recomputed from ``W_up`` per batch shard in an expert-major buffer like the dispatch
+    buffer (one shard's rows only) and summed over the batch (``collect_unit_stats``). Adds ``mass_variants``
+    (total, per-token 2:4, 2:4T consecutive, 2:4T strided kept mass) and per ``TransposableRows`` layout the
+    ``_block_sequence_stats``."""
+    num_experts = em.w_up.shape[0]
+    layouts = (TransposableRows.CONSECUTIVE, TransposableRows.STRIDED)
+
+    def local(x: jax.Array, sel: jax.Array, w_up: jax.Array) -> dict[str, jax.Array]:
+        flat = sel.reshape(-1)
+        order = jnp.argsort(flat, stable=True)
+        sizes = jnp.bincount(flat, length=num_experts).astype(jnp.int32)
+        token = order // sel.shape[1]
+        a = relu2(jax.lax.ragged_dot(x[token], w_up.astype(x.dtype), sizes))
+        per_token = keep_top2_of_4(a)
+        transposed = {rows: transposable_row_mask(a, sizes, rows) for rows in layouts}
+        if cfg.expert_act_sparsity == ActSparsity.TRANSPOSABLE:
+            kept = transposed[cfg.expert_act_transposable_rows]
+        else:
+            kept = per_token
+        stats = _unit_stats(a, kept, flat[order], num_experts)
+        a32 = a.astype(jnp.float32)
+        stats["mass_variants"] = jnp.stack(
+            [jnp.sum(a32)] + [jnp.sum(jnp.where(m, a32, 0.0)) for m in (per_token, *transposed.values())]
+        )
+        for rows in layouts:
+            stats[f"blocks_{rows}"] = _block_sequence_stats(token // seq_len, sizes, rows)
+        return jax.tree.map(lambda v: jax.lax.psum(v, _BATCH_AXES), stats)
+
+    return jax.shard_map(
+        local,
+        mesh=get_abstract_mesh(),
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(None, None, None)),
+        out_specs=P(),
+        check_vma=False,
+    )(
+        reshard(routed_input, P(_BATCH_AXES, None)),
+        reshard(selected, P(_BATCH_AXES, None)),
+        reshard(em.w_up, P(None, None, None)),
+    )
 
 
 def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:

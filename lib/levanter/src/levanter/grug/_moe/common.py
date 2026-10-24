@@ -93,7 +93,19 @@ def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
 
 
 PspecAxis: TypeAlias = str | tuple[str, ...] | None
-MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
+
+
+@dataclass(frozen=True)
+class GroupedActivation:
+    """An ungated expert activation that also reads the expert groups of the dispatch buffer:
+    ``fn(pre, group_sizes)`` on the expert-major ``[C, I]`` pre-activations, where ``group_sizes`` are the
+    active rows of each expert (rows past their sum are padding). Only ``ragged_all_to_all``'s ``ragged_dot``
+    expert MLP takes it (e.g. a mask chosen over blocks of an expert's rows)."""
+
+    fn: Callable[[jax.Array, jax.Array], jax.Array]
+
+
+MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array] | GroupedActivation
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.

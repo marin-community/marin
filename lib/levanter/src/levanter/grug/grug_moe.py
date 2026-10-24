@@ -38,6 +38,7 @@ from levanter.grug._moe.common import (
     MoeDispatchCounts,
     MoEExpertMlpPspecs,
     padding_skipped_assignments,
+    GroupedActivation,
     MoeActivation,
     MoeImplementation,
     PspecAxis,
@@ -545,7 +546,7 @@ def moe_mlp(
         mesh = _current_mesh()
 
     if isinstance(activation, ActivationFunctionEnum):
-        activation_fn: Callable[[jax.Array], jax.Array] = activation.to_jax_fn()
+        activation_fn: Callable[[jax.Array], jax.Array] | GroupedActivation = activation.to_jax_fn()
     else:
         activation_fn = activation
 
@@ -849,6 +850,7 @@ __all__ = [
     "MOE_RECEIVER_DROPPED_ASSIGNMENTS_METRIC",
     "MOE_SKIPPED_PADDING_ASSIGNMENTS_METRIC",
     "MOE_VALID_ASSIGNMENTS_METRIC",
+    "GroupedActivation",
     "MoeDispatchCounts",
     "MoeActivation",
     "MoEExpertMlp",
