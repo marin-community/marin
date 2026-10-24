@@ -92,7 +92,10 @@ def main() -> None:
             ids = raw["response_ids"]
             reply = decode_token_bytes(tokenizer, ids[:-1] if ids and ids[-1] == close else ids)
             verdicts.append(
-                {"probe_id": raw["probe_id"], **grade_reply(SET_TASK[name], tasks[raw["probe_id"]], reply, tokens.think_close)}
+                {
+                    "probe_id": raw["probe_id"],
+                    **grade_reply(SET_TASK[name], tasks[raw["probe_id"]], reply, tokens.think_close),
+                }
             )
         report["sets"][name] = set_report(verdicts)
         with fsspec.open(f"{args.out.removesuffix('.json')}-{name}-verdicts.jsonl", "w") as handle:
