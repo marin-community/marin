@@ -37,6 +37,8 @@ class _RoutedDistillationPlanner:
             if self._default_route_key is None:
                 raise ValueError("a multi-route distillation plan requires teacher_route_keys on the trajectory batch")
             route_keys = [self._default_route_key] * len(trajectory_batch["response_ids"])
+        if any(key is None for key in route_keys):
+            raise ValueError("Distillation requires a teacher route for every trajectory row")
         routed = route_trajectory_batch(
             trajectory_batch,
             route_keys=tuple(route_keys),

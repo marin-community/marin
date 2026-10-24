@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
 
@@ -84,3 +85,14 @@ def repair_turn_pair():
 def test_multi_turn_repair_switch_keeps_turn_alignment():
     batch = WholeTaskProjection(config(), Tokenizer()).project([repair_turn_pair()], request())
     np.testing.assert_array_equal(batch["behavior_sources"][0], np.array([0, 0, 1, 1, 0, 0], dtype=np.uint8))
+
+
+@pytest.mark.parametrize("routed_first", [True, False])
+def test_concatenation_preserves_sparse_teacher_routes(routed_first):
+    routed = WholeTaskProjection(config(), Tokenizer()).project([teacher_rollout([3, 4, 5, 6])], request())
+    routed["teacher_route_keys"] = ["identity"]
+    plain = WholeTaskProjection(config(), Tokenizer()).project([rollout([7, 8], 1.0)], request())
+    batches = [routed, plain] if routed_first else [plain, routed]
+    merged = concatenate_trajectory_batches(batches, tis_lcs_alert_threshold=0.005)
+    assert merged["teacher_route_keys"] == (["identity", None] if routed_first else [None, "identity"])
+    assert [len(row) for row in merged["response_ids"]] == ([4, 2] if routed_first else [2, 4])
