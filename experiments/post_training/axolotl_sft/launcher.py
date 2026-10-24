@@ -58,6 +58,12 @@ PACKED_ATTENTION_PLUGIN = "packed_attention.PackedAttentionPlugin"
 PRECISION_PROBE_PLUGIN = "precision_probe.PrecisionProbePlugin"
 # The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
 CUT_CROSS_ENTROPY_PLUGIN = "axolotl.integrations.cut_cross_entropy.CutCrossEntropyPlugin"
+# Per-architecture load-time checks shipped next to the pod runner (see nemotron_h_checks.py).
+ARCHITECTURE_PLUGINS: dict[str, tuple[str, ...]] = {
+    "qwen3_moe": (),
+    "qwen3_5_moe": (),
+    "nemotron_h": ("nemotron_h_checks.NemotronHChecksPlugin",),
+}
 GPUS_PER_NODE = 8
 POD_RUNNER = "experiments/post_training/axolotl_sft/pod_runner.py"
 PAYLOAD_ENV = "AXOLOTL_PAYLOAD"
@@ -166,7 +172,13 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "revision_of_model": spec.base.revision,
         "trust_remote_code": False,
         "strict": False,
-        "plugins": [TEMPLATE_INTEGRITY_PLUGIN, FP32_MASTER_PLUGIN, CUT_CROSS_ENTROPY_PLUGIN, PACKED_ATTENTION_PLUGIN],
+        "plugins": [
+            TEMPLATE_INTEGRITY_PLUGIN,
+            FP32_MASTER_PLUGIN,
+            CUT_CROSS_ENTROPY_PLUGIN,
+            PACKED_ATTENTION_PLUGIN,
+            *ARCHITECTURE_PLUGINS[spec.base.architecture],
+        ],
         "tokenizer_save_jinja_files": False,
         "chat_template": "jinja",
         "chat_template_jinja": spec.chat_template,
