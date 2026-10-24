@@ -310,8 +310,10 @@ Each Evalchemy evaluator bounds its active evaluation items through
 default can have up to 512 active items. Each evaluation broker worker allows 64 concurrent HTTP
 requests; the proxy allows `max(256, 64 * instances)` outstanding requests (512 for eight instances),
 including requests already running on workers.
-Metadata and tokenization requests bypass queued generations and have four reserved worker slots
-and four extra proxy slots. Their responses are fetched from the live server, not cached.
+Model-info, metrics, and tokenization requests bypass generation admission. The proxy forwards
+them directly to a worker's auxiliary HTTP endpoint while its heartbeat lease is live. Worker
+replacement updates that address after preemption; when no worker is ready, these requests return
+503. Token counts and model info come from the live serving backend rather than a local estimate.
 GPU evaluation servers schedule up to 4,096 tokens across requests per iteration by default;
 TPU servers use 512.
 Set `serve.max_num_batched_tokens` in the model configuration to override that budget.

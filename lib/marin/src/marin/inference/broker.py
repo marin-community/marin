@@ -17,7 +17,6 @@ from marin.inference.types import (
     BrokerStatus,
     InferenceBackendState,
     InferenceRequest,
-    InferenceRequestKind,
     InferenceResponse,
     InferenceWorkerMetadata,
     LeasedInferenceRequest,
@@ -54,12 +53,11 @@ class LeaseQueue(Generic[T]):
     def push(self, item: T) -> None:
         self._queue.append(item)
 
-    def pop(self, lease_timeout: float, predicate: Callable[[T], bool] = lambda _: True) -> Lease[T] | None:
-        index = next((index for index, item in enumerate(self._queue) if predicate(item)), None)
-        if index is None:
+    def pop(self, lease_timeout: float) -> Lease[T] | None:
+        if not self._queue:
             return None
 
-        item = self._queue.pop(index)
+        item = self._queue.pop(0)
         lease = Lease(item=item, lease_id=str(uuid.uuid4()), timestamp=self._clock(), timeout=lease_timeout)
         self._leases[lease.lease_id] = lease
         return lease
@@ -175,6 +173,18 @@ class InferenceBroker:
         with self._lock:
             return dict(self._worker_metadata)
 
+    def ready_workers(self) -> tuple[InferenceWorkerMetadata, ...]:
+        """Return endpoints whose workers still hold a live heartbeat lease."""
+        with self._lock:
+            if self._finished:
+                return ()
+            now = self._clock()
+            return tuple(
+                metadata
+                for worker_id, metadata in self._worker_metadata.items()
+                if now - self._worker_heartbeats[worker_id] < WORKER_LEASE_SECONDS
+            )
+
     def submit_request(self, request: InferenceRequest) -> None:
         with self._lock:
             if self._finished:
@@ -185,18 +195,14 @@ class InferenceBroker:
             self._queued_at[request.request_id] = self._clock()
             self._submitted_requests += 1
 
-    def fetch_requests(
-        self, *, max_items: int, kind: InferenceRequestKind | None = None
-    ) -> list[LeasedInferenceRequest]:
+    def fetch_requests(self, *, max_items: int) -> list[LeasedInferenceRequest]:
         fetched: list[LeasedInferenceRequest] = []
         with self._lock:
             self._expire_requests()
             if self._finished:
                 return []
             while len(fetched) < max_items:
-                lease = self._requests.pop(
-                    self._request_lease_timeout_seconds, lambda request: kind is None or request.kind is kind
-                )
+                lease = self._requests.pop(self._request_lease_timeout_seconds)
                 if lease is None:
                     break
                 fetched.append(LeasedInferenceRequest(lease_id=lease.lease_id, request=lease.item))

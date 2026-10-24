@@ -11,7 +11,6 @@ from typing import Protocol
 # Keep logs readable when a poll returns many request IDs.
 _REQUEST_ID_LOG_LIMIT = 4
 STREAM_BUFFER_BYTES = 4 * 1024 * 1024
-AUXILIARY_REQUEST_SLOTS = 4
 WORKER_HEARTBEAT_SECONDS = 5.0
 WORKER_LEASE_SECONDS = 3 * WORKER_HEARTBEAT_SECONDS
 
@@ -20,11 +19,6 @@ class InferenceBackendState(StrEnum):
     READY = "ready"
     RECOVERING = "recovering"
     FINISHED = "finished"
-
-
-class InferenceRequestKind(StrEnum):
-    AUXILIARY = "auxiliary"
-    GENERATION = "generation"
 
 
 def format_request_ids(ids: list[str]) -> str:
@@ -70,14 +64,6 @@ class InferenceRequest:
     query_string: str = ""
     headers: tuple[tuple[str, str], ...] = ()
     streaming: bool = False
-
-    @property
-    def kind(self) -> InferenceRequestKind:
-        match self.method, self.path:
-            case ("GET", "/v1/models" | "/metrics") | ("POST", "/tokenize" | "/detokenize"):
-                return InferenceRequestKind.AUXILIARY
-            case _:
-                return InferenceRequestKind.GENERATION
 
 
 @dataclass(frozen=True)
@@ -140,6 +126,7 @@ type BrokerResponse = InferenceResponse | StreamEvent
 class InferenceWorkerMetadata:
     tensor_parallel_size: int
     backend_name: str
+    auxiliary_url: str
 
 
 @dataclass(frozen=True)
@@ -161,9 +148,7 @@ class BrokerStatus:
 
 # Brokers route payloads only; callers own broker and worker lifecycle.
 class InferenceRequestProvider(Protocol):
-    def fetch_requests(
-        self, *, max_items: int, kind: InferenceRequestKind | None = None
-    ) -> list[LeasedInferenceRequest]: ...
+    def fetch_requests(self, *, max_items: int) -> list[LeasedInferenceRequest]: ...
 
     def submit_responses(self, responses: Iterable[LeasedInferenceResponse]) -> None: ...
 
@@ -188,6 +173,8 @@ class InferenceRequestProvider(Protocol):
 
 
 class InferenceResponseProvider(Protocol):
+    def ready_workers(self) -> tuple[InferenceWorkerMetadata, ...]: ...
+
     def submit_request(self, request: InferenceRequest) -> None: ...
 
     def fetch_responses(self, *, max_items: int) -> list[BrokerResponse]: ...

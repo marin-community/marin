@@ -10,12 +10,13 @@ import threading
 import time
 import uuid
 from collections import deque
-from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from concurrent.futures import Future
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, replace
 
 import anyio
+import httpx
 import uvicorn
 from rigging.timing import Duration, ExponentialBackoff
 from starlette.applications import Starlette
@@ -24,13 +25,12 @@ from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingR
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
+from marin.inference.auxiliary import auxiliary_response, is_auxiliary_request
 from marin.inference.http_proxy import forwardable_request_headers
 from marin.inference.types import (
-    AUXILIARY_REQUEST_SLOTS,
     STREAM_BUFFER_BYTES,
     InferenceBackendState,
     InferenceRequest,
-    InferenceRequestKind,
     InferenceResponse,
     InferenceResponseProvider,
     OpenAIEndpoint,
@@ -141,6 +141,7 @@ class InferenceProxy:
         self._poll_stop_event: threading.Event | None = None
         self._poll_thread: threading.Thread | None = None
         self.stats = ProxyStats()
+        self._auxiliary_client = httpx.AsyncClient(timeout=request_timeout_seconds)
         self.app = Starlette(
             routes=[
                 Route("/", self._status),
@@ -148,10 +149,17 @@ class InferenceProxy:
                 Route("/health", self._health),
                 Route("/ready", self._ready),
                 Route("/tokenize", self._forward, methods=["POST"]),
+                Route("/detokenize", self._forward, methods=["POST"]),
                 Route("/metrics", self._forward, methods=["GET"]),
                 Route("/v1/{path:path}", self._forward, methods=["GET", "POST", "OPTIONS"]),
             ],
+            lifespan=self._lifespan,
         )
+
+    @asynccontextmanager
+    async def _lifespan(self, _app: Starlette) -> AsyncIterator[None]:
+        async with self._auxiliary_client:
+            yield
 
     def __enter__(self) -> "InferenceProxy":
         self.start_response_poller()
@@ -277,7 +285,7 @@ class InferenceProxy:
             if not isinstance(request_json, dict):
                 return JSONResponse({"error": "request body must be a JSON object"}, status_code=400)
             streaming = request_json.get("stream") is True
-            if self._ignored_request_fields:
+            if self._ignored_request_fields and not is_auxiliary_request(request.method, request.url.path):
                 request_json = {
                     key: value for key, value in request_json.items() if key not in self._ignored_request_fields
                 }
@@ -315,6 +323,18 @@ class InferenceProxy:
         timeout_seconds: float | None = None,
         streaming: bool = False,
     ) -> Response:
+        if is_auxiliary_request(method, path):
+            request = InferenceRequest(
+                request_id=str(uuid.uuid4()),
+                method=method,
+                path=path,
+                payload=body,
+                query_string=query_string,
+                headers=tuple((headers or {}).items()),
+            )
+            return await self._forward_auxiliary(
+                request, self._request_timeout_seconds if timeout_seconds is None else timeout_seconds
+            )
         if streaming:
             return await self._forward_stream(
                 path,
@@ -328,19 +348,8 @@ class InferenceProxy:
         future: Future[InferenceResponse] = Future()
         pending_count = 0
         timeout_seconds = self._request_timeout_seconds if timeout_seconds is None else timeout_seconds
-        broker_request = InferenceRequest(
-            request_id=request_id,
-            method=method,
-            path=path,
-            payload=body,
-            query_string=query_string,
-            headers=tuple((headers or {}).items()),
-        )
-        pending_limit = self._max_pending_requests + (
-            AUXILIARY_REQUEST_SLOTS if broker_request.kind is InferenceRequestKind.AUXILIARY else 0
-        )
         with self._lock:
-            if len(self._pending) + len(self._streams) >= pending_limit:
+            if len(self._pending) + len(self._streams) >= self._max_pending_requests:
                 self.stats.rejected_requests += 1
                 logger.warning(
                     "InferenceProxy rejecting request method=%s path=%s pending=%d/%d",
@@ -358,6 +367,14 @@ class InferenceProxy:
             pending_count = len(self._pending)
 
         try:
+            broker_request = InferenceRequest(
+                request_id=request_id,
+                method=method,
+                path=path,
+                payload=body,
+                query_string=query_string,
+                headers=tuple((headers or {}).items()),
+            )
             await anyio.to_thread.run_sync(lambda: self._broker.submit_request(broker_request))
             logger.info(
                 "InferenceProxy submitted request request_id=%s method=%s path=%s pending=%d/%d",
@@ -408,6 +425,16 @@ class InferenceProxy:
                         self._token_samples.popleft()
                     self._token_samples.append((now, prompt, completion))
         return Response(content=response.payload, status_code=response.status_code, headers=dict(response.headers))
+
+    async def _forward_auxiliary(self, request: InferenceRequest, timeout_seconds: float) -> Response:
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                workers = await anyio.to_thread.run_sync(self._broker.ready_workers)
+                return await auxiliary_response(
+                    self._auxiliary_client, tuple(worker.auxiliary_url for worker in workers), request, timeout_seconds
+                )
+        except TimeoutError:
+            return JSONResponse({"error": "auxiliary request timed out"}, status_code=504)
 
     async def _forward_stream(
         self,

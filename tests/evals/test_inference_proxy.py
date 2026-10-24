@@ -21,6 +21,7 @@ from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.types import EndpointAccess
 from iris.resources.state import JobState, TaskState
 from marin.execution.lazy import lower
+from marin.inference.auxiliary import build_auxiliary_app
 from marin.inference.broker import InferenceBroker
 from marin.inference.config import (
     BrokerConfig,
@@ -32,6 +33,7 @@ from marin.inference.config import (
     ServingGeometry,
     VllmEngineConfig,
 )
+from marin.inference.dashboard_server import bind_serving_socket, serve_app_background
 from marin.inference.iris import (
     InferenceBackendState,
     RemoteInferenceSession,
@@ -565,6 +567,9 @@ def mock_cluster() -> Iterator[MockInferenceCluster]:
     with serve_deterministic_openai_stub() as upstream_stub:
         upstream = RunningModel(endpoint=OpenAIEndpoint(base_url=upstream_stub.base_url, model=upstream_stub.model))
         worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=5)
+        broker.register_worker(
+            "test-worker", InferenceWorkerMetadata(1, "vllm", upstream_stub.base_url.removesuffix("/v1"))
+        )
         with (
             _serve_inference_proxy(
                 broker=broker,
@@ -728,7 +733,7 @@ def test_broker_readiness_expires_without_evaluator_iris_polling() -> None:
         broker=broker,
     )
     assert session.backend_state() is InferenceBackendState.RECOVERING
-    broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm"))
+    broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm", "http://unused"))
     assert session.backend_state() is InferenceBackendState.READY
     now[0] += WORKER_LEASE_SECONDS + 1
     assert session.backend_state() is InferenceBackendState.RECOVERING
@@ -755,7 +760,7 @@ async def test_proxy_distinguishes_liveness_from_worker_readiness() -> None:
             response = await client.get("/ready")
             assert response.status_code == 503
             assert response.json()["status"] == "recovering"
-            broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm"))
+            broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm", "http://unused"))
             assert (await client.get("/ready")).status_code == 200
             broker.finish()
             response = await client.get("/ready")
@@ -981,7 +986,7 @@ def test_inference_broker_drops_response_for_expired_lease_after_requeue() -> No
 @pytest.mark.parametrize("instances", [1, 2])
 def test_remote_inference_brokers_single_and_multiple_instances(monkeypatch, instances) -> None:
     broker_actor = InferenceBroker(request_lease_timeout_seconds=240)
-    broker_actor.register_worker("worker-0", InferenceWorkerMetadata(tensor_parallel_size=1, backend_name="vllm"))
+    broker_actor.register_worker("worker-0", InferenceWorkerMetadata(1, "vllm", "http://unused"))
     proxy_models: list[str] = []
     events = []
     minted = []
@@ -1169,16 +1174,32 @@ async def test_inference_worker_refills_slots_while_slow_request_is_in_flight() 
                 release_slow.set()
 
 
+@contextmanager
+def _serve_auxiliary(upstream: DeterministicOpenAIStub) -> Iterator[str]:
+    app = build_auxiliary_app(upstream_base_url=upstream.base_url.removesuffix("/v1"), request_timeout_seconds=5)
+    with bind_serving_socket("127.0.0.1", 0) as sock, serve_app_background(app, sock, name="test-auxiliary"):
+        yield f"http://127.0.0.1:{sock.getsockname()[1]}"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("method", "path", "expected_status"),
-    [("GET", "/v1/models", 200), ("GET", "/metrics", 404), ("POST", "/tokenize", 200)],
+    ("method", "path"),
+    [
+        ("GET", "/v1/models"),
+        ("GET", "/metrics"),
+        ("POST", "/tokenize"),
+        ("POST", "/detokenize"),
+    ],
 )
-async def test_auxiliary_requests_bypass_full_generation_queue(method, path, expected_status) -> None:
+async def test_auxiliary_requests_bypass_full_generation_queue(method, path) -> None:
     broker = InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
     release = threading.Event()
-    with serve_deterministic_openai_stub(prompt_pauses={"slow": release}) as upstream_stub:
+    with (
+        serve_deterministic_openai_stub(prompt_pauses={"slow": release}) as upstream_stub,
+        _serve_auxiliary(upstream_stub) as auxiliary_url,
+    ):
         upstream = RunningModel(OpenAIEndpoint(upstream_stub.base_url, upstream_stub.model))
+        broker.register_worker("test-worker", InferenceWorkerMetadata(1, "vllm", auxiliary_url))
         worker = InferenceWorker(worker_id="test-worker", broker=broker, upstream=upstream, request_timeout_seconds=10)
         with (
             _serve_inference_proxy(
@@ -1199,21 +1220,81 @@ async def test_auxiliary_requests_bypass_full_generation_queue(method, path, exp
                     async with asyncio.timeout(5):
                         while not upstream_stub.requests_for("/v1/completions"):
                             await asyncio.sleep(0.01)
-                    # Also put a generation ahead of the auxiliary request in the broker's FIFO.
                     broker.submit_request(_completion_inference_request(request_id="queued", prompt="queued"))
                     response = await client.request(
-                        method, path, content=_json_bytes({"model": upstream_stub.model, "prompt": "hello"})
+                        method, path, json={"model": upstream_stub.model, "prompt": "hello", "tokens": [1, 2, 3]}
                     )
-                    assert response.status_code == expected_status
+                    assert response.status_code == 200
                     assert not generation.done()
-                    assert len(upstream_stub.requests_for("/v1/completions")) == 1
-                    if path == "/v1/models":
+                    assert len(upstream_stub.requests_for(path)) == 1
+                    assert broker.status().submitted_requests == 2
+                    if path == "/metrics":
+                        assert response.text == "stub_metric_total 17\n"
+                    elif path == "/v1/models":
                         assert response.json()["data"][0]["id"] == upstream_stub.model
                     elif path == "/tokenize":
                         assert response.json()["count"] == 3
+                    else:
+                        assert response.json()["prompt"] == "decoded tokens"
                 finally:
                     release.set()
                     await generation
+
+
+@pytest.mark.asyncio
+async def test_tokenization_can_exceed_four_concurrent_requests() -> None:
+    release = threading.Event()
+    broker = InferenceBroker(request_lease_timeout_seconds=10)
+    with serve_deterministic_openai_stub(tokenize_pause=release) as upstream, _serve_auxiliary(upstream) as address:
+        broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm", address))
+        with _serve_inference_proxy(broker=broker, model=upstream.model, request_timeout_seconds=10) as proxy:
+            async with httpx.AsyncClient() as client:
+                requests = [
+                    asyncio.create_task(
+                        client.post(proxy.endpoint.server_url("/tokenize"), json={"model": upstream.model})
+                    )
+                    for _ in range(8)
+                ]
+                try:
+                    async with asyncio.timeout(5):
+                        while len(upstream.requests_for("/tokenize")) < 8:
+                            await asyncio.sleep(0.01)
+                finally:
+                    release.set()
+                    responses = await asyncio.gather(*requests)
+                assert all(response.status_code == 200 for response in responses)
+                assert broker.status().submitted_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_endpoint_replacement_after_worker_lease_expires() -> None:
+    now = [0.0]
+    broker = InferenceBroker(request_lease_timeout_seconds=100, clock=lambda: now[0])
+    with (
+        serve_deterministic_openai_stub(model="original") as original,
+        serve_deterministic_openai_stub(model="replacement") as replacement,
+        _serve_auxiliary(original) as original_address,
+        _serve_auxiliary(replacement) as replacement_address,
+        _serve_inference_proxy(broker=broker, model="public", request_timeout_seconds=5) as proxy,
+    ):
+        broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm", original_address))
+        async with httpx.AsyncClient() as client:
+            url = proxy.endpoint.url("models")
+            assert (await client.get(url)).json()["data"][0]["id"] == "original"
+            now[0] += WORKER_LEASE_SECONDS + 1
+            assert (await client.get(url)).status_code == 503
+            assert len(original.requests_for("/v1/models")) == 1
+            broker.register_worker("worker", InferenceWorkerMetadata(1, "vllm", replacement_address))
+            assert (await client.get(url)).json()["data"][0]["id"] == "replacement"
+            broker.finish()
+            assert (await client.get(url)).status_code == 503
+
+
+def test_worker_auxiliary_endpoint_rejects_generation() -> None:
+    with serve_deterministic_openai_stub() as upstream, _serve_auxiliary(upstream) as address:
+        response = httpx.post(address + "/v1/completions", json={"prompt": "hello"})
+        assert response.status_code == 404
+        assert upstream.state.requests == []
 
 
 @pytest.mark.asyncio
