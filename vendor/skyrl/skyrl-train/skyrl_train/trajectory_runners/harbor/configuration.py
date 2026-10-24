@@ -365,7 +365,6 @@ class HarborConfigBuilder:
         return retry_config.model_copy(update={"exclude_exceptions": set(excluded)})
 
     def get_n_concurrent_trials(self) -> int:
-        """Get the number of concurrent Harbor tasks."""
         return concurrent_trials(self._harbor_cfg)
 
     def get_reward_shaping_config(self) -> Dict[str, Any]:
