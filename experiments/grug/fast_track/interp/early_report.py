@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 DETERMINED = 0.8  # P(y | context) for an n-gram-determined target
 MIN_CONTEXT = 50  # occurrences of a bigram context (20 for a trigram one) to call it determined
+EXAMPLE_WINDOW = 40  # tokens of each example attention pattern
 DOC_START = 8  # "first tokens of a document": document positions below this
 CATS = (
     "all",
@@ -429,10 +430,13 @@ def main() -> None:
     )
     hz = np.load(f"{d}/early_heads.npz")
     page["heads"], examples = heads_section(dict(hz))
+    rows = [r for r, src in enumerate(page["heads"]["example_source"]) if src in ("c4_en", "train")][:2]
     page["head_examples"] = {
-        "tokens": [[vocab[int(t)] for t in row] for row in examples["tokens"]],
+        "rows": rows,
+        "source": [page["heads"]["example_source"][r] for r in rows],
+        "tokens": [[vocab[int(t)] for t in examples["tokens"][r][:EXAMPLE_WINDOW]] for r in rows],
         **{
-            k: np.round(v[:, :, :64, :64], 3).tolist()
+            k: np.round(v[rows][:, :, :EXAMPLE_WINDOW, :EXAMPLE_WINDOW], 3).tolist()
             for k, v in examples.items()
             if k.startswith("L") and k.endswith("_v")
         },
