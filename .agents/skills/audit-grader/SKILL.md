@@ -3,7 +3,7 @@ name: audit-grader
 description: Audit a code check, LLM judge, or RL reward function against its task text, measure its effect on scores, and estimate its error rate with a blinded review of frozen samples. Use when asked to audit a grader or when a grader's scores look implausible; do not activate for routine grader changes.
 ---
 
-# Audit a Grader
+# Audit a grader
 
 A grader turns a response into a verdict: pass or fail, or a class such as
 correct, incorrect, or not attempted. It can be a code check, an LLM judge, or
