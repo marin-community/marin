@@ -45,7 +45,9 @@ gh workflow run agentx-performance.yaml -R marin-community/marin \
 Each profile has a separate coordinator on its execution cluster. H100 uses one
 8-GPU node in rno2a or east-02a; GB200 uses one four-GPU Grace ARM node in east-08a.
 Only roots carry federation cluster pins. Children remain on that peer; current Iris
-placement must exclude Hero's allocation before weekly GB200 activation.
+placement must verify spare GB200 capacity and exclude Hero's allocation before enabling
+that profile. Check the GitHub submission identity's admission before using east-02a;
+the validated GitHub path uses rno2a.
 
 GPU queue allowance is 48 hours, task allowance three hours, failure retry budget one
 and preemption retry budget three. Coordinators have no automatic retries and a seven-day
@@ -108,6 +110,9 @@ schedule runs twice an hour, materializes one undelivered result and uploads an
 submits children or advances execution. An `exported/` receipt acknowledges only artifact
 delivery. Losing that acknowledgement can repeat delivery; upstream conflict keys and
 the trace-cache fix make repeated ingestion safe.
+
+Processed bundle names include their SHA256. Repeating manual recovery can regenerate a
+bundle without replacing bytes referenced by an earlier completed-result descriptor.
 
 ```sh
 # Retry delivery of an exact completed descriptor, including after manual recovery:

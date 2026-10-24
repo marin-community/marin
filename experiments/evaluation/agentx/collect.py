@@ -82,6 +82,18 @@ def unpack(archive: Path, destination: Path) -> None:
             contents.extractall(destination, filter="data")
 
 
+def retain_processed_artifacts(artifacts: Path, bundle: Path, prefix: str) -> tuple[str, str]:
+    """Archive output under its checksum so earlier result descriptors remain readable."""
+    with bundle.open("wb") as encoded, zstandard.ZstdCompressor().stream_writer(encoded) as compressed:
+        with tarfile.open(fileobj=compressed, mode="w|") as contents:
+            contents.add(artifacts, arcname=".")
+    with bundle.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    uri = prefix_join(prefix, f"inferencex-{digest}.tar.zst")
+    copy_file(str(bundle), uri)
+    return uri, digest
+
+
 def retain_archive(archive: TaskOutputArchive, prefix: str, directory: Path) -> tuple[Path, str]:
     directory.mkdir(parents=True, exist_ok=True)
     local = directory / "outputs.tar.zst"
@@ -320,17 +332,13 @@ def collect_terminal(
             else:
                 artifacts = directory / "artifacts"
                 process_point(point, manifest, processor, artifacts)
-                bundle = directory / "inferencex.tar.zst"
-                with bundle.open("wb") as encoded, zstandard.ZstdCompressor().stream_writer(encoded) as compressed:
-                    with tarfile.open(fileobj=compressed, mode="w|") as contents:
-                        contents.add(artifacts, arcname=".")
-                copy_file(str(bundle), prefix_join(prefix, "inferencex.tar.zst"))
-                with bundle.open("rb") as stream:
-                    bundle_digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                bundle_uri, bundle_digest = retain_processed_artifacts(
+                    artifacts, directory / "inferencex.tar.zst", prefix
+                )
                 receipt.update(
                     {
                         "status": "valid",
-                        "artifacts_uri": prefix_join(prefix, "inferencex.tar.zst"),
+                        "artifacts_uri": bundle_uri,
                         "artifacts_sha256": bundle_digest,
                     }
                 )

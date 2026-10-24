@@ -21,7 +21,14 @@ from iris.cluster.types import JobName
 from iris.resources.state import FederationState, JobState
 from rigging.timing import Timestamp
 
-from experiments.evaluation.agentx.collect import collect_terminal, read_record, unpack, validate_window, write_record
+from experiments.evaluation.agentx.collect import (
+    collect_terminal,
+    read_record,
+    retain_processed_artifacts,
+    unpack,
+    validate_window,
+    write_record,
+)
 from experiments.evaluation.agentx.control import coordinator_plan, materialize, pending_result
 from experiments.evaluation.agentx.coordinator import recover_results, run_points
 from experiments.evaluation.agentx.run import logged_process
@@ -167,6 +174,30 @@ def test_delivery_acknowledgement_does_not_change_results_or_create_execution_st
     assert read_record(uri) == original
     # Explicit delivery retry recreates the same original source identity.
     assert materialize(uri, tmp_path / "retry") == result
+
+
+def test_reprocessing_preserves_bundles_referenced_by_earlier_completed_results(tmp_path):
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    aggregate = artifacts / "agg.json"
+    completed = []
+    for value in [1, 2]:
+        aggregate.write_text(json.dumps({"value": value}))
+        uri, digest = retain_processed_artifacts(artifacts, tmp_path / "working.tar.zst", str(tmp_path / "retained"))
+        result_uri = str(tmp_path / f"result-{value}.json")
+        write_record(
+            result_uri,
+            {
+                "source": {"kind": "fixture"},
+                "points": [{"receipt": {"status": "valid", "artifacts_uri": uri, "artifacts_sha256": digest}}],
+            },
+        )
+        completed.append(result_uri)
+    # Recovery can regenerate a point after its previous descriptor was delivered.
+    for value, result_uri in enumerate(completed, 1):
+        output = tmp_path / f"delivery-{value}"
+        materialize(result_uri, output)
+        assert json.loads((output / "agg.json").read_text()) == {"value": value}
 
 
 @pytest.fixture
