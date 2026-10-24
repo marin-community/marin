@@ -63,7 +63,7 @@ def next_token(completions_url: str, model: str, tokens: tuple[int, ...]) -> dic
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--weights", default=SNOWBALL_V01)
-    parser.add_argument("--prompts", required=True)
+    parser.add_argument("--prompts", default="check", help="JSONL path, or \"check\" for the built-in set")
     parser.add_argument("--output", required=True, help="JSON file path (s3:// or local)")
     parser.add_argument("--attention-backend", default="FLASH_ATTN")
     args = parser.parse_args()

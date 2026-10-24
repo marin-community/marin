@@ -3,9 +3,12 @@
 
 """Prompt files and tokenization shared by the torch harness and the vLLM reference.
 
-A prompt file is JSONL. Each row has an ``id`` and either ``messages`` (chat turns, rendered with the
-checkpoint's chat template and a generation prompt) or ``text`` (raw text, tokenized as is). Optional
-``targets`` lists continuations whose log-probabilities the harness reports.
+A prompt file is JSONL (s3:// or local; repository .gitignore drops *.jsonl, so keep prompt sets in object
+storage). Each row has an ``id`` and either ``messages`` (chat turns, rendered with the checkpoint's chat template
+and a generation prompt) or ``text`` (raw text, tokenized as is). Optional ``targets`` lists continuations whose
+log-probabilities the harness reports. ``--prompts check`` selects the built-in logit-check set below.
+
+This module must not import torch: the vLLM reference job runs without it.
 """
 
 import json
@@ -13,7 +16,6 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from marin.merging.checkpoint import METADATA_NAMES
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 from transformers import AutoTokenizer
@@ -32,6 +34,44 @@ def hf_repo_revision(weights: str) -> tuple[str, str | None] | None:
     return repo, revision or None
 
 
+TOKENIZER_FILES = (
+    "config.json",
+    "generation_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "chat_template.jinja",
+    "added_tokens.json",
+)
+
+CHECK_PROMPTS = [
+    {"id": "who-are-you", "messages": [{"role": "user", "content": "Who are you?"}]},
+    {"id": "who-made-you", "messages": [{"role": "user", "content": "Who created you?"}]},
+    {"id": "your-name", "messages": [{"role": "user", "content": "What is your name? Answer in one word."}]},
+    {
+        "id": "which-model",
+        "messages": [{"role": "user", "content": "Which language model am I talking to, and which company trained it?"}],
+    },
+    {
+        "id": "system-snowball",
+        "messages": [
+            {"role": "system", "content": "You are Marin Snowball, a language model made by Open Athena."},
+            {"role": "user", "content": "Who are you?"},
+        ],
+    },
+    {"id": "who-made-chatgpt", "messages": [{"role": "user", "content": "Which company made ChatGPT?"}]},
+    {"id": "capital", "messages": [{"role": "user", "content": "What is the capital of France?"}]},
+    {"id": "arithmetic", "messages": [{"role": "user", "content": "What is 17 times 23? Give only the number."}]},
+    {"id": "code", "messages": [{"role": "user", "content": "Write a Python function that reverses a string."}]},
+    {
+        "id": "fiction",
+        "messages": [{"role": "user", "content": "Write the opening line of a short story about a lighthouse keeper."}],
+    },
+    {"id": "raw-created-by", "text": "I am an AI assistant. I was created by Open"},
+]
+"""Logit-check set: identity questions, a system-prompt identity, controls, and a raw-text completion."""
+
+
 @dataclass(frozen=True)
 class Prompt:
     id: str
@@ -44,7 +84,7 @@ class Prompt:
 def load_tokenizer(weights: str):
     fs, path = filesystem_for(weights)
     with tempfile.TemporaryDirectory() as directory:
-        for name in METADATA_NAMES:
+        for name in TOKENIZER_FILES:
             if fs.exists(prefix_join(path, name)):
                 Path(directory, name).write_bytes(fs.cat_file(prefix_join(path, name)))
         return AutoTokenizer.from_pretrained(directory)
@@ -70,8 +110,11 @@ def encode(tokenizer, row: dict) -> Prompt:
 
 
 def read_prompts(path: str, tokenizer) -> list[Prompt]:
-    fs, local = filesystem_for(path)
-    rows = [json.loads(line) for line in fs.cat_file(local).decode().splitlines() if line.strip()]
+    if path == "check":
+        rows = CHECK_PROMPTS
+    else:
+        fs, local = filesystem_for(path)
+        rows = [json.loads(line) for line in fs.cat_file(local).decode().splitlines() if line.strip()]
     prompts = [encode(tokenizer, row) for row in rows]
     if len({prompt.id for prompt in prompts}) != len(prompts):
         raise ValueError(f"Duplicate prompt ids in {path}")

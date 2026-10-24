@@ -535,7 +535,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["logits", "capture", "generate", "compare"])
     parser.add_argument("--weights", default=SNOWBALL_V01)
-    parser.add_argument("--prompts")
+    parser.add_argument("--prompts", default="check", help="JSONL path, or \"check\" for the built-in set")
     parser.add_argument("--output", required=True, help="output directory (s3:// or local)")
     parser.add_argument("--vllm", help="compare: vllm_reference.py output JSON")
     parser.add_argument("--positions", default="last")
