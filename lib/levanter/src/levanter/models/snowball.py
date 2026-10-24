@@ -90,6 +90,7 @@ GRUG_MOE_ATTENTION_MODE = "production"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION_KEY = "grugmoe_artifact_schema_version"
 GRUG_MOE_ARTIFACT_SCHEMA_VERSION = 1
 SnowballProjectionImplementation = Literal["native", "fixed_schedule"]
+SnowballGatedNormImplementation = Literal["native", "fixed_schedule"]
 SnowballRMSNormImplementation: TypeAlias = Literal["native"] | BatchInvariantRmsNormImplementation
 
 
@@ -413,6 +414,8 @@ class SnowballConfig(HFCompatConfig):
     # The June H100 golden was produced with "sonic"; match it for exact-tolerance parity there.
     moe_implementation: Optional[MoeImplementation] = None
     projection_implementation: SnowballProjectionImplementation = "native"
+    # Runtime knob only; fixed-schedule attention gating is opt-in and does not affect other gates.
+    attention_gated_norm_implementation: SnowballGatedNormImplementation = "native"
     # Runtime knob only; it is intentionally omitted from the HF architectural config.
     rms_norm_implementation: SnowballRMSNormImplementation = "native"
 
@@ -422,6 +425,11 @@ class SnowballConfig(HFCompatConfig):
     def __post_init__(self) -> None:
         if self.projection_implementation not in ("native", "fixed_schedule"):
             raise ValueError(f"unknown Snowball projection implementation: {self.projection_implementation!r}")
+        if self.attention_gated_norm_implementation not in ("native", "fixed_schedule"):
+            raise ValueError(
+                "unknown Snowball attention gated-norm implementation: "
+                f"{self.attention_gated_norm_implementation!r}"
+            )
         if self.rms_norm_implementation not in ("native", "reference", "pallas_tpu"):
             raise ValueError(f"unknown Snowball RMSNorm implementation: {self.rms_norm_implementation!r}")
         if self.num_heads % self.num_kv_heads != 0:
@@ -613,21 +621,38 @@ class GatedNorm(eqx.Module):
 
     w_down: jax.Array
     w_up: jax.Array
+    implementation: SnowballGatedNormImplementation = eqx.field(static=True)
 
     @staticmethod
-    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+    def init(
+        hidden_dim: int,
+        initializer_std: float,
+        *,
+        key: PRNGKeyArray,
+        implementation: SnowballGatedNormImplementation = "native",
+    ) -> "GatedNorm":
         k_down, k_up = random.split(key)
         return GatedNorm(
             w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
             w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
+            implementation=implementation,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
-        gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
+        if self.implementation == "fixed_schedule":
+            flat_x = x.reshape(-1, x.shape[-1])
+            gate_hidden = fixed_schedule_linear(flat_x, self.w_down).reshape(*x.shape[:-1], _GATED_NORM_RANK)
+        else:
+            gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
         gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
-        return x * gate.astype(x.dtype)
+        if self.implementation == "fixed_schedule":
+            gate_logits = fixed_schedule_linear(gate_hidden.reshape(-1, _GATED_NORM_RANK), self.w_up).reshape(*x.shape)
+        else:
+            gate_logits = jnp.einsum("...r,rd->...d", gate_hidden, self.w_up)
+        gate = jax.nn.sigmoid(gate_logits)
+        gate = _match_activation_layout(gate.astype(x.dtype), x)
+        return x * gate
 
 
 class SnowballAttention(eqx.Module):
@@ -773,6 +798,17 @@ def _partition_match(aligned_v: jax.Array, attn_out: jax.Array) -> jax.Array:
     if isinstance(sharding, NamedSharding):
         return reshard(aligned_v, sharding.spec)
     return reshard(aligned_v, _activation_spec(None, "model"))
+
+
+def _match_activation_layout(value: jax.Array, reference: jax.Array) -> jax.Array:
+    """Match a pointwise activation to the existing layout of its input."""
+    target = jax.typeof(reference).sharding if isinstance(reference, core.Tracer) else reference.sharding
+    if not isinstance(target, NamedSharding):
+        return value
+    current = jax.typeof(value).sharding if isinstance(value, core.Tracer) else value.sharding
+    if isinstance(current, NamedSharding) and current == target:
+        return value
+    return jax.sharding.reshard(value, target)
 
 
 class DenseMLP(eqx.Module):
@@ -965,7 +1001,12 @@ class SnowballBlock(eqx.Module):
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         return SnowballBlock(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=GatedNorm.init(
+                cfg.hidden_dim,
+                cfg.initializer_std,
+                key=gn_attn_key,
+                implementation=cfg.attention_gated_norm_implementation,
+            ),
             attn=SnowballAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps, cfg.rms_norm_implementation),
             mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),

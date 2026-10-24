@@ -32,6 +32,7 @@ from levanter.grug.grug_moe import PreparedMoERouteCapture
 from levanter.grug.attention import AttentionMask
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.kernels.pallas.rms_norm import batch_invariant_rms_norm_reference
+from levanter.models import snowball as snowball_module
 from levanter.models.lm_model import LmConfig, LmExample
 from levanter.layers.attention import AttentionMask as LmAttentionMask
 from levanter.layers.kv_cache import KvPageCache
@@ -39,6 +40,7 @@ from levanter.inference.page_table import PageBatchInfo, PageTableSpec
 from levanter.models.snowball import (
     GRUG_MOE_ARCHITECTURE,
     GRUG_MOE_MODEL_TYPE,
+    GatedNorm,
     RMSNorm,
     GrugMoeHfConfig,
     SnowballAttention,
@@ -130,6 +132,115 @@ def test_snowball_config_hf_roundtrip():
     # from_hf_config still round-trips it (above) through its tolerant fallback tuples.
     validate_single_name_config(hf.to_dict(), cfg)
     assert "rms_norm_implementation" not in hf.to_dict()
+    assert "attention_gated_norm_implementation" not in hf.to_dict()
+
+
+def test_snowball_attention_gated_norm_fixed_schedule_matches_reference_and_vjp(monkeypatch):
+    def reference_linear(x, weight):
+        return jax.lax.dot_general(
+            x,
+            weight,
+            (((1,), (0,)), ((), ())),
+            precision=jax.lax.Precision.DEFAULT,
+            preferred_element_type=jnp.float32,
+        )
+
+    monkeypatch.setattr(snowball_module, "fixed_schedule_linear", reference_linear)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        key = jax.random.key(17)
+        native = GatedNorm.init(256, 0.02, key=key)
+        fixed = GatedNorm.init(256, 0.02, key=key, implementation="fixed_schedule")
+        x = jnp.linspace(-1.0, 1.0, 2 * 3 * 256, dtype=jnp.float32).reshape(2, 3, 256)
+
+        def loss(implementation, value, down, up):
+            return jnp.sum(GatedNorm(down, up, implementation)(value) ** 2)
+
+        native_value, native_grad = jax.value_and_grad(
+            lambda value, down, up: loss("native", value, down, up),
+            argnums=(0, 1, 2),
+        )(x, native.w_down, native.w_up)
+        fixed_value, fixed_grad = jax.value_and_grad(
+            lambda value, down, up: loss("fixed_schedule", value, down, up),
+            argnums=(0, 1, 2),
+        )(x, fixed.w_down, fixed.w_up)
+        np.testing.assert_allclose(fixed_value, native_value, rtol=1e-5, atol=1e-5)
+        for fixed_component, native_component in zip(fixed_grad, native_grad, strict=True):
+            np.testing.assert_allclose(fixed_component, native_component, rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(fixed(x), native(x), rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.timeout(120)
+def test_snowball_attention_gated_norm_fixed_schedule_matches_input_layout_on_four_cpu_devices():
+    run_on_cpu_devices(
+        """
+        import equinox as eqx
+        import jax
+        import jax.numpy as jnp
+        import numpy as np
+        from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
+
+        from levanter.models import snowball as snowball_module
+        from levanter.models.snowball import GatedNorm
+
+        # Reference wiring only: this substitutes the contraction arithmetic so CPU can exercise
+        # the product layout and autodiff path. It is not evidence for the TPU custom VJP/kernel.
+        def reference_linear(x, weight):
+            return jax.lax.dot_general(
+                x,
+                weight,
+                (((1,), (0,)), ((), ())),
+                precision=jax.lax.Precision.DEFAULT,
+                preferred_element_type=jnp.float32,
+            )
+
+        snowball_module.fixed_schedule_linear = reference_linear
+        axes = ("replica_dcn", "data", "context", "expert", "model")
+        mesh = Mesh(
+            np.asarray(jax.devices()).reshape((1, 4, 1, 1, 1)),
+            axes,
+            axis_types=(AxisType.Explicit,) * len(axes),
+        )
+        input_sharding = NamedSharding(mesh, P(("replica_dcn", "data", "expert"), None, None))
+
+        with jax.set_mesh(mesh):
+            norm = GatedNorm.init(128, 0.02, key=jax.random.key(17), implementation="fixed_schedule")
+            for shape in ((4, 256, 128), (512, 1, 128), (4, 1, 128)):
+                host_x = np.linspace(-0.5, 0.5, np.prod(shape), dtype=np.float32).reshape(shape)
+                x = jax.device_put(jnp.asarray(host_x), input_sharding)
+                actual = eqx.filter_jit(norm)(x)
+                assert actual.sharding.spec == input_sharding.spec
+
+                down = np.asarray(norm.w_down)
+                up = np.asarray(norm.w_up)
+                hidden = jax.nn.silu(jnp.asarray(host_x) @ jnp.asarray(down))
+                expected = host_x * np.asarray(jax.nn.sigmoid(hidden @ jnp.asarray(up)))
+                np.testing.assert_allclose(np.asarray(actual), expected, rtol=1e-5, atol=1e-5)
+
+                input_value_and_grad = eqx.filter_jit(jax.value_and_grad(lambda value: jnp.mean(norm(value))))
+                _, input_grad = input_value_and_grad(x)
+                assert input_grad.sharding.spec == input_sharding.spec
+                assert bool(jnp.isfinite(input_grad).all())
+
+            _, norm_grad = eqx.filter_value_and_grad(lambda model: jnp.mean(model(x)))(norm)
+            assert bool(jnp.isfinite(norm_grad.w_down).all())
+            assert bool(jnp.isfinite(norm_grad.w_up).all())
+        """,
+        device_count=4,
+    )
+
+
+def test_snowball_attention_gated_norm_selector_preserves_state_dict():
+    native_cfg = _tiny_config()
+    fixed_cfg = dataclasses.replace(native_cfg, attention_gated_norm_implementation="fixed_schedule")
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        native = SnowballLMHeadModel.init(Axis("vocab", native_cfg.vocab_size), native_cfg, key=jax.random.key(23))
+        fixed = SnowballLMHeadModel.init(Axis("vocab", fixed_cfg.vocab_size), fixed_cfg, key=jax.random.key(23))
+        native_state = native.to_state_dict()
+        fixed_state = fixed.to_state_dict()
+
+    assert native_state.keys() == fixed_state.keys()
+    for name in native_state:
+        np.testing.assert_array_equal(native_state[name], fixed_state[name], err_msg=name)
 
 
 def test_snowball_shared_rms_norm_reference_jit_and_vjp_match_fixed_schedule_reference():
