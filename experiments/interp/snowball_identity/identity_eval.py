@@ -59,7 +59,10 @@ RETRY_ATTEMPTS = 4
 # v0.1 hit the 1,024-token cap on 26 of 122 identity answers with thinking on.
 THINKING_MAX_TOKENS = 4096
 
-OTHER_ENTITIES = r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|Llama|Meta AI|Gemini|Google|Nemotron|NVIDIA|Mistral"
+OTHER_ENTITIES = (
+    r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|"
+    r"Llama|Meta AI|Gemini|Google|Nemotron|NVIDIA|Mistral"
+)
 # A first-person claim followed closely by another lab's or model's name. Pre-screen only.
 FALSE_SELF_ATTRIBUTION = re.compile(
     r"\b(?:I am|I'm|I was|my name is|I'm called|I am called|call me|my (?:creator|developer|maker) is|"

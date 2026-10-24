@@ -48,9 +48,19 @@ def main() -> None:
             continue
         with tempfile.TemporaryDirectory() as directory:
             command = [
-                suite, "--base-url", require_secret("IDENTITY_ENDPOINT"), "--label", args.label,
-                "--out", directory, "--prompt-dir", str(PROMPTS), "--split", "dev",
-                "--workers", str(args.workers),
+                suite,
+                "--base-url",
+                require_secret("IDENTITY_ENDPOINT"),
+                "--label",
+                args.label,
+                "--out",
+                directory,
+                "--prompt-dir",
+                str(PROMPTS),
+                "--split",
+                "dev",
+                "--workers",
+                str(args.workers),
             ]
             if suite == "contrastive":
                 command.extend(["--tokenizer", "open-athena/Marin-Snowball-67B-A2B-v0.1"])
