@@ -97,6 +97,14 @@ def score(item: dict, completion: str) -> dict:
     return {"correct": container.returncode == 0, "error": f"exit-{container.returncode}"}
 
 
+def unclosed_thinking(text: str) -> bool:
+    """Count literal thinking tags, allowing a closed section before a new one."""
+    depth = 0
+    for token in re.findall(r"</?think>", text):
+        depth = max(0, depth - 1) if token == "</think>" else depth + 1
+    return depth > 0
+
+
 def sign_test_pvalue(wins: int, losses: int) -> float:
     """Exact two-sided binomial test on discordant independent item pairs."""
     n = wins + losses
@@ -131,6 +139,9 @@ def paired_summary(rows: list[dict], baseline: str) -> list[dict]:
                         "wins": wins,
                         "losses": losses,
                         "sign_test_p_two_sided": sign_test_pvalue(wins, losses) if mode == "greedy" else None,
+                        "unclosed_think": sum(unclosed_thinking(r.get("completion", "")) for r in selected),
+                        "opens_think": sum("<think>" in r.get("completion", "") for r in selected),
+                        "truncated": sum(r.get("finish_reason") == "length" for r in selected),
                     }
                 )
     return summaries

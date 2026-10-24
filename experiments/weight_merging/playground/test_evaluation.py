@@ -9,6 +9,7 @@ from experiments.weight_merging.playground.evaluation import (
     python_code,
     score,
     sign_test_pvalue,
+    unclosed_thinking,
     validate_vocabulary,
 )
 
@@ -61,3 +62,11 @@ def test_exact_sign_test_uses_discordant_pairs_only():
     assert sign_test_pvalue(10, 0) == pytest.approx(2 / 1024)
     assert sign_test_pvalue(1, 9) == pytest.approx(22 / 1024)
     assert sign_test_pvalue(9, 1) == sign_test_pvalue(1, 9)
+
+
+def test_unclosed_thinking_tracks_multiple_sections():
+    assert not unclosed_thinking("plain answer")
+    assert not unclosed_thinking("<think>reasoning</think>answer")
+    assert unclosed_thinking("<think>unfinished")
+    assert unclosed_thinking("<think>done</think><think>unfinished")
+    assert unclosed_thinking("</think><think>unfinished")

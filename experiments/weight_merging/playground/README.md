@@ -257,6 +257,58 @@ greedy paired W/L and exact two-sided sign-test p-values; pooled sampled outputs
 are correlated within items and do not receive this test. All comparisons are
 exploratory and p-values do not correct for the recipe search.
 
+### Aristaeus dose response
+
+The real-donor question is whether partial transfer preserves Aristaeus's math
+gain while suppressing its unclosed thinking on code tasks. Eleven points include
+the parent and donor, three convex averages at c=0.25/0.5/0.75, and three points
+each for density-0.3 magnitude top-k pruning and DARE-linear. With one donor,
+TIES reduces to magnitude pruning: this experiment measures no sign election.
+Single-donor DARE-TIES would duplicate DARE-linear at matched update size.
+
+```bash
+host-test-budget /tmp/merge-train/bin/python \
+  -m experiments.weight_merging.playground.dose_response \
+  --anchor PARENT_SNAPSHOT --donor ARISTAEUS_SNAPSHOT \
+  --output /tmp/aristaeus-dose-recipes.json --metrics /tmp/aristaeus-dose-norms.json
+
+gpu-borrow "weight-merging playground dose response" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+  /tmp/merge-eval/bin/python -m experiments.weight_merging.playground.sweep \
+  --run /tmp/near-run --candidates /tmp/aristaeus-dose-recipes.json \
+  --max-new-tokens 8192 --max-model-len 12288 --reload-check-every 5
+
+python -m experiments.weight_merging.playground.report --run /tmp/near-run \
+  --candidates /tmp/aristaeus-dose-recipes.json --output /tmp/aristaeus-dose-report.md
+```
+
+Register Aristaeus before starting the run, as above. The norm helper uses actual
+seed-42 masks and tensor-local magnitude retention. It scales each sparse update
+to match c times the full donor update's model-wide L2 norm before serving. It
+also measures the resulting FP32 and BF16 update norms, so serving casts remain
+visible. The report includes greedy accuracy, unclosed `<think>` rates and
+truncation per dataset, paired W/L with sign tests, and sampled scores by seed.
+Its companion JSON retains all counts and denominators.
+
+### Format audit
+
+Original scoring extracts the longest closed Python fence, or the full output
+when no fence exists. Preserve that primary score. A separate diagnostic prefers
+the last closed Python fence, otherwise the last syntactically complete
+contiguous unfenced code region. It chooses by syntax before executing one
+candidate; no test result selects among drafts or edits their code.
+
+```bash
+python -m experiments.weight_merging.playground.format_audit \
+  --run /tmp/near-run --candidate aristaeus --output /tmp/aristaeus-format-audit.json
+```
+
+At cap8192, Aristaeus scored16/257 on MBPP under original extraction and94/257
+under this diagnostic (78 recoveries, including45 truncated drafts, no lost
+passes). Instruct remained157/257 under both policies. Draft salvage measures
+code present inside output, including unfinished thoughts; it is not a completed
+answer score. Aristaeus's GSM8K986/1319 vs Instruct943/1319 has paired W/L166/123,
+exact two-sided p=0.01335 before correcting for exploratory comparisons.
+
 ### Recipes and precision
 
 The near grid has 32 candidates: three single-model baselines, two convex
