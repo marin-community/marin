@@ -107,10 +107,14 @@ jobs:
           if [ "${{ matrix.package }}" = "marin-haliax" ]; then
             export JAX_NUM_CPU_DEVICES=8
           fi
+          package_args=(--package "${{ matrix.package }}")
+          if [ "${{ matrix.package }}" = "marin-core" ]; then
+            package_args=(--all-packages --no-default-groups)
+          fi
           status=0
           uv run \
             --python ${{ matrix.python }} \
-            --package ${{ matrix.package }} \
+            "${package_args[@]}" \
             ${{ matrix.extras }} \
             --group test \
             pytest ${{ matrix.pytest_args }} \
