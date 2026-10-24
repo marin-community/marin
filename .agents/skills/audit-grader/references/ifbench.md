@@ -4,8 +4,8 @@ This is the audit of the 58 IFBench instruction checkers that Marin's evaluation
 policy runs through Evalchemy, for
 [#10060](https://github.com/marin-community/marin/issues/10060). Paths below are
 relative to
-[the audit repository at `a31c684`](https://github.com/XiaoyuanWang111/ifbench-audit/tree/a31c6841dae2632dafda740bd51496843d9e5f38).
-The Hugging Face dataset
+[the audit repository at `a31c684`](https://github.com/XiaoyuanWang111/ifbench-audit/tree/a31c6841dae2632dafda740bd51496843d9e5f38),
+except the Evalchemy and Marin paths in section 1. The Hugging Face dataset
 [`xiaoyuanwang/ifbench-audit` at `ceaba90`](https://huggingface.co/datasets/xiaoyuanwang/ifbench-audit/tree/ceaba90ba6a2acac8fd8b51368a37e27c0ba688f)
 has the fixtures, the findings, the decisions, the blinded-review records, and
 the panel verdicts.
@@ -22,9 +22,10 @@ proposed readings.
 - Data: `allenai/IFBench_test` at `2e8a48de`, with one sha256 per row in
   `protocol/manifest.json`.
 - Graders: Marin's checkers in Evalchemy's `eval/chat_benchmarks/IFBench`,
-  whose checker code is unchanged from `ab7ae27` to `09d27c9` and in Marin's
-  vendored copy at `2d9bb82` (`vendor/evalchemy`, #10288), and upstream
-  IFBench at `1c40f0c`, upstream's main branch when audited.
+  whose checker code is unchanged from Evalchemy `ab7ae27` to `09d27c9` and in
+  Marin's vendored copy, `vendor/evalchemy/eval/chat_benchmarks/IFBench` at
+  Marin `2d9bb82` (vendored in #10288), and upstream IFBench at `1c40f0c`,
+  upstream's main branch when audited.
 - Dependencies, as the audit pinned them: nltk 3.10.0, emoji 2.15.0, syllapy
   0.8.0, and the NLTK data files by hash.
 - When audited, Evalchemy loaded the dataset without a revision. The checkers
@@ -35,9 +36,12 @@ proposed readings.
 `src/ifbench_audit/contracts.py` has one validated checker per instruction
 type. Each docstring states the contract, written from the instruction text.
 The decision table in `reports/AUDIT.md` has 15 entries where the text allows
-two verdicts. Three more open questions have no proposal yet, and both modes
-keep the current behavior for them. `Choices.official()` selects the official
-readings (fixes only), and `Choices()` selects the proposals.
+two verdicts. Two of them have no switch: the official reading of
+D-minor-words is itself finding F25, and the official reading of D-thesis-body
+agrees with the proposal. Three more open questions have no proposal yet, and
+fixes only and proposed both follow the official reading for them.
+`Choices.official()` selects the official readings (fixes only), and
+`Choices()` selects the proposals.
 
 ## 3. Fixtures
 
@@ -107,7 +111,9 @@ Disagreements are verdicts where Marin strict and proposed differ. Round 1
 included the 136 fixtures that existed when it was frozen. The review checks
 them against their labels, and they do not enter the error rate. Round 2 was
 frozen after the fixes that round 1 prompted. Its responses were not used to
-develop the checkers, and no reviewer had seen them.
+develop the checkers, and no reviewer had seen them. Round 2 prompted two more
+checker changes, one of them the fix for F43, and no later round has measured
+the changed checkers.
 
 Counting only the cases where both verdicts are definite (279 in round 1 and
 134 in round 2), Marin strict contradicts the consensus on 6.3% and 6.8%,
@@ -117,9 +123,13 @@ records.
 
 Each reviewer batch was a separate agent run on Claude Opus 5.5 at max effort.
 Parts of four round-1 batches ran on earlier Claude models
-(`results/blind_audit/README.md` lists them). Reviewer B read the cases in a
-different order from reviewer A. The sandbox did not enforce independence; the
-reviewers were instructed to keep it.
+(`results/blind_audit/README.md` lists them). Both reviewers used the same
+models, so their agreement does not rule out shared blind spots. Reviewer B
+read the cases in a different order from reviewer A. The sandbox did not
+enforce independence; the reviewers were instructed to keep it. As examples of
+ambiguous wording, the audit's reviewer prompt gave the questions of three
+decision entries (D-non-word-tokens, D-vacuous, and D-curly-quotes); it left
+the choice of reading to the reviewers.
 
 ## 7. Decision gate and recommendations
 

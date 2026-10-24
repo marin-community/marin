@@ -11,7 +11,8 @@ an RL reward function. This audit measures how often a grader contradicts the
 task text and how much that changes scores.
 [references/ifbench.md](references/ifbench.md) is a worked example, the audit
 of the 58 IFBench instruction checkers. That audit read the checker code before
-it wrote its contracts and kept its frozen samples in its own repository; where
+it wrote its contracts, counted as findings nine checker behaviors that step 3
+treats as decisions, and kept its frozen samples in its own repository; where
 it differs from the steps below, follow the steps.
 
 Treat an LLM judge as a pipeline, and audit every stage: graded-text
@@ -195,7 +196,8 @@ grader's, with a paired interval that excludes zero.
    them a helper that prints a case's exact response. Isolate each reviewer run
    if the reviewers' environment allows it. Otherwise, report that
    independence was instructed. Report whether the reviewers were people or
-   language models.
+   language models, and name the models; two runs of one model can share blind
+   spots.
 5. A case has a consensus when both leans agree, and an error is a grader
    verdict that differs from the consensus. A grader's error rate is the share
    of population verdicts with an error. Estimate it per stratum from the cases

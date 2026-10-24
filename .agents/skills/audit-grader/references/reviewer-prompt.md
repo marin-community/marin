@@ -5,17 +5,17 @@ reviewers (`results/blind_audit/reviewer_prompt_v1.md` in
 [the audit repository](https://github.com/XiaoyuanWang111/ifbench-audit/tree/a31c6841dae2632dafda740bd51496843d9e5f38)).
 It speaks of requirements where the audit's version speaks of instructions,
 puts benchmark-specific words in placeholders in angle brackets, and drops the
-audit's IFBench examples of ambiguous wording. Rule 1 adds an exception for
-requirements about content. Give each reviewer run this text, its own batch
-file, the full-response files that the batch names, and the helper that
-prints a case's exact response.
+audit's IFBench examples of ambiguous wording, which were the questions of
+three of the audit's decision entries. Do not add examples from your own
+decision table. Rule 1 adds an exception for requirements about content. Give
+each reviewer run this text, its own batch file, the full-response files that
+the batch names, and the helper that prints a case's exact response.
 
-A batch file starts with one paragraph that explains its delimiters. Each case
-then has an opaque id, the requirement's name and text, the full prompt as
-context, and the response between explicit begin and end markers, so that
-leading and trailing whitespace is visible. The audit repository's
-`results/blind_audit/round2/cases/batch_A00.md` shows the format; its
-`INSTRUCTION TO JUDGE` label is the `REQUIREMENT TO JUDGE` below.
+Render the batch files as step 6.3 of the skill describes, and start each with
+one paragraph that explains its delimiters. The begin and end markers around
+each response keep leading and trailing whitespace visible. The audit
+repository's `results/blind_audit/round2/cases/batch_A00.md` shows the format;
+its `INSTRUCTION TO JUDGE` label is the `REQUIREMENT TO JUDGE` below.
 
 ```text
 You are an independent reviewer for <benchmark>. Your labels will be compared with automatic graders that you will never see, so they must come only from your own reading of the requirement text.
@@ -42,4 +42,6 @@ For a grader with labels other than pass and fail, replace the verdict and
 lean values with its labels. For a task with a reference answer, such as a
 factual question, add to rule 1: "Judge against the reference answer as given.
 Do not use your own knowledge of the facts. If the reference answer looks
-wrong, set verdict ambiguous and say why."
+wrong, set verdict ambiguous and say why." For an agent task, the RESPONSE is
+the frozen graded state that step 6.3 of the skill lists; make the helper
+print each of its files.
