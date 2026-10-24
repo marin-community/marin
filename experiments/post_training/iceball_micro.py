@@ -32,6 +32,7 @@ from dataclasses import dataclass, fields
 
 import click
 import duckdb
+import yaml
 from datasets import load_dataset
 from fray.types import ANY_REGION, ResourceConfig
 from huggingface_hub import HfFileSystem
@@ -62,10 +63,24 @@ from marin.rl.skyrl import (
 )
 from marin.training.training import LevanterCheckpoint
 from rigging.filesystem.storage_path import StoragePath, prefix_join
+from skyrlrecipe import (
+    Algorithm,
+    ContextBudget,
+    Data,
+    Environment,
+    Generator,
+    Policy,
+    PolicyOptimizerConfig,
+    RLEntrypoint,
+    SamplingParams,
+    SkyRLRecipe,
+    Trainer,
+)
 from zephyr.writers import write_parquet_file
 
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
+from experiments.post_training.skyrl_recipes import MARIN_RECIPE_POLICY
 from experiments.sft.launcher import DatasetSpec, LevanterCheckpointModel, SFTSpec, resources_from_accelerator, sft_step
 
 logger = logging.getLogger(__name__)
@@ -146,57 +161,45 @@ QWEN3_CHAT_TEMPLATE = (
     "{% endfor %}"
 )
 
-ICEBALL_RL_CONFIG = f"""\
-entrypoint: standard
-
-context_budget:
-  request_window_tokens: {ICEBALL_SEQUENCE_LENGTH}
-  max_new_tokens_per_turn: 256
-  max_turns: 1
-
-environment:
-  env_class: {SKYRL_GSM8K_ENVIRONMENT}
-
-trainer:
-  strategy: megatron
-  flash_attn: false
-  use_sample_packing: false
-  algorithm:
-    advantage_estimator: grpo
-    use_kl_loss: true
-  epochs: 1
-  max_steps: 8
-  update_epochs_per_batch: 1
-  eval_batch_size: 16
-  eval_before_train: false
-  eval_interval: -1
-  ckpt_interval: 2
-  resume_mode: latest
-  logger: wandb
-  project_name: {ICEBALL_WANDB_PROJECT}
-  hf_hub_repo_id: null
-  policy:
-    optimizer_config:
-      lr: 2.0e-6
-      max_grad_norm: 1.0
-generator:
-  backend: vllm
-  model_dtype: bfloat16
-  vllm_attention_backend: FLASH_ATTN
-  gpu_memory_utilization: 0.70
-  enforce_eager: false
-  run_engines_locally: true
-  weight_sync_backend: nccl
-  sampling_params:
-    logprobs: 0
-    temperature: 1.0
-    top_p: 1.0
-
-data:
-  kind: parquet
-  train_data: []
-  val_data: []
-"""
+ICEBALL_RL_RECIPE = SkyRLRecipe(
+    entrypoint=RLEntrypoint.STANDARD,
+    context_budget=ContextBudget(
+        request_window_tokens=ICEBALL_SEQUENCE_LENGTH, max_new_tokens_per_turn=256, max_turns=1
+    ),
+    environment=Environment(env_class=SKYRL_GSM8K_ENVIRONMENT),
+    trainer=Trainer(
+        strategy="megatron",
+        flash_attn=False,
+        use_sample_packing=False,
+        algorithm=Algorithm(advantage_estimator="grpo", use_kl_loss=True),
+        epochs=1,
+        max_steps=8,
+        update_epochs_per_batch=1,
+        eval_batch_size=16,
+        eval_before_train=False,
+        eval_interval=-1,
+        ckpt_interval=2,
+        resume_mode="latest",
+        logger="wandb",
+        project_name=ICEBALL_WANDB_PROJECT,
+        hf_hub_repo_id=None,
+        policy=Policy(optimizer_config=PolicyOptimizerConfig(lr=2e-06, max_grad_norm=1.0)),
+    ),
+    generator=Generator(
+        backend="vllm",
+        model_dtype="bfloat16",
+        vllm_attention_backend="FLASH_ATTN",
+        gpu_memory_utilization=0.7,
+        enforce_eager=False,
+        run_engines_locally=True,
+        weight_sync_backend="nccl",
+        sampling_params=SamplingParams(logprobs=0, temperature=1.0, top_p=1.0),
+    ),
+    data=Data(kind="parquet", train_data=(), val_data=()),
+)
+ICEBALL_RL_CONFIG = yaml.safe_dump(
+    SkyRLRecipe.combine(authored=ICEBALL_RL_RECIPE, marin=MARIN_RECIPE_POLICY).to_skyrl(), sort_keys=False
+)
 
 
 @dataclass(frozen=True)

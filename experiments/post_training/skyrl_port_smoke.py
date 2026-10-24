@@ -25,12 +25,14 @@ from marin.rl.skyrl import (
     _materialize_role_plan_config,
     skyrl_step,
 )
+from skyrlrecipe import SkyRLRecipe
 
 from experiments.evaluation.pipeline import EvaluationResult
 from experiments.models import qwen2_5_0_5b_instruct
 from experiments.post_training.cat_count_canary.data import TRAIN_FILENAME, VALIDATION_FILENAME, cat_count_data_step
 from experiments.post_training.cat_count_canary.launcher import role_plan, training_config
 from experiments.post_training.skyrl_evaluation import SKYRL_POLICY_LOCATION, skyrl_eval_step
+from experiments.post_training.skyrl_recipes import MARIN_RECIPE_POLICY
 
 CLUSTER = "cw-rno2a"
 MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -100,11 +102,13 @@ def build_smoke(version: str) -> Smoke:
             if callback["type"] == "evaluation":
                 callback["additional_evaluations"] = {}
                 callback["metric_groups"] = {}
+        authored = SkyRLRecipe.from_document(config)
+        recipe = SkyRLRecipe.combine(base=authored, authored=authored, marin=MARIN_RECIPE_POLICY)
         return skyrl_step(
             SkyRLSpec(
                 name=user_owned_name(f"checkpoints/skyrl-port-smoke/{name}"),
                 version=version,
-                config_yaml=yaml.safe_dump(config),
+                config_yaml=yaml.safe_dump(recipe.to_skyrl()),
                 model=ArtifactHfModel(
                     step=qwen2_5_0_5b_instruct,
                     relative_path="",
