@@ -9,6 +9,15 @@ import triton
 import triton.language as tl
 from triton.language.extra.cuda import libdevice
 
+MAX_BLOCK_SIZE = 32768
+LARGE_BLOCK_WARPS = 32
+SMALL_BLOCK_WARPS = 4
+
+
+def _launch_dimensions(vocab: int) -> tuple[int, int]:
+    block = min(MAX_BLOCK_SIZE, triton.next_power_of_2(vocab))
+    return block, LARGE_BLOCK_WARPS if block >= MAX_BLOCK_SIZE else SMALL_BLOCK_WARPS
+
 
 @triton.jit
 def _softmax_forward(
@@ -120,7 +129,7 @@ def softmax_forward(
         if save_stats
         else None
     )
-    block = min(32768, triton.next_power_of_2(logits.shape[-1]))
+    block, warps = _launch_dimensions(logits.shape[-1])
     _softmax_forward[(rows,)](
         logits,
         logits if targets is None else targets.contiguous(),
@@ -136,7 +145,7 @@ def softmax_forward(
         entropy,
         save_stats,
         block,
-        num_warps=32 if block >= 32768 else 4,
+        num_warps=warps,
     )
     return output, stats
 
@@ -149,7 +158,7 @@ def softmax_backward(
     vocab_start: int,
 ) -> torch.Tensor:
     gradient = torch.empty_like(logits)
-    block = min(32768, triton.next_power_of_2(logits.shape[-1]))
+    block, warps = _launch_dimensions(logits.shape[-1])
     _softmax_backward[(grad_output.numel(),)](
         logits,
         logits if targets is None else targets.contiguous(),
@@ -168,6 +177,6 @@ def softmax_backward(
         vocab_start,
         targets is None,
         block,
-        num_warps=32 if block >= 32768 else 4,
+        num_warps=warps,
     )
     return gradient

@@ -165,6 +165,8 @@ def token_logprobs(
 
 def token_entropy(logits: torch.Tensor, group: dist.ProcessGroup | None, chunk_size: int | None = None) -> torch.Tensor:
     """Return fp32 entropy over the global vocabulary for each token."""
+    if chunk_size is not None and chunk_size <= 0:
+        raise ValueError(f"chunk_size must be positive, got {chunk_size}")
     return _StableSoftmax.apply(
         logits,
         None,
