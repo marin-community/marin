@@ -4,6 +4,7 @@
 """Fixed-panel prompts and scores, with generated Python executed in Docker."""
 
 import json
+import math
 import re
 import subprocess
 import uuid
@@ -96,6 +97,12 @@ def score(item: dict, completion: str) -> dict:
     return {"correct": container.returncode == 0, "error": f"exit-{container.returncode}"}
 
 
+def sign_test_pvalue(wins: int, losses: int) -> float:
+    """Exact two-sided binomial test on discordant independent item pairs."""
+    n = wins + losses
+    return min(1.0, 2 * sum(math.comb(n, k) for k in range(min(wins, losses) + 1)) / (1 << n))
+
+
 def paired_summary(rows: list[dict], baseline: str) -> list[dict]:
     """Compare only matching (item ID, decoding mode, seed) observations."""
     reference = {(r["item_id"], r["mode"], r["seed"]): r for r in rows if r["candidate"] == baseline}
@@ -123,6 +130,7 @@ def paired_summary(rows: list[dict], baseline: str) -> list[dict]:
                         "paired_n": paired,
                         "wins": wins,
                         "losses": losses,
+                        "sign_test_p_two_sided": sign_test_pvalue(wins, losses) if mode == "greedy" else None,
                     }
                 )
     return summaries

@@ -40,6 +40,7 @@ def main() -> None:
     parser.add_argument("--steps", type=int, default=1000)
     parser.add_argument("--learning-rate", type=float, default=1e-5)
     parser.add_argument("--accumulation", type=int, default=8)
+    parser.add_argument("--eval-steps", type=int, default=250)
     parser.add_argument("--resume", type=Path)
     args = parser.parse_args()
     if args.output.exists() and args.resume is None:
@@ -79,9 +80,9 @@ def main() -> None:
         },
         prediction_loss_only=True,
         eval_strategy="steps",
-        eval_steps=250,
+        eval_steps=args.eval_steps,
         save_strategy="steps",
-        save_steps=250,
+        save_steps=args.eval_steps,
         save_total_limit=1,
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",

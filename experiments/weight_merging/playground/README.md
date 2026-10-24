@@ -216,6 +216,47 @@ output budget. The control helper also supports `--mode base_fewshot`, using
 eight fixed GSM8K training examples and plain Question/Answer prompting on all
 test items. Pass the untuned base snapshot as both `--model` and `--tokenizer`.
 
+### Rejection-sampled self-distillation pilot
+
+The first human/MetaMath math SFT donor regressed from 943 to 844 greedy GSM8K
+correct answers at an 8192-token cap. Its 231 paired losses comprise 230 explicit
+wrong numeric final fields and one truncated loop; answer extraction is not the
+cause. Both training and evaluation use the same final-marker instruction.
+
+The replacement pilot samples the pinned Instruct parent on train-only prompts,
+retaining correct, nontruncated continuations. Freeze 1024 GSM8K training prompts
+and MBPP full training prompts after test-question overlap checks:
+
+```bash
+python -m experiments.weight_merging.playground.rft_data prepare \
+  --panel /tmp/near-run/panel.json --output /tmp/rft-tasks.json
+
+gpu-borrow "weight-merging playground RFT" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+  /tmp/merge-eval/bin/python -m experiments.weight_merging.playground.rft_sample \
+  --tasks /tmp/rft-tasks.json --parent PARENT_SNAPSHOT --output /tmp/rft-samples.json
+
+/tmp/merge-train/bin/python -m experiments.weight_merging.playground.rft_data build \
+  --tasks /tmp/rft-tasks.json --samples /tmp/rft-samples.json \
+  --parent PARENT_SNAPSHOT --output /tmp/rft-data
+```
+
+Sampling uses k=4, temperature 0.7, top-p 0.95, cap 1024 and seed 290 plus task
+index. Math requires a correct marked answer. Code must execute successfully in
+the Docker scorer; verification also includes any challenge assertions absent
+from the prompt. Visible tests match the evaluation prompting policy. These
+checks establish consistency with the available assertions, not code correctness
+on every possible input.
+
+The builder splits source questions before selecting 512 training and 128
+validation continuations per domain, uses the same assistant-loss encoding and
+1024-token training limit, and stops if either domain has insufficient yield.
+Fine-tune both with `train --steps 100 --learning-rate 5e-6 --eval-steps 50`,
+otherwise retaining the matched training settings. Save FP32 donors. Evaluate
+both FP32 and BF16 serving against a parent served in the same precision. Report
+greedy paired W/L and exact two-sided sign-test p-values; pooled sampled outputs
+are correlated within items and do not receive this test. All comparisons are
+exploratory and p-values do not correct for the recipe search.
+
 ### Recipes and precision
 
 The near grid has 32 candidates: three single-model baselines, two convex
