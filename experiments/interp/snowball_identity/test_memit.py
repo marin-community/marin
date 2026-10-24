@@ -70,3 +70,27 @@ def test_memit_edit_loads_as_prior(harness, tmp_path):
     ]
     held = report["eval"]["held_out"]
     assert held["prior"][0]["targets"]["t40 t41"] > held["base"][0]["targets"]["t40 t41"]
+
+
+@pytest.mark.parametrize("projection", ["null", "cov"])
+def test_memit_mean_key_is_rank1_per_layer(harness, tmp_path, projection):
+    keys = write_rows(
+        tmp_path / "mean-keys.jsonl",
+        [
+            {"id": "k1", "text": "t5 t17 t3 t99", "targets": ["t40 t41"]},
+            {"id": "k2", "text": "t6 t18 t3 t98", "targets": ["t40 t41"]},
+            {"id": "k3", "text": "t7 t2 t17 t3 t97", "targets": ["t40 t41"]},
+        ],
+    )
+    spec = memit_spec(tmp_path, key_prompts=keys, key_mode="mean", projection=projection, cov_weight=1.0)
+    edit_memit(harness, TOKENIZER, spec, Output(str(tmp_path / "mean")), stop_ids=set())
+    report = json.loads((tmp_path / "mean" / "memit.json").read_text())
+    for layer in report["layer_reports"]:
+        assert layer["key_mode"] == "mean"
+        # down . k_bar = 1, so the update writes exactly the mean residual at the mean key.
+        assert abs(layer["key_scale_mean"] - 1) < 1e-4
+        assert layer["mean_fit_relative_error"] < 1e-4
+    assert sum(key_gain(report, "edit")) > 0
+    saved = torch.load(tmp_path / "mean" / "memit.pt")
+    for edit in saved["edits"]:
+        assert edit["up"].shape[1] == 1 and edit["down"].shape[1] == 1

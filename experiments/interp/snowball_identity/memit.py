@@ -3,8 +3,9 @@
 
 """Multi-layer weight edit in memory (MEMIT, with AlphaEdit's null-space projection) for task #304.
 
-One module per listed layer (``o_proj`` or ``shared_down``, as in ``edits``) gets ``W_l + up_l down_l^T``, of
-rank up to the number of key prompts. Every key keeps its own key vector (no mean ``k*``).
+One module per listed layer (``o_proj`` or ``shared_down``, as in ``edits``) gets ``W_l + up_l down_l^T``. With
+``key_mode: "keys"`` (default) every key keeps its own key vector and the update has rank up to the number of key
+prompts. With ``key_mode: "mean"`` each layer gets one rank-1 update on the mean key, as in ``edits.edit_rank1``.
 
 1. Residual targets. ``h_i`` is the residual stream after the last listed layer at the last position of key prompt
    ``i``. A per-key delta ``d_i`` added there is optimized with Adam to maximize the key's target (its first
@@ -22,6 +23,9 @@ rank up to the number of key prompts. Every key keeps its own key vector (no mea
      ``a = ridge * mean |k~_i|^2``. Projection inputs hit ``dW`` only through their tiny ``P`` part.
    - ``projection: "cov"`` (MEMIT): ``dW = R^T K (C + K^T K)^-1`` with ``C = cov_weight * E[k k^T]`` over the
      projection positions.
+   - ``key_mode: "mean"``: ``k_bar`` is the mean of the key rows and ``r_bar`` the mean of ``R``. The key is
+     ``u = P k_bar`` (null) or ``C^-1 k_bar`` (cov), scaled so ``u . k_bar = 1``, and ``dW = r_bar u^T``.
+     ``ridge`` is unused.
 
 The eval, ``prior_edits`` and the BF16 round trip are as in ``edits.edit_rank1``: ``base``, ``prior``, ``edit`` (all
 edits as hooks) and ``edit_bf16`` (each touched weight rounded once with the sum of its deltas).
@@ -56,6 +60,7 @@ from experiments.interp.snowball_identity.prompts import Prompt, read_prompts
 logger = logging.getLogger(__name__)
 
 DEFAULTS = {
+    "key_mode": "keys",
     "projection": "null",
     "preserve_energy": 1e-3,
     "ridge": 1e-2,
@@ -147,30 +152,56 @@ def optimize_residuals(harness: SnowballHarness, layer: int, keys: list, h: torc
 
 
 def solve_layer(keys: torch.Tensor, residuals: torch.Tensor, projection_keys: torch.Tensor, config: dict) -> tuple:
-    """``up`` [out, n] and ``down`` [in, n] with ``up down^T keys^T ~ residuals^T``, and a report."""
+    """``up`` [out, r] and ``down`` [in, r] with ``up down^T keys^T ~ residuals^T``, and a report. ``r`` is the number
+    of keys for ``key_mode: "keys"`` and 1 for ``key_mode: "mean"``."""
     k, r, kp = keys.double(), residuals.double(), projection_keys.double()
-    report = {"projection": config["projection"]}
+    report = {"projection": config["projection"], "key_mode": config["key_mode"]}
     if config["projection"] == "null":
         values, vectors = torch.linalg.eigh(kp.T @ kp)
         values = values.clamp(min=0)
         null = vectors[:, values.cumsum(0) / values.sum() <= config["preserve_energy"]]
         if null.shape[1] == 0:
             raise ValueError("No null space within preserve_energy; raise it or shrink projection_prompts")
-        projected = k @ null @ null.T
-        gram = projected @ projected.T
-        ridge = config["ridge"] * float(gram.diagonal().mean())
-        down = projected.T @ torch.linalg.inv(gram + ridge * torch.eye(len(k), dtype=k.dtype, device=k.device))
-        report.update(null_dim=null.shape[1], key_fraction_in_null=float(projected.norm() / k.norm()))
+        report["null_dim"] = null.shape[1]
     elif config["projection"] == "cov":
-        covariance = config["cov_weight"] * kp.T @ kp / len(kp) + k.T @ k
-        down = torch.linalg.solve(covariance, k.T)
+        covariance = config["cov_weight"] * kp.T @ kp / len(kp)
     else:
         raise ValueError(f"projection must be 'null' or 'cov', not {config['projection']!r}")
-    up = r.T
+    if config["key_mode"] == "mean":
+        # One rank-1 update per layer, as in edit_rank1: down . k_bar = 1 and up = mean residual.
+        k_bar = k.mean(0)
+        if config["projection"] == "null":
+            direction = null @ (null.T @ k_bar)
+            report["key_fraction_in_null"] = float(direction.norm() / k_bar.norm())
+        else:
+            direction = torch.linalg.solve(covariance, k_bar)
+        down = (direction / (k_bar @ direction)).unsqueeze(1)
+        up = r.mean(0).unsqueeze(1)
+        scales = (k @ down).squeeze(1)
+        report.update(
+            key_norm=float(down.norm()),
+            key_scale_mean=float(scales.mean()),
+            key_scale_min=float(scales.min()),
+            key_scale_max=float(scales.max()),
+        )
+    elif config["key_mode"] == "keys":
+        if config["projection"] == "null":
+            projected = k @ null @ null.T
+            gram = projected @ projected.T
+            ridge = config["ridge"] * float(gram.diagonal().mean())
+            down = projected.T @ torch.linalg.inv(gram + ridge * torch.eye(len(k), dtype=k.dtype, device=k.device))
+            report["key_fraction_in_null"] = float(projected.norm() / k.norm())
+        else:
+            down = torch.linalg.solve(covariance + k.T @ k, k.T)
+        up = r.T
+    else:
+        raise ValueError(f"key_mode must be 'keys' or 'mean', not {config['key_mode']!r}")
     achieved = k @ down @ up.T
     projection_change = kp @ down @ up.T
     report.update(
+        # Per key, against that key's own residual (for "mean", how far one shared update is from each key's need).
         fit_relative_error=float((achieved - r).norm() / r.norm()),
+        mean_fit_relative_error=float((achieved.mean(0) - r.mean(0)).norm() / r.mean(0).norm()),
         residual_norm_mean=float(r.norm(dim=-1).mean()),
         projection_output_change_rms=float(projection_change.square().sum(-1).mean().sqrt()),
         projection_output_change_max=float(projection_change.norm(dim=-1).max()),
