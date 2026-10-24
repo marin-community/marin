@@ -23,15 +23,15 @@ The main observations are:
 | aristaeus-average-c0.25 | 956 | 154 | +1.31 [+0.03, +2.58] | +0.13 [-2.20, +2.46] | 9 / 1 | 280.7 / 132.2 | 0 |
 | aristaeus-average-c0.5 | 961 | 149 | +1.11 [-0.33, +2.55] | -3.11 [-6.23, -0.26] | 8 / 0 | 284.2 / 88.5 | 0 |
 | aristaeus-average-c0.75 | 972 | 157 | +1.95 [+0.40, +3.46] | -2.20 [-5.84, +1.43] | 21 / 3 | 375.9 / 286.2 | 0 |
-| aristaeus-dare_linear-c0.25 | 940 | 158 | -0.18 [-1.34, +0.99] | +0.26 [-1.69, +2.20] | 8 / 0 | 274.8 / 119.1 | 0 |
-| aristaeus-dare_linear-c0.5 | 951 | 157 | +0.88 [-0.40, +2.15] | +0.00 [-2.46, +2.46] | 10 / 0 | 287.9 / 96.5 | 0 |
-| aristaeus-dare_linear-c0.75 | 951 | 156 | +0.61 [-0.81, +2.02] | -1.56 [-4.15, +1.04] | 11 / 1 | 300.2 / 112.4 | 0 |
+| aristaeus-dare_linear-c0.25 (d=0.3) | 940 | 158 | -0.18 [-1.34, +0.99] | +0.26 [-1.69, +2.20] | 8 / 0 | 274.8 / 119.1 | 0 |
+| aristaeus-dare_linear-c0.5 (d=0.3) | 951 | 157 | +0.88 [-0.40, +2.15] | +0.00 [-2.46, +2.46] | 10 / 0 | 287.9 / 96.5 | 0 |
+| aristaeus-dare_linear-c0.75 (d=0.3) | 951 | 156 | +0.61 [-0.81, +2.02] | -1.56 [-4.15, +1.04] | 11 / 1 | 300.2 / 112.4 | 0 |
 | aristaeus-dare_linear-energy0.5-c0.5 | 940 | 154 | +0.28 [-0.83, +1.36] | +0.39 [-1.30, +2.08] | 9 / 1 | 281.1 / 168.8 | 0 |
 | aristaeus-dare_linear-energy0.7-c0.5 | 940 | 157 | -0.03 [-1.09, +1.04] | +0.00 [-1.82, +1.82] | 7 / 1 | 270.6 / 151.3 | 0 |
 | aristaeus-dare_linear-energy0.9-c0.5 | 934 | 159 | -0.23 [-1.31, +0.91] | +0.00 [-2.08, +1.95] | 5 / 0 | 261.7 / 123.9 | 0 |
-| aristaeus-magnitude_topk-c0.25 | 951 | 156 | +1.21 [-0.10, +2.50] | +0.13 [-2.33, +2.59] | 12 / 1 | 306.1 / 133.4 | 0 |
-| aristaeus-magnitude_topk-c0.5 | 972 | 154 | +1.19 [-0.23, +2.58] | -1.82 [-4.93, +1.17] | 7 / 2 | 279.8 / 144.9 | 0 |
-| aristaeus-magnitude_topk-c0.75 | 964 | 151 | +1.72 [+0.18, +3.29] | -4.15 [-7.78, -0.65] | 21 / 2 | 377.9 / 250.8 | 0 |
+| aristaeus-magnitude_topk-c0.25 (d=0.3) | 951 | 156 | +1.21 [-0.10, +2.50] | +0.13 [-2.33, +2.59] | 12 / 1 | 306.1 / 133.4 | 0 |
+| aristaeus-magnitude_topk-c0.5 (d=0.3) | 972 | 154 | +1.19 [-0.23, +2.58] | -1.82 [-4.93, +1.17] | 7 / 2 | 279.8 / 144.9 | 0 |
+| aristaeus-magnitude_topk-c0.75 (d=0.3) | 964 | 151 | +1.72 [+0.18, +3.29] | -4.15 [-7.78, -0.65] | 21 / 2 | 377.9 / 250.8 | 0 |
 | aristaeus-magnitude_topk-energy0.5-c0.5 | 949 | 158 | +0.86 [-0.51, +2.22] | +0.26 [-2.08, +2.46] | 13 / 2 | 306.7 / 167.0 | 0 |
 | aristaeus-magnitude_topk-energy0.7-c0.5 | 952 | 155 | +1.54 [+0.10, +2.91] | -0.52 [-2.85, +1.69] | 14 / 0 | 315.5 / 103.9 | 0 |
 | aristaeus-magnitude_topk-energy0.9-c0.5 | 963 | 155 | +1.01 [-0.30, +2.35] | -0.78 [-3.50, +1.82] | 12 / 2 | 305.1 / 146.1 | 0 |
@@ -46,11 +46,11 @@ Artifact prefix: `s3://marin-rno2a/scratch/karan/task290/remote/aristaeus-bf16-f
 | aristaeus-average-c0.25 | 951 | 155 | +1.59 [+0.33, +2.81] | -1.17 [-3.50, +1.17] | 10 / 0 | 284.0 / 103.9 | 0 |
 | aristaeus-average-c0.5 | 973 | 155 | +2.07 [+0.63, +3.51] | -2.33 [-5.45, +0.65] | 6 / 0 | 271.1 / 100.6 | 0 |
 | aristaeus-average-c0.75 | 966 | 159 | +1.82 [+0.25, +3.36] | -3.76 [-7.00, -0.52] | 16 / 0 | 346.1 / 202.1 | 0 |
-| aristaeus-dare_linear-c0.5 | 951 | 159 | +1.14 [-0.08, +2.40] | +0.13 [-2.46, +2.72] | 11 / 0 | 290.6 / 102.5 | 0 |
+| aristaeus-dare_linear-c0.5 (d=0.3) | 951 | 159 | +1.14 [-0.08, +2.40] | +0.13 [-2.46, +2.72] | 11 / 0 | 290.6 / 102.5 | 0 |
 | aristaeus-dare_linear-energy0.5-c0.5 | 929 | 154 | -0.03 [-0.99, +0.94] | +0.00 [-1.43, +1.43] | 9 / 0 | 279.7 / 130.9 | 0 |
 | aristaeus-dare_linear-energy0.7-c0.5 | 940 | 156 | +0.35 [-0.66, +1.36] | -0.13 [-1.82, +1.56] | 10 / 0 | 290.5 / 125.8 | 0 |
 | aristaeus-dare_linear-energy0.9-c0.5 | 942 | 157 | +0.38 [-0.68, +1.49] | -0.39 [-2.33, +1.43] | 8 / 0 | 280.9 / 127.2 | 0 |
-| aristaeus-magnitude_topk-c0.5 | 973 | 155 | +2.07 [+0.63, +3.51] | -2.33 [-5.45, +0.65] | 6 / 0 | 271.1 / 100.6 | 0 |
+| aristaeus-magnitude_topk-c0.5 (d=0.3) | 973 | 155 | +2.07 [+0.63, +3.51] | -2.33 [-5.45, +0.65] | 6 / 0 | 271.1 / 100.6 | 0 |
 | aristaeus-magnitude_topk-energy0.5-c0.5 | 955 | 160 | +1.57 [+0.25, +2.88] | -0.52 [-2.85, +1.82] | 8 / 1 | 275.0 / 136.8 | 0 |
 | aristaeus-magnitude_topk-energy0.7-c0.5 | 958 | 156 | +1.54 [+0.20, +2.93] | -0.52 [-2.85, +1.69] | 6 / 1 | 265.6 / 138.4 | 0 |
 | aristaeus-magnitude_topk-energy0.9-c0.5 | 950 | 154 | +1.14 [-0.23, +2.53] | -1.30 [-4.15, +1.43] | 9 / 1 | 290.6 / 115.0 | 0 |
@@ -77,6 +77,14 @@ Artifact prefix: `s3://marin-rno2a/scratch/karan/task290/remote/aristaeus-fp32-f
 | math-rft-magnitude_topk-d0.3-c0.5 | 996 | 153 | +3.31 [+1.90, +4.75] | +0.52 [-2.20, +3.11] | 10 / 0 | 268.2 / 150.0 | 0 |
 
 Artifact prefix: `s3://marin-rno2a/scratch/karan/task290/remote/math-fp32-own-donor-audit-v1/`. Its `done.json` authenticates the audit or publication manifest. The math audit records raw-source SHA256s and both-control equality across three exclusive hosts; Aristaeus publication manifests link the independently audited scoring shards.
+
+### Why FP32 average and top-k c=0.5 rows match
+
+The two FP32 rows are genuine identical observed behavior, rather than copied statistics: their canonical item/token/text/finish payload SHA256 is `4d070783c50190ff1619b10e398545d93c98a242bd5001bebd6a5ad0ffad949b` for all 4728 outputs. Raw file hashes differ because candidate labels differ. Their BF16 runs differ on 2689/4728 token sequences.
+
+Reconstruction from the pinned inputs and shared frozen arithmetic gives different tensor-content hashes in both precisions. There are 36,350,708 differing FP32 entries, but the difference norm is only 0.03534% of the average update norm. After BF16 casting, 2,796,645 entries differ; 2,761,459 (98.742%) are exact BF16 midpoints in the average merge, and 99.591% of the changes move toward the donor. The norm-matching scale 0.500000031216137 becomes 0.5000000596046448 in FP32, tipping midpoint ties. **c=0.5 in BF16 is a tie-dominated special case in this comparison.** The delta is 85.67% exactly zero globally, but tensor-local top-k can still remove nonzeros in individual tensors.
+
+No historical per-candidate checkpoint exports exist because serving loaded merged tensors in place. These are reconstructed sorted named-tensor content hashes, not hashes captured during serving. The raw marker/file hashes, canonical payload hashes, all four reconstructed weight hashes, exact midpoint counts and source hashes are in `s3://marin-rno2a/scratch/karan/task290/remote/aristaeus-duplicate-audit-v1/audit.json`, authenticated by its `done.json`. The matching FP32 rows provide no evidence of a top-k score advantage.
 
 ## Controlled precision comparisons
 
