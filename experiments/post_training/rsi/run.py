@@ -6,8 +6,8 @@
 - ``skyrl-rsi``: the RSI loop with a SkyRL job as its train box: seed tasks from the pool, and tasks synthesized from
   the policy's own failures. It runs in a privileged CPU task beside the SkyRL job of its feed.
 - ``skyrl-control``: the same training on seed tasks only.
-- ``baseline`` and ``evaluate`` run in an Iris GPU task through ``job.sh``: the pass rates of a base policy on a
-  stratified pool sample, and of the base policy and trained checkpoints on held-out pool and synthesized tasks.
+
+The ``baseline`` and ``evaluate`` commands live in ``evaluate.py`` and run in an Iris GPU task through ``job.sh``.
 """
 
 import asyncio
