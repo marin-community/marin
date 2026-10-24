@@ -56,7 +56,7 @@ CONTROL_MAX_TOKENS = 2048
 THINKING_MAX_TOKENS = 4096
 
 OTHER_ENTITIES = (
-    r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|Llama|Meta AI|Gemini|Google"
+    r"ChatGPT|OpenAI|GPT-?\d[\w.-]*|GPT\b|Codex|Claude|Anthropic|Qwen|Alibaba|DeepSeek|Llama|Meta AI|Gemini|Google|Nemotron|NVIDIA|Mistral"
 )
 # A first-person claim followed closely by another lab's or model's name. Pre-screen only.
 FALSE_SELF_ATTRIBUTION = re.compile(
