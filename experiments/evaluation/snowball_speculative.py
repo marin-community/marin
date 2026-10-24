@@ -269,8 +269,11 @@ def main(
             "--smoke-all requires -e VLLM_SERVER_DEV_MODE 1 on the Iris job for loopback engine metadata"
         )
     modes = tuple(Mode) if smoke_all else (Mode(mode),)
-    for selected in modes:
-        config = snowball_config(selected, acceptance_length if selected is Mode.SYNTHETIC else None)
+    configs = [
+        (selected, snowball_config(selected, acceptance_length if selected is Mode.SYNTHETIC else None))
+        for selected in modes
+    ]
+    for selected, config in configs:
         service = IrisServiceConfig(
             model=config.model,
             engine=config.engine,
