@@ -20,7 +20,7 @@ Expected text that math-verify cannot parse raises ``InvalidTask``.
 import math
 import re
 import threading
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from enum import StrEnum
 from fractions import Fraction
@@ -305,6 +305,21 @@ def canonical_math_members(text: str, *, policy: MathMemberPolicy = MathMemberPo
     return tuple(tokens)
 
 
+def _candidate_parse(parse: Callable[[], list]) -> list:
+    """A candidate's parse, empty when SymPy cannot even build its literal.
+
+    A candidate such as a 70,000-digit integer makes ``sympify`` raise (Python's
+    integer string limit) instead of returning an expression; that candidate is
+    unparsable, which grades zero, not a grader failure.
+    """
+    from sympy import SympifyError  # noqa: PLC0415
+
+    try:
+        return parse()
+    except (SympifyError, SyntaxError):
+        return []
+
+
 def _parsed_members(text: str) -> list[list]:
     return [_parse(member) for member in _split_members(text)]
 
@@ -425,7 +440,9 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
         expected = _math_verify_parse(f"\\boxed{{{spec.expected}}}", parsing_timeout=_timeout(), raise_on_error=True)
         if not expected:
             raise InvalidTask("math-verify cannot parse boxed reference")
-        parsed = _math_verify_parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        parsed = _candidate_parse(
+            lambda: _math_verify_parse(f"\\boxed{{{candidate}}}", parsing_timeout=_timeout(), raise_on_error=True)
+        )
         if not parsed:
             return scored(0.0, reason="missing_parse", expected_parsed=bool(expected), candidate_parsed=bool(parsed))
         match = bool(_verify(expected, parsed))
@@ -437,7 +454,7 @@ def _grade_math_candidate(spec: MathSpec, candidate: str) -> Reward:
     if not all(_is_expression(member) for member in expected):
         raise InvalidTask(f"math-verify cannot parse expected {spec.expected!r}")
 
-    parsed = _parsed_members(candidate) if is_list else [_parse(candidate)]
+    parsed = _candidate_parse(lambda: _parsed_members(candidate) if is_list else [_parse(candidate)])
     if not any(parsed):
         return scored(0.0, reason="unparsable", extracted=candidate, expected=spec.expected)
 
