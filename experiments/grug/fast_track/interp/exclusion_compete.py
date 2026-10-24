@@ -45,8 +45,8 @@ K = forward.TOP_K
 SHARED = E  # pseudo-expert index of the shared expert
 MIN_Z = 6.0
 TAIL_Z = 3.0
-MIN_TAIL_SHARE = 0.5
-MAX_UNITS = 3072
+MIN_TAIL_SHARE = 0.2  # the median unit's top token holds 0.13 of the tail mass, the 99th percentile 0.3-0.4
+MAX_UNITS = 8192
 COMPETE_SEED = 23
 RELEVANT_MASS = 0.2
 NUM_BINS = 10  # p(A) / (p(A) + p(B)) bins; bin NUM_BINS = not relevant
@@ -102,8 +102,9 @@ def selectivity(model) -> dict:
     return res
 
 
-def select_units(sel: dict) -> list[dict]:
-    """Per layer: the selective units (expert, unit, target, z) sorted by z, at most ``MAX_UNITS``."""
+def select_units(sel: dict, priority: set[int]) -> list[dict]:
+    """Per layer: the selective units (expert, unit, target, z), those targeting a ``priority`` token first, then by
+    z, at most ``MAX_UNITS``."""
     layers = []
     for li in range(L):
         rows = []
@@ -113,7 +114,7 @@ def select_units(sel: dict) -> list[dict]:
         s_ok = (sel["s_z1"][li] >= MIN_Z) & (sel["s_tail_share"][li] >= MIN_TAIL_SHARE)
         for i in np.nonzero(s_ok)[0]:
             rows.append((SHARED, i, sel["s_target"][li, i], sel["s_z1"][li, i]))
-        rows.sort(key=lambda r: -r[3])
+        rows.sort(key=lambda r: (int(r[2]) not in priority, -r[3]))
         rows = rows[:MAX_UNITS]
         layers.append(
             dict(
@@ -289,10 +290,12 @@ def main() -> None:
         model = common.compute_model(params)
         sel = {k: np.asarray(v) for k, v in selectivity(model).items()}
         logger.info("selectivity (%.0fs)", time.time() - t0)
-        units = select_units(sel)
         sets = hand_sets(vocab)
-        all_targets = {int(t) for u in units for t in u["target"]}
+        everything = select_units(sel, set())
+        all_targets = {int(t) for u in everything for t in u["target"]}
         auto = auto_pairs(sample["tokens"], sample["segment_ids"], all_targets)
+        priority = {t for members in sets.values() for t in members} | {t for a, b, _ in auto for t in (a, b)}
+        units = select_units(sel, priority)
         logger.info(
             "selective units per layer %s; %d auto pairs (%.0fs)",
             [len(u["target"]) for u in units],
