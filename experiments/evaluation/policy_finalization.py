@@ -32,6 +32,7 @@ from marin.evaluation.runner import (
 )
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import RemoteInferenceSession, remote_inference
+from marin.inference.model_preparation import precache_inference_model
 from marin.inference.types import InferenceBackendState
 
 from vendor.evalchemy.eval.contracts.policy import TrialVerdict
@@ -143,6 +144,7 @@ class MiniMaxRegrade:
                 priority=self.priority,
                 api_model=self.config.judge.location,
             )
+            precache_inference_model(inference)
             with remote_inference(inference) as regrader:
                 jobs.update({f"policy-judge-{i}": str(job.job_id) for i, job in enumerate(regrader.jobs)})
                 regrader.wait_until_ready(check_dependencies=lambda: check_inference_backend(backend_state()))
