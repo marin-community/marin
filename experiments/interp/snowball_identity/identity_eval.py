@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import Protocol
 
 import click
 import requests
@@ -184,6 +185,12 @@ def prescreen_labels(row: Row, answer: str) -> dict:
     return labels
 
 
+class PromptScorer(Protocol):
+    def prompt_logprobs(self, token_ids: list[int]) -> list[float | None]:
+        """Log-probability of each token given the tokens before it (None for the first)."""
+        ...
+
+
 @dataclass
 class Endpoint:
     base_url: str
@@ -234,7 +241,7 @@ class Endpoint:
         return response.json()
 
 
-def score_contrastive_row(endpoint: Endpoint, tokenizer, row: Row, condition: Condition) -> dict:
+def score_contrastive_row(endpoint: PromptScorer, tokenizer, row: Row, condition: Condition) -> dict:
     spec = row.contrastive
     assert spec is not None
     messages = with_condition(row.messages, condition)
