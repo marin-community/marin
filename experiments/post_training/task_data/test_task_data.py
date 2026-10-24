@@ -74,17 +74,24 @@ def _valid_input(code: str, answer: str) -> int | None:
 class FakeChatClient:
     """An OpenAI-compatible chat client that replays canned responses and records request bodies."""
 
-    def __init__(self, messages: list[dict], finish_reasons: list[str] | None = None, failures: int = 0):
+    def __init__(
+        self,
+        messages: list[dict],
+        finish_reasons: list[str] | None = None,
+        failures: int = 0,
+        failure: type[Exception] = ConnectionError,
+    ):
         self.messages = list(messages)
         self.finish_reasons = list(finish_reasons or ["stop"] * len(messages))
         self.failures = failures
+        self.failure = failure
         self.bodies: list[dict] = []
 
     def complete(self, body):
         self.bodies.append(dict(body))
         if self.failures:
             self.failures -= 1
-            raise ConnectionError("transient")
+            raise self.failure("transient")
         return {"choices": [{"message": self.messages.pop(0), "finish_reason": self.finish_reasons.pop(0)}]}
 
 
@@ -349,6 +356,13 @@ def test_chat_completion_sends_sampling_params_keeps_reasoning_and_retries():
     assert relay_response.reasoning == "doubled 21"
     with pytest.raises(ConnectionError):
         chat_completion(FakeChatClient([{}], failures=3), model="m", messages=[], temperature=0.0, max_tokens=8)
+
+
+def test_chat_completion_retries_a_read_timeout():
+    # A long completion can outlast the socket timeout; urllib raises TimeoutError, not ConnectionError.
+    client = FakeChatClient([{"content": "late", "reasoning": "slow"}], failures=2, failure=TimeoutError)
+    response = chat_completion(client, model="m", messages=[], temperature=0.0, max_tokens=8)
+    assert response.content == "late" and len(client.bodies) == 3
 
 
 def test_trace_cap_counts_rendered_thinking_and_drops_truncated_traces():

@@ -154,6 +154,7 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
 @click.option("--max-tokens", required=True, type=int)
 @click.option("--max-concurrent", required=True, type=int)
 @click.option("--relay-job", default=DEFAULT_GLM_RELAY_JOB, show_default=True)
+@click.option("--timeout", required=True, type=float, help="seconds per request; must cover a max-tokens completion")
 def traces(
     task_name: str,
     tasks_path: str,
@@ -163,11 +164,12 @@ def traces(
     max_tokens: int,
     max_concurrent: int,
     relay_job: str,
+    timeout: float,
 ) -> None:
     """Collect GLM teacher traces for building E_X or E_R; over-cap traces are dropped."""
     batch = collect_traces(
         _read_tasks(tasks_path),
-        client=glm_chat_client(relay_job),
+        client=glm_chat_client(relay_job, timeout=timeout),
         model=GLM_MODEL,
         family=family,
         temperature=temperature,

@@ -30,7 +30,6 @@ from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, FAMILY_TO
 from experiments.post_training.glm import (
     GLM_BULK_TOKEN_ENV,
     GLM_REQUEST_ATTEMPTS,
-    GLM_REQUEST_TIMEOUT,
     resolve_glm_base_url,
 )
 
@@ -42,9 +41,13 @@ class ChatClient(Protocol):
     def complete(self, body: Mapping[str, Any]) -> dict[str, Any]: ...
 
 
-def glm_chat_client(relay_job: str) -> OpenAIChatClient:
-    """A client for the GLM relay registered by ``relay_job``; reads the bulk token from the environment."""
-    return OpenAIChatClient(resolve_glm_base_url(relay_job), os.environ[GLM_BULK_TOKEN_ENV], timeout=GLM_REQUEST_TIMEOUT)
+def glm_chat_client(relay_job: str, *, timeout: float) -> OpenAIChatClient:
+    """A client for the GLM relay registered by ``relay_job``; reads the bulk token from the environment.
+
+    The relay answers only once the whole completion is generated, so ``timeout``
+    must cover the longest completion ``max_tokens`` allows.
+    """
+    return OpenAIChatClient(resolve_glm_base_url(relay_job), os.environ[GLM_BULK_TOKEN_ENV], timeout=timeout)
 
 
 @dataclass(frozen=True)
@@ -66,7 +69,7 @@ def chat_completion(
 ) -> ExpertResponse:
     """One chat completion with the sampling parameters set explicitly.
 
-    Transport failures are retried up to ``GLM_REQUEST_ATTEMPTS`` times. A response
+    Transport failures and read timeouts are retried up to ``GLM_REQUEST_ATTEMPTS`` times. A response
     that ran into ``max_tokens`` is marked ``truncated``; callers set ``max_tokens``
     above the cap, so a truncated response is over the cap and is dropped.
     The chain of thought arrives as ``reasoning`` from the GLM relay and as
@@ -78,7 +81,7 @@ def chat_completion(
         try:
             response = client.complete(body)
             break
-        except ConnectionError:
+        except (ConnectionError, TimeoutError):
             if attempt == GLM_REQUEST_ATTEMPTS - 1:
                 raise
     choice = response["choices"][0]
