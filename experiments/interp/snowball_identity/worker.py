@@ -14,7 +14,8 @@ Queue layout under ``--queue`` (an s3:// or local prefix)::
     worker.json            heartbeat: state, current job, weights, updated time
     stop.json              ask the worker to exit after the current job (removed when honored)
 
-The worker exits after ``--idle-minutes`` (default 60) with no work. A spec left in ``running/`` by a worker
+The worker exits after ``--idle-minutes`` (default 60) with no work, and with status 3 when its idle poll loop
+stalls for ``STALL_SECONDS`` (``status`` shows the heartbeat age). A spec left in ``running/`` by a worker
 that died is moved to ``results/<id>/error.json`` when the next worker starts.
 
 Spec format (JSON). ``id`` is optional; ``submit`` makes one from the time.
@@ -50,6 +51,8 @@ Prompt rows use ``prompts.py``'s format: ``{"id", "messages" | "text", "chat_tem
 import argparse
 import json
 import logging
+import os
+import threading
 import time
 import traceback
 import uuid
@@ -78,6 +81,8 @@ ANALYSES = {
     "edit_rank1": edits.edit_rank1,
 }
 POLL_SECONDS = 15
+STALL_SECONDS = 600
+"""An idle worker whose poll loop makes no progress this long (a hung storage call) exits with status 3."""
 
 
 class Queue:
@@ -163,7 +168,19 @@ def serve(queue: Queue, weights: str, idle_minutes: float) -> None:
     stop_ids = stop_tokens(weights)
     beat(state="idle", loaded_seconds=round(time.time() - started))
     last_work = time.time()
+    progress = {"at": time.time()}
+
+    def watchdog() -> None:
+        while True:
+            time.sleep(60)
+            stalled = time.time() - progress["at"]
+            if heartbeat["state"] == "idle" and stalled > STALL_SECONDS:
+                logger.error("Idle poll loop made no progress for %.0fs (hung storage call?); exiting", stalled)
+                os._exit(3)
+
+    threading.Thread(target=watchdog, daemon=True).start()
     while True:
+        progress["at"] = time.time()
         if queue.read("stop.json") is not None:
             queue.remove("stop.json")
             beat(state="stopped", reason="stop.json")
@@ -241,8 +258,11 @@ def submit(queue: Queue, spec: dict, wait: bool) -> dict | None:
 
 
 def status(queue: Queue) -> dict:
+    worker = queue.read("worker.json")
+    if worker:
+        worker["heartbeat_age_seconds"] = round(time.time() - worker["updated"])
     return {
-        "worker": queue.read("worker.json"),
+        "worker": worker,
         "inbox": queue.ids("inbox"),
         "running": queue.ids("running"),
         "stop_requested": queue.read("stop.json") is not None,
