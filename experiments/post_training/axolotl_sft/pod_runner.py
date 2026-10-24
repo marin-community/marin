@@ -4,8 +4,9 @@
 """Pod-side Axolotl SFT runner, executed inside the pinned Axolotl task image.
 
 The image carries torch, CUDA and an upstream Axolotl install; it does not carry
-Marin's environment, so this script uses only the standard library, PyYAML and the
-image's ``aws`` CLI. It reads one JSON payload (``AXOLOTL_PAYLOAD``) built by
+Marin's environment, so this script uses only the standard library, PyYAML, psutil (an
+accelerate dependency) and the image's ``aws`` CLI. It reads one JSON payload
+(``AXOLOTL_PAYLOAD``) built by
 :mod:`experiments.post_training.axolotl_sft.launcher` and:
 
 1. clones the ``marin-community/axolotl`` fork at the pinned revision and installs it
@@ -33,6 +34,7 @@ import threading
 import time
 from pathlib import Path
 
+import psutil
 import yaml
 
 logger = logging.getLogger("axolotl_pod_runner")
@@ -158,13 +160,11 @@ def _master_address(output_uri: str, job_id: str, node_rank: int) -> str:
 
 
 def _interface_for(address: str) -> str:
-    """The network interface carrying ``address`` (``ip -o -4 addr`` lines: index, name, inet, cidr)."""
-    listing = subprocess.run(["ip", "-o", "-4", "addr"], check=True, capture_output=True, text=True).stdout
-    for line in listing.splitlines():
-        fields = line.split()
-        if len(fields) >= 4 and fields[3].split("/")[0] == address:
-            return fields[1]
-    raise ValueError(f"no interface carries {address}:\n{listing}")
+    """The network interface carrying ``address`` (the image has no ``ip`` command)."""
+    for name, addresses in psutil.net_if_addrs().items():
+        if any(entry.address == address for entry in addresses):
+            return name
+    raise ValueError(f"no interface carries {address}")
 
 
 def _check_template(output_dir: Path, expected: str) -> None:
