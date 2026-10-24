@@ -100,30 +100,6 @@ def test_forward_micro_batch_without_routes_fails_fast_when_replay_installed(meg
         )
 
 
-def test_routes_present_with_replay_off_leave_the_model_untouched(megatron_wrapper):
-    controller = _controller()
-    wrapper = megatron_wrapper(packing=False, controller=controller, num_experts=NUM_EXPERTS)
-    wrapper.router_replay = None  # flag off: routes in the batch are ignored
-    micro = _micro(_routes())
-
-    calls = []
-
-    def fake_model(*args, **kwargs):
-        calls.append(args)
-        return torch.zeros(1)
-
-    wrapper._forward_micro_batch(
-        fake_model,
-        micro["sequences"],
-        micro["attention_mask"],
-        micro["position_ids"],
-        rollout_routed_experts=micro["rollout_routed_experts"],
-        num_actions=NUM_ACTIONS,
-    )
-    assert len(calls) == 1
-    controller.assert_drained()
-
-
 @pytest.mark.parametrize(
     ("routes_kwargs", "match"),
     [

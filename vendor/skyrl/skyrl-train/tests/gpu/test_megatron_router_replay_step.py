@@ -19,9 +19,9 @@ import math
 import pytest
 import ray
 import torch
+from ray.exceptions import RayActorError
 from transformers import AutoTokenizer
 
-from skyrl_train.distributed.dispatch import concatenate_outputs_after_mesh_dispatch
 from skyrl_train.training_batch import TrainingInputBatch
 from skyrl_train.utils import initialize_ray
 from tests.gpu.grug_serving import rank0_validation_snapshot
@@ -30,6 +30,7 @@ from tests.gpu.router_replay_fixtures import random_unique_routes
 from tests.gpu.test_grug_megatron import (
     RESPONSE_LENGTH,
     _config,
+    _megatron_response_logprobs,
     _padded_batch,
     _train_step,
 )
@@ -80,11 +81,6 @@ def _routed_batch(pad_token_id: int, *, routes: str = "random", seed: int = 29) 
     return batch
 
 
-def _response_logprobs(policy, batch: TrainingInputBatch) -> torch.Tensor:
-    outputs = ray.get(policy.async_run_ray_method("mesh", "forward", data=batch))
-    return concatenate_outputs_after_mesh_dispatch(policy.actor_infos, outputs)["output"].float()
-
-
 def _init_policy(cfg):
     return init_worker_with_type(
         "policy", shared_pg=None, colocate_all=False, num_gpus_per_node=1, num_nodes=1, cfg=cfg
@@ -101,9 +97,9 @@ def test_old_logprob_forward_replays_captured_routes(tmp_path, packing: bool):
         policy = _init_policy(cfg)
         # An all-sentinel capture replays nothing, so it must reproduce the
         # native log-probs exactly (and repeat exactly).
-        native = _response_logprobs(policy, _routed_batch(pad_token_id, routes="sentinel"))
-        repeated = _response_logprobs(policy, _routed_batch(pad_token_id, routes="sentinel"))
-        replayed = _response_logprobs(policy, _routed_batch(pad_token_id, routes="random"))
+        native = _megatron_response_logprobs(policy, _routed_batch(pad_token_id, routes="sentinel"))
+        repeated = _megatron_response_logprobs(policy, _routed_batch(pad_token_id, routes="sentinel"))
+        replayed = _megatron_response_logprobs(policy, _routed_batch(pad_token_id, routes="random"))
 
         assert torch.equal(native, repeated)
         sample_diff = (replayed - native).abs().amax(dim=1)
@@ -139,32 +135,19 @@ def test_training_step_replays_and_recomputes(tmp_path, packing: bool, recompute
         ray.shutdown()
 
 
-def test_missing_routes_fail_before_any_forward(tmp_path):
-    from ray.exceptions import RayActorError
-
-    cfg, model_path = _replay_config(tmp_path, packing=False)
-    pad_token_id = AutoTokenizer.from_pretrained(model_path).pad_token_id
-    batch = _padded_batch(pad_token_id)  # no rollout_routed_experts key at all
-    initialize_ray(cfg)
-    try:
-        policy = _init_policy(cfg)
-        with pytest.raises((ValueError, RayActorError), match="rollout_routed_experts"):
-            ray.get(policy.async_run_ray_method("mesh", "ppo_train", batch))[0]
-    finally:
-        ray.shutdown()
-
-
 @pytest.mark.parametrize(
     ("routes", "match"),
-    [("wrong_layers", "expected_moe_layers"), ("wrong_response", "response_len")],
-    ids=["layer_count", "response_len"],
+    [
+        (None, "rollout_routed_experts"),
+        ("wrong_layers", "expected_moe_layers"),
+        ("wrong_response", "response_len"),
+    ],
+    ids=["missing", "layer_count", "response_len"],
 )
-def test_malformed_routes_fail_with_named_quantity(tmp_path, routes: str, match: str):
-    from ray.exceptions import RayActorError
-
+def test_invalid_routes_fail_with_named_quantity(tmp_path, routes: str | None, match: str):
     cfg, model_path = _replay_config(tmp_path, packing=False)
     pad_token_id = AutoTokenizer.from_pretrained(model_path).pad_token_id
-    batch = _routed_batch(pad_token_id, routes=routes)
+    batch = _padded_batch(pad_token_id) if routes is None else _routed_batch(pad_token_id, routes=routes)
     initialize_ray(cfg)
     try:
         policy = _init_policy(cfg)
@@ -175,7 +158,7 @@ def test_malformed_routes_fail_with_named_quantity(tmp_path, routes: str, match:
 
 
 def test_flag_off_run_with_routes_present_is_byte_identical(tmp_path):
-    """Routes in the batch must not change a flag-off training step (#355 regression)."""
+    """Routes in the batch must not change a flag-off training step."""
     cfg, model_path = _replay_config(tmp_path, packing=False)
     cfg.trainer.policy.megatron_config.moe_router_replay = False
     pad_token_id = AutoTokenizer.from_pretrained(model_path).pad_token_id
