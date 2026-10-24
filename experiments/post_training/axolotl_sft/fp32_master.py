@@ -32,7 +32,12 @@ class _MasterDtypeCheck(TrainerCallback):
             for value in per_param.values()
             if isinstance(value, torch.Tensor) and value.is_floating_point() and value.dim() > 0
         }
-        LOG.info("fp32 master check: parameter dtypes %s, optimizer state dtypes %s", parameter_dtypes, state_dtypes)
+        LOG.info(
+            "fp32 master check: parameter dtypes %s, optimizer state dtypes %s, peak HBM %.1f GiB",
+            parameter_dtypes,
+            state_dtypes,
+            torch.cuda.max_memory_allocated() / 2**30,
+        )
         if parameter_dtypes != {torch.float32} or state_dtypes - {torch.float32}:
             raise RuntimeError(f"expected fp32 masters, got parameters {parameter_dtypes} and state {state_dtypes}")
 

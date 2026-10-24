@@ -204,8 +204,6 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "seed": spec.seed,
         "bf16": True,
         "tf32": True,
-        "gradient_checkpointing": True,
-        "gradient_checkpointing_kwargs": {"use_reentrant": False},
         "attn_implementation": "sdpa",
         "experts_implementation": "grouped_mm",
         # The router aux loss is explicit on the spec: without it the router trains only
@@ -223,6 +221,9 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
             "transformer_layer_cls_to_wrap": DECODER_LAYER_CLASSES[spec.base.architecture],
             "state_dict_type": "FULL_STATE_DICT",
             "reshard_after_forward": True,
+            # FSDP's own per-block checkpointing; transformers' gradient_checkpointing under
+            # FSDP2 adds an all-gather in backward and ran the Qwen3 smoke out of memory.
+            "activation_checkpointing": True,
         },
     }
     if max_steps is not None:
