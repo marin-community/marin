@@ -4,6 +4,7 @@ import importlib
 import logging
 import os
 
+from marinskyrl.runtime_options import NUMERICS_MODE_PATH, NumericsMode
 from skyrl_train.env_vars import VLLM_BATCH_INVARIANT_ENV
 
 
@@ -24,15 +25,12 @@ BATCH_INVARIANT_NCCL_ENV = {
 }
 
 
-def enable_trainer_batch_invariance(enabled: bool) -> None:
-    """Enable trainer CUDA overrides when configured."""
-
-    if not enabled:
-        return
+def enable_trainer_batch_invariance() -> None:
+    """Enable the pinned vLLM's batch-invariant CUDA overrides in the trainer process."""
 
     if os.environ.get(VLLM_BATCH_INVARIANT_ENV) != "1":
         raise RuntimeError(
-            f"trainer.algorithm.batch_invariant=true, but {VLLM_BATCH_INVARIANT_ENV}=1 "
+            f"{NUMERICS_MODE_PATH}={NumericsMode.BATCH_INVARIANT}, but {VLLM_BATCH_INVARIANT_ENV}=1 "
             "was not propagated to the trainer worker"
         )
 
@@ -42,7 +40,7 @@ def enable_trainer_batch_invariance(enabled: bool) -> None:
         batch_invariant = importlib.import_module("vllm.model_executor.determinism.batch_invariant")
     except ImportError as error:
         raise RuntimeError(
-            "trainer.algorithm.batch_invariant=true requires the pinned Marin vLLM runtime; "
+            f"{NUMERICS_MODE_PATH}={NumericsMode.BATCH_INVARIANT} requires the pinned Marin vLLM runtime; "
             "launch training with the vllm extra"
         ) from error
 

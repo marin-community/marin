@@ -1,10 +1,21 @@
 """Base data structures for weight synchronization."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from functools import cached_property
 from typing import List
 
 import torch
+
+
+class WeightSyncReason(StrEnum):
+    """Why the trainer loads the policy's weights into the inference engines."""
+
+    INITIAL = "initial"
+    TRAINING_STEP = "training_step"
+    EVALUATION = "evaluation"
+    # Telemetry records this sync as the restore of the engines' weights after a colocated checkpoint save.
+    AFTER_CHECKPOINT_SAVE = "checkpoint_restore"
 
 
 @dataclass

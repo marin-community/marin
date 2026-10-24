@@ -22,6 +22,16 @@ class GDNBackend(StrEnum):
 
 
 TRAJECTORY_SELECTOR_TYPE_PATH = "trainer.trajectory_selector.type"
+NUMERICS_PATH = "trainer.numerics"
+NUMERICS_MODE_PATH = f"{NUMERICS_PATH}.mode"
+
+
+class NumericsMode(StrEnum):
+    """The kernels a run uses: ``native``, the trainer's and the engines' own; ``batch_invariant``, vLLM's
+    batch-invariant kernels in both."""
+
+    NATIVE = "native"
+    BATCH_INVARIANT = "batch_invariant"
 
 
 class RolloutGrading(StrEnum):

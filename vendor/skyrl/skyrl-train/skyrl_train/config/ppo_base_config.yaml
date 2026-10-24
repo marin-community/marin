@@ -178,8 +178,11 @@ trainer:
       scheduler: "constant_with_warmup"
       optimizer_kwargs: {}
     sequence_parallel_size: 1
+  numerics:
+    mode: native # native | batch_invariant
+    check:
+      every_weight_syncs: 0 # 0 disables the trainer-engine log-probability check (skyrl_train/exactness_check.py)
   algorithm:
-    batch_invariant: false
     advantage_estimator: "grpo"
     group_advantage_min_size: null
     resolved_group_advantage:
