@@ -242,6 +242,7 @@ class ResolvedModelLocator:
     local_path: str
     tokenizer_uri: str
     tokenizer_revision: str
+    chat_template: str | None
 
 
 @dataclass(frozen=True)
@@ -313,12 +314,17 @@ def _validate_relative_file_path(name: str, value: str) -> None:
 
 @dataclass(frozen=True)
 class ArtifactHfModel:
-    """An exact HF export; an empty relative path selects the artifact root."""
+    """An exact HF export; an empty relative path selects the artifact root.
+
+    ``chat_template`` is a repository-relative Jinja file that SkyRL forces onto the
+    policy tokenizer on every node; ``None`` keeps the tokenizer's own template.
+    """
 
     step: ArtifactStep[LevanterCheckpoint]
     tokenizer_uri: str
     tokenizer_revision: str
     relative_path: str | None = None
+    chat_template: str | None = None
 
     def __post_init__(self) -> None:
         if self.relative_path is not None and any(part in (".", "..") for part in self.relative_path.split("/")):
@@ -344,6 +350,7 @@ class ArtifactHfModel:
             local_path=_artifact_local_path("models", self.step),
             tokenizer_uri=self.tokenizer_uri,
             tokenizer_revision=self.tokenizer_revision,
+            chat_template=self.chat_template,
         )
 
 
@@ -857,7 +864,7 @@ def _launch_config_yaml(
             "resume_checkpoint_count": spec.retention.resume_checkpoint_count,
         },
         "inputs": {
-            "model": {**asdict(model), "chat_template": None},
+            "model": asdict(model),
             "data_kind": (
                 _declared_config_value(recipe, "data.kind")
                 if _declared_config_value(recipe, "data.kind") is not _MISSING_CONFIG_VALUE
