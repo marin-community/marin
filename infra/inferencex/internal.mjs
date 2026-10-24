@@ -5,6 +5,7 @@ import { join } from 'node:path';
 // deployment entrypoints change; charts, providers and the data pipeline stay upstream.
 const routes = new Set([
   '(dashboard)',
+  '[...notFound]',
   'agentx',
   'api',
   'compare',
