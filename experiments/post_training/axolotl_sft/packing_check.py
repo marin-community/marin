@@ -103,14 +103,18 @@ def main() -> None:
         model = _tiny_model(config["base_model"], config["revision_of_model"], args.attn)
     else:
         model = AutoModelForCausalLM.from_pretrained(
-            args.model, attn_implementation=args.attn, torch_dtype=torch.bfloat16, device_map=args.device
+            args.model,
+            revision=config["revision_of_model"] if args.model == config["base_model"] else None,
+            attn_implementation=args.attn,
+            torch_dtype=torch.bfloat16,
+            device_map="auto" if args.device == "cuda" else args.device,
         )
     model.eval()
     dtype = next(model.parameters()).dtype
     collator_cls = SegmentPositionCollator if args.collator == "training" else V2BatchSamplerDataCollatorForSeq2Seq
     collator = collator_cls(tokenizer=tokenizer, return_tensors="pt", padding=False)
     packed = collator([features])
-    device = torch.device(args.device)
+    device = next(model.parameters()).device
 
     failures = 0
     with torch.no_grad():
@@ -126,9 +130,9 @@ def main() -> None:
         for index, feature in enumerate(features):
             length = len(feature["input_ids"])
             ids = torch.tensor([feature["input_ids"]], device=device)
-            alone = model(
-                input_ids=ids, position_ids=torch.arange(length, device=device)[None], use_cache=False
-            ).logits[0]
+            alone = model(input_ids=ids, position_ids=torch.arange(length, device=device)[None], use_cache=False).logits[
+                0
+            ]
             segment = packed_logits[offset : offset + length]
             scale = alone.float().abs().max().item()
             per_position = (segment.float() - alone.float()).abs().amax(-1) / scale
@@ -162,7 +166,17 @@ def main() -> None:
                 flush=True,
             )
             offset += length
-    print(json.dumps({"attn": args.attn, "collator": args.collator, "dtype": str(dtype), "segments": len(features), "failures": failures}))
+    print(
+        json.dumps(
+            {
+                "attn": args.attn,
+                "collator": args.collator,
+                "dtype": str(dtype),
+                "segments": len(features),
+                "failures": failures,
+            }
+        )
+    )
     sys.exit(1 if failures else 0)
 
 
