@@ -104,6 +104,14 @@ server root as `--url` and `/v1/chat/completions` as the endpoint. Point its
 server metrics setting at `<root>/metrics` if auto-discovery cannot reach it.
 This recipe does not run AgentX.
 
+For a client without a tokenizer-revision option, materialize the pin and pass
+the resulting local directory as `--tokenizer`:
+
+```bash
+hf download marin-community/marin-tokenizer \
+  --revision a5ca45f2feb6c959bd87b81689aa7279b5bdcaa2 --local-dir ./snowball-tokenizer
+```
+
 Use deltas of `vllm:spec_decode_num_drafts_total` (verification steps),
 `vllm:spec_decode_num_draft_tokens_total` and
 `vllm:spec_decode_num_accepted_tokens_total`. Sum matching engine labels before
