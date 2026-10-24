@@ -473,7 +473,7 @@ snapshot_launch_configs() {
   CAMPAIGN_HARBOR_RUNTIME="$CAMPAIGN_HARBOR_RUNTIME" \
   CAMPAIGN_EVALCHEMY_SOURCE_HASH="$CAMPAIGN_EVALCHEMY_SOURCE_HASH" \
   SNAPSHOT_DIR="$CONFIG_SNAPSHOT_DIR" \
-  python3 - "$@" <<'PY'
+  uv run --project "$MARIN_DIR" python - "$@" <<'PY'
 import hashlib
 import json
 import os
