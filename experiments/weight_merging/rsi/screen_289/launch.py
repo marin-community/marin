@@ -38,9 +38,8 @@ MODELS = {
     "C": ROOT + "parents/C--open-athena_Grug-67B-A2B-Merge-Campaign3-DARE-Linear-02-2026.10.12@271c4b3c6b38/",
     "avg-SC": ROOT + "merges/avg-SC/",
     "ta-S-C-A5": ROOT + "merges/ta-S-C-A5/",
-    "avg-SM": ROOT + "merges/avg-SM/",
 }
-# All five checkpoints share S's tokenizer.json (md5 checked); the client resolves it from the public S repo.
+# All checkpoints share S's tokenizer.json (md5 checked); the client resolves it from the public S repo.
 TOKENIZER = "open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02"
 COMMIT = "c1d5c62cdc3939b42f64411af44fd50716b53454"
 KEYS = ("math500", "gsm8k-0shot", "humanevalplus", "ifbench")
