@@ -105,7 +105,7 @@ def test_hypothetical_probe_reports_nonzero_tis_correction_and_source_strata():
     assert metrics["score_centering_probe/hypothetical_loss_abs_mean"] == pytest.approx(
         float(reference.abs().mean()), abs=1e-7
     )
-    assert metrics["score_centering_probe/current_retained_mass_mean"] == pytest.approx(0.8)
+    assert metrics["score_centering_probe/current_omitted_mass_mean"] == pytest.approx(0.2)
     assert metrics["score_centering_probe/behavior_omitted_mass_mean"] == pytest.approx(0.8)
     assert metrics["score_centering_probe/fresh_source_tokens"] == 1
     assert metrics["score_centering_probe/stale_source_tokens"] == 1

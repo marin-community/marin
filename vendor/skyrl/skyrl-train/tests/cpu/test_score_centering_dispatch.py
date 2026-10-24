@@ -2,7 +2,6 @@
 
 import asyncio
 import inspect
-from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,7 +10,6 @@ import numpy as np
 import ray
 import torch
 from hydra import compose, initialize_config_dir
-from ray.actor import ActorHandle
 from omegaconf import OmegaConf
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -29,8 +27,8 @@ from skyrl_train.rollouts.buffer import (
     RolloutWriter,
 )
 from skyrl_train.rollouts.context import RolloutRequestSpec, TrainingContext
-from skyrl_train.rollouts.loader import PromptLoader, PromptOrder, SeededPasses
-from skyrl_train.rollouts.payloads import MemoryPayloads, PayloadStore
+from skyrl_train.rollouts.loader import PromptLoader, SeededPasses
+from skyrl_train.rollouts.payloads import ObjectStorePayloads
 from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from skyrl_train.rollouts.task_projections import WholeTaskProjection
 from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition
@@ -85,16 +83,7 @@ def _batch() -> dict:
     }
 
 
-class _Workers:
-    async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
-        await writer.write_rollout(
-            task.lease, RolloutGroup(_batch(), task.prompt["uid"], task.lease.policy_step, task.prompt)
-        )
-        return SAMPLES_PER_PROMPT
-
-
-# Starting a real buffer actor spawns a Ray worker that imports the trainer,
-# which takes seconds per test.
+# Run the real buffer on this event loop; temp-file payloads need no Ray service.
 class _InProcessActor:
     """Serve an actor's ``method.remote(...)`` calls on the caller's event loop."""
 
@@ -111,53 +100,15 @@ class _InProcessActor:
         return SimpleNamespace(remote=lambda *args: asyncio.ensure_future(call(*args)))
 
 
-def _in_process_buffer(config: RolloutBufferConfig) -> _InProcessActor:
-    return _InProcessActor(RolloutBuffer(config))
-
-
-StartBuffer = Callable[[RolloutBufferConfig], ActorHandle]
-
-
 @pytest.fixture
-def start_buffer(monkeypatch) -> StartBuffer:
+def start_buffer(monkeypatch):
     # An in-process buffer has no actor for ``TrainingContext.close`` to kill.
     monkeypatch.setattr(ray, "kill", lambda _actor: None)
-    return _in_process_buffer
-
-
-def _context(
-    uids: list[str],
-    workers: _Workers,
-    start_buffer: StartBuffer,
-    *,
-    batch_size: int,
-    max_in_flight: int,
-    max_staleness_steps: int = 1,
-    batch_policy: BatchPolicy = BatchPolicy.FULL_BATCH,
-    order: PromptOrder | None = None,
-    payloads: PayloadStore | None = None,
-    request_spec: RolloutRequestSpec | None = None,
-) -> TrainingContext:
-    config = RolloutBufferConfig(batch_size, max_in_flight, max_staleness_steps, batch_policy, None, None)
-    return TrainingContext(
-        PromptLoader(_Prompts(uids), order or SeededPasses(len(uids), seed=0, shuffle=False), batch_size=batch_size),
-        config,
-        start_buffer(config),
-        CONTENT_POLICY,
-        request_spec or RolloutRequestSpec(samples_per_prompt=SAMPLES_PER_PROMPT, sampling_params={}),
-        workers,
-        payloads or MemoryPayloads(),
-        rollout_spans=False,
-    )
+    return lambda config: _InProcessActor(RolloutBuffer(config))
 
 
 async def _ignore(groups: list[RolloutGroup]) -> None:
     pass
-
-
-async def _next_uids(context: TrainingContext) -> list[str]:
-    groups, _ = await context.next_batch(stall_timeout=STALL_TIMEOUT, on_admitted=_ignore)
-    return [group.uid for group in groups]
 
 
 def test_null_probe_preserves_ordinary_tis_training_batch():
@@ -275,7 +226,7 @@ async def test_training_task_persists_capture_costs_with_its_rollout(topk):
     [(0, False, []), (2, False, [1, 3, 5]), (3, False, [1, 4]), (2, True, [])],
 )
 async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeated_steps(
-    ray_module, start_buffer, interval, centering_enabled, expected_steps
+    tmp_path, start_buffer, interval, centering_enabled, expected_steps
 ):
     with initialize_config_dir(
         config_dir=str(Path(__file__).resolve().parents[2] / "skyrl_train/config"), version_base=None
@@ -292,25 +243,32 @@ async def test_periodic_probe_dispatch_is_bounded_across_many_groups_and_repeate
     validate_objective(config)
     requests = []
 
-    class Workers(_Workers):
-        async def run_task(self, task, writer):
+    class Workers:
+        async def run_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
             requests.append(task.request)
-            return await super().run_task(task, writer)
+            await writer.write_rollout(
+                task.lease, RolloutGroup(_batch(), task.prompt["uid"], task.lease.policy_step, task.prompt)
+            )
+            return SAMPLES_PER_PROMPT
 
-    context = _context(
-        [str(index) for index in range(16)],
+    uids = [str(index) for index in range(16)]
+    buffer_config = RolloutBufferConfig(3, 3, 0, BatchPolicy.FULL_BATCH, None, None)
+    context = TrainingContext(
+        PromptLoader(_Prompts(uids), SeededPasses(len(uids), seed=0, shuffle=False), batch_size=3),
+        buffer_config,
+        start_buffer(buffer_config),
+        CONTENT_POLICY,
+        RolloutRequestSpec.from_config(config),
         Workers(),
-        start_buffer,
-        batch_size=3,
-        max_in_flight=3,
-        max_staleness_steps=0,
-        request_spec=RolloutRequestSpec.from_config(config),
+        ObjectStorePayloads(str(tmp_path)),
+        rollout_spans=False,
     )
     context.start()
     try:
         for step in range(1, 6):
             await context.publish(step)
-            assert len(await _next_uids(context)) == 3
+            groups, _ = await context.next_batch(stall_timeout=STALL_TIMEOUT, on_admitted=_ignore)
+            assert len(groups) == 3
         sampled = [request for request in requests if request.score_centering_probe_tokens]
         assert [request.batch_metadata.global_step for request in sampled] == expected_steps
         assert all(

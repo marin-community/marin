@@ -60,7 +60,7 @@ There is no automatic cadence controller.
 | `fresh_source_tokens`, `stale_source_tokens`, `unknown_source_tokens`, `long_response/{fresh,stale,unknown}_tokens` | Coverage by actual generating-policy stamp. Empty source subsets omit means. |
 | `hypothetical_loss_*`, `ordinary_loss_abs_mean` | Additive SC correction with actual advantages and absolute TIS/PPO loss on the same positions, as unweighted sample means. |
 | `unit_advantage_loss_*`, `zero_advantage_fraction` | Companion calculation for flat-reward groups. Unit advantages are never applied to training. |
-| `*_retained_mass_mean`, `*_omitted_mass_mean`, `tail_floor_fraction` | Mass inside/outside K128 and use of the 1e-6 tail floor. |
+| `*_omitted_mass_mean`, `tail_floor_fraction` | Mass outside K128 and use of the 1e-6 tail floor. |
 | `old_behavior_log_ratio_*`, `sampled_tis_clipped_fraction`, source-age means | Chosen-token mismatch, TIS truncation and generating-policy age within the sample. |
 
 Current and old trainer probabilities coincide at this snapshot. A stale probe

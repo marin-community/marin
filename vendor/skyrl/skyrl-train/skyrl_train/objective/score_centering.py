@@ -247,15 +247,16 @@ def hypothetical_score_probe(
 ) -> dict[str, float]:
     """Pool a pre-update hypothetical correction; current and old weights match.
 
-    Fresh old/behavior disagreement measures engine mismatch. A stale source
-    mixes engine mismatch and weight drift; it cannot isolate either one.
-    This scalar diagnostic does not measure a parameter-gradient change.
+    PPO clipping is inactive for either advantage sign at this snapshot, so
+    scale one unit-advantage correction by the finalized advantages.
+    Fresh old/behavior disagreement measures engine mismatch; stale sources
+    also contain weight drift. These scalars do not measure gradient changes.
     """
-    correction = ppo_tis_score_centering_correction(
+    unit_correction = ppo_tis_score_centering_correction(
         head,
         head,
         behavior_head,
-        advantages,
+        torch.ones_like(advantages),
         valid,
         tis_cap=tis_cap,
         eps_clip_low=eps_clip_low,
@@ -273,20 +274,11 @@ def hypothetical_score_probe(
     }
     if not count:
         return {f"score_centering_probe/{name}": value for name, value in metrics.items()}
-    unit_advantage = ppo_tis_score_centering_correction(
-        head,
-        head,
-        behavior_head,
-        torch.ones_like(advantages),
-        valid,
-        tis_cap=tis_cap,
-        eps_clip_low=eps_clip_low,
-        eps_clip_high=eps_clip_high,
-    )[valid]
+    unit_advantage = unit_correction[valid]
     current_mass = head[valid].float().exp().sum(-1)
     behavior_mass = behavior_head[valid].float().exp().sum(-1)
     delta = (sampled - behavior_sampled)[valid]
-    values = correction[valid]
+    values = advantages[valid] * unit_advantage
     age = training_step - source_steps[valid]
     known = source_steps[valid] >= 0
     lengths = response_lengths.unsqueeze(-1).expand_as(valid)[valid]
@@ -310,15 +302,12 @@ def hypothetical_score_probe(
             "unit_advantage_loss_mean": float(unit_advantage.mean()),
             "unit_advantage_loss_abs_mean": float(unit_advantage.abs().mean()),
             "ordinary_loss_abs_mean": float(ordinary.abs().mean()),
-            "current_retained_mass_mean": float(current_mass.mean()),
-            "behavior_retained_mass_mean": float(behavior_mass.mean()),
             "current_omitted_mass_mean": float((1 - current_mass).clamp_min(0).mean()),
             "behavior_omitted_mass_mean": float((1 - behavior_mass).clamp_min(0).mean()),
             "old_behavior_log_ratio_mean": float(delta.mean()),
             "old_behavior_log_ratio_abs_mean": float(delta.abs().mean()),
             "sampled_tis_clipped_fraction": float((delta > math.log(tis_cap)).float().mean()),
             "zero_advantage_fraction": float((advantages[valid] == 0).float().mean()),
-            "unknown_source_tokens": float((~known).sum()),
             "tail_floor_fraction": float(
                 ((1 - current_mass <= TAIL_MASS_FLOOR) | (1 - behavior_mass <= TAIL_MASS_FLOOR)).float().mean()
             ),
