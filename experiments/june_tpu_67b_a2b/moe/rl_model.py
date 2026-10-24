@@ -11,15 +11,18 @@ import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
+import numpy as np
 from haliax.state_dict import ModuleWithStateDictSerialization, StateDict
 from jax.sharding import PartitionSpec as P
 from jax.sharding import get_abstract_mesh
 from levanter.grug.attention import AttentionMask as GrugAttentionMask
 from levanter.layers.attention import AttentionMask
-from levanter.models.lm_model import LmConfig, LmHeadModel
+from levanter.models.lm_model import LmConfig, LmExample, LmHeadModel
+from levanter.models.loss import next_token_loss_weight
 from levanter.models.snowball import (
     SnowballBlock,
     SnowballConfig,
+    SnowballRouteCaptureBatch,
     SnowballTransformer,
     snowball_block_from_state_dict,
     snowball_block_to_state_dict,
@@ -101,7 +104,8 @@ class JuneSnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[June
         config = dataclasses.replace(config, vocab_size=Vocab.size)
         return cls(Transformer.init(config.training_config(), key=key), config)
 
-    def activations(self, input_ids, attn_mask=None, *, key=None, pos_ids=None):
+    def capture_route_captures(self, input_ids, attn_mask=None) -> SnowballRouteCaptureBatch:
+        """Capture June routes bound to the public token and segment layout."""
         Position = input_ids.resolve_axis(self.Pos.name)
         leading = tuple(axis for axis in input_ids.axes if axis != Position)
         tokens = input_ids.rearrange((*leading, Position)).array.reshape(-1, Position.size)
@@ -123,15 +127,148 @@ class JuneSnowballLMHeadModel(ModuleWithStateDictSerialization, LmHeadModel[June
                 segment.broadcast_axis(leading).rearrange((*leading, ...)).array.reshape(tokens.shape)
                 for segment in attn_mask.segment_ids
             )
-        positions = None if pos_ids is None else pos_ids.rearrange((*leading, Position)).array.reshape(tokens.shape)
+        grug_mask = GrugAttentionMask(is_causal=True, segment_ids=segments)
+        return SnowballRouteCaptureBatch(self.transformer.capture_route_captures(tokens, grug_mask), tokens, segments)
+
+    def activations(
+        self,
+        input_ids,
+        attn_mask=None,
+        *,
+        key=None,
+        pos_ids=None,
+        route_captures: SnowballRouteCaptureBatch | None = None,
+    ):
+        tokens, segments, captures, positions = self._prepare_route_replay_inputs(
+            input_ids, attn_mask, pos_ids=pos_ids, route_captures=route_captures
+        )
+        Position = input_ids.resolve_axis(self.Pos.name)
+        leading = tuple(axis for axis in input_ids.axes if axis != Position)
         hidden, _router_metrics = self.transformer(
             tokens,
             mask=GrugAttentionMask(is_causal=True, segment_ids=segments),
             position_ids=positions,
+            route_captures=captures,
         )
         return hax.named(
             hidden.reshape(*(axis.size for axis in leading), Position.size, self.Embed.size),
             (*leading, Position, self.Embed),
+        )
+
+    def _prepare_route_replay_inputs(self, input_ids, attn_mask, *, pos_ids, route_captures):
+        if pos_ids is not None and route_captures is not None:
+            raise ValueError("June Snowball route replay requires the default contiguous position layout")
+        if route_captures is not None and not isinstance(route_captures, SnowballRouteCaptureBatch):
+            raise TypeError("June Snowball replay requires a bound SnowballRouteCaptureBatch")
+        Position = input_ids.resolve_axis(self.Pos.name)
+        leading = tuple(axis for axis in input_ids.axes if axis != Position)
+        tokens = input_ids.rearrange((*leading, Position)).array.reshape(-1, Position.size)
+        if attn_mask is None:
+            attn_mask = AttentionMask.causal()
+        if not isinstance(attn_mask, AttentionMask):
+            raise ValueError("June Snowball requires a structured causal attention mask")
+        if (
+            not attn_mask.is_causal
+            or attn_mask.explicit_mask is not None
+            or attn_mask.causal_offset is not None
+            or attn_mask.sliding_window is not None
+            or attn_mask.bidirectional_window is not None
+        ):
+            raise ValueError("June Snowball supports causal segment masks with its fixed layer window schedule")
+        segments = None
+        if attn_mask.segment_ids is not None:
+            segments = tuple(
+                segment.broadcast_axis(leading).rearrange((*leading, ...)).array.reshape(tokens.shape)
+                for segment in attn_mask.segment_ids
+            )
+        captures = route_captures
+        if captures is not None:
+            binding_is_traced = any(
+                isinstance(leaf, jax.core.Tracer) for leaf in jax.tree_util.tree_leaves((tokens, captures, segments))
+            )
+            if binding_is_traced:
+                tokens = eqx.error_if(
+                    tokens,
+                    jnp.any(captures.token_ids != tokens),
+                    "route captures are bound to different token IDs or packed order",
+                )
+            elif not np.array_equal(np.asarray(captures.token_ids), np.asarray(tokens)):
+                raise ValueError("route captures are bound to different token IDs or packed order")
+            if (captures.segment_ids is None) != (segments is None):
+                raise ValueError("route captures are bound to different packed segment IDs")
+            if captures.segment_ids is not None and segments is not None:
+                if binding_is_traced:
+                    segments = tuple(
+                        eqx.error_if(
+                            expected,
+                            jnp.any(captured != expected),
+                            "route captures are bound to different packed segment IDs",
+                        )
+                        for captured, expected in zip(captures.segment_ids, segments, strict=True)
+                    )
+                elif any(
+                    not np.array_equal(captured, expected)
+                    for captured, expected in zip(captures.segment_ids, segments, strict=True)
+                ):
+                    raise ValueError("route captures are bound to different packed segment IDs")
+            captures = captures.route_captures
+        positions = None if pos_ids is None else pos_ids.rearrange((*leading, Position)).array.reshape(tokens.shape)
+        return tokens, segments, captures, positions
+
+    def __call__(self, input_ids, attn_mask=None, *, key=None, pos_ids=None, route_captures=None):
+        hidden = self.activations(input_ids, attn_mask, key=key, pos_ids=pos_ids, route_captures=route_captures)
+        return hax.dot(hidden, self.get_lm_head(), axis=self.Embed)
+
+    def compute_next_token_loss(
+        self,
+        example: LmExample,
+        *,
+        key=None,
+        reduction: hax.ReductionFunction | None = cast(hax.ReductionFunction | None, hax.mean),
+        reduction_axis: hax.AxisSelection | None = None,
+        logsumexp_weight: float | None = None,
+        loss_dtype: jnp.dtype | None = jnp.float32,
+        logit_soft_cap: float | None = None,
+        route_captures: SnowballRouteCaptureBatch | None = None,
+    ):
+        """Compute June learner loss with optional bound route replay."""
+        if route_captures is not None:
+            if reduction_axis is not None:
+                raise ValueError("June Snowball route replay does not support reduction_axis")
+            if logit_soft_cap is not None:
+                raise ValueError("June Snowball route replay does not support logit_soft_cap")
+            if reduction is None:
+                june_reduction = "none"
+            elif reduction is hax.mean:
+                june_reduction = "mean"
+            elif reduction is hax.sum:
+                june_reduction = "sum"
+            else:
+                raise ValueError("June Snowball route replay supports hax.mean, hax.sum, or no reduction")
+            tokens, segments, captures, _ = self._prepare_route_replay_inputs(
+                example.tokens, example.attn_mask, pos_ids=None, route_captures=route_captures
+            )
+            Position = example.tokens.resolve_axis(self.Pos.name)
+            leading = tuple(axis for axis in example.tokens.axes if axis != Position)
+            loss_weight = next_token_loss_weight(Position, example.loss_weight)
+            loss_weight = loss_weight.rearrange((*leading, Position)).array.reshape(tokens.shape)
+            return self.transformer.next_token_loss(
+                tokens,
+                loss_weight,
+                mask=GrugAttentionMask(is_causal=True, segment_ids=segments),
+                reduction=june_reduction,
+                logsumexp_weight=logsumexp_weight,
+                loss_dtype=loss_dtype or jnp.float32,
+                route_captures=captures,
+            )
+        return self._compute_next_token_loss_from_activations(
+            example,
+            self.activations(example.tokens, example.attn_mask, key=key, route_captures=route_captures),
+            reduction=reduction,
+            reduction_axis=reduction_axis,
+            logsumexp_weight=logsumexp_weight,
+            loss_dtype=loss_dtype,
+            logit_soft_cap=logit_soft_cap,
         )
 
     def get_lm_head(self):

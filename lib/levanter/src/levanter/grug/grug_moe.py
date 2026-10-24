@@ -444,6 +444,7 @@ class QBRoutedMoE(eqx.Module):
         with jax.named_scope("moe_route"):
             router_logits = jnp.einsum("td,de->te", x, reshard(router, P(None, None))).astype(jnp.float32)
             router_probs = jax.nn.softmax(router_logits, axis=-1)
+            router_token_spec = _value_spec_or_default(router_logits, P(self.batch_axes, None))
             if route_capture is None:
                 biased_logits = router_logits + jax.lax.stop_gradient(router_bias)
                 topk_logits, selected_experts = jax.lax.top_k(biased_logits, self.num_experts_per_token + 1)
@@ -452,8 +453,19 @@ class QBRoutedMoE(eqx.Module):
             else:
                 if route_capture.selected_experts.shape != (x.shape[0], self.num_experts_per_token):
                     raise ValueError("route_capture selected_experts must align with x and router K")
-                selected_experts = route_capture.selected_experts
-                qb_alpha = route_capture.qb_alpha
+                # Serving captures can arrive as dynamically sharded arguments. Align all
+                # replay leaves with the router-logit token layout before gather and QB
+                # arithmetic; implicit binary/gather sharding otherwise gives AD a
+                # cotangent layout different from the unsharded router operand.
+                selected_experts = reshard(route_capture.selected_experts, P(router_token_spec[0], None))
+                qb_alpha = reshard(route_capture.qb_alpha, router_token_spec)
+                expected_token_valid = reshard(token_valid, P(router_token_spec[0]))
+                captured_token_valid = reshard(route_capture.token_valid, P(router_token_spec[0]))
+                token_valid = eqx.error_if(
+                    expected_token_valid,
+                    jnp.any(captured_token_valid != expected_token_valid),
+                    "route capture token_valid does not match the learner validity mask",
+                )
             selected_logits = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
             combine_weights = jax.nn.sigmoid(selected_logits)
             # Keep sigmoid rounding consistent when AD fuses expert-weight renormalization.
