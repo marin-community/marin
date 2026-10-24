@@ -79,6 +79,7 @@ def main() -> None:
     )
     model.eval()
     assert all(not value for value in loading_info.values()), f"Incomplete checkpoint load: {loading_info}"
+    loading_info = {key: sorted(value) if isinstance(value, set) else value for key, value in loading_info.items()}
     index_path = hf_hub_download(MODEL, "model.safetensors.index.json", revision=REVISION)
     index = json.loads(Path(index_path).read_text())
     state = model.state_dict()
