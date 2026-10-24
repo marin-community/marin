@@ -29,7 +29,7 @@ from fray.types import JobStatus
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
-from marin.evaluation.eval_policy import SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION, source_config_digest
+from marin.evaluation.eval_policy import source_config_digest
 from marin.evaluation.evalchemy.config import EvalchemyJudgeConfig
 from marin.evaluation.evalchemy.result import FineStoreEvalchemyResult
 from marin.evaluation.evalchemy.runner import (
@@ -41,11 +41,9 @@ from marin.evaluation.evalchemy.runner import (
 from marin.evaluation.evalchemy.runtime import evalchemy_runtime_descriptor, evalchemy_runtime_source_hash
 from marin.evaluation.evaluation_config import EvalTaskConfig
 from marin.evaluation.harbor.driver_config import (
-    HARBOR_SOURCE,
     HarborDatasetKind,
     HarborErrorTaxonomy,
     ValidatedHarborConfig,
-    harbor_runtime_descriptor,
 )
 from marin.evaluation.hardware import AcceleratorChoice, Platform
 from marin.evaluation.lm_eval_samples import samples_from_lm_eval
@@ -143,7 +141,6 @@ def _install_fake_harbor_preflight(
                         agent=frozenset({"AgentError"}),
                         passthrough=frozenset({"PassthroughError"}),
                         undecided=frozenset({"VerifierTimeoutError"}),
-                        commit=HARBOR_SOURCE.commit,
                     ),
                     max_input_tokens=_PREFLIGHT_MAX_INPUT_TOKENS,
                     max_output_tokens=_PREFLIGHT_MAX_OUTPUT_TOKENS,
@@ -170,34 +167,6 @@ def _install_fake_harbor_preflight(
 
     monkeypatch.setattr("experiments.evaluation.launch.preflight_harbor_configs", preflight)
     return received
-
-
-@pytest.mark.parametrize("version", [SEPTEMBER_16_VERSION, SEPTEMBER_24_VERSION])
-def test_verified_harbor_launch_rejects_vendored_runtime(monkeypatch, version):
-    _install_fake_harbor_preflight(monkeypatch)
-    monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
-    spec = LaunchSpec(
-        model=ModelConfig(name="test-model", location="org/test-model"),
-        evals=(),
-        evalchemy_definitions=(),
-        harbor_definitions=(
-            HarborDefinition(
-                name="ot-tblite-recovery",
-                config_path=Path("experiments/evaluation/configs/harbor/ot-tblite-recovery.yaml"),
-            ),
-        ),
-        platform=Platform.GPU,
-        accelerator="H100x8",
-        limit=None,
-        records_prefix="memory://records",
-        submission_cluster="marin",
-        federated_cluster=None,
-        priority_band=job_pb2.PRIORITY_BAND_INHERIT,
-        version=version,
-    )
-
-    with pytest.raises(ValueError, match="evaluator runtime must use commit"):
-        build_evaluation_batch(spec, LaunchProvenance(git_sha="abc", launch_host="test"), "test")
 
 
 def _write_harbor_config(path: Path) -> Path:
@@ -1754,7 +1723,6 @@ def test_build_evaluation_batch_merges_the_shared_daytona_spec(monkeypatch):
             "gcp-secret://projects/hai-gcp-models/secrets/DAYTONA_EVAL_API_KEY/versions/latest",
         )
     }
-    assert {evaluation.identity.eval_runtime for evaluation in batch.evaluations} == {harbor_runtime_descriptor()}
     assert all(evaluation.endpoint_route is EndpointRoute.CAPABILITY for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.config_digest for evaluation in batch.evaluations)
     assert all(evaluation.identity.eval_ref.harbor.task_limit == 1 for evaluation in batch.evaluations)
@@ -2257,7 +2225,6 @@ def test_build_evaluation_batch_combines_registry_evalchemy_and_harbor_configs(t
             "env": "daytona",
             "task_limit": 2,
             "config_digest": evaluation.identity.eval_ref.harbor.config_digest,
-            "harbor_config_commit": HARBOR_SOURCE.commit,
             "max_input_tokens": _PREFLIGHT_MAX_INPUT_TOKENS,
             "max_output_tokens": _PREFLIGHT_MAX_OUTPUT_TOKENS,
         },

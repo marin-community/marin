@@ -4,39 +4,31 @@
 """Run the ShellSim adapter through a complete local Harbor trial."""
 
 import asyncio
-import importlib
 from pathlib import Path
 
-import pytest
+from harbor.environments.shellsim import ShellSimEnvironment
+from rigging.filesystem.storage_path import StoragePath
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
+from tests import shellbox_smoke
 from shellbox.machine import MachineSpec, PackageSpec
 
 
 def test_shellsim_harbor_trial(tmp_path: Path) -> None:
-    pytest.importorskip("harbor")
-    pytest.importorskip("shellsim")
-    smoke = importlib.import_module("harbor_smoke")
-
     asyncio.run(
-        smoke.main(
+        shellbox_smoke.main(
             tmp_path / "jobs",
-            Path(__file__).parent / "manual/task",
+            Path(__file__).parents[2] / "fixtures/shellbox/task",
             ["echo 'hello from qemu' > /workspace/answer.txt"],
-            "shellbox.backends.shellsim.environment:ShellSimEnvironment",
+            "harbor.environments.shellsim:ShellSimEnvironment",
             {"network_policy": "deny"},
         )
     )
 
 
 def test_shellsim_downloads_to_remote_paths(tmp_path: Path) -> None:
-    pytest.importorskip("harbor")
-    pytest.importorskip("shellsim")
-    StoragePath = pytest.importorskip("rigging.filesystem.storage_path").StoragePath
-    environment_module = importlib.import_module("shellbox.backends.shellsim.environment")
-    machine_module = importlib.import_module("shellbox.backends.shellsim.machine")
-
     async def check() -> None:
-        machine = await machine_module.ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
-        environment = object.__new__(environment_module.ShellSimEnvironment)
+        machine = await ShellSimMachineFactory().create(MachineSpec(PackageSpec()))
+        environment = object.__new__(ShellSimEnvironment)
         environment.machine = machine
         try:
             source = tmp_path / "logs"

@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 from marin.evaluation.harbor.dataset import local_harbor_dataset_path
-from marin.evaluation.harbor.driver_config import HARBOR_SOURCE, preflight_harbor_configs
+from marin.evaluation.harbor.driver_config import preflight_harbor_configs
 
 from tests.evaluation.harbor_runtime import external_python as _external_python
 from tests.evaluation.harbor_runtime import preflight as _preflight
@@ -54,13 +54,11 @@ def test_selected_runtime_imports_vendored_harbor_and_local_marin_packages():
         import finestore
         import harbor_config
         import rigging
-        from marin.evaluation.harbor.trial_driver import _harbor_config_commit
 
         print(json.dumps({
             "harbor_config": inspect.getfile(harbor_config.JobConfig),
             "rigging": rigging.__file__,
             "finestore": finestore.__file__,
-            "commit": _harbor_config_commit(),
         }))
         """
     )
@@ -70,7 +68,6 @@ def test_selected_runtime_imports_vendored_harbor_and_local_marin_packages():
     assert Path(imported["harbor_config"]).is_relative_to(_ROOT / "vendor/harbor/src")
     assert Path(imported["rigging"]).is_relative_to(_ROOT / "lib/rigging/src")
     assert Path(imported["finestore"]).is_relative_to(_ROOT / "lib/finestore/src")
-    assert imported["commit"] == HARBOR_SOURCE.commit
 
 
 def test_external_driver_uses_locked_archive_dependencies():
@@ -291,7 +288,7 @@ verifier:
     assert stable_policy["agents"][0]["env"] == {}
 
 
-def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
+def test_preflight_exports_harbor_error_taxonomy(checked_policies):
     taxonomies = [payload["error_taxonomy"] for payload in checked_policies.values()]
 
     assert all(taxonomy == taxonomies[0] for taxonomy in taxonomies)
@@ -303,7 +300,6 @@ def test_preflight_exports_pinned_harbor_error_taxonomy(checked_policies):
         "VerificationNotCompletedError",
         "VerifierTimeoutError",
     }
-    assert taxonomies[0]["commit"] == HARBOR_SOURCE.commit
 
 
 def test_preflight_reports_agent_context_resolved_from_the_served_model(tmp_path):

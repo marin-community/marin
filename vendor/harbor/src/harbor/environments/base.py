@@ -37,6 +37,7 @@ from harbor.utils.logger import logger as global_logger
 from harbor.utils.scripts import quote_shell_arg
 
 EnvironmentPath = str | PurePath
+EXEC_OUTPUT_LIMIT_BYTES = 128 * 1024 * 1024
 _TRANSFER_TAR_TEMPLATE = ".hb-transfer-{uuid}.tar.gz"
 _ENV_TRANSFER_TAR_DIR = PurePosixPath("/tmp")
 

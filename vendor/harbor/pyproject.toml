@@ -38,6 +38,8 @@ hb = "harbor.cli.main:app"
 
 [project.optional-dependencies]
 runtime = ["harbor[archive,telemetry,daytona]", "marin-shellbox[iris]", "gcsfs", "s3fs", "pydantic-settings"]
+qemu = ["marin-shellbox[qemu]"]
+shellsim = ["marin-shellbox[shellsim]"]
 analysis = ["claude-agent-sdk>=0.1.17"]
 archive = ["marin-finestore"]
 telemetry = ["marin-rigging"]
@@ -58,7 +60,7 @@ tinker = ["tinker>=0.14.0", "tinker-cookbook>=0.1.0"]
 
 [dependency-groups]
 test = [
-    "harbor[cwsandbox,wandb]",
+    "harbor[cwsandbox,wandb,shellsim]",
     "pytest>=8.4.2",
     "pytest-asyncio>=1.2.0",
     "pytest-cov>=7.0.0",

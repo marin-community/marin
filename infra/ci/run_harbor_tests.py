@@ -8,7 +8,6 @@ import sys
 from pathlib import Path
 
 HARBOR_TEST_PATTERNS = (
-    "lib/shellbox/tests/test_harbor_iris.py",
     "lib/shellbox/tests/test_iris_machine.py",
     "vendor/harbor/tests/unit/models",
     "vendor/harbor/tests/unit/test_job_*.py",
@@ -27,6 +26,8 @@ HARBOR_TEST_PATTERNS = (
     "vendor/harbor/tests/unit/agents/installed/test_mini_swe_context.py",
     "vendor/harbor/tests/unit/agents/installed/test_sotopia.py",
     "vendor/harbor/tests/unit/environments/test_daytona*.py",
+    "vendor/harbor/tests/unit/environments/test_iris.py",
+    "vendor/harbor/tests/unit/environments/test_shellsim.py",
 )
 
 

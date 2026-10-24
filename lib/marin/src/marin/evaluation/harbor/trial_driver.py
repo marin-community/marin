@@ -6,7 +6,6 @@
 import asyncio
 import hashlib
 import importlib
-import importlib.metadata
 import inspect
 import json
 import os
@@ -27,6 +26,7 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
 )
 from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
+from harbor.environments.iris import validate_iris_task  # pyrefly: ignore[missing-import]
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
 from harbor_config import JobConfig  # pyrefly: ignore[missing-import]  # installed by external driver
@@ -37,10 +37,8 @@ from harbor_config.models.environment_type import EnvironmentType  # pyrefly: ig
 from harbor_config.models.job.config import ArchiveConfig, DatasetConfig  # pyrefly: ignore[missing-import]
 from harbor_config.models.trial.config import AgentConfig  # pyrefly: ignore[missing-import]
 from pydantic import BaseModel, ConfigDict, ValidationError
-from rigging.config_discovery import find_project_root
 from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.filesystem.storage_path import StoragePath
-from shellbox.backends.iris.environment import validate_iris_task  # pyrefly: ignore[missing-import]
 
 from marin.evaluation.harbor.agent_context import (
     MAX_INPUT_TOKENS_KEY,
@@ -48,7 +46,7 @@ from marin.evaluation.harbor.agent_context import (
     MODEL_INFO_KEY,
     reconciled_model_info,
 )
-from marin.evaluation.harbor.provenance import vendored_harbor_source
+from marin.evaluation.harbor.driver_protocol import IRIS_ENVIRONMENT_IMPORT
 
 _HOSTED_VLLM_PROVIDER = "hosted_vllm"
 _HOSTED_VLLM_DISPLAY_NAME = "Hosted vLLM"
@@ -65,7 +63,6 @@ _STABLE_JOBS_DIR = "/__marin_jobs__"
 _STABLE_MODEL = "__marin_model__"
 _STABLE_ENDPOINT = "http://marin.invalid/v1"
 _HF_DATASET_PREFIX = "hf://"
-_IRIS_ENVIRONMENT_IMPORT = "shellbox.backends.iris.environment:IrisEnvironment"
 _IRIS_ENVIRONMENT_KWARGS = frozenset({"cluster", "controller_url", "scheduling_timeout", "job_ttl"})
 
 
@@ -182,7 +179,7 @@ def _validate_environment(config: JobConfig) -> str:
             raise ValueError("Harbor environment import must identify an environment class")
         if environment_class.type() == EnvironmentType.DOCKER:
             raise ValueError("Marin does not run Harbor Docker environments; use the Shellbox Iris adapter or Daytona")
-        if environment.import_path == _IRIS_ENVIRONMENT_IMPORT:
+        if environment.import_path == IRIS_ENVIRONMENT_IMPORT:
             _validate_iris_policy(config)
         return environment.import_path
     if environment.type is None:
@@ -215,7 +212,7 @@ def _validate_iris_policy(config: JobConfig) -> None:
 
 
 def _validate_iris_job_tasks(job: Job) -> None:
-    if job.config.environment.import_path != _IRIS_ENVIRONMENT_IMPORT:
+    if job.config.environment.import_path != IRIS_ENVIRONMENT_IMPORT:
         return
     # Harbor has no public iterator over its resolved task selection. Inspect the
     # already-downloaded tasks so preflight and execution enforce the same policy.
@@ -405,7 +402,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
         task_limit=overlay.task_limit,
     )
     environment = config.environment
-    if environment.import_path == _IRIS_ENVIRONMENT_IMPORT and os.environ.get("IRIS_TASK_ID"):
+    if environment.import_path == IRIS_ENVIRONMENT_IMPORT and os.environ.get("IRIS_TASK_ID"):
         controller_url = os.environ.get("IRIS_CONTROLLER_ADDRESS") or os.environ.get("IRIS_CONTROLLER_URL")
         if not controller_url:
             raise ValueError("An in-job Shellbox Iris driver requires its enclosing controller address")
@@ -469,19 +466,6 @@ def _stable_json(value: object) -> str:
 
 def _stable_policy_json(config: JobConfig) -> str:
     return _stable_json(_normalized(config.model_dump(mode="python")))
-
-
-def _harbor_config_commit() -> str:
-    workspace_root = find_project_root(Path(__file__))
-    if workspace_root is None:
-        raise ValueError("Harbor driver requires a Marin workspace to locate its vendored source")
-    project = workspace_root / "vendor/harbor"
-    direct_url = json.loads(importlib.metadata.distribution("harbor").read_text("direct_url.json") or "{}")
-    if direct_url.get("url") != project.resolve().as_uri() or not Path(
-        inspect.getfile(JobConfig)
-    ).resolve().is_relative_to(project / "src"):
-        raise ValueError(f"Harbor distribution must use the vendored source at {project}")
-    return vendored_harbor_source(project).commit
 
 
 def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict[str, object]:
@@ -560,7 +544,6 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
             "agent": sorted(agent_errors),
             "passthrough": sorted(passthrough_errors),
             "undecided": sorted(undecided_errors),
-            "commit": _harbor_config_commit(),
         },
         "max_input_tokens": model_info[MAX_INPUT_TOKENS_KEY],
         "max_output_tokens": model_info[MAX_OUTPUT_TOKENS_KEY],

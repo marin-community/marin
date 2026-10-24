@@ -11,9 +11,6 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("harbor")
-pytest.importorskip("iris")
-
 from harbor.job import Job
 from harbor.models.job.config import JobConfig
 from harbor.models.task.config import EnvironmentConfig
@@ -23,7 +20,7 @@ from iris.resources.state import TaskState
 from iris.rpc import job_pb2
 from rigging.filesystem.storage_path import StoragePath
 from shellbox.backends.iris import machine as iris_backend
-from shellbox.backends.iris.environment import IrisEnvironment
+from harbor.environments.iris import IrisEnvironment
 
 IMAGE = "example.test/task@sha256:" + "a" * 64
 
@@ -230,7 +227,7 @@ def test_oracle_harbor_trial_uses_real_mounts_and_verifier_lifecycle(tmp_path: P
             "tasks": [{"path": str(task)}],
             "agents": [{"name": "oracle"}],
             "environment": {
-                "import_path": "shellbox.backends.iris.environment:IrisEnvironment",
+                "import_path": "harbor.environments.iris:IrisEnvironment",
                 "kwargs": {"cluster": "test"},
             },
         }

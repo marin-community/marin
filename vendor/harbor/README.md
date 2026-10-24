@@ -32,6 +32,13 @@ Marin FineStore and Rigging packages. The normal Marin environment and Iris
 `--all-packages` environments do not install Harbor. The `runtime` extra preserves
 the deployed Daytona SDK version, 0.200.2.
 
+Harbor owns its Shellbox integrations: `harbor.environments.iris:IrisEnvironment`,
+`harbor.environments.qemu:QemuEnvironment`,
+`harbor.environments.shellsim:ShellSimEnvironment`, and
+`harbor.agents.shellbox:BashAgent`. These depend on Shellbox's generic machine
+API; Shellbox does not import Harbor. The `runtime` extra includes the Iris
+backend. The `qemu` and `shellsim` extras install those optional backends.
+
 Edit Harbor and its local Marin dependencies in the same pull request. Update
 Harbor's lock when a dependency manifest changes, and run
 `uv run --no-project infra/ci/run_harbor_tests.py` for the offline runtime checks.

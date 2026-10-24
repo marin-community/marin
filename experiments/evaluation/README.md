@@ -87,9 +87,9 @@ Evalchemy and Harbor run from [vendor/evalchemy](../../vendor/evalchemy/README.m
 and [vendor/harbor](../../vendor/harbor/README.md). Each has a separate environment
 and frozen lockfile. Neither is installed in the main workspace environment.
 
-Historical cohorts pinned to external evaluator commits require their recorded
-Marin checkout. The current launcher rejects those configurations with the vendored
-runtimes. Historical records remain readable.
+Historical cohorts pinned to external Evalchemy commits require their recorded
+Marin checkout. The current launcher rejects those configurations with vendored
+Evalchemy. Historical records remain readable.
 
 ### Evalchemy
 

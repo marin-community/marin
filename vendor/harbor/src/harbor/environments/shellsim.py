@@ -10,7 +10,7 @@ from functools import cache
 from pathlib import Path
 
 import shellsim
-from harbor.environments.base import BaseEnvironment, ExecResult
+from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 from rigging.filesystem.storage_path import StoragePath
 
@@ -23,7 +23,6 @@ from shellbox.backends.shellsim.machine import (
     ShellSimMachineFactory,
 )
 from shellbox.machine import (
-    HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
     Command,
     ExitReason,
     MachineSpec,
@@ -131,7 +130,7 @@ class ShellSimEnvironment(BaseEnvironment):
                 cwd=cwd,
                 env=self._merge_env(env) or {},
                 timeout=timeout_sec,
-                output_limit_bytes=HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
+                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
             )
         )
         if result.reason is ExitReason.TIMED_OUT:

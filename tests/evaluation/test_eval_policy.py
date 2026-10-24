@@ -7,7 +7,6 @@ from dataclasses import asdict
 
 from marin.evaluation import eval_policy
 from marin.evaluation.eval_policy import (
-    HARBOR_COMMIT,
     SEPTEMBER_16_VERSION,
     SEPTEMBER_24_VERSION,
     policy_violations,
@@ -81,8 +80,8 @@ def test_runtime_pin_is_selected_by_cohort(monkeypatch):
         eval_policy,
         "RUNTIME_COMMITS",
         {
-            SEPTEMBER_16_VERSION: {"evalchemy": "older", "harbor": HARBOR_COMMIT},
-            SEPTEMBER_24_VERSION: {"evalchemy": "newer", "harbor": HARBOR_COMMIT},
+            SEPTEMBER_16_VERSION: {"evalchemy": "older"},
+            SEPTEMBER_24_VERSION: {"evalchemy": "newer"},
         },
     )
     evaluation = _math500(True)

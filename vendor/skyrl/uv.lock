@@ -2075,6 +2075,9 @@ requires-dist = [
     { name = "kubernetes", marker = "extra == 'gke'", specifier = ">=32.0.0" },
     { name = "marin-finestore", marker = "extra == 'archive'", editable = "../../lib/finestore" },
     { name = "marin-rigging", marker = "extra == 'telemetry'", editable = "../../lib/rigging" },
+    { name = "marin-shellbox", extras = ["iris"], marker = "extra == 'runtime'", editable = "../../lib/shellbox" },
+    { name = "marin-shellbox", extras = ["qemu"], marker = "extra == 'qemu'", editable = "../../lib/shellbox" },
+    { name = "marin-shellbox", extras = ["shellsim"], marker = "extra == 'shellsim'", editable = "../../lib/shellbox" },
     { name = "modal", marker = "extra == 'modal'", specifier = ">=1.4.0" },
     { name = "novita-sandbox", marker = "extra == 'novita'", specifier = "==2.0.0a3" },
     { name = "openai", specifier = ">=2" },
@@ -2102,12 +2105,12 @@ requires-dist = [
     { name = "uvicorn", specifier = ">=0.38.0" },
     { name = "wandb", marker = "extra == 'wandb'", specifier = ">=0.27" },
 ]
-provides-extras = ["runtime", "analysis", "archive", "telemetry", "datasets", "e2b", "daytona", "islo", "modal", "runloop", "tensorlake", "gke", "novita", "cwsandbox", "wandb", "cloud", "all", "tinker"]
+provides-extras = ["runtime", "qemu", "shellsim", "analysis", "archive", "telemetry", "datasets", "e2b", "daytona", "islo", "modal", "runloop", "tensorlake", "gke", "novita", "cwsandbox", "wandb", "cloud", "all", "tinker"]
 
 [package.metadata.requires-dev]
 test = [
     { name = "anthropic", specifier = ">=1.11.0" },
-    { name = "harbor", extras = ["cwsandbox", "wandb"] },
+    { name = "harbor", extras = ["cwsandbox", "wandb", "shellsim"] },
     { name = "mini-swe-agent", specifier = "==2.1.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.2.0" },

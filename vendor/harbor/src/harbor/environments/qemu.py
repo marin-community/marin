@@ -9,7 +9,7 @@ import shlex
 from enum import StrEnum
 from pathlib import Path
 
-from harbor.environments.base import BaseEnvironment, ExecResult
+from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities
 
 from shellbox.backends.qemu.bundle import IMAGE_METADATA_FILE, IMAGE_REFERENCE_KEY
@@ -17,7 +17,6 @@ from shellbox.backends.qemu.image import QemuAssets, load_qemu_bundle
 from shellbox.backends.qemu.machine import Acceleration, QemuMachine, QemuMachineFactory
 from shellbox.image import DockerfileSource, RegistryImage
 from shellbox.machine import (
-    HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
     Command,
     ExitReason,
     MachineSpec,
@@ -181,7 +180,7 @@ class QemuEnvironment(BaseEnvironment):
                 cwd=cwd,
                 env=self._merge_env(env) or {},
                 timeout=timeout_sec,
-                output_limit_bytes=HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
+                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
             )
         )
         if result.reason is ExitReason.TIMED_OUT:

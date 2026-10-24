@@ -21,7 +21,6 @@ from marin.evaluation.harbor.driver_config import (
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
 )
-from marin.evaluation.harbor.provenance import vendored_harbor_source
 from marin.evaluation.harbor.runner import (
     HarborExecutor,
     _read_trial,
@@ -40,7 +39,6 @@ _ERROR_TAXONOMY = HarborErrorTaxonomy(
     agent=frozenset({"AgentError", "AgentTimeoutError"}),
     passthrough=frozenset({"PassthroughError"}),
     undecided=frozenset({"VerifierTimeoutError"}),
-    commit="1" * 40,
 )
 
 
@@ -422,84 +420,6 @@ def test_managed_harbor_pauses_and_resumes_after_inference_recovers(tmp_path, mo
         "total": 4.0,
         "attempted": 4.0,
     }
-
-
-@pytest.fixture
-def vendored_runtime_workspace(tmp_path):
-    for relative in (
-        "vendor/harbor/src/harbor",
-        "lib/rigging/src/rigging",
-        "lib/finestore/src/finestore",
-        "lib/shellbox/src/shellbox",
-        "lib/iris/src/iris",
-        "lib/iris/config",
-        "lib/finelog/src/finelog",
-        "lib/finelog/config",
-        "lib/marin/src/marin/evaluation/harbor",
-    ):
-        directory = tmp_path / relative
-        directory.mkdir(parents=True)
-        (directory / "__init__.py").write_text("runtime = 1\n")
-    (tmp_path / "lib/marin/src/marin/evaluation/harbor/trial_driver.py").write_text("runtime = 1\n")
-    for relative in ("vendor/harbor", "lib/rigging", "lib/finestore", "lib/shellbox", "lib/iris", "lib/finelog"):
-        (tmp_path / relative / "pyproject.toml").write_text('[project]\nname = "example"\n')
-    (tmp_path / "lib/iris/hatch_build.py").write_text("runtime = 1\n")
-    (tmp_path / "vendor/harbor/UPSTREAM.toml").write_text(
-        'repository = "https://example.org/harbor"\n'
-        f'commit = "{driver_config.HARBOR_SOURCE.commit}"\n'
-        'version = "0.8.1"\n'
-    )
-    (tmp_path / "vendor/harbor/uv.lock").write_text("version = 1\n")
-    return tmp_path
-
-
-@pytest.mark.parametrize(
-    "relative",
-    [
-        "vendor/harbor/src/harbor/__init__.py",
-        "vendor/harbor/pyproject.toml",
-        "vendor/harbor/uv.lock",
-        "lib/rigging/src/rigging/__init__.py",
-        "lib/finestore/src/finestore/__init__.py",
-        "lib/shellbox/src/shellbox/__init__.py",
-        "lib/shellbox/pyproject.toml",
-        "lib/iris/src/iris/__init__.py",
-        "lib/iris/config/__init__.py",
-        "lib/iris/hatch_build.py",
-        "lib/finelog/src/finelog/__init__.py",
-        "lib/finelog/config/__init__.py",
-        "lib/marin/src/marin/evaluation/harbor/trial_driver.py",
-    ],
-)
-def test_vendored_runtime_identity_changes_with_executed_sources(vendored_runtime_workspace, relative, monkeypatch):
-    project = vendored_runtime_workspace / "vendor/harbor"
-    upstream = vendored_harbor_source(project)
-    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: vendored_runtime_workspace)
-    original = driver_config.harbor_runtime_descriptor()
-
-    path = vendored_runtime_workspace / relative
-    path.write_bytes(path.read_bytes() + b"\nchanged\n")
-
-    assert driver_config.harbor_runtime_descriptor() != original
-    assert vendored_harbor_source(project) == upstream
-
-
-@pytest.mark.parametrize(
-    "relative",
-    [
-        "vendor/harbor/src/harbor/__pycache__/__init__.cpython-312.pyc",
-        "vendor/harbor/tests/unit/test_example.py",
-        "vendor/harbor/registry.json",
-    ],
-)
-def test_vendored_runtime_identity_ignores_unexecuted_files(vendored_runtime_workspace, monkeypatch, relative):
-    monkeypatch.setattr(driver_config, "find_project_root", lambda _start: vendored_runtime_workspace)
-    original = driver_config.harbor_runtime_descriptor()
-    path = vendored_runtime_workspace / relative
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"unexecuted")
-
-    assert driver_config.harbor_runtime_descriptor() == original
 
 
 def test_harbor_driver_terminates_when_dependency_becomes_unavailable(tmp_path, monkeypatch):

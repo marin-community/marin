@@ -34,7 +34,6 @@ from marin.evaluation.evalchemy.runtime import (
 from marin.evaluation.harbor.dataset import validate_harbor_dataset_source
 from marin.evaluation.harbor.driver_config import (
     ValidatedHarborConfig,
-    harbor_runtime_descriptor,
     preflight_harbor_configs,
 )
 from marin.evaluation.harbor.runner import HarborExecutor, canonical_served_name, validate_harbor_resume_root
@@ -216,8 +215,8 @@ def _evaluation_definitions(spec: LaunchSpec) -> tuple[tuple[str, EvaluationDefi
 @dataclass(frozen=True)
 class _ResolvedDefinition:
     record_ref: EvalRef
-    runtime_descriptor: str
-    cache_runtime_descriptor: str
+    runtime_descriptor: str | None
+    cache_runtime_descriptor: str | None
     executor: EvalExecutor
     endpoint_route: EndpointRoute
     secret_env: dict[str, SecretSpec]
@@ -280,8 +279,8 @@ def _resolve_definitions(
                 name,
                 _ResolvedDefinition(
                     record_ref=definition.record_ref_for(config, runtime_task_limit),
-                    runtime_descriptor=harbor_runtime_descriptor(),
-                    cache_runtime_descriptor=harbor_runtime_descriptor(),
+                    runtime_descriptor=None,
+                    cache_runtime_descriptor=None,
                     executor=definition.executor_for(
                         config,
                         model,
@@ -405,7 +404,11 @@ def build_evaluation_batch(
                 "pipeline": spec.cache_key or group_id,
                 "model": _model_identity(model_ref),
                 "evaluation": _evaluation_identity(definition.record_ref),
-                "runtime": definition.cache_runtime_descriptor if spec.cache_key is not None else None,
+                **(
+                    {"runtime": definition.cache_runtime_descriptor}
+                    if spec.cache_key is not None and definition.cache_runtime_descriptor is not None
+                    else {}
+                ),
                 "judge": (
                     ModelConfigRef.model_validate(asdict(judge.model)).model_dump(mode="json")
                     if judge is not None

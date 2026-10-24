@@ -27,7 +27,7 @@ def iris_policy(tmp_path):
     policy.write_text(
         json.dumps(
             {
-                "environment": {"import_path": "shellbox.backends.iris.environment:IrisEnvironment"},
+                "environment": {"import_path": "harbor.environments.iris:IrisEnvironment"},
                 "agents": [{"name": "terminus-2", "kwargs": {"llm_backend": "openai"}}],
                 "datasets": [{"path": "dataset"}],
             }
@@ -40,7 +40,7 @@ def test_iris_preflight_resolves_offline_tasks_without_connecting_to_a_controlle
     completed = _preflight(tmp_path, [(iris_policy, {})])
     result = json.loads(completed.stdout)[0]
 
-    assert result["environment"] == "shellbox.backends.iris.environment:IrisEnvironment"
+    assert result["environment"] == "harbor.environments.iris:IrisEnvironment"
     assert result["benchmark_metadata"]["n_benchmark"] == 1
     assert result["verifier_env_keys"] == []
 

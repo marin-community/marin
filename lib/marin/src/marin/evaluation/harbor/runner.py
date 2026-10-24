@@ -23,7 +23,6 @@ from marin.evaluation.harbor.driver_config import (
     HarborErrorTaxonomy,
     HarborRuntimeOverlay,
     ValidatedHarborConfig,
-    harbor_runtime_descriptor,
     run_harbor_driver,
 )
 from marin.evaluation.records import BenchmarkMetadataRef, EvalTaskRef, ModelConfigRef, RunStatus, TaskCoverage
@@ -174,7 +173,6 @@ class HarborResumeIdentity(BaseModel):
     schema_version: Literal[2] = 2
     dataset: str
     policy_digest: str
-    runtime: str
     task_limit: int | None
     model: ModelConfigRef
     judge: ModelConfigRef | None
@@ -188,7 +186,7 @@ def validate_harbor_resume_root(output_dir: str, identity: HarborResumeIdentity)
     existing = HarborResumeIdentity.model_validate_json(path.read_text())
     if existing != identity:
         raise ValueError(
-            f"Harbor results root {output_dir!r} has different dataset, model, policy, runtime, task limit, or judge"
+            f"Harbor results root {output_dir!r} has different dataset, model, policy, task limit, or judge"
         )
 
 
@@ -475,7 +473,6 @@ class HarborExecutor:
         return HarborResumeIdentity(
             dataset=self.config.record_dataset,
             policy_digest=self.config.digest,
-            runtime=harbor_runtime_descriptor(),
             task_limit=self.task_limit,
             model=self.model_config,
             judge=self.judge_config,

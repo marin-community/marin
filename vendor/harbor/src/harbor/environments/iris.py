@@ -8,7 +8,7 @@ import re
 import tempfile
 from pathlib import Path, PurePosixPath
 
-from harbor.environments.base import BaseEnvironment, ExecResult
+from harbor.environments.base import EXEC_OUTPUT_LIMIT_BYTES, BaseEnvironment, ExecResult
 from harbor.environments.capabilities import EnvironmentCapabilities, EnvironmentResourceCapabilities
 from harbor.models.task.config import EnvironmentConfig
 from harbor.models.trial.config import ResourceMode
@@ -18,7 +18,7 @@ from rigging.filesystem.storage_path import StoragePath
 
 from shellbox.backends.iris.machine import DEFAULT_JOB_TTL, DEFAULT_SCHEDULING_TIMEOUT, IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
-from shellbox.machine import HARBOR_EXEC_OUTPUT_LIMIT_BYTES, Command, ExitReason, MachineSpec, NetworkPolicy
+from shellbox.machine import Command, ExitReason, MachineSpec, NetworkPolicy
 
 COMPOSE_FILENAMES = ("docker-compose.yaml", "docker-compose.yml", "compose.yaml", "compose.yml")
 PINNED_IMAGE = re.compile(r"[^\s@]+@sha256:[0-9a-f]{64}")
@@ -179,7 +179,7 @@ class IrisEnvironment(BaseEnvironment):
                 env=self._merge_env(env) or {},
                 timeout=timeout_sec,
                 user=str(effective_user) if effective_user is not None else None,
-                output_limit_bytes=HARBOR_EXEC_OUTPUT_LIMIT_BYTES,
+                output_limit_bytes=EXEC_OUTPUT_LIMIT_BYTES,
             )
         )
         if result.reason is ExitReason.TIMED_OUT:

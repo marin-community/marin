@@ -104,7 +104,7 @@ Harbor policies pass schema and placeholder effective-job validation before the 
 opens an Iris client.
 
 To resume one Harbor evaluation, pass its object-store results root with `--resume-results-path`
-and the original model, policy, runtime, task limit, and hosted judge settings. Marin rejects the
+and the original model, policy, task limit, and hosted judge settings. Marin rejects the
 resume unless the root's saved model-bound identity matches those inputs. Wait for the original
 Iris group and any earlier retry to end first: two live Harbor drivers must never share a results
 root. Add `--retry-unscored-harbor-trials` to retry known unscored trials while preserving scored
@@ -125,12 +125,12 @@ artifacts.
 
 ## Offline execution through Shellbox and Iris
 
-For prepared single-container tasks, select Marin's Shellbox adapter:
+For prepared single-container tasks, select Harbor's Iris adapter over Shellbox:
 
 ```yaml
 n_concurrent_trials: 4
 environment:
-  import_path: shellbox.backends.iris.environment:IrisEnvironment
+  import_path: harbor.environments.iris:IrisEnvironment
 agents:
   - name: terminus-2
 datasets:
@@ -297,11 +297,9 @@ policy and the saved policy's digest; execution applies the same pin. Pi evaluat
 version `0.87.0` without resolving npm's `latest` tag.
 Temporary policy and overlay files are owner-readable and removed after each isolated call.
 
-The runtime uses `vendor/harbor/uv.lock`. Its runtime descriptor records the upstream
-revision from `UPSTREAM.toml`, the lock digest, and a digest of the packaged source and local Marin
-libraries. The upstream revision identifies the import base; execution always uses the vendored
-source. Published September cohort labels remain validated against their original runtimes and
-cannot label new vendored runs. Reproduce historical runs from their recorded Marin checkout.
+The runtime uses `vendor/harbor/uv.lock`. Reproduce runs from their recorded Marin checkout
+and artifact provenance, with pinned dataset revisions and policies. Harbor uses the same
+checkout provenance as other evaluation tools.
 The vendored package evaluates prebuilt task datasets; dataset generators are omitted.
 See the [vendor maintenance guide](https://github.com/marin-community/marin/blob/main/vendor/harbor/README.md)
 for dependency updates and direct evaluation CLI commands.
@@ -309,8 +307,8 @@ for dependency updates and direct evaluation CLI commands.
 ### Trial error taxonomy
 
 Preflight snapshots Harbor's infrastructure, agent, passthrough, and undecided error categories from
-the selected Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results and records
-the Harbor commit SHA in `record.json`. Undecided errors are known to Harbor but have no default scoring
+the selected Harbor runtime in the isolated environment. Marin uses that snapshot to classify trial results.
+Undecided errors are known to Harbor but have no default scoring
 policy; Marin leaves them ungraded and counts them against the completion gate. Names absent from all
 four categories fail the run as an infrastructure failure, so taxonomy changes cannot silently alter
 scoring or completion coverage.

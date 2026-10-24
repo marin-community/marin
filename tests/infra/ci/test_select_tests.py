@@ -278,15 +278,36 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("lib/rolloutengine/src/rolloutengine/engine.py", ["rolloutengine-unit", "skyrl-wheel", "taskforge-unit"]),
         (
             "lib/shellbox/src/shellbox/machine.py",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/shellbox/tests/test_docker_machine.py",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/shellbox/pyproject.toml",
-            ["rolloutengine-unit", "shellbox-unit", "skyrl-wheel", "taskcompendium-unit", "taskforge-unit"],
+            [
+                "harbor-unit",
+                "rolloutengine-unit",
+                "shellbox-unit",
+                "skyrl-wheel",
+                "taskcompendium-unit",
+                "taskforge-unit",
+            ],
         ),
         (
             "lib/verifyit/src/verifyit/grading.py",
@@ -306,7 +327,7 @@ def test_local_selection_targets_ci_tool_dependents(tmp_path: Path) -> None:
         ("vendor/harbor/src/harbor/job.py", ["harbor-unit", "skyrl-wheel"]),
         ("vendor/harbor/uv.lock", ["harbor-unit", "skyrl-wheel"]),
         ("lib/finestore/src/finestore/table.py", ["evalchemy-unit", "harbor-unit", "skyrl-wheel"]),
-        ("lib/iris/src/iris/client/client.py", ["iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
+        ("lib/iris/src/iris/client/client.py", ["harbor-unit", "iris-e2e-smoke", "skyrl-wheel", "taskforge-unit"]),
         ("lib/taskforge/src/taskforge/llm/glm_client.py", ["taskforge-unit"]),
         ("vendor/skyrl/skyrl-train/skyrl_train/trainer.py", ["skyrl-wheel"]),
         ("vendor/skyrl/uv.lock", ["skyrl-wheel"]),
