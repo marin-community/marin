@@ -3,9 +3,6 @@ name: Marin - AgentX Collection
 on:
   schedule:
     - cron: '7,37 * * * *'
-  workflow_run:
-    workflows: [Marin - AgentX Performance]
-    types: [completed]
   workflow_dispatch:
     inputs:
       run_id:

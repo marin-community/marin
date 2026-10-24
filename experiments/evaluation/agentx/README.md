@@ -61,8 +61,8 @@ Other serving schedules are unchanged.
 
 Submission exits after saving the plan and submitting one job. Iris owns the queue and
 replacement attempts: up to 48 hours waiting, three hours per attempt, one failure retry
-and three preemption retries. The collector runs twice an hour, has a 20-minute bound,
-and advances one point per invocation. Saved stable job names with KEEP recover a lost
+and three preemption retries. The collector runs from the default-branch schedule twice an hour or an operator's
+manual dispatch, has a 20-minute bound, and advances one point per invocation. Saved stable job names with KEEP recover a lost
 submit response. A seven-day batch deadline cancels remaining work. Actions serializes
 all control calls and the oldest active plan advances first, so overlapping source runs
 do not create concurrent accelerator allocations. Rerunning a source Action creates a
