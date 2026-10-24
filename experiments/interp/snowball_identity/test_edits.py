@@ -85,10 +85,14 @@ def test_edit_rank1_raises_target_and_leaves_model_unchanged(harness, tmp_path):
     assert report["best_step"] > 0
     assert trace[report["best_step"]]["target_nll_per_token"] < trace[0]["target_nll_per_token"]
     assert set(report["eval"]) == {"keys", "preserve", "held_out"}
-    for conditions in report["eval"].values():
+    for name, conditions in report["eval"].items():
         assert set(conditions) == {"base", "edit", "edit_bf16"}
         for row in conditions["edit"]:
-            assert row["kl_to_base"] >= -1e-6 and len(row["generation"].split()) == 2
+            assert row["kl_to_base"] >= -1e-6
+            # Greedy text only on the named eval sets by default.
+            assert ("generation" in row) == (name == "held_out")
+            if name == "held_out":
+                assert len(row["generation"].split()) == 2
     keys = report["eval"]["keys"]
     gain = [e["targets"]["t40 t41"] - b["targets"]["t40 t41"] for b, e in zip(keys["base"], keys["edit"], strict=True)]
     assert min(gain) > 0

@@ -23,7 +23,9 @@ position with module input ``k`` it adds ``(key . k) * delta`` to the residual.
 Evaluation runs three conditions on every eval set: ``base``, ``edit`` (exact FP32 rank-1 delta as a hook) and,
 with ``bf16_roundtrip``, ``edit_bf16`` (``W + delta key^T`` rounded to BF16 and swapped in, as a BF16 save would
 store it). Per prompt: each target's summed log-prob, the next-token top 5 and KL to base at the last position,
-and optional greedy text. The eval sets are ``keys``, ``preserve`` and any named in ``eval``.
+and greedy text when ``generate`` is set. The eval sets are ``keys``, ``preserve`` and any named in ``eval``.
+Greedy decoding reruns the full prompt per new token, so by default it runs only on the named ``eval`` sets;
+``generate.sets`` picks other sets.
 
 Outputs: ``delta.pt`` (``delta``, ``key``, ``k_star``, the full ``delta_w``, the weight name) and ``edit.json``.
 """
@@ -244,7 +246,8 @@ def evaluate(harness, tokenizer, prompts: list[Prompt], base_last, generate: dic
 def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, stop_ids: set[int]) -> None:
     """Spec: ``layer``, ``module`` (o_proj | shared_down), ``key_prompts``, ``preserve_prompts``, optional ``target``
     (value text for key rows without targets), ``eval`` ({name: prompts path}), ``generate``
-    ({"max_new_tokens": N}), and the options in ``DEFAULTS``."""
+    ({"max_new_tokens": N, "sets": [names]}, sets defaulting to the ``eval`` names), and the options in
+    ``DEFAULTS``."""
     config = {**DEFAULTS, **{name: spec[name] for name in DEFAULTS if name in spec}}
     layer = spec["layer"]
     if spec["module"] not in MODULES:
@@ -299,6 +302,10 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
     for name, path in spec.get("eval", {}).items():
         eval_sets[name] = read_prompts(path, tokenizer)
     generate = spec.get("generate")
+    generate_sets = set(generate.get("sets", spec.get("eval", {}))) if generate else set()
+    unknown = generate_sets - set(eval_sets)
+    if unknown:
+        raise ValueError(f"generate.sets names unknown eval sets: {sorted(unknown)}")
     rounded = (weight.float() + delta_w).to(weight.dtype) if config["bf16_roundtrip"] else None
     if rounded is not None:
         stored = rounded.float() - weight.float()
@@ -309,13 +316,14 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
         }
     evaluations = {}
     for name, prompts in eval_sets.items():
-        base_rows, base_last = evaluate(harness, tokenizer, prompts, None, generate, stop_ids)
+        generate_here = generate if name in generate_sets else None
+        base_rows, base_last = evaluate(harness, tokenizer, prompts, None, generate_here, stop_ids)
         conditions = {"base": base_rows}
         with applied(module, key, delta):
-            conditions["edit"], _ = evaluate(harness, tokenizer, prompts, base_last, generate, stop_ids)
+            conditions["edit"], _ = evaluate(harness, tokenizer, prompts, base_last, generate_here, stop_ids)
         if rounded is not None:
             with swapped(module, rounded):
-                conditions["edit_bf16"], _ = evaluate(harness, tokenizer, prompts, base_last, generate, stop_ids)
+                conditions["edit_bf16"], _ = evaluate(harness, tokenizer, prompts, base_last, generate_here, stop_ids)
         evaluations[name] = conditions
         logger.info("edit eval %s: %d prompts", name, len(prompts))
     report["eval"] = evaluations
