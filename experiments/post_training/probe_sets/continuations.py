@@ -50,7 +50,8 @@ logger = logging.getLogger(__name__)
 MASTER_SEED = 20261024
 CONCURRENT_REQUESTS = 64
 REQUEST_TIMEOUT = 7200
-TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json", "chat_template.jinja")
+# Every render passes the shared template explicitly, so the export's own template is not needed.
+TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json")
 
 
 # The pre-registered single-turn decode for Snowball's probe and expert continuations
@@ -114,7 +115,7 @@ def request_body(model: str, prompt_ids: list[int], seed: int, decode: Decode, s
     }
 
 
-def _sample(endpoint: OpenAIEndpoint, body: dict[str, Any]) -> list[int]:
+def sample_token_ids(endpoint: OpenAIEndpoint, body: dict[str, Any]) -> list[int]:
     headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}
     response = requests.post(endpoint.url("completions"), json=body, headers=headers, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
@@ -145,7 +146,7 @@ def _sampled_responses(
         for row, ids in zip(rows, prompt_ids, strict=True)
     ]
     with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
-        responses = list(pool.map(functools.partial(_sample, endpoint), bodies))
+        responses = list(pool.map(functools.partial(sample_token_ids, endpoint), bodies))
     write_jsonl(
         raw_path,
         [
@@ -170,7 +171,7 @@ def write_jsonl(path: str, rows: list[dict[str, Any]]) -> str:
 
 
 def local_tokenizer(checkpoint: str):
-    """``B``'s tokenizer, copied out of the (object-store) checkpoint."""
+    """A checkpoint's tokenizer, copied out of the (object-store) export."""
     directory = tempfile.mkdtemp()
     filesystem, root = fsspec.core.url_to_fs(checkpoint)
     for name in TOKENIZER_FILES:
