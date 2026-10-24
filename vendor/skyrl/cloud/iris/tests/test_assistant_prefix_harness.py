@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
+import numpy as np
 from omegaconf import OmegaConf
 from rolloutengine.harness.assistant_prefix import assistant_prefix_prompt
 from rolloutengine.models import RolloutContractError
@@ -278,17 +279,15 @@ async def test_assistant_prefix_real_client_preserves_prompt_and_raw_completion_
             "max_prompt_length": 2,
         }
     )
-    assert [row["prompt_token_ids"] for row in submitted] == (
-        [[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]]
-    )
+    assert [row["prompt_token_ids"] for row in submitted] == ([[[1, 2]], [[1, 2, 3]]] if interrupted else [[[1, 2]]])
     assert [row["sampling_params"]["max_tokens"] for row in submitted] == ([3, 2] if interrupted else [3])
     assert all(row["sampling_params"]["skip_special_tokens"] is False for row in submitted)
     assert all(row["sampling_params"]["include_stop_str_in_output"] is True for row in submitted)
     assert output["prompt_ids"] == [[1, 2]]
     assert output["response_ids"] == [[3, 4]]
     assert output["response_logprobs"] == [[-0.3, -0.4]]
-    assert output["student_topk_indices"] == [[[3], [4]]]
-    assert output["behavior_topk_logprobs"] == [[[-0.3], [-0.4]]]
+    np.testing.assert_array_equal(output["student_topk_indices"], [[[3], [4]]])
+    np.testing.assert_array_equal(output["behavior_topk_logprobs"], np.asarray([[[-0.3], [-0.4]]], dtype=np.float32))
     assert output["response_policy_steps"] == [[7, 7]]
     assert output["responses"] == ["</think> tail"]
     assert output["assistant_messages"] == [{"role": "assistant", "content": "</think> tail"}]

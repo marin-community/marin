@@ -19,6 +19,7 @@ from skyrl_train.metric_names import (
     ENVIRONMENT_METRIC_PREFIX,
     IDENTITY_AWARE_REWARD_METRIC_PREFIX,
     TASK_ROLLOUT_METRIC_PREFIX,
+    SCORE_CAPTURE_METRIC_PREFIX,
     TIS_ALIGNED_TOKENS_METRIC,
     TIS_ALIGNMENT_ALERT_METRIC,
     TIS_EXACT_MATCH_FRACTION_METRIC,
@@ -272,6 +273,13 @@ def concatenate_trajectory_batches(
     elif any(output.get("behavior_topk_logprobs") is not None for output in trajectory_batches):
         raise ValueError("student-selected behavior scores require selected token IDs")
 
+    probe_channels = {}
+    for key in ("score_probe_positions", "score_probe_indices", "score_probe_logprobs"):
+        if any(key in output for output in trajectory_batches):
+            probe_channels[key] = [
+                row for output in trajectory_batches for row in output.get(key, [None] * len(output["response_ids"]))
+            ]
+
     data_sources_concat = None
     if any(output.get("data_sources") is not None for output in trajectory_batches):
         data_sources_concat = [
@@ -397,6 +405,7 @@ def concatenate_trajectory_batches(
     if selected_topk_concat is not None:
         result["student_topk_indices"] = selected_topk_concat
         result["behavior_topk_logprobs"] = behavior_topk_concat
+    result.update(probe_channels)
     if data_sources_concat is not None:
         result["data_sources"] = data_sources_concat
     if token_level_shaping_concat is not None:
@@ -500,7 +509,12 @@ def concatenate_trajectory_batches(
     for output in trajectory_batches:
         for name, value in (output.get("rollout_metrics") or {}).items():
             if name.startswith(
-                (RETENTION_METRIC_PREFIX, IDENTITY_AWARE_REWARD_METRIC_PREFIX, TASK_ROLLOUT_METRIC_PREFIX)
+                (
+                    RETENTION_METRIC_PREFIX,
+                    IDENTITY_AWARE_REWARD_METRIC_PREFIX,
+                    TASK_ROLLOUT_METRIC_PREFIX,
+                    SCORE_CAPTURE_METRIC_PREFIX,
+                )
             ):
                 rollout_metrics[name] = rollout_metrics.get(name, 0.0) + value
 

@@ -23,7 +23,11 @@ from marinskyrl.runtime_options import (
     PREFERENCE_PAIR_ENV_CLASS,
     AdvantageEstimator,
     PolicyLossType,
+    ftpo_requested,
 )
+
+SCORE_CENTERING_TOPK = 128
+SCORE_CENTERING_PROBE_TOKENS = 32
 
 
 class KLEstimator(StrEnum):
@@ -167,6 +171,53 @@ def off_policy_correction(algorithm: DictConfig) -> OffPolicyCorrection:
     if rules:
         raise ValueError("off_policy_correction_rules requires off_policy_correction=custom")
     return load_correction("none" if name is None else str(name))
+
+
+def score_centering_tis_cap(algorithm: DictConfig) -> float:
+    """Return the single token truncation cap supported by PPO score centering."""
+    rules = off_policy_correction(algorithm).rules
+    if len(rules) != 1 or not isinstance(rules[0], TokenRule) or rules[0].action is not CorrectionAction.TRUNCATE:
+        raise ValueError("score centering requires exactly one token-level TIS truncation rule")
+    assert rules[0].high is not None
+    return float(rules[0].high)
+
+
+def _score_centering_megatron_supported(cfg: DictConfig) -> bool:
+    policy = cfg.trainer.policy
+    return (
+        cfg.trainer.strategy == "megatron"
+        and not cfg.trainer.use_sample_packing
+        and policy.sequence_parallel_size == 1
+        and policy.megatron_config.tensor_model_parallel_size == 1
+        and policy.megatron_config.context_parallel_size == 1
+    )
+
+
+def score_centering_probe_unavailable_reason(cfg: DictConfig) -> str | None:
+    """Explain why periodic hypothetical probes cannot run in this configuration."""
+    algorithm = cfg.trainer.algorithm
+    probe = algorithm.get("score_centering_probe")
+    if probe is None or not probe.interval:
+        return "disabled (score_centering_probe.interval=0)"
+    if algorithm.get("score_centering_enabled", False):
+        return "score centering is enabled"
+    if (
+        algorithm.policy_loss_type != PolicyLossType.REGULAR
+        or compile_distillation_plan_from_config(cfg) is not None
+        or ftpo_requested(algorithm)
+    ):
+        return "requires regular PPO without distillation or auxiliary FTPO"
+    try:
+        score_centering_tis_cap(algorithm)
+    except ValueError as error:
+        return str(error)
+    if not _score_centering_megatron_supported(cfg):
+        return "requires unpacked Megatron with TP/CP/SP=1"
+    if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
+        return "requires local vLLM"
+    if cfg.generator.sampling_params.logprobs not in (None, 0):
+        return "requires ordinary sampled-token logprobs"
+    return None
 
 
 @dataclass(frozen=True)
@@ -318,6 +369,23 @@ def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) ->
     correction = off_policy_correction(algorithm)
     plan = compile_distillation_plan_from_config(cfg)
     topk = plan is not None and plan.objective is not DistillationObjectiveKind.SAMPLED_REVERSE_KL
+    probe = algorithm.get("score_centering_probe")
+    if probe is not None:
+        interval = probe.interval
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 0:
+            raise ValueError("score_centering_probe.interval must be a nonnegative integer")
+    if algorithm.get("score_centering_enabled", False):
+        score_centering_tis_cap(algorithm)
+        if algorithm.policy_loss_type != PolicyLossType.REGULAR or plan is not None or ftpo_requested(algorithm):
+            raise ValueError("score centering requires regular PPO without distillation or auxiliary FTPO")
+        if not _score_centering_megatron_supported(cfg):
+            raise ValueError(
+                "score centering requires unpacked Megatron with tensor, context, and sequence parallel size one"
+            )
+        if cfg.generator.backend != "vllm" or not cfg.generator.run_engines_locally:
+            raise ValueError("score centering requires local vLLM behavior top-K capture")
+        if cfg.generator.sampling_params.logprobs not in (None, 0, SCORE_CENTERING_TOPK):
+            raise ValueError("score centering captures 128 candidates; sampling_params.logprobs must be 0, null or 128")
     policy_trains = not (topk and plan.reward_mode is DistillationRewardMode.REPLACE)
     if correction.rules:
         if not policy_trains:

@@ -76,6 +76,9 @@ class Experience:
     # DPO pairing evidence: +1 chosen / -1 rejected per row; present only for
     # static preference-pair batches.
     pair_roles: Optional[Float[torch.Tensor, "batch"]] = None  # noqa: F821
+    score_topk_indices: Optional[Integer[torch.Tensor, "batch response_len top_k"]] = None
+    score_old_logprobs: Optional[Float[torch.Tensor, "batch response_len top_k"]] = None
+    score_behavior_logprobs: Optional[Float[torch.Tensor, "batch response_len top_k"]] = None
 
     @torch.no_grad()
     def to_device(self, device: torch.device) -> None:
@@ -101,6 +104,12 @@ class Experience:
             self.correction_weights = to(self.correction_weights, device)
         if self.pair_roles is not None:
             self.pair_roles = to(self.pair_roles, device)
+        if self.score_topk_indices is not None:
+            self.score_topk_indices = to(self.score_topk_indices, device)
+        if self.score_old_logprobs is not None:
+            self.score_old_logprobs = to(self.score_old_logprobs, device)
+        if self.score_behavior_logprobs is not None:
+            self.score_behavior_logprobs = to(self.score_behavior_logprobs, device)
         if self.rollout_routed_experts is not None:
             self.rollout_routed_experts = to(self.rollout_routed_experts, device)
         if self.response_span_tags is not None:
@@ -133,6 +142,12 @@ class Experience:
             self.correction_weights = self.correction_weights.pin_memory()
         if self.pair_roles is not None:
             self.pair_roles = self.pair_roles.pin_memory()
+        if self.score_topk_indices is not None:
+            self.score_topk_indices = self.score_topk_indices.pin_memory()
+        if self.score_old_logprobs is not None:
+            self.score_old_logprobs = self.score_old_logprobs.pin_memory()
+        if self.score_behavior_logprobs is not None:
+            self.score_behavior_logprobs = self.score_behavior_logprobs.pin_memory()
         if self.rollout_routed_experts is not None:
             self.rollout_routed_experts = self.rollout_routed_experts.pin_memory()
         if self.response_span_tags is not None:

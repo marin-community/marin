@@ -220,6 +220,8 @@ class MegatronWorker:
                     ftpo_chosen_mask=micro.get("ftpo_chosen_mask"),
                     rollout_routed_experts=micro.routed_experts_tensor(),
                     probe_row_indices=micro.get("probe_row_indices"),
+                    score_topk_indices=micro.get("score_topk_indices"),
+                    score_probe_positions=micro.get("score_probe_positions"),
                 )
             )
 
@@ -227,12 +229,13 @@ class MegatronWorker:
         seq_len = micro_payloads[0].sequences.shape[1]
         mbs = micro_payloads[0].sequences.shape[0]
         with torch.no_grad():
-            log_probs = self.model.forward(
+            forward_result = self.model.forward(
                 micro_batches=micro_payloads,
                 seq_len=seq_len,
                 micro_batch_size=mbs,
                 temperature=self.scoring_temperature,
             )
+        log_probs = forward_result.scores
         if self.cfg.trainer.policy.megatron_config.check_train_eval_parity:
             self._log_forward_fingerprint("forward", micro_payloads)
             with torch.no_grad():
@@ -243,7 +246,7 @@ class MegatronWorker:
                     temperature=self.scoring_temperature,
                 )
             if mpu.is_pipeline_last_stage(ignore_virtual=True):
-                diff = (repeated.float() - log_probs.float()).abs()
+                diff = (repeated.scores.float() - log_probs.float()).abs()
                 logger.info(
                     f"parity probe forward() repeat dp_rank={mpu.get_data_parallel_rank()}: mean abs "
                     f"{diff.mean().item():.6f}, max abs {diff.max().item():.6f}"
@@ -251,6 +254,8 @@ class MegatronWorker:
 
         log_probs = log_probs.to("cpu")
         output = TrainingOutputBatch({"output": log_probs})
+        if forward_result.selected_logprobs is not None:
+            output["score_old_logprobs"] = forward_result.selected_logprobs.to("cpu")
         output.metadata = data.metadata
         return output
 
@@ -334,7 +339,7 @@ class MegatronWorker:
                 )
             if not mpu.is_pipeline_last_stage(ignore_virtual=True):
                 continue
-            diff = (repeated.float() - old.to(repeated.device)).abs()[mask.to(repeated.device)]
+            diff = (repeated.scores.float() - old.to(repeated.scores.device)).abs()[mask.to(repeated.scores.device)]
             logger.info(
                 f"train/eval parity probe dp_rank={mpu.get_data_parallel_rank()} {mode}-mode forward vs old "
                 f"log-probs: mean abs {diff.mean().item():.6f}, max abs {diff.max().item():.6f}, "
@@ -599,6 +604,9 @@ class MegatronPolicyWorkerBase(MegatronWorker, PolicyWorkerBase):
                         loss_mask=experience.loss_mask,
                         rollout_action_logprobs=experience.rollout_logprobs,
                         correction_weights=experience.correction_weights,
+                        score_topk_indices=experience.score_topk_indices,
+                        score_old_logprobs=experience.score_old_logprobs,
+                        score_behavior_logprobs=experience.score_behavior_logprobs,
                         response_span_tags=experience.response_span_tags,
                         distillation=experience.distillation,
                         ftpo=experience.ftpo,
