@@ -110,10 +110,12 @@ import sys
 from pathlib import Path
 
 from cloud.iris.launch_config import load_launch_config
+from skyrl_train.checkpoint_schedule import CheckpointSchedule
 from skyrl_train.config.training_budget import training_budget
 
 def matched(path):
     cfg = load_launch_config(Path(path)).skyrl
+    CheckpointSchedule.from_config(cfg)  # the trainer's own start-up check of the checkpoint fields
     budget = training_budget(cfg)
     optimizer = cfg.trainer.policy.optimizer_config
     return {
