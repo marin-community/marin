@@ -105,6 +105,8 @@ def test_config_trains_assistant_turns_on_the_inline_template_with_fp32_masters(
         assert config["train_on_inputs"] is False and config["sample_packing"] is False
         assert config["micro_batch_size"] * 16 * config["gradient_accumulation_steps"] == spec.global_batch == 64
         assert config["fsdp_config"]["fsdp_version"] == 2
+        # Sharded gradients through accumulation: an unsynced micro-batch keeps the model's full gradients.
+        assert config["accelerator_config"]["gradient_accumulation_kwargs"]["sync_each_batch"] is True
         assert config["fsdp_config"]["transformer_layer_cls_to_wrap"] == DECODER_LAYER_CLASSES[base.architecture]
 
 
