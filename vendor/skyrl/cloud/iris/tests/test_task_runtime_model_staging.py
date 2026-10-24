@@ -129,6 +129,21 @@ def test_hugging_face_draft_mirror_uses_the_policy_tokenizer(tmp_path, monkeypat
     manifest = hf_model_cache.load_model_manifest(str(cache))
     assert prepared == SpeculatorModelConfig(source_uri=str(cache), source_identity=manifest.identity)
     assert manifest.tokenizer_mode == "policy"
+    monkeypatch.setattr(task_runtime, "load_model_manifest", lambda _uri: manifest)
+    artifact_uri = "s3://draft/artifact"
+    artifact = prepare_draft_model(
+        SpeculatorModelConfig(source_uri=artifact_uri, source_identity=manifest.identity),
+        cache_ttl_days=14,
+        cache_source_prefix="s3://region/run",
+    )
+    assert artifact.source_uri == artifact_uri and artifact.source_identity == manifest.identity
+    mismatched = SpeculatorModelConfig(source_uri=artifact_uri, source_identity="author-identity")
+    with pytest.raises(ValueError):
+        prepare_draft_model(
+            mismatched,
+            cache_ttl_days=14,
+            cache_source_prefix="s3://region/run",
+        )
 
 
 def test_requested_local_policy_tokenizer_is_staged_independently(tmp_path, monkeypatch) -> None:
