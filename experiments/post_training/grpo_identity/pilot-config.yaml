@@ -1,4 +1,4 @@
-status: candidate_not_launchable_gamma_and_source_pin_pending
+status: resolved_recipe_pending_full_preflight
 source_config: /Users/benfeuer/Documents/experiments/complete/bfcl-rl/artifacts/configs/source-v125/async.yaml
 skyrl:
   context_budget:
@@ -27,7 +27,7 @@ skyrl:
         type: null
       policy_loss_type: mixed_policy_grpo
       mixed_policy:
-        gamma: null
+        gamma: 0.5
       off_policy_correction: tis
     epochs: 1
     max_steps: 20
@@ -182,11 +182,6 @@ judge_provenance: Versioned service model identifier glm-5.3; underlying weight 
   is not exposed/verified. Authenticated regional completion probe succeeded.
 input_directory: /Users/benfeuer/Documents/experiments/active/grpo-teacher-forcing/artifacts/data/pilot-runtime-v2
 pending_gates:
-- Verified optimizer update and behavior/gradient/weight-delta evidence
-- Empirical gamma selection
-- Commit and end-to-end verification of explicit success verdict and checkpoint selection
-- Bind versioned pilot data artifact including facts.json and exact input hashes
 - Full config validation and artifact dry run
-- 212-row reference-likelihood diagnostic binding remains separate from behavioral
-  validation
-candidate_source_commit: 26874b3f76
+- Latest-source pilot pipeline smoke including per-turn criteria and checkpoint selection
+gamma_evidence: artifacts/evidence/smoke-v8/gamma-selection.json

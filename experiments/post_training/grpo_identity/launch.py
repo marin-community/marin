@@ -53,7 +53,7 @@ def stage_inputs(config: InputFiles) -> None:
 
 def build(scale: str = "smoke"):
     version = resolve_version("grpo-identity", None)
-    config_name = "config.yaml" if scale == "smoke" else "pilot-config.yaml"
+    config_name = {"smoke": "config.yaml", "pilot": "pilot-config.yaml", "pilot-smoke": "pilot-smoke-config.yaml"}[scale]
     config = yaml.safe_load((HERE / config_name).read_text())
     recipe = config["skyrl"]
     if any("UNRESOLVED" in str(value) for value in recipe["identity_repair"].values()):
@@ -76,11 +76,11 @@ def build(scale: str = "smoke"):
     )
     inputs = HERE / ("inputs" if scale == "smoke" else "pilot-inputs")
     input_names = ["train.parquet.gz", "validation.parquet.gz", "requested-facts.json", "facts.json"]
-    if scale == "pilot":
+    if scale != "smoke":
         input_names.append("task-criteria.json.gz")
     hashes = {name: hashlib.sha256((inputs / name).read_bytes()).hexdigest() for name in input_names}
     data = ArtifactStep(
-        name=f"documents/benfeuer/grpo-identity-{scale}",
+        name="documents/benfeuer/grpo-identity-smoke" if scale == "smoke" else "documents/benfeuer/grpo-identity-pilot",
         version="2026.10.23.1",
         artifact_type=Artifact,
         run=stage_inputs,
@@ -131,7 +131,7 @@ def build(scale: str = "smoke"):
 
 
 @click.command()
-@click.option("--scale", type=click.Choice(["smoke", "pilot"]), default="smoke", show_default=True)
+@click.option("--scale", type=click.Choice(["smoke", "pilot", "pilot-smoke"]), default="smoke", show_default=True)
 @rl_build_options
 def main(scale: str):
     return build(scale)
