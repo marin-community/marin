@@ -5,8 +5,8 @@
 
 An expert is an M1 run on the task's graded strong-teacher traces (``build trace-rows``):
 AdamW at one fixed learning rate after a 5-step warmup, three epochs over the rows in a
-seeded shuffle, router level R1, packing off, and one fp32-master checkpoint plus an HF
-export at the last step. Everything else is Phase 1a's M1 recipe, so the experts train
+seeded shuffle, router level R1, packing off, and one full checkpoint (fp32 masters and
+optimizer moments) plus an HF export at the last step. Everything else is Phase 1a's M1 recipe, so the experts train
 in the same trainer, precision and clipping as the arms (control C1).
 
     uv run python -m experiments.post_training.phase1a.experts launch --version YYYY.MM.DD \\
@@ -80,15 +80,23 @@ class ExpertPlan:
 
 
 def expert_recipe(plan: ExpertPlan) -> dict:
-    """Phase 1a's M1 recipe with the expert's epochs, shuffle, batch and final checkpoint."""
+    """Phase 1a's M1 recipe with the expert's epochs, shuffle, batch and one final checkpoint.
+
+    The expert saves one full checkpoint (fp32 masters with the optimizer moments) in the
+    ``dp_reshardable`` format at its last step, not WP2's masters-only schedule: on
+    Snowball 67B the ``fully_reshardable`` save that masters-only needs gathers each DP
+    group's optimizer state onto one rank and crashed the job at step 240, twice.
+    """
     recipe = skyrl_recipe(RunPlan(Method.M1, _CONDITION[plan.task], EXPERT_SEED, plan.learning_rate), {})
-    recipe["trainer"].update(
+    trainer = recipe["trainer"]
+    trainer.update(
         epochs=EXPERT_EPOCHS,
         max_steps=plan.steps,
-        checkpoint_steps=[plan.steps],
-        optimizer_checkpoint_steps=[plan.steps],
+        checkpoint_steps=[],
+        optimizer_checkpoint_steps=[],
         ckpt_interval=plan.steps,
     )
+    trainer["policy"]["megatron_config"]["optimizer_checkpoint_sharding_type"] = "dp_reshardable"
     recipe["data"]["shuffle"] = True
     return recipe
 

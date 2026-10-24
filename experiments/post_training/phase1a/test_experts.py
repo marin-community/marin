@@ -24,13 +24,15 @@ from experiments.post_training.phase1a.matrix import Task
 from experiments.post_training.phase1a.test_phase1a import COMPOSE
 
 
-def test_an_expert_trains_three_epochs_of_full_batches_and_checkpoints_once_at_the_end():
+def test_an_expert_trains_three_epochs_of_full_batches_and_saves_one_full_checkpoint_at_the_end():
     plan = ExpertPlan(Task.R, rows=3280, learning_rate=1e-5)
     assert plan.steps == (3280 // EXPERT_SEQUENCES_PER_STEP) * 3 == 153
     recipe = expert_recipe(plan)
     trainer = recipe["trainer"]
     assert (trainer["epochs"], trainer["max_steps"]) == (3, 153)
-    assert trainer["checkpoint_steps"] == trainer["optimizer_checkpoint_steps"] == [153]
+    assert trainer["checkpoint_steps"] == trainer["optimizer_checkpoint_steps"] == []
+    assert trainer["ckpt_interval"] == 153
+    assert trainer["policy"]["megatron_config"]["optimizer_checkpoint_sharding_type"] == "dp_reshardable"
     assert trainer["policy"]["optimizer_config"]["lr"] == 1e-5
     assert trainer["algorithm"]["policy_loss_type"] == "sft" and recipe["environment"]["env_class"] == "fixed_completion"
     assert recipe["data"]["shuffle"] is True and not trainer["use_sample_packing"]
@@ -65,4 +67,4 @@ def test_expert_configs_compose_through_skyrls_launcher(tmp_path):
     assert x["steps"] == [240, 3, 1] and r["steps"] == [153, 3, 1]
     assert x["sequences_per_step"] == r["sequences_per_step"] == EXPERT_SEQUENCES_PER_STEP
     assert x["order"][0] is True and x["env_class"] == "fixed_completion"
-    assert x["checkpoints"] == [[240], [240]] and r["response_caps"] == {"task_R": 16_384}
+    assert x["checkpoints"] == [[], []] and r["response_caps"] == {"task_R": 16_384}
