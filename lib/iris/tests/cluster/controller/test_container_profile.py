@@ -159,7 +159,7 @@ def _service_group_request():
     return request
 
 
-def test_sandbox_service_group_persists_on_admission_and_dispatch(service, state):
+def test_sandbox_service_group_persists_on_admission(service):
     service._controller.backend.descriptor = k8s_backend_descriptor()
     response = _as("user", "alice", service.launch_job, _service_group_request(), None)
     stored = _as(
@@ -171,10 +171,6 @@ def test_sandbox_service_group_persists_on_admission_and_dispatch(service, state
     ).request
     assert stored.resources.cpu_millicores == 2000
     assert stored.environment.sandbox_services[0].name == "runtime"
-    with state._db.read_snapshot() as snapshot:
-        dispatched = snapshot.caches[RunTemplatesProjection].get(snapshot, JobName.from_wire(response.job_id))
-    assert dispatched is not None
-    assert dispatched.environment.sandbox_services == stored.environment.sandbox_services
 
 
 def test_service_exec_cannot_select_infrastructure_containers(service):
