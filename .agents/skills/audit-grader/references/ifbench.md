@@ -1,4 +1,4 @@
-# Worked Example: IFBench in Evalchemy
+# Worked example: IFBench in Evalchemy
 
 This is the audit of the 58 IFBench instruction checkers that Marin's evaluation
 policy runs through Evalchemy, for

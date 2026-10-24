@@ -1,9 +1,9 @@
-# Blinded Reviewer Prompt
+# Blinded reviewer prompt
 
 This prompt is adapted from the one the IFBench audit gave its language-model
 reviewers (`results/blind_audit/reviewer_prompt_v1.md` in
 [the audit repository](https://github.com/XiaoyuanWang111/ifbench-audit/tree/a31c6841dae2632dafda740bd51496843d9e5f38)).
-It speaks of requirements where the audit's version speaks of instructions,
+It calls each check a requirement, where the audit's version says instruction,
 puts benchmark-specific words in placeholders in angle brackets, and drops the
 audit's IFBench examples of ambiguous wording, which were the questions of
 three of the audit's decision entries. Do not add examples from your own

@@ -1,14 +1,14 @@
 ---
 name: audit-grader
-description: Audit a code check, LLM judge, or RL reward function against its task text, measure its effect on scores, and estimate its error rate with a blinded review of frozen samples. Use when asked to audit a grader, including one whose scores look implausible; do not activate for routine grader changes.
+description: Audit a programmatic checker, LLM judge, or RL reward function against its task text, measure its effect on scores, and estimate its error rate with a blinded review of frozen samples. Use when asked to audit a grader, including one whose scores look implausible; do not activate for routine grader changes.
 ---
 
 # Audit a grader
 
 A grader turns a response into a verdict: pass or fail, or a class such as
-correct, incorrect, or not attempted. It can be a code check, an LLM judge, or
-an RL reward function. This audit measures how often a grader contradicts the
-task text and how much that changes scores.
+correct, incorrect, or not attempted. It can be a programmatic checker, an LLM
+judge, or an RL reward function. This audit measures how often a grader
+contradicts the task text and how much that changes scores.
 [references/ifbench.md](references/ifbench.md) is a worked example, the audit
 of the 58 IFBench instruction checkers. That audit read the checker code before
 it wrote its contracts, counted as findings nine checker behaviors that step 3
@@ -185,8 +185,8 @@ grader's, with a paired interval that excludes zero.
    check's name and text, the prompt, and the response between explicit begin
    and end markers. For an agent task, the response is what the verifier
    reads, frozen from the trial: the answer file or other graded state, and
-   any execution result the verifier uses. Do not show the model, a grader
-   verdict, or another reviewer's labels.
+   any execution result the verifier uses. Do not show the source model, a
+   grader verdict, or another reviewer's labels.
 4. Have two reviewers label every case, in separate runs and in different
    orders. Each label has a verdict (one of the grader's labels, or
    `ambiguous`), a lean (the label under the reading that the reviewer finds
