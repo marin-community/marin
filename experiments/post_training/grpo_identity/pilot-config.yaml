@@ -24,7 +24,11 @@ skyrl:
       loss_reduction: token_mean
       group_advantage_min_size: null
       dynamic_sampling:
-        type: null
+        type: filter
+        max_sample_batches: 10
+        informative_on: shaped
+        min_reward_std: 0.0
+        max_mean_reward: null
       policy_loss_type: mixed_policy_grpo
       mixed_policy:
         gamma: 0.5
