@@ -60,8 +60,9 @@ CATEGORIES = (
 )
 CAT_TARGET = (0, 0, 0, 1, 2, 3, 4, 3)  # index into PAIRS' targets
 PAIRS = ((" crit", "ics"), (" produ", "cer"), (" Ex", "ception"), (" wasn", "'t"), (" wasn", "\u2019t"))
-# The two case studies: their categories with the pair's continuation (the global unit ranking's queries) and all.
-CASES = {"crit": ((0, 1), (0, 1, 2)), "wasn": ((5, 6), (5, 6, 7))}
+# The global unit rankings: the categories whose attribution they sum, and the windows that use them (the contrast
+# pairs use crit's). The curly "\u2019t" continuation of " wasn" gets its own.
+CASES = {"crit": ((0, 1), (0, 1, 2)), "wasn": ((5,), (5, 7)), "wasn_curly": ((6,), (6,))}
 COUNT_TRIGGERS = (" crit", " critic", " wasn", " produ", " Ex")
 # Rows kept per source (train, Paloma) and group.
 ROW_CAPS = {"crit": 400, "wasn": 350, "produ": 80, "ex": 80}
