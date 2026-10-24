@@ -2,10 +2,10 @@
 
 from dataclasses import dataclass, replace
 from functools import partial
-import os
 
 from daytona import AsyncDaytona, DaytonaConfig
 from omegaconf import DictConfig
+from rigging.secrets import require_secret
 from shellbox.backends.daytona.machine import DaytonaMachineFactory, DaytonaNetworkMode, DaytonaNetworkPolicy
 from shellbox.machine import Backend, MachineFactory
 from taskcompendium.models import NoGrader
@@ -102,9 +102,7 @@ class HarborTaskSettings:
                 key_env = self.environment.kwargs.get("eval_api_key_env" if phase == "eval" else "api_key_env")
                 client_factory = AsyncDaytona
                 if key_env is not None:
-                    api_key = os.environ.get(key_env)
-                    if not api_key:
-                        raise ValueError(f"Missing Daytona credential environment variable: {key_env}")
+                    api_key = require_secret(key_env)
                     client_factory = partial(AsyncDaytona, DaytonaConfig(api_key=api_key))
                 return DaytonaMachineFactory(
                     client_factory=client_factory,

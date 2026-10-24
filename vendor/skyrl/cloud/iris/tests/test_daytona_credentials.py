@@ -101,3 +101,30 @@ def test_daytona_preflight_follows_task_backend(entrypoint, terminal_bench_data,
     )
 
     assert launcher._rl_config_uses_daytona(config) is expected
+
+
+@pytest.mark.parametrize(
+    ("entrypoint", "backend"),
+    [
+        ("skyrl_train.entrypoints.main_base", "daytona"),
+        ("skyrl_train.entrypoints.terminal_bench", "docker"),
+        (launcher.CHECKPOINT_EXPORT_ENTRYPOINT, "daytona"),
+    ],
+)
+def test_inactive_terminal_backends_skip_named_credential_reads(tmp_path, monkeypatch, entrypoint, backend):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    for name in ("HARBOR_TRAIN_KEY", "HARBOR_EVAL_KEY"):
+        monkeypatch.delenv(name, raising=False)
+        (tmp_path / name).mkdir()
+    config = OmegaConf.create({
+        "runtime": {"entrypoint": entrypoint, "task_env": {"SETTING": 1}},
+        "skyrl": {"terminal_bench_config": {"harbor": {
+            "environment_type": backend,
+            "daytona_api_key_env": "HARBOR_TRAIN_KEY",
+            "eval_daytona_api_key_env": "HARBOR_EVAL_KEY",
+        }}},
+    })
+    environment = launcher.config_task_environment(config).to_proto()
+    assert dict(environment.secrets) == {}
+    assert environment.env_vars["SETTING"] == "1"
+    assert not ({"HARBOR_TRAIN_KEY", "HARBOR_EVAL_KEY"} & environment.env_vars.keys())

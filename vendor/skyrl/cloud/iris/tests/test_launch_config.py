@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import base64
 import os
+import subprocess
 from contextlib import contextmanager
 from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
 import pytest
+import requests
 import yaml
 from omegaconf import OmegaConf
 from rolloutengine.models import ModelTurn
 from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
+from skyrl_gym.envs.nemotron_ultra.judge import OpenAIJudge
+from skyrl_train.rollouts.harbor_tasks import HarborTaskSettings
 
 from cloud.iris import training_driver
 from cloud.iris.iris_backend import IrisBackend
@@ -510,8 +514,27 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
 
 @pytest.mark.parametrize("delivery", ["file", "environment"])
 @pytest.mark.parametrize("checkpoint_export", [False, True])
-def test_backend_submits_configured_credentials_as_named_files_only(tmp_path, monkeypatch, capsys, delivery, checkpoint_export):
-    keys = {"DAYTONA_EVAL_API_KEY": "synthetic-daytona", "TOGETHER_API_KEY": "synthetic-judge"}
+@pytest.mark.parametrize("harbor_credentials", ["complete", "train_only", "default"])
+def test_backend_submits_configured_credentials_as_named_files_only(
+    tmp_path, monkeypatch, capsys, delivery, checkpoint_export, harbor_credentials
+):
+    keys = {
+        "HARBOR_TRAIN_KEY": "synthetic-harbor-train",
+        "DAYTONA_EVAL_API_KEY": "synthetic-daytona-eval",
+        "TOGETHER_API_KEY": "synthetic-judge",
+    }
+    for name in ("DAYTONA_RL_API_KEY", "DAYTONA_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    if harbor_credentials == "train_only":
+        monkeypatch.setenv("DAYTONA_RL_API_KEY", "synthetic-preflight")
+    subprocess_run = subprocess.run
+    def secret_manager_boundary(command, **kwargs):
+        if command[0] != "gcloud":
+            return subprocess_run(command, **kwargs)
+        assert harbor_credentials == "default" and not checkpoint_export
+        assert command[:4] == ["gcloud", "secrets", "versions", "access"]
+        return SimpleNamespace(stdout="synthetic-preflight")
+    monkeypatch.setattr("cloud.iris.iris_backend.subprocess.run", secret_manager_boundary)
     monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
     ambient = {name: f"ambient-decoy-{name}" for name in keys}
     for name, value in keys.items():
@@ -525,12 +548,27 @@ def test_backend_submits_configured_credentials_as_named_files_only(tmp_path, mo
             monkeypatch.setenv(name, value)
     (tmp_path / "UNRELATED_SECRET").write_text("never-explicitly-selected")
     raw = _raw_config()
-    raw["run"]["submission"] = "detach"
+    raw["run"].update(submission="detach", export_hf=False)
     raw["iris"].update(target_cluster="cw-us-east-02a", parent_cluster_config="lib/iris/config/marin.yaml")
     raw["skyrl"]["environment"] = {"task_sessions": {
         "daytona": {"api_key_env": "DAYTONA_EVAL_API_KEY", "ttl_minutes": 60},
         "remote_judge": {"api_key_env": "TOGETHER_API_KEY", "base_url": "https://example.invalid"},
     }}
+    raw["skyrl"]["data"] = {"terminal_bench_data": ["s3://tasks/terminal.parquet"]}
+    raw["skyrl"]["entrypoint"] = "terminal_bench"
+    harbor = {"environment_type": "daytona"}
+    if harbor_credentials != "default":
+        harbor["daytona_api_key_env"] = "HARBOR_TRAIN_KEY"
+    if harbor_credentials == "complete":
+        harbor["eval_daytona_api_key_env"] = "DAYTONA_EVAL_API_KEY"
+    raw["skyrl"]["terminal_bench"] = {"harbor": harbor}
+    raw["skyrl"]["trainer"]["callbacks"] = [{
+        "type": "harbor_evaluation",
+        "daytona_api_key_env": "DAYTONA_EVAL_API_KEY",
+        "cohorts": [{"name": "heldout", "reward_key": "reward", "job": {"tasks": []}}],
+        "timeout": 600,
+        "minimum_coverage": 0.9,
+    }]
     path = tmp_path / "launch.yaml"
     path.write_text(yaml.safe_dump(raw))
     if checkpoint_export:
@@ -539,10 +577,10 @@ def test_backend_submits_configured_credentials_as_named_files_only(tmp_path, mo
         composed["runtime"].update(profile="megatron-export", entrypoint=CHECKPOINT_EXPORT_ENTRYPOINT)
         path.write_text(yaml.safe_dump(composed))
     serialized = path.read_text()
-    requests = []
+    submitted_requests = []
     class RecordingClient:
         def submit(self, **request):
-            requests.append(request)
+            submitted_requests.append(request)
             return SimpleNamespace(job_id="/synthetic/qualification")
     @contextmanager
     def client_boundary(**kwargs):
@@ -550,12 +588,55 @@ def test_backend_submits_configured_credentials_as_named_files_only(tmp_path, mo
     monkeypatch.setattr("iris.cli.connect.open_iris_client", client_boundary)
     result = IrisBackend().launch(path)
     assert result.job_id == "/synthetic/qualification"
-    environment = requests[0]["environment"].to_proto()
-    assert dict(environment.secrets) == ({} if checkpoint_export else keys)
-    assert not (keys.keys() & environment.env_vars.keys())
+    environment = submitted_requests[0]["environment"].to_proto()
+    selected = {name: value for name, value in keys.items() if harbor_credentials != "default" or name != "HARBOR_TRAIN_KEY"}
+    assert dict(environment.secrets) == ({} if checkpoint_export else selected)
+    assert not (selected.keys() & environment.env_vars.keys())
+    if harbor_credentials == "complete":
+        assert "DAYTONA_API_KEY" not in environment.env_vars
+        assert "DAYTONA_RL_API_KEY" not in os.environ
+        assert "DAYTONA_API_KEY" not in os.environ
+    elif not checkpoint_export:
+        assert environment.env_vars["DAYTONA_API_KEY"] == "synthetic-preflight"
     assert path.read_text() == serialized
     payload = base64.b64decode(environment.env_vars[RL_CONFIG_PAYLOAD_ENV]).decode()
     captured = capsys.readouterr()
     assert all(value not in payload + captured.out + captured.err for value in [*keys.values(), *ambient.values()])
     if delivery == "file":
         assert {name: os.environ[name] for name in keys} == ambient
+    if checkpoint_export:
+        return
+
+    # Materialize only the recorded wire secrets, as Iris does for the child.
+    child_secrets = tmp_path / "child-secrets"
+    child_secrets.mkdir()
+    for name in keys:
+        monkeypatch.delenv(name)
+    for name, value in environment.secrets.items():
+        (child_secrets / name).write_text(value)
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(child_secrets))
+    child_config = tmp_path / "child-launch.yaml"
+    child_config.write_text(payload)
+    config = load_launch_config(child_config)
+    observed = []
+    def daytona_boundary(settings=None):
+        observed.append(settings.api_key if settings is not None else environment.env_vars["DAYTONA_API_KEY"])
+    monkeypatch.setattr("skyrl_train.rollouts.harbor_tasks.AsyncDaytona", daytona_boundary)
+    settings = HarborTaskSettings.from_config(config.skyrl.terminal_bench_config)
+    settings.machine_factory(phase="train").client_factory()
+    settings.machine_factory(phase="eval").client_factory()
+    assert observed == [
+        keys["HARBOR_TRAIN_KEY"] if harbor_credentials != "default" else "synthetic-preflight",
+        keys["DAYTONA_EVAL_API_KEY"] if harbor_credentials == "complete" else "synthetic-preflight",
+    ]
+
+    def judge_boundary(url, *, headers, **kwargs):
+        assert headers["Authorization"] == f"Bearer {keys['TOGETHER_API_KEY']}"
+        response = requests.Response()
+        response.status_code = 200
+        response._content = b'{"choices":[{"message":{"content":"verified"},"finish_reason":"stop"}]}'
+        return response
+    monkeypatch.setattr(requests, "post", judge_boundary)
+    judge = OpenAIJudge("https://example.invalid/v1", "fixture", api_key_env="TOGETHER_API_KEY")
+    assert judge.generate([{"role": "user", "content": "grade"}]) == "verified"
+    assert not (keys.keys() & os.environ.keys())
