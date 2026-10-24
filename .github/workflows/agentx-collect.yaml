@@ -1,0 +1,103 @@
+name: Marin - AgentX Collection
+
+on:
+  schedule:
+    - cron: '7,37 * * * *'
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Source benchmark run ID; omit to select the oldest active plan
+        type: string
+      run_attempt: {type: string, default: '1'}
+      operation:
+        type: choice
+        options: [advance, cancel]
+        default: advance
+  workflow_call:
+    inputs:
+      state_root: {type: string, default: ''}
+      run_id: {type: string, default: ''}
+      run_attempt: {type: string, default: '1'}
+      operation: {type: string, default: advance}
+
+concurrency:
+  group: agentx-controller
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+jobs:
+  collect:
+    if: github.repository == 'marin-community/marin' && (inputs.state_root != '' || vars.AGENTX_STATE_ROOT != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      STATE_ROOT: ${{ inputs.state_root || vars.AGENTX_STATE_ROOT }}
+      SOURCE_RUN: ${{ inputs.run_id }}
+      SOURCE_ATTEMPT: ${{ inputs.run_attempt || '1' }}
+      OPERATION: ${{ inputs.operation || 'advance' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
+      - run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
+      - name: Select one saved batch
+        id: select
+        run: |
+          run_args=()
+          if [[ -n "$SOURCE_RUN" ]]; then run_args=(--run-id "$SOURCE_RUN" --run-attempt "$SOURCE_ATTEMPT"); fi
+          uv run --no-sync python -m experiments.evaluation.agentx.control select --root "$STATE_ROOT" "${run_args[@]}"
+      - uses: actions/checkout@v7
+        if: steps.select.outputs.checkpoint != ''
+        with:
+          ref: ${{ steps.select.outputs.head_sha }}
+          clean: false
+      - name: Restore pinned control environment and processor
+        if: steps.select.outputs.checkpoint != ''
+        run: |
+          set -eo pipefail
+          uv sync --frozen --package marin-core --extra cpu --no-default-groups
+          processor_sha=$(python -c 'import json; print(json.load(open("experiments/evaluation/agentx/series.json"))["processor_source"])')
+          git init "$RUNNER_TEMP/agentx-processor"
+          git -C "$RUNNER_TEMP/agentx-processor" remote add origin https://github.com/SemiAnalysisAI/InferenceX.git
+          git -C "$RUNNER_TEMP/agentx-processor" fetch --depth=1 origin "$processor_sha"
+          git -C "$RUNNER_TEMP/agentx-processor" checkout --detach FETCH_HEAD
+          git -C "$RUNNER_TEMP/agentx-processor" apply "$GITHUB_WORKSPACE/experiments/evaluation/agentx/inferencex.patch"
+      - name: Advance once and rebuild the complete import bundle
+        id: collect
+        if: steps.select.outputs.checkpoint != ''
+        env:
+          CHECKPOINT: ${{ steps.select.outputs.checkpoint }}
+        run: |
+          uv run --no-sync python -m experiments.evaluation.agentx.control "$OPERATION" \
+            --root "$STATE_ROOT" --checkpoint "$CHECKPOINT" --work "$RUNNER_TEMP/agentx-collection" \
+            --processor "$RUNNER_TEMP/agentx-processor"
+      - uses: actions/upload-artifact@v7
+        id: upload
+        if: always() && steps.collect.outputs.bundle != ''
+        with:
+          name: agentx-results-${{ steps.select.outputs.source_run_id }}-${{ steps.select.outputs.source_run_attempt }}
+          path: ${{ steps.collect.outputs.bundle }}
+          if-no-files-found: error
+          retention-days: 90
+      - name: Acknowledge the artifact upload before archiving a completed plan
+        if: always() && steps.upload.outcome == 'success'
+        env:
+          CHECKPOINT: ${{ steps.select.outputs.checkpoint }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          uv run --no-sync python -m experiments.evaluation.agentx.control ack \
+            --root "$STATE_ROOT" --checkpoint "$CHECKPOINT" --artifact-url "$ARTIFACT_URL"

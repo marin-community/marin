@@ -1,0 +1,120 @@
+name: Marin - AgentX Performance
+
+on:
+  schedule:
+    - cron: '23 10 * * 0'
+  workflow_dispatch:
+    inputs:
+      profile:
+        type: choice
+        options: [both, h100, gb200]
+        default: both
+      concurrency:
+        description: One measured point, or the full fixed grid
+        type: choice
+        options: [all, '8', '32']
+        default: all
+      target_cluster:
+        type: choice
+        options: [cw-rno2a, cw-us-east-02a]
+        default: cw-rno2a
+      priority:
+        description: Interactive is for explicitly requested development/validation
+        type: choice
+        options: [batch, interactive]
+        default: batch
+  workflow_call:
+    inputs:
+      state_root: {type: string, default: ''}
+      profile: {type: string, default: both}
+      concurrency: {type: string, default: all}
+      target_cluster: {type: string, default: cw-rno2a}
+      priority: {type: string, default: batch}
+
+concurrency:
+  group: agentx-controller
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+jobs:
+  submit:
+    if: >-
+      github.repository == 'marin-community/marin' &&
+      (github.event_name != 'schedule' || vars.AGENTX_WEEKLY_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
+      CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
+      STATE_ROOT: ${{ inputs.state_root || vars.AGENTX_STATE_ROOT }}
+      PROFILE: ${{ inputs.profile || 'both' }}
+      POINT: ${{ inputs.concurrency || 'all' }}
+      TARGET_CLUSTER: ${{ inputs.target_cluster || 'cw-rno2a' }}
+      PRIORITY: ${{ inputs.priority || 'batch' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+      - uses: google-github-actions/auth@v3
+        with:
+          project_id: hai-gcp-models
+          workload_identity_provider: projects/748532799086/locations/global/workloadIdentityPools/github-pool/providers/github-oidc
+          service_account: github-iris@hai-gcp-models.iam.gserviceaccount.com
+      - name: Prepare fixed corpus and tokenizer on CPU
+        env:
+          HF_HOME: ${{ runner.temp }}/agentx-hf
+          HF_HUB_DISABLE_PROGRESS_BARS: '1'
+          TOKENIZERS_PARALLELISM: 'false'
+        run: |
+          set -eo pipefail
+          test -n "$STATE_ROOT"
+          uvx --python 3.12 --from agentx-harness==1.0.12 \
+            --with-requirements experiments/evaluation/agentx/requirements-harness.txt \
+            python -m experiments.evaluation.agentx.prepare \
+            --series experiments/evaluation/agentx/series.json --output "$RUNNER_TEMP/corpus.json" \
+            2>&1 | tee "$RUNNER_TEMP/preparation.log"
+      - name: Install CPU control tools
+        run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
+      - name: Save inputs and submit one native Iris point
+        id: submit
+        run: |
+          set -eo pipefail
+          point_args=()
+          if [[ "$POINT" != all ]]; then point_args=(--concurrency "$POINT"); fi
+          uv run --no-sync python -m experiments.evaluation.agentx.control submit \
+            --root "$STATE_ROOT" --profile "$PROFILE" --cluster "$TARGET_CLUSTER" \
+            --priority "$PRIORITY" "${point_args[@]}"
+      - name: Retain submission plan
+        env:
+          CHECKPOINT: ${{ steps.submit.outputs.checkpoint }}
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from pathlib import Path
+          from experiments.evaluation.agentx.batch import read_record, write_record
+          destination = Path(os.environ['RUNNER_TEMP']) / 'agentx-plan.json'
+          write_record(str(destination), read_record(os.environ['CHECKPOINT']))
+          PY
+      - name: Cancel this batch if its submitting workflow was cancelled
+        if: cancelled()
+        run: |
+          uv run --no-sync python -m experiments.evaluation.agentx.control cancel \
+            --root "$STATE_ROOT" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: agentx-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/agentx-plan.json
+            ${{ runner.temp }}/corpus.json
+            ${{ runner.temp }}/harness-requirements.txt
+            ${{ runner.temp }}/preparation.log
+          if-no-files-found: ignore
+          retention-days: 90

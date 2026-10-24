@@ -1,0 +1,48 @@
+diff --git a/inferencex-e2e/infx/results/agentic/__init__.py b/inferencex-e2e/infx/results/agentic/__init__.py
+index 5cf746969..56e121d11 100644
+--- a/inferencex-e2e/infx/results/agentic/__init__.py
++++ b/inferencex-e2e/infx/results/agentic/__init__.py
+@@ -88,7 +88,10 @@ def _gpu_shape(env: Mapping[str, str]) -> tuple[dict[str, Any], int, int, int, s
+             "dcp_size": parallelism.dcp_size,
+             "pcp_size": parallelism.pcp_size,
+         }
+-        return fields, parallelism.gpus_per_worker, tp, ep, dp_attention
++        dp_size = _env_int(env, "DP_SIZE", 1)
++        if dp_size < 1:
++            raise SystemExit("DP_SIZE must be positive.")
++        return fields, parallelism.gpus_per_worker * dp_size, tp, ep, dp_attention
+ 
+     prefill_num_workers = _env_int(env, "PREFILL_NUM_WORKERS")
+     prefill = Parallelism(
+diff --git a/inferencex-e2e/infx/tests/results/agentic/test_process_agentic_result.py b/inferencex-e2e/infx/tests/results/agentic/test_process_agentic_result.py
+index e162f4968..29a051da3 100644
+--- a/inferencex-e2e/infx/tests/results/agentic/test_process_agentic_result.py
++++ b/inferencex-e2e/infx/tests/results/agentic/test_process_agentic_result.py
+@@ -357,6 +357,27 @@ def test_processor_emits_nested_request_and_server_metrics(tmp_path: Path):
+     _assert_stable_server_metrics_schema(agg)
+ 
+ 
++def test_attention_data_parallel_ranks_count_toward_per_gpu_throughput(tmp_path: Path) -> None:
++    result_dir = _write_fixture(tmp_path)
++    single = _run_processor(result_dir, tmp_path / "single", {"TP": "1", "EP_SIZE": "1"})
++    parallel = _run_processor(
++        result_dir,
++        tmp_path / "parallel",
++        {"TP": "1", "EP_SIZE": "2", "DP_SIZE": "2", "DP_ATTENTION": "true"},
++    )
++    assert parallel["num_gpus"] == 2
++    assert parallel["tp"] == 1
++    assert parallel["ep"] == 2
++    assert (
++        parallel["request_metrics"]["throughput"]["total"]
++        == single["request_metrics"]["throughput"]["total"]
++    )
++    assert parallel["request_metrics"]["throughput"]["per_gpu"]["output_tput_tps"] == pytest.approx(
++        single["request_metrics"]["throughput"]["per_gpu"]["output_tput_tps"] / 2,
++        abs=0.00001,
++    )
++
++
+ def test_processor_records_run_attempt(tmp_path: Path):
+     result_dir = _write_fixture(tmp_path)
+     retried = _run_processor(result_dir, tmp_path / "a", {"GITHUB_RUN_ATTEMPT": "4"})
