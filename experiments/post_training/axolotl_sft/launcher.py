@@ -52,6 +52,8 @@ DECODER_LAYER_CLASSES = {
 TEMPLATE_INTEGRITY_PLUGIN = "axolotl.integrations.template_integrity.TemplateIntegrityPlugin"
 # Shipped next to the pod runner; see fp32_master.py.
 FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
+# Packed conversations isolated in attention; see packed_attention.py.
+PACKED_ATTENTION_PLUGIN = "packed_attention.PackedAttentionPlugin"
 # A diagnostic-only plugin shipped next to the pod runner; see precision_probe.py.
 PRECISION_PROBE_PLUGIN = "precision_probe.PrecisionProbePlugin"
 # The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
@@ -103,9 +105,8 @@ class AxolotlSpec:
     ``data_uri`` is one CL12 ``{source}.jsonl.gz`` in object storage; ``init_uri``,
     when set, is a previous stage's uploaded export, which initializes the weights
     instead of the pinned base (the base still proves tokenizer and template
-    provenance). Training is unpacked, one conversation per sequence: the Stage 0
-    budget is matched in examples, and the masking canary is defined on unpacked
-    sequences.
+    provenance). Conversations pack into ``sequence_len``-token sequences, one packed
+    sequence per device micro-batch, as Snowball's stages pack.
     """
 
     name: str
@@ -165,7 +166,7 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "revision_of_model": spec.base.revision,
         "trust_remote_code": False,
         "strict": False,
-        "plugins": [TEMPLATE_INTEGRITY_PLUGIN, FP32_MASTER_PLUGIN, CUT_CROSS_ENTROPY_PLUGIN],
+        "plugins": [TEMPLATE_INTEGRITY_PLUGIN, FP32_MASTER_PLUGIN, CUT_CROSS_ENTROPY_PLUGIN, PACKED_ATTENTION_PLUGIN],
         "tokenizer_save_jinja_files": False,
         "chat_template": "jinja",
         "chat_template_jinja": spec.chat_template,
@@ -189,8 +190,10 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "shuffle_merged_datasets": False,
         "dataset_processes": 32,
         "sequence_len": spec.sequence_len,
-        "sample_packing": False,
-        "pad_to_sequence_len": False,
+        # One packed epoch per stage, as Snowball trains: conversations pack into sequence_len
+        # tokens, isolated from each other by the packed-attention plugin.
+        "sample_packing": True,
+        "pad_to_sequence_len": True,
         "micro_batch_size": spec.per_device_batch_size,
         "gradient_accumulation_steps": spec.gradient_accumulation_steps,
         "num_epochs": spec.epochs,
