@@ -43,6 +43,9 @@ Spec format (JSON). ``id`` is optional; ``submit`` makes one from the time.
 "preserve_prompts": PATH, ...}``
     A rank-1 weight edit optimized and evaluated in memory (``edits.edit_rank1``; options and outputs are in
     that module's docstring). The model is unchanged after the spec.
+``{"command": "edit_memit", "layers": [L, ...], "module": ..., "key_prompts": PATH, "preserve_prompts": PATH, ...}``
+    A multi-layer MEMIT / AlphaEdit edit, rank up to the number of keys per layer (``memit.edit_memit``). The
+    model is unchanged after the spec.
 
 Prompt rows use ``prompts.py``'s format: ``{"id", "messages" | "text", "chat_template_kwargs"?, "prefill"?,
 "targets"?}``.
@@ -61,7 +64,7 @@ import torch
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.interp.snowball_identity import analyses, edits
+from experiments.interp.snowball_identity import analyses, edits, memit
 from experiments.interp.snowball_identity.harness import (
     COMMANDS,
     Output,
@@ -79,6 +82,7 @@ ANALYSES = {
     "patch": lambda harness, tokenizer, spec, output, stop_ids: analyses.patch(harness, tokenizer, spec, output),
     "steer": analyses.steer,
     "edit_rank1": edits.edit_rank1,
+    "edit_memit": memit.edit_memit,
 }
 POLL_SECONDS = 15
 STALL_SECONDS = 600

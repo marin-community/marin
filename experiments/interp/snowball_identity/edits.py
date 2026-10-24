@@ -74,11 +74,13 @@ DEFAULTS = {
 
 @contextmanager
 def applied(module: torch.nn.Module, key: torch.Tensor, delta: torch.Tensor):
-    """Add ``(key . k) * delta`` to the module output: the exact effect of ``W + delta key^T``."""
+    """Add ``(key . k) * delta`` to the module output: the exact effect of ``W + delta key^T``. With 2-D ``key``
+    [in, r] and ``delta`` [out, r] it is the rank-r edit ``W + delta key^T``."""
 
     def hook(module, args, output):
         scale = args[0].float() @ key
-        return output + (scale.unsqueeze(-1) * delta).to(output.dtype)
+        change = scale.unsqueeze(-1) * delta if key.ndim == 1 else scale @ delta.T
+        return output + change.to(output.dtype)
 
     handle = module.register_forward_hook(hook)
     try:
@@ -99,10 +101,15 @@ def swapped(module: torch.nn.Module, weight: torch.Tensor):
 
 @dataclass(frozen=True)
 class Edit:
+    """``W + up down^T`` on one weight: ``up`` [out, r], ``down`` [in, r] (rank 1: ``delta``, ``key``)."""
+
     weight: str
     module: torch.nn.Module
-    key: torch.Tensor
-    delta: torch.Tensor
+    up: torch.Tensor
+    down: torch.Tensor
+
+    def matrix(self) -> torch.Tensor:
+        return self.up @ self.down.T
 
 
 def module_for(harness: SnowballHarness, weight: str) -> torch.nn.Module:
@@ -114,13 +121,30 @@ def module_for(harness: SnowballHarness, weight: str) -> torch.nn.Module:
     raise ValueError(f"{weight} is not an editable weight ({sorted(MODULES)})")
 
 
-def load_edit(harness: SnowballHarness, path: str) -> Edit:
+def make_edit(harness: SnowballHarness, weight: str, up: torch.Tensor, down: torch.Tensor) -> Edit:
+    module = module_for(harness, weight)
+    device = module.weight.device
+    return Edit(weight, module, up.float().to(device), down.float().to(device))
+
+
+def load_edits(harness: SnowballHarness, path: str) -> list[Edit]:
+    """The edits in an ``edit_rank1`` ``delta.pt`` (one) or an ``edit_memit`` ``memit.pt`` (one per layer)."""
     fs, local = filesystem_for(path)
     with fs.open(local, "rb") as file:
         saved = torch.load(file, map_location="cpu", weights_only=True)
-    module = module_for(harness, saved["weight"])
-    device = module.weight.device
-    return Edit(saved["weight"], module, saved["key"].float().to(device), saved["delta"].float().to(device))
+    if "edits" in saved:
+        return [make_edit(harness, e["weight"], e["up"], e["down"]) for e in saved["edits"]]
+    return [make_edit(harness, saved["weight"], saved["delta"].unsqueeze(1), saved["key"].unsqueeze(1))]
+
+
+def load_priors(harness: SnowballHarness, spec: dict) -> tuple[list[Edit], list[dict]]:
+    """The spec's ``prior_edits`` and their report rows."""
+    priors, report = [], []
+    for path in spec.get("prior_edits", []):
+        for edit in load_edits(harness, path):
+            priors.append(edit)
+            report.append({"path": path, "weight": edit.weight, "delta_w_norm": float(edit.matrix().norm())})
+    return priors, report
 
 
 @contextmanager
@@ -128,22 +152,42 @@ def stacked(edits: list[Edit]):
     """Every edit applied exactly, as hooks."""
     with ExitStack() as stack:
         for edit in edits:
-            stack.enter_context(applied(edit.module, edit.key, edit.delta))
+            stack.enter_context(applied(edit.module, edit.down, edit.up))
         yield
 
 
 @contextmanager
 def rounded_weights(edits: list[Edit]):
     """Each touched weight replaced by ``W + sum of its deltas``, rounded once to the weight's dtype."""
-    totals: dict[str, list] = {}
-    for edit in edits:
-        entry = totals.setdefault(edit.weight, [edit.module, 0])
-        entry[1] = entry[1] + torch.outer(edit.delta, edit.key)
     with ExitStack() as stack:
-        for module, delta_w in totals.values():
+        for module, delta_w in summed(edits).values():
             weight = module.weight.data
             stack.enter_context(swapped(module, (weight.float() + delta_w).to(weight.dtype)))
         yield
+
+
+def summed(edits: list[Edit]) -> dict[str, tuple[torch.nn.Module, torch.Tensor]]:
+    """Per touched weight: its module and the sum of its edits' ``delta_w``."""
+    totals: dict[str, tuple] = {}
+    for edit in edits:
+        module, total = totals.get(edit.weight, (edit.module, 0))
+        totals[edit.weight] = (module, total + edit.matrix())
+    return totals
+
+
+def bf16_report(edits: list[Edit]) -> dict[str, dict]:
+    """Per touched weight, how ``W + sum of its deltas`` survives rounding to the weight's dtype."""
+    report = {}
+    for name, (module, total) in summed(edits).items():
+        weight = module.weight.data
+        rounded = (weight.float() + total).to(weight.dtype)
+        stored = rounded.float() - weight.float()
+        report[name] = {
+            "changed_entries_fraction": float((rounded != weight).float().mean()),
+            "stored_delta_norm": float(stored.norm()),
+            "relative_error_of_stored_delta": float((stored - total).norm() / total.norm()),
+        }
+    return report
 
 
 def module_io(harness: SnowballHarness, module, prompts: list[Prompt], last_only: bool) -> tuple[torch.Tensor, ...]:
@@ -305,11 +349,60 @@ def evaluate(harness, tokenizer, prompts: list[Prompt], base_last, generate: dic
     return rows, last
 
 
+def key_values(spec: dict, tokenizer, key_prompts: list[Prompt]) -> list[tuple[Prompt, list[int]]]:
+    """(prompt, value tokens) per key row: its first ``targets`` entry, else the spec's ``target``."""
+    keys = []
+    for prompt in key_prompts:
+        value = prompt.targets[0] if prompt.targets else spec.get("target")
+        if not value:
+            raise ValueError(f"key prompt {prompt.id} has no target and the spec has no 'target'")
+        keys.append((prompt, tokenizer(value, add_special_tokens=False)["input_ids"]))
+    return keys
+
+
+def read_preserve(spec: dict, tokenizer) -> tuple[list[Prompt], list[Prompt], bool]:
+    """Preserve prompts (KL), projection prompts (null space; default the preserve prompts), and whether they differ."""
+    preserve = read_prompts(spec["preserve_prompts"], tokenizer)
+    separate = spec.get("projection_prompts", spec["preserve_prompts"]) != spec["preserve_prompts"]
+    return preserve, read_prompts(spec["projection_prompts"], tokenizer) if separate else preserve, separate
+
+
+def evaluate_edits(
+    harness, tokenizer, spec: dict, fixed_sets: dict, priors: list[Edit], new: list[Edit], bf16: bool, stop_ids
+) -> dict:
+    """Every eval set under ``base``, ``prior`` (with priors), ``edit`` (all edits as hooks) and ``edit_bf16``."""
+    eval_sets = dict(fixed_sets)
+    for name, path in spec.get("eval", {}).items():
+        eval_sets[name] = read_prompts(path, tokenizer)
+    generate = spec.get("generate")
+    generate_sets = set(generate.get("sets", spec.get("eval", {}))) if generate else set()
+    unknown = generate_sets - set(eval_sets)
+    if unknown:
+        raise ValueError(f"generate.sets names unknown eval sets: {sorted(unknown)}")
+    conditions_for = {"edit": lambda: stacked([*priors, *new])}
+    if priors:
+        conditions_for = {"prior": lambda: stacked(priors), **conditions_for}
+    if bf16:
+        conditions_for["edit_bf16"] = lambda: rounded_weights([*priors, *new])
+    evaluations = {}
+    for name, prompts in eval_sets.items():
+        generate_here = generate if name in generate_sets else None
+        base_rows, base_last = evaluate(harness, tokenizer, prompts, None, generate_here, stop_ids)
+        conditions = {"base": base_rows}
+        for condition, context in conditions_for.items():
+            with context():
+                conditions[condition], _ = evaluate(harness, tokenizer, prompts, base_last, generate_here, stop_ids)
+        evaluations[name] = conditions
+        logger.info("edit eval %s: %d prompts", name, len(prompts))
+    return evaluations
+
+
 def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, stop_ids: set[int]) -> None:
     """Spec: ``layer``, ``module`` (o_proj | shared_down), ``key_prompts``, ``preserve_prompts``, optional ``target``
     (value text for key rows without targets), ``eval`` ({name: prompts path}), ``generate``
     ({"max_new_tokens": N, "sets": [names]}, sets defaulting to the ``eval`` names), ``prior_edits``
-    ([delta.pt paths]), ``projection_prompts`` (default ``preserve_prompts``), and the options in ``DEFAULTS``."""
+    ([delta.pt / memit.pt paths]), ``projection_prompts`` (default ``preserve_prompts``), and the options in
+    ``DEFAULTS``."""
     config = {**DEFAULTS, **{name: spec[name] for name in DEFAULTS if name in spec}}
     layer = spec["layer"]
     if spec["module"] not in MODULES:
@@ -318,16 +411,9 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
     module = find(harness.layers[layer])
     weight_name = f"model.layers.{layer}.{suffix}.weight"
     key_prompts = read_prompts(spec["key_prompts"], tokenizer)
-    preserve = read_prompts(spec["preserve_prompts"], tokenizer)
-    separate_projection = spec.get("projection_prompts", spec["preserve_prompts"]) != spec["preserve_prompts"]
-    projection = read_prompts(spec["projection_prompts"], tokenizer) if separate_projection else preserve
-    keys = []
-    for prompt in key_prompts:
-        value = prompt.targets[0] if prompt.targets else spec.get("target")
-        if not value:
-            raise ValueError(f"key prompt {prompt.id} has no target and the spec has no 'target'")
-        keys.append((prompt, tokenizer(value, add_special_tokens=False)["input_ids"]))
-    priors = [load_edit(harness, path) for path in spec.get("prior_edits", [])]
+    preserve, projection, separate_projection = read_preserve(spec, tokenizer)
+    keys = key_values(spec, tokenizer, key_prompts)
+    priors, prior_report = load_priors(harness, spec)
     started = time.time()
 
     with stacked(priors):
@@ -344,16 +430,13 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
             key_report["kl_preserve_key_scale_rms"] = float(preserve_scale.square().mean().sqrt())
         reference_norm = float(key_outputs.norm(dim=-1).mean())
         delta, best_step, trace = optimize_delta(harness, module, key, keys, preserve, reference_norm, config)
-    new = Edit(weight_name, module, key, delta)
+    new = Edit(weight_name, module, delta.unsqueeze(1), key.unsqueeze(1))
     delta_w = torch.outer(delta, key)
     weight = module.weight.data
     report = {
         "weight": weight_name,
         "config": config,
-        "prior_edits": [
-            {"path": path, "weight": prior.weight, "delta_norm": float(prior.delta.norm())}
-            for path, prior in zip(spec.get("prior_edits", []), priors, strict=True)
-        ],
+        "prior_edits": prior_report,
         "key": key_report,
         "reference_output_norm": reference_norm,
         "delta_norm": float(delta.norm()),
@@ -373,40 +456,18 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
             "delta_w": delta_w.cpu(),
         },
     )
-
-    eval_sets = {"keys": key_prompts, "preserve": preserve}
-    for name, path in spec.get("eval", {}).items():
-        eval_sets[name] = read_prompts(path, tokenizer)
-    generate = spec.get("generate")
-    generate_sets = set(generate.get("sets", spec.get("eval", {}))) if generate else set()
-    unknown = generate_sets - set(eval_sets)
-    if unknown:
-        raise ValueError(f"generate.sets names unknown eval sets: {sorted(unknown)}")
     if config["bf16_roundtrip"]:
         # The target tensor as one export of the whole stack stores it.
-        total = delta_w + sum(torch.outer(e.delta, e.key) for e in priors if e.weight == weight_name)
-        rounded = (weight.float() + total).to(weight.dtype)
-        stored = rounded.float() - weight.float()
-        report["bf16"] = {
-            "changed_entries_fraction": float((rounded != weight).float().mean()),
-            "stored_delta_norm": float(stored.norm()),
-            "relative_error_of_stored_delta": float((stored - total).norm() / total.norm()),
-        }
-    conditions_for = {"edit": lambda: stacked([*priors, new])}
-    if priors:
-        conditions_for = {"prior": lambda: stacked(priors), **conditions_for}
-    if config["bf16_roundtrip"]:
-        conditions_for["edit_bf16"] = lambda: rounded_weights([*priors, new])
-    evaluations = {}
-    for name, prompts in eval_sets.items():
-        generate_here = generate if name in generate_sets else None
-        base_rows, base_last = evaluate(harness, tokenizer, prompts, None, generate_here, stop_ids)
-        conditions = {"base": base_rows}
-        for condition, context in conditions_for.items():
-            with context():
-                conditions[condition], _ = evaluate(harness, tokenizer, prompts, base_last, generate_here, stop_ids)
-        evaluations[name] = conditions
-        logger.info("edit eval %s: %d prompts", name, len(prompts))
-    report["eval"] = evaluations
+        report["bf16"] = bf16_report([e for e in [*priors, new] if e.weight == weight_name])[weight_name]
+    report["eval"] = evaluate_edits(
+        harness,
+        tokenizer,
+        spec,
+        {"keys": key_prompts, "preserve": preserve},
+        priors,
+        [new],
+        config["bf16_roundtrip"],
+        stop_ids,
+    )
     report["seconds"] = round(time.time() - started, 1)
     output.write_json("edit.json", report)
