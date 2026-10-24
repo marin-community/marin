@@ -43,5 +43,10 @@ class Fp32MasterWeightsPlugin(BasePlugin):
     def pre_model_load(self, cfg):
         cfg.torch_dtype = torch.float32
 
+    def post_model_load(self, cfg, model):
+        # Some modules (e.g. Qwen MoE embeddings under FSDP2's RAM-efficient load) still come
+        # back bf16, and FSDP requires one dtype per parameter group: cast the rest before wrapping.
+        model.to(torch.float32)
+
     def add_callbacks_post_trainer(self, cfg, trainer):
         return [_MasterDtypeCheck()]
