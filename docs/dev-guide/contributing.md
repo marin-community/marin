@@ -56,6 +56,30 @@ importable in any selected test environment. The guard dumps thread state and st
 delayed hard-kill timer when a signal-based timeout cannot stop a test; an import failure
 is a test-environment error, not a product-test failure.
 
+### Locked dependency security
+
+The `Marin - Locked Dependency Security` workflow checks every tracked `uv.lock`,
+including vendored projects, nightly at 05:23 UTC and on lockfile pull requests.
+Run the same check locally with:
+
+```bash
+uv run --no-project scripts/ci/check_locked_security.py --output /tmp/locked-security.json
+```
+
+Use Python 3.12 or later and uv 0.13.5 or later. The check reads every locked
+package, including inactive extras and platform branches, and validates each
+frozen graph offline. It fails on Brotli versions below 1.2.1, brotlicffi versions
+below 1.2.1.0, any LiteLLM package (blocked by Marin policy), invalid locks,
+failed graph validation, or an empty inventory. It never installs project
+packages or refreshes locks. The workflow uploads its JSON findings. Failed or
+cancelled scheduled runs open or update a tracking issue and use the configured
+Loom trigger and Slack webhook for notification.
+
+This covers versions in the checkout. Harbor agent install scripts, existing
+environments, container images, and bundled Node/Bun decoders require separate
+runtime checks. Updating a lock does not patch a running process or an existing
+installation. An old worktree can restore affected packages during `uv sync`.
+
 ### Opening a pull request
 
 Before opening a pull request:
