@@ -6,7 +6,8 @@ that passes the strict dev name/creator gate in both thinking modes. It still
 loses 8.59 percentage points of GSM8K versus v0.1 and increases fiction identity
 intrusion. Final heldout generation confirms the tradeoff. Sparse, stochastic,
 and component-restricted arms were dropped by the task leads; no such results
-are implied here. The separately requested L20 v1 rank-1 math control is pending.
+are implied here. The separately requested L20 v1 rank-1 math control shows no clear math regression
+in this test, but its identity fix is only partial.
 
 ## Models and precision
 
@@ -158,6 +159,46 @@ Two-run screen means compare avg-SM F32 with a matched S-F32 control:
 There is no BF16 avg-SM score to compare. The matched F32 control separates merge
 changes from the serving dtype difference in the original S baseline.
 
+## L20 v1 rank-1 cost control
+
+This is the L20 **v1 edit**, exported under artifact version `2026.10.24.3`,
+not a v3 edit. Checkpoint:
+`s3://marin-rno2a/marin/checkpoints/snowball-identity-task305/edits/t304-rank1-L20-shared/2026.10.24.3/hf/`.
+The receipt SHA256 is
+`8db92efaefdb667f8e5c93704f0ad5a4bdcd7fef79c897b6173512a66789e146`.
+Its 52 object sizes and 502-key index were independently checked. The producer's
+readback receipt records exactly one changed tensor,
+`model.layers.20.shared_expert.down_proj.weight`, with 501 unchanged tensors and
+native 476 BF16 / 26 F32 storage preserved. A second full 134 GB rehash was not run.
+The target update has approximately 12.24% relative L2 norm.
+
+Serving and decoding match the ladder protocol above. The matched base is alpha 0
+from the pinned v0.1 anchor, retaining native router-bias storage and served BF16.
+All six rank-1 task/decodes have full coverage, correct provenance, matching
+per-item metric sums, and validated actual sampling payloads. The independent
+standard screen's overlapping greedy GSM run was explicitly authorized because
+it answers a different comparison.
+
+| Metric | Alpha 0 counts (greedy / 17 / 29) | Rank-1 counts | Alpha 0 mean | Rank-1 mean | Paired delta and 95% CI (pp) |
+|---|---|---|---:|---:|---|
+| GSM8K (/1319) | 1221 / 1207 / 1212 | 1215 / 1213 / 1204 | 91.989% | 91.787% | -.202 [-.758, +.354] |
+| MATH500 (/500) | 457 / 462 / 462 | 461 / 464 / 461 | 92.067% | 92.400% | +.333 [-.667, +1.333] |
+
+No clear math regression is detected; this is not an equivalence test. The edit's
+separately reported dev identity scores are only 15/52 off and 3/52 on without a
+system prompt, so this does not establish a complete identity fix.
+
+Resource accounting for this additional screen includes every submitted attempt:
+one H100x8 serve, 29m15.69s task duration including loading and idle time, or
+3.902 allocated H100-hours. Three CPU parents took 22m18.36s, 22m18.02s,
+and 22m54.25s (67.511 task-minutes total); six CPU eval children total 65.272
+task-minutes. All evaluation jobs succeeded on the first attempt with zero failures
+or preemptions. The serve was explicitly cancelled after completion; Iris counts
+that user termination as one preemption. These are observed resource durations,
+not invoiced dollars; they exclude prior checkpoint export and the reused base's
+screen cost. Parent and child status receipts are retained. No task-owned serve
+remains running.
+
 ## Capability exposure and containment
 
 The earlier math wrapper passed an endpoint capability in Evalchemy model_args,
@@ -192,7 +233,9 @@ Experiment log: `~/Dropbox/marin-notes/weight-merging-rsi-loop/experiment-log.md
   `manual-fiction-review.json`; compare with
   `~/Dropbox/marin-notes/snowball-identity/runs/v0.1-adc0078a/heldout/`.
 - `precision-serving-audit/`: F32 investigation and matched avg-SM screen evidence.
-- `rank1-screen/`: L20 v1 receipt and matched cost-screen launch records (pending).
+- `rank1-screen/`: L20 v1 receipt, resource receipts and matched screen evidence.
+  Run `rank1-screen/analyze_math.py` with the same environment to reproduce
+  `math/report.json`, raw samples and the paired comparison against alpha 0.
 
 Cloud roots are `s3://marin-rno2a/scratch/karan/task297/` for exports,
 `quantized-ladder-evals/`, `quantized-ladder-heldout/`, and
@@ -201,4 +244,5 @@ readback hashes and resource metrics. Jobs are `rsi297-cw-qladder-aTAG`,
 `rsi297-qladder-aTAG-dev`, and `rsi297-qladder-aTAG-math-{greedy,17,29}`.
 Launch scripts are saved beside the notes; all capabilities remain outside them.
 All six ladder serves have been stopped after their authorized evaluations.
-Every artifact is retained. Task closure awaits the requested rank-1 math control.
+Every artifact is retained. The requested ladder, final heldout, and rank-1 cost
+control are complete; unrun sparse/component variants were explicitly dropped.
