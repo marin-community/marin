@@ -19,7 +19,7 @@ from skyrl_train.rollouts.task_worker import TaskRolloutWorker
 from skyrl_train.task_inputs import task_messages
 from skyrl_train.tokenizer import tokenizer_from_config
 from skyrl_train.trajectory_runners.model_clients import REASONING_VIOLATIONS_KEY, DirectModelClient
-from skyrl_train.trajectory_runners.types import TaskRequestBatch, TokenProvenance, TrajectoryID
+from skyrl_train.trajectory_runners.types import BatchMetadata, TaskRequestBatch, TokenProvenance, TrajectoryID
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import Outcome
 from taskcompendium.reasoning_spans import ReasoningViolation
@@ -64,7 +64,7 @@ def task_inputs():
             "max_turns": 2,
             "max_input_length": 100,
             "apply_overlong_filtering": False,
-            "reasoning_spans": {"policy": "grade"},
+            "reasoning_spans": {"policy": "grade", "penalty": 0.0, "penalty_target": "rollout"},
             "sampling_params": {
                 "max_generate_length": 10,
                 "temperature": 1.0,
@@ -150,11 +150,21 @@ async def test_assistant_prefix_worker_preserves_continuation_and_rejects_parsed
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "policy,status,reward", [("reject", Outcome.SUBMISSION_FAILURE, 0.0), ("grade", Outcome.GRADED, 1.0)]
+    "policy,phase,status,reward",
+    [
+        ("reject", "train", Outcome.SUBMISSION_FAILURE, 0.0),
+        ("penalize", "train", Outcome.GRADED, 0.75),
+        ("penalize", "eval", Outcome.GRADED, 1.0),
+        ("grade", "train", Outcome.GRADED, 1.0),
+    ],
 )
-async def test_the_worker_applies_its_reasoning_span_policy_to_a_malformed_turn(task_inputs, policy, status, reward):
+async def test_the_worker_applies_its_reasoning_span_policy_to_a_malformed_turn(
+    task_inputs, policy, phase, status, reward
+):
     config, request = task_inputs
-    config = OmegaConf.merge(config, {"reasoning_spans": {"policy": policy}})
+    config = OmegaConf.merge(
+        config, {"reasoning_spans": {"policy": policy, "penalty": 0.25 if policy == "penalize" else 0.0}}
+    )
     package = verifyit_package(StructureClosureSpec('{"value":', '{"value":12}', ClosureFormat.JSON))
     task = request.rows[0].spec.task.model_copy(
         update={
@@ -169,7 +179,11 @@ async def test_the_worker_applies_its_reasoning_span_policy_to_a_malformed_turn(
             "grader": package.grader,
         }
     )
-    request = replace(request, rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),))
+    request = replace(
+        request,
+        rows=(task_input(lowered_task(task, "assistant_prefix", max_turns=1)),),
+        batch_metadata=BatchMetadata(global_step=0, training_phase=phase),
+    )
 
     class Client:
         """Reports a stray end marker in the turn's reply, as the chat transport records one."""
@@ -189,10 +203,12 @@ async def test_the_worker_applies_its_reasoning_span_policy_to_a_malformed_turn(
     worker = TaskRolloutWorker(config, WholeTaskProjection(config, WorkerTokenizer()), Client(), {}, shutdown_timeout=30)
     try:
         (rollout,) = await worker.generate(request)
+        batch = await worker.training_batch(request, [rollout])
     finally:
         await worker.shutdown()
 
-    assert (rollout.grade.status, rollout.grade.reward) == (status, reward)
+    assert rollout.grade.status == status
+    assert batch["rewards"] == [pytest.approx(reward)]
 
 
 @pytest.mark.asyncio

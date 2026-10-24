@@ -439,8 +439,12 @@ generator:
 
   reasoning_spans:
     # How training treats a rollout with a malformed reasoning span: `grade` keeps its task grade, `reject`
-    # grades it as a reward-0 submission failure. Only chat turns are checked.
+    # grades it as a reward-0 submission failure, and `penalize` keeps the grade and charges `penalty` in train
+    # rollouts. Only chat turns are checked.
     policy: grade
+    penalty: 0.0
+    # `rollout` subtracts the penalty from the reward; `marker` charges it to the token where the span goes wrong.
+    penalty_target: rollout
 
   chat_template:
     source: "name"
