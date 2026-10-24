@@ -13,6 +13,8 @@ model weights instead of the masters fails the second check.
 
 from __future__ import annotations
 
+import os
+import uuid
 from pathlib import Path
 
 import pytest
@@ -29,6 +31,9 @@ from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.gpu.grug_tiny_checkpoint import TOKENIZER, write_tiny_checkpoint
 from tests.gpu.test_megatron_worker import get_test_training_batch
 from tests.gpu.utils import get_test_actor_config, init_worker_with_type
+
+
+S3_SCRATCH_ENV = "SKYRL_GPU_TEST_S3_SCRATCH"
 
 
 def _training_config(model_path: str, *, world_size: int) -> object:
@@ -134,14 +139,19 @@ def test_masters_save_without_a_gather_and_survive_a_full_checkpoint_round_trip(
     checkpoint into a fresh policy and saving its masters again must reproduce them.
     """
     require_hoppers(world_size)
+    # Megatron restores only from CoreWeave S3, so the round trip needs an S3 scratch prefix.
+    s3_prefix = os.environ.get(S3_SCRATCH_ENV)
+    if not s3_prefix:
+        pytest.skip(f"set {S3_SCRATCH_ENV} to an s3:// scratch prefix for the checkpoint round trip")
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
     training_cfg = _training_config(str(model_path), world_size=world_size)
     training_cfg.trainer.policy.megatron_config.optimizer_checkpoint_sharding_type = "dp_reshardable"
+    run_root = f"{s3_prefix.rstrip('/')}/{uuid.uuid4().hex}"
     initialize_ray(training_cfg)
     try:
-        masters_dir, full_dir, reloaded_dir = (tmp_path / name / "policy" for name in ("masters", "full", "reloaded"))
+        masters_dir, full_dir, reloaded_dir = (f"{run_root}/{name}/policy" for name in ("masters", "full", "reloaded"))
         batch = get_test_training_batch(4)
         batch.metadata["global_step"] = 0
 
