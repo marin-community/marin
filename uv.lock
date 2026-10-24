@@ -1,7 +1,3 @@
-# SECURITY WARNING (2026-10-24): this old lock selects vulnerable Brotli.
-# Local installed copies were patched separately; uv sync can restore the flaw.
-# Before use, refresh from main or re-lock with brotli>=1.2.1 and
-# brotlicffi>=1.2.1.0 (CVE-2026-111497).
 version = 1
 revision = 5
 requires-python = ">=3.12, <3.14"

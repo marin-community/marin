@@ -22,9 +22,9 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import jinja2
 from marin.inference.openai_chat import OpenAIChatClient
 from transformers import AutoTokenizer
+from transformers.utils.chat_template_utils import _compile_jinja_template
 
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, FAMILY_TOKENIZER_REVISIONS, shared_template
 from experiments.post_training.glm import (
@@ -109,8 +109,9 @@ def token_counter(tokenizer) -> Callable[[str], int]:
 
 
 @functools.cache
-def _assistant_template(family: str) -> jinja2.Template:
-    return jinja2.Environment().from_string(shared_template(FAMILY_TOKEN_MAPS[family]))
+def _assistant_template(family: str):
+    # transformers' environment: the template's {% generation %} masking tag needs its extension.
+    return _compile_jinja_template(shared_template(FAMILY_TOKEN_MAPS[family]))
 
 
 def rendered_completion_text(family: str, response: ExpertResponse) -> str:
