@@ -28,6 +28,7 @@ from einops import rearrange
 from haliax import Axis
 from haliax.jax_utils import named_call
 from haliax.nn import ArrayStacked
+from haliax.nn.ragged_dot import ragged_dot
 from jax import core, random
 from jax.sharding import NamedSharding, get_abstract_mesh, reshard
 from jax.sharding import PartitionSpec as P
@@ -1738,7 +1739,7 @@ def _routed_unit_stats(
         order = jnp.argsort(flat, stable=True)
         sizes = jnp.bincount(flat, length=num_experts).astype(jnp.int32)
         token = order // sel.shape[1]
-        a = relu2(jax.lax.ragged_dot(x[token], w_up.astype(x.dtype), sizes))
+        a = relu2(ragged_dot(x[token], w_up.astype(x.dtype), sizes))
         per_token = keep_top2_of_4(a)
         transposed = {rows: transposable_row_mask(a, sizes, rows) for rows in layouts}
         if cfg.expert_act_sparsity == ActSparsity.TRANSPOSABLE:
