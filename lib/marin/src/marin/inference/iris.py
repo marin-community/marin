@@ -426,7 +426,7 @@ def _register_dashboard(
     backend_name: str,
     streaming: bool,
     chat_template_content: str | None,
-) -> Iterator[None]:
+) -> Iterator[str]:
     job_info = get_job_info()
     if job_info is None:
         raise RuntimeError("Iris service must run inside an Iris job")
@@ -474,7 +474,7 @@ def _register_dashboard(
                 address,
                 proxy_path(service.endpoint_name),
             )
-            yield
+            yield address
 
 
 def _block_until_timeout(check_alive: Callable[[], None], timeout_hours: float) -> None:

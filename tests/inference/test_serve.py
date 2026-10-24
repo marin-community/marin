@@ -37,6 +37,7 @@ from marin.inference.config import (
     IrisConfig,
     LevanterEngineConfig,
     ObjectStoreLoadMode,
+    RejectionSampleMethod,
     ResolvedModelLocator,
     ServedModelConfig,
     ServingGeometry,
@@ -428,6 +429,44 @@ def test_speculative_model_uses_resolved_uri_in_vllm_launch(monkeypatch):
         "model": "/cache/eagle-draft",
         "num_speculative_tokens": 3,
     }
+
+
+@pytest.mark.parametrize("acceptance_length", [None, 1.0, 2.5, 4.0])
+def test_speculative_policy_reaches_engine_subprocess(tmp_path, monkeypatch, acceptance_length):
+    argv_path = tmp_path / "argv.json"
+    monkeypatch.setattr(
+        "marin.inference.vllm_backend.vllm_launcher",
+        lambda _config: FakeVllmLauncher("record-args", str(argv_path)),
+    )
+    policy = SpeculativeServingConfig(
+        method=SpeculativeMethod.EAGLE3,
+        model=ResolvedModelLocator(uri="/models/draft", identity="draft@fixed-revision"),
+        num_speculative_tokens=3,
+        rejection_sample_method=(
+            RejectionSampleMethod.STANDARD if acceptance_length is None else RejectionSampleMethod.SYNTHETIC
+        ),
+        synthetic_acceptance_length=acceptance_length,
+    )
+    backend = VllmBackend(
+        VllmEngineConfig(speculative=policy, compilation_cache=VllmCompilationCacheMode.CALLER_MANAGED)
+    )
+    spec = ModelSpec(
+        weights="/models/target",
+        api_model="target",
+        num_chips=1,
+        tensor_parallel_size=1,
+        dtype="bfloat16",
+        max_model_len=1024,
+        chat_template_content="{{ messages }}",
+    )
+    with backend.serve(spec):
+        argv = json.loads(argv_path.read_text())
+    received = json.loads(argv[argv.index("--speculative-config") + 1])
+    assert received["model"] == "/models/draft"
+    assert received["method"] == "eagle3"
+    assert received["num_speculative_tokens"] == 3
+    assert received.get("rejection_sample_method", "standard") == policy.rejection_sample_method.value
+    assert received.get("synthetic_acceptance_length") == acceptance_length
 
 
 def test_checkout_free_setup_script_pins_marin_core_with_extras():

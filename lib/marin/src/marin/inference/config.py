@@ -186,6 +186,11 @@ class SpeculativeMethod(StrEnum):
     EAGLE3 = "eagle3"
 
 
+class RejectionSampleMethod(StrEnum):
+    STANDARD = "standard"
+    SYNTHETIC = "synthetic"
+
+
 class ObjectStoreLoadMode(StrEnum):
     """How an inference worker makes object-store weights available to its engine."""
 
@@ -200,21 +205,32 @@ class SpeculativeServingConfig:
     method: SpeculativeMethod
     model: ResolvedModelLocator
     num_speculative_tokens: int
+    rejection_sample_method: RejectionSampleMethod = RejectionSampleMethod.STANDARD
+    synthetic_acceptance_length: float | None = None
 
     def __post_init__(self) -> None:
         if self.num_speculative_tokens <= 0:
             raise ValueError("num_speculative_tokens must be positive")
+        if self.rejection_sample_method is RejectionSampleMethod.SYNTHETIC:
+            length = self.synthetic_acceptance_length
+            if length is None or not 1 <= length <= self.num_speculative_tokens + 1:
+                raise ValueError("synthetic acceptance length must include the bonus token and lie in [1, depth + 1]")
+        elif self.synthetic_acceptance_length is not None:
+            raise ValueError("synthetic_acceptance_length requires rejection_sample_method=synthetic")
 
     def vllm_argument(self) -> str:
         """Return the JSON value accepted by vLLM's ``--speculative-config``."""
-        return json.dumps(
-            {
-                "method": self.method.value,
-                "model": self.model.uri,
-                "num_speculative_tokens": self.num_speculative_tokens,
-            },
-            separators=(",", ":"),
-        )
+        config: dict[str, object] = {
+            "method": self.method.value,
+            "model": self.model.uri,
+            "num_speculative_tokens": self.num_speculative_tokens,
+        }
+        if self.rejection_sample_method is RejectionSampleMethod.SYNTHETIC:
+            config.update(
+                rejection_sample_method=self.rejection_sample_method.value,
+                synthetic_acceptance_length=self.synthetic_acceptance_length,
+            )
+        return json.dumps(config, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
