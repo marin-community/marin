@@ -106,6 +106,14 @@ candidates. Set `PLAYGROUND_PANEL` to the frozen panel object's S3 URL,
 `PLAYGROUND_OUTPUT` / `PLAYGROUND_REVISION`. Submit with
 `--gpu H100x1 --cpu 8 --memory 32GB --disk 64GB --no-sync`.
 
+`iris_rft_gates.sh` evaluates Instruct, math-RFT and code-RFT under both BF16
+and FP32 serving with the same full panel and decoding policy. Set
+`PLAYGROUND_MATH_RFT` and `PLAYGROUND_CODE_RFT` to source prefixes containing
+`final-fp32/` and `training-metadata.json`, plus `PLAYGROUND_PANEL`,
+`PLAYGROUND_OUTPUT` and `PLAYGROUND_REVISION`. Submit on one H100 with
+32GB RAM/64GB disk. Registering donor hashes precedes generation; scoring is
+separate for each precision. Admission uses paired own-domain improvement.
+
 CW GPU pods have containerd rather than Docker. Use `sweep --defer-code-scoring`
 there: MBPP rows have null correctness and an explicit pending flag. Generation
 never executes their Python. `report` refuses pending scores. Run `iris_score.sh`
