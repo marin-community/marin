@@ -173,7 +173,8 @@ at 4K, 5632 at 8K, and 2816 at 16K with the same 390251-step schedule, learning 
 decay. Eval runs at the training context, so the `eval_dropless/*` series shift at each switch.
 
 A switch's deploy PR edits Python only. It sets the `HERO_MODEL` fields in `heuristic.py`
-(`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, or `capacity_factor` as needed), appends the
+(`max_seq_len`, and `qk_mult`, `qk_mult_long_scale`, `capacity_factor`, or
+`attention_context_layout` as needed), appends the
 context the run is leaving, with the step N it ended at, to `HERO_CONTEXT_PHASES` in
 `launch_scaling_ladder.py`, and sets `HERO_FLOPS_BASELINE_TOTAL` to the parent's
 `throughput/total_gflops` × 1e9 at W&B `_step` N−1, which counts N updates. Later handoffs keep
@@ -185,6 +186,13 @@ data seed, component order, and token store unchanged. The QK and capacity value
 evidence, and a live switch needs a rehearsal from the handoff checkpoint and agreed trial
 thresholds; see the
 [context-switch inventory](https://github.com/marin-community/marin/issues/9615#issuecomment-5940217790).
+
+Under context parallelism, `attention_context_layout` sets how FA4 assigns query rows to context
+shards. The default, `"zigzag"`, swaps the late half of each shard's queries with its mirror shard so
+every shard does equal causal work; `"contiguous"` keeps each shard's own rows and skips the swap.
+Keep `"zigzag"` at 262K and set `"contiguous"` at 65K; the measurements are in
+[#10610](https://github.com/marin-community/marin/pull/10610). The field has no effect without a
+context axis.
 
 ## Coordinated garbage collection
 
