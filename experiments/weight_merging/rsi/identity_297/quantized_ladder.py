@@ -9,7 +9,7 @@ import json
 import logging
 import resource
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import safetensors.torch
 import torch
@@ -56,14 +56,18 @@ def main() -> None:
     parser.add_argument("--alpha", type=float, choices=(0, 0.5, 0.75, 1), required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--code-revision", required=True)
+    parser.add_argument("--anchor-path", default=ANCHOR.path, help="Same pinned anchor, staged in the worker's region.")
+    parser.add_argument("--donor-path", default=DONOR.path, help="Same pinned donor, staged in the worker's region.")
     args = parser.parse_args()
     torch.set_num_threads(16)
     start = time.monotonic()
     fs, prefix = filesystem_for(args.output.rstrip("/"))
+    anchor_source = replace(ANCHOR, path=args.anchor_path)
+    donor_source = replace(DONOR, path=args.donor_path)
     recipe = {
         "alpha": args.alpha,
-        "anchor": asdict(ANCHOR),
-        "donor": asdict(DONOR),
+        "anchor": asdict(anchor_source),
+        "donor": asdict(donor_source),
         "code_revision": args.code_revision,
         "kind": "quantized ladder",
         "dtype": "anchor dtype: BF16 weights, persistent FP32 router biases",
@@ -80,7 +84,7 @@ def main() -> None:
         logging.info("Verified arm already complete")
         return
     fs.makedirs(prefix + "/audit_progress", exist_ok=True)
-    anchor, donor = CheckpointReader(ANCHOR), CheckpointReader(DONOR)
+    anchor, donor = CheckpointReader(anchor_source), CheckpointReader(donor_source)
     assert anchor.weight_map.keys() == donor.weight_map.keys()
     names = sorted(anchor.weight_map, key=lambda name: (anchor.weight_map[name], name))
     objects, stats, weight_map = [], {}, {}
