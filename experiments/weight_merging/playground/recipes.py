@@ -81,7 +81,7 @@ def far_controls() -> list[dict]:
             )
         result.append(
             {
-                "name": f"far-{donor}-ties-d0.3-s0.3",
+                "name": f"far-{donor}-magnitude_topk-d0.3-s0.3",
                 "source": "instruct",
                 "donors": [donor],
                 "recipe": recipe("ties", [1], 0.3, 0.3),

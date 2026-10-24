@@ -15,13 +15,19 @@ uv --no-config pip install --python "$work_dir/eval/bin/python" torch==2.5.1 --i
 uv --no-config pip install --python "$work_dir/eval/bin/python" vllm==0.6.6.post1 transformers==4.48.3 numpy==1.26.4
 "$work_dir/eval/bin/python" - "$work_dir/run" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 from huggingface_hub import snapshot_download
 root = Path(sys.argv[1])
 sources = json.loads(Path('experiments/weight_merging/playground/models.json').read_text())
-sources = {key: sources[key] for key in ('anchor', 'instruct')}
-sources['aristaeus'] = {'repo': 'EphAsad/Aristaeus', 'revision': 'f6e918c83cda9aa8ec57ab8d57e9a557b8190b00'}
+family = os.environ.get('PLAYGROUND_FAMILY', 'aristaeus')
+if family not in ('aristaeus', 'far'):
+    raise ValueError(f'Unknown model family: {family}')
+names = ('anchor', 'instruct', 'coder', 'math') if family == 'far' else ('anchor', 'instruct')
+sources = {key: sources[key] for key in names}
+if family == 'aristaeus':
+    sources['aristaeus'] = {'repo': 'EphAsad/Aristaeus', 'revision': 'f6e918c83cda9aa8ec57ab8d57e9a557b8190b00'}
 paths = {key: snapshot_download(value['repo'], revision=value['revision'],
     allow_patterns=['*.json', '*.safetensors', '*.jinja', 'merges.txt', 'vocab.json'])
     for key, value in sources.items()}
