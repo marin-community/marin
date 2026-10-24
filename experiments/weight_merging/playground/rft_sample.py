@@ -15,6 +15,7 @@ from transformers import AutoTokenizer
 from vllm import LLM, SamplingParams
 
 from experiments.weight_merging.playground.evaluation import prompt, score
+from experiments.weight_merging.playground.sampling import independent_requests
 
 
 def main():
@@ -42,25 +43,24 @@ def main():
         max_num_seqs=64,
         gpu_memory_utilization=0.8,
         swap_space=0,
-        enforce_eager=True,
         enable_prefix_caching=False,
     )
+    requests = independent_requests(texts, list(range(len(items))), 4)
     params = [
         SamplingParams(
-            n=4,
+            n=1,
             temperature=0.7,
             top_p=0.95,
             max_tokens=1024,
-            seed=290 + i,
+            seed=request.seed,
             stop_token_ids=[tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|endoftext|>")],
         )
-        for i in range(len(items))
+        for request in requests
     ]
-    outputs = llm.generate(texts, params)
+    outputs = llm.generate([request.text for request in requests], params)
     pairs = [
-        (item, j, completion)
-        for item, output in zip(items, outputs, strict=True)
-        for j, completion in enumerate(output.outputs)
+        (items[request.prompt_index], request.sample_index, output.outputs[0])
+        for request, output in zip(requests, outputs, strict=True)
     ]
     with ThreadPoolExecutor(max_workers=4) as pool:
         grades = list(
@@ -91,10 +91,12 @@ def main():
         "vllm": vllm.__version__,
         "torch": torch.__version__,
         "n": 4,
+        "sampling_n": 1,
+        "execution_mode": "vllm_default_graphs",
         "temperature": 0.7,
         "top_p": 0.95,
         "max_new_tokens": 1024,
-        "seed_policy": "290 + task index",
+        "seed_policy": "290 + 4 * original task index + sample index; n=1 per request",
         "rows": rows,
     }
     args.output.write_text(json.dumps(metadata, indent=2) + "\n")

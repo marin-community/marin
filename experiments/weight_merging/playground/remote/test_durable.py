@@ -33,6 +33,15 @@ def complete_run(root: Path) -> tuple[Path, dict, list[dict]]:
     return run, reference, candidates
 
 
+def test_execution_modes_cannot_share_a_durable_phase(tmp_path):
+    _, reference, candidates = complete_run(tmp_path)
+    reference["execution_mode"] = "eager"
+    CandidateStore(str(tmp_path / "remote"), reference, candidates).initialize()
+    graph_reference = {**reference, "execution_mode": "vllm_default_graphs"}
+    with pytest.raises(ValueError, match="contract changed"):
+        CandidateStore(str(tmp_path / "remote"), graph_reference, candidates).initialize()
+
+
 def test_interrupted_publication_never_becomes_done_and_retry_commits(tmp_path, monkeypatch):
     run, reference, candidates = complete_run(tmp_path)
     store = CandidateStore(str(tmp_path / "remote"), reference, candidates)

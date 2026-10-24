@@ -44,6 +44,7 @@ def evaluate(llm, tokenizer, items: list[dict], candidate: Candidate, args) -> l
     for mode, seed in modes:
         params = [
             SamplingParams(
+                n=1,
                 temperature=0 if mode == "greedy" else 0.7,
                 top_p=1 if mode == "greedy" else 0.95,
                 max_tokens=args.max_new_tokens,
@@ -84,7 +85,7 @@ def evaluate(llm, tokenizer, items: list[dict], candidate: Candidate, args) -> l
 
 
 def engine(paths: dict[str, Path], source: str, rope_theta: float, args):
-    return LLM(
+    model = LLM(
         model=str(paths[source]),
         tokenizer=str(paths["instruct"]),
         dtype=args.dtype,
@@ -94,8 +95,10 @@ def engine(paths: dict[str, Path], source: str, rope_theta: float, args):
         swap_space=0,
         enable_prefix_caching=False,
         rope_theta=rope_theta,
-        enforce_eager=True,
     )
+    if model.llm_engine.model_config.enforce_eager:
+        raise ValueError("This phase requires default vLLM compilation and CUDA graphs")
+    return model
 
 
 def reload_weights(llm, paths: dict[str, Path], candidate: Candidate) -> None:
@@ -114,6 +117,7 @@ def reload_probe(llm, tokenizer, items: list[dict], max_tokens: int) -> list[lis
         for item in items
     ]
     params = SamplingParams(
+        n=1,
         temperature=0,
         max_tokens=max_tokens,
         stop_token_ids=[tokenizer.eos_token_id, tokenizer.convert_tokens_to_ids("<|endoftext|>")],
@@ -162,6 +166,8 @@ def main() -> None:
         "vllm": vllm.__version__,
         "max_num_seqs": args.max_num_seqs,
         "dtype": args.dtype,
+        "execution_mode": "vllm_default_graphs",
+        "sampling_n": 1,
         "defer_code_scoring": args.defer_code_scoring,
         "max_new_tokens": args.max_new_tokens,
         "max_model_len": args.max_model_len,
@@ -185,6 +191,8 @@ def main() -> None:
             "vllm",
             "max_num_seqs",
             "dtype",
+            "execution_mode",
+            "sampling_n",
             "defer_code_scoring",
             "max_new_tokens",
             "max_model_len",

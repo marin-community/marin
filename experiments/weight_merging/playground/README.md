@@ -338,6 +338,17 @@ test items. Pass the untuned base snapshot as both `--model` and `--tokenizer`.
 
 ### Rejection-sampled self-distillation pilot
 
+Generate each response as a separate `n=1` request with seed
+`290 + samples_per_prompt * original_prompt_index + sample_index`.
+In the pinned vLLM 0.6.6.post1, seeded `n>1` requests copy the same seed to
+every child request and mostly duplicate completions. The original k4 donors
+therefore used one response per prompt, repeated. This affects their training
+interpretation; evaluation uses separate `n=1` requests for each decode.
+Before generating a new k8 dataset, require a fixed 20-prompt probe to average
+at least five distinct completions per prompt. Report unique prompt and
+completion counts after verification and dataset selection. Preserve the
+original global prompt indices across chunking and resume.
+
 The first human/MetaMath math SFT donor regressed from 943 to 844 greedy GSM8K
 correct answers at an 8192-token cap. Its 231 paired losses comprise 230 explicit
 wrong numeric final fields and one truncated loop; answer extraction is not the

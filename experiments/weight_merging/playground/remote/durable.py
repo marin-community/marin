@@ -22,6 +22,8 @@ REFERENCE_FIELDS = (
     "vllm",
     "max_num_seqs",
     "dtype",
+    "execution_mode",
+    "sampling_n",
     "defer_code_scoring",
     "max_new_tokens",
     "max_model_len",
