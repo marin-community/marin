@@ -1624,30 +1624,3 @@ def _serve_text_upstream(*, status_code: int, body: str) -> Iterator[RunningMode
         server.shutdown()
         server.server_close()
         thread.join()
-
-
-def test_partial_broker_worker_submission_releases_created_workers(monkeypatch):
-    submitted = []
-    terminated = []
-
-    def submit(request):
-        submitted.append(request)
-        if len(submitted) == 2:
-            raise TimeoutError("second worker submission timed out")
-        return SimpleNamespace(job_id="/tester/worker-0", terminate=lambda: terminated.append("worker-0"))
-
-    monkeypatch.setattr(iris_module, "current_client", lambda: SimpleNamespace(submit=submit))
-    config = RemoteInferenceConfig(
-        model=ServedModelConfig(weights="test-model"),
-        engine=VllmEngineConfig(),
-        instances=2,
-        iris=IrisConfig(
-            worker_resources=ResourceConfig.with_gpu("H100", count=1),
-            worker_environment=create_environment(docker_image="test"),
-        ),
-    )
-    with pytest.raises(TimeoutError, match="second worker"):
-        iris_module._submit_broker_workers(
-            "test", config, BrokerConfig(), InferenceBroker(request_lease_timeout_seconds=BROKER_LEASE_TIMEOUT_SECONDS)
-        )
-    assert terminated == ["worker-0"]

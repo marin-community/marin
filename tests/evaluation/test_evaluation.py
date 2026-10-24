@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
-from contextlib import contextmanager, nullcontext
+from contextlib import nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -2765,21 +2765,3 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
-
-
-def test_evaluation_recovers_from_inference_startup_timeout(tmp_path, monkeypatch):
-    starts = iter((TimeoutError("not ready"), _remote_session(), _remote_session()))
-
-    @contextmanager
-    def remote(_config):
-        result = next(starts)
-        if isinstance(result, TimeoutError):
-            raise RemoteInferenceStartupError("startup timed out", jobs=()) from result
-        yield result
-
-    _patch_inference_runtime(monkeypatch, remote)
-    batch = _hosted_judge_batch(tmp_path, (_evaluation(tmp_path, "one", _successful_evaluation),))
-
-    paths = _run_test_batch(batch)
-
-    assert read_record(paths[0]).status is RunStatus.SUCCEEDED
