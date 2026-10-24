@@ -40,6 +40,11 @@ _ENVIRONMENT_REGISTRY: dict[EnvironmentType, _EnvEntry] = {
         "DaytonaEnvironment",
         "daytona",
     ),
+    EnvironmentType.DAYTONA_GUARDED: _EnvEntry(
+        "harbor.environments.daytona_guarded",
+        "GuardedDaytonaEnvironment",
+        "daytona",
+    ),
     EnvironmentType.E2B: _EnvEntry(
         "harbor.environments.e2b",
         "E2BEnvironment",

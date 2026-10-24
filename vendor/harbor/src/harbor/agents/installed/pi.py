@@ -33,6 +33,12 @@ _CURRENT_PI_PACKAGE = "@earendil-works/pi-coding-agent"
 _NODE_VERSION = "22"
 _LEGACY_PI_PACKAGE = "@mariozechner/pi-coding-agent"
 _PI_PACKAGE_RENAME_VERSION = Version("0.74.0")
+_BROTLI_RUNTIME_CHECK = """
+const v = process.versions.brotli?.split(".").map(Number);
+if (!v || !(v[0] > 1 || (v[0] === 1 && (v[1] > 2 || (v[1] === 2 && v[2] >= 1))))) {
+  throw Error("Pi requires Node with Brotli >=1.2.1 (CVE-2026-111497)");
+}
+"""
 _REMOTE_LOG_READ_BLOCK_SIZE = 1024 * 1024
 
 
@@ -406,8 +412,9 @@ export default function (pi) {
     def nvm_shell_command() -> str:
         """Return the shell prelude that exposes the NVM-managed Pi executable."""
         return (
-            'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" && '
-            f"nvm use {_NODE_VERSION} >/dev/null"
+            'if [ -s "$HOME/.nvm/nvm.sh" ]; then '
+            'export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; '
+            f"nvm use {_NODE_VERSION} >/dev/null; fi"
         )
 
     def hosted_endpoint_env(self) -> dict[str, str]:
@@ -457,22 +464,28 @@ export default function (pi) {
     async def install(self, environment: BaseEnvironment) -> None:
         package_name = self._package_name()
         version_spec = f"@{self._version}" if self._version else "@latest"
-        await self.exec_as_root(
-            environment,
-            command="apt-get update && apt-get install -y curl",
-            env={"DEBIAN_FRONTEND": "noninteractive"},
-        )
+        existing = await environment.exec(command="command -v node && command -v npm")
+        if existing.return_code != 0:
+            await self.exec_as_root(
+                environment,
+                command="apt-get update && apt-get install -y curl",
+                env={"DEBIAN_FRONTEND": "noninteractive"},
+            )
+            await self.exec_as_agent(
+                environment,
+                command=(
+                    "set -euo pipefail; "
+                    "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash && "
+                    'export NVM_DIR="$HOME/.nvm" && . "$NVM_DIR/nvm.sh" && '
+                    f"nvm install {_NODE_VERSION}"
+                ),
+            )
         await self.exec_as_agent(
             environment,
             command=(
-                "set -euo pipefail; "
-                "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash && "
-                'export NVM_DIR="$HOME/.nvm" && '
-                '\\. "$NVM_DIR/nvm.sh" || true && '
-                "command -v nvm &>/dev/null || { echo 'Error: NVM failed to load' >&2; exit 1; } && "
-                f"nvm install {_NODE_VERSION} && npm -v && "
-                f"npm install -g --ignore-scripts {package_name}{version_spec} && "
-                "pi --version"
+                f"set -euo pipefail; {self.nvm_shell_command()}; "
+                f"node -e {shlex.quote(_BROTLI_RUNTIME_CHECK)} && "
+                f"npm install -g --ignore-scripts {package_name}{version_spec} && pi --version"
             ),
         )
 

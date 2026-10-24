@@ -1240,3 +1240,47 @@ class TestPiPopulateContext:
         agent.populate_context_post_run(context)
         assert context.n_input_tokens == 10
         assert context.n_output_tokens == 5
+
+
+@pytest.mark.parametrize("brotli_version,allowed", [("1.2.1", True), ("1.2.0", False)])
+async def test_pi_installs_with_image_toolchain_without_external_bootstrap(tmp_path, brotli_version, allowed):
+    """A container with approved Node needs only its configured npm registry."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    marker = tmp_path / "installed"
+    node = shutil.which("node")
+    assert node is not None
+    node_script = (
+        'Object.defineProperty(process.versions, "brotli", {value: '
+        + json.dumps(brotli_version) + '}); eval(process.argv[1]);'
+    )
+    node_wrapper = bin_dir / "node"
+    node_wrapper.write_text(
+        f'#!/bin/sh\nexec {shlex.quote(node)} -e {shlex.quote(node_script)} "$2"\n'
+    )
+    node_wrapper.chmod(0o755)
+    for name, script in {
+        "npm": f'#!/bin/sh\n[ "$1" = install ] && /usr/bin/touch {shlex.quote(str(marker))}\n',
+        "pi": '#!/bin/sh\necho "0.87.0"\n',
+    }.items():
+        path = bin_dir / name
+        path.write_text(script)
+        path.chmod(0o755)
+
+    async def execute(command, **kwargs):
+        # No curl, apt, or nvm exists in this isolated shell PATH.
+        result = subprocess.run(
+            ["/bin/bash", "-c", command],
+            env={"PATH": str(bin_dir), "HOME": str(tmp_path)},
+            text=True, capture_output=True,
+        )
+        return SimpleNamespace(return_code=result.returncode, stdout=result.stdout, stderr=result.stderr)
+
+    agent = Pi(logs_dir=UPath(tmp_path / "logs"), version="0.87.0")
+    if allowed:
+        await agent.install(SimpleNamespace(exec=execute))
+        assert marker.exists()
+    else:
+        with pytest.raises(NonZeroAgentExitCodeError, match="Brotli >=1.2.1"):
+            await agent.install(SimpleNamespace(exec=execute))
+        assert not marker.exists()

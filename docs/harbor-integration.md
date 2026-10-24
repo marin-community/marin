@@ -293,3 +293,102 @@ participants and ordered message, reasoning, tool-call, and observation parts. E
 normalized sample table directly. `record.json` stores the
 deterministic source-policy digest and any Marin runtime task cap. A source policy's own `n_tasks`
 remains part of the policy digest.
+
+## Guarded package downloads
+
+Use `daytona-guarded` to enforce package download policy outside an agent
+container. It permits outbound access only to a dedicated package gateway and
+explicit operator-owned service hosts. Changing pip/npm settings or clearing
+proxy variables cannot add destinations to the provider firewall. Ordinary
+`daytona` and other backends do not acquire this protection automatically.
+
+The gateway in `harbor.security.gateway` implements the PyPI JSON simple index
+and npm package metadata/artifact routes. It blocks all PyPI LiteLLM releases,
+Brotli below 1.2.1, and brotlicffi below 1.2.1.0. Before each artifact download it
+queries OSV for the exact package ecosystem, name, and version, and rejects any
+active advisory. Advisory lookup errors deny the download. A new advisory can
+block a version that previously passed. The resolver can select a version whose
+artifact is then rejected; the gateway does not silently substitute a version.
+
+Artifact URLs are rewritten to the gateway. The gateway fetches only artifacts
+listed by the public registry, rejects redirects and unexpected artifact hosts,
+and verifies SHA-256 for Python or SHA-512 for npm before returning bytes.
+It does not expose an arbitrary URL-fetch or HTTP CONNECT endpoint. Metadata is
+limited to 32 MiB and artifacts to 256 MiB; larger artifacts fail explicitly.
+
+Build the gateway image from the repository root:
+
+```bash
+docker build -f infra/package_gateway/Dockerfile -t marin-package-gateway:review .
+```
+
+The image uses its own frozen dependency lock and runs without root. Publish it
+behind a dedicated HTTPS origin with source-network access rules, request
+limits, and at least 2 GiB of temporary disk. The current gateway serves only
+public-package data and has no per-client authentication. Restrict ingress to
+your approved sandbox source networks; an authenticated registry deployment
+needs client credential support before rollout. Start it with
+`--public-origin https://packages.example.org`. Its upstream access is limited
+by application routes to PyPI, npm, their artifact hosts, and `api.osv.dev`.
+Do not colocate unrelated file-serving routes or a general proxy on that origin.
+No live gateway is provisioned by the Harbor code or Docker build.
+
+Configure each trial with the reviewed image for that benchmark:
+
+```yaml
+environment:
+  type: daytona-guarded
+  kwargs:
+    package_gateway: https://packages.example.org
+    service_domains: [model.example.org]
+    approved_image: registry.example.org/benchmark@sha256:<64-hex-digest>
+```
+
+Replace every example value. The approved image supplies the benchmark files,
+Python, package tools, and any required OS libraries. Its contents and runtime
+versions must be reviewed before approval. The configured image replaces the
+task Dockerfile/image selection; use the correct image for each benchmark.
+Guarded mode rejects Docker-in-Docker, compose overlays, mutable image tags,
+snapshot fallbacks, and `force_build`. Daytona's remote image builder runs
+outside the sandbox firewall, so guarded trials cannot build task Dockerfiles.
+
+Model and judge domains are explicit trusted exceptions. Do not allow public
+registries, arbitrary file hosts, wildcard domains, or services that relay
+arbitrary URLs. Keep Daytona control-plane credentials outside the sandbox.
+The launcher supplies the same Daytona credential references for both Daytona
+backends. Provider support for strict allow lists is required; verify the org's
+network-policy behavior before rollout.
+
+Pi can install through npm when the approved image already contains Node and
+npm. It rejects Node with Brotli older than 1.2.1 before installing Pi. Other
+agents that download OS packages, NVM, uv, Git repositories, or native installers
+can fail under the firewall; prepare their approved toolchain or adapt their
+install path. Do not add broad registry/source exceptions to make them pass.
+
+Before enabling a real evaluation, run the disposable network canary with a
+reviewed image containing `curl` and the normal Harbor shell utilities:
+
+```bash
+uv run --project vendor/harbor --frozen --extra runtime python -m harbor.security.canary \
+  --gateway https://packages.example.org \
+  --approved-image registry.example.org/benchmark@sha256:<64-hex-digest> \
+  --service-domain model.example.org
+```
+
+Supply the exact image and service domains intended for evaluation. A successful
+canary exit is a required rollout gate; a failed or incomplete probe blocks
+rollout. The canary checks the listed download paths under that configuration;
+it cannot establish whether an allowed model service relays arbitrary URLs.
+Review each service exception separately.
+
+This uses `DAYTONA_API_KEY`, verifies an allowed gateway request and blocked
+Brotli/LiteLLM requests, probes direct public registry/source access without
+proxy routing, then deletes the sandbox. Its five-minute TTL bounds leaks if
+the harness is interrupted. A local test of gateway responses is not evidence
+that the provider's network firewall is active.
+
+This policy blocks known package-version findings. It does not prove that an
+unreported release is harmless, inspect native libraries embedded inside every
+package, remove packages already baked into images, or undo prior compromise.
+Registry and advisory-service integrity, the approved image, and the explicitly
+allowed service hosts remain trusted inputs.

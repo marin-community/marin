@@ -30,7 +30,7 @@ from rigging.secrets import SecretSpec
 
 logger = logging.getLogger(__name__)
 
-_DAYTONA_ENVIRONMENT_TYPE = "daytona"
+_DAYTONA_ENVIRONMENT_TYPES = frozenset({"daytona", "daytona-guarded"})
 _EVALCHEMY_CONFIG_DIR = Path(__file__).with_name("configs") / "evalchemy"
 _HARBOR_CONFIG_DIR = Path(__file__).with_name("configs") / "harbor"
 _DAYTONA_SECRET_ENV: Mapping[str, SecretSpec] = MappingProxyType(
@@ -168,7 +168,7 @@ class HarborDefinition:
     family: str | None = None
 
     def secret_env_for(self, config: ValidatedHarborConfig) -> Mapping[str, SecretSpec]:
-        secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment == _DAYTONA_ENVIRONMENT_TYPE else {}
+        secret_env = dict(_DAYTONA_SECRET_ENV) if config.environment in _DAYTONA_ENVIRONMENT_TYPES else {}
         for key in config.verifier_env_keys:
             secret_env.setdefault(key, _VERIFIER_SECRET_ENV.get(key, (f"env:{key}",)))
         return MappingProxyType(secret_env)

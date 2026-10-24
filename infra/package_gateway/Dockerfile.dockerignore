@@ -1,0 +1,11 @@
+**
+!infra
+!infra/package_gateway
+!infra/package_gateway/pyproject.toml
+!infra/package_gateway/uv.lock
+!vendor
+!vendor/harbor
+!vendor/harbor/src
+!vendor/harbor/src/harbor
+!vendor/harbor/src/harbor/security
+!vendor/harbor/src/harbor/security/**
