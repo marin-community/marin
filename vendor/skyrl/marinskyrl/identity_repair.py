@@ -18,6 +18,7 @@ class RepairTeacherSettings(BaseModel):
 class IdentityRuntimeSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
     fact_manifest: str
+    task_criteria_manifest: str | None = None
     requested_facts_manifest: str
     teacher: RepairTeacherSettings
     judge_base_url: str

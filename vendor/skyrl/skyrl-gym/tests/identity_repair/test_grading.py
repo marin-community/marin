@@ -32,10 +32,18 @@ def test_production_judge_uses_requested_facts_and_task_evidence(monkeypatch, co
     context = TurnContext("What is your name?", True, (IdentityFact.NAME,), completed)
     result = judge.grade_answer("I am Marin Snowball.", context, manifest, RewardWeights())
     assert result.reward.total == score
-    assert result.reward.judge_version == "judge-model@pin/identity-repair-v2-request-specific"
+    assert result.reward.judge_version == "judge-model@pin/identity-repair-v4-task-criteria"
     payload = json.loads(requests_seen[0]["messages"][-1]["content"])
     assert payload["requested_facts"] == ["name"]
     assert payload["answer"] == "I am Marin Snowball."
+    schema = requests_seen[0]["response_format"]["json_schema"]["schema"]
+    assert "inappropriate_refusal" in schema["required"]
+    assert "appropriate_refusal" not in schema["properties"]
+    assert schema["additionalProperties"] is False
+    facts = schema["properties"]["fact_correctness"]
+    assert facts["required"] == ["name"]
+    assert set(facts["properties"]) == {"name"}
+    assert facts["additionalProperties"] is False
 
 
 def encode_response(assessment, *, fenced=False):

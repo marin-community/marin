@@ -45,6 +45,7 @@ class TurnContext:
     requested_facts: tuple[IdentityFact, ...]
     task_completed: bool | None  # deterministic task verdict when available (None = unknown)
     conversation: tuple[Mapping[str, object], ...] = ()
+    task_criteria: str = ""
 
 
 @dataclass(frozen=True)

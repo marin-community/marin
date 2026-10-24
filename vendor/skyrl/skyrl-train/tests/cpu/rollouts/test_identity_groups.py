@@ -38,6 +38,7 @@ async def test_four_member_group_preserves_ids_independent_rewards_and_projectio
         else:
             assert payload["conversation_before_answer"][-1]["role"] == "user"
             assert payload["conversation_before_answer"][-1]["content"] == payload["request"]
+            assert payload["task_completion_criteria"] == "Give the assistant name; no biography required."
             graded_answers.append(payload["answer"])
             assessment = {"task_completed": not wrong, "fact_correctness": {"name": float(not wrong)},
                           "unsupported_claims": int(wrong), "inappropriate_refusal": False,
@@ -57,7 +58,8 @@ async def test_four_member_group_preserves_ids_independent_rewards_and_projectio
     teacher = FakeClient(["I am Marin Snowball"])
     groups = IdentityRepairGroups(CharTokenizer(), manifest, judge, teacher, FakeClient([]),
                                   TeacherRepairSpec({"temperature": 1.0}, {"temperature": 1.0}, 8192),
-                                  {row.spec.task.id: ((IdentityFact.NAME,),)}, RewardWeights())
+                                  {row.spec.task.id: ((IdentityFact.NAME,),)}, RewardWeights(),
+                                  {row.spec.task.id: ("Give the assistant name; no biography required.",)})
     generated = []
 
     async def generate(index):

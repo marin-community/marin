@@ -103,6 +103,7 @@ class OpenAIJudge:
         max_tokens: int,
         temperature: float = 0.0,
         top_p: float | None = None,
+        response_schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         request: dict[str, Any] = {
             "model": self.model,
@@ -110,6 +111,10 @@ class OpenAIJudge:
             "temperature": temperature,
             "max_completion_tokens": max_tokens,
         }
+        if response_schema is not None:
+            request["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "judge_assessment", "strict": True, "schema": response_schema,
+            }}
         if top_p is not None:
             request["top_p"] = top_p
         if self.reasoning_effort is not None:
@@ -123,6 +128,7 @@ class OpenAIJudge:
         max_tokens: int,
         temperature: float = 0.0,
         top_p: float | None = None,
+        response_schema: dict[str, Any] | None = None,
     ) -> str:
         response = _post_json_with_retry(
             url=f"{self.base_url.rstrip('/')}/chat/completions",
@@ -132,6 +138,7 @@ class OpenAIJudge:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 top_p=top_p,
+                response_schema=response_schema,
             ),
             timeout=self.timeout_seconds,
         )
@@ -151,8 +158,11 @@ class OpenAIJudge:
             raise RuntimeError(f"Judge returned no message content: {body}")
         return content
 
-    def generate(self, messages: list[dict[str, str]], *, max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS) -> str:
-        return self._post_chat_completion(messages, max_tokens=max_tokens)
+    def generate(
+        self, messages: list[dict[str, str]], *, max_tokens: int = DEFAULT_JUDGE_MAX_TOKENS,
+        response_schema: dict[str, Any] | None = None,
+    ) -> str:
+        return self._post_chat_completion(messages, max_tokens=max_tokens, response_schema=response_schema)
 
     def generate_response(
         self,

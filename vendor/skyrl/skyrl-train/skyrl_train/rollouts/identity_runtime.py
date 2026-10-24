@@ -84,6 +84,16 @@ def build_identity_groups(cfg, tokenizer, student_client, engines) -> IdentityRe
     requested = json.loads((data_root / settings.requested_facts_manifest).read_text())
     requested = {task: tuple(tuple(IdentityFact(fact) for fact in turn) for turn in turns)
                  for task, turns in requested.items()}
+    criteria = {}
+    if settings.task_criteria_manifest is not None:
+        criteria = json.loads((data_root / settings.task_criteria_manifest).read_text())
+        if not isinstance(criteria, dict) or set(criteria) != set(requested):
+            raise ValueError("Task criteria must cover exactly the requested-fact tasks")
+        for task, turns in criteria.items():
+            if (not isinstance(turns, list) or len(turns) != len(requested[task])
+                    or not all(isinstance(criterion, str) and criterion.strip() for criterion in turns)):
+                raise ValueError(f"Task criteria must provide nonempty text for every turn: {task}")
+        criteria = {task: tuple(turns) for task, turns in criteria.items()}
     judge = ProductionIdentityJudge(OpenAIJudge(settings.judge_base_url, settings.judge_model,
                                                api_key_env=settings.judge_api_key_env, strict_completion=True),
                                     settings.judge_revision, settings.judge_max_tokens)
@@ -94,5 +104,5 @@ def build_identity_groups(cfg, tokenizer, student_client, engines) -> IdentityRe
                          dict(OmegaConf.to_container(cfg.generator.sampling_params, resolve=True)),
                          settings.teacher.max_model_len, chat_template_kwargs=dict(cfg.generator.get("chat_template_kwargs", {})),
                          max_resume_turns=settings.max_resume_turns),
-        requested, RewardWeights(**settings.reward_weights),
+        requested, RewardWeights(**settings.reward_weights), criteria,
     )

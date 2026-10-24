@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 
 from taskcompendium.grading_result import GradeResult, Outcome
 
@@ -25,6 +25,7 @@ class IdentityRepairGroups:
     repair_spec: TeacherRepairSpec
     requested_facts: Mapping[str, tuple[tuple[IdentityFact, ...], ...]]
     weights: RewardWeights
+    task_criteria: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
     async def _paired(self, original: TrainingRollout, session_id: str, template_kwargs: dict) -> list[TrainingRollout]:
         for index, step in enumerate(original.steps):
@@ -47,14 +48,19 @@ class IdentityRepairGroups:
         facts = self.requested_facts[rollout.task_id]
         if len(facts) != len(rollout.steps):
             raise ValueError("Requested-fact manifest must cover every assistant turn")
+        criteria = self.task_criteria[rollout.task_id] if self.task_criteria else ("",) * len(facts)
+        if len(criteria) != len(facts):
+            raise ValueError("Task criteria must cover every assistant turn")
         records = []
-        for step, requested in zip(rollout.steps, facts, strict=True):
+        for step, requested, criterion in zip(rollout.steps, facts, criteria, strict=True):
             user = next(message for message in reversed(step.messages[:-1]) if message.get("role") == "user")
-            context = TurnContext(str(user["content"]), bool(requested), requested, None, tuple(step.messages[:-1]))
+            context = TurnContext(str(user["content"]), bool(requested), requested, None,
+                                  tuple(step.messages[:-1]), criterion)
             result = await asyncio.to_thread(
                 self.judge.grade_answer, step.turn.message.get("content") or "", context, self.manifest, self.weights
             )
-            records.append({"reward": asdict(result.reward), "assessment": result.assessment.model_dump()})
+            records.append({"reward": asdict(result.reward), "assessment": result.assessment.model_dump(),
+                            "task_criteria": criterion})
         if not records:
             raise ValueError("Cannot grade an empty identity rollout")
         reward = sum(record["reward"]["total"] for record in records) / len(records)
