@@ -14,7 +14,7 @@ def complete_run(root: Path) -> tuple[Path, dict, list[dict]]:
     run.mkdir()
     panel = json.dumps({"items": [{"id": "item"}]}).encode()
     reference = dict.fromkeys(REFERENCE_FIELDS, "frozen")
-    reference.update(panel_sha256=digest(panel), decode_seeds=[17, 29])
+    reference.update(panel_sha256=digest(panel), decode_seeds=[17, 29], models={})
     candidates = [{"name": "instruct", "source": "instruct"}]
     metadata = {**reference, "candidates": candidates}
     for name, data in (
@@ -69,5 +69,21 @@ def test_partial_candidate_and_changed_recipe_cannot_be_reused(tmp_path):
     (run / "outputs.jsonl").write_text(original)
     store.publish(run, "instruct")
     changed = CandidateStore(str(tmp_path / "remote"), reference, [{**candidates[0], "rope_theta": 10000}])
+    with pytest.raises(ValueError, match="contract changed"):
+        changed.done("instruct")
+
+
+def test_registered_checkpoint_resume_uses_hashes_across_pod_paths(tmp_path):
+    run, reference, candidates = complete_run(tmp_path)
+    source = {"path": "/old-pod/model", "weights_sha256": {"weights": "original"}, "config_sha256": "config"}
+    reference["models"] = {"instruct": source}
+    metadata = json.loads((run / "run-metadata.json").read_text())
+    metadata["models"] = {"instruct": {**source, "path": "/new-pod/model"}}
+    (run / "run-metadata.json").write_text(json.dumps(metadata))
+    store = CandidateStore(str(tmp_path / "remote"), reference, candidates)
+    store.publish(run, "instruct")
+    assert store.done("instruct")
+    source["weights_sha256"] = {"weights": "changed"}
+    changed = CandidateStore(str(tmp_path / "remote"), reference, candidates)
     with pytest.raises(ValueError, match="contract changed"):
         changed.done("instruct")

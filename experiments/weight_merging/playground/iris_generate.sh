@@ -44,6 +44,12 @@ if [ "${PLAYGROUND_PREFLIGHT:-0}" = 1 ]; then
  exit 0
 fi
 if [ -s "$work_dir/pending" ]; then
+ if [ "${PLAYGROUND_FAMILY:-aristaeus}" = rft ]; then
+  fsutil cp -r "$PLAYGROUND_MATH_RFT/final-fp32" "$work_dir/math_rft"
+  fsutil cp "$PLAYGROUND_MATH_RFT/training-metadata.json" "$work_dir/math-training.json"
+  fsutil cp -r "$PLAYGROUND_CODE_RFT/final-fp32" "$work_dir/code_rft"
+  fsutil cp "$PLAYGROUND_CODE_RFT/training-metadata.json" "$work_dir/code-training.json"
+ fi
  uv --no-config venv "$work_dir/eval" --python 3.12
  uv --no-config pip install --python "$work_dir/eval/bin/python" torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
  uv --no-config pip install --python "$work_dir/eval/bin/python" vllm==0.6.6.post1 transformers==4.48.3 numpy==1.26.4
@@ -56,7 +62,7 @@ from huggingface_hub import snapshot_download
 root = Path(sys.argv[1])
 sources = json.loads(Path('experiments/weight_merging/playground/models.json').read_text())
 family = os.environ.get('PLAYGROUND_FAMILY', 'aristaeus')
-if family not in ('aristaeus', 'far'):
+if family not in ('aristaeus', 'far', 'rft'):
     raise ValueError(f'Unknown model family: {family}')
 names = ('anchor', 'instruct', 'coder', 'math') if family == 'far' else ('anchor', 'instruct')
 sources = {key: sources[key] for key in names}
@@ -68,6 +74,13 @@ paths = {key: snapshot_download(value['repo'], revision=value['revision'],
 (root/'model-paths.json').write_text(json.dumps(paths, indent=2)+'\n')
 (root/'model-sources.json').write_text(json.dumps(sources, indent=2)+'\n')
 PYMODELS
+ if [ "${PLAYGROUND_FAMILY:-aristaeus}" = rft ]; then
+  for domain in math code; do
+   "$work_dir/eval/bin/python" -m experiments.weight_merging.playground.register \
+    --run "$work_dir/common" --name "${domain}_rft" --path "$work_dir/${domain}_rft" \
+    --training-metadata "$work_dir/$domain-training.json"
+  done
+ fi
  export VLLM_ATTENTION_BACKEND=XFORMERS
  while IFS= read -r candidate; do
   run_dir="$work_dir/candidates/$candidate"

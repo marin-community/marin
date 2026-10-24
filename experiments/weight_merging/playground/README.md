@@ -127,6 +127,12 @@ combined run is under `aggregate/`; a partial aggregate contains only completed
 candidates. Keep one writer per phase prefix.
 Set `PLAYGROUND_FAMILY=far` to download the pinned Instruct/Coder/Math family
 for the small far-donor negative-control arm, using `recipes --arm far`.
+For an admitted RFT pair, set `PLAYGROUND_FAMILY=rft`, provide
+`PLAYGROUND_MATH_RFT` / `PLAYGROUND_CODE_RFT` checkpoint prefixes, and use
+recipes whose donor names are `math_rft` and `code_rft`. Each prefix must contain
+`final-fp32/` and `training-metadata.json`; reference the matching donor gate
+metadata. Pod-local checkpoint paths may change between attempts, but the
+registered weight, config and training metadata hashes must match.
 Set `PLAYGROUND_BASE_CONTROL=1` to run the base model's eight-shot GSM8K
 control after the curve in the same job.
 

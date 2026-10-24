@@ -36,6 +36,20 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def frozen_reference(metadata: dict) -> dict:
+    reference = {key: metadata[key] for key in REFERENCE_FIELDS}
+    # Registered checkpoints are identified by content, not a pod's temporary path.
+    models = {}
+    for name, source in reference["models"].items():
+        source = dict(source)
+        if source.get("weights_sha256") and source.get("config_sha256"):
+            source.pop("path", None)
+            if source.get("training_metadata_sha256"):
+                source.pop("training_metadata", None)
+        models[name] = source
+    return {**reference, "models": models}
+
+
 def normalized_candidate(value: dict) -> dict:
     recipe = value.get("recipe")
     if recipe is not None:
@@ -64,7 +78,7 @@ class CandidateStore:
             require_coreweave(remote)
         self.fs, self.prefix = filesystem_for(remote)
         self.prefix = self.prefix.rstrip("/")
-        self.reference = reference
+        self.reference = frozen_reference(reference)
         self.candidates = {row["name"]: normalized_candidate(row) for row in candidates}
         if len(self.candidates) != len(candidates):
             raise ValueError("Duplicate candidate names")
@@ -103,7 +117,7 @@ class CandidateStore:
             return
         metadata = json.loads((run / "run-metadata.json").read_text())
         candidate = next(value for value in metadata["candidates"] if value["name"] == name)
-        actual = {**{key: metadata[key] for key in REFERENCE_FIELDS}, "candidate": normalized_candidate(candidate)}
+        actual = {**frozen_reference(metadata), "candidate": normalized_candidate(candidate)}
         if actual != self.contract(name):
             raise ValueError(f"Generation contract differs from frozen reference: {name}")
         panel = json.loads((run / "panel.json").read_text())
