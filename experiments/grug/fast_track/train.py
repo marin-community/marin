@@ -76,6 +76,7 @@ from experiments.grug.fast_track.model import (
     GradProbeSite,
     GrugModelConfig,
     LayerSkip,
+    NullController,
     Transformer,
     forward_flops_per_token,
 )
@@ -1049,14 +1050,21 @@ def _make_train_step(
 def _null_bias_step(
     cfg: GrugModelConfig, pending: jax.Array, real_betas: jax.Array, metrics: dict[str, jax.Array]
 ) -> jax.Array:
-    """Next pending QB betas with null columns: this step's real-expert betas, then the null controller
-    ``b_null += null_bias_rate * (mean real slots - null_target_real_experts)`` per layer, in float32 (the null
-    columns hold ``-b_null``)."""
-    real_slots = jnp.stack(
-        [metrics[f"train/aux/{OUTSTAT_PREFIX}moe_active_k_L{i}"] for i in range(cfg.num_layers)]
-    ).astype(jnp.float32)
-    error = real_slots - cfg.null_target_real_experts
-    null_columns = pending[:, cfg.num_experts :] - cfg.null_bias_rate * error[:, None]
+    """Next pending QB betas with null columns: this step's real-expert betas, then the null controller's bias per
+    layer in float32 (the null columns hold ``-b_null``): ``NullController.INTEGRAL`` steps
+    ``b_null += null_bias_rate * (mean real slots - null_target_real_experts)``, ``NullController.QB`` takes this
+    step's solved ``null_qb_bias``."""
+
+    def per_layer(name: str) -> jax.Array:
+        return jnp.stack([metrics[f"train/aux/{OUTSTAT_PREFIX}{name}_L{i}"] for i in range(cfg.num_layers)]).astype(
+            jnp.float32
+        )
+
+    if cfg.null_controller == NullController.QB:
+        null_columns = jnp.broadcast_to(-per_layer("null_qb_bias")[:, None], pending[:, cfg.num_experts :].shape)
+    else:
+        error = per_layer("moe_active_k") - cfg.null_target_real_experts
+        null_columns = pending[:, cfg.num_experts :] - cfg.null_bias_rate * error[:, None]
     return jnp.concatenate([real_betas[:, : cfg.num_experts], null_columns], axis=-1)
 
 

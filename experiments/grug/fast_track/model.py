@@ -174,6 +174,16 @@ class NullAux(StrEnum):
     """``exp(-loss_t)``, the model's probability of the target."""
 
 
+class NullController(StrEnum):
+    """How the shared per-layer null-expert selection bias tracks ``null_target_real_experts`` (applied next step)."""
+
+    INTEGRAL = "integral"
+    """LongCat-style: ``b += null_bias_rate * (mean real slots - target)``."""
+    QB = "qb"
+    """Solved each step from the routing margins, like QB's thresholds: the bias at which this batch's mean real
+    slots per token equals the target (``null_qb_bias``)."""
+
+
 class ValueEmbeds(StrEnum):
     """Value embeddings on the MLA layers: ``v = lambda1 * v + w * value_embed[token]``."""
 
@@ -472,8 +482,9 @@ class GrugModelConfig:
     null_target_real_experts: float = 8.0
     """With ``num_null_experts``: the null-bias controller's target mean real (non-null) slots per token per layer.
     Also sizes the ragged EP transport buffers (``capacity_factor`` times this many slots per token)."""
+    null_controller: NullController = NullController.INTEGRAL
     null_bias_rate: float = 0.05
-    """With ``num_null_experts``: each step ``b_null += null_bias_rate * (mean real slots - target)`` per layer."""
+    """``NullController.INTEGRAL``: each step ``b_null += null_bias_rate * (mean real slots - target)`` per layer."""
     null_aux: NullAux = NullAux.NONE
     null_aux_weight: float = 0.0
     """``lambda`` of the ``null_aux`` term (per MoE layer)."""
@@ -501,6 +512,8 @@ class GrugModelConfig:
             raise ValueError(f"num_null_experts must be >= 0, got {self.num_null_experts}")
         if self.num_null_experts and not 0 < self.null_target_real_experts <= self.num_experts_per_token:
             raise ValueError("null_target_real_experts must be in (0, num_experts_per_token]")
+        if self.null_controller == NullController.QB and self.num_null_experts < self.num_experts_per_token:
+            raise ValueError("null_controller=qb needs num_null_experts >= num_experts_per_token")
         if (self.null_aux != NullAux.NONE) != (self.null_aux_weight > 0):
             raise ValueError("null_aux and a positive null_aux_weight go together")
         if self.null_aux != NullAux.NONE and not self.num_null_experts:
@@ -1291,6 +1304,14 @@ class MoEMLP(eqx.Module):
             # The trainer steps the null bias (``null_bias_rate``) in float32 from this layer's mean real slots.
             null_bias = jax.lax.stop_gradient(self.router_bias[num_experts])
             router_stats[f"{OUTSTAT_PREFIX}null_bias"] = null_bias
+            if self.cfg.null_controller == NullController.QB:
+                router_stats[f"{OUTSTAT_PREFIX}null_qb_bias"] = null_qb_bias(
+                    biased_logits[:, :num_experts],
+                    router_logits[:, num_experts:],
+                    k,
+                    self.cfg.null_target_real_experts,
+                    mesh,
+                )
             router_stats[f"{OUTSTAT_PREFIX}null_real_slots_std"] = jnp.std(real_slots)
             router_stats[f"{OUTSTAT_PREFIX}null_real_weight"] = jax.lax.stop_gradient(jnp.mean(real_weight))
             router_stats[NULL_REAL_WEIGHT] = reshard(
@@ -1322,6 +1343,29 @@ class MoEMLP(eqx.Module):
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
         return routed, router_stats
+
+
+def null_qb_bias(
+    real_biased: Float[Array, "T E"],
+    null_logits: Float[Array, "T N"],
+    k: int,
+    target_real: float,
+    mesh: jax.sharding.AbstractMesh,
+) -> jax.Array:
+    """The shared null bias ``b`` at which the batch's mean real slots per token in the top-``k`` is ``target_real``.
+
+    With real biased logits sorted ``R_1 >= R_2 >= ...`` and null logits ``Z_1 >= Z_2 >= ...``, the ``i``-th real
+    expert is selected iff fewer than ``k - i + 1`` nulls beat it, i.e. ``R_i - Z_{k+1-i} > b``. So a token's real
+    slots are ``sum_i 1[m_i > b]`` over its ``k`` margins ``m_i = R_i - Z_{k+1-i}``, and ``b`` is the upper quantile at
+    rank ``T * target_real`` of the batch's ``T k`` margins: QB's sharded histogram quantile on one pooled column."""
+    top_real, _ = _small_top_k(real_biased, k)
+    top_null, _ = _small_top_k(null_logits, k)
+    margins = top_real - top_null[:, ::-1]
+    pooled = reshard(margins.reshape(-1, 1), P(_BATCH_AXES, None))
+    bias, _, _ = qb_beta_hist(
+        pooled, mesh, target_share=target_real / k, num_experts=1, n_bins=_QB_HIST_BINS, batch_axes=_BATCH_AXES
+    )
+    return bias[0]
 
 
 def _shared_experts_tail(
