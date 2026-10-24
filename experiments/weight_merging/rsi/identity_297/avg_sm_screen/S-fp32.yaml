@@ -1,0 +1,25 @@
+name: rsi297-S-fp32
+location: s3://marin-rno2a/tmp/ttl=14d/quick-serve-models/open-athena_Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02_50fe2f488aee7730bbccc721024b35229075602e-ed9c7f9b0a347fc0
+tokenizer: open-athena/Grug-67B-A2B-Antidoom-RLVR1-Step12-2026.10.02
+tokenizer_revision: 50fe2f488aee7730bbccc721024b35229075602e
+apply_chat_template: true
+resource_hint:
+  gpu:
+    H100: 8
+  memory: 512g
+serve:
+  reasoning_parser: grug
+  tensor_parallel_size: 1
+  data_parallel_size: 8
+  max_model_len: 73728
+  max_num_batched_tokens: 7168
+  max_num_seqs: 32
+  tool_call_parser: hermes
+  auto_overrides: false
+  hf_hub_disable_xet: true
+  vllm_extra_args:
+  - --enable-expert-parallel
+  - --model-loader-extra-config
+  - '{"distributed":true}'
+  - --dtype
+  - float32
