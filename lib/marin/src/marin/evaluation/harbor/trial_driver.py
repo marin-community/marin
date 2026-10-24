@@ -26,7 +26,11 @@ from harbor.agents.installed.acp_registry import (  # pyrefly: ignore[missing-im
 )
 from harbor.environments.base import BaseEnvironment  # pyrefly: ignore[missing-import]
 from harbor.environments.factory import _load_environment_class  # pyrefly: ignore[missing-import]
-from harbor.environments.iris import host_model_authentication, validate_iris_task  # pyrefly: ignore[missing-import]
+from harbor.environments.iris import (  # pyrefly: ignore[missing-import]
+    MODEL_RELAY_PORT,
+    host_model_authentication,
+    validate_iris_task,
+)
 from harbor.job import Job  # pyrefly: ignore[missing-import]  # installed by external driver
 from harbor.models.task.task import Task  # pyrefly: ignore[missing-import]
 from harbor.utils.env import resolve_env_vars, task_environment  # pyrefly: ignore[missing-import]
@@ -76,7 +80,7 @@ _IRIS_ENVIRONMENT_KWARGS = frozenset(
     }
 )
 _TASK_MODEL_ENVIRONMENT = {
-    "OPENAI_BASE_URL": "http://127.0.0.1:8787/v1",
+    "OPENAI_BASE_URL": f"http://127.0.0.1:{MODEL_RELAY_PORT}/v1",
     "OPENAI_API_KEY": "EMPTY",
 }
 

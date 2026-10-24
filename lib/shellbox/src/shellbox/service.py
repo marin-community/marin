@@ -7,7 +7,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Protocol
 
 from shellbox.machine import Command, ExitReason, Machine, MachineSpec, NetworkPolicy, UnsupportedMachineSpec
 
@@ -97,10 +96,6 @@ class ServiceGroup:
         if self._closing is None:
             self._closing = asyncio.ensure_future(self._close())
         await asyncio.shield(self._closing)
-
-
-class ServiceGroupFactory(Protocol):
-    async def create_group(self, spec: ServiceGroupSpec) -> ServiceGroup: ...
 
 
 async def wait_service_ready(machine: Machine, probe: ReadinessProbe) -> None:
