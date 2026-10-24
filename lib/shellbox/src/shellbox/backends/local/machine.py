@@ -19,11 +19,11 @@ import re
 import resource
 import shutil
 import signal
-import subprocess
 import sys
 import tarfile
 import tempfile
 from collections.abc import Awaitable, Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -156,15 +156,32 @@ def _copy(source: Path, target: Path) -> None:
 
 
 def _remove(path: Path) -> None:
-    """Remove a machine's directory, including the work directory that overlayfs leaves without permissions."""
+    """Remove a private tree after its guest processes have been reclaimed."""
+    try:
+        shutil.rmtree(path)
+    except PermissionError:
+        descriptor = os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            _unlock_directories(descriptor)
+        finally:
+            os.close(descriptor)
+        shutil.rmtree(path)
 
-    def unlock(_, failed: str, error: BaseException) -> None:
-        if not isinstance(error, PermissionError) or not os.path.isdir(failed):
-            raise error
-        os.chmod(failed, 0o700)
-        shutil.rmtree(failed)
 
-    shutil.rmtree(path, onexc=unlock)
+def _unlock_directories(descriptor: int) -> None:
+    # O_PATH opens even mode000 directories. The proc link refers to this pinned
+    # directory, so neither chmod nor traversal can follow a guest symlink out.
+    pinned = f"/proc/self/fd/{descriptor}"
+    os.chmod(pinned, 0o700)
+    with os.scandir(pinned) as entries:
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            child = os.open(entry.name, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=descriptor)
+            try:
+                _unlock_directories(child)
+            finally:
+                os.close(child)
 
 
 def _overlaid_directories() -> tuple[str, ...]:
@@ -209,7 +226,6 @@ def _sandbox_argv(
     layers: Path | None,
     mounts: Iterable[Mount],
     network: NetworkPolicy,
-    account: pwd.struct_passwd | None,
 ) -> list[str]:
     """The bwrap invocation that runs a program over ``root`` with the system directories and ``mounts``.
 
@@ -220,9 +236,6 @@ def _sandbox_argv(
     if network == NetworkPolicy.DENY:
         argv.append("--unshare-net")
     argv += ["--new-session", "--die-with-parent", "--cap-drop", "ALL"]
-    if account is not None:
-        # setpriv uses these to switch to the account, and the switch clears them with every other capability.
-        argv += ["--cap-add", "CAP_SETUID", "--cap-add", "CAP_SETGID"]
     argv += ["--bind", str(root), "/"]
     overlaid = () if layers is None else _overlaid_directories()
     for path in SYSTEM_DIRECTORIES:
@@ -244,8 +257,6 @@ def _sandbox_argv(
     argv += ["--dev", "/dev", "--tmpfs", SHARED_MEMORY, "--proc", "/proc"]
     for mount in mounts:
         argv += ["--ro-bind", str(mount.host), str(mount.guest)]
-    if account is not None:
-        argv += ["setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--clear-groups", "--"]
     return argv
 
 
@@ -268,38 +279,33 @@ def _bwrap_candidates(bwrap: Path | None) -> tuple[Path, ...]:
 
 
 def _prepare_sandbox(bwrap: Path, system_directories: SystemDirectories) -> str | None:
-    """Build a sandbox with ``bwrap`` and run a command in it; why it cannot, or None when it can."""
-    root = Path(tempfile.mkdtemp(prefix="shellbox-bwrap-probe-"))
-    layers = None
-    try:
-        _prepare_root(root, None)
-        if system_directories == SystemDirectories.COPY_ON_WRITE:
-            layers = Path(tempfile.mkdtemp(prefix="shellbox-bwrap-probe-layers-"))
-            _prepare_layers(layers)
-        argv = _sandbox_argv(
-            bwrap,
+    """Return why namespace creation or command entry fails, or None when both work."""
+
+    async def probe() -> str | None:
+        root, layers = _machine_directories(None, copy_on_write=system_directories is SystemDirectories.COPY_ON_WRITE)
+        machine = LocalMachine(
+            MachineSpec(HostImage(), workdir="/"),
+            bwrap=bwrap,
             root=root,
             layers=layers,
             mounts=(),
-            network=NetworkPolicy.DENY,
-            account=None,
+            environment=CONTROL_ENVIRONMENT,
         )
         try:
-            probe = subprocess.run(
-                [*argv, "/bin/sh", "-c", "exit 0"],
-                capture_output=True,
-                text=True,
-                timeout=PROBE_TIMEOUT,
-                check=False,
-                env=CONTROL_ENVIRONMENT,
-            )
-        except OSError as error:
-            return str(error)
-    finally:
-        _remove(root)
-        if layers is not None:
-            _remove(layers)
-    return None if probe.returncode == 0 else probe.stderr.strip() or f"exit status {probe.returncode}"
+            async with asyncio.timeout(PROBE_TIMEOUT):
+                await machine._start_keeper()
+                result = await machine._control("exit 0", PurePosixPath("/"))
+        except (OSError, RuntimeError, TimeoutError) as error:
+            return str(error) or type(error).__name__
+        finally:
+            await machine.close()
+        if result.exit_code == 0:
+            return None
+        return result.stderr.decode(errors="replace").strip() or f"exit status {result.exit_code}"
+
+    # Factory construction is synchronous and may run inside an existing event loop.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, probe()).result()
 
 
 def _working_bwrap(candidates: Iterable[Path], system_directories: SystemDirectories) -> Path:
@@ -450,7 +456,6 @@ class LocalMachine:
                 layers=self.layers,
                 mounts=self.mounts,
                 network=self.spec.network if peer is None else NetworkPolicy.ALLOW,
-                account=None,
             )
         else:
             arguments = [
@@ -463,6 +468,7 @@ class LocalMachine:
                 "--unshare-ipc",
                 "--unshare-pid",
                 "--unshare-uts",
+                "--unshare-cgroup-try",
                 "--new-session",
                 "--die-with-parent",
                 "--cap-drop",
@@ -572,7 +578,7 @@ class LocalMachine:
             # this namespace and root even if the kernel later reuses its PID.
             descriptors = []
             try:
-                for namespace in ("user", "net", "ipc", "uts", "mnt", "pid"):
+                for namespace in ("user", "net", "ipc", "uts", "mnt", "pid", "cgroup"):
                     descriptors.append(os.open(f"/proc/{pid}/ns/{namespace}", os.O_RDONLY | os.O_CLOEXEC))
                     expected_inode = json.loads(payload).get(f"{namespace}-namespace")
                     if expected_inode is not None and os.fstat(descriptors[-1]).st_ino != expected_inode:
@@ -655,12 +661,19 @@ class LocalMachine:
             raise ValueError("Sandbox arguments cannot contain NUL bytes")
         # Anonymous output files let a successful foreground command finish even
         # when its background services keep stdout open. RLIMIT_FSIZE bounds writers.
+        status_read, status_write = os.pipe()
         with (
+            os.fdopen(status_read, "rb", buffering=0) as status,
+            os.fdopen(status_write, "wb", buffering=0) as status_writer,
             tempfile.TemporaryFile() as configuration,
             tempfile.TemporaryFile() as stdout_file,
             tempfile.TemporaryFile() as stderr_file,
             tempfile.TemporaryFile() as stdin_file,
         ):
+            config["status"] = status_write
+            # Reports are written before the launcher exits. A nonblocking read
+            # cannot be held open by a process that inherited another pipe end.
+            os.set_blocking(status_read, False)
             configuration.write(json.dumps(config).encode())
             configuration.seek(0)
             stdin_file.write(command.stdin)
@@ -674,7 +687,7 @@ class LocalMachine:
                     "-c",
                     LAUNCH_SOURCE,
                     str(configuration.fileno()),
-                    pass_fds=(configuration.fileno(), self._root_fd, *dict.fromkeys(self._namespaces)),
+                    pass_fds=(configuration.fileno(), status_write, self._root_fd, *dict.fromkeys(self._namespaces)),
                     env=CONTROL_ENVIRONMENT,
                     stdin=stdin_file,
                     stdout=stdout_file,
@@ -687,6 +700,7 @@ class LocalMachine:
                 async with asyncio.timeout(command.timeout):
                     process = await asyncio.shield(acquisition)
                     self._commands.add(process)
+                    status_writer.close()
                     await process.wait()
             except BaseException as interruption:
                 try:
@@ -697,6 +711,7 @@ class LocalMachine:
                         process = await asyncio.shield(acquisition)
                         self._commands.add(process)
                 finally:
+                    status_writer.close()
                     if not self._closed:
                         await asyncio.shield(self.close())
                 await process.wait()
@@ -707,6 +722,10 @@ class LocalMachine:
                 if process is not None:
                     self._commands.discard(process)
             self._check_open()
+            if error := status.read(launch.SETUP_ERROR_LIMIT_BYTES):
+                raise RuntimeError(
+                    f"Cannot start the command in the machine's sandbox: {error.decode(errors='replace')}"
+                )
             stdout_file.seek(0)
             stderr_file.seek(0)
             stdout = stdout_file.read(command.output_limit_bytes + 1)
@@ -947,9 +966,9 @@ class LocalMachineFactory:
                 entrypoint = (
                     service.entrypoint if service.entrypoint is not None else (() if image is None else image.entrypoint)
                 )
-                arguments = (
-                    service.arguments if service.arguments is not None else (() if image is None else image.arguments)
-                )
+                arguments = service.arguments
+                if arguments is None:
+                    arguments = image.arguments if service.entrypoint is None and image is not None else ()
                 if not entrypoint and not arguments:
                     raise UnsupportedMachineSpec(f"Service {service.name} has no startup command")
                 monitor = asyncio.create_task(member.run(Command((*entrypoint, *arguments))))

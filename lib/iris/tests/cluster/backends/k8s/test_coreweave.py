@@ -1168,6 +1168,27 @@ def test_start_controller_creates_one_network_policy_per_egress_policy(service_c
         _DNS_RULE,
         {"to": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": blocked}}]},
     ]
+    assert _egress_policy_rules(k8s, "loopback") == []
+
+    provider.stop_controller(cluster_config)
+    assert _egress_policy_rules(k8s, "loopback") == []
+
+
+def test_controller_network_policy_permissions_cannot_create_or_relax_isolation():
+    role = cluster_role_manifest("iris-controller-iris")
+    rules = [
+        rule
+        for rule in role["rules"]
+        if set(rule["apiGroups"]) & {"networking.k8s.io", "*"} and set(rule["resources"]) & {"networkpolicies", "*"}
+    ]
+    assert rules == [
+        {
+            "apiGroups": ["networking.k8s.io"],
+            "resources": ["networkpolicies"],
+            "resourceNames": ["iris-egress-loopback"],
+            "verbs": ["get"],
+        }
+    ]
 
 
 @pytest.mark.parametrize("change", ["health_config", "literal_endpoint", "injected_credential"])

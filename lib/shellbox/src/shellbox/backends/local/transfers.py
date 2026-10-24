@@ -18,7 +18,12 @@ DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 def _guest_member(member: tarfile.TarInfo, path: str) -> tarfile.TarInfo:
     if member.islnk() or member.isdev():
         return tarfile.data_filter(member, path)
-    return tarfile.tar_filter(member, path)
+    filtered = tarfile.tar_filter(member, path)
+    if filtered.isdir() and filtered.mode is not None:
+        # Keep the staging tree traversable and writable for repeated merges,
+        # without granting group or other write access from guest metadata.
+        filtered = filtered.replace(mode=(filtered.mode & 0o755) | 0o700, deep=False)
+    return filtered
 
 
 def _metadata(source: Path, descriptor: int) -> None:
@@ -36,15 +41,19 @@ def _merge(source: Path, parent: int, name: str) -> None:
             destination = None
         if destination is not None and stat.S_ISLNK(destination.st_mode):
             os.unlink(name, dir_fd=parent)
+        created = False
         try:
-            os.mkdir(name, dir_fd=parent)
+            os.mkdir(name, mode=0o700, dir_fd=parent)
         except FileExistsError:
             pass
+        else:
+            created = True
         descriptor = os.open(name, DIRECTORY_FLAGS, dir_fd=parent)
         try:
             for entry in source.iterdir():
                 _merge(entry, descriptor, entry.name)
-            _metadata(source, descriptor)
+            if created:
+                _metadata(source, descriptor)
         finally:
             os.close(descriptor)
         return
@@ -109,6 +118,8 @@ def unpack_local_archive(stream: bytes, target: Path) -> None:
     The destination and its ancestors must not be symlinks. Interior symlinks
     remain links when downloaded, and later downloads replace rather than follow
     them. Existing unrelated destination files remain in place.
+    Existing directory modes stay unchanged; new directories retain owner access
+    and cannot acquire group or other write permissions from guest metadata.
     """
     with tempfile.TemporaryDirectory() as staging, tarfile.open(fileobj=io.BytesIO(stream)) as archive:
         members = archive.getmembers()
