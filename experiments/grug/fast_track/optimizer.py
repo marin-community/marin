@@ -287,6 +287,9 @@ ATTN_RES_QUERY_LR_SCALE = 0.1
 """Adam LR of the AttnRes pseudo-queries as a multiple of ``adam_lr``."""
 KDA_BETA_LR_MULT = 2.0
 """MuonH LR multiple of the ``kda_beta`` group (the KDA write-strength projection)."""
+ACT_POWER_LR_MULT = 0.1
+"""Adam LR of the learnable ReLU exponents (``mlp_act_power``, the ``act_power`` group) as a multiple of
+``adam_lr``; no weight decay."""
 _ADAM_LEAVES = re.compile(r"(?:^|\.)(value_embed|ve_lambda|ve_gate|qk_mult)$")
 
 
@@ -411,6 +414,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
                 "embed2": adam_at(adam_lr),
                 "router": adam_at(adam_lr * self.router_lr_mult, decay=True),
                 "embed": embed_at(adam_lr),
+                "act_power": adam_at(adam_lr * ACT_POWER_LR_MULT),
             }
             return optax.multi_transform(
                 {name: _named_scope_transform(f"opt_{name}", tx) for name, tx in transforms.items()}, self.create_mask
@@ -429,6 +433,8 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
         def mask_fn(param, path):
             path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
+            if path_lower.endswith("mlp_act_power"):
+                return "act_power"
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:
                 return "kda_beta_adam" if self.kda_beta_group == "adam" else self.kda_beta_group

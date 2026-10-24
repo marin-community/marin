@@ -69,11 +69,13 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
+    UNIT_STATS_PREFIX,
     DenseMLP,
     GradProbeSite,
     GrugModelConfig,
     LayerSkip,
     Transformer,
+    collect_unit_stats,
     forward_flops_per_token,
 )
 
@@ -226,6 +228,9 @@ class GrugTrainerConfig:
     token_dump_path: str | None = None
     # The token dump also records each token's loss with every token skipping these layers (``LayerSkip``).
     token_dump_skip_layers: tuple[int, ...] = ()
+    # After the last step, write per-unit activity counts of every MoE layer over held-out batches here
+    # (``write_unit_stats``).
+    unit_stats_path: str | None = None
     # With ``lm_head_grad_dump_every``: write the train batch's per-token lm_head input-gradient norms and token ids
     # to ``<lm_head_grad_dump_dir>/step-<step>.npz`` on the ``lm_head_grad_dump_due`` steps.
     lm_head_grad_dump_dir: str | None = None
@@ -418,8 +423,31 @@ def _to_dropless_local(
     return eqx.tree_at(stack_expert_mlps, model, dropless)
 
 
+def _mlp_act_power_leaves(model: Transformer) -> list[jax.Array]:
+    return [stack.stacked.mlp_act_power for stack in model.layer_stacks()]
+
+
 def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
-    return mp.cast_to_compute(model)
+    compute = mp.cast_to_compute(model)
+    if model.stacked_blocks.stacked.mlp_act_power is None:
+        return compute
+    # The ReLU exponents stay float32: bfloat16 would round a learned or scheduled exponent to 1/128 near 2.
+    return eqx.tree_at(_mlp_act_power_leaves, compute, _mlp_act_power_leaves(model))
+
+
+def scheduled_act_power(step: jax.Array, schedule: tuple[float, float], last_step: int) -> jax.Array:
+    """``mlp_act_power_schedule``'s exponent at ``step``: linear from ``start`` at step 0 to ``end`` at
+    ``last_step``."""
+    start, end = schedule
+    frac = jnp.clip(step.astype(jnp.float32) / max(last_step, 1), 0.0, 1.0)
+    return start + (end - start) * frac
+
+
+def _with_act_power(model: Transformer, power: jax.Array) -> Transformer:
+    """``model`` with every layer's ``mlp_act_power`` set to ``power``."""
+    return eqx.tree_at(
+        _mlp_act_power_leaves, model, [jnp.zeros_like(leaf) + power for leaf in _mlp_act_power_leaves(model)]
+    )
 
 
 def build_tagged_evaluator(
@@ -958,8 +986,12 @@ def _make_train_step(
     lm_head_grad_probe_site: GradProbeSite | None = None,
     lm_head_grad_clip: float | None = None,
     token_embed_stats: bool = False,
+    act_power_schedule: tuple[float, float] | None = None,
+    last_step: int = 0,
 ):
     """``extra_mlp_start_step``: the first step the ``extra_mlp_layers`` MLPs are on.
+    ``act_power_schedule`` (``mlp_act_power_schedule``) writes ``scheduled_act_power`` at the step (``last_step``
+    the final one) into the layers' ``mlp_act_power`` before the forward.
     ``lm_head_grad_probe_site`` adds the per-token lm_head input-gradient stats (``_lm_head_grad_metrics``),
     ``token_embed_stats`` the ``_token_embed_stats``.
     ``grad_accum_microbatches`` > 1 averages gradients over that many microbatches
@@ -981,6 +1013,8 @@ def _make_train_step(
         # host-side kernel launches that can cause SPMD sync issues).
         with jax.named_scope("qb_apply"):
             qb_params = _apply_qb_betas(state.params, state.pending_qb_betas)
+        if act_power_schedule is not None:
+            qb_params = _with_act_power(qb_params, scheduled_act_power(state.step, act_power_schedule, last_step))
         extra_active = state.step >= extra_mlp_start_step
 
         if grad_accum_microbatches > 1:
@@ -1474,6 +1508,10 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                 write_token_dump(
                     config, state, mesh, batch_schedule.batch_size_at_step(0), config.trainer.token_dump_path
                 )
+            if config.trainer.unit_stats_path is not None:
+                write_unit_stats(
+                    config, state, mesh, batch_schedule.batch_size_at_step(0), config.trainer.unit_stats_path
+                )
             if marker is not None and jax.process_index() == 0:
                 with fsspec.open(marker, "w") as f:
                     json.dump({"step": int(state.step), "final_loss": float(last_loss)}, f)
@@ -1542,6 +1580,66 @@ def _token_dump_step(mp: jmp.Policy, skip_layers: tuple[int, ...]):
     return run
 
 
+UNIT_STATS_BATCHES = 4
+
+
+def _unit_stats_step(mp: jmp.Policy):
+    """Jitted ``(params, qb_betas, tokens, segment_ids) -> dict`` of the per-layer unit activity counts
+    (``collect_unit_stats``), keyed without ``UNIT_STATS_PREFIX``; trace it under ``collect_unit_stats``."""
+
+    @jax.jit
+    def run(params: Transformer, qb_betas: jax.Array, tokens: jax.Array, segment_ids: jax.Array):
+        model = _cast_to_compute(mp, _apply_qb_betas(params, qb_betas))
+        _, metrics = model(tokens, mask=AttentionMask.causal().with_segment_ids(segment_ids))
+        return {
+            k.removeprefix(UNIT_STATS_PREFIX): reshard(v, P())
+            for k, v in metrics.items()
+            if k.startswith(UNIT_STATS_PREFIX)
+        }
+
+    return run
+
+
+def write_unit_stats(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, batch_size: int, path: str) -> None:
+    """Sum the MoE layers' per-unit activity counts (``model._unit_stats``) over ``UNIT_STATS_BATCHES`` held-out
+    batches, write them (``[L, ...]`` per key) to ``path`` and log each layer's active-unit fractions."""
+    num_sequences = UNIT_STATS_BATCHES * batch_size
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        tokens, segments = pool.submit(
+            _held_out_sequences, config.data, seq_len=config.model.max_seq_len, num_sequences=num_sequences
+        ).result()
+    sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
+    step = _unit_stats_step(config.trainer.trainer.mp)
+    totals: dict[str, np.ndarray] = {}
+    with collect_unit_stats():
+        for start in range(0, num_sequences, batch_size):
+            batch = [
+                jax.make_array_from_callback(x.shape, sharding, lambda index, x=x: x[index])
+                for x in (tokens[start : start + batch_size], segments[start : start + batch_size])
+            ]
+            # Replicated outputs: every process holds the whole sums.
+            for k, v in step(state.params, state.pending_qb_betas, *batch).items():
+                local = np.asarray(v.addressable_data(0))
+                totals[k] = totals.get(k, 0) + local.astype(np.float64 if k.endswith("mass") else np.int64)
+    summary = {}
+    for site in ("routed", "shared"):
+        if f"{site}_active" not in totals:
+            continue
+        active = totals[f"{site}_active"].reshape(totals[f"{site}_active"].shape[0], -1).sum(-1)
+        units = totals[f"{site}_active"].shape[-1]
+        rows = totals[f"{site}_rows"].reshape(totals[f"{site}_rows"].shape[0], -1).sum(-1)
+        for layer, frac in enumerate(active / (rows * units)):
+            summary[f"unit_stats/{site}_active_frac_L{layer}"] = float(frac)
+    levanter.tracker.log(summary, step=int(state.step))
+    if jax.process_index() != 0:
+        return
+    buffer = io.BytesIO()
+    np.savez(buffer, step=np.asarray(int(state.step)), num_sequences=np.asarray(num_sequences), **totals)
+    with fsspec.open(path, "wb") as f:
+        f.write(buffer.getvalue())
+    logger.info("Wrote the unit stats to %s: %s", path, summary)
+
+
 def write_token_dump(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, batch_size: int, path: str) -> None:
     """Run held-out batches and write ``tokens``, ``segment_ids``, ``next_token_loss`` ``[N, S]`` (the loss of
     predicting token s+1 at s), and with ``token_dump_skip_layers`` ``skipped_loss``."""
@@ -1597,6 +1695,12 @@ def _build_train_step(config: GrugRunConfig, optimizer):
         lm_head_grad_probe_site=config.model.lm_head_grad_probe_site if config.model.lm_head_grad_probe else None,
         lm_head_grad_clip=config.model.lm_head_grad_clip,
         token_embed_stats=config.model.token_embed_stats,
+        act_power_schedule=(
+            (config.model.mlp_act_power_schedule[0], config.model.mlp_act_power_schedule[1])
+            if config.model.mlp_act_power_schedule
+            else None
+        ),
+        last_step=trainer.num_train_steps - 1,
     )
 
 
