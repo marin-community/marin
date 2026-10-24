@@ -135,6 +135,7 @@ async def _model_turn(
     max_prompt_length: int | None,
     chat_template_kwargs: dict[str, Any],
     session_id: str,
+    prompt_group_id: str,
 ) -> ModelTurn:
     """Convert an inference response to the common exact-token record."""
     options = dict(request.options)
@@ -159,6 +160,7 @@ async def _model_turn(
                 model_input = InferenceEngineInput(
                     prompt_token_ids=[prompt_ids],
                     session_ids=[session_id],
+                    prompt_group_ids=[prompt_group_id],
                     sampling_params=raw_sampling,
                 )
             else:
@@ -167,6 +169,7 @@ async def _model_turn(
                     chat_completion_params=[options],
                     chat_continuations=[continuation],
                     session_ids=[session_id],
+                    prompt_group_ids=[prompt_group_id],
                     sampling_params=sampling_params,
                     max_context_length=max_context_length,
                     max_prompt_length=max_prompt_length,
@@ -471,6 +474,7 @@ class TaskRolloutWorker:
                     max_prompt_length=max_input_length,
                     chat_template_kwargs=self.chat_template_kwargs,
                     session_id=session_id,
+                    prompt_group_id=trajectory_ids[index].instance_id if trajectory_ids is not None else session_id,
                 )
 
             engine = engines[index]

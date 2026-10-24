@@ -211,7 +211,12 @@ class DirectModelClient:
         return ModelClientOutput(**output, token_provenance=TokenProvenance.ENGINE)
 
     async def _generate_assistant_prefix(
-        self, request: InferenceEngineInput, messages: list[dict[str, Any]], options: dict[str, Any], session_id: str
+        self,
+        request: InferenceEngineInput,
+        messages: list[dict[str, Any]],
+        options: dict[str, Any],
+        session_id: str,
+        prompt_group_id: str,
     ) -> _ChatResult:
         prompt_ids = assistant_prefix_token_ids(self._client.tokenizer, messages, options)
         sampling = dict(request.get("sampling_params") or {})
@@ -231,6 +236,7 @@ class DirectModelClient:
                 "prompts": None,
                 "prompt_token_ids": [prompt_ids],
                 "session_ids": [session_id],
+                "prompt_group_ids": [prompt_group_id],
                 "sampling_params": sampling,
             }
         )
@@ -281,15 +287,20 @@ class DirectModelClient:
         continuations = request.get("chat_continuations") or [None] * len(prompts)
         if len(continuations) != len(prompts):
             raise ValueError("chat_continuations and prompts must have the same batch size")
+        prompt_group_ids = request.get("prompt_group_ids", session_ids)
+        if len(prompt_group_ids) != len(prompts):
+            raise ValueError("prompt_group_ids and prompts must have the same batch size")
         sampling_params = dict(request.get("sampling_params") or {})
         requested_top_k = sampling_params.get("logprobs")
         requested_top_k = requested_top_k if isinstance(requested_top_k, int) and requested_top_k > 0 else None
 
-        async def generate_one(messages, row_options, session_id, continuation):
+        async def generate_one(messages, row_options, session_id, prompt_group_id, continuation):
             if row_options.get("extra_body", {}).get("continue_final_message") is True:
                 if continuation is not None:
                     raise ValueError("An initial assistant prefix cannot reuse a sampled chat continuation")
-                return await self._generate_assistant_prefix(request, messages, row_options, session_id)
+                return await self._generate_assistant_prefix(
+                    request, messages, row_options, session_id, prompt_group_id
+                )
             chat_options = self._chat_options(row_options, sampling_params)
             tokenize_options = {key: value for key, value in chat_options.items() if key in CHAT_TOKENIZE_FIELDS}
             render_request = {
@@ -316,7 +327,8 @@ class DirectModelClient:
             body = {
                 "model": self._client.model_name,
                 "messages": messages,
-                "session_id": session_id,
+                # The chat route places a request by this key; one prompt group shares an engine.
+                "session_id": prompt_group_id,
                 **{key: value for key, value in sampling_params.items() if key not in _CHAT_SAMPLING_EXCLUSIONS},
                 **chat_options,
                 "include_stop_str_in_output": True,
@@ -407,8 +419,10 @@ class DirectModelClient:
 
         results = await asyncio.gather(
             *(
-                generate_one(messages, row_options, session_id, continuation)
-                for messages, row_options, session_id, continuation in zip(prompts, options, session_ids, continuations)
+                generate_one(messages, row_options, session_id, prompt_group_id, continuation)
+                for messages, row_options, session_id, prompt_group_id, continuation in zip(
+                    prompts, options, session_ids, prompt_group_ids, continuations
+                )
             )
         )
         return _assemble_chat_results(results)
