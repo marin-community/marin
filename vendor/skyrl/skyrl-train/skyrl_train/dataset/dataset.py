@@ -5,6 +5,9 @@ from collections.abc import Mapping
 from typing import List
 from transformers import PreTrainedTokenizerBase
 
+# The top-level column naming a row's teacher route, read by domain-weighted sampling.
+ROUTE_COLUMN = "teacher_route"
+
 
 def read_prompt_files(sources: list[str]) -> datasets.Dataset:
     """Load local parquet/JSON files or explicitly selected Hugging Face splits."""
@@ -96,6 +99,34 @@ class PromptDataset:
 
     def __len__(self):
         return len(self.dataframe)
+
+
+def prompt_token_ids(tokenizer: PreTrainedTokenizerBase, prompt) -> list[int]:
+    """Apply the chat template with a generation prompt, normalizing Transformers 5 returns."""
+    encoded = tokenizer.apply_chat_template(prompt, add_generation_prompt=True)
+    if isinstance(encoded, Mapping):
+        encoded = encoded.get("input_ids")
+    if hasattr(encoded, "tolist"):
+        encoded = encoded.tolist()
+    if isinstance(encoded, list) and len(encoded) == 1 and isinstance(encoded[0], list):
+        encoded = encoded[0]
+    if not isinstance(encoded, list):
+        raise TypeError(f"tokenizer chat template returned unsupported token IDs: {type(encoded).__name__}")
+    return [int(token) for token in encoded]
+
+
+def completion_token_ids(
+    tokenizer: PreTrainedTokenizerBase, completion: str, *, field: str, max_generate_length: int
+) -> list[int]:
+    """Tokenize one completion, failing loudly when it exceeds the response cap."""
+    ids = [int(token) for token in tokenizer(completion, add_special_tokens=False)["input_ids"]]
+    if not ids:
+        raise ValueError(f"{field} completion tokenized to zero tokens")
+    if len(ids) > max_generate_length:
+        raise ValueError(
+            f"{field} completion needs {len(ids)} tokens over its {max_generate_length}-token response cap"
+        )
+    return ids
 
 
 def _prompt_token_count(tokenizer: PreTrainedTokenizerBase, prompt, **template_options) -> int:

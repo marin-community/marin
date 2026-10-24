@@ -8,6 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Mapping
 
+from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from omegaconf.errors import OmegaConfBaseException
 
@@ -17,12 +18,16 @@ from marinskyrl.distillation import (
     compile_distillation_plan_from_config,
 )
 from skyrl_train.config.ftpo import validate_ftpo
+from skyrl_train.config.training_budget import RESPONSE_CAPS_KEY, ResponseCaps, training_budget
 from skyrl_train.dynamic_sampling import DynamicSamplingType
 
 from marinskyrl.runtime_options import (
+    FIXED_COMPLETION_ENV_CLASS,
     PREFERENCE_PAIR_ENV_CLASS,
     AdvantageEstimator,
+    FixedCompletionFormat,
     PolicyLossType,
+    SamplingKind,
 )
 
 
@@ -280,9 +285,74 @@ def validate_dpo(cfg: DictConfig) -> None:
         )
 
 
+def validate_fixed_completions(cfg: DictConfig) -> None:
+    """Reject fixed-completion configurations that would silently change the matched SFT budget."""
+    try:
+        FixedCompletionFormat(cfg.data.fixed_completion_format)
+    except ValueError as error:
+        raise ValueError(f"invalid data.fixed_completion_format: {error}") from error
+    algorithm = cfg.trainer.algorithm
+    if algorithm.policy_loss_type != PolicyLossType.SFT:
+        raise ValueError(
+            f"fixed-completion training requires policy_loss_type=sft (the static runner has no rollouts); "
+            f"got {algorithm.policy_loss_type}"
+        )
+    if algorithm.advantage_estimator != AdvantageEstimator.UNIFORM:
+        raise ValueError("fixed-completion sft ignores advantages; use advantage_estimator=uniform")
+    if LossReduction(algorithm.loss_reduction) is not LossReduction.TOKEN_MEAN:
+        raise ValueError("fixed-completion sft trains the mean per-token NLL; use loss_reduction=token_mean")
+    if cfg.generator.n_samples_per_prompt != 1:
+        raise ValueError(
+            "fixed-completion rows are complete sequences; sequences per step is train_batch_size, "
+            "so generator.n_samples_per_prompt must be 1"
+        )
+    if cfg.trainer.use_sample_packing:
+        raise ValueError("fixed-completion training requires use_sample_packing=false; packing is off for every method")
+    if cfg.trainer.step_wise_training:
+        raise ValueError("fixed-completion rows are single complete sequences; step-wise training is not supported")
+    if cfg.trainer.trajectory_selector.type is not None:
+        raise ValueError("fixed-completion rewards are inert; unset trainer.trajectory_selector")
+    kind = cfg.data.sampling.kind
+    if kind is not None and SamplingKind(kind) is not SamplingKind.DOMAIN_WEIGHTED:
+        raise ValueError(
+            "fixed-completion rewards are inert, so reward-adaptive orders cannot run; use seeded passes "
+            f"(data.sampling.kind=null) or domain-weighted, got {kind}"
+        )
+    if cfg.trainer.rollout_buffer.max_staleness_steps != 0:
+        raise ValueError(
+            "fixed-completion training requires rollout_buffer.max_staleness_steps=0 so each batch is one "
+            "train_batch_size window of the prompt order, keeping the domain-weighted route mixture exact"
+        )
+    if cfg.trainer.placement.colocate_all:
+        raise ValueError(
+            "fixed-completion training launches no inference engines; use trainer.placement.colocate_all=false"
+        )
+
+
+def validate_response_caps(cfg: DictConfig, caps: ResponseCaps) -> None:
+    """Reject per-task response caps that a consumer of the global cap would silently ignore."""
+    if not caps.by_data_source or str(cfg.environment.env_class) == FIXED_COMPLETION_ENV_CLASS:
+        return
+    if cfg.generator.trajectory_reward_shaping.enabled:
+        raise ValueError(
+            f"generator.{RESPONSE_CAPS_KEY} is unsupported with trajectory_reward_shaping, whose overlong "
+            "and truncation terms read the single generator.sampling_params.max_generate_length"
+        )
+    if cfg.get("terminal_bench_config") is not None:
+        raise ValueError(
+            f"generator.{RESPONSE_CAPS_KEY} is unsupported with Harbor tasks, whose truncation shaping and "
+            "installed agents read the single generator.sampling_params.max_generate_length"
+        )
+
+
 def validate_objective(cfg: DictConfig, *, loss_spec: LossSpec | None = None) -> None:
     """Reject objective settings that cannot affect the selected training rows correctly."""
     validate_ftpo(cfg)
+    budget = training_budget(cfg)
+    validate_response_caps(cfg, budget.response_caps)
+    logger.info("Training budget per optimizer step: {}", budget)
+    if str(cfg.environment.env_class) == FIXED_COMPLETION_ENV_CLASS:
+        validate_fixed_completions(cfg)
     if cfg.trainer.algorithm.policy_loss_type == PolicyLossType.DPO:
         validate_dpo(cfg)
     limit = cfg.trainer.policy.max_consecutive_nonfinite_steps
