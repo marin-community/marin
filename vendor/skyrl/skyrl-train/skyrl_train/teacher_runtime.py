@@ -14,6 +14,7 @@ from marinskyrl.distillation import (
     LocalInferenceTeacherSpec,
     OpenAICompatibleTeacherSpec,
     TeacherEvidenceKind,
+    TeacherModelSpec,
     TeacherPlacement,
     compile_distillation_plan_from_config,
     validate_distillation_runtime_support,
@@ -42,6 +43,16 @@ from skyrl_train.teacher_oracle import (
     TeacherOracleOwner,
 )
 from skyrl_train.tokenizer import create_tokenizer
+from marinskyrl.hf_model import staged_model_path
+from marinskyrl.resource_locator import is_cloud_uri
+
+
+def teacher_model_location(model: TeacherModelSpec) -> tuple[str, str | None]:
+    """Where a local-inference teacher loads from: a Hub repo at its revision, or the node-local
+    copy the launcher staged of an object-store export pinned by its manifest identity."""
+    if is_cloud_uri(model.path):
+        return staged_model_path(model.path, model.revision), None
+    return model.path, model.revision
 
 
 @dataclass(frozen=True)
@@ -104,9 +115,10 @@ def prepare_distillation_runtime(
             external_teachers.append(teacher)
             continue
         assert isinstance(teacher, LocalInferenceTeacherSpec)
+        model_path, model_revision = teacher_model_location(teacher.model)
         teacher_tokenizer = create_tokenizer(
-            teacher.model.path,
-            revision=teacher.model.revision,
+            model_path,
+            revision=model_revision,
             disable_fast_tokenizer=bool(cfg.trainer.disable_fast_tokenizer),
         )
         teacher_fingerprint = tokenizer_vocabulary_fingerprint(teacher_tokenizer)
@@ -118,8 +130,8 @@ def prepare_distillation_runtime(
         student_window = cfg.generator.engine_init_kwargs.get("max_model_len")
         if student_window is not None:
             teacher_config = AutoConfig.from_pretrained(
-                teacher.model.path,
-                revision=teacher.model.revision,
+                model_path,
+                revision=model_revision,
                 trust_remote_code=True,
             )
             teacher_window = getattr(teacher_config, "max_position_embeddings", None)
@@ -153,14 +165,15 @@ async def _start_local_teacher_pool(
     max_logprobs = teacher.top_k if teacher.top_k is not None else 1
     engine_init_kwargs = dict(OmegaConf.to_container(cfg.generator.engine_init_kwargs, resolve=True))
     engine_init_kwargs.pop("openai_sampling_params", None)
-    engine_init_kwargs["revision"] = teacher.model.revision
+    model_path, model_revision = teacher_model_location(teacher.model)
+    engine_init_kwargs["revision"] = model_revision
     engine_init_kwargs["served_model_name"] = teacher.model.path
     if "max_model_len" in engine_init_kwargs:
         # Scoring prefills the whole student sequence, which may fill the student's window, and
         # generates one token, so the teacher needs one position beyond that window.
         engine_init_kwargs["max_model_len"] = int(engine_init_kwargs["max_model_len"]) + 1
     role = InferenceEngineRoleConfig(
-        pretrain=teacher.model.path,
+        pretrain=model_path,
         backend=teacher.backend,
         num_inference_engines=engine_count,
         tensor_parallel_size=resources.tensor_parallel_size,
