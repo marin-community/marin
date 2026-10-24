@@ -10,13 +10,36 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from experiments.weight_merging.playground import evaluation
 from experiments.weight_merging.playground.evaluation import DOCKER_IMAGE, score
+from experiments.weight_merging.playground.remote.grades import GradeStore
 
 
-def score_rows(rows: list[dict], items: dict[str, dict], *, parity: bool = False) -> tuple[list[dict], list[dict]]:
+def score_rows(
+    rows: list[dict], items: dict[str, dict], *, cache: GradeStore, parity: bool = False
+) -> tuple[list[dict], list[dict]]:
     pending = [row for row in rows if row["dataset"] == "mbpp" and (parity or row.get("pending_execution"))]
+
+    def durable_score(row):
+        item = items[row["item_id"]]
+        identity = cache.identity(row, item)
+        cached = cache.get(identity)
+        if cached is not None:
+            return cached
+        try:
+            grade = score(item, row["completion"])
+        except Exception as error:
+            error.add_note(f"Scoring observation: {row['candidate']} {row['item_id']} {row['mode']} seed={row['seed']}")
+            raise
+        cache.put(identity, grade)
+        return grade
+
     with ThreadPoolExecutor(max_workers=4) as pool:
-        grades = list(pool.map(lambda row: score(items[row["item_id"]], row["completion"]), pending))
+        grades = []
+        for index, grade in enumerate(pool.map(durable_score, pending), 1):
+            grades.append(grade)
+            if index % 50 == 0 or index == len(pending):
+                print(f"Durable code grades: {index}/{len(pending)}", flush=True)
     replacements, differences = {}, []
     for row, grade in zip(pending, grades, strict=True):
         key = row["candidate"], row["item_id"], row["mode"], row["seed"]
@@ -31,6 +54,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--cache", required=True)
     parser.add_argument("--parity-items", type=int, default=0)
     args = parser.parse_args()
     if args.output.exists():
@@ -44,7 +68,13 @@ def main():
         rows = [
             row for row in rows if row["dataset"] == "mbpp" and row["mode"] == "greedy" and row["item_id"] in selected
         ]
-    scored, differences = score_rows(rows, items, parity=bool(args.parity_items))
+    scoring_contract = {
+        "docker_image": DOCKER_IMAGE,
+        "evaluation_sha256": hashlib.sha256(Path(evaluation.__file__).read_bytes()).hexdigest(),
+        "rescore_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+    }
+    cache = GradeStore(args.cache, scoring_contract)
+    scored, differences = score_rows(rows, items, cache=cache, parity=bool(args.parity_items))
     args.output.mkdir(parents=True)
     for name in ("panel.json", "model-paths.json", "model-sources.json"):
         shutil.copy2(args.run / name, args.output / name)
@@ -54,6 +84,8 @@ def main():
     metadata = json.loads((args.run / "run-metadata.json").read_text())
     metadata["scoring"] = {
         "docker_image": DOCKER_IMAGE,
+        "cache": args.cache,
+        "scoring_contract": scoring_contract,
         "parity_items": args.parity_items,
         "rows": len(scored),
         "differences": differences,

@@ -90,7 +90,10 @@ def score(item: dict, completion: str) -> dict:
     try:
         container.communicate(code, timeout=10)
     except subprocess.TimeoutExpired:
-        subprocess.run(["docker", "rm", "--force", name], check=True, capture_output=True, timeout=15)
+        try:
+            subprocess.run(["docker", "rm", "--force", name], check=True, capture_output=True, text=True, timeout=15)
+        except subprocess.CalledProcessError as error:
+            raise RuntimeError(f"Docker timeout cleanup failed: {error.stderr.strip()}") from error
         container.communicate()
         return {"correct": False, "error": "timeout"}
     if container.returncode == 125:

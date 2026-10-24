@@ -29,7 +29,7 @@ PYCLI
 fi
 docker pull python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.rescore \
-  --run "$work_dir/run" --output "$work_dir/scored" --parity-items "${PLAYGROUND_PARITY_ITEMS:-0}"
+  --run "$work_dir/run" --output "$work_dir/scored" --cache "$PLAYGROUND_OUTPUT/item-grades" --parity-items "${PLAYGROUND_PARITY_ITEMS:-0}"
 if [ "${PLAYGROUND_PARITY_ITEMS:-0}" = 0 ]; then
   "$work_dir/io/bin/python" - "$work_dir/scored" <<'PYREPORT'
 import json

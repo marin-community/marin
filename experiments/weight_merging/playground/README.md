@@ -109,12 +109,22 @@ loss on the resume stack without optimizer updates; this publishes only
 `evaluation.json`. Compare it with the stored validation loss before gating
 when a hardware or library transition changes the observed loss.
 
-`iris_generate.sh` runs the 11-point Aristaeus curve on one H100 with fresh
-H100 baselines, cap8192/context12288 and a reload parity check every five
-candidates. Set `PLAYGROUND_PANEL` to the frozen panel object's S3 URL,
-`PLAYGROUND_RECIPES` to the norm job's recipes object, and
-`PLAYGROUND_OUTPUT` / `PLAYGROUND_REVISION`. Submit with
+`iris_generate.sh` runs each candidate separately on one H100, with
+cap8192/context12288 and a fresh-versus-reloaded 20-item parity check before
+each candidate. Set `PLAYGROUND_PANEL` to the frozen panel object's S3 URL,
+`PLAYGROUND_RECIPES` to the recipes object, `PLAYGROUND_REFERENCE` to the
+original run's metadata object, and `PLAYGROUND_OUTPUT` / `PLAYGROUND_REVISION`.
+The generation Python files must match the reference's recorded hashes exactly.
+For an old source bundle, copy only this shell launcher and the nested `remote/`
+sidecar into that bundle; retain the original top-level Python files. Submit with
 `--gpu H100x1 --cpu 8 --memory 32GB --disk 64GB --no-sync`.
+Set `PLAYGROUND_RECOVERED_RUN` to an immutable recovered run prefix to import
+complete candidates. `PLAYGROUND_PREFLIGHT=1` verifies the source and recovery
+on a CPU worker before allocating a GPU. Every candidate publishes raw outputs
+and provenance with read-back hashes, then writes `candidates/NAME/done.json`
+last. Retries validate those objects and skip completed candidates. The final
+combined run is under `aggregate/`; a partial aggregate contains only completed
+candidates. Keep one writer per phase prefix.
 Set `PLAYGROUND_FAMILY=far` to download the pinned Instruct/Coder/Math family
 for the small far-donor negative-control arm, using `recipes --arm far`.
 Set `PLAYGROUND_BASE_CONTROL=1` to run the base model's eight-shot GSM8K
@@ -142,7 +152,12 @@ to fill in the scores using the unchanged pinned Python image and resource
 limits. `PLAYGROUND_PARITY_ITEMS=20` checks the first20fixed MBPP IDs on all
 baseline greedy rows against their existing scores; any difference fails the
 job. Normal scoring writes a separate scored run, retaining the raw generation
-records. Keep large inputs/results in S3/GCS rather than local scratch.
+records. Each scored observation is saved immediately under
+`PLAYGROUND_OUTPUT/item-grades/items/`; retry with the same output prefix to
+reuse it. The cache key covers the completion, item and tests, decode identity,
+image and scorer source hashes. Direct `rescore` calls require `--cache PREFIX`.
+Infrastructure errors abort scoring and preserve completed grades. Keep large
+inputs/results in S3/GCS rather than local scratch.
 
 Use isolated CUDA environments because the repository defaults to CPU Torch.
 The tested GPU driver is 535.309.01; CUDA 12.1 is compatible with it.
