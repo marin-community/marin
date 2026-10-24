@@ -106,6 +106,10 @@ DAYTONA_RATE_LIMIT_HEADERS = frozenset(
 ) | {"retry-after"}
 
 
+class TaskSpecRejected(ValueError):
+    """The rollout engine refuses a task spec before any attempt starts."""
+
+
 class InstalledAgentWorker(Protocol):
     async def startup(self) -> None: ...
 
@@ -452,7 +456,10 @@ class TaskRolloutWorker:
             selected_harnesses.append(harnesses)
         engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
-            engine.check(lowered)
+            try:
+                engine.check(lowered)
+            except (ValueError, NotImplementedError) as error:
+                raise TaskSpecRejected(f"{type(error).__name__}: {error}") from error
         tasks = [item.task for item in lowered_tasks]
         sampling = get_sampling_params_for_backend(
             self.trajectory_runner_cfg.backend, self.trajectory_runner_cfg.sampling_params
@@ -602,13 +609,13 @@ class TaskRolloutWorker:
             return await write_trajectory_batch(task, writer, batch)
 
     async def _run_feed_task(self, task: RolloutTask, writer: RolloutWriter) -> int:
+        """Skip a row whose spec the engine refuses; let every other error fail training, as ``run_task`` does."""
         assert self.feed_root is not None
         uid = task.prompt["uid"]
         try:
             rollouts = await self.generate(task.request)
-        except Exception as error:
-            logger.opt(exception=error).warning("Feed row {} failed", uid)
-            await asyncio.to_thread(write_skipped, self.feed_root, uid, f"{type(error).__name__}: {error}")
+        except TaskSpecRejected as error:
+            await asyncio.to_thread(write_skipped, self.feed_root, uid, f"the engine refuses the task: {error}")
             await writer.skip_rollout(task.lease, task.prompt)
             return 0
         trajectory_ids = task.request.trajectory_ids
@@ -627,12 +634,7 @@ class TaskRolloutWorker:
             for index, rollout in enumerate(rollouts)
         ]
         await asyncio.to_thread(write_graded_group, self.feed_root, graded_group(uid, task.lease.policy_step, graded))
-        try:
-            batch = await self.training_batch(task.request, rollouts)
-        except Exception as error:
-            logger.opt(exception=error).warning("Feed row {} has no training batch; skipping it", uid)
-            await writer.skip_rollout(task.lease, task.prompt)
-            return 0
+        batch = await self.training_batch(task.request, rollouts)
         return await write_trajectory_batch(task, writer, batch)
 
 
