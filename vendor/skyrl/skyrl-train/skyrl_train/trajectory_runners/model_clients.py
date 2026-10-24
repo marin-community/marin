@@ -218,30 +218,33 @@ async def _render_chat_prompt(
     return messages, prompt_ids
 
 
-def _reasoning_marker_tokens(tokenizer: PreTrainedTokenizerBase) -> dict[int, bool]:
-    """Map each reasoning marker that is one token to whether it opens a span."""
+def _reasoning_marker_tokens(tokenizer: PreTrainedTokenizerBase) -> dict[int, str]:
+    """Map each reasoning marker that is one token to its text."""
     markers = {}
-    for opening, closing in REASONING_DELIMITERS:
-        for marker, opens in ((opening, True), (closing, False)):
+    for pair in REASONING_DELIMITERS:
+        for marker in pair:
             token_ids = tokenizer.encode(marker, add_special_tokens=False)
             if len(token_ids) == 1:
-                markers[token_ids[0]] = opens
+                markers[token_ids[0]] = marker
     return markers
 
 
-def _reasoning_violation_token(response_ids: Sequence[int], markers: Mapping[int, bool]) -> int | None:
+def _reasoning_violation_token(response_ids: Sequence[int], markers: Mapping[int, str]) -> int | None:
     """Index of the first second-opening or stray-closing marker, or the last token of an unclosed span.
 
     ``None`` when the one-token markers are well formed, i.e. the violation is in literal marker text.
     """
+    closing_marker = dict(REASONING_DELIMITERS)
     state = _SpanState.BEFORE
+    expected_close = None
     for index, token in enumerate(response_ids):
-        opens = markers.get(token)
-        if opens is None:
+        marker = markers.get(token)
+        if marker is None:
             continue
-        if opens and state == _SpanState.BEFORE:
+        if marker in closing_marker and state == _SpanState.BEFORE:
             state = _SpanState.INSIDE
-        elif not opens and state != _SpanState.AFTER:
+            expected_close = closing_marker[marker]
+        elif state == _SpanState.BEFORE or (state == _SpanState.INSIDE and marker == expected_close):
             # A closing marker first closes a span that the chat template opened in the prompt.
             state = _SpanState.AFTER
         else:

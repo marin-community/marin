@@ -25,7 +25,7 @@ from skyrl_train.trajectory_runners.model_clients import (
 from skyrl_train.trajectory_runners.trajectory_processing import concatenate_trajectory_batches
 from skyrl_train.trajectory_runners.trajectory_reward_shaping import apply_reasoning_span_penalties
 
-VOCABULARY = {1: "<|start_think|>", 2: "<|end_think|>", 3: "plan", 4: "call", 5: "<|eot_id|>"}
+VOCABULARY = {1: "<|start_think|>", 2: "<|end_think|>", 3: "plan", 4: "call", 5: "<|eot_id|>", 6: "</think>"}
 TOOL_CALL = {"id": "call-0", "type": "function", "function": {"name": "bash", "arguments": '{"command": "ls"}'}}
 
 
@@ -130,6 +130,7 @@ def test_an_earlier_malformed_turn_zeroes_a_correct_final_answer():
         ([1, 3, 2, 4, 1, 3, 5], 4),  # the second opening marker
         ([3, 2, 1, 3, 2, 5], 2),  # a second span after the one the template opened
         ([1, 3, 2, 3, 2, 4, 5], 4),  # the stray closing marker
+        ([1, 3, 6, 4, 2, 5], 2),  # a closing marker of another syntax
         ([1, 3, 5], 2),  # the end-of-turn token sampled where the closing marker belonged
     ],
 )
