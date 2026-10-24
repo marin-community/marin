@@ -502,7 +502,6 @@ def create_ray_wrapped_inference_engines(
     inference_engine_enable_sleep=False,
     max_num_batched_tokens=8192,
     max_num_seqs=1024,
-    tokenizer=None,
     backend="vllm",
     vllm_attention_backend: str | None = None,
     sleep_level=2,  # we only set to 1 for unit tests that do not explicitly sync weights or for LoRA

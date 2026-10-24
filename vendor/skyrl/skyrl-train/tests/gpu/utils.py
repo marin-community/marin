@@ -415,7 +415,6 @@ def init_inference_engines(
         inference_engine_enable_sleep=sleep,
         max_num_batched_tokens=8192,
         max_num_seqs=max_num_seqs,
-        tokenizer=tokenizer,
         backend=backend,
         sleep_level=sleep_level,
         enable_lora=enable_lora,

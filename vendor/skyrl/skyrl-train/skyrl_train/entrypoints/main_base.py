@@ -124,7 +124,6 @@ class EntrypointSupervisor:
 def create_ray_wrapped_inference_engines_from_config(
     cfg: DictConfig,
     colocate_pg,
-    tokenizer: PreTrainedTokenizerBase,
     *,
     entrypoint: str = STANDARD_TRAINING_ENTRYPOINT,
     operation: EntrypointOperation = EntrypointOperation.TRAIN,
@@ -219,7 +218,6 @@ def create_ray_wrapped_inference_engines_from_config(
         engine_init_kwargs["revision"] = model_revision
     engine_kwargs = inference_engine_kwargs_from_config(
         cfg,
-        tokenizer,
         role,
         engine_init_kwargs=engine_init_kwargs,
     )
@@ -325,7 +323,6 @@ class BasePPOExp:
             inference_engines = create_ray_wrapped_inference_engines_from_config(
                 self.cfg,
                 self.colocate_pg,
-                self.tokenizer,
                 entrypoint=entrypoint,
                 operation=operation,
             )
