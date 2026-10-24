@@ -9,7 +9,10 @@ without spinning up a full coordinator.
 
 import io
 import os
+import sys
+import threading
 from collections import OrderedDict
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 import cloudpickle
@@ -21,6 +24,7 @@ from fsspec.implementations.local import LocalFileSystem
 from iris.env_resources import TaskResources
 from rigging.filesystem.storage_path import StoragePath
 from zephyr import memory_budget
+from zephyr.parquet_scan import scan_parquet
 from zephyr.runners import _InProcessWorkerContext
 from zephyr.shard_keys import deterministic_hash
 from zephyr.shuffle import (
@@ -179,6 +183,74 @@ def test_scatter_reader_uses_virtual_hosted_coreweave_endpoint(monkeypatch):
             },
         )
     ]
+
+
+def test_merge_sorted_frames_reads_s3_with_native_credential_file(tmp_path, monkeypatch):
+    parquet = io.BytesIO()
+    pl.DataFrame({"key": [1, 3]}).write_parquet(parquet)
+    body = parquet.getvalue()
+
+    class S3Handler(BaseHTTPRequestHandler):
+        def do_HEAD(self):
+            self._respond()
+
+        def do_GET(self):
+            self._respond()
+
+        def _respond(self):
+            if (
+                "Credential=storage-id/" not in self.headers.get("Authorization", "")
+                or self.headers.get("x-amz-security-token") != "storage-token"
+            ):
+                self.send_error(403)
+                return
+            start, end = 0, len(body) - 1
+            if requested := self.headers.get("Range"):
+                first, last = requested.removeprefix("bytes=").split("-")
+                start, end = int(first), int(last) if last else end
+            self.send_response(206 if requested else 200)
+            self.send_header("Content-Length", str(end - start + 1))
+            self.send_header("ETag", '"parquet"')
+            self.send_header("Last-Modified", "Wed, 21 Oct 2015 07:28:00 GMT")
+            if requested:
+                self.send_header("Content-Range", f"bytes {start}-{end}/{len(body)}")
+            self.end_headers()
+            if self.command == "GET":
+                self.wfile.write(body[start : end + 1])
+
+        def log_message(self, *_args):
+            pass
+
+    credentials = tmp_path / "credentials"
+    credentials.write_text(
+        "[default]\naws_access_key_id=other-id\naws_secret_access_key=other-secret\n"
+        "[merge]\naws_access_key_id=storage-id\naws_secret_access_key=storage-secret\n"
+        "aws_session_token=storage-token\n"
+    )
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(credentials))
+    monkeypatch.setenv("AWS_PROFILE", "default")
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path / "secrets"))
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ENDPOINT_URL_S3"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setitem(fsspec.config.conf, "s3", {"profile": "merge"})
+    # The CPU worker does not require the optional boto3 SDK; exercise Rust's reader.
+    monkeypatch.setitem(sys.modules, "boto3", None)
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
+    monkeypatch.setenv("AWS_ALLOW_HTTP", "true")
+    with ThreadingHTTPServer(("127.0.0.1", 0), S3Handler) as server:
+        endpoint = f"http://127.0.0.1:{server.server_port}"
+        monkeypatch.setenv("AWS_ENDPOINT_URL", endpoint)
+        # A broken credential bridge must also stay on loopback, never query cloud IMDS.
+        monkeypatch.setenv("AWS_METADATA_ENDPOINT", endpoint)
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            frames = [scan_parquet("s3://test-bucket/chunk.parquet"), pl.DataFrame({"key": [2, 4]}).lazy()]
+            batches = _merge_sorted_frames(frames, "key", str(tmp_path / "unused-spills"), fan_in=2, shard=0)
+            assert pl.concat(batches).to_dicts() == [{"key": key} for key in [1, 2, 3, 4]]
+        finally:
+            server.shutdown()
+            worker.join()
 
 
 def test_scatter_roundtrip_sorted_chunks(tmp_path):
