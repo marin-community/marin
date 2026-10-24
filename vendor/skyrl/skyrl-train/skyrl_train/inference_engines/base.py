@@ -10,6 +10,8 @@ SESSION_ID_HEADER = "x-skyrl-session-id"
 UNSTAMPED_POLICY_STEP = -1
 # Chat-completion choice field with one policy step per token in ``token_ids``.
 CHOICE_POLICY_STEPS_KEY = "policy_steps"
+# The data-parallel rank of a remote engine.
+UNKNOWN_ENGINE_DP_RANK = -1
 
 
 class PromptSamplingOverride(TypedDict, total=False):
