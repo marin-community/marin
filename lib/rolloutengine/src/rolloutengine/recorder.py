@@ -13,7 +13,6 @@ from typing import Any, NoReturn
 
 from shellbox.machine import Machine
 from taskcompendium.models import TaskSpec
-from taskcompendium.reasoning_spans import ReasoningViolation
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.harness.core import Harness, HarnessContext
@@ -200,15 +199,6 @@ class _Recorder:
         """Whether a conversation has a model turn. The engine grades only then."""
         conversation = self.conversation
         return (conversation is not None and conversation.has_turn) or any(record.steps for record in self.earlier)
-
-    def reasoning_violations(self) -> tuple[ReasoningViolation, ...]:
-        """The malformed reasoning spans of every recorded turn, in turn order."""
-        steps = [step for record in self.earlier for step in record.steps]
-        if self.conversation is not None:
-            steps.extend(self.conversation.steps)
-            if self.conversation.pending is not None:
-                steps.append(self.conversation.pending)
-        return tuple(step.turn.reasoning_violation for step in steps if step.turn.reasoning_violation is not None)
 
     def graded_messages(self) -> tuple[dict[str, Any], ...] | None:
         """The chat of the last conversation that has a model turn, or ``None``."""

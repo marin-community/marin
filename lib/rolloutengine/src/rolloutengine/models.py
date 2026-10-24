@@ -97,8 +97,7 @@ class ModelTurn:
     usage: TokenUsage | None = None
     """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
     reasoning_violation: ReasoningViolation | None = None
-    """The malformed reasoning span that the transport found in the reply, if any. An engine that rejects
-    malformed reasoning grades the attempt as a submission failure."""
+    """The malformed reasoning span that the transport found in the reply, if any."""
 
     @property
     def request_tokens(self) -> int:

@@ -3,9 +3,17 @@
 
 import asyncio
 
+from rolloutengine.models import ConversationRecord, ModelTurn, RolloutStep, Transition
+from taskcompendium.grading_result import GradeResult, Outcome
 from taskcompendium.reasoning_spans import ReasoningViolation
 
 from skyrl_train.inference_engines.base import InferenceEngineInput
+from skyrl_train.rollouts.training_record import (
+    TrainingRollout,
+    TrainingStep,
+    TrainingTransition,
+    reject_malformed_reasoning,
+)
 from skyrl_train.trajectory_runners.model_clients import REASONING_VIOLATIONS_KEY, DirectModelClient
 
 VOCABULARY = {1: "<|start_think|>", 2: "<|end_think|>", 3: "plan", 4: "call", 5: "<|eot_id|>"}
@@ -67,3 +75,42 @@ def test_a_length_stop_inside_the_span_is_truncation():
 def test_an_unclosed_span_that_stops_is_a_violation():
     output = _generate([1, 3, 5], finish_reason="stop")
     assert output[REASONING_VIOLATIONS_KEY] == [ReasoningViolation.UNCLOSED]
+
+
+def _step(violation):
+    turn = ModelTurn(
+        message={"role": "assistant", "content": "4"},
+        prompt_token_ids=(3,),
+        response_token_ids=(4,),
+        logprobs=None,
+        stop_reason="stop",
+        reasoning_violation=violation,
+    )
+    return RolloutStep(turn, Transition(done=True), 0, ())
+
+
+def _rollout(*violations, step_reward=None):
+    conversations = tuple(ConversationRecord((), (3,), (4,), (1,), None, (_step(violation),)) for violation in violations)
+    last = conversations[-1].steps[0]
+    return TrainingRollout(
+        task_id="task",
+        messages=(),
+        prompt_token_ids=(3,),
+        response_token_ids=(4,),
+        loss_mask=(1,),
+        logprobs=None,
+        grade=GradeResult(Outcome.GRADED, 1.0, passed=True),
+        stop_reason="stop",
+        steps=(TrainingStep(last.turn, TrainingTransition(done=True, reward=step_reward), 0, ()),),
+        conversations=conversations,
+    )
+
+
+def test_an_earlier_malformed_turn_zeroes_a_correct_final_answer():
+    rejected = reject_malformed_reasoning(_rollout(ReasoningViolation.SECOND_SPAN, None, step_reward=1.0))
+
+    assert (rejected.grade.status, rejected.grade.reward) == (Outcome.SUBMISSION_FAILURE, 0.0)
+    assert rejected.grade.diagnostics["reasoning_violations"] == [
+        {"conversation": 0, "turn": 0, "violation": ReasoningViolation.SECOND_SPAN}
+    ]
+    assert rejected.steps[0].transition.reward is None
