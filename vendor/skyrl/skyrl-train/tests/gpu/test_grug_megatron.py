@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import copy
-import math
 import os
 from types import SimpleNamespace
 
@@ -49,9 +48,9 @@ from tests.gpu.grug_serving import (
     rollout_training_batch,
 )
 from tests.gpu.grug_tiny_checkpoint import TOY_SHAPE, write_tiny_checkpoint
-from tests.gpu.utils import get_test_actor_config, init_worker_with_type
+from tests.gpu.grug_training import ROLLOUT_WORLD_SIZE, policy_config, init_policy, train_step
+from tests.gpu.utils import init_worker_with_type
 
-ROLLOUT_WORLD_SIZE = 2
 RESPONSE_LENGTH = 8
 PROMPT_LENGTH = 12
 
@@ -97,6 +96,7 @@ def embedding_preprocess_model(request, tmp_path):
             vocab_size=1024,
             num_experts_per_tok=2,
             max_position_embeddings=128,
+            qk_mult=1.37,
             **{**TOY_SHAPE, "num_hidden_layers": 2},
         )
         provider = AutoBridge.from_hf_config(config).to_megatron_provider(load_weights=False)
@@ -157,48 +157,6 @@ def test_grug_embedding_recompute_preserves_gradients_and_reduces_saved_activati
     torch.testing.assert_close(results[1], results[0], rtol=1e-5, atol=1e-5)
     if not freeze_embeddings:
         assert saved_bytes[1] < saved_bytes[0], saved_bytes
-
-
-def _config(model_path: str, *, world_size: int, pp: int, ep: int):
-    cfg = get_test_actor_config()
-    cfg.trainer.policy.model.path = model_path
-    cfg.trainer.critic.model.path = None
-    cfg.trainer.strategy = "megatron"
-    cfg.trainer.flash_attn = False
-    cfg.trainer.bf16 = True
-    cfg.trainer.gradient_checkpointing = True
-    cfg.trainer.use_sample_packing = False
-    cfg.trainer.train_batch_size = 4
-    cfg.trainer.policy_mini_batch_size = 4
-    cfg.trainer.micro_train_batch_size_per_gpu = 2
-    cfg.trainer.micro_forward_batch_size_per_gpu = 2
-    cfg.trainer.update_epochs_per_batch = 1
-    cfg.trainer.algorithm.use_kl_loss = False
-    cfg.trainer.algorithm.use_entropy_loss = False
-    cfg.trainer.placement.colocate_all = False
-    cfg.trainer.placement.policy_num_nodes = 1
-    cfg.trainer.placement.policy_num_gpus_per_node = world_size
-    cfg.trainer.policy.megatron_config.tensor_model_parallel_size = 1
-    cfg.trainer.policy.megatron_config.pipeline_model_parallel_size = pp
-    cfg.trainer.policy.megatron_config.context_parallel_size = 1
-    cfg.trainer.policy.megatron_config.expert_model_parallel_size = ep
-    cfg.trainer.policy.megatron_config.expert_tensor_parallel_size = 1
-    # Large enough that one Adam step moves bf16 norm weights sitting at 1.0 (ulp 2^-7).
-    cfg.trainer.policy.optimizer_config.lr = 2.0e-2
-    cfg.trainer.policy.optimizer_config.max_grad_norm = 0.0
-    cfg.generator.backend = "vllm"
-    cfg.generator.weight_sync_backend = "nccl"
-    cfg.generator.inference_engine_tensor_parallel_size = 1
-    cfg.generator.inference_engine_data_parallel_size = ROLLOUT_WORLD_SIZE
-    cfg.generator.inference_engine_expert_parallel_size = ROLLOUT_WORLD_SIZE
-    cfg.generator.num_inference_engines = 1
-    cfg.generator.n_samples_per_prompt = 1
-    cfg.generator.gpu_memory_utilization = 0.35
-    cfg.generator.sampling_params.temperature = 1.0
-    cfg.generator.sampling_params.top_p = 1.0
-    cfg.generator.sampling_params.top_k = -1
-    cfg.generator.sampling_params.max_generate_length = 4
-    return cfg
 
 
 def _padded_batch(
@@ -287,19 +245,6 @@ def _assert_logprobs_close(actual: torch.Tensor, expected: torch.Tensor, respons
     assert diff.mean().item() < LOGPROB_MEAN_ABS_TOLERANCE, diff.mean()
 
 
-def _init_policy(cfg, world_size: int):
-    return init_worker_with_type(
-        "policy", shared_pg=None, colocate_all=False, num_gpus_per_node=world_size, num_nodes=1, cfg=cfg
-    )
-
-
-def _train_step(policy, batch: TrainingInputBatch) -> dict[str, float]:
-    train_output = ray.get(policy.async_run_ray_method("mesh", "ppo_train", batch))[0]
-    status = train_output.metadata["train_status"]
-    assert math.isfinite(status["policy_loss"])
-    return status
-
-
 @pytest.mark.parametrize(
     ("world_size", "pp", "ep"),
     [(1, 1, 1), (2, 2, 1), (4, 2, 2)],
@@ -310,13 +255,13 @@ def test_grug_megatron_forward_matches_hf(tmp_path, world_size: int, pp: int, ep
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
-    cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=ep)
+    cfg = policy_config(str(model_path), world_size=world_size, pp=pp, ep=ep)
     pad_token_id = AutoTokenizer.from_pretrained(model_path).pad_token_id
     batch = _padded_batch(pad_token_id)
     initialize_ray(cfg)
     try:
         expected = ray.get(_hf_response_logprobs.remote(str(model_path), batch))
-        policy = _init_policy(cfg, world_size)
+        policy = init_policy(cfg, world_size)
         actual = _megatron_response_logprobs(policy, batch)
         _assert_logprobs_close(actual, expected, batch["response_mask"])
     finally:
@@ -369,7 +314,7 @@ def test_grug_megatron_train_forward_matches_eval_forward(
     write_tiny_checkpoint(
         model_path, max_position_embeddings=16384, num_experts_per_tok=num_experts_per_tok, shape=shape
     )
-    cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=ep)
+    cfg = policy_config(str(model_path), world_size=world_size, pp=pp, ep=ep)
     # The forward and training passes must see the same micro-batch shapes; see the trainer docs.
     cfg.trainer.micro_forward_batch_size_per_gpu = 1
     cfg.trainer.micro_train_batch_size_per_gpu = 1
@@ -383,7 +328,7 @@ def test_grug_megatron_train_forward_matches_eval_forward(
     )
     initialize_ray(cfg)
     try:
-        policy = _init_policy(cfg, world_size)
+        policy = init_policy(cfg, world_size)
         # The trainer offloads the optimizer for rollouts and reloads it before training.
         ray.get(
             policy.async_run_ray_method("pass_through", "offload_to_cpu", offload_optimizer=True, offload_model=False)
@@ -434,7 +379,7 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
     write_tiny_checkpoint(
         model_path, max_position_embeddings=4096, num_experts_per_tok=num_experts_per_tok, shape=shape
     )
-    cfg = _config(str(model_path), world_size=world_size, pp=pp, ep=ep)
+    cfg = policy_config(str(model_path), world_size=world_size, pp=pp, ep=ep)
     pad_token_id = AutoTokenizer.from_pretrained(model_path).pad_token_id
     rows = _padded_batch(pad_token_id, batch_size=6, prompt_length=prompt_length, response_length=response_length)
     first = rows.slice(0, 4)
@@ -442,7 +387,7 @@ def test_grug_megatron_eval_forward_is_independent_of_peer_rank_batch(
     peer_swapped.metadata = rows.metadata
     initialize_ray(cfg)
     try:
-        policy = _init_policy(cfg, world_size)
+        policy = init_policy(cfg, world_size)
         baseline = _megatron_response_logprobs(policy, first)
         repeated = _megatron_response_logprobs(policy, first)
         swapped = _megatron_response_logprobs(policy, peer_swapped)
@@ -462,13 +407,13 @@ def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
-    cfg = _config(str(model_path), world_size=world_size, pp=2, ep=1)
+    cfg = policy_config(str(model_path), world_size=world_size, pp=2, ep=1)
     tokenizer = AutoTokenizer.from_pretrained(model_path)
     batch = _padded_batch(tokenizer.pad_token_id)
     export_dir = tmp_path / "export"
     initialize_ray(cfg)
     try:
-        policy = _init_policy(cfg, world_size)
+        policy = init_policy(cfg, world_size)
         names = [*PARAMETER_NAMES, *BIAS_NAMES]
         original = GrugMoeForCausalLM.from_pretrained(model_path, dtype=torch.float32).state_dict()
         before = rank0_validation_snapshot(policy, names)
@@ -478,7 +423,7 @@ def test_grug_megatron_pp2_train_step_updates_weights_and_exports(tmp_path):
         for name in BIAS_NAMES:
             torch.testing.assert_close(before[name], original[name].float(), rtol=0, atol=0)
 
-        _train_step(policy, batch)
+        train_step(policy, batch)
         after = rank0_validation_snapshot(policy, names)
         for name in PARAMETER_NAMES:
             assert not torch.equal(after[name], before[name]), f"{name} did not update"
@@ -506,7 +451,7 @@ def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollou
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
-    cfg = _config(str(model_path), world_size=policy_world_size, pp=2, ep=1)
+    cfg = policy_config(str(model_path), world_size=policy_world_size, pp=2, ep=1)
     initialize_ray(cfg)
     client = grug_engine_client(cfg, str(model_path))
     try:
@@ -523,10 +468,10 @@ def test_grug_megatron_four_gpu_pp2_disaggregated_rollout_train_broadcast_rollou
         score_input = InferenceEngineInput(prompt_token_ids=[prompts[0] + [first_token]], sampling_params=score_params)
         first_logprob = asyncio.run(client.generate(score_input))["prompt_logprobs"][0][-1][first_token]
 
-        policy = _init_policy(cfg, policy_world_size)
+        policy = init_policy(cfg, policy_world_size)
         names = [*PARAMETER_NAMES, *BIAS_NAMES]
         before = rank0_validation_snapshot(policy, names)
-        _train_step(policy, rollout_training_batch(prompts, first_rollout))
+        train_step(policy, rollout_training_batch(prompts, first_rollout))
         training = rank0_validation_snapshot(policy, names)
         for name in PARAMETER_NAMES:
             assert not torch.equal(training[name], before[name]), f"{name} did not update"
@@ -563,7 +508,7 @@ def test_grug_megatron_two_gpu_colocated_sleep_sync_preserves_grouped_experts(tm
     model_path = tmp_path / "model"
     model_path.mkdir()
     write_tiny_checkpoint(model_path)
-    cfg = _config(str(model_path), world_size=world_size, pp=1, ep=2)
+    cfg = policy_config(str(model_path), world_size=world_size, pp=1, ep=2)
     cfg.trainer.placement.colocate_all = True
     if moe_backend == "flashinfer_cutlass":
         cfg.generator.engine_init_timeout_seconds = 4200
