@@ -13,13 +13,7 @@ from skyrl_train.utils.harbor_errors import (
     retry_excluded_exception_types,
 )
 
-from skyrl_train.rollouts.harbor_settings import (
-    EnvironmentConfig,
-    EnvironmentType,
-    RetryConfig,
-    VerifierConfig,
-    concurrent_trials,
-)
+from skyrl_train.rollouts.harbor_settings import EnvironmentConfig, EnvironmentType, RetryConfig, VerifierConfig
 
 
 @dataclass
@@ -363,9 +357,6 @@ class HarborConfigBuilder:
             self.get_error_handling_config(),
         )
         return retry_config.model_copy(update={"exclude_exceptions": set(excluded)})
-
-    def get_n_concurrent_trials(self) -> int:
-        return concurrent_trials(self._harbor_cfg)
 
     def get_reward_shaping_config(self) -> Dict[str, Any]:
         """
