@@ -9,9 +9,9 @@ seeded shuffle, router level R1, packing off, and one fp32-master checkpoint plu
 export at the last step. Everything else is Phase 1a's M1 recipe, so the experts train
 in the same trainer, precision and clipping as the arms (control C1).
 
-    uv run python -m experiments.post_training.phase1a.experts --version YYYY.MM.DD \\
+    uv run python -m experiments.post_training.phase1a.experts launch --version YYYY.MM.DD \\
         --learning-rate LR --b-uri S3_URI --b-version V \\
-        --rows-uri S3_URI --rows-version V --task task_X --task task_R
+        --rows-uri S3_URI --rows-version V --x-rows N --r-rows N --task task_X --task task_R
 
 ``--rows-uri`` is a directory holding ``expert_rows_X.parquet`` and ``expert_rows_R.parquet``
 (``python -m experiments.post_training.phase1a.experts rows`` writes them). Without
