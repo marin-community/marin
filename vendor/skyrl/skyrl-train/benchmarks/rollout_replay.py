@@ -40,6 +40,12 @@ class ReplayWorker(MegatronPolicyWorkerBase):
 
     def init_model(self, model_path, num_training_steps=1):
         super().init_model(model_path, num_training_steps=num_training_steps)
+        checksum = hashlib.sha256()
+        for module in self.actor_module:
+            for name, parameter in module.named_parameters():
+                checksum.update(name.encode())
+                checksum.update(parameter.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes())
+        self.initial_parameter_sha256 = checksum.hexdigest()
         self.model = RecordingModelWrapper(
             config=self.cfg,
             actor_module=self.actor_module,
@@ -56,6 +62,7 @@ class ReplayWorker(MegatronPolicyWorkerBase):
         result.metadata["production_source"] = str(Path(model_utils.__file__).resolve())
         result.metadata["production_sha256"] = hashlib.sha256(Path(model_utils.__file__).read_bytes()).hexdigest()
         result.metadata["gpu"] = torch.cuda.get_device_name()
+        result.metadata["initial_parameter_sha256"] = self.initial_parameter_sha256
         return result
 
 
