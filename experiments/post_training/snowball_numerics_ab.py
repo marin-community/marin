@@ -1,0 +1,187 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Train Snowball under one trainer-vLLM numerics setup, with everything else held fixed across setups.
+
+Every run trains the 67B-A2B Snowball SFT export on the E6.2 Snowball training selection with 64 prompts and eight
+answers per update, PPO with token-level truncated importance sampling at staleness 4, and the async launcher's
+optimizer, and it evaluates on the held-out MATH level 3-5 set. ``--numerics`` sets ``trainer.numerics.mode``
+(``native``: each side's own kernels; ``exact``: decode-invariant vLLM engines and Grug trainer kernels that compute
+the engines' log-probabilities bit for bit); ``--routing replay`` replays vLLM's expert routes in the trainer. Every
+run checks the trainer's log-probabilities against the engines' every 10 weight syncs. Only the RL stage is built: the
+in-run evaluation scores the held-out set.
+
+Plan or run::
+
+    python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset gate --numerics exact \\
+        --routing native --cluster cw-us-east-02a
+    python -m experiments.post_training.snowball_numerics_ab --version 2026.10.02.1 --preset full --numerics native \\
+        --routing replay --cluster cw-rno2a --run
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import replace
+from enum import StrEnum
+from types import MappingProxyType
+
+import click
+from marin.execution.lazy import ArtifactStep
+from marin.experiment.namespacing import user_owned_name
+from marin.rl.cli import rl_build_options
+from marin.rl.skyrl import ArtifactDataSource, SkyRLRun
+
+from experiments.post_training.async_rl import (
+    DEFAULT,
+    SNOWBALL_RECIPE,
+    AsyncPreset,
+    apply_settings,
+    settings_suffix,
+    snowball_config,
+    snowball_rl_step,
+)
+from experiments.post_training.curriculum_rl.launch import SNOWBALL_MODEL, SNOWBALL_POLICY
+
+EXPERIMENT_NAME = "snowball-numerics-ab"
+WANDB_PROJECT = f"marin-{EXPERIMENT_NAME}"
+DATA_ROOT = "s3://marin-us-east-02a/marin/users/ahmad/documents/math-eval-pool/1.0.0-candidate1"
+# The E6.2 Snowball training selection: 1,853 rows of GSM8K, MATH levels 1-3 and reasoning-gym chain sums.
+TRAIN_DATA_URI = f"{DATA_ROOT}/buckets/e62-resolved-reviewed-v1/snowball"
+TRAIN_FILENAME = "train.parquet"
+# MATH test levels 3-5 without MATH-500: 3,294 rows graded by the aime env, none of them in the training selection.
+HELDOUT_DATA_URI = f"{DATA_ROOT}/batteries/e9-heldout-v1/snowball"
+HELDOUT_FILENAME = "heldout-math-l345.parquet"
+PROMPTS_PER_UPDATE = 64
+# Eight answers per prompt keep 512 sequences per update, the async launcher's default load.
+ANSWERS_PER_PROMPT = 8
+# Prompts per evaluation request batch; four batches score the held-out set.
+EVAL_BATCH_PROMPTS = 1024
+# The E9 held-out protocol's sampling.
+EVAL_SAMPLING = MappingProxyType({"temperature": 0.6, "top_p": 0.95})
+# H100 clusters of the same node type. Both read the export and data from the us-east-02a bucket; cw-rno2a reads it
+# through its local object-store cache.
+H100_CLUSTERS = ("cw-us-east-02a", "cw-rno2a")
+
+NUMERICS_AB_RECIPE = replace(
+    SNOWBALL_RECIPE,
+    role_plan=replace(
+        SNOWBALL_RECIPE.role_plan,
+        train_batch_size=PROMPTS_PER_UPDATE,
+        policy_mini_batch_size=PROMPTS_PER_UPDATE,
+        n_samples_per_prompt=ANSWERS_PER_PROMPT,
+    ),
+)
+
+# 100 updates, evaluating every 10. 96 prompt groups generating at once hold 768 sequences.
+FULL = replace(DEFAULT, label="full", generation_workers=96)
+# The full run's settings for two updates.
+GATE = replace(FULL, label="gate", max_steps=2)
+PRESETS: Mapping[str, AsyncPreset] = MappingProxyType({preset.label: preset for preset in (GATE, FULL)})
+
+
+class Numerics(StrEnum):
+    """The ``trainer.numerics.mode`` of a run."""
+
+    NATIVE = "native"
+    EXACT = "exact"
+
+
+# Weight syncs between two exactness checks, in every arm.
+CHECK_EVERY_WEIGHT_SYNCS = 10
+
+
+class Routing(StrEnum):
+    """Whether the trainer routes tokens itself (``native``) or replays the experts vLLM chose (``replay``)."""
+
+    NATIVE = "native"
+    REPLAY = "replay"
+
+
+def numerics_ab_config(
+    preset: AsyncPreset, numerics: Numerics, routing: Routing, settings: tuple[str, ...] = ()
+) -> dict:
+    """Render the shared A/B config for one numerics and routing mode, then apply ``--set`` changes."""
+    config = snowball_config(preset, NUMERICS_AB_RECIPE)
+    trainer = config["trainer"]
+    trainer["project_name"] = WANDB_PROJECT
+    trainer["eval_batch_size"] = EVAL_BATCH_PROMPTS
+    # A failed check logs and the run continues, so native arms report their mismatch.
+    trainer["numerics"] = {
+        "mode": str(numerics),
+        "check": {"every_weight_syncs": CHECK_EVERY_WEIGHT_SYNCS, "on_failure": "log"},
+    }
+    # Each token's loss weight is min(exp(old - rollout), 2) over the rollout's log-probabilities.
+    trainer["algorithm"]["off_policy_correction"] = "tis"
+    # Each batch trains the groups leased for it, so a step's prompts do not depend on generation speed.
+    trainer["rollout_buffer"]["batch_policy"] = "full_batch"
+    replay = routing is Routing.REPLAY
+    trainer["policy"]["megatron_config"]["moe_router_replay"] = replay
+    generator = config["generator"]
+    generator["engine_init_kwargs"]["enable_return_routed_experts"] = replay
+    generator["eval_sampling_params"] = dict(EVAL_SAMPLING)
+    # GSM8K rows earn reward only for a completed response whose last line is "#### <number>", as their prompt asks.
+    config["environment"]["task_sessions"] = {"gsm8k": {"reward_method": "final_line"}}
+    # Seeded passes over the training rows in a fresh trainer.seed order each pass.
+    config["data"]["shuffle"] = True
+    config["data"]["sampling"] = {"kind": None}
+    return apply_settings(config, settings)
+
+
+def run_label(preset: AsyncPreset, numerics: Numerics, routing: Routing) -> str:
+    """The run's name: numerics, routing mode and preset."""
+    return f"{numerics}-{routing}-{preset.label}"
+
+
+def build_run(
+    preset: AsyncPreset,
+    numerics: Numerics,
+    routing: Routing,
+    cluster: str,
+    version: str | None,
+    settings: tuple[str, ...] = (),
+) -> ArtifactStep[SkyRLRun]:
+    """Assemble the RL step for one preset, numerics and routing mode on ``cluster``."""
+    train = ArtifactStep.adopt(
+        user_owned_name(f"documents/{EXPERIMENT_NAME}/e62-snowball-train"), "2026.09.12", TRAIN_DATA_URI
+    )
+    heldout = ArtifactStep.adopt(
+        user_owned_name(f"documents/{EXPERIMENT_NAME}/heldout-math-l345"), "2026.09.14", HELDOUT_DATA_URI
+    )
+    # The run's address names the numerics and routing mode; a --set run also carries a hash of its settings.
+    return snowball_rl_step(
+        f"checkpoints/{EXPERIMENT_NAME}/{run_label(preset, numerics, routing)}{settings_suffix(settings)}",
+        version,
+        numerics_ab_config(preset, numerics, routing, settings),
+        recipe=NUMERICS_AB_RECIPE,
+        policy=SNOWBALL_POLICY,
+        model=SNOWBALL_MODEL,
+        train_data=ArtifactDataSource(train, relative_path=TRAIN_FILENAME),
+        validation_data=ArtifactDataSource(heldout, relative_path=HELDOUT_FILENAME),
+        cluster=cluster,
+        # No terminal HF export; the last two Megatron checkpoints stay under the run's temporary checkpoint root.
+        export_hf=False,
+    )
+
+
+@click.command(help=__doc__)
+@click.option("--preset", type=click.Choice(sorted(PRESETS)), required=True)
+@click.option("--numerics", type=click.Choice([mode.value for mode in Numerics]), required=True)
+@click.option("--routing", type=click.Choice([mode.value for mode in Routing]), required=True)
+@click.option("--cluster", type=click.Choice(H100_CLUSTERS), required=True, help="H100 cluster that runs the job.")
+@click.option(
+    "--set",
+    "settings",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Change one setting of the rendered RL config (dotted key; prefix + to add a new key).",
+)
+@rl_build_options
+def main(preset: str, numerics: str, routing: str, cluster: str, settings: tuple[str, ...]) -> dict[str, ArtifactStep]:
+    chosen = PRESETS[preset]
+    mode, route = Numerics(numerics), Routing(routing)
+    return {run_label(chosen, mode, route): build_run(chosen, mode, route, cluster, None, settings)}
+
+
+if __name__ == "__main__":
+    main()

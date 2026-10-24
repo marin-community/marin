@@ -308,9 +308,8 @@ def check_loop_shape(config: dict) -> None:
         raise click.BadParameter("rollout_buffer.batch_policy must be full_batch or rolling")
 
 
-def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
-    """Render the RL config: the curriculum data wiring plus every setting this launcher decides."""
-    recipe = SNOWBALL_RECIPE
+def snowball_config(preset: AsyncPreset, recipe: TrainingRecipe) -> dict:
+    """Render the RL config for one recipe: the curriculum data wiring plus every setting this launcher decides."""
     plan = recipe.role_plan
     # The curriculum template supplies the data and environment sections; every other section is
     # written below in full.
@@ -451,6 +450,11 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     }
     # Let the allocator grow segments instead of fragmenting at the memory ceiling.
     config["extra_env"] = {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+    return config
+
+
+def apply_settings(config: dict, settings: tuple[str, ...]) -> dict:
+    """Apply ``--set`` changes, then derive the evaluation-dependent keys and check the context budget."""
     for text in settings:
         apply_setting(config, parse_setting(text))
     trainer = config["trainer"]
@@ -463,23 +467,38 @@ def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict
     return config
 
 
+def training_config(preset: AsyncPreset, settings: tuple[str, ...] = ()) -> dict:
+    """Render the Snowball RL config with ``--set`` changes applied."""
+    return apply_settings(snowball_config(preset, SNOWBALL_RECIPE), settings)
+
+
 @dataclass(frozen=True)
 class AsyncRun:
     rl: ArtifactStep[SkyRLRun]
     evaluation: ArtifactStep[EvaluationResult]
 
 
-def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, settings: tuple[str, ...] = ()) -> AsyncRun:
-    """Assemble the RL step and its evaluation for one policy and preset."""
-    recipe = SNOWBALL_RECIPE
-    config = training_config(preset, settings)
-    pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
-    model = policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None))
-    # A --set run gets its own address: the name carries a hash of its settings.
+def settings_suffix(settings: tuple[str, ...]) -> str:
+    """The run-address suffix of ``--set`` changes: a hash of them, empty without changes."""
     changes = "\n".join(settings)
-    suffix = f"-set-{fingerprint_hash(changes)}" if settings else ""
-    base_name = f"checkpoints/{EXPERIMENT_NAME}/{policy.label}-{preset.label}{suffix}"
-    rl = skyrl_step(
+    return f"-set-{fingerprint_hash(changes)}" if settings else ""
+
+
+def snowball_rl_step(
+    base_name: str,
+    version: str | None,
+    config: dict,
+    *,
+    recipe: TrainingRecipe,
+    policy: PolicySpec,
+    model: ArtifactStep,
+    train_data: ArtifactDataSource,
+    validation_data: ArtifactDataSource,
+    cluster: str,
+    export_hf: bool,
+) -> ArtifactStep[SkyRLRun]:
+    """The RL step ``base_name`` that trains ``model`` with ``config`` on ``recipe``'s topology on ``cluster``."""
+    return skyrl_step(
         SkyRLSpec(
             name=user_owned_name(base_name),
             version=version or resolve_version(base_name, None),
@@ -490,8 +509,8 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
                 tokenizer_revision=policy.tokenizer_revision,
                 relative_path=policy.model_relative_path,
             ),
-            train_data=(ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),),
-            validation_data=(ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),),
+            train_data=(train_data,),
+            validation_data=(validation_data,),
             topology=SkyRLTopology(
                 num_nodes=recipe.role_plan.num_nodes,
                 gpus_per_node=GPUS_PER_NODE,
@@ -502,21 +521,41 @@ def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, sett
             seed=config["trainer"]["seed"],
         ),
         IrisSkyRLExecution(
-            cluster=policy.cluster,
-            cluster_config=f"lib/iris/config/{policy.cluster}.yaml",
+            cluster=cluster,
+            cluster_config=f"lib/iris/config/{cluster}.yaml",
             cpu=16,
             memory=recipe.host_memory,
             disk="2TB",
             priority="interactive",
             # One automatic retry, then fail; a healthy run resumes from its latest checkpoint on resubmission.
             max_retries=1,
-            target_cluster=policy.cluster,
+            target_cluster=cluster,
             parent_cluster_config=IRIS_HUB_CLUSTER_CONFIG,
             coordinator_timeout_hours=72,
             # The W&B key decides the entity; a hard-coded one fails at runtime for a key that
             # cannot write there.
             wandb_entity=None,
         ),
+        export_hf=export_hf,
+    )
+
+
+def build_run(policy: PolicySpec, preset: AsyncPreset, version: str | None, settings: tuple[str, ...] = ()) -> AsyncRun:
+    """Assemble the RL step and its evaluation for one policy and preset."""
+    config = training_config(preset, settings)
+    pool = pool_step(POOL_ARTIFACT_NAME, version or resolve_version(POOL_ARTIFACT_NAME, None))
+    # A --set run gets its own address: the name carries a hash of its settings.
+    suffix = settings_suffix(settings)
+    rl = snowball_rl_step(
+        f"checkpoints/{EXPERIMENT_NAME}/{policy.label}-{preset.label}{suffix}",
+        version,
+        config,
+        recipe=SNOWBALL_RECIPE,
+        policy=policy,
+        model=policy.adopted_model or model_step(version or resolve_version(MODEL_ARTIFACT_NAME, None)),
+        train_data=ArtifactDataSource(pool, relative_path=TRAIN_FILENAME),
+        validation_data=ArtifactDataSource(pool, relative_path=VALIDATION_FILENAME),
+        cluster=policy.cluster,
         export_hf=True,
     )
     # The evaluation serves the rendered window, so a --set on the budget reaches the server.
