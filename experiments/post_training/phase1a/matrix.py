@@ -218,9 +218,11 @@ def skyrl_recipe(run: RunPlan, teachers: dict[Task, TeacherModel]) -> dict:
     """The ``skyrl`` subtree for one run, with every matched field rendered explicitly.
 
     ``teachers`` maps each task to its expert (E_X, E_R) or, for the procedure null,
-    to B. M4 scores rollouts with them; M1's rows were sampled from them.
+    to B. M4 scores rollouts with them; M1 trains on fixed rows and takes none.
     """
-    if set(teachers) != set(run.tasks):
+    if run.method is Method.M1 and teachers:
+        raise ValueError(f"{run.name} is M1 and scores nothing; it takes no teachers")
+    if run.method is Method.M4 and set(teachers) != set(run.tasks):
         raise ValueError(f"{run.name} needs teachers for {sorted(run.tasks)}, got {sorted(teachers)}")
     recipe = _base_recipe()
     caps = {str(task): RESPONSE_CAP_TOKENS[task] for task in run.tasks}

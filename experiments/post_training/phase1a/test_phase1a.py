@@ -147,7 +147,7 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path):
         for condition, seed in cells:
             for method in Method:
                 run = RunPlan(method, condition, seed, 2e-6)
-                teachers = {task: TEACHERS[task] for task in run.tasks}
+                teachers = {task: TEACHERS[task] for task in run.tasks} if method is Method.M4 else {}
                 spec = run_spec(run, model=model, run_data=data, teachers=teachers)
                 step = skyrl_step(spec, execution(), export_hf=True)
                 config = step.build_config(StepContext.for_fingerprint(step.runtime_args, step.deps))

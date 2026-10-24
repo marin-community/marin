@@ -160,7 +160,7 @@ def main(
     pool = {Task.X: expert_x, Task.R: expert_r, Task.GENERAL: b_teacher}
     steps = []
     for run in selected_runs(stage, learning_rate, methods, conditions, seeds):
-        teachers = {task: pool[task] for task in run.tasks}
+        teachers = {task: pool[task] for task in run.tasks} if run.method is Method.M4 else {}
         spec = run_spec(run, model=model, run_data=run_data, teachers=teachers)
         steps.append(skyrl_step(spec, execution(), export_hf=True))
     return steps
