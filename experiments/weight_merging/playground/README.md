@@ -333,9 +333,13 @@ validation continuations per domain, uses the same assistant-loss encoding and
 Fine-tune both with `train --steps 100 --learning-rate 5e-6 --eval-steps 50`,
 otherwise retaining the matched training settings. Save FP32 donors. Evaluate
 both FP32 and BF16 serving against a parent served in the same precision. Report
-greedy paired W/L and exact two-sided sign-test p-values; pooled sampled outputs
-are correlated within items and do not receive this test. All comparisons are
-exploratory and p-values do not correct for the recipe search.
+greedy paired W/L and exact two-sided sign-test p-values. For admission, average
+each item's paired score differences across greedy and sampled seeds 17/29,
+then bootstrap those item means with 5,000 resamples (seed 290). Require a
+positive mean gain in both serving precisions and a 95% interval excluding zero
+in at least one. Pooled sign tests are descriptive because the three decodes
+of one item are correlated. All comparisons are exploratory; these intervals
+and p-values do not correct for recipe selection.
 
 ### Aristaeus dose response
 
@@ -366,8 +370,12 @@ seed-42 masks and tensor-local magnitude retention. It scales each sparse update
 to match c times the full donor update's model-wide L2 norm before serving. It
 also measures the resulting FP32 and BF16 update norms, so serving casts remain
 visible. The report includes greedy accuracy, unclosed `<think>` rates and
-truncation per dataset, paired W/L with sign tests, and sampled scores by seed.
-Its companion JSON retains all counts and denominators.
+truncation and mean generated tokens per dataset, paired W/L with sign tests,
+sampled scores by seed, and bootstrap intervals for per-item mean gains.
+Its companion JSON retains per-seed lengths, counts and denominators.
+`iris_generate.sh` defaults to BF16 serving; set `PLAYGROUND_DTYPE=float32` for
+FP32 merging and serving end to end. Use a fresh Instruct control at each dtype;
+this comparison changes both weight casting and activation arithmetic.
 
 ### Format audit
 
