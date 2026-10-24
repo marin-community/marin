@@ -4,6 +4,7 @@
 import pytest
 
 from experiments.weight_merging.playground.evaluation import (
+    grade_completion,
     numeric_answer,
     paired_summary,
     python_code,
@@ -70,3 +71,15 @@ def test_unclosed_thinking_tracks_multiple_sections():
     assert unclosed_thinking("<think>unfinished")
     assert unclosed_thinking("<think>done</think><think>unfinished")
     assert unclosed_thinking("</think><think>unfinished")
+
+
+def test_deferred_code_grading_does_not_execute_generated_code(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError("GPU generation must not execute code")
+
+    monkeypatch.setattr("subprocess.Popen", forbidden)
+    assert grade_completion({"dataset": "mbpp"}, "print('generated')", defer_code=True) == {
+        "correct": None,
+        "pending_execution": True,
+    }
+    assert grade_completion({"dataset": "gsm8k", "answer": "42"}, "#### 42", defer_code=True)["correct"]

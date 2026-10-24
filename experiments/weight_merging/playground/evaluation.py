@@ -111,6 +111,13 @@ def sign_test_pvalue(wins: int, losses: int) -> float:
     return min(1.0, 2 * sum(math.comb(n, k) for k in range(min(wins, losses) + 1)) / (1 << n))
 
 
+def grade_completion(item: dict, completion: str, *, defer_code: bool = False) -> dict:
+    """Leave execution pending on GPU pods; an isolated CPU scorer fills it in."""
+    if defer_code and item["dataset"] == "mbpp":
+        return {"correct": None, "pending_execution": True}
+    return score(item, completion)
+
+
 def paired_summary(rows: list[dict], baseline: str) -> list[dict]:
     """Compare only matching (item ID, decoding mode, seed) observations."""
     reference = {(r["item_id"], r["mode"], r["seed"]): r for r in rows if r["candidate"] == baseline}

@@ -57,10 +57,49 @@ implementation is intended. Reproducibility across Torch versions is not assumed
 
 ## Run
 
-Run from the repository root. `gpu-borrow` and `host-test-budget` are local
-helpers on `karans-linux`: they reserve the GPU around the resident LLM and
-limit CPU test resources. Whisper remains running and uses about 2.24 GiB of
-VRAM. On another host, use that host's resource controls.
+Submit experiments from the repository root to Iris / CoreWeave. The owner's
+2026-10-23 policy prohibits local model training, evaluation, merging and heavy
+preparation on karans-linux, including small models. Local work is limited to
+light lint/unit tests, UI and metadata checks. Resident voice-notes and Whisper
+services stay running. The model commands below are worker commands, executed
+inside an Iris job; `host-test-budget` examples only describe the earlier local
+pilot and are not authorization to run model preparation on this host.
+
+Use a current Iris submission client including secret-file delivery (commit
+c7c14a252d or later). The experiment branch predates that API; its older bundled
+CLI cannot forward CoreWeave credentials to the current server. Source the
+existing operator environment, and let Iris inherit secrets as files. Do not
+put credential values on command lines. The worker bootstrap pins secret-aware
+rigging from the same revision.
+
+```bash
+set -a
+source /path/to/operator.env
+set +a
+IRIS_BIN=/path/to/current/iris
+"$IRIS_BIN" --cluster marin job run --enable-extra-resources \
+  --target-cluster cw-rno2a --cpu 8 --memory 32GB --disk 32GB \
+  --job-name playground-norms --no-sync --no-wait \
+  -e PLAYGROUND_OUTPUT s3://marin-rno2a/scratch/USER/playground/norms \
+  -- bash experiments/weight_merging/playground/iris_norms.sh
+```
+
+`iris_resume.sh` resumes this pilot's code donor from its complete step50
+checkpoint to step100 on one H100. Stage `code-rft/checkpoint-50/` and `rft-data/`
+under `PLAYGROUND_INPUT`, set `PLAYGROUND_OUTPUT` and `PLAYGROUND_REVISION`, and
+submit with `--gpu H100x1 --cpu 8 --memory 32GB --disk 64GB --no-sync`. The script
+relocates the saved best-checkpoint path and records the hardware transition;
+bitwise training equivalence across GPUs is not assumed.
+
+CW GPU pods have containerd rather than Docker. Use `sweep --defer-code-scoring`
+there: MBPP rows have null correctness and an explicit pending flag. Generation
+never executes their Python. `report` refuses pending scores. Run `iris_score.sh`
+on an Iris GCP Docker worker with `--container-profile container_profile_docker_access`
+to fill in the scores using the unchanged pinned Python image and resource
+limits. `PLAYGROUND_PARITY_ITEMS=20` checks the first20fixed MBPP IDs on all
+baseline greedy rows against their existing scores; any difference fails the
+job. Normal scoring writes a separate scored run, retaining the raw generation
+records. Keep large inputs/results in S3/GCS rather than local scratch.
 
 Use isolated CUDA environments because the repository defaults to CPU Torch.
 The tested GPU driver is 535.309.01; CUDA 12.1 is compatible with it.

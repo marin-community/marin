@@ -26,10 +26,10 @@ from experiments.weight_merging.playground.arithmetic import Method, Recipe, mer
 from experiments.weight_merging.playground.checkpoints import checkpoint_map
 from experiments.weight_merging.playground.evaluation import (
     GSM_SMOKE_IDS,
+    grade_completion,
     paired_summary,
     prompt,
     read_rows,
-    score,
     validate_vocabulary,
 )
 
@@ -122,7 +122,12 @@ def evaluate(llm, tokenizer, items: list[dict], candidate: Candidate, args) -> l
         outputs = llm.generate(texts, params, use_tqdm=True)
         elapsed = time.monotonic() - began
         with ThreadPoolExecutor(max_workers=4) as pool:
-            grades = list(pool.map(score, items, [o.outputs[0].text for o in outputs]))
+            grades = list(
+                pool.map(
+                    lambda pair: grade_completion(pair[0], pair[1], defer_code=args.defer_code_scoring),
+                    zip(items, [o.outputs[0].text for o in outputs], strict=True),
+                )
+            )
         for index, (item, output, grade) in enumerate(zip(items, outputs, grades, strict=True)):
             completion = output.outputs[0]
             rows.append(
@@ -190,6 +195,7 @@ def main() -> None:
     parser.add_argument("--max-new-tokens", type=int, default=2048)
     parser.add_argument("--max-model-len", type=int, default=8192)
     parser.add_argument("--candidates", type=Path, required=True)
+    parser.add_argument("--defer-code-scoring", action="store_true")
     parser.add_argument("--only", nargs="+")
     parser.add_argument("--dtype", choices=["bfloat16", "float32"], default="bfloat16")
     parser.add_argument("--threads", type=int, default=4)
@@ -222,6 +228,7 @@ def main() -> None:
         "vllm": vllm.__version__,
         "max_num_seqs": args.max_num_seqs,
         "dtype": args.dtype,
+        "defer_code_scoring": args.defer_code_scoring,
         "max_new_tokens": args.max_new_tokens,
         "max_model_len": args.max_model_len,
         "decode_seeds": DECODE_SEEDS,
@@ -244,6 +251,7 @@ def main() -> None:
             "vllm",
             "max_num_seqs",
             "dtype",
+            "defer_code_scoring",
             "max_new_tokens",
             "max_model_len",
             "source_sha256",
@@ -303,7 +311,7 @@ def main() -> None:
             for row in rows:
                 stream.write(json.dumps(row) + "\n")
         existing.extend(rows)
-        summary = paired_summary(existing, "instruct")
+        summary = paired_summary([r for r in existing if not r.get("pending_execution")], "instruct")
         (args.run / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
         print(
             json.dumps(

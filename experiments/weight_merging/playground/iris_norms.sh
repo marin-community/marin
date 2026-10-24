@@ -5,7 +5,7 @@ set -euo pipefail
 work_dir=$(mktemp -d /tmp/playground-norms-XXXXXX)
 uv --no-config venv "$work_dir/env" --python 3.12
 uv --no-config pip install --python "$work_dir/env/bin/python" torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
-uv --no-config pip install --python "$work_dir/env/bin/python" safetensors huggingface_hub -e lib/rigging
+uv --no-config pip install --python "$work_dir/env/bin/python" safetensors huggingface_hub "marin-rigging @ git+https://github.com/marin-community/marin.git@c7c14a252dc2d6f7cd86136f99799960e1667e53#subdirectory=lib/rigging"
 "$work_dir/env/bin/python" - "$work_dir" <<'PY'
 import json
 import subprocess
