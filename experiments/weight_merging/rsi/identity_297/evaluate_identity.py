@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--dtype", choices=("float32", "bfloat16"), required=True)
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--model-revision", default=MODEL_REVISION, help="HF pin or immutable merge recipe revision.")
+    parser.add_argument("--split", choices=("dev", "heldout"), default="dev")
     args = parser.parse_args()
     fs, destination = filesystem_for(args.output.rstrip("/"))
     provenance = {
@@ -33,11 +34,11 @@ def main() -> None:
         "dtype": args.dtype,
         "model_revision": args.model_revision,
         "scorer_revision": SCORER_REVISION,
-        "split": "dev",
+        "split": args.split,
         "workers": args.workers,
         "prompt_sha256": {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(PROMPTS.iterdir())},
     }
-    for suite in ("contrastive", "generate"):
+    for suite in (("generate",) if args.split == "heldout" else ("contrastive", "generate")):
         prefix = f"{destination}/{suite}"
         marker = f"{prefix}/done.json"
         if fs.exists(marker):
@@ -59,7 +60,7 @@ def main() -> None:
                 "--prompt-dir",
                 str(PROMPTS),
                 "--split",
-                "dev",
+                args.split,
                 "--workers",
                 str(args.workers),
             ]
