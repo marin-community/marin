@@ -17,7 +17,6 @@ from omegaconf import DictConfig, OmegaConf
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
 from taskcompendium.models import NoGrader
-from taskcompendium.reasoning_spans import ReasoningSpanRule
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
@@ -73,7 +72,12 @@ from skyrl_train.rollouts.task_projections import (
     WholeTaskProjection,
     logprobs_requested,
 )
-from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
+from skyrl_train.rollouts.training_record import (
+    ReasoningSpanPolicy,
+    TrainingRollout,
+    reject_malformed_reasoning,
+    training_rollout,
+)
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
@@ -355,7 +359,7 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
-        self.reasoning_span_rule = ReasoningSpanRule(trajectory_runner_cfg.reasoning_spans.policy)
+        self.reasoning_span_policy = ReasoningSpanPolicy(trajectory_runner_cfg.reasoning_spans.policy)
         self.harbor = harbor
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait
@@ -450,10 +454,7 @@ class TaskRolloutWorker:
             )
             lowered_tasks[index] = lowered.model_copy(update={"judge_connection": self.judge_connection})
             selected_harnesses.append(harnesses)
-        engines = [
-            RolloutEngine(self.factories, harnesses, reasoning_span_rule=self.reasoning_span_rule)
-            for harnesses in selected_harnesses
-        ]
+        engines = [RolloutEngine(self.factories, harnesses) for harnesses in selected_harnesses]
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
             engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
@@ -496,6 +497,9 @@ class TaskRolloutWorker:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
+                if self.reasoning_span_policy == ReasoningSpanPolicy.REJECT:
+                    # Before group grading, so a malformed rollout never enters a GenRM comparison.
+                    result = reject_malformed_reasoning(result)
                 if (
                     isinstance(task.grader, NoGrader)
                     and result.grade.status == Outcome.UNAVAILABLE
