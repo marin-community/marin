@@ -329,9 +329,11 @@ class GrugModelConfig:
     swa_layers: tuple[int, ...] = ()
     """Local layers whose mixer is sliding-window softmax attention instead of KDA (needs ``local_mixer=kda``):
     MHA with KDA's head layout (``num_heads`` query and KV heads of ``head_dim``), QK-norm, half-RoPE, XSA and the
-    per-head output gate, causal within documents over the last ``swa_window`` tokens (self included). No q/k/v
-    convs and no branch-output SConv, like the KDA blocks minus their q/k/v convs."""
+    per-head output gate, causal within documents over the last ``swa_window`` tokens (self included). No
+    branch-output SConv, like the KDA blocks; KDA's q/k/v convs only with ``swa_qkv_conv``."""
     swa_window: int = 128
+    swa_qkv_conv: bool = False
+    """Give the ``swa_layers`` KDA's q/k/v ShortConv + SiLU on the projections (before QK-norm and RoPE)."""
     kda_dt_range: tuple[float, float] = (0.02, 0.5)
     """KDA ``dt_bias`` init: the per-token log-decay ``|g|`` at zero gate input is log-uniform in this range."""
     kda_save_chunk_states: bool = False
@@ -482,6 +484,8 @@ class GrugModelConfig:
                 raise ValueError(f"swa_layers {bad} must be local (KDA) layers")
             if self.swa_window <= 0:
                 raise ValueError(f"swa_window must be positive, got {self.swa_window}")
+        if self.swa_qkv_conv and not self.swa_layers:
+            raise ValueError("swa_qkv_conv needs swa_layers")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
             raise ValueError(f"kda_chunk_size must be one of {list(KDA_CHUNK_TILES)}, got {self.kda_chunk_size}")
         if self.entropy_skip_layers:
@@ -635,6 +639,7 @@ class CausalSelfAttention(eqx.Module):
     w_o: Float[Array, "NH D"]
     attn_gate: Float[Array, "D N"] | None
     sconv_k: ShortConv | None  # SConv after the K projection ("k" in cfg.sconv_sites)
+    qkv_convs: tuple[ShortConv, ShortConv, ShortConv] | None  # KDA's q/k/v ShortConv + SiLU (swa_qkv_conv)
     rel_pos: InklingRelPos | None  # Inkling relative-position bias (replaces RoPE when set)
     w_dkv: Float[Array, "D L"] | None  # MLA only
     kv_latent_norm: "RMSNorm | None"
@@ -669,6 +674,7 @@ class CausalSelfAttention(eqx.Module):
                 w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
                 attn_gate=attn_gate,
                 sconv_k=sconv_k,
+                qkv_convs=None,
                 rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
                 w_dkv=reshard(_init_weight(k_dkv, (d, kvl), std), P(_FSDP_AXES, None)),
                 kv_latent_norm=RMSNorm.init(kvl, cfg.layer_norm_eps),
@@ -691,6 +697,15 @@ class CausalSelfAttention(eqx.Module):
             w_o=reshard(_init_weight(k_o, (n * h, d), std), P("model", _FSDP_AXES)),
             attn_gate=attn_gate,
             sconv_k=sconv_k,
+            qkv_convs=(
+                (
+                    ShortConv.init(n * h, cfg.sconv_kernel, cfg.sconv_impl),
+                    ShortConv.init(m * h, cfg.sconv_kernel, cfg.sconv_impl),
+                    ShortConv.init(m * h, cfg.sconv_kernel, cfg.sconv_impl),
+                )
+                if cfg.swa_qkv_conv
+                else None
+            ),
             rel_pos=InklingRelPos.init(cfg, key=k_rel) if cfg.inkling_relpos else None,
             w_dkv=None,
             kv_latent_norm=None,
@@ -745,6 +760,12 @@ class CausalSelfAttention(eqx.Module):
         q_flat = _proj(x, self.w_q)
         k_flat = _proj(kv_in, self.w_k)
         v_flat = _proj(kv_in, self.w_v)
+        if self.qkv_convs is not None:
+            # KDA's projection convs: depthwise causal conv (no cross-document taps), then SiLU.
+            conv_q, conv_k, conv_v = self.qkv_convs
+            q_flat = jax.nn.silu(conv_q(q_flat, sconv_segment_ids))
+            k_flat = jax.nn.silu(conv_k(k_flat, sconv_segment_ids))
+            v_flat = jax.nn.silu(conv_v(v_flat, sconv_segment_ids))
         # SConv: depthwise causal conv after the K projection.
         if self.sconv_k is not None:
             k_flat = self.sconv_k(k_flat, sconv_segment_ids)
