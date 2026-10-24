@@ -18,7 +18,8 @@ import logging
 
 from axolotl.integrations.base import BasePlugin
 
-LOG = logging.getLogger(__name__)
+# Under "axolotl." so Axolotl's logging config prints it.
+LOG = logging.getLogger("axolotl.integrations.router_aux_loss")
 
 
 def _pass_router_logits(model) -> None:
@@ -35,7 +36,7 @@ def _pass_router_logits(model) -> None:
         if not checked:
             if outputs.aux_loss is None:
                 raise RuntimeError(f"{type(model).__name__} returned no aux_loss with output_router_logits=True")
-            LOG.info("router aux loss on the first forward: %.6f", float(outputs.aux_loss))
+            LOG.info("router aux loss on the first forward: %.6f", outputs.aux_loss.item())
             checked = True
         return outputs
 

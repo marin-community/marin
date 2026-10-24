@@ -34,6 +34,7 @@ from experiments.post_training.axolotl_sft.launcher import (
     iris_command,
     launch_payload,
 )
+from experiments.post_training.axolotl_sft.pod_runner import _check_template
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template, template_sha256
 
 # The #8225 Stage 0 optimizer, every field explicit.
@@ -246,3 +247,11 @@ def test_masking_canary_on_the_shared_template(base_name):
     # Positions, not token values, are disjoint: the partition assertion above
     # already places every rendered token in exactly one message's span.
     assert template_sha256(tokens) == hashlib.sha256(template.encode()).hexdigest()
+
+
+def test_template_check_rejects_a_processor_jinja_that_differs(tmp_path):
+    (tmp_path / "tokenizer_config.json").write_text(json.dumps({"chat_template": "shared"}))
+    _check_template(tmp_path, "shared")
+    (tmp_path / "chat_template.jinja").write_text("published")
+    with pytest.raises(ValueError, match="differs from the configured"):
+        _check_template(tmp_path, "shared")
