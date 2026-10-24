@@ -1,12 +1,4 @@
-"""Judge contract for verifying attribution claims.
-
-`SemanticJudge` is the seam between this package's deterministic detection and a semantic verifier. Production
-binds an OpenAI-compatible endpoint in configuration; this package stays I/O-free and ships only the protocol and
-a deterministic test double.
-
-`ClaimKind` and `AttributionClaim` live here rather than in `detector` because both the detector and the judge
-reference them; keeping the claim types in this lower module keeps imports acyclic. `detector` re-exports them.
-"""
+"""Claim types and semantic-verifier contract for attribution detection."""
 
 from collections.abc import Callable
 from dataclasses import dataclass

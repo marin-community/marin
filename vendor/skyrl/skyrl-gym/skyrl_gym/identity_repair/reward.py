@@ -11,7 +11,7 @@ from skyrl_gym.identity_repair.judge import ClaimKind, SemanticJudge
 
 
 class RewardDimension(StrEnum):
-    """Rubric dimensions; penalties are positive-magnitude subscores subtracted in the total."""
+    """Rubric dimensions with signed contributions summed in the total."""
 
     FACTUAL_CORRECTNESS = "factual_correctness"
     RESPONSIVENESS = "responsiveness"

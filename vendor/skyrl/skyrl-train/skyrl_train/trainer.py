@@ -2198,17 +2198,7 @@ class RayPPOTrainer:
             else None
         )
 
-        (
-            sequences_tensor,
-            attention_masks_tensor,
-            response_masks_tensor,
-            rewards_tensor,
-            loss_masks_tensor,
-            rollout_logprobs_tensor,
-            token_level_shaping_tensor,
-            response_span_tags_tensor,
-            behavior_sources_tensor,
-        ) = convert_prompts_responses_to_batch_tensors(
+        collated = convert_prompts_responses_to_batch_tensors(
             self.tokenizer,
             prompt_ids,
             response_ids,
@@ -2219,6 +2209,15 @@ class RayPPOTrainer:
             response_span_tags,
             behavior_sources,
         )
+        sequences_tensor = collated.sequences
+        attention_masks_tensor = collated.attention_mask
+        response_masks_tensor = collated.action_mask
+        rewards_tensor = collated.rewards
+        loss_masks_tensor = collated.loss_masks
+        rollout_logprobs_tensor = collated.logprobs
+        token_level_shaping_tensor = collated.token_level_shaping
+        response_span_tags_tensor = collated.response_span_tags
+        behavior_sources_tensor = collated.behavior_sources
         if (
             rollout_logprobs_required(
                 self.cfg.trainer.algorithm,
@@ -2357,17 +2356,7 @@ class RayPPOTrainer:
                     response if repair is None else response[: repair.response_position] + list(repair.repair_token_ids)
                     for response, repair in zip(response_ids, closure_targets.repairs, strict=True)
                 ]
-                (
-                    sequences_tensor,
-                    attention_masks_tensor,
-                    response_masks_tensor,
-                    rewards_tensor,
-                    learner_loss_masks,
-                    learner_logprobs,
-                    _,
-                    _,
-                    _,
-                ) = convert_prompts_responses_to_batch_tensors(
+                collated = convert_prompts_responses_to_batch_tensors(
                     self.tokenizer,
                     prompt_ids,
                     response_ids,
@@ -2392,6 +2381,12 @@ class RayPPOTrainer:
                     None,
                     None,
                 )
+                sequences_tensor = collated.sequences
+                attention_masks_tensor = collated.attention_mask
+                response_masks_tensor = collated.action_mask
+                rewards_tensor = collated.rewards
+                learner_loss_masks = collated.loss_masks
+                learner_logprobs = collated.logprobs
                 width = response_masks_tensor.shape[1]
                 candidates = candidates[:, :width]
                 chosen = chosen[:, :width]

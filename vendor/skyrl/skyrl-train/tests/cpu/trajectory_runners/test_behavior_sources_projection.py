@@ -1,5 +1,8 @@
 import numpy as np
 import pytest
+import torch
+from types import SimpleNamespace
+from skyrl_train.dataset.preprocess import convert_prompts_responses_to_batch_tensors
 from rolloutengine.models import ModelTurn
 from taskcompendium.grading_result import GradeResult, Outcome
 
@@ -96,3 +99,21 @@ def test_concatenation_preserves_sparse_teacher_routes(routed_first):
     merged = concatenate_trajectory_batches(batches, tis_lcs_alert_threshold=0.005)
     assert merged["teacher_route_keys"] == (["identity", None] if routed_first else [None, "identity"])
     assert [len(row) for row in merged["response_ids"]] == ([4, 2] if routed_first else [2, 4])
+
+
+def test_padding_preserves_teacher_sources_and_behavior_logprobs():
+    batch = convert_prompts_responses_to_batch_tensors(
+        SimpleNamespace(pad_token_id=0),
+        [[10], [10, 11]],
+        [[20, 21], [22]],
+        [[0.0, 1.0], [0.5]],
+        [[0, 1], [1]],
+        [np.array([-0.2, -0.3]), np.array([-0.4])],
+        behavior_sources=[np.array([0, 1], dtype=np.uint8), np.array([1], dtype=np.uint8)],
+    )
+    torch.testing.assert_close(batch.sequences, torch.tensor([[0, 10, 20, 21], [10, 11, 22, 0]]))
+    torch.testing.assert_close(batch.behavior_sources, torch.tensor([[0, 1], [1, 0]], dtype=torch.uint8))
+    torch.testing.assert_close(batch.logprobs, torch.tensor([[-0.2, -0.3], [-0.4, 0.0]]))
+    torch.testing.assert_close(batch.loss_masks, torch.tensor([[0.0, 1.0], [1.0, 0.0]]))
+    torch.testing.assert_close(batch.rewards, torch.tensor([[0.0, 1.0], [0.5, 0.0]]))
+    torch.testing.assert_close(batch.action_mask, torch.tensor([[1, 1], [1, 0]]))

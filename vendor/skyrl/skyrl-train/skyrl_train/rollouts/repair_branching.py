@@ -1,10 +1,10 @@
 """Teacher-repair branch construction for mixed-policy identity GRPO groups.
 
 Given a student rollout and one verified attribution error, build the paired
-branch the plan requires: rewind to the clean prefix before the claim's clause,
+branch: rewind to the clean prefix before the claim's clause,
 sample a teacher continuation for the remainder of that assistant turn, then
 resume the current student on subsequent turns using each branch's own history.
-The original rollout is retained untouched. Teacher sampling parameters are
+The original token sequence is retained; paired loss masks exclude the shared prefix. Teacher sampling parameters are
 recorded verbatim in the branch metrics; failures reject the branch for audit
 rather than resampling until success.
 """
@@ -22,9 +22,8 @@ from skyrl_gym.envs.nemotron_ultra.answer_extraction import final_answer_text
 from taskcompendium.grading_result import GradeResult, Outcome
 from skyrl_train.inference_engines.base import ChatContinuation, InferenceEngineInput
 from skyrl_train.rollouts.training_record import TrainingRollout, TrainingStep, TrainingTransition
-from skyrl_train.trajectory_runners.types import TokenProvenance
+from skyrl_train.trajectory_runners.types import BEHAVIOR_SOURCES_KEY, TokenProvenance
 
-BEHAVIOR_SOURCES_KEY = "behavior_sources"
 STUDENT_SOURCE = 0
 TEACHER_SOURCE = 1
 
@@ -339,8 +338,7 @@ async def expand_identity_repair_group(
 ) -> list[TrainingRollout]:
     """Return the original rollout plus at most one repair branch.
 
-    The plan's first treatment repairs the first verified error per rollout;
-    later ablations may hand control back earlier. Ambiguous detections and
+    Repair at most one verified error per rollout. Ambiguous detections and
     generator failures are recorded in the returned rollouts' metrics as
     rejections and never silently dropped.
     """
@@ -385,14 +383,7 @@ def assert_finite_logprobs(values: Sequence[float], context: str) -> None:
 
 
 class ModelClientBranchChat:
-    """BranchChatClient over the trainer's ModelClient chat path.
-
-    Mirrors ``task_worker._model_turn`` for message requests: the engine renders
-    ``messages`` and splices ``prefix_token_ids`` into the assistant message at
-    ``assistant_message_index``, so the generator conditions on the served
-    prefix rather than the original message text. Verifying that the rendered
-    context contains none of the repaired claim is a smoke-test assertion.
-    """
+    """Continue an exact served token prefix through the model client chat API."""
 
     def __init__(self, client) -> None:
         self._client = client
