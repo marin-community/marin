@@ -186,22 +186,31 @@ def _raise_budget_exceeded(_signum, _frame) -> None:
     raise _ScreenBudgetExceeded
 
 
-def screened_answer(answer: str) -> bool:
-    """:func:`answer_is_verifier_parsable` under a CPU budget that cannot be swallowed.
+def cpu_bounded(call: Callable[[], bool], *, cpu_seconds: float) -> bool | None:
+    """``call()`` under a CPU budget that cannot be swallowed; ``None`` when the budget runs out.
 
     The watchdog is a profiling timer, separate from math-verify's SIGALRM, that keeps
-    firing every half second past the budget until its exception lands. An answer the
-    verifier cannot settle within the budget is not usable for grading and is dropped.
+    firing every half second past the budget until its exception lands. Signals reach
+    only the main thread, so this must run there.
     """
     previous = signal.signal(signal.SIGPROF, _raise_budget_exceeded)
-    signal.setitimer(signal.ITIMER_PROF, SCREEN_CPU_SECONDS, _SCREEN_RETRY_SECONDS)
+    signal.setitimer(signal.ITIMER_PROF, cpu_seconds, _SCREEN_RETRY_SECONDS)
     try:
-        return answer_is_verifier_parsable(answer)
+        return call()
     except _ScreenBudgetExceeded:
-        return False
+        return None
     finally:
         signal.setitimer(signal.ITIMER_PROF, 0)
         signal.signal(signal.SIGPROF, previous)
+
+
+def screened_answer(answer: str) -> bool:
+    """:func:`answer_is_verifier_parsable` under :data:`SCREEN_CPU_SECONDS` of CPU.
+
+    An answer the verifier cannot settle within the budget is not usable for grading
+    and is dropped.
+    """
+    return bool(cpu_bounded(lambda: answer_is_verifier_parsable(answer), cpu_seconds=SCREEN_CPU_SECONDS))
 
 
 def answer_verdicts(pool_rows: list[dict[str, str]], *, workers: int) -> dict[str, bool]:

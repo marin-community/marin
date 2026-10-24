@@ -35,7 +35,7 @@ from experiments.post_training.task_data.expert_traces import (
     token_counter,
     write_trace_batch,
 )
-from experiments.post_training.task_data.math_r import build_r_tasks
+from experiments.post_training.task_data.math_r import build_r_tasks, cpu_bounded
 
 TOKEN_CAPS = {"X": X_COMPLETION_TOKEN_CAP, "R": R_COMPLETION_TOKEN_CAP}
 DATA_SOURCES = {"X": "task_X", "R": "task_R"}
@@ -49,6 +49,10 @@ def _read_tasks(path: str) -> list[dict]:
 
 def _write_manifest(path: Path, manifest: dict) -> None:
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+GRADE_CPU_SECONDS = 60
+"""CPU budget for grading one trace: math-verify's own deadline can be swallowed (see math_r)."""
 
 
 @click.group()
@@ -114,7 +118,13 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
     """Keep the graded-correct teacher traces: the expert training set."""
     tasks = {task["task_id"]: task for task in _read_tasks(tasks_path)}
     traces = [trace for path in traces_paths for trace in _read_tasks(path)]
-    correct = [trace for trace in traces if GRADERS[task_name](tasks[trace["task_id"]], trace["content"])]
+    grader = GRADERS[task_name]
+    verdicts = [
+        cpu_bounded(lambda trace=trace: grader(tasks[trace["task_id"]], trace["content"]), cpu_seconds=GRADE_CPU_SECONDS)
+        for trace in traces
+    ]
+    # A trace the grader cannot settle within the budget is not graded correct.
+    correct = [trace for trace, verdict in zip(traces, verdicts, strict=True) if verdict]
     with open(output_path, "w") as handle:
         for trace in correct:
             handle.write(json.dumps(trace, sort_keys=True) + "\n")
@@ -124,6 +134,7 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
         "traces": list(traces_paths),
         "kept_under_cap": len(traces),
         "graded_correct": len(correct),
+        "grade_budget_exceeded": sum(verdict is None for verdict in verdicts),
         "pass_rate": len(correct) / len(traces) if traces else 0.0,
         "with_reasoning": sum(bool(trace["reasoning"]) for trace in traces),
         "completion_tokens_p50": tokens[len(tokens) // 2] if tokens else None,
