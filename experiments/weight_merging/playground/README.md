@@ -165,6 +165,16 @@ image and scorer source hashes. Direct `rescore` calls require `--cache PREFIX`.
 Infrastructure errors abort scoring and preserve completed grades. Keep large
 inputs/results in S3/GCS rather than local scratch.
 
+Timeout cleanup tolerates Docker auto-removal races only after `docker ps -a`
+confirms that the exact named container is gone; the grade remains a timeout
+failure. For this cleanup-only patch, `PLAYGROUND_CLEANUP_CACHE_MANIFEST` may
+point to an explicit compatibility manifest containing `old_contract`,
+`new_contract` and `patch_diff`. It must pin the one supported pre-patch contract
+and the exact current evaluation/scorer hashes. Any later scorer edit invalidates
+that manifest. Before reuse, five cached items, including a timeout, are executed
+again and must match exactly. The final run metadata retains both contracts,
+the patch and the sanity-check grades. Ordinary runs use a fresh source contract.
+
 Use isolated CUDA environments because the repository defaults to CPU Torch.
 The tested GPU driver is 535.309.01; CUDA 12.1 is compatible with it.
 

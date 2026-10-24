@@ -8,12 +8,38 @@ import math
 import random
 import re
 import subprocess
+import time
 import uuid
 from decimal import Decimal, InvalidOperation
 
 DOCKER_IMAGE = "python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f"
 NUMBER = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
 GSM_SMOKE_IDS = (0, 3, 7, 11, 19, 29, 43, 59, 79, 101, 127, 151)
+
+
+def remove_timed_out_container(name: str) -> None:
+    """Allow an auto-removal race only after the named container disappears."""
+    try:
+        subprocess.run(["docker", "rm", "--force", name], check=True, capture_output=True, text=True, timeout=15)
+    except subprocess.CalledProcessError as error:
+        message = error.stderr.strip()
+        raced = "No such container" in message or (
+            f"removal of container {name}" in message and "already in progress" in message
+        )
+        if not raced:
+            raise RuntimeError(f"Docker timeout cleanup failed: {message}") from error
+        for _ in range(20):
+            remaining = subprocess.run(
+                ["docker", "ps", "--all", "--filter", f"name={name}", "--format", "{{.Names}}"],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if name not in {line.strip().lstrip("/") for line in remaining.stdout.splitlines()}:
+                return
+            time.sleep(0.1)
+        raise RuntimeError(f"Docker timeout cleanup did not remove {name}: {message}") from error
 
 
 def validate_vocabulary(expected: dict[str, int], actual: dict[str, int], padding_token: str | None) -> None:
@@ -90,10 +116,7 @@ def score(item: dict, completion: str) -> dict:
     try:
         container.communicate(code, timeout=10)
     except subprocess.TimeoutExpired:
-        try:
-            subprocess.run(["docker", "rm", "--force", name], check=True, capture_output=True, text=True, timeout=15)
-        except subprocess.CalledProcessError as error:
-            raise RuntimeError(f"Docker timeout cleanup failed: {error.stderr.strip()}") from error
+        remove_timed_out_container(name)
         container.communicate()
         return {"correct": False, "error": "timeout"}
     if container.returncode == 125:

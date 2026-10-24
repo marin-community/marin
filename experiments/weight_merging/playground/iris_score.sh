@@ -28,8 +28,15 @@ PYCLI
   export PATH="/usr/local/bin:$PATH"
 fi
 docker pull python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
+cache_options=()
+if [ -n "${PLAYGROUND_CLEANUP_CACHE_MANIFEST:-}" ]; then
+  "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io cp \
+    "$PLAYGROUND_CLEANUP_CACHE_MANIFEST" "$work_dir/cleanup-cache-manifest.json"
+  cache_options=(--cleanup-cache-manifest "$work_dir/cleanup-cache-manifest.json")
+fi
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.rescore \
-  --run "$work_dir/run" --output "$work_dir/scored" --cache "$PLAYGROUND_OUTPUT/item-grades" --parity-items "${PLAYGROUND_PARITY_ITEMS:-0}"
+  --run "$work_dir/run" --output "$work_dir/scored" --cache "$PLAYGROUND_OUTPUT/item-grades" \
+  --parity-items "${PLAYGROUND_PARITY_ITEMS:-0}" "${cache_options[@]}"
 if [ "${PLAYGROUND_PARITY_ITEMS:-0}" = 0 ]; then
   "$work_dir/io/bin/python" - "$work_dir/scored" <<'PYREPORT'
 import json

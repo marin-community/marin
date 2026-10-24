@@ -14,6 +14,44 @@ from experiments.weight_merging.playground import evaluation
 from experiments.weight_merging.playground.evaluation import DOCKER_IMAGE, score
 from experiments.weight_merging.playground.remote.grades import GradeStore
 
+# The cleanup-only patch preserves grading and sandbox limits. Reuse requires an
+# explicit, source-pinned manifest and selects this one known old contract.
+PRECLEANUP_CACHE_CONTRACT = {
+    "docker_image": DOCKER_IMAGE,
+    "evaluation_sha256": "dccb00a00219aeeabbd389c9355b01eababa23b7c9460ba8e0cc264e618bf3fa",
+    "rescore_sha256": "f5ad7eba3404486b95829620ecdfe6874a52482ae6da624c193af0b5cb5b487e",
+}
+
+
+def check_cleanup_cache(rows: list[dict], items: dict[str, dict], cache: GradeStore) -> list[dict]:
+    """Re-execute five saved observations, including a timeout, before reuse."""
+    selected = []
+    for row in rows:
+        if row["dataset"] != "mbpp":
+            continue
+        item = items[row["item_id"]]
+        cached = cache.get(cache.identity(row, item))
+        if cached is None:
+            continue
+        if (
+            len(selected) < 4
+            or cached.get("error") == "timeout"
+            or any(grade.get("error") == "timeout" for _, grade in selected)
+        ):
+            selected.append((row, cached))
+        if len(selected) == 5:
+            break
+    if len(selected) != 5 or not any(grade.get("error") == "timeout" for _, grade in selected):
+        raise ValueError("Cleanup cache audit requires five saved grades including a timeout")
+    checks = []
+    for row, cached in selected:
+        actual = score(items[row["item_id"]], row["completion"])
+        if actual != cached:
+            raise ValueError(f"Cleanup patch changed cached grade: {row['candidate']} {row['item_id']}")
+        checks.append({"key": [row[key] for key in ("candidate", "item_id", "mode", "seed")], "grade": actual})
+    print("Cleanup cache sanity: five exact grades, including timeout", flush=True)
+    return checks
+
 
 def score_rows(
     rows: list[dict], items: dict[str, dict], *, cache: GradeStore, parity: bool = False
@@ -55,6 +93,7 @@ def main():
     parser.add_argument("--run", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cache", required=True)
+    parser.add_argument("--cleanup-cache-manifest", type=Path)
     parser.add_argument("--parity-items", type=int, default=0)
     args = parser.parse_args()
     if args.output.exists():
@@ -73,7 +112,16 @@ def main():
         "evaluation_sha256": hashlib.sha256(Path(evaluation.__file__).read_bytes()).hexdigest(),
         "rescore_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
-    cache = GradeStore(args.cache, scoring_contract)
+    compatibility = json.loads(args.cleanup_cache_manifest.read_text()) if args.cleanup_cache_manifest else None
+    if compatibility is not None and (
+        compatibility["old_contract"] != PRECLEANUP_CACHE_CONTRACT
+        or compatibility["new_contract"] != scoring_contract
+        or not compatibility["patch_diff"]
+    ):
+        raise ValueError("Cleanup cache manifest does not pin the exact old/new scorer sources and patch")
+    cache_contract = PRECLEANUP_CACHE_CONTRACT if compatibility is not None else scoring_contract
+    cache = GradeStore(args.cache, cache_contract)
+    sanity = check_cleanup_cache(rows, items, cache) if compatibility is not None else []
     scored, differences = score_rows(rows, items, cache=cache, parity=bool(args.parity_items))
     args.output.mkdir(parents=True)
     for name in ("panel.json", "model-paths.json", "model-sources.json"):
@@ -86,6 +134,9 @@ def main():
         "docker_image": DOCKER_IMAGE,
         "cache": args.cache,
         "scoring_contract": scoring_contract,
+        "cache_contract": cache_contract,
+        "cleanup_cache_compatibility": compatibility,
+        "cleanup_cache_sanity": sanity,
         "parity_items": args.parity_items,
         "rows": len(scored),
         "differences": differences,

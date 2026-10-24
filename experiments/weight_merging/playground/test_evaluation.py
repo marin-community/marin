@@ -1,6 +1,9 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
+import subprocess
+from types import SimpleNamespace
+
 import pytest
 
 from experiments.weight_merging.playground.evaluation import (
@@ -9,6 +12,7 @@ from experiments.weight_merging.playground.evaluation import (
     numeric_answer,
     paired_summary,
     python_code,
+    remove_timed_out_container,
     score,
     sign_test_pvalue,
     unclosed_thinking,
@@ -91,3 +95,55 @@ def test_bootstrap_resamples_whole_items_instead_of_individual_decodes():
     assert summary["paired_items"] == 2
     assert summary["mean_item_gain"] == 0.5
     assert summary["item_bootstrap_ci95"] == [0, 1]
+
+
+@pytest.mark.parametrize("message", ["removal of container NAME is already in progress", "No such container: NAME"])
+def test_timeout_auto_remove_race_remains_a_failed_grade_after_disappearance(monkeypatch, message):
+    polls = iter([True, False])
+
+    class Container:
+        attempts = 0
+
+        def communicate(self, *args, **kwargs):
+            self.attempts += 1
+            if self.attempts == 1:
+                raise subprocess.TimeoutExpired("docker run", 10)
+
+    monkeypatch.setattr("subprocess.Popen", lambda *args, **kwargs: Container())
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    def run(command, **kwargs):
+        if command[1] == "rm":
+            raise subprocess.CalledProcessError(1, command, stderr=message.replace("NAME", command[-1]))
+        assert command[1] == "ps" and command[-1] == "{{.Names}}"
+        name_filter = command[command.index("--filter") + 1]
+        assert name_filter.startswith("name=merge-eval-")
+        return SimpleNamespace(stdout=name_filter.removeprefix("name=") + "\n" if next(polls) else "")
+
+    monkeypatch.setattr("subprocess.run", run)
+    assert score({"dataset": "mbpp", "setup": [], "tests": []}, "while True: pass") == {
+        "correct": False,
+        "error": "timeout",
+    }
+    with pytest.raises(StopIteration):
+        next(polls)
+
+
+def test_cleanup_race_does_not_accept_a_remaining_container_or_other_daemon_error(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda _: None)
+
+    def run(command, **kwargs):
+        if command[1] == "rm":
+            raise subprocess.CalledProcessError(1, command, stderr="No such container: merge-eval-test")
+        return SimpleNamespace(stdout="merge-eval-test\n")
+
+    monkeypatch.setattr("subprocess.run", run)
+    with pytest.raises(RuntimeError, match="did not remove"):
+        remove_timed_out_container("merge-eval-test")
+
+    def daemon_error(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="permission denied")
+
+    monkeypatch.setattr("subprocess.run", daemon_error)
+    with pytest.raises(RuntimeError, match="permission denied"):
+        remove_timed_out_container("merge-eval-test")
