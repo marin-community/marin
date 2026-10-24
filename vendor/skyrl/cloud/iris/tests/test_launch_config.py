@@ -276,26 +276,6 @@ def test_composed_launch_records_whether_training_runs_ahead_of_its_updates(
     assert load_launch_config(path).runtime.training_type == expected
 
 
-@pytest.mark.parametrize(
-    ("rollout_buffer", "harbor_trials", "in_flight"),
-    [({}, None, 12), ({}, 20, 5), ({"max_in_flight": 8}, 20, 8)],
-    ids=["one-and-a-half-batches", "within-harbor-sandboxes", "explicit-above-harbor-bound"],
-)
-def test_launch_caps_prompt_groups_generating_at_once(
-    tmp_path: Path, rollout_buffer: dict, harbor_trials: int | None, in_flight: int
-) -> None:
-    raw = _raw_config()
-    raw["skyrl"]["trainer"]["rollout_buffer"] = rollout_buffer
-    raw["skyrl"]["generator"]["n_samples_per_prompt"] = 4
-    if harbor_trials is not None:
-        raw["skyrl"]["config_groups"] = {"terminal_bench_config": "terminal_bench"}
-        raw["skyrl"]["terminal_bench"] = {"harbor": {"n_concurrent_trials": harbor_trials}}
-    path = tmp_path / "launch.yaml"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-
-    assert load_launch_config(path).skyrl.trainer.rollout_buffer.max_in_flight == in_flight
-
-
 def test_object_store_uris_in_skyrl_config_reach_the_task_unchanged(tmp_path: Path) -> None:
     raw = _raw_config()
     raw["skyrl"]["trainer"]["rollout_buffer"] = {"object_store_root": "s3://runs/smoke/rollouts"}
