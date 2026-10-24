@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import requests
 import torch
+from huggingface_hub import hf_hub_download
 from rigging.filesystem.buckets import filesystem_for
 from rigging.secrets import require_secret
 from transformers import AutoTokenizer
@@ -36,6 +37,7 @@ PROMPTS = (
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--decode-probe", action="store_true")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[4]
     sys.path.insert(0, str(root / "vendor/skyrl/skyrl-train"))
@@ -66,19 +68,33 @@ def main() -> None:
     assert all(isinstance(ids, list) and all(isinstance(token, int) for token in ids) for ids in prompt_ids)
     assert len(prompt_ids[5]) > 3000, f"Window probe too short: {len(prompt_ids[5])}"
     print(f"Validated prompt token lengths: {[len(ids) for ids in prompt_ids]}", flush=True)
-    model = grug.GrugMoeForCausalLM.from_pretrained(
+    model, loading_info = grug.GrugMoeForCausalLM.from_pretrained(
         MODEL,
         revision=REVISION,
         dtype=torch.float32,
         attn_implementation="eager",
         device_map="auto",
         max_memory={index: "65GiB" for index in range(torch.cuda.device_count())},
-    ).eval()
+        output_loading_info=True,
+    )
+    model.eval()
+    assert all(not value for value in loading_info.values()), f"Incomplete checkpoint load: {loading_info}"
+    index_path = hf_hub_download(MODEL, "model.safetensors.index.json", revision=REVISION)
+    index = json.loads(Path(index_path).read_text())
+    state = model.state_dict()
+    assert set(state) == set(index["weight_map"]), "Loaded state keys differ from checkpoint"
+    state_bytes = sum(tensor.numel() * tensor.element_size() for tensor in state.values())
+    assert state_bytes == index["metadata"]["total_size"], "Loaded tensor bytes differ from checkpoint"
     assert all(parameter.dtype == torch.float32 for parameter in model.parameters())
     assert all(parameter.device.type == "cuda" for parameter in model.parameters())
     provenance = {
         "model": MODEL,
         "revision": REVISION,
+        "loading_info": loading_info,
+        "parameter_count": sum(parameter.numel() for parameter in model.parameters()),
+        "state_tensor_count": len(state),
+        "state_elements": sum(tensor.numel() for tensor in state.values()),
+        "state_bytes": state_bytes,
         "reference": "SkyRL Grug HF-compatible eager FP32, TF32 disabled",
         "implementation_sha256": (
             hashlib.sha256((root / "vendor/skyrl/skyrl-train/skyrl_train/models/grug_moe.py").read_bytes()).hexdigest()
@@ -89,6 +105,62 @@ def main() -> None:
     }
     fs.pipe_file(prefix + "/provenance.json", json.dumps(provenance, indent=2).encode())
     print(json.dumps(provenance), flush=True)
+    if args.decode_probe:
+        prompts = (
+            "Write a detailed 600-word horror story about a fairy tending a deserted garden.",
+            "Explain how to solve linear equations, with five worked examples and detailed reasoning for each step.",
+            "Describe the history and culture of Paris in a detailed 600-word essay.",
+        )
+        for index, prompt in enumerate(prompts):
+            done_path = f"{prefix}/decode-{index}.json"
+            if fs.exists(done_path):
+                continue
+            ids = tokenizer.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=True,
+                return_dict=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            payload = {
+                "model": MODEL,
+                "prompt": ids,
+                "max_tokens": 200,
+                "temperature": 0,
+                "seed": 0,
+                "logprobs": 1,
+                "return_tokens_as_token_ids": True,
+            }
+            base = require_secret("FP32_ENDPOINT").rstrip("/")
+            response = requests.post(base + "/v1/completions", json=payload, timeout=180)
+            response.raise_for_status()
+            choice = response.json()["choices"][0]
+            tokens = choice["logprobs"]["tokens"]
+            assert tokens and all(token.startswith("token_id:") for token in tokens)
+            generated = [int(token.split(":", 1)[1]) for token in tokens]
+            inputs = torch.tensor([ids + generated[:-1]], device=model.get_input_embeddings().weight.device)
+            with torch.inference_mode():
+                logits = model(input_ids=inputs, use_cache=False, logits_to_keep=len(generated)).logits[0].float().cpu()
+            log_probs = logits.log_softmax(-1)
+            comparisons = []
+            for step, token_id in enumerate(generated):
+                server = choice["logprobs"]["token_logprobs"][step]
+                reference = float(log_probs[step, token_id])
+                comparisons.append(
+                    {
+                        "step": step,
+                        "token_id": token_id,
+                        "server": server,
+                        "reference": reference,
+                        "error": server - reference,
+                        "reference_top_id": int(logits[step].argmax()),
+                    }
+                )
+            result = {"prompt": prompt, "input_ids": ids, "choice": choice, "comparisons": comparisons}
+            fs.pipe_file(done_path, json.dumps(result, indent=2).encode())
+            print(f"Completed decode prompt {index}: {len(generated)} tokens", flush=True)
+        fs.pipe_file(prefix + "/done.json", json.dumps({"decode_prompts": 3, "provenance": provenance}).encode())
+        return
     for index, prompt in enumerate(PROMPTS):
         done_path = f"{prefix}/prompt-{index}.json"
         if fs.exists(done_path):
