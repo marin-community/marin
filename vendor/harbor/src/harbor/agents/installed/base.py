@@ -11,6 +11,10 @@ from harbor.environments.base import BaseEnvironment, ExecResult
 from harbor.utils.env import parse_bool_env_value
 from harbor.utils.templating import render_prompt_template
 
+REQUIRED_MODEL_PRICE_FIELDS = frozenset(
+    {"input_cost_per_token", "output_cost_per_token"}
+)
+
 SERVER_TIMEOUT_GRACE = 15.0
 SERVER_TIMEOUT_KILL_DELAY = 5.0
 

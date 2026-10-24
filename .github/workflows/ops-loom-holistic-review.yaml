@@ -106,6 +106,6 @@ jobs:
             read-only except for creating or replacing the original holistic
             overview comment and optionally creating one new top-level
             comment with new or materially changed actionable findings. Run
-            review-pr-holistic with --comment and publish a typed result.
+            review-pr in holistic mode with --comment and publish a typed result.
           base: ${{ github.event.pull_request.head.sha }}
           github-issue: ${{ github.event.pull_request.number }}

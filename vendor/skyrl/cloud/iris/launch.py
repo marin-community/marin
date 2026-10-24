@@ -19,13 +19,13 @@ from omegaconf import DictConfig, OmegaConf
 
 from cloud.iris.artifacts import terminal_checkpoint_step, write_json
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
-from cloud.iris.runtime_bundle import resolve_launcher_source, runtime_bundle_inputs
 from marinskyrl.checkpoint_paths import policy_export_path
 from marinskyrl.hf_model import validate_portable_hf_model_files
 from marinskyrl.packed_tasks import select_task_references
 from marinskyrl.resource_locator import join_resource_path
 from marinskyrl.task_sources import TaskTroveParquetSource, TaskTroveSelectionSnapshot, data_source, data_source_dict
 from rigging.filesystem.storage_path import StoragePath
+from rigging.provenance import Provenance, launch_provenance
 
 
 class LaunchState(StrEnum):
@@ -61,7 +61,7 @@ class LaunchResult:
     state: LaunchState
     iris_job_id: str | None
     iris_job_state: str | None
-    source_digest: str
+    provenance: Provenance
     runtime_profile: str
     model: ExportedPolicy | None
     failure: str | None
@@ -135,7 +135,7 @@ def _result(
         state=state,
         iris_job_id=outcome.job_id if outcome else None,
         iris_job_state=outcome.job_state if outcome else None,
-        source_digest=str(config.runtime.source_digest),
+        provenance=launch_provenance(),
         runtime_profile=str(config.runtime.profile),
         model=model,
         failure=failure,
@@ -163,7 +163,6 @@ def _record_failure(
 def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -> LaunchResult:
     """Execute the lifecycle declared by one resolved launch config."""
     config = _prepare_config(load_launch_config(config_path))
-    runtime_bundle_inputs(str(config.runtime.source_digest))
     terminal_manifest_uri = str(config.artifacts.terminal_manifest_uri)
     if StoragePath(terminal_manifest_uri).exists():
         raise ValueError(f"Terminal manifest is immutable and already exists: {terminal_manifest_uri}")
@@ -222,7 +221,6 @@ def execute_launch(config_path: Path, *, backend: LaunchBackend | None = None) -
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Launch SkyRL from one resolved Hydra config")
     commands = parser.add_subparsers(dest="component", required=True)
-    commands.add_parser("source-digest", help="Identify the checked-out runtime, assets, and lock")
     iris = commands.add_parser("iris")
     iris_commands = iris.add_subparsers(dest="action", required=True)
     launch = iris_commands.add_parser("launch")
@@ -232,9 +230,6 @@ def create_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = create_parser().parse_args(argv)
-    if args.component == "source-digest":
-        print(resolve_launcher_source().digest)
-        return 0
     with contextlib.redirect_stdout(sys.stderr):
         result = execute_launch(args.config)
     json.dump(asdict(result), sys.stdout, sort_keys=True)

@@ -10,9 +10,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import uuid
 from collections import deque
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, fields
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
 from typing import Literal, cast
@@ -20,6 +21,7 @@ from typing import Literal, cast
 import fsspec
 import yaml
 from iris.cluster.client.job_info import get_job_info
+from iris.rpc import job_pb2
 from pydantic import BaseModel
 from rigging.config_discovery import find_project_root
 from rigging.filesystem.cluster_config import marin_temp_bucket
@@ -41,13 +43,6 @@ _LAUNCHER_DIAGNOSTIC_LINES = 20
 SKYRL_TEMPORARY_STORAGE_TTL_DAYS = 14
 IRIS_HUB_CLUSTER_CONFIG = "lib/iris/config/marin.yaml"
 SKYRL_PROJECT = Path("vendor/skyrl")
-
-
-def skyrl_runtime_digest() -> str:
-    """Ask the isolated executable to identify its checked-out source and lock."""
-    completed = _run_launcher(_project_command("source-digest"))
-    completed.check_returncode()
-    return completed.stdout.strip()
 
 
 def skyrl_temporary_run_path(output_path: str, *, ttl_days: int) -> str:
@@ -82,13 +77,6 @@ def validate_megatron_geometry(geometry: MegatronGeometry, *, role: str, num_gpu
             f"Megatron {role} has {num_gpus} GPUs but requires {sizes}; "
             "GPUs must be divisible by TP*PP*CP and data-parallel size by EP"
         )
-
-
-@dataclass(frozen=True)
-class SkyRLRuntime:
-    """Digest of the current SkyRL source, assets, and independent lock."""
-
-    source_digest: str = field(init=False, default_factory=skyrl_runtime_digest)
 
 
 @dataclass(frozen=True)
@@ -235,8 +223,8 @@ class SkyRLRetentionPolicy:
     temporary_storage_ttl_days: int = SKYRL_TEMPORARY_STORAGE_TTL_DAYS
 
     def __post_init__(self) -> None:
-        if not 1 <= self.resume_checkpoint_count <= 5:
-            raise ValueError("SkyRL resume_checkpoint_count must be between one and five")
+        if not 1 <= self.resume_checkpoint_count <= 10:
+            raise ValueError("SkyRL resume_checkpoint_count must be between one and ten")
         if self.temporary_storage_ttl_days <= 0:
             raise ValueError("SkyRL temporary_storage_ttl_days must be positive")
 
@@ -319,12 +307,16 @@ def _validate_relative_file_path(name: str, value: str) -> None:
 
 @dataclass(frozen=True)
 class ArtifactHfModel:
-    """An exact HF export produced by another Marin artifact step."""
+    """An exact HF export; an empty relative path selects the artifact root."""
 
     step: ArtifactStep[LevanterCheckpoint]
     tokenizer_uri: str
     tokenizer_revision: str
     relative_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.relative_path is not None and any(part in (".", "..") for part in self.relative_path.split("/")):
+            raise ValueError("HF model relative_path must not contain dot segments; use '' for the artifact root")
 
     def deps(self) -> tuple[ArtifactStep, ...]:
         return (self.step,)
@@ -414,7 +406,6 @@ class SkyRLSpec:
     name: str
     version: str
     config_yaml: str
-    runtime: SkyRLRuntime
     model: ArtifactHfModel
     train_data: tuple[SkyRLDataSource, ...]
     validation_data: tuple[SkyRLDataSource, ...]
@@ -442,6 +433,8 @@ class IrisSkyRLExecution:
     coordinator_timeout_hours: int
     wandb_entity: str | None = None
     job_timeout_seconds: int = 0
+    required_env_vars: tuple[str, ...] = ()
+    container_profile: job_pb2.ContainerProfile | None = None
 
     def __post_init__(self) -> None:
         if self.coordinator_timeout_hours <= 0:
@@ -597,6 +590,11 @@ def _validate_skyrl_recipe(
     if _declared_config_value(config, "trainer.strategy") != "megatron":
         raise ValueError("SkyRL requires trainer.strategy=megatron")
     _validate_role_plan_config(config, topology.role_plan)
+    if (
+        _declared_config_value(config, "generator.weight_sync_transport") == "expert_block"
+        and topology.role_plan.colocate_all
+    ):
+        raise ValueError("SkyRL expert_block requires non-colocated inference workers")
     forward_batch = _declared_config_value(config, "trainer.micro_forward_batch_size_per_gpu")
     if forward_batch is not _MISSING_CONFIG_VALUE and forward_batch != topology.role_plan.micro_train_batch_size_per_gpu:
         raise ValueError("Megatron requires equal micro_forward_batch_size_per_gpu and micro_train_batch_size_per_gpu")
@@ -652,25 +650,41 @@ class _SkyRLLaunchResponse(BaseModel):
     model: _SkyRLTerminalModel | None = None
 
 
-def _project_command(*arguments: str) -> list[str]:
+def skyrl_cpu_command(*arguments: str) -> list[str]:
+    """Return argv for SkyRL's frozen CPU environment using its declared Python requirement."""
     workspace_root = find_project_root(Path(__file__))
     if workspace_root is None:
         raise RuntimeError("The MarinSkyRL launcher requires a Marin checkout")
+    project_root = workspace_root / SKYRL_PROJECT
+    uv_version = (project_root / ".uv-version").read_text().strip()
+    python_requirement = tomllib.loads((project_root / "pyproject.toml").read_text())["project"]["requires-python"]
     return [
+        "uv",
+        "tool",
+        "run",
+        "--from",
+        f"uv=={uv_version}",
+        "--python",
+        python_requirement,
+        "--no-python-downloads",
         "uv",
         "run",
         "--project",
-        str(workspace_root / SKYRL_PROJECT),
+        str(project_root),
+        "--python",
+        python_requirement,
+        "--no-python-downloads",
         "--frozen",
+        "--extra",
+        "cpu",
         "--no-group",
         "dev",
-        "marinskyrl",
         *arguments,
     ]
 
 
 def _launcher_command(config_path: str) -> list[str]:
-    return _project_command("iris", "launch", "--config", config_path)
+    return skyrl_cpu_command("marinskyrl", "iris", "launch", "--config", config_path)
 
 
 def _run_launcher(command: list[str]) -> subprocess.CompletedProcess[str]:
@@ -799,7 +813,6 @@ def _launch_config_yaml(
             "export_hf": export_hf,
         },
         "runtime": {
-            "source_digest": spec.runtime.source_digest,
             "profile": _declared_config_value(recipe, "trainer.strategy"),
             "entrypoint": "",
             "experiments_dir": "/app/experiments",
@@ -849,6 +862,8 @@ def _launch_config_yaml(
         },
         "skyrl": recipe,
     }
+    if execution.container_profile is not None:
+        launch["iris"]["container_profile"] = job_pb2.ContainerProfile.Name(execution.container_profile)
     return yaml.safe_dump(launch, sort_keys=False)
 
 

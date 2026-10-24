@@ -26,6 +26,7 @@ from google.cloud import storage
 
 import rigging.filesystem.factory as factory
 from rigging.filesystem.atomic import unique_temp_path
+from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.filesystem.s3_errors import is_transient_s3_error
 from rigging.filesystem.storage_path import StoragePath
 from rigging.timing import ExponentialBackoff, retry_with_backoff
@@ -221,14 +222,15 @@ class S3ConditionalObject:
         session = botocore.session.get_session()
         config = botocore.config.Config(s3={"addressing_style": "virtual"})
         credentials = {}
-        access_key = os.environ.get("AWS_ACCESS_KEY_ID")
-        secret_key = os.environ.get("AWS_SECRET_ACCESS_KEY")
+        options = s3_credential_options()
+        access_key = options.get("key")
+        secret_key = options.get("secret")
         if access_key and secret_key:
             credentials = {
                 "aws_access_key_id": access_key,
                 "aws_secret_access_key": secret_key,
             }
-            if session_token := os.environ.get("AWS_SESSION_TOKEN"):
+            if session_token := options.get("token"):
                 credentials["aws_session_token"] = session_token
         if endpoint_url:
             return session.create_client("s3", endpoint_url=endpoint_url, config=config, **credentials)

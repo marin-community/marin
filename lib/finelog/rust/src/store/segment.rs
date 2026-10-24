@@ -314,7 +314,7 @@ fn layout_version_of(meta: &ParquetMetaData) -> Option<u32> {
         .and_then(|v| v.parse::<u32>().ok())
 }
 
-fn segment_id_of(meta: &ParquetMetaData) -> Option<Uuid> {
+pub(crate) fn segment_id_of(meta: &ParquetMetaData) -> Option<Uuid> {
     meta.file_metadata()
         .key_value_metadata()
         .and_then(|kvs| kvs.iter().find(|kv| kv.key == SEGMENT_ID_KEY))

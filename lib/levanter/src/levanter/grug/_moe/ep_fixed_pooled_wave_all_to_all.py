@@ -15,6 +15,7 @@ from jaxtyping import Array, Bool, Float, Int
 from levanter.grug._moe.common import _assignment_validity, _scaled_capacity, CapacityDrops
 from levanter.grug._moe.ep_common import (
     _assignment_sources,
+    _combine_gather_sum,
     _ranks_within_groups,
     _token_sources,
 )
@@ -26,7 +27,6 @@ class _PooledDispatch(NamedTuple):
     receiver_linear_indices: Int[Array, " received"]
     receiver_keep: Array
     sender_linear_indices: Int[Array, " assignments"]
-    sender_keep: Array
     assignment_sources: Int[Array, " send"]
     receiver_dropped: Int[Array, ""]
 
@@ -36,7 +36,6 @@ class _PooledOutput(NamedTuple):
     receiver_linear_indices: Int[Array, " received"]
     receiver_keep: Array
     sender_linear_indices: Int[Array, " assignments"]
-    sender_keep: Array
     assignment_sources: Int[Array, " send"]
     receiver_dropped: Int[Array, ""]
 
@@ -64,81 +63,6 @@ def _dispatch_gather_input_grad(
 
     grad_x = jax.lax.fori_loop(0, topk, add_route, grad_x)
     return grad_x.astype(cotangent.dtype)
-
-
-def _combine_gather_sum_impl(
-    send_output: Float[Array, "send H"],
-    gather_indices: Int[Array, " assignments"],
-    keep: Array,
-    combine_weights: Float[Array, "Tlocal K"],
-) -> Float[Array, "Tlocal H"]:
-    tokens_per_shard, topk = combine_weights.shape
-    hidden_dim = send_output.shape[1]
-    gather_indices = gather_indices.reshape(tokens_per_shard, topk)
-    keep = keep.reshape(tokens_per_shard, topk)
-
-    if sonic_gather_sum_available():
-        weights = jnp.where(keep, combine_weights, 0)
-        return sonic_gather_sum_masked(send_output, gather_indices, weights, output_dtype=jnp.float32)
-
-    out = jnp.zeros((tokens_per_shard, hidden_dim), dtype=jnp.float32)
-
-    def add_route(route_index, out):
-        rows = send_output[jnp.minimum(gather_indices[:, route_index], send_output.shape[0] - 1)]
-        rows = jnp.where(keep[:, route_index, None], rows, 0)
-        weight = combine_weights[:, route_index, None].astype(jnp.float32)
-        return out + rows.astype(jnp.float32) * weight
-
-    return jax.lax.fori_loop(0, topk, add_route, out)
-
-
-@jax.custom_vjp
-def _combine_gather_sum(
-    send_output: Float[Array, "send H"],
-    gather_indices: Int[Array, " assignments"],
-    keep: Array,
-    assignment_sources: Int[Array, " send"],
-    combine_weights: Float[Array, "Tlocal K"],
-) -> Float[Array, "Tlocal H"]:
-    return _combine_gather_sum_impl(send_output, gather_indices, keep, combine_weights)
-
-
-def _combine_gather_sum_fwd(send_output, gather_indices, keep, assignment_sources, combine_weights):
-    out = _combine_gather_sum_impl(send_output, gather_indices, keep, combine_weights)
-    return out, (send_output, gather_indices, keep, assignment_sources, combine_weights)
-
-
-def _combine_gather_sum_bwd(residual, cotangent):
-    send_output, gather_indices, keep, assignment_sources, combine_weights = residual
-    tokens_per_shard, topk = combine_weights.shape
-    assignments_per_shard = tokens_per_shard * topk
-    valid = assignment_sources < assignments_per_shard
-    sources = jnp.minimum(assignment_sources, assignments_per_shard - 1)
-    source_tokens = sources // topk
-    source_weights = combine_weights.reshape(-1)[sources].astype(jnp.float32)
-    d_send_output = cotangent[source_tokens].astype(jnp.float32) * source_weights[:, None]
-    d_send_output = jnp.where(valid[:, None], d_send_output, 0).astype(send_output.dtype)
-
-    gather_indices = gather_indices.reshape(tokens_per_shard, topk)
-    keep = keep.reshape(tokens_per_shard, topk)
-    d_combine_weights = jnp.zeros_like(combine_weights)
-
-    def set_route(route_index, d_combine_weights):
-        rows = send_output[jnp.minimum(gather_indices[:, route_index], send_output.shape[0] - 1)]
-        d_weight = jnp.sum(cotangent.astype(jnp.float32) * rows.astype(jnp.float32), axis=1)
-        d_weight = jnp.where(keep[:, route_index], d_weight, 0).astype(combine_weights.dtype)
-        return jax.lax.dynamic_update_slice_in_dim(
-            d_combine_weights,
-            d_weight[:, None],
-            route_index,
-            axis=1,
-        )
-
-    d_combine_weights = jax.lax.fori_loop(0, topk, set_route, d_combine_weights)
-    return d_send_output, None, None, None, d_combine_weights
-
-
-_combine_gather_sum.defvjp(_combine_gather_sum_fwd, _combine_gather_sum_bwd)
 
 
 def _compact_received_impl(
@@ -440,7 +364,6 @@ def _dispatch_pooled(
         receiver_linear_indices,
         receiver_keep,
         sender_linear_indices,
-        sender_keep,
         assignment_sources,
         receiver_dropped,
     )
@@ -464,7 +387,6 @@ def _compute_pooled(
         dispatch.receiver_linear_indices,
         dispatch.receiver_keep,
         dispatch.sender_linear_indices,
-        dispatch.sender_keep,
         dispatch.assignment_sources,
         dispatch.receiver_dropped,
     )
@@ -495,9 +417,9 @@ def _combine_pooled(
         return _combine_gather_sum(
             returned,
             output.sender_linear_indices,
-            output.sender_keep,
             output.assignment_sources,
             combine_weights_local,
+            jnp.float32,
         )
 
 

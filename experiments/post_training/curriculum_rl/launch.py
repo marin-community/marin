@@ -48,7 +48,6 @@ from marin.rl.skyrl import (
     SkyRLRetentionPolicy,
     SkyRLRolePlan,
     SkyRLRun,
-    SkyRLRuntime,
     SkyRLSpec,
     SkyRLTopology,
     skyrl_step,
@@ -644,7 +643,6 @@ def build_arm(
             name=user_owned_name(rl_base_name),
             version=version or resolve_version(rl_base_name, None),
             config_yaml=rl_config_yaml(preset, spec, policy),
-            runtime=SkyRLRuntime(),
             model=ArtifactHfModel(
                 step=model,
                 tokenizer_uri=policy.tokenizer_uri,

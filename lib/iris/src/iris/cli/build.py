@@ -261,7 +261,10 @@ def build_image(
             capture_output=not verbose,
         )
 
-    cmd = ["docker", "buildx", "build", "--platform", platform]
+    # --pull resolves base image tags against the registry. Without it the docker
+    # driver reuses the builder's local copy, and the registry layer cache then
+    # replays layers built on that stale base, missing base-image security fixes.
+    cmd = ["docker", "buildx", "build", "--pull", "--platform", platform]
     cmd.extend(["--target", image_type])
     cmd.extend(["--build-arg", f"CARGO_PROFILE={cargo_profile}"])
     # The image carries no `.git`, so the date the controller reports for itself

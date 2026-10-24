@@ -18,6 +18,8 @@ recovery input. The EvalDash Marina runner scans object storage and commits cata
 instances do no background reconciliation work.
 The runner writes through the database engine without loading a serving snapshot. Catalog
 materialization reads and writes at most 128 run IDs per batch within the prefix transaction.
+Source verification updates and upserts also use batches of at most 128 rows; PostgreSQL applies
+each verification batch in one statement rather than sending an update for each record.
 Object checks finish before that transaction begins; parsed records from those checks remain in
 memory until commit.
 Historical records may omit `model.config.tokenizer_revision`; the record reader treats an omitted
@@ -47,8 +49,11 @@ Each source change and its selected `eval_catalog_runs`/`eval_catalog_metrics` p
 transaction. The lowest configured prefix priority wins duplicate run IDs, so a removed canonical
 record promotes its legacy copy without rereading it. The transaction advances
 `eval_catalog_state.generation`. Each serving instance checks that generation at most once every 10
-seconds and swaps its in-memory aggregate views only after a newer generation commits. A failed check
-serves the last good snapshot and retries after the same interval. `marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
+seconds and swaps its in-memory record snapshot only after a newer generation commits. A failed check
+serves the last good snapshot and retries after the same interval. Snapshot loads read the generation
+and records in one read-only `REPEATABLE READ` transaction, so a writer can commit during a load
+without blocking it or mixing records from different generations.
+`marina release infra/marina/apps/evaldash --base-version CURRENT_VERSION` applies the
 pending numbered migrations from `migrations/` under a
 PostgreSQL advisory lock and rejects a database whose migration ledger is newer than the running
 binary; mounting the app only verifies the schema, and never writes. The initial migration adopts the
@@ -70,6 +75,10 @@ and Escape. Filters, result limit, and launch/flat view are carried in the run-l
 Runs span all cohorts; the cohort carried by the shell navigation applies to scored views.
 Filtering launches by eval retains all their sibling runs and the full launch's status.
 `/meta` returns `run_facets` over all records, including smoke runs, separately from panel facets.
+Its model, benchmark, cohort, and filter lists are computed when a catalog snapshot loads or refreshes.
+Requests reuse those lists and read current archive flags independently; archiving does not require a
+new catalog generation. Synchronous metadata work runs in a worker thread so database waits leave the
+async event loop available to other requests.
 
 Model detail links record the selected cohort in `?cohort=`, including `all` and `unversioned`,
 so reopening a link restores the same runs and scores. Links without a cohort resolve to the
@@ -182,8 +191,9 @@ Historical cohort labels remain selectable. `cohort=all` selects the newest admi
 benchmark across cohorts for browsing; model comparison is disabled and the `/compare` API rejects
 it. The UI marks all-cohort and unverified historical views with an asterisk because their settings
 are not verified as comparable. A named verified cohort admits only records with its approved
-benchmark config, evaluator revision, and thinking mode. Models with different normalized source
-YAMLs have separate comparison names ending in `@<12-character digest>`.
+benchmark config, evaluator revision, and thinking mode. Results share a row by model name within
+the selected cohort, including benchmark-specific serving overrides. Each run retains its source
+configuration and digest.
 
 Within the selected cohort, each benchmark uses the newest run that clears the request's admission rules
 (`min_coverage`, default 0.9, and a succeeded status). `min_benchmark_coverage`, also 0.9, is the share
@@ -220,11 +230,20 @@ finelog hub by internal IP over Direct VPC egress. GCE instance discovery requir
 payload rather than erroring, so the dashboard shows "unreachable" and falls back to the log
 tails recorded on the run.
 
-The `samples/artifact` endpoint resolves a sample's `trajectory_uri` through fsspec,
-restricted to URIs under the run's own `results_path` -- a `..` segment or an out-of-tree URI is
-refused, so the endpoint cannot fetch arbitrary object storage. It size-caps each read and, like the
-logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable, or oversized
-object rather than a 500. Reads are cached briefly, as sample tables are.
+The `samples/artifact` endpoint resolves a sample's `trajectory_uri` or `summary_uri` from the
+FineStore archive or the run's results tree. Direct object-store URIs must be under the run's own
+`results_path`: a `..` segment or an out-of-tree URI is refused. The endpoint size-caps each read
+and, like the logs endpoint, returns a typed `{available: false, reason}` for a missing, unreadable,
+or oversized object rather than a 500. Reads are cached briefly, as sample tables are.
+
+For SOTOPIA-hard Harbor samples without an archived ATIF trajectory, the sample reader returns a
+`summary_uri` with a `sotopia-summary://<trial>` reference from the archived trial ID. The artifact
+endpoint reads `harbor_jobs/<job>/<trial>/result.json` and resolves its selected `trial_relpath`
+under the same results path. It displays `agent/sotopia-summary.json` only from that attempt. The
+viewer renders the ordered conversation, evaluator reasoning, dimension scores, and context-budget
+data.
+If no summary is available, the endpoint reports that status. This fallback does not change the
+archived sample or its reward.
 
 `/models/{model}` aggregates in one call everything the Model view needs: the model's identity from
 its newest record, one cohort entry per distinct version (newest first), each eval's score-over-time

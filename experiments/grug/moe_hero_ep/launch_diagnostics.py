@@ -23,6 +23,7 @@ from rigging.filesystem.storage_path import prefix_join
 from experiments.grug.moe_hero_ep.harrier_mix_2026_08_18 import (
     HARRIER_MIX_2026_08_18_STORE,
     HARRIER_MIX_2026_08_18_TAG,
+    SIMULATED_EPOCHING_MAX_FLOPS,
     harrier_mix_2026_08_18_data_config,
 )
 from experiments.grug.moe_hero_ep.hero_recipe import (
@@ -104,10 +105,12 @@ def build_diagnostic_run(
     max_seq_len: int | None = None,
     context_axis_size: int = 1,
     expert_axis_size: int = HERO_EP_EXPERT_AXIS_SIZE,
+    balance_attention_rows: bool = False,
     qk_mult: float | None = None,
     qk_mult_long_scale: float | None = None,
     restore_from: str | None = None,
     moe_implementation: str | None = None,
+    ce_grad_in_forward_token_block_size: int | None = None,
     master_param_mode: MasterParamMode = HERO_MASTER_PARAM_MODE,
     processes_per_task: int = HERO_PROCESSES_PER_TASK,
     eval_every: int = 0,
@@ -173,6 +176,7 @@ def build_diagnostic_run(
             ("qk_mult", qk_mult),
             ("qk_mult_long_scale", qk_mult_long_scale),
             ("moe_implementation", moe_implementation),
+            ("ce_grad_in_forward_token_block_size", ce_grad_in_forward_token_block_size),
         )
         if value is not None
     }
@@ -235,7 +239,10 @@ def build_diagnostic_run(
         master_param_mode=master_param_mode,
     )
     grug_trainer = dataclasses.replace(
-        grug_trainer, context_axis_size=context_axis_size, expert_axis_size=expert_axis_size
+        grug_trainer,
+        context_axis_size=context_axis_size,
+        expert_axis_size=expert_axis_size,
+        balance_attention_rows=balance_attention_rows,
     )
     train_resources = ResourceConfig.with_gpu(
         "GB200",
@@ -318,7 +325,7 @@ def build_diagnostic_run(
             total_steps=total_schedule_steps,
             batch_size=batch_size,
             max_seq_len=model.max_seq_len,
-            experiment_flops=experiment_flops,
+            enable_simulated_epoching=experiment_flops <= SIMULATED_EPOCHING_MAX_FLOPS,
             validation=validation,
         )
         return GrugRunConfig(
@@ -430,6 +437,12 @@ def build_diagnostic_run(
     "--moe-implementation",
     default=None,
     help="Override the MoE backend, e.g. ragged_all_to_all. Defaults to the hero spec.",
+)
+@click.option(
+    "--ce-grad-in-forward-token-block-size",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Compute the training cross-entropy's gradients in its forward, in blocks of this many rows per rank.",
 )
 @click.option(
     "--master-params",
@@ -545,6 +558,12 @@ def build_diagnostic_run(
 )
 @click.option("--expert-axis-size", type=click.IntRange(min=1), default=HERO_EP_EXPERT_AXIS_SIZE, show_default=True)
 @click.option(
+    "--balance-attention-rows/--no-balance-attention-rows",
+    default=False,
+    show_default=True,
+    help="Deal rows to batch shards by attention cost.",
+)
+@click.option(
     "--qk-mult",
     type=click.FloatRange(min=0, min_open=True),
     default=None,
@@ -571,6 +590,7 @@ def main(
     capacity_factor: float | None,
     latent_dim: int | None,
     moe_implementation: str | None,
+    ce_grad_in_forward_token_block_size: int | None,
     master_params: str,
     processes_per_task: int,
     save_checkpoints: bool,
@@ -587,6 +607,7 @@ def main(
     seq_len: int | None,
     context_axis_size: int,
     expert_axis_size: int,
+    balance_attention_rows: bool,
     qk_mult: float | None,
     qk_mult_long_scale: float | None,
     restore_from: str | None,
@@ -606,10 +627,12 @@ def main(
         max_seq_len=seq_len,
         context_axis_size=context_axis_size,
         expert_axis_size=expert_axis_size,
+        balance_attention_rows=balance_attention_rows,
         qk_mult=qk_mult,
         qk_mult_long_scale=qk_mult_long_scale,
         restore_from=restore_from,
         moe_implementation=moe_implementation,
+        ce_grad_in_forward_token_block_size=ce_grad_in_forward_token_block_size,
         master_param_mode=MasterParamMode(master_params),
         processes_per_task=processes_per_task,
         save_checkpoints=save_checkpoints,

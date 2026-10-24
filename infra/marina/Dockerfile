@@ -3,7 +3,7 @@ FROM python:3.12-slim AS build
 ENV PYTHONUNBUFFERED=1
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=ghcr.io/astral-sh/uv:0.12.3 /uv /bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /bin/uv
 # The workspace lives at /app: rigging resolves the repo-root config/ directory by walking up
 # from the working directory to the workspace pyproject, so the process runs from here.
 WORKDIR /app

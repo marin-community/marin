@@ -15,7 +15,7 @@ if str(_REPO_ROOT) not in sys.path:
 
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config  # noqa: E402
 
-_BASE_CONFIG = _REPO_ROOT / "cloud/iris/configs/nemotron_ultra_rlvr_acceptance.yaml"
+_BASE_CONFIG = _REPO_ROOT / "cloud/iris/configs/qwen_megatron_smoke.yaml"
 
 
 @dataclass
@@ -25,6 +25,7 @@ class _HPCStub:
 
 def _skipped_grading_config(tmp_path: Path, *, eval_interval: int) -> Path:
     raw = yaml.safe_load(_BASE_CONFIG.read_text())
+    raw["environment"]["env_class"] = "nemotron_ultra"
     trainer = raw["trainer"]
     trainer["eval_before_train"] = False
     trainer["eval_interval"] = eval_interval

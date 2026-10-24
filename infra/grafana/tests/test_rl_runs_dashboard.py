@@ -352,6 +352,68 @@ def _view_sql(view: str, endpoint: str) -> str:
     return f"WITH {sources}\n{dataset.views[view]}"
 
 
+@pytest.mark.parametrize("build", [rl_overview_dataset, rl_gpu_dataset])
+def test_selected_rl_views_preserve_combined_results_with_uneven_device_samples(store, build):
+    extra_samples = [
+        _row(
+            service="iris-node-agent",
+            name="gpu_utilization_percent",
+            value=0,
+            moment=WINDOW_START + timedelta(seconds=sequence),
+            seq=sequence,
+            node_name=NODES[0],
+            attributes={"gpu_uuid": f"GPU-{NODES[0]}-0"},
+        )
+        for sequence in (1, 2, 3)
+    ]
+    store.executemany(
+        f'INSERT INTO "telemetry_v1.node_agent" VALUES ({", ".join("?" for _ in _COLUMNS)})', extra_samples
+    )
+    combined = build((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 300_000)
+    for view in combined.views:
+        selected = build((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 300_000, view)
+        results = []
+        for dataset in (combined, selected):
+            sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
+            rows = store.execute(f"WITH {sources}\n{dataset.views[view]}").fetchall()
+            results.append(sorted(rows, key=lambda row: tuple(str(value) for value in row[:2])))
+        assert len(results[0]) == len(results[1]), view
+        for expected, actual in zip(results[0], results[1], strict=True):
+            assert actual == pytest.approx(expected, rel=1e-12, abs=1e-12), view
+        if view == "gpu_utilization":
+            assert results[1][0] == (_WINDOW_START_MS, RUN_ID, 57.6875)
+
+
+@pytest.mark.parametrize("view", ["critical_path", "straggler"])
+def test_critical_path_sources_exclude_other_clocks_and_phases(store, view):
+    irrelevant = [
+        _row(
+            service="marinskyrl",
+            name="phase_duration_seconds",
+            value=1000,
+            moment=WINDOW_START,
+            seq=100,
+            run_id=RUN_ID,
+            attributes={"phase": phase, "clock_domain": clock, "outcome": "success"},
+        )
+        for phase, clock in (("train_step", "inclusive_wall"), ("rollout_call", "critical_path"))
+    ]
+    store.executemany(f'INSERT INTO "telemetry_v1.marinskyrl" VALUES ({", ".join("?" for _ in _COLUMNS)})', irrelevant)
+    selected = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 300_000, view)
+    source_rows = store.execute(selected.sources[0].sql).fetch_arrow_table().to_pylist()
+    assert {(row["clock_domain"], row["phase"]) for row in source_rows} == {
+        ("critical_path", "rollout_or_inference_wait"),
+        ("critical_path", "train_step"),
+    }
+    combined = rl_overview_dataset((CLUSTER,), RUN_ID, _WINDOW_START_MS, _NOW_MS, 300_000)
+    results = []
+    for dataset in (combined, selected):
+        sources = ",\n".join(f"{source.name} AS ({source.sql})" for source in dataset.sources)
+        rows = store.execute(f"WITH {sources}\n{dataset.views[view]}").fetchall()
+        results.append(sorted(rows, key=lambda row: tuple(str(value) for value in row[:2])))
+    assert results[0] == results[1]
+
+
 def _panel_sql(title: str) -> str:
     (panel,) = [panel for panel in dashboard_panels(_dashboard()["panels"]) if panel.get("title") == title]
     (target,) = [target for target in panel["targets"] if target.get("url") in ("/v1/rl/overview", "/v1/rl/gpu")]

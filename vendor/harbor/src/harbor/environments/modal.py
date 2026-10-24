@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import shlex
 import tempfile
 from abc import abstractmethod
@@ -339,32 +338,6 @@ class _ModalDinD(_ModalStrategy):
             command, cwd=cwd, env=env, timeout_sec=timeout_sec, shell=shell
         )
 
-    def _compose_referenced_env_vars(self) -> dict[str, str]:
-        """Extract env vars referenced in task and extra docker compose files.
-
-        Parses ``${VAR_NAME}`` and ``${VAR_NAME:-default}`` patterns from the
-        compose files and returns values from os.environ for any that are set.
-        """
-        compose_paths = [
-            self._env.environment_dir / "docker-compose.yaml",
-            *self._env.extra_docker_compose_paths,
-        ]
-
-        content = "\n".join(path.read_text() for path in compose_paths if path.exists())
-        # Match ${VAR}, ${VAR:-default}, and bare $VAR references
-        matches = re.findall(
-            r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}|\$([A-Za-z_][A-Za-z0-9_]*)\b",
-            content,
-        )
-        var_names = {g1 or g2 for g1, g2 in matches}
-
-        env_vars: dict[str, str] = {}
-        for name in var_names:
-            value = os.environ.get(name)
-            if value is not None:
-                env_vars[name] = value
-        return env_vars
-
     def _infra_env_vars(self) -> dict[str, str]:
         """Harbor infrastructure vars required by the compose templates."""
         env_vars = ComposeInfraEnvVars(
@@ -387,7 +360,7 @@ class _ModalDinD(_ModalStrategy):
 
     def _compose_env_vars(self) -> dict[str, str]:
         """All environment variables for docker compose commands."""
-        user_env: dict[str, str] = self._compose_referenced_env_vars()
+        user_env: dict[str, str] = {}
         if self._resolved_task_env:
             user_env.update(self._resolved_task_env)
         if self._env._persistent_env:
@@ -553,10 +526,13 @@ class _ModalDinD(_ModalStrategy):
         # modules and netlink permissions for creating veth pairs.  Disabling
         # iptables and the default bridge avoids both issues.  All compose
         # services must use network_mode: host (handled by a compose overlay).
+        # Pinned dind tags are not rebuilt when Alpine updates its CA bundle, so
+        # the image refreshes it before dockerd pulls task images.
         env._image = Image.from_registry(dind_image).dockerfile_commands(
             "RUN mkdir -p /etc/docker "
             '&& echo \'{"iptables": false, "bridge": "none"}\' '
-            "> /etc/docker/daemon.json"
+            "> /etc/docker/daemon.json",
+            "RUN apk upgrade --no-cache ca-certificates",
         )
 
         env._app = await App.lookup.aio(

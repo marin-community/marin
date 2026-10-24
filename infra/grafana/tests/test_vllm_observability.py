@@ -16,7 +16,7 @@ from dashboard_stitch import stitch_all
 from finelog.errors import StatsError
 from server import create_app
 from starlette.testclient import TestClient
-from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, VLLM_OVERVIEW_SECTIONS
+from vllm_observability import VLLM_DETAIL_MAX_WINDOW_MS, VLLM_MAX_WINDOW_MS, VLLM_OVERVIEW_SECTIONS
 
 
 @pytest.mark.parametrize("filename", ["inference.json", "inference_overview.json"])
@@ -280,11 +280,17 @@ def _standalone_overview_app():
                  '{"finished_reason":"stop"}', ?, 0)""",
                 [cluster, value, timestamp, cluster, timestamp, cluster, timestamp],
             )
+    queries = []
+
+    def query(sql, *, max_rows):
+        queries.append(sql)
+        return database.execute(sql).fetch_arrow_table()
+
     source = Record(
         target=ClusterTarget("marin", "project", "zone", "fleet", "cluster"),
-        query=lambda sql, *, max_rows: database.execute(sql).fetch_arrow_table(),
+        query=query,
     )
-    return create_app(bridge_config(), {"marin": source}, {}, None, None, None)
+    return create_app(bridge_config(), {"marin": source}, {}, None, None, None), queries
 
 
 def _assert_standalone_rows(rows, rate):
@@ -297,8 +303,45 @@ def _assert_standalone_rows(rows, rate):
 
 @pytest.fixture
 def standalone_overview_client():
-    with TestClient(_standalone_overview_app()) as client:
+    app, _ = _standalone_overview_app()
+    with TestClient(app) as client:
         yield client
+
+
+def test_near_live_vllm_views_share_window_without_losing_counter_lookback_or_reset(monkeypatch):
+    monkeypatch.setattr("server.time.time", lambda: 180.1)
+    app, queries = _standalone_overview_app()
+    params = {"identity_kind": "job_id", "identity": "/serve", "from": 60_001, "to": 180_001, "bucket_ms": 15_000}
+    with TestClient(app) as client:
+        rates = client.get("/finelog/marin/v1/vllm/overview", params={**params, "view": "token_rate"})
+        totals = client.get(
+            "/finelog/marin/v1/vllm/overview",
+            params={**params, "from": 60_002, "to": 180_002, "view": "counter_total"},
+        )
+
+    assert rates.status_code == totals.status_code == 200
+    # The first rate needs the sample before the visible window; the second
+    # excludes cw-a's reset while retaining cw-b's observed token increase.
+    assert [(row["t"], row["value"]) for row in rates.json()] == [(60_000, 3.5), (120_000, 1.0)]
+    assert [(row["metric"], row["value"]) for row in totals.json()] == [("generated_tokens", 270.0)]
+    assert len(queries) == 1
+
+
+def test_near_live_vllm_alignment_preserves_original_range_limit(monkeypatch):
+    end_ms = VLLM_MAX_WINDOW_MS + 180_001
+    monkeypatch.setattr("server.time.time", lambda: end_ms / 1000)
+    app, queries = _standalone_overview_app()
+    params = {
+        "identity_kind": "job_id",
+        "identity": "/serve",
+        "from": 180_000,
+        "to": end_ms,
+        "bucket_ms": 15_000,
+    }
+    with TestClient(app) as client:
+        response = client.get("/finelog/marin/v1/vllm/overview", params=params)
+    assert response.status_code == 400
+    assert queries == []
 
 
 def test_standalone_reset_window_change(standalone_overview_client):

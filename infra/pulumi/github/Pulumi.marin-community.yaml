@@ -59,7 +59,7 @@ config:
       source_kind: manual
       source_ref: owner-recovery:loom-trigger-token
       disposition: keep
-      note: Consumed by fork failure reporters and the SkyRL nightly migrated into Marin.
+      note: Consumed by fork failure reporters and the SkyRL nightly.
     - name: SLACK_WEBHOOK_URL
       scope: organization
       presence: present

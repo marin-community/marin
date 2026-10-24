@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import logging
 import subprocess
 import sys
 from collections.abc import Callable
@@ -20,6 +21,9 @@ from marin.inference.python_tools import (
     PythonToolSourceTooLarge,
 )
 from marin.inference.shell_workspace import ShellWorkspaceRequest
+from marin.inference.shellsim_runtime import ToolRuntime
+
+logger = logging.getLogger(__name__)
 
 TOOL_WORKER_TIMEOUT = 10
 _MAX_TOOL_ERROR_LENGTH = 4_000
@@ -57,6 +61,7 @@ async def _tool_response(
     module: str,
     arguments: tuple[str, ...],
     parse_payload: Callable[[object], _SerializedToolRequest],
+    runtime: ToolRuntime | None,
 ) -> Response:
     try:
         payload = await request.json()
@@ -69,11 +74,18 @@ async def _tool_response(
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
+    if runtime is not None:
+        try:
+            await asyncio.to_thread(runtime.prepare)
+        except Exception:
+            logger.exception("Dashboard tool runtime preparation failed")
+            return JSONResponse({"error": "Dashboard tool runtime preparation failed"}, status_code=503)
+
     try:
         result = await asyncio.to_thread(
             _run_tool_worker,
             module,
-            (*arguments, "--catalog", request.app.state.shellsim_catalog),
+            (*arguments, "--catalog", request.app.state.tool_runtime.catalog),
             tool_request.to_json_bytes(),
         )
     except subprocess.TimeoutExpired:
@@ -92,6 +104,7 @@ async def python_tool_definitions_response(request: Request) -> Response:
         module=_PYTHON_TOOL_MODULE,
         arguments=(operation.value,),
         parse_payload=PythonToolDefinitionsRequest.from_payload,
+        runtime=None,
     )
 
 
@@ -104,6 +117,7 @@ async def invoke_tool_response(request: Request) -> Response:
         module=_PYTHON_TOOL_MODULE,
         arguments=(operation.value,),
         parse_payload=lambda payload: PythonToolRequest.from_payload(payload, name=name),
+        runtime=request.app.state.tool_runtime,
     )
 
 
@@ -114,4 +128,5 @@ async def shell_workspace_response(request: Request) -> Response:
         module="marin.inference.shell_workspace",
         arguments=(),
         parse_payload=ShellWorkspaceRequest.from_payload,
+        runtime=request.app.state.tool_runtime,
     )

@@ -3,7 +3,7 @@
 
 """The RL data catalog: every dataset declaration, keyed by name."""
 
-from experiments.post_training.task_curation.datasets import unconverted
+from experiments.post_training.task_curation.datasets import structure_closure, unconverted
 from experiments.post_training.task_curation.datasets.arc import arc
 from experiments.post_training.task_curation.datasets.nemotron_ultra import components as nemotron_ultra
 from experiments.post_training.task_curation.datasets.reasoning_gym import tasks as reasoning_gym
@@ -49,6 +49,7 @@ def all_sources() -> dict[str, RlDataSource]:
         *arc.sources(),
         *reasoning_gym.sources(),
         *nemotron_ultra.sources(),
+        *structure_closure.sources(),
         *unconverted.sources(),
     ]
     identifiers = [source.info.id for source in sources]

@@ -12,12 +12,12 @@ from typing import Any
 
 import click
 import pyarrow.parquet as pq
-from marina.client import DEFAULT_MARINA_URL
+from marina.client import DEFAULT_MARINA_URL, AppletQuery, applet_query
 from rigging.filesystem.s3_compat import configure_coreweave_s3
 from rigging.filesystem.storage_path import StoragePath
 from taskcompendium.pipeline.curriculum.models import AlignmentRelease, CurriculumCoverage, CurriculumStatistic
 
-from infra.marina.applets.rl_data_catalog.load import Query, applet_query, batches, insert_rows
+from infra.marina.applets.rl_data_catalog.load import batches, insert_rows
 
 DELETE_BATCH_SIZE = 10_000
 TABLE_COLUMNS = {
@@ -65,7 +65,7 @@ def release_tasks(paths: list[str]) -> Iterator[dict]:
                     }
 
 
-def load_curriculum(release_uri: str, coverage_uri: str, query: Query) -> dict[str, Any]:
+def load_curriculum(release_uri: str, coverage_uri: str, query: AppletQuery) -> dict[str, Any]:
     """Load full-population statistics and bounded task examples, then select atomically."""
     started = time.monotonic()
     release = AlignmentRelease.model_validate_json(StoragePath(release_uri).read_text())

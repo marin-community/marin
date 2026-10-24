@@ -5,15 +5,15 @@ from copy import deepcopy
 from pathlib import Path
 
 import httpx
-import litellm
 import pytest
-from minisweagent.run.mini import app
-from typer.testing import CliRunner
-
 from harbor.agents.installed.mini_swe_agent import MiniSweAgent
 from harbor.environments.base import ExecResult
 from harbor.literal.proxy import LITERAL_LOG_FILENAME
 from harbor.models.agent.context import AgentContext
+from minisweagent.run.mini import app
+from openai.resources.chat.completions import Completions
+from openai.types.chat import ChatCompletion
+from typer.testing import CliRunner
 
 
 def _compacting_model_class(monkeypatch):
@@ -39,10 +39,15 @@ def _install_tokenizer(monkeypatch):
     )
 
 
-def _model_response(content: str) -> litellm.ModelResponse:
-    return litellm.ModelResponse(
+def _model_response(content: str) -> ChatCompletion:
+    return ChatCompletion(
+        id="chatcmpl-test",
+        object="chat.completion",
+        created=1,
+        model="served-model",
         choices=[
             {
+                "index": 0,
                 "message": {"role": "assistant", "content": content},
                 "finish_reason": "stop",
             }
@@ -51,10 +56,15 @@ def _model_response(content: str) -> litellm.ModelResponse:
     )
 
 
-def _tool_response() -> litellm.ModelResponse:
-    return litellm.ModelResponse(
+def _tool_response() -> ChatCompletion:
+    return ChatCompletion(
+        id="chatcmpl-test",
+        object="chat.completion",
+        created=1,
+        model="served-model",
         choices=[
             {
+                "index": 0,
                 "message": {
                     "role": "assistant",
                     "content": "",
@@ -141,7 +151,9 @@ def test_compaction_activates_only_above_character_threshold(monkeypatch):
             return _model_response("summary")
         return _tool_response()
 
-    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     _model(compacting_model_class, threshold).query(messages)
     assert len(calls) == 1
 
@@ -170,7 +182,9 @@ def test_compaction_preserves_full_transcript_and_complete_recent_turn(monkeypat
             return _model_response("Files inspected: old-a and old-b.")
         return _tool_response()
 
-    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     model = _model(compacting_model_class, 800)
     model.query(messages)
 
@@ -207,7 +221,9 @@ def test_compaction_reuses_prior_summary_without_resummarizing_raw_history(
             return _model_response(f"summary-{len(calls)}")
         return _tool_response()
 
-    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     model = _model(compacting_model_class, 300)
     model.query(messages)
     messages.extend(_turn("second", 300))
@@ -242,7 +258,9 @@ def test_compaction_falls_back_to_bounded_excerpt_when_summary_fails(monkeypatch
             raise RuntimeError("summary unavailable")
         return _tool_response()
 
-    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     model = _model(compacting_model_class, 300)
     model.query(messages)
 
@@ -332,9 +350,14 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
         )
         if kwargs["messages"][0]["content"].startswith("You compact the work history"):
             return _model_response("Inspected the repository and ran echo ready.")
-        return litellm.ModelResponse(
+        return ChatCompletion(
+            id="chatcmpl-test",
+            object="chat.completion",
+            created=1,
+            model="served-model",
             choices=[
                 {
+                    "index": 0,
                     "message": {
                         "role": "assistant",
                         "content": "",
@@ -359,7 +382,9 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
             },
         )
 
-    monkeypatch.setattr(litellm, "completion", completion)
+    monkeypatch.setattr(
+        Completions, "create", lambda self, **kwargs: completion(**kwargs)
+    )
     config = tmp_path / "custom.yaml"
     config.write_text(
         f"model:\n  model_kwargs:\n    max_tokens: {requested}\n    temperature: 0.25\n    extra_body:\n      chat_template_kwargs:\n        enable_thinking: false\n"
@@ -374,11 +399,15 @@ async def test_native_agent_enforces_total_context_and_keeps_tool_actions(
             start = words.index("mini-swe-agent") + 1
             argv = words[start : words.index("2>&1")]
             argv = [
-                str(config)
-                if word == "/tmp/mswea-config/custom.yaml"
-                else f"--output={trajectory}"
-                if word.startswith("--output=")
-                else word
+                (
+                    str(config)
+                    if word == "/tmp/mswea-config/custom.yaml"
+                    else (
+                        f"--output={trajectory}"
+                        if word.startswith("--output=")
+                        else word
+                    )
+                )
                 for word in argv
             ]
             result = CliRunner().invoke(app, argv, env=env)

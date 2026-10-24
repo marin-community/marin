@@ -41,8 +41,9 @@ runs:
         title: "Canary triage: ${{ inputs.lane }} ${{ github.run_id }}"
         goal: >-
           Diagnose the failed ${{ inputs.lane }} canary in
-          ${{ github.repository }}. Use the triage-canary, use-iris, and
-          query-finelog skills as applicable. Context: CANARY_LANE=${{ inputs.lane }},
+          ${{ github.repository }}. Follow infra/loom/procedures/triage-canary.md;
+          use use-iris and query-finelog for operations and telemetry.
+          Context: CANARY_LANE=${{ inputs.lane }},
           CANARY_JOB_ID=${{ inputs.job-id }}, CANARY_RUN_ID=${{ inputs.run-id }},
           IRIS_CONFIG=${{ inputs.iris-config }},
           IRIS_NAMESPACE=${{ inputs.iris-namespace }},
