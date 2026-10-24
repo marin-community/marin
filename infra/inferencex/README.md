@@ -10,9 +10,14 @@ only the `inferencex_reader` password. The import Action receives `inferencex_wr
 also use immutable digests. `app.patch` is the complete local overlay. It adds the
 Snowball catalog entry, landing defaults, build/recipe detail, internal origin, Unix
 socket connections and exact GitHub-attempt ingestion. It leaves the upstream schema,
-processing, view transforms and trace importer in use. Internal pages render at request
-time, database-backed OG routes skip static enumeration, and the private sitemap is
+processing, view transforms and trace importer in use. APIs supply benchmark data at
+request time, database-backed OG routes skip static enumeration, and the private sitemap is
 empty: building the image needs no database credentials or fixtures.
+
+One phase-boundary fix keeps offsets relative when slicing request charts. Adding an
+epoch-nanosecond origin and subtracting it lost precision and dropped the first profiling
+request in a real H100 window. The API retained 351 requests while the histogram showed
+350; the regression uses that window's origin and offset. No measurement is rewritten.
 
 The app remains GPLv3; `LICENSE.app` preserves its license. Corresponding source is the
 upstream commit in `settings.json` plus the adjacent patch. Keep both with distributed
@@ -66,7 +71,16 @@ with `/api/v1/benchmarks`, `/api/v1/benchmarks/history`,
 unchanged benchmark/trace identities and counts. Verify two actual source run IDs in
 history, preserving their real timestamps; two runs on one UTC date do not establish a
 second calendar date. Check reader SELECT succeeds and INSERT/DDL fail, and a wrong
-password is rejected. Upstream fixture smoke tests are separate regression evidence.
+password is rejected. Throughput and request-token distributions come from the client
+profiling records; `total_prompt_tokens` and `total_generation_tokens` preserve vLLM
+server counter deltas. Generated tokens can differ from tokens received by the client;
+check these totals against `server_metrics.tokens`, not client throughput times duration.
+Upstream fixture smoke tests are separate regression evidence.
+
+History uses the original GitHub source run's UTC creation date, following upstream's
+convention. Iris submission/start times and raw profiling start/end times retain the
+actual queue delay and measurement window. A later collector date is not substituted
+for the source date.
 
 ## Production activation after human review
 
@@ -91,7 +105,8 @@ directly, following `infra/pulumi.md`. Keep real-identity previews and passwords
    with Pulumi's `--exclude`. Review drift; do not replace existing policies manually.
 4. Through an authenticated Cloud SQL proxy, create the two restricted LOGIN roles using
    SQL, apply `roles.sql`, and store each generated password in the matching Secret Manager
-   secret. Avoid Cloud SQL's default elevated user membership. Store a separately generated
+   secret. Avoid [Cloud SQL's default elevated user membership](https://docs.cloud.google.com/sql/docs/postgres/users).
+   Store a separately generated
    invalidation secret in `marin-inferencex-invalidate-secret`. Run upstream migrations as
    the writer. Passwords and secret versions stay outside Pulumi state and Git.
 5. Preview/apply the full `marin-inferencex` leaf. It builds and pushes the web image,

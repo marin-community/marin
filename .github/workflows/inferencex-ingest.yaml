@@ -77,6 +77,7 @@ jobs:
           ready=false
           for attempt in {1..30}; do
             if [[ -S "$RUNNER_TEMP/cloudsql/$INSTANCE/.s.PGSQL.5432" ]]; then ready=true; break; fi
+            echo "Waiting for Cloud SQL socket ($attempt/30)"
             sleep 1
           done
           [[ "$ready" == true ]]
@@ -92,8 +93,9 @@ jobs:
           DASHBOARD_URL: https://performance.oa.dev
         run: |
           set -euo pipefail
-          export DATABASE_PASSWORD="$(gcloud secrets versions access latest --secret=cloudsql-inferencex-writer-password --project=hai-gcp-models)"
-          export INVALIDATE_SECRET="$(gcloud secrets versions access latest --secret=marin-inferencex-invalidate-secret --project=hai-gcp-models)"
+          DATABASE_PASSWORD="$(gcloud secrets versions access latest --secret=cloudsql-inferencex-writer-password --project=hai-gcp-models)"
+          INVALIDATE_SECRET="$(gcloud secrets versions access latest --secret=marin-inferencex-invalidate-secret --project=hai-gcp-models)"
+          export DATABASE_PASSWORD INVALIDATE_SECRET
           echo "::add-mask::$DATABASE_PASSWORD"
           echo "::add-mask::$INVALIDATE_SECRET"
           export DATABASE_SOCKET_DIR="$RUNNER_TEMP/cloudsql/$INSTANCE"

@@ -32,6 +32,24 @@ index 2a8e24da..1ba5d780 100644
  Operational values (benchmark source repositories, target sites, Deployment Protection
  bypass) are read from the environment, GitHub repository variables, or secrets. There
  are no defaults: a required value that is unset fails the script or workflow step that
+diff --git a/packages/app/cypress.config.ts b/packages/app/cypress.config.ts
+index 24aa0753..9d645b72 100644
+--- a/packages/app/cypress.config.ts
++++ b/packages/app/cypress.config.ts
+@@ -34,7 +34,12 @@ export default defineConfig({
+       on(
+         'file:preprocessor',
+         createBundler({
+-          define: { 'process.env.NODE_ENV': '"test"' },
++          define: {
++            'process.env.NODE_ENV': '"test"',
++            'process.env.NEXT_PUBLIC_SITE_URL': JSON.stringify(
++              process.env.NEXT_PUBLIC_SITE_URL ?? '',
++            ),
++          },
+           alias: { '@': path.resolve(__dirname, 'src') },
+         }),
+       );
 diff --git a/packages/app/next.config.ts b/packages/app/next.config.ts
 index cd1d35a6..678cecea 100644
 --- a/packages/app/next.config.ts
@@ -113,28 +131,6 @@ index 307d7a9c..a2bf261c 100644
    const slugs = await getAllComparableCompareSlugs();
    return slugs.map(({ modelSlug, a, b }) => ({ slug: canonicalCompareSlug(modelSlug, a, b) }));
  }
-diff --git a/packages/app/src/app/layout.tsx b/packages/app/src/app/layout.tsx
-index 72874c51..81b39e19 100644
---- a/packages/app/src/app/layout.tsx
-+++ b/packages/app/src/app/layout.tsx
-@@ -4,6 +4,7 @@ import './globals.css';
- import { Analytics } from '@vercel/analytics/next';
- import { SpeedInsights } from '@vercel/speed-insights/next';
- import type { Metadata } from 'next';
-+
- import { DM_Sans } from 'next/font/google';
- 
- import { Footer } from '@/components/footer/footer';
-@@ -34,6 +35,9 @@ import {
-   LANDING_BANNER_STORAGE_KEY,
- } from '@/lib/nudges/landing-banner';
- 
-+// Cloud Run builds have no database credentials. Resolve data when serving requests.
-+export const dynamic = 'force-dynamic';
-+
- const dm_sans = DM_Sans({
-   subsets: ['latin'],
-   display: 'optional',
 diff --git a/packages/app/src/app/robots.ts b/packages/app/src/app/robots.ts
 index 431eb2fa..862f4eb5 100644
 --- a/packages/app/src/app/robots.ts
@@ -209,6 +205,103 @@ index 33e04643..d40b1a81 100644
    const slugs = await getAllComparableCompareSlugs();
    return slugs.map(({ modelSlug, a, b }) => ({ slug: canonicalCompareSlug(modelSlug, a, b) }));
  }
+diff --git a/packages/app/src/components/inference/agentic-point/phase-slice.test.ts b/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
+index ffa80dc9..00a24b88 100644
+--- a/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
++++ b/packages/app/src/components/inference/agentic-point/phase-slice.test.ts
+@@ -207,6 +207,28 @@ describe('sliceTimelineByPhase', () => {
+ });
+ 
+ describe('sliceRequestChartDataByPhase', () => {
++  it('retains the first profiling request at real epoch-nanosecond origins', () => {
++    // Adding this offset to the epoch and subtracting it rounds upward by 80 ns.
++    // That previously excluded the earliest request from the profiling charts.
++    const offset = 61_005_390_000;
++    const tl = timeline(
++      [
++        req({ cid: 'warmup', phase: 'warmup', start: 0 }),
++        req({ cid: 'first-profile', start: offset, end: offset + 1000 }),
++      ],
++      1_792_821_503_345_722_600,
++    );
++    const compact: RequestChartData = { ...tl, timelineVersion: 6 };
++    for (const result of [
++      sliceTimelineByPhase(tl, 'profiling'),
++      sliceRequestChartDataByPhase(compact, 'profiling'),
++    ]) {
++      expect(result.requests.map((request) => request.cid)).toEqual(['first-profile']);
++      expect(result.requests[0]!.start).toBe(0);
++    }
++    expect(phaseBoundarySec({ startNs: tl.startNs }, tl)).toBe(offset / 1e9);
++  });
++
+   it('filters and rebases the compact request payload without Gantt-only fields', () => {
+     const data: RequestChartData = {
+       version: 1,
+diff --git a/packages/app/src/components/inference/agentic-point/phase-slice.ts b/packages/app/src/components/inference/agentic-point/phase-slice.ts
+index 39b5484d..fb4c28b7 100644
+--- a/packages/app/src/components/inference/agentic-point/phase-slice.ts
++++ b/packages/app/src/components/inference/agentic-point/phase-slice.ts
+@@ -26,7 +26,7 @@ export function timelineHasWarmup(timeline: RequestPhaseData | null | undefined)
+   return Boolean(timeline?.requests.some((r) => r.phase !== 'profiling'));
+ }
+ 
+-export function phaseBoundaryNs(timeline: RequestPhaseData | null | undefined): number | null {
++function phaseBoundaryOffsetNs(timeline: RequestPhaseData | null | undefined): number | null {
+   if (!timeline) return null;
+   let hasWarmup = false;
+   let minProfilingStart: number | null = null;
+@@ -38,7 +38,12 @@ export function phaseBoundaryNs(timeline: RequestPhaseData | null | undefined):
+     }
+   }
+   if (!hasWarmup || minProfilingStart === null) return null;
+-  return timeline.startNs + minProfilingStart;
++  return minProfilingStart;
++}
++
++export function phaseBoundaryNs(timeline: RequestPhaseData | null | undefined): number | null {
++  const offset = phaseBoundaryOffsetNs(timeline);
++  return offset === null || !timeline ? null : timeline.startNs + offset;
+ }
+ 
+ export function phaseBoundarySec(
+@@ -46,9 +51,9 @@ export function phaseBoundarySec(
+   timeline: RequestPhaseData | null | undefined,
+ ): number | null {
+   if (!serverMetrics) return null;
+-  const boundaryNs = phaseBoundaryNs(timeline);
+-  if (boundaryNs === null) return null;
+-  return Math.max(0, (boundaryNs - serverMetrics.startNs) / 1e9);
++  const offset = phaseBoundaryOffsetNs(timeline);
++  if (offset === null || !timeline) return null;
++  return Math.max(0, (timeline.startNs - serverMetrics.startNs + offset) / 1e9);
+ }
+ 
+ export interface PhaseSlicedSeries<S> {
+@@ -108,9 +113,8 @@ export function sliceTimelineByPhase(
+   timeline: RequestTimeline,
+   phase: StagePhase,
+ ): RequestTimeline {
+-  const boundaryNs = phaseBoundaryNs(timeline);
+-  if (boundaryNs === null) return timeline;
+-  const boundaryOff = boundaryNs - timeline.startNs;
++  const boundaryOff = phaseBoundaryOffsetNs(timeline);
++  if (boundaryOff === null) return timeline;
+   const inPhase = (r: RequestRecord) =>
+     phase === 'warmup' ? r.start < boundaryOff : r.start >= boundaryOff;
+   const shift = phase === 'profiling' ? boundaryOff : 0;
+@@ -130,9 +134,8 @@ export function sliceRequestChartDataByPhase(
+   data: RequestChartData,
+   phase: StagePhase,
+ ): RequestChartData {
+-  const boundaryNs = phaseBoundaryNs(data);
+-  if (boundaryNs === null) return data;
+-  const boundaryOff = boundaryNs - data.startNs;
++  const boundaryOff = phaseBoundaryOffsetNs(data);
++  if (boundaryOff === null) return data;
+   const inPhase = (request: RequestChartRecord) =>
+     phase === 'warmup' ? request.start < boundaryOff : request.start >= boundaryOff;
+   const shift = phase === 'profiling' ? boundaryOff : 0;
 diff --git a/packages/app/src/components/inference/agentic-point/point-summary.test.ts b/packages/app/src/components/inference/agentic-point/point-summary.test.ts
 index a3bbce47..cb6975af 100644
 --- a/packages/app/src/components/inference/agentic-point/point-summary.test.ts
@@ -761,7 +854,7 @@ index 9cf16f39..7631a4f8 100644
  weight-sharing group, `prefill_tp` stays 1, and `prefill_num_workers` counts
  groups. Do not interpret the group width as TP or EP. Sibling rows expose the
 diff --git a/packages/skills/skills/inferencex-api/integrity.json b/packages/skills/skills/inferencex-api/integrity.json
-index 45c4d764..963171c8 100644
+index 45c4d764..feea5baf 100644
 --- a/packages/skills/skills/inferencex-api/integrity.json
 +++ b/packages/skills/skills/inferencex-api/integrity.json
 @@ -2,14 +2,14 @@
@@ -777,15 +870,15 @@ index 45c4d764..963171c8 100644
      "references/cli.md": "11e1183f7ed70d669019e8435ac16a6a9f873de027507b8850a9943f6659bfd9",
      "references/collectivex.md": "f79cf8e2779a9289ab69f79f4a4b338e0b9a5f76a3750a3e969f33a744e726a1",
 -    "references/dashboard-views.md": "7696cdaa152e839067c29b91d4e305b6995d4c7f23f4bf569b2b046d3e55da22",
-+    "references/dashboard-views.md": "76de6918417583f3c76476ff4b655653cfaa30d7f12260d82c73a25cb38d42af",
++    "references/dashboard-views.md": "554404d27ff83c3dd76901ffe086a27a10797c49cb79df72ef80210196125505",
      "references/offline-exports.md": "95aa565dcd4c9e592159baa560a9a58217bc61e395de1c6daf0576795c7f4ec9",
      "references/pareto.md": "1b4d2d163f982e3f2d97addce310789eae9c1e5badd82dd7501708c9e0385027",
      "references/powerx.md": "5af5527d54a7e6191a5769080c122638b333b1ceb59e19fdee7df662a5cd3c8f",
 diff --git a/packages/skills/skills/inferencex-api/references/dashboard-views.md b/packages/skills/skills/inferencex-api/references/dashboard-views.md
-index 411cc8c5..07a67131 100644
+index 411cc8c5..d7814f7e 100644
 --- a/packages/skills/skills/inferencex-api/references/dashboard-views.md
 +++ b/packages/skills/skills/inferencex-api/references/dashboard-views.md
-@@ -525,3 +525,23 @@ and retain any advertised-context qualification alongside the configured length.
+@@ -525,3 +525,26 @@ and retain any advertised-context qualification alongside the configured length.
  For causal encoder-decoder models preserve separate prefill and decode active
  counts when supplied. Conditional-memory and auxiliary-module accounting is
  model-specific; retain the registry's accompanying features and source link.
@@ -803,6 +896,9 @@ index 411cc8c5..07a67131 100644
 +Device selection uses the existing hardware controls. Select a point to inspect
 +its concurrency, request timeline and GitHub source run; sibling navigation
 +selects the other measured concurrency points. Missing measurements stay absent.
++Per-point distributions preserve the first profiling request at the stage boundary.
++Report the selected stage and its request count; the stored timeline also includes
++warmup records, while throughput and latency summaries use upstream profiling aggregates.
 +
 +The benchmark artifact manifest records the fixed model/tokenizer and corpus
 +revisions, harness, vLLM wheel/source, serving recipe, actual Iris attempt and
