@@ -32,12 +32,11 @@ on:
       priority: {type: string, default: batch}
 
 concurrency:
-  group: agentx-controller
+  group: agentx-submission
   cancel-in-progress: false
 
 permissions:
   contents: read
-  actions: read
   id-token: write
 
 jobs:
@@ -46,12 +45,11 @@ jobs:
       github.repository == 'marin-community/marin' &&
       (github.event_name != 'schedule' || vars.AGENTX_WEEKLY_ENABLED == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       CW_KEY_ID: ${{ secrets.CW_ACCESS_KEY_ID }}
       CW_KEY_SECRET: ${{ secrets.CW_SECRET_ACCESS_KEY }}
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      GH_TOKEN: ${{ github.token }}
       STATE_ROOT: ${{ inputs.state_root || vars.AGENTX_STATE_ROOT }}
       PROFILE: ${{ inputs.profile || 'both' }}
       POINT: ${{ inputs.concurrency || 'all' }}
@@ -82,7 +80,7 @@ jobs:
             2>&1 | tee "$RUNNER_TEMP/preparation.log"
       - name: Install CPU control tools
         run: uv sync --frozen --package marin-core --extra cpu --no-default-groups
-      - name: Save inputs and submit one native Iris point
+      - name: Freeze inputs and submit Iris CPU coordinators
         id: submit
         run: |
           set -eo pipefail
@@ -91,28 +89,21 @@ jobs:
           uv run --no-sync python -m experiments.evaluation.agentx.control submit \
             --root "$STATE_ROOT" --profile "$PROFILE" --cluster "$TARGET_CLUSTER" \
             --priority "$PRIORITY" "${point_args[@]}"
-      - name: Retain submission plan
-        env:
-          CHECKPOINT: ${{ steps.submit.outputs.checkpoint }}
+      - name: Observe Iris progress for a bounded window
         run: |
-          uv run --no-sync python - <<'PY'
-          import os
-          from pathlib import Path
-          from experiments.evaluation.agentx.batch import read_record, write_record
-          destination = Path(os.environ['RUNNER_TEMP']) / 'agentx-plan.json'
-          write_record(str(destination), read_record(os.environ['CHECKPOINT']))
-          PY
-      - name: Cancel this batch if its submitting workflow was cancelled
+          uv run --no-sync python -m experiments.evaluation.agentx.control observe \
+            --root "$STATE_ROOT" --profile "$PROFILE" \
+            --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --observe-seconds 300
+      - name: Cancel owned coordinators and children on explicit workflow cancellation
         if: cancelled()
         run: |
           uv run --no-sync python -m experiments.evaluation.agentx.control cancel \
-            --root "$STATE_ROOT" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+            --root "$STATE_ROOT" --profile "$PROFILE" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: agentx-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/agentx-plan.json
             ${{ runner.temp }}/corpus.json
             ${{ runner.temp }}/harness-requirements.txt
             ${{ runner.temp }}/preparation.log

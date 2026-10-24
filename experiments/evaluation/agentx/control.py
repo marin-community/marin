@@ -1,30 +1,38 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bounded GitHub Actions entry points for submission, collection and cancellation."""
+"""Submit/cancel Iris coordinators and deliver their completed results to ingestion."""
 
 import argparse
 import hashlib
 import json
+import logging
 import os
 import subprocess
-import time
+import tempfile
 from pathlib import Path
 
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
+from iris.cluster.client import resolve_job_user
+from iris.cluster.constraints import Constraint, ConstraintOp, preemptible_constraint
+from iris.cluster.types import Entrypoint, EnvironmentSpec, JobName, ResourceSpec
+from iris.rpc import job_pb2
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
+from rigging.timing import Duration
 
-from experiments.evaluation.agentx.batch import advance_batch, cancel_batch, create_batch, read_record, write_record
-from experiments.evaluation.agentx.collect import collect_terminal, copy_file, unpack
+from experiments.evaluation.agentx.collect import copy_file, read_record, unpack, write_record
+from experiments.evaluation.agentx.coordinator import COORDINATOR_TIMEOUT, prepare_processor, recover_results
+from experiments.evaluation.agentx.submit import SERIES_PATH, point_manifest
 
 
 def action_output(name: str, value: str) -> None:
     if "\n" in value or "\r" in value:
         raise ValueError("Action output must be one line")
-    with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
-        stream.write(f"{name}={value}\n")
+    if "GITHUB_OUTPUT" in os.environ:
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
+            stream.write(f"{name}={value}\n")
 
 
 def source_run() -> dict:
@@ -41,45 +49,95 @@ def source_run() -> dict:
     }
 
 
-def checkpoint_uri(root: str, run_id: int, attempt: int, phase: str = "active") -> str:
-    return prefix_join(root, f"states/{phase}/{run_id}-{attempt}.json")
+def submission_uri(root: str, run_id: int, attempt: int, profile: str) -> str:
+    return prefix_join(root, f"submissions/{run_id}-{attempt}-{profile}.json")
 
 
-def select_checkpoint(root: str, run_id: int | None, attempt: int) -> tuple[str, dict] | None:
-    if run_id is not None:
-        for phase in ("active", "complete"):
-            uri = checkpoint_uri(root, run_id, attempt, phase)
-            try:
-                return uri, read_record(uri)
-            except FileNotFoundError:
-                continue
-        raise FileNotFoundError("No saved plan for this GitHub run and attempt")
-    filesystem, prefix = filesystem_for(prefix_join(root, "states/active"))
-    try:
-        paths = filesystem.ls(prefix, detail=False)
-    except FileNotFoundError:
+def coordinator_plan(
+    source: dict, profile: str, cluster: str, priority: str, root: str, concurrency: int | None
+) -> dict:
+    """Freeze source, adopted vLLM and point inputs before submitting to Iris."""
+    series = json.loads(SERIES_PATH.read_text())
+    name = f"agentx-{source['run_id']}-{source['run_attempt']}-{profile}"
+    return {
+        "name": name,
+        "job_id": str(JobName.root(resolve_job_user(None), name)),
+        "source": source,
+        "profile": profile,
+        "cluster": cluster if profile == "h100" else series["profiles"][profile]["cluster"],
+        "priority": priority,
+        "root": root,
+        "retention_uri": prefix_join(root, f"runs/{source['run_id']}/{source['run_attempt']}/{profile}"),
+        "points": [
+            {"name": f"c{value}", "manifest": point_manifest(profile, value, source)}
+            for value in series["profiles"][profile]["concurrencies"]
+            if concurrency is None or value == concurrency
+        ],
+    }
+
+
+def submit_coordinator(client: IrisClient, plan: dict):
+    return client.submit(
+        entrypoint=Entrypoint(
+            command=[
+                "uv",
+                "run",
+                "--frozen",
+                "--python",
+                "3.12",
+                "--package",
+                "marin-core",
+                "--extra",
+                "cpu",
+                "--no-default-groups",
+                "python",
+                "-m",
+                "experiments.evaluation.agentx.coordinator",
+                "--plan",
+                "agentx-plan.json",
+            ],
+            workdir_files={"agentx-plan.json": json.dumps(plan).encode()},
+        ),
+        name=plan["name"],
+        resources=ResourceSpec(cpu=2, memory="8GB", disk="32GB"),
+        environment=EnvironmentSpec(setup_scripts=[]),
+        constraints=[
+            Constraint.create(key="cluster", op=ConstraintOp.EQ, value=plan["cluster"]),
+            preemptible_constraint(False),
+        ],
+        priority_band={"batch": job_pb2.PRIORITY_BAND_BATCH, "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE}[
+            plan["priority"]
+        ],
+        scheduling_timeout=Duration.from_seconds(json.loads(SERIES_PATH.read_text())["scheduling_timeout"]),
+        timeout=Duration.from_seconds(COORDINATOR_TIMEOUT),
+        max_retries_failure=0,
+        max_retries_preemption=0,
+        existing_job_policy=job_pb2.EXISTING_JOB_POLICY_KEEP,
+        task_image=json.loads(SERIES_PATH.read_text())["task_image"],
+    )
+
+
+def pending_result(root: str) -> str | None:
+    """Select completed output awaiting artifact delivery; never inspect or schedule jobs."""
+    filesystem, prefix = filesystem_for(prefix_join(root, "completed"))
+    if not filesystem.exists(prefix):
         return None
-    if len(paths) > 100:
-        raise RuntimeError("More than 100 active descriptors; inspect the backlog before submitting more work")
-    plans = [
-        (filesystem.unstrip_protocol(path), read_record(filesystem.unstrip_protocol(path)))
-        for path in paths
-        if path.endswith(".json")
-    ]
-    return min(plans, key=lambda item: item[1]["created_unix"]) if plans else None
+    for path in sorted(filesystem.ls(prefix, detail=False)):
+        if path.endswith(".json"):
+            uri = filesystem.unstrip_protocol(path)
+            marker = prefix_join(root, f"exported/{Path(path).name}")
+            marker_fs, marker_path = filesystem_for(marker)
+            if not marker_fs.exists(marker_path):
+                return uri
+    return None
 
 
-def github_attempt(source: dict) -> dict:
-    path = f"repos/{source['repository']}/actions/runs/{source['run_id']}/attempts/{source['run_attempt']}"
-    return json.loads(subprocess.check_output(["gh", "api", path], text=True, timeout=60))
-
-
-def materialize(batch: dict, output: Path) -> None:
-    """Recreate a complete import bundle even if an earlier collector lost its upload step."""
-    output.mkdir(parents=True, exist_ok=True)
-    for index, point in enumerate(batch["points"]):
-        receipt = point.get("receipt")
-        if receipt is None or receipt["status"] != "valid":
+def materialize(result_uri: str, output: Path) -> dict:
+    result = read_record(result_uri)
+    output.mkdir(parents=True, exist_ok=False)
+    for index, point in enumerate(result["points"]):
+        receipt = point["receipt"]
+        if receipt["status"] != "valid":
             continue
         archive = output.parent / f"point-{index}.tar.zst"
         copy_file(receipt["artifacts_uri"], str(archive))
@@ -88,131 +146,83 @@ def materialize(batch: dict, output: Path) -> None:
         if digest != receipt["artifacts_sha256"]:
             raise ValueError("Retained processed artifact checksum changed")
         unpack(archive, output)
-    write_record(
-        str(output / "agentx-source.json"),
-        {
-            "source": batch["source"],
-            "plan_sha256": batch["plan_sha256"],
-            "status": batch["status"],
-            "points": batch["points"],
-            "collector_run_id": int(os.environ["GITHUB_RUN_ID"]),
-            "collector_run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-        },
-    )
-
-
-def acknowledge(checkpoint: str, artifact_url: str) -> None:
-    batch = read_record(checkpoint)
-    batch["last_collection"] = {
-        "artifact_url": artifact_url,
-        "run_id": int(os.environ["GITHUB_RUN_ID"]),
-        "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-    }
-    write_record(checkpoint, batch)
-    if batch["status"] == "complete" or (
-        batch["status"] == "cancelled"
-        and all(point["state"] in {"unsubmitted", "cancelled", "collected", "failed"} for point in batch["points"])
-    ):
-        destination = checkpoint.replace("/states/active/", "/states/complete/")
-        if destination != checkpoint:
-            copy_file(checkpoint, destination)
-            filesystem, path = filesystem_for(checkpoint)
-            filesystem.rm(path)
+    write_record(str(output / "agentx-source.json"), result)
+    return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=["submit", "select", "advance", "cancel", "ack"])
+    parser.add_argument("operation", choices=["submit", "observe", "cancel", "recover", "export", "ack"])
     parser.add_argument("--root", required=True)
     parser.add_argument("--profile", choices=["h100", "gb200", "both"], default="both")
     parser.add_argument("--cluster", choices=["cw-rno2a", "cw-us-east-02a"], default="cw-rno2a")
     parser.add_argument("--priority", choices=["batch", "interactive"], default="batch")
-    parser.add_argument("--concurrency", type=int, choices=[8, 32], help="One point from the fixed grid; omit for both")
-    parser.add_argument("--checkpoint")
+    parser.add_argument("--concurrency", type=int, choices=[8, 32])
     parser.add_argument("--run-id", type=int)
     parser.add_argument("--run-attempt", type=int, default=1)
+    parser.add_argument("--result-uri")
     parser.add_argument("--work", type=Path)
-    parser.add_argument("--processor", type=Path)
     parser.add_argument("--artifact-url")
+    parser.add_argument("--observe-seconds", type=int, default=600)
     args = parser.parse_args()
-    if args.operation == "select":
-        selected = select_checkpoint(args.root, args.run_id, args.run_attempt)
-        if selected:
-            checkpoint, batch = selected
-            action_output("checkpoint", checkpoint)
-            action_output("head_sha", batch["source"]["head_sha"])
-            action_output("source_run_id", str(batch["source"]["run_id"]))
-            action_output("source_run_attempt", str(batch["source"]["run_attempt"]))
-        return
+    logging.basicConfig(level=logging.INFO)
     if args.operation == "ack":
-        acknowledge(args.checkpoint, args.artifact_url)
+        write_record(
+            prefix_join(args.root, f"exported/{Path(args.result_uri).name}"), {"artifact_url": args.artifact_url}
+        )
         return
-    if args.operation == "submit":
-        source = source_run()
-        checkpoint = checkpoint_uri(args.root, source["run_id"], source["run_attempt"])
-        try:
-            batch = read_record(checkpoint)
-        except FileNotFoundError:
-            profiles = ["h100", "gb200"] if args.profile == "both" else [args.profile]
-            retention = prefix_join(args.root, f"runs/{source['run_id']}/{source['run_attempt']}")
-            batch = create_batch(
-                source, profiles, args.cluster, args.priority, "runner", retention, time.time(), args.concurrency
-            )
-            write_record(checkpoint, batch)
-        action_output("checkpoint", checkpoint)
-        oldest = select_checkpoint(args.root, None, 1)
-        if oldest is not None and oldest[0] != checkpoint:
-            print("Saved this batch behind the existing active batch; no second GPU allocation was submitted")
+    if args.operation == "export":
+        uri = args.result_uri or pending_result(args.root)
+        if uri is None:
             return
-    else:
-        checkpoint = args.checkpoint or checkpoint_uri(args.root, args.run_id, args.run_attempt)
-        batch = read_record(checkpoint)
-        oldest = select_checkpoint(args.root, None, 1)
-        if (
-            args.operation == "advance"
-            and batch["status"] == "active"
-            and oldest is not None
-            and oldest[0] != checkpoint
-        ):
-            print("Another active batch precedes this one; no second GPU allocation was submitted")
-            return
+        result = materialize(uri, args.work / "import")
+        action_output("result_uri", uri)
+        action_output("bundle", str(args.work / "import"))
+        action_output("source_run_id", str(result["source"]["run_id"]))
+        action_output("source_run_attempt", str(result["source"]["run_attempt"]))
+        return
+    profiles = ["h100", "gb200"] if args.profile == "both" else [args.profile]
+    source = source_run() if args.operation == "submit" else None
+    run_id = source["run_id"] if source is not None else args.run_id
+    attempt = source["run_attempt"] if source is not None else args.run_attempt
     with connect_controller(cluster_name="marin") as endpoint:
         with IrisClient.remote(endpoint.url, credentials=endpoint.credentials, workspace=Path.cwd()) as client:
-
-            def collect(status, manifest, retention):
-                if args.work is None or args.processor is None:
-                    return None
-                return collect_terminal(
-                    status, manifest, retention, args.work, args.processor, time.time(), client=client
-                )
-
-            if args.operation == "cancel" or github_attempt(batch["source"])["conclusion"] == "cancelled":
-                cancel_batch(client, batch, checkpoint, collect)
-            else:
-                head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-                if head != batch["source"]["head_sha"]:
-                    raise ValueError(
-                        "Collector must check out the saved source commit before it can submit another point"
+            for profile in profiles:
+                uri = submission_uri(args.root, run_id, attempt, profile)
+                if source is not None:
+                    try:
+                        plan = read_record(uri)
+                    except FileNotFoundError:
+                        plan = coordinator_plan(
+                            source, profile, args.cluster, args.priority, args.root, args.concurrency
+                        )
+                        write_record(uri, plan)
+                    job = submit_coordinator(client, plan)
+                    if str(job.job_id) != plan["job_id"]:
+                        raise ValueError("Iris job identity differs from the retained submission")
+                    print(
+                        f"Submitted {job.job_id}; {job.job_id.dashboard_url(endpoint.url)}; recovery descriptor: {uri}",
+                        flush=True,
                     )
-
-                advance_batch(client, batch, checkpoint, collect, time.time())
-    if args.operation == "submit":
-        return
-    if args.work is not None:
-        materialize(batch, args.work / "import")
-        action_output("bundle", str(args.work / "import"))
-        action_output("source_run_id", str(batch["source"]["run_id"]))
-        action_output("source_run_attempt", str(batch["source"]["run_attempt"]))
-    print(
-        json.dumps(
-            {
-                "status": batch["status"],
-                "points": [{"job_id": p["job_id"], "state": p["state"]} for p in batch["points"]],
-            }
-        )
-    )
-    if any(point["state"] == "failed" for point in batch["points"]):
-        raise SystemExit(1)
+                    continue
+                plan = read_record(uri)
+                job = client.job(JobName.from_string(plan["job_id"]))
+                if args.operation == "cancel":
+                    job.cancel()
+                elif args.operation == "observe":
+                    try:
+                        job.wait(timeout=args.observe_seconds, stream_logs=True)
+                    except TimeoutError:
+                        print(
+                            f"Observation ended; Iris continues at {job.job_id.dashboard_url(endpoint.url)}. "
+                            f"Reattach: uv run iris --cluster=marin job logs {job.job_id} --follow",
+                            flush=True,
+                        )
+                elif args.operation == "recover":
+                    with tempfile.TemporaryDirectory(prefix="agentx-recovery-") as directory:
+                        work = Path(directory)
+                        prepare_processor(work / "processor")
+                        print(recover_results(client, plan, work, work / "processor"))
 
 
 if __name__ == "__main__":

@@ -4,12 +4,16 @@
 """Control-plane interruption regressions; these tests allocate no hardware."""
 
 import dataclasses
+import io
 import json
 import os
 import sys
+import tarfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import zstandard
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.client.workload import JobStatus, ResourceRequest
@@ -17,14 +21,9 @@ from iris.cluster.types import JobName
 from iris.resources.state import FederationState, JobState
 from rigging.timing import Timestamp
 
-from experiments.evaluation.agentx.batch import (
-    advance_batch,
-    cancel_batch,
-    create_batch,
-    read_record,
-    write_record,
-)
-from experiments.evaluation.agentx.collect import collect_terminal, validate_window
+from experiments.evaluation.agentx.collect import collect_terminal, read_record, unpack, validate_window, write_record
+from experiments.evaluation.agentx.control import coordinator_plan, materialize, pending_result
+from experiments.evaluation.agentx.coordinator import recover_results, run_points
 from experiments.evaluation.agentx.run import logged_process
 from experiments.evaluation.agentx.submit import SERIES_PATH
 
@@ -60,13 +59,13 @@ def job_status(job_id: JobName, state: JobState) -> JobStatus:
 
 
 class FakeController:
-    """The Iris RPC boundary: stable logical jobs survive a lost local response."""
+    """Iris RPC boundary with terminal scheduling failures and hierarchical ownership."""
 
-    def __init__(self) -> None:
-        self.jobs = {}
-        self.submitted_manifests = {}
-        self.lose_submit_response = False
-        self.lose_cancel_response = False
+    def __init__(self, plan):
+        self.plan = plan
+        self.jobs = {plan["job_id"]: job_status(JobName.from_string(plan["job_id"]), JobState.RUNNING)}
+        self.waited = []
+        self.stop_after = None
 
     def job_status(self, job_id):
         if str(job_id) not in self.jobs:
@@ -74,21 +73,19 @@ class FakeController:
         return self.jobs[str(job_id)]
 
     def submit(self, **request):
-        job_id = JobName.from_string(f"/fixture/{request['name']}")
-        self.jobs.setdefault(str(job_id), job_status(job_id, JobState.PENDING))
-        self.submitted_manifests.setdefault(
-            str(job_id), json.loads(request["entrypoint"].workdir_files["agentx-point.json"])
-        )
-        if self.lose_submit_response:
-            self.lose_submit_response = False
-            raise TimeoutError("Fixture lost the response after Iris accepted the job")
-        return SimpleNamespace(job_id=job_id)
+        if self.stop_after is not None and len(self.waited) >= self.stop_after:
+            raise InterruptedError("Coordinator lost before the next submission")
+        job_id = JobName.from_string(self.plan["job_id"]).child(request["name"])
+        # Sequential ownership: the previous child is terminal before submission.
+        assert all(status.state != JobState.PENDING for status in self.jobs.values())
+        self.jobs[str(job_id)] = job_status(job_id, JobState.PENDING)
 
-    def cancel_job(self, job_id):
-        self.jobs[str(job_id)] = dataclasses.replace(self.jobs[str(job_id)], state=JobState.KILLED)
-        if self.lose_cancel_response:
-            self.lose_cancel_response = False
-            raise TimeoutError("Fixture lost the cancellation acknowledgement")
+        def wait(**_kwargs):
+            self.jobs[str(job_id)] = dataclasses.replace(self.jobs[str(job_id)], state=JobState.FAILED)
+            self.waited.append(str(job_id))
+            return self.jobs[str(job_id)]
+
+        return SimpleNamespace(job_id=job_id, wait=wait)
 
     def list_tasks(self, job_id):
         return self.jobs[str(job_id)].tasks
@@ -103,92 +100,73 @@ def saved_batch(tmp_path):
         "repository": "fixture/fixture",
         "head_sha": "1" * 40,
     }
-    batch = create_batch(source, ["h100"], "cw-rno2a", "batch", "fixture", str(tmp_path / "retained"), 1000, None)
-    checkpoint = str(tmp_path / "checkpoint.json")
-    write_record(checkpoint, batch)
-    return batch, checkpoint
+    plan = coordinator_plan(source, "h100", "cw-rno2a", "batch", str(tmp_path / "retained"), None)
+    return plan, str(tmp_path / "submission.json")
 
 
-def no_collection(status, manifest, retention):
-    raise AssertionError("An unfinished job has no publishable window")
+def test_coordinator_retains_each_terminal_outcome_and_runs_points_serially(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    controller = FakeController(plan)
+    with pytest.raises(RuntimeError, match="points failed"):
+        run_points(controller, plan, tmp_path, tmp_path)
+    result = read_record(pending_result(plan["root"]))
+    assert result["source"] == plan["source"]
+    assert len(controller.waited) == 2
+    # The one-point result was deliverable before the second point completed.
+    completed = list((tmp_path / "retained" / "completed").glob("*.json"))
+    assert sorted(len(json.loads(path.read_text())["points"]) for path in completed) == [1, 2]
+    assert all(point["receipt"]["status"] == "failed" for point in result["points"])
 
 
-def test_lost_submit_response_recovers_same_queued_job_and_frozen_inputs(saved_batch):
-    batch, checkpoint = saved_batch
-    controller = FakeController()
-    controller.lose_submit_response = True
-    with pytest.raises(TimeoutError):
-        advance_batch(controller, batch, checkpoint, no_collection, 1001)
-    recovered = read_record(checkpoint)
-    advance_batch(controller, recovered, checkpoint, no_collection, 1000 + 30 * 3600)
-    assert len(controller.jobs) == 1
-    point = recovered["points"][0]
-    assert point["state"] == "pending"
-    assert point["manifest"] == controller.submitted_manifests[point["job_id"]]
-    assert recovered["points"][1]["state"] == "unsubmitted"
+def test_coordinator_loss_keeps_completed_results_and_manual_recovery_never_submits(saved_batch, tmp_path):
+    plan, descriptor = saved_batch
+    write_record(descriptor, plan)
+    controller = FakeController(plan)
+    controller.stop_after = 1
+    with pytest.raises(InterruptedError):
+        run_points(controller, plan, tmp_path, tmp_path)
+    completed_uri = pending_result(plan["root"])
+    first_result = read_record(completed_uri)
+    controller.jobs[plan["job_id"]] = dataclasses.replace(controller.jobs[plan["job_id"]], state=JobState.FAILED)
+    recovered_uri = recover_results(controller, read_record(descriptor), tmp_path, tmp_path)
+    assert read_record(recovered_uri) == first_result
+    assert len(controller.jobs) == 2  # Failed parent and its only submitted child.
+    assert len(controller.waited) == 1
 
 
-def test_collection_timeout_reuses_retained_result_before_advancing(saved_batch, tmp_path):
-    batch, checkpoint = saved_batch
-    controller = FakeController()
-    advance_batch(controller, batch, checkpoint, no_collection, 1001)
-    point = batch["points"][0]
-    controller.jobs[point["job_id"]] = dataclasses.replace(controller.jobs[point["job_id"]], state=JobState.SUCCEEDED)
-    retained = tmp_path / "retained-receipt.json"
-
-    def interrupted_collection(status, manifest, retention):
-        write_record(str(retained), {"status": "valid", "sha256": "a" * 64, "attempt_uid": "completed-attempt"})
-        raise TimeoutError("Fixture control process ended after retaining a completed result")
-
-    with pytest.raises(TimeoutError):
-        advance_batch(controller, batch, checkpoint, interrupted_collection, 1002)
-    recovered = read_record(checkpoint)
-    advance_batch(controller, recovered, checkpoint, lambda *_: read_record(str(retained)), 1003)
-    assert len(controller.jobs) == 1
-    assert recovered["points"][0]["receipt"]["attempt_uid"] == "completed-attempt"
-    assert recovered["points"][0]["state"] == "collected"
-    advance_batch(controller, recovered, checkpoint, no_collection, 1004)
-    assert len(controller.jobs) == 2
-    assert recovered["points"][1]["state"] == "submitted"
-
-
-def test_cancellation_survives_lost_ack_without_starting_another_point(saved_batch):
-    batch, checkpoint = saved_batch
-    controller = FakeController()
-    advance_batch(controller, batch, checkpoint, no_collection, 1001)
-    controller.lose_cancel_response = True
-    with pytest.raises(TimeoutError):
-        cancel_batch(controller, batch, checkpoint)
-    recovered = read_record(checkpoint)
-    advance_batch(controller, recovered, checkpoint, lambda *_: {"status": "failed", "reason": "cancelled"}, 1002)
-    assert recovered["status"] == "cancelled"
-    assert len(controller.jobs) == 1
-    assert next(iter(controller.jobs.values())).state == JobState.KILLED
-    assert recovered["points"][1]["state"] == "unsubmitted"
-
-
-def test_cancelled_batch_waits_for_output_retention_before_it_can_be_archived(saved_batch):
-    batch, checkpoint = saved_batch
-    controller = FakeController()
-    advance_batch(controller, batch, checkpoint, no_collection, 1001)
-    cancel_batch(controller, batch, checkpoint)
-    advance_batch(controller, batch, checkpoint, lambda *_: None, 1002)
-    assert batch["points"][0]["state"] == "awaiting-output"
-    receipt = {"status": "failed", "archive_uri": "retained/cancelled.tar.zst"}
-    advance_batch(controller, batch, checkpoint, lambda *_: receipt, 1003)
-    assert batch["points"][0]["state"] == "cancelled"
-    assert read_record(checkpoint)["points"][0]["receipt"] == receipt
+def test_recovery_refuses_a_live_coordinator(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    controller = FakeController(plan)
+    with pytest.raises(ValueError, match="still live"):
+        recover_results(controller, plan, tmp_path, tmp_path)
     assert len(controller.jobs) == 1
 
 
-def test_native_success_with_invalid_export_stays_failed(saved_batch):
-    batch, checkpoint = saved_batch
-    controller = FakeController()
-    advance_batch(controller, batch, checkpoint, no_collection, 1001)
-    point = batch["points"][0]
-    controller.jobs[point["job_id"]] = dataclasses.replace(controller.jobs[point["job_id"]], state=JobState.SUCCEEDED)
-    advance_batch(controller, batch, checkpoint, lambda *_: {"status": "failed", "reason": "invalid window"}, 1002)
-    assert read_record(checkpoint)["points"][0]["state"] == "failed"
+def test_overlapping_sources_retain_independent_completed_results(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    second = coordinator_plan(plan["source"] | {"run_id": 124}, "h100", "cw-rno2a", "batch", plan["root"], 8)
+    for submission in (plan, second):
+        with pytest.raises(RuntimeError):
+            run_points(FakeController(submission), submission, tmp_path, tmp_path)
+    sources = {
+        json.loads(path.read_text())["source"]["run_id"] for path in (tmp_path / "retained" / "completed").glob("*.json")
+    }
+    assert sources == {123, 124}
+
+
+def test_delivery_acknowledgement_does_not_change_results_or_create_execution_state(saved_batch, tmp_path):
+    plan, _ = saved_batch
+    with pytest.raises(RuntimeError):
+        run_points(FakeController(plan), plan, tmp_path, tmp_path)
+    uri = pending_result(plan["root"])
+    original = read_record(uri)
+    result = materialize(uri, tmp_path / "import")
+    assert result == read_record(str(tmp_path / "import" / "agentx-source.json")) == original
+    write_record(str(tmp_path / "retained" / "exported" / Path(uri).name), {"artifact_url": "github/artifact"})
+    assert pending_result(plan["root"]) != uri
+    assert read_record(uri) == original
+    # Explicit delivery retry recreates the same original source identity.
+    assert materialize(uri, tmp_path / "retry") == result
 
 
 @pytest.fixture
@@ -257,7 +235,7 @@ def test_child_failure_reaches_iris_exit_status_and_both_log_destinations(tmp_pa
 def test_scheduling_failure_retains_diagnostics_without_waiting_for_a_nonexistent_archive(saved_batch, tmp_path):
     batch, _ = saved_batch
     point = batch["points"][0]
-    status = job_status(JobName.from_string(point["job_id"]), JobState.FAILED)
+    status = job_status(JobName.from_string(batch["job_id"] + "/" + point["name"]), JobState.FAILED)
     receipt = collect_terminal(status, point["manifest"], str(tmp_path / "retained"), tmp_path, tmp_path, 1001)
     assert receipt["status"] == "failed"
     assert receipt["attempt_uid"] is None
@@ -277,3 +255,18 @@ def test_error_ratio_is_checked_separately_from_agentx_scenario_validity(exporte
         stream.write(json.dumps(failure) + "\n")
     with pytest.raises(ValueError, match="error ratio"):
         validate_window(directory, manifest, "winner")
+
+
+def test_iris_archive_can_be_read_without_host_zstd_or_tar(tmp_path, monkeypatch):
+    # Iris task images provide the Python codec, not the zstd CLI used by Actions.
+    content = b'{"iris_attempt_uid":"original-attempt","status":"failed"}\n'
+    wire = io.BytesIO()
+    with tarfile.open(fileobj=wire, mode="w") as archive:
+        entry = tarfile.TarInfo("point/attempt.json")
+        entry.size = len(content)
+        archive.addfile(entry, io.BytesIO(content))
+    incoming = tmp_path / "outputs.tar.zst"
+    incoming.write_bytes(zstandard.compress(wire.getvalue()))
+    monkeypatch.setenv("PATH", str(tmp_path / "no-external-tools"))
+    unpack(incoming, tmp_path / "retained")
+    assert (tmp_path / "retained" / "point" / "attempt.json").read_bytes() == content

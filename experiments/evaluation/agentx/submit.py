@@ -3,16 +3,12 @@
 
 """Submit a fixed point without holding a local control process open."""
 
-import argparse
 import dataclasses
 import hashlib
 import json
-import subprocess
 from pathlib import Path
 
-from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
-from iris.cluster.constraints import Constraint, ConstraintOp
 from iris.cluster.types import Entrypoint, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.rpc import job_pb2
 from marin.external_dependencies import VLLM_GPU_RELEASE
@@ -31,13 +27,13 @@ def point_manifest(profile: str, concurrency: int, source: dict) -> dict:
         "recipe_fingerprint": fingerprint,
         "profile": profile,
         "concurrency": concurrency,
-        "vllm_release": dataclasses.asdict(VLLM_GPU_RELEASE),
+        "vllm_release": json.loads(json.dumps(dataclasses.asdict(VLLM_GPU_RELEASE))),
         "source": source,
     }
 
 
-def submit_point(client: IrisClient, name: str, manifest: dict, cluster: str, priority: str):
-    """Use Iris's stable name and native retry budgets; never recreate a completed job."""
+def submit_point(client: IrisClient, name: str, manifest: dict, priority: str):
+    """Submit a child on the coordinator's peer with native whole-attempt retries."""
     series = json.loads(SERIES_PATH.read_text())
     if hashlib.sha256(SERIES_PATH.read_bytes()).hexdigest() != manifest["series_sha256"]:
         raise ValueError("The submission checkout does not match the saved series")
@@ -80,7 +76,9 @@ def submit_point(client: IrisClient, name: str, manifest: dict, cluster: str, pr
             device=gpu_device(profile["gpu"], profile["gpus"]),
         ),
         environment=EnvironmentSpec(setup_scripts=[]),
-        constraints=[Constraint.create(key="cluster", op=ConstraintOp.EQ, value=cluster)],
+        # Cluster pins route roots through federation; a peer cannot route its own
+        # children again. Clear inherited routing pins; Iris retains the peer region.
+        constraints=[],
         priority_band={"batch": job_pb2.PRIORITY_BAND_BATCH, "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE}[priority],
         scheduling_timeout=Duration.from_seconds(series["scheduling_timeout"]),
         timeout=Duration.from_seconds(series["scheduling_timeout"] + series["task_timeout"]),
@@ -90,35 +88,3 @@ def submit_point(client: IrisClient, name: str, manifest: dict, cluster: str, pr
         existing_job_policy=job_pb2.EXISTING_JOB_POLICY_KEEP,
         task_image=series["task_image"],
     )
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--name", required=True)
-    parser.add_argument("--profile", choices=["h100", "gb200"], required=True)
-    parser.add_argument("--concurrency", type=int, required=True)
-    parser.add_argument("--cluster", choices=["cw-rno2a", "cw-us-east-02a", "cw-us-east-08a"], required=True)
-    parser.add_argument("--priority", choices=["batch", "interactive"], default="batch")
-    parser.add_argument(
-        "--source",
-        type=Path,
-        required=True,
-        help="Real GitHub run provenance, or explicitly marked local validation metadata",
-    )
-    parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    manifest = point_manifest(args.profile, args.concurrency, json.loads(args.source.read_text()))
-    manifest["workspace_head"] = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
-    manifest["workspace_diff_sha256"] = hashlib.sha256(subprocess.check_output(["git", "diff", "HEAD"])).hexdigest()
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    # Persist intent before the submission RPC. The deterministic name survives a lost response.
-    args.output.write_text(json.dumps({"name": args.name, "manifest": manifest}, indent=2))
-    with connect_controller(cluster_name="marin") as endpoint:
-        with IrisClient.remote(endpoint.url, credentials=endpoint.credentials, workspace=Path.cwd()) as client:
-            job = submit_point(client, args.name, manifest, args.cluster, args.priority)
-            args.output.write_text(json.dumps({"job_id": str(job.job_id), "manifest": manifest}, indent=2))
-            print(job.job_id)
-
-
-if __name__ == "__main__":
-    main()

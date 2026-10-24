@@ -1,108 +1,137 @@
 # Snowball AgentX performance
 
-This comparison series measures the adopted Marin vLLM GPU release on one eight-H100 node
-or one four-GB200 Grace ARM node. AgentX owns session replay, warmup and measurement.
-Each point and each Iris replacement starts a fresh server and native KV cache.
-Compilation and CUDA graphs remain enabled. There is no host-cache offload.
+An Iris CPU coordinator owns each hardware grid. GitHub submits it and observes logs
+for a bounded window. Iris owns GPU queueing and whole-attempt retries. The coordinator
+processes and durably retains each completed point before submitting the next one.
+A separate collection Action delivers completed results to the existing dashboard importer.
 
-## Fixed inputs
+**Coordinator failure can require manual recovery.** Its CPU capacity is explicitly
+non-preemptible, but it can still fail or be disrupted. For v0, an operator salvages
+completed children and submits a fresh run for unfinished measurements. There is no
+cross-Action execution state machine or automatic coordinator recovery.
 
-`series.json` pins the Snowball checkpoint and tokenizer, official 256K corpus, harness,
-processor, resource requests and timing controls. `requirements-harness.txt` freezes the
-isolated harness environment. The 393 parent sessions all fit the 262,144-token runtime
-context: no extra whole-session filtering is applied. The official 256K corpus already
-drops individual requests above its 256,000-token limit. The released loader reads HF
-`main`, so preparation checks its revision before and after loading and verifies the
-download SHA256; a moved dataset fails closed.
+## Fixed measurement
 
-The grid is concurrency 8 and 32. Initial eight-H100 windows showed output throughput
-increasing from about 301 to 694 tokens/s, with complete timing coverage at both points.
-This provides a low-load and a busier operating point without a tuning sweep. These
-exploratory local windows are not relabeled as GitHub results. The latter window had
-one empty-content response among 1,037 profiling requests; its diagnostics are retained.
+`series.json` pins `snowball011-native-256k-v0`: Snowball v0.1.1, the official
+256K corpus's 393 sessions, 262,144 runtime context, supported 900-second windows,
+concurrency 8/32 and native KV cache. Each point and replacement attempt starts a new
+server/cache. Compilation and CUDA graphs remain enabled. The harness alone owns
+session replay, warmup and measurement. No interrupted windows are stitched.
 
-The production recipe explicitly limits profiling request errors to 1%, using AgentX's
-`--failed-request-threshold` and a collection-time check. This is stricter than AgentX's
-10% scenario default. Warmup records are excluded from this ratio. AgentX must also
-stamp the full 900-second window valid and uncancelled, with its required metric coverage.
-Errors remain visible in raw request timelines. No interrupted windows are stitched.
+Preparation checks the corpus revision before and after the released loader, verifies
+its download SHA256 and checks the pinned tokenizer. No additional whole-session
+filtering is applied. The official corpus already removes requests above 256,000 tokens.
+`requirements-harness.txt` freezes its isolated environment outside Marin dependencies.
 
-The submission snapshot resolves `marin.external_dependencies.VLLM_GPU_RELEASE` once,
-including release, source, architecture-specific wheel URLs/hashes and Torch ABI.
-Retries use that same checkout and manifest. A new model checkpoint starts a new series.
-The series settings and harness lock determine the recipe fingerprint. The source Git
-commit identifies runner code; each attempt also retains the complete serving and harness
-argument lists. Change the series identifier when changing hard-coded serving behavior.
+The source checkout resolves Marin's adopted vLLM once per run, including wheel hashes
+for both architectures. Manifests retain that release, source GitHub run/attempt/commit,
+recipe fingerprint, complete serving/harness argv and native Iris attempt UID. The GPU
+command is unchanged by the coordinator change. The recipe requires an uncancelled,
+valid 900-second window, required timing coverage and at most 1% profiling request
+errors. Warmup records are excluded from the error ratio; diagnostics remain inspectable.
 
-## Run and collect
+## Submit, observe and cancel
 
-After human review and merge, configure `AGENTX_STATE_ROOT` to a durable prefix such as
-`s3://marin-rno2a/marin/experiments/agentx-performance/v0`. Keep this prefix outside
-Iris's seven-day task-output TTL. Existing CoreWeave, HF and WIF credentials are reused.
-Manual runs and Sunday 10:23 UTC runs default to **batch** priority. Set
-`AGENTX_WEEKLY_ENABLED=true` only after the end-to-end acceptance below succeeds.
+After human review and merge, set `AGENTX_STATE_ROOT` to a non-TTL prefix, for example
+`s3://marin-rno2a/marin/experiments/agentx-performance/v0`. Existing CoreWeave, HF and
+GitHub WIF credentials are reused. Sunday 10:23 UTC and manual runs default to **batch**.
+Development validation may explicitly select interactive priority and one concurrency.
 
 ```sh
 gh workflow run agentx-performance.yaml -R marin-community/marin \
   -f profile=h100 -f concurrency=all -f target_cluster=cw-rno2a -f priority=batch
-gh workflow run agentx-collect.yaml -R marin-community/marin
-# Recover or recollect a specific source attempt:
-gh workflow run agentx-collect.yaml -R marin-community/marin \
-  -f run_id=RUN_ID -f run_attempt=1
-# Cancel a saved batch and its active native job:
-gh workflow run agentx-collect.yaml -R marin-community/marin \
-  -f run_id=RUN_ID -f run_attempt=1 -f operation=cancel
 ```
 
-Development may select interactive priority and one concurrency from the fixed grid.
-GB200 uses current Iris placement in east-08a; no historical rack is hard-coded.
-Verify current batch placement excludes the Hero allocation before enabling weekly GB200.
-Other serving schedules are unchanged.
+Each profile has a separate coordinator on its execution cluster. H100 uses one
+8-GPU node in rno2a or east-02a; GB200 uses one four-GPU Grace ARM node in east-08a.
+Only roots carry federation cluster pins. Children remain on that peer; current Iris
+placement must exclude Hero's allocation before weekly GB200 activation.
 
-Submission exits after saving the plan and submitting one job. Iris owns the queue and
-replacement attempts: up to 48 hours waiting, three hours per attempt, one failure retry
-and three preemption retries. The collector runs from the default-branch schedule twice an hour or an operator's
-manual dispatch, has a 20-minute bound, and advances one point per invocation. Saved stable job names with KEEP recover a lost
-submit response. A seven-day batch deadline cancels remaining work. Actions serializes
-all control calls and the oldest active plan advances first, so overlapping source runs
-do not create concurrent accelerator allocations. Rerunning a source Action creates a
-new attempt and plan; cancel the old plan first when abandoning it.
+GPU queue allowance is 48 hours, task allowance three hours, failure retry budget one
+and preemption retry budget three. Coordinators have no automatic retries and a seven-day
+bound. Separate source run/attempt names isolate overlapping submissions; Iris owns
+admission and priority. Each coordinator submits its own points serially.
 
-Cancellation is durable before the RPC and is retried until the native job is terminal
-and its diagnostics have been retained. Collector timeouts do not cancel benchmark jobs.
-Collection lists federated tasks, then fetches their individual snapshots for complete
-attempt history. It verifies uploader checksums and retains all available attempt archives
-before processing only the final successful window.
-It waits at most ten minutes for a missing final archive. Failed/invalid attempts keep
-their receipt and native attempt history but cannot produce an importable point.
-Live logs include preparation, server and harness output; a pod lost before the output
-uploader runs can leave only native metadata and streamed logs. When an archive is missing,
-collection also retains the last 20,000 streamed lines per attempt, with an explicit limit.
+The Action's five-minute viewing window per coordinator can end while Iris keeps
+running. That expiration does not cancel work. Reattach or explicitly cancel the owned
+tree from the same authenticated checkout:
 
-Every successful collection rebuilds the complete bundle for the original run/attempt.
-The plan stays active until GitHub acknowledges the artifact upload. Recollection can
-recover a lost upload and upstream database conflict keys make reimports idempotent.
-The pinned upstream processor uses the small `inferencex.patch` to count DP GPUs once:
-TP1/DP8/EP8 means eight physical GPUs; TP1/DP4/EP4 means four.
+```sh
+uv run iris --cluster=marin job logs /runner/agentx-RUN_ID-ATTEMPT-h100 --follow
+uv run python -m experiments.evaluation.agentx.control cancel \
+  --root "$AGENTX_STATE_ROOT" --run-id RUN_ID --run-attempt ATTEMPT --profile h100
+```
 
-GitHub artifacts retain plans and bundles for 90 days. Durable object storage retains
-all collected archives, hashes, Iris receipts and source IDs until an operator applies
-the organization's retention policy. Never delete the only raw archive. Monitor failed
-collection Actions and the active-plan backlog; no resident orchestration service runs.
+Use the exact job ID printed by submission; the user prefix depends on the submitter.
+Cancelling a still-running submission Action also cancels its coordinators and children.
+After that Action has completed, use the explicit CLI cancellation above. Completed
+points are already durable. Run the recovery command below after the tree stops when
+you also want durable diagnostics for the interrupted child.
+
+## Manual recovery and retained results
+
+For an exceptional coordinator failure, inspect its root and children with
+`iris --cluster=marin job describe JOB_ID`. If it is still live, reattach or explicitly
+cancel it. Once its tree is terminal, check out the original source commit in an isolated
+worktree and run this recovery command with the original source run and attempt:
+
+```sh
+uv run --frozen --package marin-core --extra cpu --no-default-groups \
+  python -m experiments.evaluation.agentx.control recover \
+  --root "$AGENTX_STATE_ROOT" --run-id RUN_ID --run-attempt ATTEMPT --profile h100
+```
+
+Repeat for `gb200` if that coordinator was affected. Recovery can wait up to ten minutes for Iris output finalization. It reads the immutable
+`submissions/RUN_ID-ATTEMPT-PROFILE.json`, retains existing terminal children and publishes
+completed output. It never submits a GPU job or restarts a measurement. Completed valid
+siblings keep their original identities. Submit a fresh Action for unfinished points:
+
+```sh
+gh workflow run agentx-performance.yaml -R marin-community/marin \
+  -f profile=h100 -f concurrency=32 -f target_cluster=cw-rno2a -f priority=batch
+```
+
+That is a new source run using its newly frozen adoption; it does not fill an interrupted
+window in the old run. A cancelled source is retained for inspection but excluded from
+performance ingestion. If the coordinator failed before submitting any child, there is
+nothing to salvage and a fresh submission is sufficient.
+
+Collection verifies Iris uploader hashes, retains all available attempts outside the
+seven-day Iris TTL and processes only a final successful, valid window. Native metadata
+and the last 20,000 streamed lines are retained when an attempt archive is unavailable.
+The pinned upstream processor plus `inferencex.patch` counts TP1/DP8/EP8 as eight GPUs
+and TP1/DP4/EP4 as four. No AgentX or InferenceX package enters Marin's dependency graph.
+
+Completed immutable descriptors enter `completed/`. The default-branch collection
+schedule runs twice an hour, materializes one undelivered result and uploads an
+`agentx-results-*` artifact for the existing ingestion workflow. It never queries Iris,
+submits children or advances execution. An `exported/` receipt acknowledges only artifact
+delivery. Losing that acknowledgement can repeat delivery; upstream conflict keys and
+the trace-cache fix make repeated ingestion safe.
+
+```sh
+# Retry delivery of an exact completed descriptor, including after manual recovery:
+gh workflow run agentx-collect.yaml -R marin-community/marin \
+  -f result_uri=s3://BUCKET/PREFIX/completed/RESULT.json
+```
+
+Keep collection enabled while submitted work can finish. GitHub artifacts retain results
+for 90 days. Durable raw archives, receipts and processed hashes follow the organization's
+retention policy; preserve a restore reference before deleting them. Monitor coordinator
+failures and failed collection/import Actions. A missed result after coordinator loss is
+an operator recovery case, not an automatic remediation loop.
 
 ## Validation and activation
 
-Run CPU preparation before allocating GPUs, then the focused control tests and repository
-affected-test runner. Validate an owned queued cancellation and preemption/replacement;
-never preempt somebody else's job for a test. Run repeated real GitHub H100 windows,
-collect and import through the dashboard's upstream ingestion CLI, then compare raw
-counts, timing, throughput and physical GPU normalization with its APIs and rendered UI.
-Reimport the same bundle and verify unchanged row counts and trace identities. Check
-history across source run IDs without altering their timestamps. Finish H100 acceptance
-before a normal-duration four-GB200 run.
+Run preparation and CPU control checks before GPU allocation. Check native retry/attempt
+identity, retained output, explicit cancellation, overlapping sources, coordinator-loss
+recovery and observation expiration. Validate one normal-duration H100 point through the
+coordinator, then processing, repeated import, SQL/API values and retained UI views.
+Repeat GB200 measurement if its ARM/device execution changes. Reuse existing unchanged
+performance sweeps and label local evidence separately from deployment acceptance.
 
-Dashboard packaging, read-only credentials, import/cache refresh, deployment and rollback
-are described in `infra/inferencex/README.md` in the companion dashboard change. The new
-workflow schedules need a human-reviewed merge; no merge or permanent deployment is
-part of validation. Disable weekly submission to stop new runs, then cancel active plans;
-do not disable collection while a native job is still running.
+The companion `infra/inferencex/README.md` covers reader/writer separation, app builds,
+Cloud Run/IAP/SQL setup, cache refresh and rollback. Human review/merge, cloud secret/IAM
+bootstrap and live IAP/TLS acceptance remain activation steps. Enable ingestion and prove
+an end-to-end run before setting `AGENTX_WEEKLY_ENABLED=true`. Existing serving schedules
+remain separate. No merge, permanent deployment or weekly activation is part of validation.

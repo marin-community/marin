@@ -3,26 +3,65 @@
 
 """Collect one terminal Iris point using its uploader receipt and upstream formats."""
 
+import dataclasses
 import hashlib
 import json
 import os
 import shutil
 import subprocess
 import tarfile
+from collections.abc import Mapping
+from datetime import datetime
+from enum import Enum
 from pathlib import Path
 
+import zstandard
 from fsspec.implementations.local import LocalFileSystem
 from iris.client.client import IrisClient
 from iris.client.workload import JobStatus, TaskOutputArchive, TaskOutputArchiveState
+from iris.cluster.types import JobName
 from iris.resources.state import JobState, TaskState
 from rigging.filesystem import atomic
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
+from rigging.timing import Timestamp
 
-from experiments.evaluation.agentx.batch import json_value, write_record
 from experiments.evaluation.agentx.submit import SERIES_PATH
 
 STREAM_LOG_LINE_LIMIT = 20_000
+
+
+def json_value(value: object) -> object:
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {field.name: getattr(value, field.name) for field in dataclasses.fields(value)}
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, (JobName, Path)):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Timestamp):
+        return {"epoch_ms": value.epoch_ms()}
+    raise TypeError(f"Cannot serialize {type(value)}")
+
+
+def read_record(uri: str) -> dict:
+    filesystem, path = filesystem_for(uri)
+    with filesystem.open(path, "rt") as stream:
+        return json.load(stream)
+
+
+def write_record(uri: str, record: dict) -> None:
+    filesystem, path = filesystem_for(uri)
+    if isinstance(filesystem, LocalFileSystem):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with atomic.atomic_rename(path, filesystem=filesystem) as temporary:
+        # fsspec.open's automatic mkdir issues CreateBucket on S3. The existing
+        # bucket is infrastructure; writing an object must not try to create it.
+        with filesystem.open(temporary, "wt") as stream:
+            json.dump(record, stream, indent=2, default=json_value)
 
 
 def copy_file(source: str, destination: str) -> None:
@@ -38,11 +77,9 @@ def copy_file(source: str, destination: str) -> None:
 
 def unpack(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
-    with subprocess.Popen(["zstd", "--decompress", "--stdout", str(archive)], stdout=subprocess.PIPE) as process:
-        with tarfile.open(fileobj=process.stdout, mode="r|") as contents:
+    with archive.open("rb") as encoded, zstandard.ZstdDecompressor().stream_reader(encoded) as decoded:
+        with tarfile.open(fileobj=decoded, mode="r|") as contents:
             contents.extractall(destination, filter="data")
-        if process.wait(timeout=60):
-            raise RuntimeError("Iris output archive decompression failed")
 
 
 def retain_archive(archive: TaskOutputArchive, prefix: str, directory: Path) -> tuple[Path, str]:
@@ -280,7 +317,9 @@ def collect_terminal(
                 artifacts = directory / "artifacts"
                 process_point(point, manifest, processor, artifacts)
                 bundle = directory / "inferencex.tar.zst"
-                subprocess.run(["tar", "--zstd", "-cf", str(bundle), "-C", str(artifacts), "."], check=True)
+                with bundle.open("wb") as encoded, zstandard.ZstdCompressor().stream_writer(encoded) as compressed:
+                    with tarfile.open(fileobj=compressed, mode="w|") as contents:
+                        contents.add(artifacts, arcname=".")
                 copy_file(str(bundle), prefix_join(prefix, "inferencex.tar.zst"))
                 with bundle.open("rb") as stream:
                     bundle_digest = hashlib.file_digest(stream, "sha256").hexdigest()
