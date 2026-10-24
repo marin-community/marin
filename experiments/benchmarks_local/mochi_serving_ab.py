@@ -121,7 +121,12 @@ def build_config(args):
         with open_dict(model):
             model.source_uri = args.source
         generator.model_loading = "stream"
-        engine_init_kwargs["model_loader_extra_config"] = {"distributed": bool(args.runai_distributed)}
+        # Bound each process's CPU staging buffer: unbounded, eight streaming processes held about 120 GB each on a
+        # node while loading the 1.07 TB export.
+        engine_init_kwargs["model_loader_extra_config"] = {
+            "distributed": bool(args.runai_distributed),
+            "memory_limit": int(args.runai_memory_limit_gib * 2**30),
+        }
     generator.engine_init_kwargs = engine_init_kwargs
     return cfg
 
@@ -572,6 +577,7 @@ def main() -> None:
     runner.add_argument("--metadata-dir", default="/tmp/mochi-model")
     runner.add_argument("--weights", choices=("real", "dummy"), default="real")
     runner.add_argument("--runai-distributed", type=int, default=1)
+    runner.add_argument("--runai-memory-limit-gib", type=float, default=16)
     runner.add_argument("--serving-nodes", type=int, required=True)
     runner.add_argument("--batch-invariant", type=int, required=True)
     runner.add_argument("--max-num-batched-tokens", type=int, required=True)
