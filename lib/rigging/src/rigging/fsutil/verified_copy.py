@@ -435,7 +435,10 @@ def _copy_with_hash(
     digest = hashlib.sha256()
     multipart_etag = _MultipartEtag(S3_UPLOAD_PART_BYTES) if _has_fixed_s3_uploads(destination_fs) else None
     copied_size = 0
-    destination_options = {"block_size": S3_UPLOAD_PART_BYTES} if multipart_etag is not None else {}
+    is_s3 = _is_s3(destination_fs)
+    destination_options: dict[str, int | bool] = {"autocommit": False} if is_s3 else {}
+    if multipart_etag is not None:
+        destination_options["block_size"] = S3_UPLOAD_PART_BYTES
     with source_fs.open(source_path, "rb") as source:
         destination = destination_fs.open(destination_path, "wb", **destination_options)
         try:
@@ -446,16 +449,24 @@ def _copy_with_hash(
                 destination.write(chunk)
                 copied_size += len(chunk)
             destination.close()
+            if is_s3:
+                destination.commit()
         except BaseException:
-            if _is_s3(destination_fs):
-                # Closing an s3fs writer after a failed part can commit the uploaded prefix.
-                destination.discard()
+            if is_s3:
+                # Closing an uncommitted s3fs writer flushes parts but cannot publish them.
+                try:
+                    destination.close()
+                finally:
+                    destination.discard()
             else:
                 destination.close()
                 if destination_fs.exists(destination_path):
                     destination_fs.rm(destination_path)
             raise
-    expected_etag = multipart_etag.etag(copied_size) if multipart_etag is not None else None
+    # Uncommitted small S3 writes use a one-part MPU; verify those by content.
+    expected_etag = (
+        multipart_etag.etag(copied_size) if multipart_etag is not None and copied_size >= S3_UPLOAD_PART_BYTES else None
+    )
     return _CopiedFile(digest.hexdigest(), copied_size, expected_etag)
 
 
