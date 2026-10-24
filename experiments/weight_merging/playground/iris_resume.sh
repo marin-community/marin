@@ -6,8 +6,8 @@ work_dir=$(mktemp -d /tmp/playground-resume-XXXXXX)
 uv --no-config venv "$work_dir/io" --python 3.12
 uv --no-config pip install --python "$work_dir/io/bin/python" "marin-rigging @ git+https://github.com/marin-community/marin.git@c7c14a252dc2d6f7cd86136f99799960e1667e53#subdirectory=lib/rigging"
 mkdir -p "$work_dir/code-rft"
-"$work_dir/io/bin/fsutil" cp -r "$PLAYGROUND_INPUT/code-rft/checkpoint-50" "$work_dir/code-rft/"
-"$work_dir/io/bin/fsutil" cp -r "$PLAYGROUND_INPUT/rft-data" "$work_dir/"
+"$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io  cp -r "$PLAYGROUND_INPUT/code-rft/checkpoint-50" "$work_dir/code-rft/"
+"$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io  cp -r "$PLAYGROUND_INPUT/rft-data" "$work_dir/"
 uv --no-config venv "$work_dir/train" --python 3.12
 uv --no-config pip install --python "$work_dir/train/bin/python" torch==2.5.1 --index-url https://download.pytorch.org/whl/cu121
 uv --no-config pip install --python "$work_dir/train/bin/python" transformers==4.57.6 datasets==4.8.5 accelerate==1.12.0 bitsandbytes==0.45.5 liger-kernel==0.6.4 numpy==2.5.4 pyarrow==26.0.0 safetensors==0.8.0 wandb==0.31.0
@@ -37,7 +37,10 @@ export WANDB_PROJECT=weight-merging-playground
 export WANDB_DIR="$work_dir/wandb"
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Always publish any completed checkpoints if training exits early.
-trap '"$work_dir/io/bin/fsutil" cp -r "$work_dir/code-rft" "$PLAYGROUND_OUTPUT/"' EXIT
+publish_checkpoints() {
+  "$work_dir/io/bin/python" -m experiments.weight_merging.playground.cloud_io cp -r "$work_dir/code-rft" "$PLAYGROUND_OUTPUT/"
+}
+trap publish_checkpoints EXIT
 "$work_dir/train/bin/python" -m experiments.weight_merging.playground.train \
   --parent "$parent" --data "$work_dir/rft-data" --domain code --output "$work_dir/code-rft" \
   --resume "$work_dir/code-rft/checkpoint-50" --steps 100 --learning-rate 5e-6 \
