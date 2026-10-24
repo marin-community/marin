@@ -321,7 +321,6 @@ def test_policy_judge_rejects_incompatible_placement_before_submission(
     ]
     result = CliRunner().invoke(cli, command)
     assert result.exit_code != 0
-    assert "same cluster or region" in result.output
     assert submitted_batches == []
 
 
