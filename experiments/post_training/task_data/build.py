@@ -21,12 +21,17 @@ from pathlib import Path
 
 import click
 from marin.inference.openai_chat import OpenAIChatClient
-from verifyit.grade import GradingInfraError
 
 from experiments.post_training.glm import DEFAULT_GLM_RELAY_JOB, GLM_MODEL
 from experiments.post_training.task_data.code_x import exclude_public_cruxeval, synthesize_x_tasks
 from experiments.post_training.task_data.code_x import write_split as write_x_split
-from experiments.post_training.task_data.expert_outputs import GRADERS, CompletionRow, sample_completions, write_m1_rows
+from experiments.post_training.task_data.expert_outputs import (
+    GRADERS,
+    CompletionRow,
+    bounded_grade,
+    sample_completions,
+    write_m1_rows,
+)
 from experiments.post_training.task_data.expert_traces import (
     R_COMPLETION_TOKEN_CAP,
     X_COMPLETION_TOKEN_CAP,
@@ -37,7 +42,7 @@ from experiments.post_training.task_data.expert_traces import (
     token_counter,
     write_trace_batch,
 )
-from experiments.post_training.task_data.math_r import build_r_tasks, cpu_bounded
+from experiments.post_training.task_data.math_r import build_r_tasks
 
 TOKEN_CAPS = {"X": X_COMPLETION_TOKEN_CAP, "R": R_COMPLETION_TOKEN_CAP}
 DATA_SOURCES = {"X": "task_X", "R": "task_R"}
@@ -51,10 +56,6 @@ def _read_tasks(path: str) -> list[dict]:
 
 def _write_manifest(path: Path, manifest: dict) -> None:
     path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-
-
-GRADE_CPU_SECONDS = 60
-"""CPU budget for grading one trace: math-verify's own deadline can be swallowed (see math_r)."""
 
 
 @click.group()
@@ -111,14 +112,6 @@ def chunk(tasks_path: str, rows_per_chunk: int, chunk_count: int | None, output_
         print(f"{stem}.chunk{index:02d}.jsonl: rows {start}..{start + len(chunk_lines) - 1}")
 
 
-def _settled_grade(grader, task: dict, trace: dict) -> bool | None:
-    """The grader's verdict, or ``None`` when the math verifier exhausts its own deadline."""
-    try:
-        return grader(task, trace["content"])
-    except GradingInfraError:
-        return None
-
-
 @cli.command()
 @click.option("--task", "task_name", required=True, type=click.Choice(sorted(GRADERS)))
 @click.option("--tasks", "tasks_path", required=True, type=click.Path(exists=True, dir_okay=False))
@@ -129,12 +122,7 @@ def grade(task_name: str, tasks_path: str, traces_paths: tuple[str, ...], output
     tasks = {task["task_id"]: task for task in _read_tasks(tasks_path)}
     traces = [trace for path in traces_paths for trace in _read_tasks(path)]
     grader = GRADERS[task_name]
-    verdicts = [
-        cpu_bounded(
-            lambda trace=trace: _settled_grade(grader, tasks[trace["task_id"]], trace), cpu_seconds=GRADE_CPU_SECONDS
-        )
-        for trace in traces
-    ]
+    verdicts = [bounded_grade(grader, tasks[trace["task_id"]], trace["content"]) for trace in traces]
     # A trace the grader cannot settle (CPU budget or verifier deadline) is not graded correct.
     correct = [trace for trace, verdict in zip(traces, verdicts, strict=True) if verdict]
     with open(output_path, "w") as handle:

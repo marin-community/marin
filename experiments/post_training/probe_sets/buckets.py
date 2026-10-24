@@ -42,6 +42,7 @@ from typing import Any
 from transformers.convert_slow_tokenizer import bytes_to_unicode
 
 from experiments.post_training.chat_template import FAMILY_TOKEN_MAPS, shared_template
+from experiments.post_training.task_data.terminus_answers import json_string_spans
 
 
 class Bucket(StrEnum):
@@ -67,31 +68,14 @@ class TaggedSequence:
     reasoning_decile: list[int]
 
 
-def _json_string_values(content: str, key: str) -> list[tuple[int, int]]:
-    """Character spans of every ``"key": "<value>"`` string value in ``content``, quotes excluded.
-
-    A value still open at the end of the content (a reply cut at the token cap) runs to
-    the end.
-    """
-    spans = []
-    for match in re.finditer(rf'"{re.escape(key)}"\s*:\s*"', content):
-        start = index = match.end()
-        while index < len(content) and content[index] != '"':
-            index += 2 if content[index] == "\\" else 1
-        spans.append((start, min(index, len(content))))
-    return spans
-
-
 def _content_spans(content: str) -> list[tuple[int, int, Bucket]]:
     """Terminus-2 spans inside an assistant reply's JSON, relative to the content."""
     spans = [
         (start, end, Bucket.REASONING)
         for key in _TERMINUS_REASONING_FIELDS
-        for start, end in _json_string_values(content, key)
+        for start, end in json_string_spans(content, key)
     ]
-    spans += [
-        (start, end, Bucket.TOOL_ARGUMENTS) for start, end in _json_string_values(content, _TERMINUS_COMMAND_FIELD)
-    ]
+    spans += [(start, end, Bucket.TOOL_ARGUMENTS) for start, end in json_string_spans(content, _TERMINUS_COMMAND_FIELD)]
     return sorted(spans)
 
 

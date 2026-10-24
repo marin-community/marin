@@ -16,6 +16,7 @@ from verifyit.grade import GradingInfraError
 
 from experiments.post_training.chat_template import GRUG_TOKENS, QWEN_TOKENS
 from experiments.post_training.task_data import build as build_module
+from experiments.post_training.task_data import expert_outputs as expert_outputs_module
 from experiments.post_training.task_data import math_r
 from experiments.post_training.task_data.build import cli
 from experiments.post_training.task_data.code_x import (
@@ -534,7 +535,7 @@ def test_grade_counts_a_trace_the_grader_cannot_settle_as_incorrect(tmp_path, mo
         return True
 
     monkeypatch.setitem(build_module.GRADERS, "R", spin_on_runaway)
-    monkeypatch.setattr(build_module, "GRADE_CPU_SECONDS", 0.2)
+    monkeypatch.setattr(expert_outputs_module, "GRADE_CPU_SECONDS", 0.2)
     tasks = tmp_path / "r_train.jsonl"
     tasks.write_text(json.dumps({"task_id": "r-0", "answer": "4"}) + "\n")
     traces = tmp_path / "r_traces.jsonl"
