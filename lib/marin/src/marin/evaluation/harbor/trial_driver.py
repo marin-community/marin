@@ -52,6 +52,7 @@ _OPENAI_COMPATIBLE_PACKAGE = "@ai-sdk/openai-compatible"
 _OPENCODE_AGENT = "opencode"
 _OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 _PI_ACP_REGISTRY_ID = "pi-acp"
+_PI_VERSION = "0.87.0"
 _TERMINUS_2_AGENT = "terminus-2"
 _LLM_CALL_KWARGS_KEY = "llm_call_kwargs"
 _MAX_TOKENS_KEY = "max_tokens"
@@ -259,6 +260,12 @@ def _terminus_llm_call_kwargs(
     return {**call_kwargs, _MAX_TOKENS_KEY: max_tokens}
 
 
+def _pinned_pi_agent[T: AgentConfig](agent: T) -> T:
+    if agent.name != AgentName.PI:
+        return agent
+    return agent.model_copy(update={"kwargs": {**agent.kwargs, "version": _PI_VERSION}})
+
+
 def _agent_config(
     agent: AgentConfig,
     *,
@@ -272,7 +279,7 @@ def _agent_config(
     runtime_env = agent.env
     if agent.name is not None and is_acp_registry_shorthand(agent.name):
         runtime_env = {**agent.env, _OPENAI_BASE_URL_ENV: endpoint_url}
-    return AgentConfig.model_validate(
+    configured = AgentConfig.model_validate(
         {
             **agent.model_dump(mode="python"),
             "model_name": f"{_HOSTED_VLLM_PROVIDER}/{served_model}",
@@ -281,6 +288,8 @@ def _agent_config(
         },
         extra="forbid",
     )
+
+    return _pinned_pi_agent(configured)
 
 
 def _effective_agent(agent: AgentConfig, overlay: RuntimeOverlay) -> AgentConfig:
@@ -342,6 +351,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
             "job_name": overlay.job_name,
             "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
             "agents": [agent],
+            "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
             "datasets": [dataset],
             "verifier": config.verifier.model_copy(update={"env": {**config.verifier.env, **overlay.verifier_env}}),
             "archive": ArchiveConfig(
@@ -360,6 +370,7 @@ def _stable_config(config: JobConfig) -> JobConfig:
             "job_name": _STABLE_JOB_NAME,
             "jobs_dir": _STABLE_JOBS_DIR,
             "agents": [agent],
+            "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
         }
     )
     return JobConfig.model_validate(stable.model_dump(mode="json"), extra="forbid")

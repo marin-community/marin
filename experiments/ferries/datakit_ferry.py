@@ -39,9 +39,10 @@ TIER1_SCALE = PipelineScale(
     ),
     fuzzy=FuzzyClusterConfig(
         text=ClusterTextParams(output_shards=256),
-        worker=ResourceConfig(cpu=8, ram="64g", disk="64g"),
-        map_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
-        reduce_task=ResourceConfig(cpu=1, ram="8g", disk="8g"),
+        # Four tasks per worker fit the measured sub-10 GiB fuzzy-stage peak.
+        worker=ResourceConfig(cpu=4, ram="16g", disk="64g"),
+        map_task=ResourceConfig(cpu=1, ram="4g", disk="8g"),
+        reduce_task=ResourceConfig(cpu=1, ram="4g", disk="8g"),
         max_workers=16,
     ),
     store=StoreConfig(task_count=None, worker=ResourceConfig(cpu=4, ram="32g", disk="64g")),

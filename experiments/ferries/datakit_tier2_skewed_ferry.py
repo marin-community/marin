@@ -80,6 +80,8 @@ def build_sources(output_prefix: str) -> dict[str, StepSpec]:
         id_field="id",
         relative_input_path="data",
         file_extensions=(".parquet",),
+        # Normalization peaked at 5.2 GiB per worker on a completed 98-shard run.
+        worker_resources=ResourceConfig(cpu=2, ram="16g", disk="10g"),
         override_output_path=prefix_join(output_prefix, "normalize"),
     )
     return {SOURCE_NAME: normalized}

@@ -36,7 +36,7 @@ POLICY_PATTERN = re.compile(
 
 
 class Tau3RuntimeInfrastructureError(RuntimeError):
-    """The benchmark-owned tau3 runtime failed during the relay."""
+    """The benchmark-owned tau3 relay failed during setup or a runtime turn."""
 
 
 class Tau3HarborACPRelay(BaseAgent):
@@ -75,13 +75,15 @@ class Tau3HarborACPRelay(BaseAgent):
             "python3 -m pip install --no-cache-dir mcp==1.25.0", user="root"
         )
         if install.return_code != 0:
-            raise RuntimeError(f"Failed to install MCP client: {install.stderr}")
+            raise Tau3RuntimeInfrastructureError(
+                f"Failed to install MCP client: {install.stderr}"
+            )
 
         prepare = await environment.exec(
             f"mkdir -p {shlex.quote(str(REMOTE_PACKAGE_ROOT))}", user="root"
         )
         if prepare.return_code != 0:
-            raise RuntimeError(
+            raise Tau3RuntimeInfrastructureError(
                 f"Failed to prepare relay package path: {prepare.stderr}"
             )
 

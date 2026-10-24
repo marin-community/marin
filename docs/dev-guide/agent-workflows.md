@@ -9,6 +9,11 @@ For an ordinary feature or bug fix without a domain skill, implement under
 root and scoped repository instructions, then use `manage-pr` when the change
 is ready to publish. No general implementation skill is required.
 
+For PR preparation, `manage-pr` overlaps advisory review with affected tests
+and docs checks after formatting and the initial commit. Draft PR text while
+checks run, then collect all results and resolve findings before pushing or
+publishing. Reuse passing checks while their inputs remain unchanged.
+
 ## Changes and knowledge
 
 | Skill | Owns | Boundary |
@@ -18,6 +23,7 @@ is ready to publish. No general implementation skill is required.
 | `simplify-code` | Explicitly requested cleanup of a branch or diff | Review findings alone do not authorize edits; publication belongs to `manage-pr` |
 | `file-issue` | Deduplicating and filing an issue | Implementing an assigned issue belongs to `manage-pr` |
 | `use-echo` | Searching prior work and maintaining shared knowledge or incident records | Repository procedures belong in `OPS.md` or `docs/`; search alone does not require a write |
+| `research-engineering` | Iterative design and data exploration, experiments, runnable research branches, notebooks, and promotion into Marin | Background research uses experiment records; domain skills own execution and `manage-pr` owns contribution PRs |
 | `curate-experiments` | Report-index curation and explicitly requested archive tags and issue breadcrumbs | Archival does not authorize deleting experiment files; scheduled issue summaries use an assigned procedure |
 
 ## Operations and measurement
