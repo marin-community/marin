@@ -33,6 +33,7 @@ dependencies = [
     # marin-ducky is the ad-hoc DuckDB SQL service (dashboard + runner + deploy),
     # a workspace member so service fixes land without a wheel republish.
     "marin-ducky",
+    "marin-skyrlrecipe",
     # marin-marina is the multi-app web kernel (infra/marina), a workspace member so
     # `uv run marina dev` serves the apps from this checkout.
     "marin-marina",
@@ -198,6 +199,7 @@ members = [
     "lib/finelog",
     "lib/dupekit",
     "lib/ducky",
+    "lib/skyrlrecipe",
     "lib/haliax",
     "lib/levanter",
     "lib/marin",
@@ -231,6 +233,7 @@ marin-finelog = { workspace = true }
 marin-deploy = { workspace = true }
 marin-dupekit = { workspace = true }
 marin-ducky = { workspace = true }
+marin-skyrlrecipe = { workspace = true }
 marin-marina = { workspace = true }
 marin-haliax = { workspace = true }
 marin-levanter = { workspace = true }
@@ -367,6 +370,7 @@ project-includes = [
     "lib/iris/src/**/*.py",
     "lib/iris/scripts/**/*.py",
     "lib/ducky/src/**/*.py",
+    "lib/skyrlrecipe/src/**/*.py",
     "lib/rigging/src/**/*.py",
     "lib/zephyr/src/**/*.py",
     "lib/verifyit/src/**/*.py",
@@ -393,6 +397,7 @@ search-path = [
     "lib/fray/src",
     "lib/iris/src",
     "lib/ducky/src",
+    "lib/skyrlrecipe/src",
     "infra/deploy/src",
     "infra/marina/src",
     "infra/marina/apps",

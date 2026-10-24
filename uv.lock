@@ -718,6 +718,7 @@ members = [
     "marin-rolloutengine",
     "marin-root",
     "marin-shellbox",
+    "marin-skyrlrecipe",
     "marin-taskcompendium",
     "marin-taskforge",
     "marin-verifyit",
@@ -7642,6 +7643,7 @@ dependencies = [
     { name = "marin-levanter" },
     { name = "marin-marina" },
     { name = "marin-rigging", extra = ["secrets"] },
+    { name = "marin-skyrlrecipe" },
     { name = "marin-verifyit", extra = ["math", "reasoning-gym", "schema"] },
     { name = "marin-zephyr" },
     { name = "seaborn" },
@@ -7683,6 +7685,7 @@ requires-dist = [
     { name = "marin-levanter", marker = "extra == 'pipeline'", editable = "lib/levanter" },
     { name = "marin-marina", editable = "infra/marina" },
     { name = "marin-rigging", extras = ["secrets"], editable = "lib/rigging" },
+    { name = "marin-skyrlrecipe", editable = "lib/skyrlrecipe" },
     { name = "marin-verifyit", extras = ["math", "reasoning-gym", "schema"], editable = "lib/verifyit" },
     { name = "marin-zephyr", editable = "lib/zephyr" },
     { name = "nvidia-cublas", marker = "sys_platform == 'linux' and extra == 'pipeline'", specifier = ">=13.2.0.9" },
@@ -7742,6 +7745,31 @@ provides-extras = ["qemu", "shellsim", "gvisor", "daytona", "iris"]
 
 [package.metadata.requires-dev]
 test = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
+name = "marin-skyrlrecipe"
+version = "0.1.0"
+source = { editable = "lib/skyrlrecipe" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.13,<3" }]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
 
 [[package]]
 name = "marin-taskcompendium"

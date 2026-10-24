@@ -3081,6 +3081,24 @@ provides-extras = ["qemu", "shellsim", "gvisor", "daytona", "iris"]
 test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
+name = "marin-skyrlrecipe"
+version = "0.1.0"
+source = { editable = "../../lib/skyrlrecipe" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.13,<3" }]
+
+[package.metadata.requires-dev]
+test = [
+    { name = "pytest", specifier = ">=8.4" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+]
+
+[[package]]
 name = "marin-style"
 version = "0.4.0"
 source = { git = "https://github.com/marin-community/marin-style?rev=727f180cd423246ca1a6164163a5883cda5bf52b#727f180cd423246ca1a6164163a5883cda5bf52b" }
@@ -3201,6 +3219,7 @@ dependencies = [
     { name = "marin-rigging", extra = ["prometheus", "secrets"] },
     { name = "marin-rolloutengine" },
     { name = "marin-shellbox", extra = ["daytona", "shellsim"] },
+    { name = "marin-skyrlrecipe" },
     { name = "marin-taskcompendium" },
     { name = "marin-verifyit", extra = ["judge", "math", "reasoning-gym", "schema"] },
     { name = "math-verify" },
@@ -3373,6 +3392,7 @@ requires-dist = [
     { name = "marin-rigging", extras = ["secrets"], editable = "../../lib/rigging" },
     { name = "marin-rolloutengine", editable = "../../lib/rolloutengine" },
     { name = "marin-shellbox", extras = ["daytona", "shellsim"], editable = "../../lib/shellbox" },
+    { name = "marin-skyrlrecipe", editable = "../../lib/skyrlrecipe" },
     { name = "marin-taskcompendium", editable = "../../lib/taskcompendium" },
     { name = "marin-verifyit", extras = ["math", "schema", "reasoning-gym", "judge"], editable = "../../lib/verifyit" },
     { name = "math-verify", specifier = "==0.9.0" },
