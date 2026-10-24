@@ -53,7 +53,14 @@ def test_hero_log_scaling_factor_is_one_through_the_floor_and_1_296_at_262144_ke
     ids=["on", "null"],
 )
 def test_schema_3_config_json_keeps_log_scaling_and_split_experts(log_scaling, expected):
-    config = GrugMoeConfig(grugmoe_artifact_schema_version=3, **log_scaling)
+    config = GrugMoeConfig(
+        grugmoe_artifact_schema_version=3,
+        qk_mult=1.5703274004183786,
+        sliding_window=2048,
+        max_position_embeddings=65536,
+        num_experts_per_tok=4,
+        **log_scaling,
+    )
 
     reloaded = GrugMoeConfig.from_dict(config.to_dict())
 
