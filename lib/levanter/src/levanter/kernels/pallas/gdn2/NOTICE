@@ -1,0 +1,31 @@
+Atomic Ops kernel subset
+Source: https://github.com/Akseleu-J/atomic-ops
+Revision: a9bd7c5315907d23ccf1ce6b033d46a196566888 (PyPI 0.1.0 compute sources)
+License: MIT; see LICENSE for the original copyright and permission notice.
+
+Only configs.py, gdn2_fwd.py, gdn2_bwd.py, and gdn2_pipeline.py are
+vendored. upstream/ preserves the baseline compute implementation; its
+block-solver list has an added type annotation with no arithmetic change.
+candidate/ derives from those files and removes clipping, non-finite
+replacement, and damping. It replaces off-diagonal pairwise reductions
+with boundary-centered matrix products and masks diagonal blocks before
+exponentiation. Diagonal masks use full-rank iotas to avoid an unsupported
+TPU boolean reshape. Both causal and strict-diagonal masks are applied
+before feature reduction, avoiding a post-reduction mask relayout.
+The benchmark selects a feature-first diagonal score layout on v4 to
+avoid its unsupported sublane gather on trailing-feature reduction.
+It retains the feature-last layout on v5e/v5p/v6e.
+The v4 backward path transposes the state-decay reduction to preserve lane
+layout and processes diagonal pair gradients in 16-query-row tiles.
+Micro-solver rows are statically unrolled to avoid
+runtime indexing; hardware compilation is validated separately from CPU
+interpretation. The independent token recurrence is in reference.py.
+
+Inputs to these experimental kernels must reside on a single device.
+The benchmark explicitly places all inputs on one local TPU device.
+They are not wired into a model or distributed training API.
+
+The benchmark is lib/levanter/scripts/bench/bench_atomic_gdn2.py.
+Only configurations passing forward and all-input-gradient checks receive
+accepted timing rows. CPU interpretation tests do not establish TPU
+compilation, numerical parity, or performance.
