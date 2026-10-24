@@ -42,6 +42,7 @@ def policy_plan(key, policy_dir, endpoint, output, concurrency, max_length=16320
         **payload.get("extra_model_args", {}),
         "timeout": 7200,
         "transport_retry_budget": 7200,
+        "transport_attempt_timeout": 7200,
     }
     payload["policy_provenance"] = dict(
         path=str(path),
@@ -115,6 +116,8 @@ def main():
     if args.submit:
         try:
             validate_gate(gate, args.endpoint)
+            if args.policy in ("boolq", "piqa") and not gate.get("nll_accepted"):
+                raise ValueError("NLL policies require the accepted real-client echo/BOS/continuation-span diagnostic")
         except ValueError as error:
             parser.error(str(error))
     plan = policy_plan(args.policy, args.policy_dir, args.endpoint, args.output, args.concurrency, args.max_length)
