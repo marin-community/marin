@@ -85,6 +85,11 @@ _ENTROPY_PRED = "entropy_pred"
 _ENTROPY_CHUNK = 1024
 # Per-layer branch-output stats, stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
+# Per-layer per-token total combine weight of the selected real experts ``[T]`` (``num_null_experts`` with a
+# ``null_aux`` pressure): differentiable, from the forward to the loss.
+NULL_REAL_WEIGHT = "null_real_weight"
+# Per-layer per-token count of selected real experts ``[T]`` (``num_null_experts``; stop-gradient, for token dumps).
+NULL_REAL_SLOTS = "null_real_slots"
 
 # Kimi K3's KDA layer: low-rank forget-gate width, and the per-token log-decay floor
 # ``g = -KDA_MIN_LOG_DECAY * sigmoid(...)``.
@@ -155,6 +160,18 @@ class RouterCombine(StrEnum):
     SQRT_SOFTPLUS_RAW = "sqrt_softplus_raw"
     """``sqrt(softplus(logit))`` times a constant (``routing_renorm_sum / (K sqrt(log 2))``, so the sum matches at
     init), no renormalization: a token's total expert weight can vary."""
+
+
+class NullAux(StrEnum):
+    """Per-token weighting ``w_t`` of the null-expert aux term ``null_aux_weight * mean_t[w_t * R_t]`` summed over
+    MoE layers, where ``R_t`` is the token's total combine weight on its selected real experts. ``w_t`` is
+    stop-gradient and normalized to mean 1 over the batch's loss tokens."""
+
+    NONE = "none"
+    INVLOSS = "invloss"
+    """``(mean_loss / max(loss_t, null_aux_eps)) ** null_aux_gamma``: low-loss tokens are pushed hardest to nulls."""
+    PTARGET = "ptarget"
+    """``exp(-loss_t)``, the model's probability of the target."""
 
 
 class ValueEmbeds(StrEnum):
@@ -447,6 +464,23 @@ class GrugModelConfig:
     ``relu2`` for ReLU^2-GLU as in Primer / ReMoE)."""
     learnable_qk_mult: bool = False
     """A learnable scalar per softmax-attention layer (init ``qk_mult``) in place of the fixed ``qk_mult``."""
+    num_null_experts: int = 0
+    """Zero-compute experts (AdaMoE / MoE++ / LongCat-Flash): extra router columns that join the top-K selection.
+    A selected null slot keeps its share of the renormalized combine weight but outputs zero and is dropped from
+    dispatch, so a token's real experts get only ``routing_renorm_sum * (real share)``. The nulls share one
+    selection bias per layer (``null_bias_rate`` controller); QB balances the real experts only."""
+    null_target_real_experts: float = 8.0
+    """With ``num_null_experts``: the null-bias controller's target mean real (non-null) slots per token per layer.
+    Also sizes the ragged EP transport buffers (``capacity_factor`` times this many slots per token)."""
+    null_bias_rate: float = 0.01
+    """With ``num_null_experts``: each step ``b_null += null_bias_rate * (mean real slots - target)`` per layer."""
+    null_aux: NullAux = NullAux.NONE
+    null_aux_weight: float = 0.0
+    """``lambda`` of the ``null_aux`` term (per MoE layer)."""
+    null_aux_eps: float = 0.02
+    """Loss floor (nats) of ``NullAux.INVLOSS``."""
+    null_aux_gamma: float = 1.0
+    """Exponent of ``NullAux.INVLOSS``."""
 
     def __post_init__(self) -> None:
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
@@ -463,6 +497,14 @@ class GrugModelConfig:
             # QB routing takes top-(k+1) and keeps the last entry as the threshold alpha, so a
             # full-bank top-k asks `jax.lax.top_k` for more entries than the router has experts.
             raise ValueError("num_experts_per_token must be < num_experts, because QB routing selects top-(k+1)")
+        if self.num_null_experts < 0:
+            raise ValueError(f"num_null_experts must be >= 0, got {self.num_null_experts}")
+        if self.num_null_experts and not 0 < self.null_target_real_experts <= self.num_experts_per_token:
+            raise ValueError("null_target_real_experts must be in (0, num_experts_per_token]")
+        if (self.null_aux != NullAux.NONE) != (self.null_aux_weight > 0):
+            raise ValueError("null_aux and a positive null_aux_weight go together")
+        if self.null_aux != NullAux.NONE and not self.num_null_experts:
+            raise ValueError("null_aux needs num_null_experts")
         if self.local_mixer == LocalMixer.KDA and not self.attn_res:
             raise ValueError("local_mixer=kda requires attn_res (KDA layers run in the unrolled AttnRes loop)")
         if self.kda_chunk_size not in KDA_CHUNK_TILES:
@@ -489,6 +531,16 @@ class GrugModelConfig:
     def expert_in_dim(self) -> int:
         """Width the routed experts read and write: the MoE latent, or the hidden dim without one."""
         return self.latent_dim if self.latent_dim is not None else self.hidden_dim
+
+    @property
+    def router_columns(self) -> int:
+        """Router logits per token: the real experts, then the null experts."""
+        return self.num_experts + self.num_null_experts
+
+    @property
+    def mean_routed_experts(self) -> float:
+        """Real experts per token per layer: top-K, or the null controller's target."""
+        return self.null_target_real_experts if self.num_null_experts else float(self.num_experts_per_token)
 
     @property
     def kv_source_layers(self) -> int:
@@ -1129,8 +1181,8 @@ class MoEMLP(eqx.Module):
         # own projection keeps `hidden_dim`.
         width = cfg.expert_in_dim
         return MoEMLP(
-            router=reshard(_init_weight(k_router, (d, cfg.num_experts), cfg.initializer_std), P(None, None)),
-            router_bias=jnp.zeros((cfg.num_experts,)),
+            router=reshard(_init_weight(k_router, (d, cfg.router_columns), cfg.initializer_std), P(None, None)),
+            router_bias=jnp.zeros((cfg.router_columns,)),
             w_latent_down=(
                 None
                 if latent is None
@@ -1187,6 +1239,7 @@ class MoEMLP(eqx.Module):
         biased_logits = router_logits + jax.lax.stop_gradient(self.router_bias)
         k = self.cfg.num_experts_per_token
         num_experts = self.cfg.num_experts
+        num_null = self.cfg.num_null_experts
         # Select top-(K+1) on biased logits; the (K+1)-th is the QB threshold alpha.
         topk_logits, selected_experts = _small_top_k(biased_logits, k + 1)
         alpha = topk_logits[:, -1:]
@@ -1194,28 +1247,62 @@ class MoEMLP(eqx.Module):
         # Combine weights on unbiased logits for selected experts.
         unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
         combine_weights_f = self._combine_weights(unbiased_topk)
+        real_logits = router_logits
+        if num_null:
+            # A null slot keeps its share of the renormalized weight (the real experts' total weight shrinks), outputs
+            # zero, and carries the out-of-range expert id E that every MoE backend treats as an invalid assignment:
+            # never dispatched, never counted against capacity, combine weight zero.
+            is_null = selected_experts >= num_experts
+            combine_weights_f = jnp.where(is_null, 0.0, combine_weights_f)
+            if self.cfg.null_aux != NullAux.NONE:
+                # The aux term's view of the same weights, whose gradient reaches only the router matrix.
+                aux_logits = _router_only_grad(router_logits, x_flat, self.router)
+                aux_weights = self._combine_weights(jnp.take_along_axis(aux_logits, selected_experts, axis=-1))
+                real_weight = jnp.sum(jnp.where(is_null, 0.0, aux_weights), axis=-1)
+            else:
+                real_weight = jnp.sum(combine_weights_f, axis=-1)
+            selected_experts = jnp.where(is_null, num_experts, selected_experts)
+            real_logits = router_logits[:, :num_experts]
+            real_slots = jnp.sum(~is_null, axis=-1).astype(jnp.float32)
+            mean_real = jnp.mean(real_slots)
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
         # Per-shard partials only; the cross-device reduction happens once after the layer loop.
         router_stats = local_routing_stats(
             reshard(selected_experts, P(_BATCH_AXES, None)),
-            reshard(router_logits, P(_BATCH_AXES, None)),
+            reshard(real_logits, P(_BATCH_AXES, None)),
             mesh,
             num_experts=num_experts,
             batch_axes=_BATCH_AXES,
         )
         # Sharded QB: estimate each expert's threshold beta from the margins `s - alpha` by binning
-        # them into fixed bins over the live global range and reading the (1-K/E) quantile.
+        # them into fixed bins over the live global range and reading the (1-K/E) quantile. With nulls the target
+        # share is this step's real assignments over the real experts, so QB balances the real experts among
+        # themselves and leaves their total to the null-bias controller.
         beta, margin_min, margin_max = qb_beta_hist(
-            reshard(router_logits - alpha, P(_BATCH_AXES, None)),
+            reshard(real_logits - alpha, P(_BATCH_AXES, None)),
             mesh,
-            target_share=k / num_experts,
+            target_share=mean_real / num_experts if num_null else k / num_experts,
             num_experts=num_experts,
             n_bins=_QB_HIST_BINS,
             batch_axes=_BATCH_AXES,
         )
+        if num_null:
+            # LongCat-style controller on the shared null bias (applied next step like the QB betas, which carry
+            # it as -bias in the null columns).
+            null_bias = jax.lax.stop_gradient(self.router_bias[num_experts])
+            next_null_bias = null_bias + self.cfg.null_bias_rate * (mean_real - self.cfg.null_target_real_experts)
+            beta = jnp.concatenate([beta, jnp.broadcast_to(-next_null_bias, (num_null,))])
+            router_stats[f"{_OUTSTAT_PREFIX}null_bias"] = null_bias
+            router_stats[f"{_OUTSTAT_PREFIX}null_real_slots_std"] = jnp.std(real_slots)
+            router_stats[f"{_OUTSTAT_PREFIX}null_real_weight"] = jax.lax.stop_gradient(jnp.mean(real_weight))
+            router_stats[NULL_REAL_WEIGHT] = reshard(
+                real_weight if self.cfg.null_aux != NullAux.NONE else jax.lax.stop_gradient(real_weight),
+                P(_BATCH_AXES),
+            )
+            router_stats[NULL_REAL_SLOTS] = reshard(real_slots, P(_BATCH_AXES))
         router_stats["qb_beta"] = beta
-        router_stats[f"{_OUTSTAT_PREFIX}moe_active_k"] = jnp.asarray(float(k), jnp.float32)
+        router_stats[f"{_OUTSTAT_PREFIX}moe_active_k"] = mean_real if num_null else jnp.asarray(float(k), jnp.float32)
         router_stats["margin_min"] = margin_min
         router_stats["margin_max"] = margin_max
 
@@ -1445,9 +1532,16 @@ def _run_expert_bank(
     combine_weights: jax.Array,
 ):
     """Dispatch the expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
-    dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``."""
+    dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``.
+
+    With ``num_null_experts`` the ragged EP transport buffers hold ``capacity_factor`` times
+    ``null_target_real_experts`` slots per token instead of ``num_experts_per_token``, so the dropped null slots
+    save their expert GEMM rows."""
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
+        capacity_topk = None
+        if cfg.num_null_experts and em.implementation == "ragged_all_to_all":
+            capacity_topk = math.ceil(cfg.null_target_real_experts)
         return moe_mlp(
             routed_input,
             selected,
@@ -1463,7 +1557,10 @@ def _run_expert_bank(
             report_capacity_overflow=True,
             expert_chunks=em.expert_chunks,
             ragged_expert_chunks=cfg.moe_ragged_chunks,
+            ragged_capacity_topk=capacity_topk,
         )
+    if cfg.num_null_experts:
+        raise ValueError("num_null_experts supports only the ungated ReLU^2 experts (moe_ungated_relu2)")
     return em(routed_input, selected, combine_weights, mesh=get_abstract_mesh(), report_capacity_overflow=True)
 
 
@@ -1482,6 +1579,26 @@ def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], I
         indices.append(index)
         x = jnp.where(iota == index[..., None], -jnp.inf, x)
     return jnp.stack(values, axis=-1), jnp.stack(indices, axis=-1)
+
+
+@jax.custom_vjp
+def _router_only_grad(logits: jax.Array, x: jax.Array, w: jax.Array) -> jax.Array:
+    """``logits`` (``x @ w``) unchanged, with a backward that sends their cotangent only to ``w`` (``x^T d``): a
+    loss term on these logits trains the router matrix and nothing upstream of it."""
+    return logits
+
+
+def _router_only_grad_fwd(logits: jax.Array, x: jax.Array, w: jax.Array):
+    return logits, (x, w)
+
+
+def _router_only_grad_bwd(residuals, d: jax.Array):
+    x, w = residuals
+    dw = jnp.einsum("td,te->de", x, d.astype(x.dtype), out_sharding=_partition_spec_of(w) or P(None, None))
+    return jnp.zeros_like(d), jnp.zeros_like(x), dw.astype(w.dtype)
+
+
+_router_only_grad.defvjp(_router_only_grad_fwd, _router_only_grad_bwd)
 
 
 @jax.custom_vjp
@@ -1750,21 +1867,33 @@ def _attn_res_layer_remat_fwd(perturbed, diff_args, mask, token_ids, use_long, l
 @_attn_res_layer_remat.def_bwd
 def _attn_res_layer_remat_bwd(residuals, grad_out, perturbed, diff_args, mask, token_ids, use_long, layer_index, eps):
     del residuals, perturbed
-    # Router stats are logging-only and carry no cotangent.
-    d_partial, d_blocks, d_block_logits, _ = grad_out
-    _, blocks, block_logits, _, _, _ = diff_args
+    # Router stats are logging-only and carry no cotangent, except the null aux's per-token real weight.
+    d_partial, d_blocks, d_block_logits, d_stats = grad_out
+    layer, blocks, block_logits, _, _, _ = diff_args
+    cfg = layer.attn.cfg
+    d_real_weight = d_stats.get(NULL_REAL_WEIGHT) if cfg.null_aux != NullAux.NONE else None
     d_blocks = jax.tree.map(lambda d, x: jnp.zeros_like(x) if d is None else d, d_blocks, blocks, is_leaf=_is_none)
     d_block_logits = jax.tree.map(
         lambda d, x: jnp.zeros_like(x) if d is None else d, d_block_logits, block_logits, is_leaf=_is_none
     )
     with jax.named_scope(f"attn_res_bwd{layer_index}"):
-        diff_args, d_partial, d_blocks, d_block_logits = jax.lax.optimization_barrier(
-            (diff_args, d_partial, d_blocks, d_block_logits)
+        diff_args, d_partial, d_blocks, d_block_logits, d_real_weight = jax.lax.optimization_barrier(
+            (diff_args, d_partial, d_blocks, d_block_logits, d_real_weight)
         )
-        _, vjp_fn = jax.vjp(
-            lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps)[0], diff_args
-        )
-        ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_extras),) = vjp_fn(d_partial)
+        if d_real_weight is None:
+            _, vjp_fn = jax.vjp(
+                lambda args: _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps)[0], diff_args
+            )
+            cotangent = d_partial
+        else:
+
+            def layer_out(args):
+                out, stats = _attn_res_layer(args, mask, token_ids, use_long, layer_index, eps)
+                return out, stats[NULL_REAL_WEIGHT]
+
+            _, vjp_fn = jax.vjp(layer_out, diff_args)
+            cotangent = (d_partial, d_real_weight)
+        ((d_layer, d_blocks_own, d_block_logits_own, d_partial_in, d_queries, d_extras),) = vjp_fn(cotangent)
         d_blocks = tuple(a + b for a, b in zip(d_blocks, d_blocks_own, strict=True))
         d_block_logits = jax.tree.map(jnp.add, d_block_logits, d_block_logits_own)
         # One barrier over every cotangent: the weight gradients are off the critical path, and without
@@ -2017,6 +2146,9 @@ class Transformer(eqx.Module):
                 "margin_max_per_layer": stacked_router_stats["margin_max"],
             }
             router_metrics.update({k: v for k, v in stacked_router_stats.items() if k.startswith(_OUTSTAT_PREFIX)})
+            for key in (NULL_REAL_WEIGHT, NULL_REAL_SLOTS):
+                if key in stacked_router_stats:
+                    router_metrics[key] = stacked_router_stats[key]
         router_metrics.update(final_gate_stats)
         if pre_norm_grad_probe is not None:
             rms = jnp.sqrt(jnp.mean(jnp.square(jax.lax.stop_gradient(hidden).astype(jnp.float32)), axis=-1))
@@ -2193,6 +2325,35 @@ class Transformer(eqx.Module):
             keep = ((h ^ (h >> 13)).astype(jnp.float32) / jnp.float32(1 << 32)) < frac
         return pred, keep & jnp.asarray(active)
 
+    def _null_aux(
+        self,
+        per_token: Float[Array, "B S"],
+        weight: Float[Array, "B S"],
+        count: jax.Array,
+        real_weight: Float[Array, "L T"],
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """``null_aux_weight * sum_layers mean_t[w_t * R_t]`` (``NullAux``) from this step's per-token training loss
+        (stop-gradient; the cross-entropy plus its z-loss term) and the layers' per-token real-expert weight ``R``."""
+        cfg = self.config
+        loss_t = jax.lax.stop_gradient(per_token).astype(jnp.float32)
+        if cfg.null_aux == NullAux.INVLOSS:
+            mean_loss = jnp.sum(weight * loss_t) / count
+            w = (mean_loss / jnp.maximum(loss_t, cfg.null_aux_eps)) ** cfg.null_aux_gamma
+        else:
+            w = jnp.exp(-loss_t)
+        w = weight * w
+        w = jax.lax.stop_gradient(w / (jnp.sum(w) / count))
+        layers = real_weight.shape[0]
+        r = real_weight.reshape(layers, *per_token.shape)
+        per_layer = jnp.sum(w[None] * r, axis=(1, 2)) / count
+        aux = cfg.null_aux_weight * jnp.sum(per_layer)
+        metrics = {
+            "train/null/aux_loss": jax.lax.stop_gradient(aux),
+            "train/null/aux_w_max": jnp.max(w),
+            "train/null/aux_w_rms": jnp.sqrt(jnp.sum(jnp.square(w)) / count),
+        }
+        return aux, metrics
+
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
@@ -2225,8 +2386,15 @@ class Transformer(eqx.Module):
         probe_metrics = {} if final_norm_rms is None else {FINAL_NORM_INPUT_RMS_KEY: final_norm_rms}
         entropy_pred = router_metrics.pop(_ENTROPY_PRED, None)
         outstats = {k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith(_OUTSTAT_PREFIX)}
+        real_weight = router_metrics.pop(NULL_REAL_WEIGHT, None)
+        router_metrics.pop(NULL_REAL_SLOTS, None)
+        if self.config.null_aux == NullAux.NONE:
+            real_weight = None
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
+        null_aux = real_weight is not None and train_terms
+        if null_aux and reduction != "mean":
+            raise ValueError("the null aux term needs the mean loss reduction")
 
         head_in = hidden
         if head_grad_probe is not None:
@@ -2239,15 +2407,26 @@ class Transformer(eqx.Module):
             self.output_proj,
             labels,
             weight=loss_weight,
-            reduction=reduction,
+            # The null aux reads the per-token loss, so take it unreduced and form the same mean here.
+            reduction="none" if null_aux else reduction,
             logsumexp_weight=logsumexp_weight,
             dtype=loss_dtype,
             implementation="xla_fast_bwd",
             block_sizes=_CE_BLOCK_SIZES,
             logit_soft_cap=self.config.logit_soft_cap,
         )
-        # Router z-loss is logged for monitoring only; it is not added to the training loss.
-        loss = cross_entropy_loss
+        null_metrics: dict[str, jax.Array] = {}
+        if null_aux:
+            assert real_weight is not None
+            per_token = cross_entropy_loss
+            weight_f = loss_weight.astype(jnp.float32)
+            count = jnp.maximum(jnp.sum(weight_f), 1.0)
+            cross_entropy_loss = jnp.sum(per_token) / count
+            null_aux_loss, null_metrics = self._null_aux(per_token, weight_f, count, real_weight)
+            # Router z-loss is logged for monitoring only; it is not added to the training loss.
+            loss = cross_entropy_loss + null_aux_loss.astype(cross_entropy_loss.dtype)
+        else:
+            loss = cross_entropy_loss
         entropy_metrics: dict[str, jax.Array] = {}
         if entropy_pred is not None and train_terms:
             target = _vocab_entropy(hidden, self.output_proj, self.config.logit_soft_cap)
@@ -2283,6 +2462,7 @@ class Transformer(eqx.Module):
         summarized_metrics = summarize_router_metrics(router_metrics)
         summarized_metrics.update(final_gate_metrics)
         summarized_metrics.update(entropy_metrics)
+        summarized_metrics.update(null_metrics)
         summarized_metrics["train/cross_entropy_loss"] = cross_entropy_loss
         summarized_metrics.update(probe_metrics)
         for name, per_layer in outstats.items():
@@ -2339,7 +2519,7 @@ def forward_flops_per_token(model: Transformer) -> float:
     """Analytic forward FLOPs per token of ``model``'s architecture.
 
     Matmuls are read off the parameter tree: 2 x every weight a token multiplies, with the routed experts
-    scaled by ``num_experts_per_token / num_experts`` (nominal routing, drops not discounted). Embedding
+    scaled by ``mean_routed_experts / num_experts`` (nominal routing, drops not discounted). Embedding
     tables, norms and other vectors are excluded. The attention cores have no weights and are added
     explicitly: causal softmax attention over the keys each query actually attends (a sliding window caps
     the span), ``QK^T`` plus ``PV``; and KDA's chunked delta rule, ``6 d_k d_v + 4 C (d_k + d_v)`` per head
@@ -2361,7 +2541,7 @@ def forward_flops_per_token(model: Transformer) -> float:
             continue
         size = float(math.prod(leaf.shape))
         if "expert_mlp" in names:
-            size *= cfg.num_experts_per_token / cfg.num_experts
+            size *= cfg.mean_routed_experts / cfg.num_experts
         matmul += 2 * size
         if names[-2:] == ["attn", "w_q"]:
             q_widths[names[0]] = leaf.shape[-1]

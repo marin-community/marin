@@ -69,6 +69,8 @@ from experiments.grug.dispatch import dispatch_grug_training_run
 from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
+    NULL_REAL_SLOTS,
+    NULL_REAL_WEIGHT,
     DenseMLP,
     GradProbeSite,
     GrugModelConfig,
@@ -547,7 +549,7 @@ def _compute_match_flops(
             num_shared_experts=(
                 model_config.num_shared_experts if model_config.shared_expert_intermediate_dim > 0 else 0
             ),
-            num_experts_per_tok=model_config.num_experts_per_token,
+            num_experts_per_tok=round(model_config.mean_routed_experts),
             sliding_window=model_config.sliding_window,
             global_every=model_config.global_every,
             local_kv_heads=model_config.local_kv_heads,
@@ -559,7 +561,9 @@ def _compute_match_flops(
         if model_config.latent_dim is not None:
             hidden, latent = model_config.hidden_dim, model_config.latent_dim
             # Matches the routed term in `lm_flops_per_token`: 2 * (gate + up + down) * intermediate * top_k.
-            routed_delta = 2 * model_config.intermediate_dim * model_config.num_experts_per_token * 3 * (latent - hidden)
+            routed_delta = (
+                2 * model_config.intermediate_dim * round(model_config.mean_routed_experts) * 3 * (latent - hidden)
+            )
             # W_latent_down (hidden -> latent) and W_latent_up (latent -> hidden), once per token each.
             projection = 2 * hidden * 2 * latent
             flops_per_token += model_config.num_layers * (routed_delta + projection)
@@ -629,7 +633,11 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
         # Dense blocks have no router (QB routing dropped), so there is no router_bias to set.
         return model
     new_bias = -qb_betas
-    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
+    # Center the real experts' biases only; the null columns (``num_null_experts``) hold the null controller's
+    # absolute bias.
+    num_experts = model.config.num_experts
+    real = new_bias[:, :num_experts]
+    new_bias = new_bias.at[:, :num_experts].set(real - jnp.mean(real, axis=-1, keepdims=True))
     # qb_betas are in layer order; each stack takes the rows of its own layers.
     # A stack with fewer experts than the widest layer (final_num_experts) takes only its own columns.
     per_stack = [
@@ -652,7 +660,7 @@ def initial_state(
         step=jax.sharding.reshard(jnp.array(0, dtype=jnp.int32), P()),
         params=params,
         opt_state=opt_state,
-        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.num_experts)),
+        pending_qb_betas=jnp.zeros((model_config.num_layers, model_config.router_columns)),
     )
 
 
@@ -1374,7 +1382,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
                         metrics["moe/receiver_dropped_assignments"],
                         batch_size=rec.batch.tokens.shape[0],
                         sequence_length=rec.batch.tokens.shape[1],
-                        top_k=config.model.num_experts_per_token,
+                        top_k=round(config.model.mean_routed_experts),
                         num_layers=config.model.num_layers,
                     )
                     levanter.tracker.log(jax.device_get(drop_metrics), step=step)
@@ -1534,6 +1542,12 @@ def _token_dump_step(mp: jmp.Policy, skip_layers: tuple[int, ...]):
         mask = AttentionMask.causal().with_segment_ids(segment_ids)
         weight = jnp.ones(tokens.shape, jnp.float32)
         out = {"next_token_loss": model.next_token_loss(tokens, weight, mask=mask, reduction="none")}
+        if model.config.num_null_experts:
+            # Per-layer real (non-null) experts and their total combine weight per token, as [B, L, S].
+            _, stats = model(tokens, mask=mask)
+            for name, key in (("real_slots", NULL_REAL_SLOTS), ("real_weight", NULL_REAL_WEIGHT)):
+                per_layer = stats[key].reshape(stats[key].shape[0], *tokens.shape)
+                out[name] = jnp.transpose(per_layer, (1, 0, 2))
         if skip_layers:
             skip = LayerSkip(skip_layers, jnp.zeros(tokens.shape, jnp.bool_))
             out["skipped_loss"] = model.next_token_loss(tokens, weight, mask=mask, reduction="none", layer_skip=skip)
