@@ -20,6 +20,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     Source,
     TaskSpec,
@@ -29,6 +30,7 @@ from taskcompendium.runtime.resources import inline_resource
 from verifyit.spec import NumericSpec
 
 WORKDIR = "/workspace"
+SOLVER_TURN_BUDGET = 30
 ITEMS = ("bolts", "nuts", "washers", "hinges", "brackets")
 
 
@@ -61,6 +63,8 @@ def task_spec(task_id: str) -> TaskSpec:
         answer_format=PlainText(),
         grader=grader.grader,
         source=Source(dataset="taskforge-agentic", revision="example", row=task_id, importer_revision="example"),
+        turn_budget=SOLVER_TURN_BUDGET,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
         resources=ResourceGroups(
             worker=(inline_resource("workspace/ledger.csv", "\n".join(lines).encode() + b"\n"),),
             verifier=grader.resources,

@@ -46,6 +46,7 @@ def executable_task():
         environment=EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS),
         grader_environment=EnvironmentRequirements(docker_image=IMAGE, command_semantics=CommandSemantics.LINUX_PROCESS),
         output_paths=SOLUTION_PATHS,
+        turn_budget=1,
         verifier=(inline_resource("cases/input_1.txt", b"3 4\n"), inline_resource("cases/output_1.txt", b"7\n")),
         worker=(inline_resource("setup_files/readme.txt", b"Public setup"),),
     )

@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 from typing import Any, NoReturn
 
 from shellbox.machine import Machine
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import ReasoningMode, TaskSpec, TurnEvidence, reasoning_template_kwargs
 
 from rolloutengine.cleanup import _Cleanup
 from rolloutengine.harness.core import Harness, HarnessContext
@@ -61,6 +61,17 @@ def _failure_record(operation: RolloutOperation, cause: BaseException) -> Rollou
     if notes:
         diagnostics["notes"] = list(notes)
     return RolloutFailure(type(cause).__name__, diagnostics)
+
+
+def _with_reasoning(prompt: Prompt, reasoning: ReasoningMode) -> Prompt:
+    """Ask for the task's reasoning mode in every request of the conversation."""
+    requested = reasoning_template_kwargs(reasoning)
+    if not requested:
+        return prompt
+    kwargs = dict(prompt.options.get("chat_template_kwargs", {}))
+    if any(kwargs.get(key, value) != value for key, value in requested.items()):
+        raise RolloutContractError(f"The harness's chat_template_kwargs {kwargs} contradict the task's {reasoning}")
+    return replace(prompt, options={**prompt.options, "chat_template_kwargs": {**kwargs, **requested}})
 
 
 class _NoEvents:
@@ -172,9 +183,11 @@ class _Recorder:
     and records a sent request that has no answer. Final observations replace such a request.
     """
 
-    def __init__(self, model: Model, limits: RolloutLimits, mode: TraceMode, events: EventSink):
+    def __init__(self, model: Model, task: TaskSpec, limits: RolloutLimits, mode: TraceMode, events: EventSink):
         self.model = model
         self.limits = limits
+        self.max_turns = task.turn_budget
+        self.reasoning = task.reasoning
         self.mode = mode
         self.events = events
         self.earlier: list[ConversationRecord] = []
@@ -207,17 +220,29 @@ class _Recorder:
             return tuple(conversation.messages)
         return next((record.messages for record in reversed(self.earlier) if record.steps), None)
 
+    def graded_turns(self) -> tuple[TurnEvidence, ...]:
+        """Serving evidence of the graded conversation's turns, or nothing unless every turn has it."""
+        conversation = self.conversation
+        if conversation is not None and conversation.has_turn:
+            pending = () if conversation.pending is None else (conversation.pending.turn,)
+            turns = (*(step.turn for step in conversation.steps), *pending)
+        else:
+            record = next((record for record in reversed(self.earlier) if record.steps), None)
+            turns = () if record is None else tuple(step.turn for step in record.steps)
+        evidence = tuple(turn.evidence for turn in turns if turn.evidence is not None)
+        return evidence if len(evidence) == len(turns) else ()
+
     async def start(self, prompt: Prompt) -> ModelTurn:
         await self._enter()
         current = self.conversation
-        if current is not None and (self.budget_reached or self.turns >= self.limits.max_turns):
+        if current is not None and (self.budget_reached or self.turns >= self.max_turns):
             # The turn and token limits end the attempt before a new conversation. A length stop does not.
             self._stop_at_limit(self.step_observations, None)
         deadlines = self.deadlines
         assert deadlines is not None
         if current is None and deadlines.total.when() is None and self.limits.total_turn_timeout is not None:
             deadlines.total.reschedule(asyncio.get_running_loop().time() + self.limits.total_turn_timeout)
-        conversation = _Conversation(prompt, self.mode)
+        conversation = _Conversation(_with_reasoning(prompt, self.reasoning), self.mode)
         request = _Request(self.step_observations, None, conversation, self._waited())
         return await self._send(request, conversation.request((), prompt.token_ids))
 
@@ -230,7 +255,7 @@ class _Recorder:
             raise RuntimeError("A harness replies only after a model turn")
         if self.step_observations:
             raise RuntimeError("A turn has recorded final observations, so the harness cannot reply to it")
-        if self.stop_reason == LENGTH_STOP_REASON or self.budget_reached or self.turns >= self.limits.max_turns:
+        if self.stop_reason == LENGTH_STOP_REASON or self.budget_reached or self.turns >= self.max_turns:
             self._stop_at_limit(observations, token_ids)
         served = conversation.trace.prefix
         if token_ids is not None and self.mode == TraceMode.EXACT_TOKENS and token_ids[: len(served)] != served:
@@ -539,7 +564,7 @@ async def harness_rollout(
     """
     harness.check(task, limits)
     run_id = uuid.uuid4().hex if run_id is None else run_id
-    recorder = _Recorder(model, limits, trace, events)
+    recorder = _Recorder(model, task, limits, trace, events)
     cleanup = _Cleanup(limits.cleanup_timeout)
     async with AsyncExitStack() as resources:
         context = HarnessContext(task, limits, machine, events, _CleanupScope(resources, cleanup), run_id)

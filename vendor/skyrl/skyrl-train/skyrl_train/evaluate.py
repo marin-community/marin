@@ -2,7 +2,7 @@ import asyncio
 from contextlib import asynccontextmanager, nullcontext
 import torch
 from skyrl_train.utils.progress import tqdm
-from typing import Dict, List, Protocol
+from typing import Any, Dict, Iterable, List, Mapping, Protocol
 from loguru import logger
 from collections import defaultdict
 from dataclasses import dataclass, replace
@@ -11,6 +11,7 @@ from skyrl_train.utils import Timer
 from skyrl_train.evaluation_pool import EvaluationPool
 from skyrl_train.io import io
 from marinskyrl.resource_locator import join_resource_path
+from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY, ProtocolAxis
 
 from skyrl_train.trajectory_runners.trajectory_processing import (
     concatenate_trajectory_batches,
@@ -193,6 +194,29 @@ async def evaluation_session(trajectory_runner, cfg, global_step, sink):
         await trajectory_runner.stop_eval_session()
 
 
+def protocol_metrics(diagnostics: Iterable[Mapping[str, Any]], data_sources: Iterable[str | None]) -> Dict[str, float]:
+    """Per-source pass rates of each protocol result, from the grade diagnostics of tasks with a protocol check.
+
+    Attempts without an assessment, and results their check does not assess, are left out of every
+    denominator; ``<key>_assessed`` counts each denominator.
+    """
+    counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+    for row, data_source in zip(diagnostics, data_sources, strict=True):
+        assessment = row.get(PROTOCOL_DIAGNOSTICS_KEY)
+        if assessment is None:
+            continue
+        for axis in ProtocolAxis:
+            value = assessment.get(axis)
+            if value is None:
+                continue
+            tally = counts[f"eval/{data_source or 'unknown'}/protocol/{assessment['check']}/{axis}"]
+            tally[0] += int(value)
+            tally[1] += 1
+    metrics = {key: passed / assessed for key, (passed, assessed) in counts.items()}
+    metrics.update({f"{key}_assessed": float(assessed) for key, (_, assessed) in counts.items()})
+    return metrics
+
+
 def _calculate_eval_metrics(
     batch: TrajectoryBatch,
     uids: List[str],
@@ -216,6 +240,9 @@ def _calculate_eval_metrics(
         if average is not None:
             metrics["eval/all/avg_verifier_score"] = average
     metrics.update({f"eval/all/{key}": value for key, value in evaluation_response_metrics(batch).items()})
+    verification = batch.get("verification_results")
+    if verification is not None:
+        metrics.update(protocol_metrics((result.diagnostics if result else {} for result in verification), data_sources))
     return metrics
 
 

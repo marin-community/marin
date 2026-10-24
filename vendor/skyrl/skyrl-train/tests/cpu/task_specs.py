@@ -10,6 +10,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
     PlainText,
+    ReasoningMode,
     Source,
     TaskSpec,
     TextMessage,
@@ -34,6 +35,8 @@ def text_task(task_id: str = "task", *, prompt="Question", source="fixture") -> 
         answer_format=PlainText(),
         grader=NoGrader(reason="Projection fixture"),
         source=Source(dataset=source, revision="1", row="0", importer_revision="1"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 
@@ -103,14 +106,18 @@ def lowered_task(
     task: TaskSpec,
     session_name: str = "shellbox",
     *,
-    max_turns: int = 2,
+    turn_budget: int | None = None,
     backend: str | None = None,
     verifier_backend: str | None = None,
     **limits,
 ) -> TaskRolloutSpec:
+    """Lower ``task``; ``turn_budget`` replaces the task's own budget."""
+    if turn_budget is not None:
+        task = task.model_copy(update={"turn_budget": turn_budget})
+    session = {key: value for key, value in session_spec(session_name, **limits).items() if key != "max_turns"}
     return rollout_spec(
         task,
-        session_spec(session_name, max_turns=max_turns, **limits),
+        session,
         task_machine=None if backend is None else machine_runtime(backend),
         verifier_machine=None if verifier_backend is None else machine_runtime(verifier_backend),
     )

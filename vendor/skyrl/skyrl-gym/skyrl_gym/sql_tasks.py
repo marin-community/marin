@@ -253,7 +253,7 @@ class SQLTaskSession:
         )
         self.reference_sql = extras["reward_spec"]["ground_truth"]
         self.verifyit = bool(config.get("verifyit_enabled", False))
-        self.max_turns = lowered.limits.max_turns
+        self.max_turns = lowered.task.turn_budget
         self.directory = ""
         self.reference = scoring.QueryRows(0, [])
         self.failure: GradeResult | None = None

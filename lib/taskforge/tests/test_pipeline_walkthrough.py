@@ -24,6 +24,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     InlineFile,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     Source,
     TaskResource,
@@ -108,6 +109,8 @@ async def task(context: RLEnvBuildContext, numbers: TaskResource, proposal: dict
         grader=grader.grader,
         source=Source(dataset="taskforge", revision="test", row=context.workpiece_id, importer_revision="test"),
         resources=ResourceGroups(worker=(numbers,), verifier=grader.resources),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 
@@ -129,6 +132,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     InlineFile,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     Source,
     TaskResource,

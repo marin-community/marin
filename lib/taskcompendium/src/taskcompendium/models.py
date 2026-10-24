@@ -20,7 +20,16 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Annotated, ClassVar, Literal, NoReturn
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    PositiveInt,
+    TypeAdapter,
+    field_validator,
+    model_validator,
+)
 from rigging.filesystem.path_validation import validate_relative_file_path, validate_relative_file_paths
 from shellbox.machine import CommandSemantics as CommandSemantics
 from shellbox.machine import PackageSpec, UnsupportedMachineSpec
@@ -41,7 +50,7 @@ from verifyit.spec import (
     spec_from_table,
 )
 
-SCHEMA_VERSION = "0.28"
+SCHEMA_VERSION = "0.29"
 DOCKER_IMAGE_PATTERN = r"^[^\s@]+@sha256:[0-9a-f]{64}$"
 TOOL_ARGUMENTS_OBJECT_ERROR = "Tool arguments must be a JSON object"
 
@@ -56,6 +65,35 @@ class AnswerType(StrEnum):
     STATE = "state"
     WORKSPACE_STATE = "workspace_state"
     NATIVE_ACTION = "native_action"
+
+
+class ReasoningMode(StrEnum):
+    """Whether the task asks the model to reason before it answers.
+
+    ``MODEL_DEFAULT`` sends no reasoning setting, so the chat template's default applies.
+    """
+
+    ON = "on"
+    OFF = "off"
+    MODEL_DEFAULT = "model_default"
+
+
+def reasoning_template_kwargs(reasoning: ReasoningMode) -> dict[str, bool]:
+    """The chat-template arguments that request ``reasoning``; none for the model default."""
+    if reasoning == ReasoningMode.MODEL_DEFAULT:
+        return {}
+    return {"enable_thinking": reasoning == ReasoningMode.ON}
+
+
+class ReasoningApplied(StrEnum):
+    """The reasoning setting a served prompt actually rendered, as the serving side observed it.
+
+    ``UNVERIFIED`` means the template renders the same prompt either way, so the setting had no effect.
+    """
+
+    ON = "on"
+    OFF = "off"
+    UNVERIFIED = "unverified"
 
 
 class Source(BaseModel):
@@ -632,6 +670,46 @@ class NoGrader(BaseModel):
 Grader = Annotated[VerifyitGrader | ScriptGrader | NoGrader, Field(discriminator="kind")]
 
 
+class RequiredFileCheck(BaseModel):
+    """The answer must be a nonempty file at the task's output path, not a chat claim."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["required_file"] = "required_file"
+
+
+class ToolExecutionCheck(BaseModel):
+    """The model must invoke ``tool`` and the tool must execute it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["tool_execution"] = "tool_execution"
+    tool: str = Field(min_length=1)
+
+
+class ThinkingDisabledCheck(BaseModel):
+    """With reasoning off, the response must contain no reasoning channel or delimiters."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["thinking_disabled"] = "thinking_disabled"
+
+
+class UrlLoadingCheck(BaseModel):
+    """The model must try to retrieve ``url`` with ``tool``."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    kind: Literal["url_loading"] = "url_loading"
+    tool: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+
+
+ProtocolCheck = Annotated[
+    RequiredFileCheck | ToolExecutionCheck | ThinkingDisabledCheck | UrlLoadingCheck, Field(discriminator="kind")
+]
+
+
 def grades_in_process(grader: Grader) -> bool:
     """Whether the grader scores the extracted answer without a grading machine."""
     return isinstance(grader, VerifyitGrader) and grader.environment is None
@@ -681,13 +759,32 @@ class SubmissionFailure(ValueError):
 
 
 @dataclass(frozen=True)
+class TurnEvidence:
+    """What one model turn was sent and returned, as the serving side recorded it.
+
+    ``raw_response`` is the decoded response with special tokens kept. ``request_settings`` are the
+    request options actually applied. ``reasoning_markers`` are the reasoning delimiters the served
+    chat template defines.
+    """
+
+    raw_response: str
+    request_settings: Mapping[str, JsonValue]
+    reasoning_applied: ReasoningApplied
+    reasoning_markers: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class GradingAttempt:
-    """Captured trial evidence; state absence is distinct from captured JSON null."""
+    """Captured trial evidence; state absence is distinct from captured JSON null.
+
+    ``turns`` holds serving evidence for each model turn when the runtime recorded it.
+    """
 
     conversation: ConversationTrace
     files: Mapping[str, bytes] = field(default_factory=dict)
     state: StateSubmission | None = None
     stop_reason: str | None = None
+    turns: tuple[TurnEvidence, ...] = ()
 
 
 JSON_VALUE = TypeAdapter(JsonValue, config=ConfigDict(strict=True, allow_inf_nan=False))
@@ -878,6 +975,9 @@ class TaskSpec(BaseModel):
     answer_format: AnswerFormat
     grader: Grader
     source: Source
+    turn_budget: PositiveInt
+    reasoning: ReasoningMode
+    protocol_check: ProtocolCheck | None = None
     schema_version: str = SCHEMA_VERSION
     resources: ResourceGroups = Field(default_factory=ResourceGroups)
     tags: tuple[str, ...] = ()
@@ -906,4 +1006,15 @@ class TaskSpec(BaseModel):
             installed = {f"/tests/{resource.path}" for resource in self.resources.verifier}
             if self.grader.conversation_path in installed:
                 raise ValueError("The conversation path collides with a verifier resource")
+        self._validate_protocol_check()
         return self
+
+    def _validate_protocol_check(self) -> None:
+        check = self.protocol_check
+        if isinstance(check, RequiredFileCheck) and (self.answer_type != AnswerType.FILE or not self.output_paths):
+            raise ValueError("A required-file check needs a file answer with output paths")
+        if isinstance(check, ThinkingDisabledCheck) and self.reasoning != ReasoningMode.OFF:
+            raise ValueError("A thinking-disabled check needs reasoning off")
+        if isinstance(check, ToolExecutionCheck | UrlLoadingCheck):
+            if check.tool not in {tool.name for tool in self.interaction_tools}:
+                raise ValueError(f"The protocol check's tool {check.tool!r} is not an interaction tool")

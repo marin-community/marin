@@ -118,7 +118,7 @@ class NemotronTaskSession:
             if self.agent == LEAN_AGENT
             else 1
         )
-        self.max_turns = min(source_turn_limit, lowered.limits.max_turns)
+        self.max_turns = min(source_turn_limit, lowered.task.turn_budget)
         self.turns = 0
         self.grades: list[GradeResult] = []
         judges = self.config.get("judges", {})

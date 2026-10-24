@@ -151,7 +151,6 @@ class HarborTaskSettings:
 
         limits = spec.limits.model_copy(
             update={
-                "max_turns": spec.limits.max_turns if self.max_turns is None else self.max_turns,
                 "total_turn_timeout": timeout(
                     spec.limits.total_turn_timeout,
                     self.eval_timeout if phase == "eval" else self.agent_timeout,
@@ -167,8 +166,11 @@ class HarborTaskSettings:
                 else self.attempt_timeout,
             }
         )
+        # A Harbor agent's own turn limit replaces the imported task's budget.
+        task = spec.task if self.max_turns is None else spec.task.model_copy(update={"turn_budget": self.max_turns})
         return spec.model_copy(
             update={
+                "task": task,
                 "task_machine": machine(spec.task_machine),
                 "verifier_machine": machine(spec.verifier_machine),
                 "limits": limits,

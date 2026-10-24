@@ -25,6 +25,7 @@ from taskcompendium.models import (
     TaskSpec,
     VerifyitGrader,
     grades_with_judge,
+    reasoning_template_kwargs,
 )
 from taskcompendium.runtime.shell import resolve_shell_tool
 from transformers import PreTrainedTokenizerBase
@@ -123,8 +124,9 @@ def _restore_task_prompts(batch: dict) -> dict:
 def task_prompt_token_count(
     tokenizer: PreTrainedTokenizerBase, row: dict, prompt_key: str, *, chat_template_kwargs: dict | None = None
 ) -> int:
-    """Include native task tools in the initial prompt's length budget."""
+    """Include native task tools and the task's reasoning mode in the initial prompt's length budget."""
     lowered = TaskRolloutSpec.model_validate_json(row[TASK_ROLLOUT_COLUMN])
+    chat_template_kwargs = {**(chat_template_kwargs or {}), **reasoning_template_kwargs(lowered.task.reasoning)}
     if lowered.harness == ASSISTANT_PREFIX_HARNESS:
         prompt = assistant_prefix_prompt(lowered.task)
         options = {**prompt.options, "chat_template_kwargs": chat_template_kwargs or {}}
@@ -159,20 +161,20 @@ def source_row_task(
         machine = machines.get(row["extra_info"]["nemotron_ultra"]["agent"], machine)
     elif session_name == "openenv":
         machine = machines.get(row["env_name"], machine)
-    source_session = dict(environment_configs["session"])
+    session = {**environment_configs["session"], **config.pop("session", {}), "task_session": session_name}
+    # A source row's turn limit, else its session's, becomes the imported task's turn budget.
     row_turn_limit = row.get("max_turns")
     if row_turn_limit is None:
         row_turn_limit = (row.get("extra_info") or {}).get("max_turns")
-    if row_turn_limit is not None:
-        source_session["max_turns"] = int(row_turn_limit)
-    session = {**source_session, **config.pop("session", {}), "task_session": session_name}
+    session_turn_limit = session.pop("max_turns")
+    turn_budget = int(session_turn_limit if row_turn_limit is None else row_turn_limit)
     requirements = (
         EnvironmentRequirements()
         if machine is None
         else EnvironmentRequirements.model_validate(machine["requirements"])
     )
     runtime = None if machine is None else MachineRuntimeSpec.model_validate(machine["runtime"])
-    task = source_task(prompt, row, config, source, environment=requirements)
+    task = source_task(prompt, row, config, source, turn_budget=turn_budget, environment=requirements)
     return rollout_spec(task, session, task_machine=runtime)
 
 
@@ -197,8 +199,27 @@ def _canonical_task_prompt(row: dict, _index: int, *, environment_configs: Mappi
     ):
         machine = config["image_verifier"] if grader.environment.docker_image is not None else config["package_verifier"]
         verifier = MachineRuntimeSpec.model_validate(machine)
-    lowered = rollout_spec(task, session, verifier_machine=verifier)
+    lowered = rollout_spec(task, session, task_machine=_task_machine(task, config), verifier_machine=verifier)
     return _stored_prompt(lowered)
+
+
+def _task_machine(task: TaskSpec, config: Mapping[str, Any]) -> MachineRuntimeSpec | None:
+    """The configured machine for a task whose environment, files or tools need one, else ``None``.
+
+    Tool providers run on the host, so a task that needs only providers gets no machine.
+    """
+    requirements = task.environment_requirements
+    needs_machine = (
+        requirements.model_copy(update={"tool_providers": {}}) != EnvironmentRequirements()
+        or task.resources.all
+        or task.resources.worker
+        or task.output_paths
+        or task.tool_bindings
+    )
+    if not needs_machine:
+        return None
+    machine = config["image_task_machine"] if requirements.docker_image is not None else config["package_task_machine"]
+    return MachineRuntimeSpec.model_validate(machine)
 
 
 def write_tasks(path: Path, records: Iterable[TaskRolloutSpec]) -> None:

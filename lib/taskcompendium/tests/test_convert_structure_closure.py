@@ -18,6 +18,7 @@ from taskcompendium.models import (
     GradingAttempt,
     NoGrader,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     Source,
     TaskSpec,
@@ -53,6 +54,8 @@ def native_row():
             answer_format=PlainText(),
             grader=NoGrader(reason="Replaced by the native session grader in the source row"),
             resources=ResourceGroups(verifier=(config,)),
+            turn_budget=1,
+            reasoning=ReasoningMode.MODEL_DEFAULT,
         ).model_dump(mode="json")
         native["grader"] = {"kind": "session"}
         payload = json.dumps(

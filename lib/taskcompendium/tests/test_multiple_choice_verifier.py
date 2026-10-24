@@ -16,6 +16,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     GradingAttempt,
     PlainText,
+    ReasoningMode,
     Source,
     TaskSpec,
     TextMessage,
@@ -35,6 +36,8 @@ def test_hand_authored_multiple_choice_answer(response, reward):
         answer_format=PlainText(),
         grader=verifyit_package(McqSpec(expected="B", options=4)).grader,
         source=Source(dataset="hand-authored", revision="1", row="mcq", importer_revision="1"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
     result = grade_answer(

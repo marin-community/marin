@@ -96,6 +96,7 @@ async def test_swe_task_applies_and_grades_the_patch_in_a_fresh_repository(
             docker_image="fixture@sha256:" + "0" * 64,
             working_directory="/testbed",
         ),
+        turn_budget=3,
     )
     task = TaskSpec.model_validate_json(task.model_dump_json())
     assert task.context.events == (TextMessage(role="user", content="Repair value.txt."),)

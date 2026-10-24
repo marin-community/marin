@@ -48,6 +48,8 @@ class AgenticConfig:
     judge_policy: LLMPolicy
     web: Web
     agent_limits: RolloutLimits
+    agent_turns: int
+    """The agent task's turn budget."""
     solver_limits: RolloutLimits
     gate: Gate
     budget: ToolBudget

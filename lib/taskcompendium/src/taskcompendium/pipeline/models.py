@@ -10,7 +10,15 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from taskcompendium.models import AssistantToolCalls, EnvironmentRequirements, Source, TaskSpec, TextMessage
+from taskcompendium.models import (
+    AssistantToolCalls,
+    ConversationEvent,
+    EnvironmentRequirements,
+    Source,
+    TaskSpec,
+    TextMessage,
+    TurnEvidence,
+)
 from taskcompendium.pipeline.inputs import ConversionContext, SourceFiles
 from taskcompendium.runtime.models import RolloutRecord
 
@@ -110,7 +118,19 @@ class OracleCommand:
     answer_file: str | None = None
 
 
-type ControlSubmission = Reply | WorkspaceFiles | OracleCommand
+@dataclass(frozen=True)
+class Transcript:
+    """A whole attempt: the agent's events after the task's context, its files and its serving evidence.
+
+    It exercises graders that read more than the final answer, such as a task's protocol check.
+    """
+
+    events: tuple[ConversationEvent, ...]
+    files: Mapping[str, bytes] = field(default_factory=dict)
+    turns: tuple[TurnEvidence, ...] = ()
+
+
+type ControlSubmission = Reply | WorkspaceFiles | OracleCommand | Transcript
 
 
 @dataclass(frozen=True)

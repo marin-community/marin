@@ -39,16 +39,18 @@ from taskcompendium.pipeline.models import (
     ControlSubmission,
     OracleCommand,
     Reply,
+    Transcript,
     VerificationReport,
     WorkspaceFiles,
 )
 from taskcompendium.pipeline.verification import answer_event, control_result
+from taskcompendium.protocol import PROTOCOL_DIAGNOSTICS_KEY, ProtocolAxis, with_protocol_assessment
 from taskcompendium.runtime.environment import prepare_machine_spec, setup_user, validate_machine_spec
 from taskcompendium.runtime.grading import grade_empty_in_sandbox
 from taskcompendium.runtime.shell import ShellEnvironment, upload_resources
 from taskcompendium.runtime.task_grading import grade_task, sandbox_grade
 
-CONTROLS_REVISION = "18"
+CONTROLS_REVISION = "19"
 ORACLE_TIMEOUT = 600.0
 ORACLE_OUTPUT_LIMIT_BYTES = 1_048_576
 FILE_SUBMISSION_MESSAGE = TextMessage(role="assistant", content="The submission is in the workspace.")
@@ -234,6 +236,12 @@ async def _control(
             return CheckResult(check=name, status=CheckStatus.INFRA_ERROR, detail=str(error))
     elif isinstance(submission, Reply):
         attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, submission.event)))
+    elif isinstance(submission, Transcript):
+        attempt = GradingAttempt(
+            ConversationTrace(events=(*task.context.events, *submission.events)),
+            dict(submission.files),
+            turns=submission.turns,
+        )
     else:
         attempt = GradingAttempt(
             ConversationTrace(events=(*task.context.events, FILE_SUBMISSION_MESSAGE)), dict(submission.files)
@@ -241,7 +249,7 @@ async def _control(
     grade = (
         grade_task(task, attempt, judge_connection=judge_connection)
         if sandbox is None
-        else await sandbox_grade(task, attempt, *sandbox.grader)
+        else with_protocol_assessment(task, attempt, await sandbox_grade(task, attempt, *sandbox.grader))
     )
     if (
         grades_with_judge(task.grader)
@@ -253,7 +261,23 @@ async def _control(
             status=CheckStatus.FAIL,
             detail=f"Judge control was decided by a local gate without a remote verdict: {grade.detail}",
         )
+    if name == "golden" and (failed := _failed_protocol_axes(grade.diagnostics)):
+        return CheckResult(
+            check=name,
+            status=CheckStatus.FAIL,
+            detail=f"Golden control fails its protocol check on {failed}: {grade.diagnostics[PROTOCOL_DIAGNOSTICS_KEY]}",
+        )
     return control_result(grade, name, expected)
+
+
+def _failed_protocol_axes(diagnostics: dict[str, Any]) -> list[str]:
+    """The protocol results a known-correct attempt failed, or every result when none could be assessed."""
+    assessment = diagnostics.get(PROTOCOL_DIAGNOSTICS_KEY)
+    if assessment is None:
+        return []
+    if "not_evaluable" in assessment:
+        return list(ProtocolAxis)
+    return [axis for axis in ProtocolAxis if assessment.get(axis) is False]
 
 
 async def _empty_sandbox_control(task: TaskSpec, sandbox: _Sandbox) -> CheckResult:

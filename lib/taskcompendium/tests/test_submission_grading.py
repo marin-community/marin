@@ -39,6 +39,7 @@ from taskcompendium.models import (
     JsonValueAnswer,
     NoGrader,
     PlainText,
+    ReasoningMode,
     Source,
     StateSubmission,
     TaskSpec,
@@ -62,6 +63,8 @@ def _task(grader: Grader, answer_type=AnswerType.TEXT, answer_format=PlainText()
         answer_format=answer_format,
         grader=grader,
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 
@@ -200,6 +203,8 @@ def test_runtime_grades_a_typed_native_action_through_the_supplied_judge_endpoin
         answer_format=FinalAction(require_call=True, max_calls=1),
         grader=package.grader,
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
     attempt = GradingAttempt(ConversationTrace(events=(*task.context.events, response)))
 
@@ -255,6 +260,8 @@ def test_remote_judge_rejects_an_empty_candidate_without_calling_the_endpoint():
         answer_format=FinalAction(max_calls=1),
         grader=package.grader,
         source=Source(dataset="test", revision="1", row="0", importer_revision="1"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
     result = grade_remote_judge_answer(

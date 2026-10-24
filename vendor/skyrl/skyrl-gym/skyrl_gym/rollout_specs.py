@@ -2,11 +2,14 @@
 
 import json
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 from pydantic import BaseModel
-from rolloutengine.harness.shell import ShellHarness
+from rolloutengine.harness.fetch import FetchProvider
+from rolloutengine.harness.shell import ShellHarness, ToolProvider
 from rolloutengine.models import MachineRuntimeSpec, RolloutLimits, TaskRolloutSpec, TraceMode
+from taskcompendium.fetch import FETCH_ACTION_INTERFACE
 from taskcompendium.models import TaskSpec
 from taskcompendium.runtime.shell import ShellToolConfig
 
@@ -28,8 +31,13 @@ def rollout_spec(
     task_machine: MachineRuntimeSpec | None = None,
     verifier_machine: MachineRuntimeSpec | None = None,
 ) -> TaskRolloutSpec:
-    """Separate harness selection from rollout limits in the published task spec."""
+    """Separate harness selection from rollout limits in the published task spec.
+
+    The task's ``turn_budget`` is the turn limit, so a session cannot set one.
+    """
     settings = dict(session)
+    if "max_turns" in settings:
+        raise ValueError("The task's turn budget is the turn limit; the session cannot set max_turns")
     harness = settings.pop("task_session")
     shell_tool = settings.pop("shell_tool", {})
     command_timeout = settings.pop("command_timeout", None)
@@ -50,6 +58,10 @@ def rollout_spec(
     )
 
 
+TOOL_PROVIDERS: Mapping[str, ToolProvider] = MappingProxyType({FETCH_ACTION_INTERFACE: FetchProvider()})
+"""Host tools every Shellbox harness serves, by action interface."""
+
+
 def shell_harness(name: str) -> ShellHarness:
     """Restore the shell configuration encoded in a task's harness name."""
     if not name.startswith(_SHELLBOX_PREFIX):
@@ -58,6 +70,7 @@ def shell_harness(name: str) -> ShellHarness:
     return ShellHarness(
         command_timeout=settings.command_timeout,
         shell_tool=settings.shell_tool,
+        tools=TOOL_PROVIDERS,
     )
 
 

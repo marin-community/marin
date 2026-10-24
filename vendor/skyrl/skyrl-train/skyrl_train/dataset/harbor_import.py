@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from taskcompendium.models import ReasoningMode
 from taskcompendium.models import (
     AnswerType,
     ArtifactKind,
@@ -142,7 +143,7 @@ def _environment(config: EnvironmentConfig, *, capabilities: tuple[str, ...] = (
     )
 
 
-def harbor_trial_task(directory: Path, *, source: Source) -> TaskSpec:
+def harbor_trial_task(directory: Path, *, source: Source, turn_budget: int) -> TaskSpec:
     """Keep an original package host-private for execution and grading by Harbor."""
     resources = tuple(
         resource.model_copy(update={"mtime_ns": (directory / resource.path).stat().st_mtime_ns})
@@ -159,6 +160,8 @@ def harbor_trial_task(directory: Path, *, source: Source) -> TaskSpec:
         grader=NoGrader(reason="Harbor grades the completed trial"),
         resources=ResourceGroups(verifier=resources),
         source=source,
+        turn_budget=turn_budget,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
         tags=("harbor",),
     )
 
@@ -176,7 +179,7 @@ def restore_harbor_trial_task(task: TaskSpec, directory: Path) -> None:
             os.utime(path, ns=(resource.mtime_ns, resource.mtime_ns))
 
 
-def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
+def harbor_task(directory: Path, *, source: Source, turn_budget: int) -> TaskSpec:
     """Preserve task semantics and grade with the package's tests in a separate machine.
 
     Shared verifier mode, multi-stage packages, image builds, and healthchecks are unsupported.
@@ -247,5 +250,7 @@ def harbor_task(directory: Path, *, source: Source) -> TaskSpec:
         grader=grader,
         resources=ResourceGroups(worker=worker, verifier=private),
         source=source,
+        turn_budget=turn_budget,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
         tags=("harbor",),
     )

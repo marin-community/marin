@@ -193,6 +193,7 @@ async def _model_turn(
         logprobs=None if logprobs is None else tuple(logprobs[0]),
         stop_reason=output["stop_reasons"][0],
         text=output.get("responses", [message.get("content") or ""])[0],
+        evidence=(output.get("turn_evidence") or [None])[0],
         metadata={
             **{
                 name: output[name][0]
@@ -352,6 +353,8 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
+        if "enable_thinking" in self.chat_template_kwargs:
+            raise ValueError("Each task sets its reasoning mode; the worker cannot set enable_thinking")
         self.harbor = harbor
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait

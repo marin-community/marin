@@ -11,7 +11,7 @@ from verifyit.spec import StructureClosureSpec
 
 from taskcompendium.convert.answers import unsupported
 from taskcompendium.grader import verifyit_package
-from taskcompendium.models import ConversationInput, Source, TaskResource, TaskSpec, TextMessage
+from taskcompendium.models import ConversationInput, ReasoningMode, Source, TaskResource, TaskSpec, TextMessage
 from taskcompendium.pipeline.models import ImportRejection, NormalizationChange, NormalizedTask, RawRow
 from taskcompendium.runtime.resources import resource_bytes
 
@@ -57,6 +57,8 @@ def structure_closure_task(row: RawRow) -> NormalizedTask | ImportRejection:
                 ),
             ),
             "grader": grader,
+            "turn_budget": 1,
+            "reasoning": ReasoningMode.MODEL_DEFAULT,
         }
     )
     original_source = Source.model_validate(native["source"])

@@ -21,6 +21,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     GradingAttempt,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     ScriptGrader,
     Source,
@@ -51,6 +52,8 @@ def specification():
         answer_format=PlainText(),
         grader=EXACT_DONE,
         source=Source(dataset="org/project", revision="pinned-revision", row="0", importer_revision="1"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 
