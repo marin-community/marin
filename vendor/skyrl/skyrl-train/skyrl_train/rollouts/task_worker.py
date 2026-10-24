@@ -16,7 +16,7 @@ from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from shellbox.machine import Backend, Machine, MachineFactory
 from taskcompendium.grading_result import GradingFailure, Outcome
-from taskcompendium.models import NoGrader
+from taskcompendium.models import ENABLE_THINKING, NoGrader
 from verifyit.modes.grade_judge import JudgeConnection
 from rolloutengine.harness.core import Harness
 from rolloutengine.harness.external import AgentHarness
@@ -193,6 +193,7 @@ async def _model_turn(
         logprobs=None if logprobs is None else tuple(logprobs[0]),
         stop_reason=output["stop_reasons"][0],
         text=output.get("responses", [message.get("content") or ""])[0],
+        evidence=(output.get("turn_evidence") or [None])[0],
         metadata={
             **{
                 name: output[name][0]
@@ -352,6 +353,8 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
+        if ENABLE_THINKING in self.chat_template_kwargs:
+            raise ValueError(f"Each task sets its reasoning mode; the worker cannot set {ENABLE_THINKING}")
         self.harbor = harbor
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait

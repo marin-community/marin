@@ -11,7 +11,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 from shellbox.machine import NetworkPolicy
 from taskcompendium.grading_result import GradeResult, GradingFailure, Outcome
-from taskcompendium.models import TaskSpec
+from taskcompendium.models import TaskSpec, TurnEvidence
 from verifyit.modes.grade_judge import JudgeConnection
 
 LENGTH_STOP_REASON = "length"
@@ -95,6 +95,8 @@ class ModelTurn:
     """Extra data from the transport, such as top-k log probabilities. The engine passes it on unread."""
     usage: TokenUsage | None = None
     """Token counts that the transport reports. The token budget counts them instead of the token IDs."""
+    evidence: TurnEvidence | None = None
+    """What the serving side sent and returned, for transports that can observe the rendered prompt."""
 
     @property
     def request_tokens(self) -> int:
@@ -429,7 +431,7 @@ class MachineRuntimeSpec(BaseModel):
 
 
 class RolloutLimits(BaseModel):
-    """Turn, token, and time limits for one attempt.
+    """Token and time limits for one attempt; the task's ``turn_budget`` is its turn limit.
 
     ``max_total_tokens`` stops model requests when the tokens spent, plus the known part of the next
     prompt, reach the threshold. The known part is the last request's prompt and response. The new
@@ -439,7 +441,6 @@ class RolloutLimits(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
 
-    max_turns: int = Field(gt=0)
     max_total_tokens: int | None = Field(gt=0)
     model_turn_timeout: float | None = Field(gt=0)
     tool_turn_timeout: float | None = Field(gt=0)

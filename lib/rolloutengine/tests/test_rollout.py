@@ -643,7 +643,7 @@ async def test_agent_request_open_at_the_turn_limit_fails_at_the_attempt_cleanup
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)}
-    ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1))
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent", turn_budget=1))
     assert record.rollout.stop_reason == "max_turns"
     await asyncio.wait({handlers[-1]}, timeout=5)
     assert len(handlers) == 2
@@ -2724,7 +2724,7 @@ async def test_closing_answers_a_server_request_before_the_agent_drains_its_hand
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)}
-    ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1, cleanup_timeout=5))
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent", turn_budget=1, cleanup_timeout=5))
 
     assert isinstance(handlers[-1].exception(), RolloutEnded)
     assert "cleanup_errors" not in record.grade.diagnostics
@@ -2827,7 +2827,7 @@ async def test_a_harness_that_ignores_a_limit_runs_until_the_turn_deadline():
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"fixture": Stubborn()}
-    ).run_task(rollout_spec(arithmetic_task(), harness="fixture", max_turns=1, total_turn_timeout=0.05))
+    ).run_task(rollout_spec(arithmetic_task(), harness="fixture", turn_budget=1, total_turn_timeout=0.05))
     assert (record.rollout.stop_reason, record.grade.reward) == ("max_turns", 1.0)
 
 
@@ -2876,7 +2876,7 @@ async def test_an_agent_that_does_not_stop_is_a_cleanup_error_and_is_kept_until_
     runner = engine(ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)})
     try:
         record = await asyncio.wait_for(
-            runner.run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1, cleanup_timeout=0.1)),
+            runner.run_task(rollout_spec(arithmetic_task(), harness="agent", turn_budget=1, cleanup_timeout=0.1)),
             timeout=5,
         )
     finally:
@@ -3084,7 +3084,7 @@ async def test_an_agent_waits_while_the_engine_grades():
             ReplayModel([{"role": "assistant", "content": "12"}]),
             {"local": factory},
             harnesses={"agent": AgentHarness(agent)},
-        ).run_task(rollout_spec(task, verifier_machine=machine_runtime(), harness="agent", max_turns=1))
+        ).run_task(rollout_spec(task, verifier_machine=machine_runtime(), harness="agent", turn_budget=1))
     )
     try:
         await asyncio.wait_for(factory.entered.wait(), timeout=5)
@@ -3132,7 +3132,7 @@ async def test_an_agent_that_fails_while_it_stops_is_a_cleanup_error():
 
     record = await engine(
         ReplayModel([{"role": "assistant", "content": "12"}]), harnesses={"agent": AgentHarness(agent)}
-    ).run_task(rollout_spec(arithmetic_task(), harness="agent", max_turns=1))
+    ).run_task(rollout_spec(arithmetic_task(), harness="agent", turn_budget=1))
     assert (record.grade.status, record.grade.reward) == (Outcome.GRADED, 1.0)
     assert record.grade.diagnostics["cleanup_errors"] == [{"operation": "agent_stop", "exception_type": "OSError"}]
 
@@ -3533,7 +3533,7 @@ async def test_a_harness_records_a_final_reward_after_the_session_refuses_a_requ
             return await super().complete(request)
 
     model = (ReplayModel if refusal == "limit" else FailingModel)([{"role": "assistant", "content": "12"}])
-    spec = rollout_spec(arithmetic_task(), harness="fixture", **({"max_turns": 1} if refusal == "limit" else {}))
+    spec = rollout_spec(arithmetic_task(), harness="fixture", **({"turn_budget": 1} if refusal == "limit" else {}))
     runner = engine(model, harnesses={"fixture": RecordsAfterARefusal(second)})
     if refusal == "limit":
         rollout = (await runner.run_task(spec)).rollout

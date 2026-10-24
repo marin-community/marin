@@ -26,7 +26,8 @@ flowchart TD
 
 ## Task and runtime specs
 
-`TaskSpec` contains the task definition: public context, tools, output paths, answer type, answer format, grader, environment requirements, resources, source, and tags.
+`TaskSpec` contains the task definition: public context, tools, output paths, answer type, answer format, grader, environment requirements, resources, source, tags, turn budget, reasoning mode, and an optional protocol check.
+The task's `turn_budget` is the rollout's turn limit, and its `reasoning` mode sets the chat template's `enable_thinking`; a harness that requests a conflicting value fails the rollout.
 Its `environment_requirements` includes capabilities, an optional digest-pinned Docker image, workdir, setup commands, environment variables, and named tool-provider contracts.
 A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate requirements in `grader.environment`.
 
@@ -35,7 +36,7 @@ A `ScriptGrader`, or a `VerifyitGrader` with an environment, declares separate r
 | Spec | Fields |
 | --- | --- |
 | `MachineRuntimeSpec` | `backend`, `network`, `cpus`, `memory_mb`, `storage_mb`, `gpus`, `user`, `startup_timeout`, `cleanup_timeout` |
-| `RolloutLimits` | `max_turns`, `max_total_tokens`, `model_turn_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
+| `RolloutLimits` | `max_total_tokens`, `model_turn_timeout`, `tool_turn_timeout`, `total_turn_timeout`, `attempt_timeout`, `verifier_timeout`, `cleanup_timeout` |
 | `TaskRolloutSpec` | `task: TaskSpec`, `harness`, `task_machine`, `verifier_machine`, `limits: RolloutLimits`, `trace`, `judge_connection` |
 
 Fields require explicit values except `trace`, which defaults to `TraceMode.EXACT_TOKENS`, and `judge_connection`,

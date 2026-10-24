@@ -10,6 +10,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     NoGrader,
     PlainText,
+    ReasoningMode,
     Source,
     TaskSpec,
     TextMessage,
@@ -34,6 +35,8 @@ def text_task(task_id: str = "task", *, prompt="Question", source="fixture") -> 
         answer_format=PlainText(),
         grader=NoGrader(reason="Projection fixture"),
         source=Source(dataset=source, revision="1", row="0", importer_revision="1"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 
@@ -73,15 +76,9 @@ def machine_runtime(backend: str) -> MachineRuntimeSpec:
     )
 
 
-def session_spec(
-    session_name: str = "shellbox",
-    *,
-    max_turns: int = 2,
-    **limits,
-) -> dict:
+def session_spec(session_name: str = "shellbox", **limits) -> dict:
     settings = dict(
         task_session=session_name,
-        max_turns=max_turns,
         model_turn_timeout=5,
         command_timeout=1,
         tool_turn_timeout=5,
@@ -95,22 +92,21 @@ def session_spec(
     return settings
 
 
-def session_limits(*, max_turns: int = 2, **limits) -> dict:
-    return {key: value for key, value in session_spec(max_turns=max_turns, **limits).items() if key != "task_session"}
-
-
 def lowered_task(
     task: TaskSpec,
     session_name: str = "shellbox",
     *,
-    max_turns: int = 2,
+    turn_budget: int | None = None,
     backend: str | None = None,
     verifier_backend: str | None = None,
     **limits,
 ) -> TaskRolloutSpec:
+    """Lower ``task``; ``turn_budget`` replaces the task's own budget."""
+    if turn_budget is not None:
+        task = task.model_copy(update={"turn_budget": turn_budget})
     return rollout_spec(
         task,
-        session_spec(session_name, max_turns=max_turns, **limits),
+        session_spec(session_name, **limits),
         task_machine=None if backend is None else machine_runtime(backend),
         verifier_machine=None if verifier_backend is None else machine_runtime(verifier_backend),
     )

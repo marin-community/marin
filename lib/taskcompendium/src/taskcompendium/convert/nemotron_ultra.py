@@ -29,6 +29,7 @@ from taskcompendium.models import (
     FinalAction,
     FunctionDefinition,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     TaskSpec,
     TextMessage,
@@ -227,6 +228,8 @@ def blend_task(
             answer_format=FinalAction() if answer_type == AnswerType.NATIVE_ACTION else PlainText(),
             grader=package.grader,
             resources=ResourceGroups(verifier=package.resources),
+            turn_budget=1,
+            reasoning=ReasoningMode.MODEL_DEFAULT,
         ),
         (*changes, *request.changes),
     )

@@ -16,6 +16,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     TaskResource,
     TaskSpec,
@@ -43,6 +44,7 @@ def workspace_task(
     environment: EnvironmentRequirements,
     grader_environment: EnvironmentRequirements,
     output_paths: tuple[str, ...],
+    turn_budget: int,
     verifier: tuple[TaskResource, ...] = (),
     worker: tuple[TaskResource, ...] = (),
     oracle: tuple[TaskResource, ...] = (),
@@ -65,6 +67,8 @@ def workspace_task(
         answer_type=AnswerType.FILE,
         answer_format=PlainText(),
         grader=package.grader,
+        turn_budget=turn_budget,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
         tags=tags,
     )
 
@@ -90,4 +94,6 @@ def conversation_task(
         answer_type=AnswerType.TEXT,
         answer_format=PlainText(),
         grader=package.grader,
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )

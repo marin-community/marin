@@ -24,6 +24,7 @@ from taskcompendium.models import (
     AnswerType,
     ConversationInput,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     TaskSpec,
     TextMessage,
@@ -185,6 +186,8 @@ def _tasktrove_task(
         answer_format=PlainText(),
         grader=package.grader,
         tags=tags,
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 

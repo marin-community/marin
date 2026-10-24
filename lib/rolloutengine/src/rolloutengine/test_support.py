@@ -13,6 +13,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
+    ReasoningMode,
     Source,
     TaskSpec,
     TextMessage,
@@ -57,6 +58,8 @@ def arithmetic_task(**update) -> TaskSpec:
             "answer_format": PlainText(),
             "grader": verifyit_package(TWELVE).grader,
             "source": Source(dataset="fixture", revision="1", row="0", importer_revision="1"),
+            "turn_budget": 3,
+            "reasoning": ReasoningMode.MODEL_DEFAULT,
             **update,
         }
     )
@@ -82,7 +85,6 @@ def machine_runtime(**overrides) -> MachineRuntimeSpec:
 def rollout_limits(**overrides) -> RolloutLimits:
     return RolloutLimits.model_validate(
         {
-            "max_turns": 3,
             "max_total_tokens": None,
             "model_turn_timeout": None,
             "tool_turn_timeout": None,
@@ -103,8 +105,12 @@ def rollout_spec(
     verifier_machine=None,
     trace=None,
     judge_connection=None,
+    turn_budget=None,
     **limits,
 ) -> TaskRolloutSpec:
+    """A rollout of ``task``; ``turn_budget`` replaces the task's own budget."""
+    if turn_budget is not None:
+        task = task.model_copy(update={"turn_budget": turn_budget})
     return TaskRolloutSpec.model_validate(
         {
             "task": task,

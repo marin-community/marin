@@ -14,6 +14,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     TaskSpec,
     TextMessage,
@@ -105,6 +106,8 @@ def convert_structured_outputs(row: RawRow, context: ConversionContext) -> TaskS
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
         tags=converted.tags,
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
     return rewritten_task(task, original=original, reason=REWRITE_REASON)
 

@@ -43,6 +43,7 @@ from taskcompendium.models import (
     NoGrader,
     PlainText,
     ProviderRequirement,
+    ReasoningMode,
     ResourceGroups,
     TaskResource,
     TaskSpec,
@@ -784,6 +785,8 @@ def _agent_task(
         answer_format=FinalAction() if action else PlainText(),
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
     return NormalizedTask(task, (*changes, *request.changes))
 

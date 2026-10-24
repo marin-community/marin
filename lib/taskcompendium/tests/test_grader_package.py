@@ -28,6 +28,7 @@ from taskcompendium.models import (
     FunctionDefinition,
     GradingAttempt,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     RewardFile,
     RewardFileFormat,
@@ -65,6 +66,8 @@ def _task(package, answer_type=AnswerType.TEXT, answer_format=PlainText(), final
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
         source=Source(dataset="test", revision="1", row="1", importer_revision="1"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
     return TaskSpec.model_validate_json(task.model_dump_json())
 

@@ -37,6 +37,7 @@ from taskcompendium.models import (
     ConversationInput,
     EnvironmentRequirements,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     TaskSpec,
     TextMessage,
@@ -286,6 +287,8 @@ def convert_generated(row: RawRow, context: ConversionContext) -> TaskSpec | Imp
         answer_format=PlainText(),
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
 
 
@@ -330,6 +333,8 @@ def convert_tasktrove(row: RawRow, context: ConversionContext) -> TaskSpec | Nor
         grader=package.grader,
         resources=ResourceGroups(verifier=package.resources),
         tags=("reasoning", "reasoning-gym", dataset.replace("_", "-"), "nemotron"),
+        turn_budget=1,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
     )
     return rewritten_task(task, original=instruction, reason=REWRITE_REASON)
 

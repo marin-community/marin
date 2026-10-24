@@ -21,6 +21,7 @@ from taskcompendium.models import (
     EnvironmentRequirements,
     InlineFile,
     PlainText,
+    ReasoningMode,
     ResourceGroups,
     Source,
     TaskResource,
@@ -30,6 +31,7 @@ from taskcompendium.models import (
 from verifyit.spec import NumericSpec
 
 WORKDIR = "/workspace"
+SOLVER_TURN_BUDGET = 30
 RECIPE_PATH = "workspace/recipe.txt"
 INGREDIENTS = ("flour", "butter", "sugar", "milk", "onions", "rice")
 
@@ -65,6 +67,8 @@ def task_spec(task_id: str) -> TaskSpec:
         answer_format=PlainText(),
         grader=grader.grader,
         source=Source(dataset="taskforge", revision="example", row=task_id, importer_revision="example"),
+        turn_budget=SOLVER_TURN_BUDGET,
+        reasoning=ReasoningMode.MODEL_DEFAULT,
         resources=ResourceGroups(worker=(recipe_file,), verifier=grader.resources),
         tags=("d43.culinary.scaling",),
     )
