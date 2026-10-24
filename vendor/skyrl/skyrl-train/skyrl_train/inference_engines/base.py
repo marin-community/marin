@@ -30,6 +30,8 @@ class InferenceEngineInput(TypedDict):
     # Per-prompt token scoring overrides. Rollout sampling remains shared.
     sampling_params_per_prompt: NotRequired[List[PromptSamplingOverride]]
     session_ids: Optional[List[Hashable]]
+    # Requests of one prompt group go to one engine, which then computes the group's shared prompt prefix once.
+    prompt_group_ids: NotRequired[List[Hashable]]
     # Per-sample Responses-API options (tools, parallel_tool_calls, etc.) that
     # require the serving backend's resolved chat renderer.
     chat_completion_params: NotRequired[List[Dict[str, Any]]]

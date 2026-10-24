@@ -280,6 +280,7 @@ class InferenceEngineClient(InferenceEngineInterface):
         prompts = input_batch.get("prompts")
         prompt_token_ids = input_batch.get("prompt_token_ids")
         session_ids = input_batch.get("session_ids")
+        routing_keys = input_batch.get("prompt_group_ids", session_ids)
         sampling_params = input_batch.get("sampling_params")
         per_prompt_sampling_params = input_batch.get("sampling_params_per_prompt")
 
@@ -300,32 +301,37 @@ class InferenceEngineClient(InferenceEngineInterface):
         num_inference_engines = len(self.engines)
         if session_ids is not None and len(session_ids) != num_prompts:
             raise ValueError("session_ids must align one-for-one with prompts")
+        if routing_keys is not None and len(routing_keys) != num_prompts:
+            raise ValueError("prompt_group_ids must align one-for-one with prompts")
+
+        # We do a shortcut for non-batched requests, which can support pause/continue generation for
+        # in-flight weight updates. A request with a prompt group or session id gets the chat path's load-aware,
+        # sticky routing; one without either goes to a random engine.
+        if num_prompts == 1:
+            if routing_keys is None:
+                engine_idx = self._resolve_engine_idx(random.randint(0, num_inference_engines - 1))
+            else:
+                engine_idx = self._route_session(routing_keys[0])
+            self._inc_inflight(engine_idx)
+            try:
+                return await self._generate_single_with_retry(
+                    engine_idx=engine_idx,
+                    original_prompt_ids=prompt_token_ids[0],
+                    sampling_params=sampling_params,
+                    session_id=session_ids[0] if session_ids is not None else None,
+                    per_prompt_sampling_params=(
+                        per_prompt_sampling_params[0] if per_prompt_sampling_params is not None else None
+                    ),
+                )
+            finally:
+                self._dec_inflight(engine_idx)
 
         # 1. Route prompts to engines
         engine_idx_to_prompt_ids: dict[int, list[int]] = route_prompts_to_engines(
             num_prompts=num_prompts,
             num_inference_engines=num_inference_engines,
-            session_ids=session_ids,
+            session_ids=routing_keys,
         )
-
-        # We do a shortcut for non-batched requests, which can support pause/continue generation for
-        # in-flight weight updates.
-        if num_prompts == 1:
-            # Route to a single engine for this single prompt and use retry flow.
-            assert len(engine_idx_to_prompt_ids) == 1
-            ((engine_idx, prompt_ids_list),) = engine_idx_to_prompt_ids.items()
-            assert prompt_ids_list == [0], "Single prompt should map to index [0]"
-            engine_idx = self._resolve_engine_idx(engine_idx)
-            original_prompt_ids = prompt_token_ids[0]
-            return await self._generate_single_with_retry(
-                engine_idx=engine_idx,
-                original_prompt_ids=original_prompt_ids,
-                sampling_params=sampling_params,
-                session_id=session_ids[0] if session_ids is not None else None,
-                per_prompt_sampling_params=(
-                    per_prompt_sampling_params[0] if per_prompt_sampling_params is not None else None
-                ),
-            )
 
         # For batched generate(), pause/continue cannot be supported.
         if self.generation_paused_event.is_set():
