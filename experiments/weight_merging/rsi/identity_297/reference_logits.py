@@ -27,6 +27,9 @@ PROMPTS = (
     "Janet has 3 apples and buys 5 more. How many apples does she have?",
     "Solve for x: 2*x + 7 = 19.",
     "The capital of France is",
+    "Remember the opening codeword: lavender.\n"
+    + "This is a neutral passage about gardens, weather, books, and travel.\n" * 250
+    + "What was the opening codeword?",
 )
 
 
@@ -69,7 +72,7 @@ def main() -> None:
         ),
         "windows": [None if long else model.config.sliding_window for long in grug.grug_long_layer_flags(26)],
         "device_map": {key: str(value) for key, value in model.hf_device_map.items()},
-        "limitation": "Short prompts do not exercise the 2048-token window boundary. API values are log probabilities.",
+        "limitation": "Five short prompts and one >3000-token prompt. API values are log probabilities.",
     }
     fs.pipe_file(prefix + "/provenance.json", json.dumps(provenance, indent=2).encode())
     print(json.dumps(provenance), flush=True)
@@ -80,6 +83,8 @@ def main() -> None:
         ids = tokenizer.apply_chat_template(
             [{"role": "user", "content": prompt}], tokenize=True, add_generation_prompt=True, enable_thinking=False
         )
+        if index == 5:
+            assert len(ids) > 3000, f"Window probe too short: {len(ids)}"
         inputs = torch.tensor([ids], device=model.get_input_embeddings().weight.device)
         with torch.inference_mode():
             logits = model(input_ids=inputs, use_cache=False, logits_to_keep=1).logits[0, -1].float().cpu()
