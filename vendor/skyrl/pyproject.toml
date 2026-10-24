@@ -128,6 +128,9 @@ telemetry = [
 [project.scripts]
 marinskyrl = "cloud.iris.launch:main"
 
+[project.entry-points."vllm.general_plugins"]
+skyrl_decode_invariant = "skyrl_train.inference_engines.vllm.decode_invariant.plugin:register_attention_backend"
+
 [dependency-groups]
 analysis = [
     "matplotlib",

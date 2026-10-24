@@ -28,10 +28,11 @@ NUMERICS_MODE_PATH = f"{NUMERICS_PATH}.mode"
 
 class NumericsMode(StrEnum):
     """The kernels a run uses: ``native``, the trainer's and the engines' own; ``batch_invariant``, vLLM's
-    batch-invariant kernels in both."""
+    batch-invariant kernels in both; ``exact``, decode-invariant vLLM engines and the trainer's own kernels."""
 
     NATIVE = "native"
     BATCH_INVARIANT = "batch_invariant"
+    EXACT = "exact"
 
 
 class RolloutGrading(StrEnum):
