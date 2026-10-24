@@ -379,6 +379,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
+      - name: Install local sandbox tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap umoci busybox-static
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
@@ -386,6 +390,10 @@ jobs:
           cache-dependency-glob: "uv.lock"
       - name: Install Shellbox test environment
         run: uv sync --package marin-taskcompendium --package marin-shellbox --extra iris --extra shellsim --group test --frozen
+      - name: Require local namespace support
+        run: |
+          uv run --no-sync --package marin-shellbox --frozen python -c \
+            'from shellbox.backends.local.machine import LocalMachineFactory; LocalMachineFactory()'
       - name: Test Shellbox
         run: uv run --no-sync --package marin-shellbox --frozen --group test pytest -c lib/taskcompendium/pyproject.toml lib/shellbox/tests -q
 

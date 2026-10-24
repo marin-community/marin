@@ -900,6 +900,15 @@ def _build_service_group_network_policy(namespace: str) -> dict:
     }
 
 
+def _service_group_security_context() -> dict:
+    return {
+        "runAsUser": 0,
+        "capabilities": {"drop": ["ALL"]},
+        "allowPrivilegeEscalation": False,
+        "seccompProfile": {"type": "RuntimeDefault"},
+    }
+
+
 def _sandbox_service_container(service: job_pb2.SandboxServiceSpec) -> dict:
     resources = service.resources
     requests = {"cpu": f"{resources.cpu_millicores}m", "memory": str(resources.memory_bytes)}
@@ -913,12 +922,7 @@ def _sandbox_service_container(service: job_pb2.SandboxServiceSpec) -> dict:
         "workingDir": service.workdir,
         "env": [{"name": name, "value": value} for name, value in service.env_vars.items()],
         "resources": {"requests": requests, "limits": limits},
-        "securityContext": {
-            "runAsUser": 0,
-            "capabilities": {"drop": ["ALL"]},
-            "allowPrivilegeEscalation": False,
-            "seccompProfile": {"type": "RuntimeDefault"},
-        },
+        "securityContext": _service_group_security_context(),
         "terminationMessagePolicy": "FallbackToLogsOnError",
     }
     if service.HasField("entrypoint"):
@@ -1086,12 +1090,7 @@ def _build_pod_manifest(
     # Raises for DOCKER_ACCESS, which this backend rejects (see _security_context).
     container["securityContext"] = _security_context(run_req.container_profile, has_tpu)
     if services:
-        container["securityContext"] = {
-            "runAsUser": 0,
-            "capabilities": {"drop": ["ALL"]},
-            "allowPrivilegeEscalation": False,
-            "seccompProfile": {"type": "RuntimeDefault"},
-        }
+        container["securityContext"] = _service_group_security_context()
 
     if resources:
         container["resources"] = resources
