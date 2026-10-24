@@ -52,11 +52,16 @@ from marin.merging.checkpoint import CheckpointReader, CheckpointSource
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.interp.snowball_identity.prompts import SNOWBALL_V01, Prompt, load_tokenizer, read_prompts
+from experiments.interp.snowball_identity.prompts import (
+    SNOWBALL_V01,
+    Prompt,
+    hf_repo_revision,
+    load_tokenizer,
+    read_prompts,
+)
 
 logger = logging.getLogger(__name__)
 
-SNOWBALL_V01_REVISION = "6783e9743478bd25a9ce03ab3460e84d6a9814b0"
 TOP_K = 50
 SKYRL_TRAIN = Path(__file__).resolve().parents[3] / "vendor" / "skyrl" / "skyrl-train"
 
@@ -530,7 +535,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("command", choices=["logits", "capture", "generate", "compare"])
     parser.add_argument("--weights", default=SNOWBALL_V01)
-    parser.add_argument("--revision", default=SNOWBALL_V01_REVISION)
     parser.add_argument("--prompts")
     parser.add_argument("--output", required=True, help="output directory (s3:// or local)")
     parser.add_argument("--vllm", help="compare: vllm_reference.py output JSON")
@@ -558,7 +562,8 @@ def main() -> None:
     devices = tuple(torch.device(f"cuda:{index}") for index in range(torch.cuda.device_count()))
     if not devices:
         raise RuntimeError("No CUDA devices visible")
-    harness = SnowballHarness.load(args.weights, args.revision, devices)
+    hf = hf_repo_revision(args.weights)
+    harness = SnowballHarness.load(args.weights, (hf[1] if hf else None) or "", devices)
     output.write(
         f"{args.command}-args.json",
         json.dumps({**vars(args), "torch": torch.__version__, "gpus": len(devices)}).encode(),

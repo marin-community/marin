@@ -22,7 +22,7 @@ from marin.inference.iris_vllm import iris_vllm_followers, iris_vllm_launch
 from marin.inference.vllm_backend import VllmBackend
 from rigging.filesystem.buckets import filesystem_for
 
-from experiments.interp.snowball_identity.prompts import SNOWBALL_V01, load_tokenizer, read_prompts
+from experiments.interp.snowball_identity.prompts import SNOWBALL_V01, hf_repo_revision, load_tokenizer, read_prompts
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +69,10 @@ def main() -> None:
     args = parser.parse_args()
 
     prompts = read_prompts(args.prompts, load_tokenizer(args.weights))
+    repo, revision = hf_repo_revision(args.weights) or (args.weights, None)
     spec = ModelSpec(
-        weights=args.weights,
+        weights=repo,
+        revision=revision,
         api_model="snowball-v0.1",
         num_chips=GPU_COUNT,
         tensor_parallel_size=None,

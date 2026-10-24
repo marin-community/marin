@@ -18,12 +18,18 @@ from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 from transformers import AutoTokenizer
 
-SNOWBALL_V01 = (
-    "s3://marin-us-east-02a/marin/models/"
-    "open-athena--Snowball-Smartie-RL-2026-10-15-32-step14--6783e9743478bd25a9ce03ab3460e84d6a9814b0"
-)
-"""In-region copy of the Snowball v0.1 weights: open-athena/Snowball-Smartie-RL-2026.10.15.32-step14@6783e974 has
-the same 39 shards as open-athena/Marin-Snowball-67B-A2B-v0.1@adc0078a."""
+SNOWBALL_V01 = "hf://open-athena/Marin-Snowball-67B-A2B-v0.1@adc0078a19a4383bc998fcdb43867b3360baf5f3"
+"""Snowball v0.1, pinned. The same 39 shards are in-region for cw-us-east-02a at
+s3://marin-us-east-02a/marin/models/open-athena--Snowball-Smartie-RL-2026-10-15-32-step14--6783e9743478bd25a9ce03ab3460e84d6a9814b0;
+pass that as ``--weights`` for a job there."""
+
+
+def hf_repo_revision(weights: str) -> tuple[str, str | None] | None:
+    """``(repo, revision)`` for an ``hf://repo[@revision]`` path, else None."""
+    if not weights.startswith("hf://"):
+        return None
+    repo, _, revision = weights.removeprefix("hf://").partition("@")
+    return repo, revision or None
 
 
 @dataclass(frozen=True)
