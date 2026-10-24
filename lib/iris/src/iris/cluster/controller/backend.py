@@ -56,6 +56,7 @@ from iris.cluster.controller.scheduling.scheduler import (
 )
 from iris.cluster.controller.task_state import RunningTaskEntry
 from iris.cluster.controller.worker_health import WorkerHealthEvent, WorkerLiveness
+from iris.cluster.runtime.sandbox import SANDBOX_SERVICE_GROUP_CAPABILITY
 from iris.cluster.types import JobName, PendingTask, WorkerId, WorkerStatusMap
 from iris.rpc import controller_pb2, job_pb2, worker_pb2
 
@@ -91,6 +92,7 @@ class BackendCapability(StrEnum):
     WORKER_FLEET = "worker-fleet"
     DIRECT_DISPATCH = "direct-dispatch"
     AUTOSCALER = "autoscaler"
+    SANDBOX_SERVICE_GROUPS = SANDBOX_SERVICE_GROUP_CAPABILITY
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,7 +113,7 @@ class BackendDescriptor:
         capabilities = self.capabilities
         if not capabilities:
             capabilities = frozenset(
-                {BackendCapability.DIRECT_DISPATCH}
+                {BackendCapability.DIRECT_DISPATCH, BackendCapability.SANDBOX_SERVICE_GROUPS}
                 if self.kind is BackendKind.KUBERNETES
                 else {BackendCapability.WORKER_FLEET}
             )

@@ -1042,6 +1042,7 @@ class IrisClient:
                     sync_packages=environment.sync_packages,
                     secrets=environment.secrets,
                     secret_behavior=environment.secret_behavior,
+                    sandbox_services=environment.sandbox_services,
                 )
             else:
                 environment = EnvironmentSpec(env_vars=child_env, setup_scripts=parent_setup_scripts)

@@ -485,10 +485,24 @@ message EnvironmentConfig {
   // client builds this list (default project sync, or caller-provided); empty
   // means no setup. Child jobs inherit it to reproduce the parent's environment.
   repeated string setup_scripts = 6;
+  // Credential-free containers sharing only the sandbox task's private network.
+  // Their resource reservations are included in the job's total resources.
+  repeated SandboxServiceSpec sandbox_services = 8;
 
   // pip_packages(1), extras(3), python_version(4) are resolved into setup_scripts
   // client-side; dockerfile(5) is replaced by RunTaskRequest.task_image.
   reserved 1, 3, 4, 5;
+}
+
+message SandboxServiceSpec {
+  string name = 1;
+  string image = 2;
+  string workdir = 3;
+  map<string, string> env_vars = 4;
+  ResourceSpecProto resources = 5;
+  // Absence preserves the image's ENTRYPOINT or CMD respectively.
+  CommandEntrypoint entrypoint = 6;
+  CommandEntrypoint arguments = 7;
 }
 
 // ============================================================================

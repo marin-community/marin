@@ -8,6 +8,7 @@ import json
 import os
 import pwd
 import subprocess
+import tarfile
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
@@ -21,6 +22,7 @@ pytest.importorskip("iris")
 from connectrpc.code import Code
 from connectrpc.errors import ConnectError
 from iris.client.workload_codec import task_status_from_proto
+from iris.cluster.client.job_info import JobInfo
 from iris.cluster.types import JobName
 from iris.resources.state import TaskState
 from iris.rpc import job_pb2
@@ -29,6 +31,7 @@ from shellbox.backends.iris import machine as iris_backend
 from shellbox.backends.iris.machine import IrisMachine, IrisMachineFactory
 from shellbox.image import RegistryImage
 from shellbox.machine import Command, MachineSpec, MachineTerminated, NetworkPolicy, UnsupportedMachineSpec
+from shellbox.service import ReadinessProbe, ServiceEndpoint, ServiceGroupSpec, ServiceSpec
 
 # Linux MAX_ARG_STRLEN: the worker passes the exec command as argv to `docker exec` or `kubectl exec`.
 LINUX_ARGUMENT_LIMIT_BYTES = 128 * 1024
@@ -118,8 +121,10 @@ class RecordingClient(LocalClient):
 class TaskClient(LocalClient):
     def __init__(self, job: LocalJob):
         self.job = job
+        self.submitted: dict = {}
 
     def submit(self, **kwargs):
+        self.submitted = kwargs
         return self.job
 
 
@@ -220,6 +225,39 @@ def test_factory_uses_typed_iris_states_and_cancels_the_job(tmp_path, monkeypatc
     assert submitted_environments == [{"JUDGE_KEY": secret} if private_credentials else {}]
     assert secret not in json.dumps(asdict(spec), default=str)
     assert secret not in caplog.text
+
+
+def test_directory_upload_does_not_restore_host_ownership(tmp_path, monkeypatch):
+    original_metadata = tarfile.TarFile.gettarinfo
+
+    def foreign_owner(archive, *args, **kwargs):
+        metadata = original_metadata(archive, *args, **kwargs)
+        metadata.uid = os.getuid() + 1
+        metadata.gid = os.getgid() + 1
+        metadata.uname = metadata.gname = ""
+        return metadata
+
+    # Force the ownership-restoration behavior GNU tar uses for root, while
+    # exercising real extraction as an unprivileged test user.
+    monkeypatch.setenv("TAR_OPTIONS", "--same-owner")
+    monkeypatch.setattr(tarfile.TarFile, "gettarinfo", foreign_owner)
+    source = tmp_path / "input"
+    source.mkdir()
+    (source / "solution.sh").write_text("#!/bin/sh\nexit 0\n")
+    (source / "solution.sh").chmod(0o755)
+    target = tmp_path / "remote"
+
+    async def run():
+        machine, _ = local_machine(tmp_path)
+        try:
+            await machine.upload(source, str(target))
+            assert (target / "solution.sh").read_bytes() == (source / "solution.sh").read_bytes()
+            assert (target / "solution.sh").stat().st_uid == os.getuid()
+            assert (target / "solution.sh").stat().st_mode & 0o777 == 0o755
+        finally:
+            await machine.close()
+
+    asyncio.run(run())
 
 
 def test_file_larger_than_one_exec_argument_round_trips(tmp_path: Path) -> None:
@@ -417,6 +455,158 @@ def test_factory_waits_for_a_pending_task_without_holding_an_executor_thread(mon
     asyncio.run(scenario())
 
 
+def test_nested_factory_uses_task_identity_instead_of_host_credentials(monkeypatch):
+    info = JobInfo(
+        task_id=JobName.from_wire("/user/driver/0"),
+        controller_address="http://controller",
+        task_token="task-scoped-token",
+    )
+    client = RecordingClient()
+    attached_headers: dict[str, str] = {}
+
+    def remote(*args, credentials, **kwargs):
+        attached_headers.update(credentials.headers())
+        return client
+
+    monkeypatch.setattr(iris_backend, "get_job_info", lambda: info)
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: pytest.fail("Read host cluster credentials"))
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", remote)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: LocalRpc())
+    factory = IrisMachineFactory(controller_url="http://controller")
+
+    with pytest.raises(SubmissionRecorded):
+        asyncio.run(factory.create(MachineSpec(source=RegistryImage("ubuntu:24.04"))))
+
+    assert attached_headers == {"authorization": "Bearer task-scoped-token"}
+    assert client.submitted["container_profile"] == job_pb2.CONTAINER_PROFILE_SANDBOX
+
+
+class GroupRpc(LocalRpc):
+    def __init__(self):
+        self.targets: set[str] = set()
+
+    def list_backends(self, request):
+        return SimpleNamespace(backends=[SimpleNamespace(capabilities=["sandbox-service-groups"])])
+
+    def exec_in_container(self, request, timeout_ms):
+        self.targets.add(request.container_name)
+        return super().exec_in_container(request, timeout_ms)
+
+
+def test_private_group_routes_service_exec_reserves_resources_and_closes_together(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    client = TaskClient(job)
+    rpc = GroupRpc()
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    probe = Command(
+        ("sh", "-c", "n=$(cat attempts 2>/dev/null || echo 0); n=$((n+1)); echo $n > attempts; test $n -ge 2")
+    )
+    spec = ServiceGroupSpec(
+        task=MachineSpec(image, workdir=str(tmp_path / "task"), cpus=2, memory_mb=256),
+        services=(
+            ServiceSpec(
+                name="runtime",
+                machine=MachineSpec(image, workdir=str(runtime), cpus=1, memory_mb=128),
+                endpoints=(ServiceEndpoint("http", 8000),),
+                readiness=ReadinessProbe(probe, timeout=5, interval=0.001, attempts=3),
+            ),
+        ),
+    )
+
+    async def run():
+        group = await IrisMachineFactory(controller_url="http://controller").create_group(spec)
+        assert group.endpoint("runtime", "http") == "runtime:8000"
+        await group.wait_ready()
+        assert (runtime / "attempts").read_text().strip() == "2"
+        assert (await group.services["runtime"].run(Command(("printf", "runtime")))).stdout == b"runtime"
+        await group.services["runtime"].close()
+        assert job.cancelled
+        with pytest.raises(RuntimeError, match="closed"):
+            await group.task.run(Command(("true",)))
+        await group.close()
+
+    asyncio.run(run())
+    assert rpc.targets == {"", "runtime"}
+    assert client.submitted["resources"].cpu == 3
+    assert client.submitted["resources"].memory == 384 * 1024 * 1024
+    environment = client.submitted["environment"].to_sandbox_proto()
+    assert not environment.secrets
+    assert environment.sandbox_services[0].name == "runtime"
+    assert not environment.sandbox_services[0].HasField("entrypoint")
+    assert not environment.sandbox_services[0].HasField("arguments")
+
+
+def test_readiness_timeout_retries_without_stopping_runtime_or_leaving_probe_children(monkeypatch, tmp_path):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    client = TaskClient(job)
+    rpc = GroupRpc()
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    probe_program = """\
+import fcntl
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+assert os.getcwd() == os.environ['EXPECTED_CWD']
+assert sys.stdin.buffer.read() == b'probe input'
+counter = Path('attempts')
+attempt = int(counter.read_text()) + 1 if counter.exists() else 1
+counter.write_text(str(attempt))
+if attempt == 1:
+    subprocess.run([sys.executable, '-c',
+        "import fcntl,time; lock=open('probe.lock','w'); "
+        "fcntl.flock(lock,fcntl.LOCK_EX); time.sleep(3)"], check=True)
+else:
+    assert Path('probe.lock').exists()
+    with open('probe.lock') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        Path('healthy').write_text(str(attempt))
+"""
+    probe = Command(
+        ("python3", "-c", probe_program),
+        cwd=str(runtime),
+        env={"EXPECTED_CWD": str(runtime)},
+        stdin=b"probe input",
+        timeout=1,
+        output_limit_bytes=8,
+        user=str(os.getuid()),
+    )
+    spec = ServiceGroupSpec(
+        task=MachineSpec(image, workdir=str(tmp_path / "task")),
+        services=(
+            ServiceSpec(
+                name="runtime",
+                machine=MachineSpec(image, workdir=str(tmp_path)),
+                readiness=ReadinessProbe(probe, timeout=8, interval=0.001, attempts=2),
+            ),
+        ),
+    )
+
+    async def run():
+        group = await IrisMachineFactory(controller_url="http://controller").create_group(spec)
+        try:
+            await group.wait_ready()
+            assert (runtime / "healthy").read_text() == "2"
+            assert not job.cancelled
+            assert (await group.services["runtime"].run(Command(("printf", "running")))).stdout == b"running"
+        finally:
+            await group.close()
+        assert job.cancelled
+
+    asyncio.run(run())
+
+
 def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     job = LocalJob(LocalTask(TaskState.FAILED))
     monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
@@ -428,6 +618,50 @@ def test_factory_cancels_the_job_when_the_task_fails(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match="container exited"):
         asyncio.run(factory.create(spec))
     assert job.cancelled
+
+
+@pytest.mark.parametrize("advertise_support", [True, False])
+def test_group_failure_cannot_leave_running_members(monkeypatch, tmp_path, advertise_support):
+    job = LocalJob(LocalTask(TaskState.RUNNING))
+    client = TaskClient(job)
+    rpc = GroupRpc()
+    if not advertise_support:
+        monkeypatch.setattr(rpc, "list_backends", lambda _: SimpleNamespace(backends=[]))
+    monkeypatch.setattr(iris_backend, "connect_controller", lambda **_: LocalEndpoint())
+    monkeypatch.setattr(iris_backend.IrisClient, "remote", lambda *_, **__: client)
+    monkeypatch.setattr(iris_backend, "ControllerServiceClientSync", lambda **_: rpc)
+    image = RegistryImage("example.test/prepared@sha256:" + "a" * 64)
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    spec = ServiceGroupSpec(
+        task=MachineSpec(image, workdir=str(tmp_path / "task")),
+        services=(
+            ServiceSpec(
+                name="runtime",
+                machine=MachineSpec(image, workdir=str(runtime)),
+                readiness=ReadinessProbe(
+                    Command(("sh", "-c", "echo unhealthy >&2; exit 1")), timeout=5, interval=0.001, attempts=2
+                ),
+            ),
+        ),
+    )
+
+    async def run():
+        factory = IrisMachineFactory(controller_url="http://controller")
+        if not advertise_support:
+            with pytest.raises(UnsupportedMachineSpec, match="does not advertise"):
+                await factory.create_group(spec)
+            assert not client.submitted
+            return
+        group = await factory.create_group(spec)
+        with pytest.raises(RuntimeError, match="2 attempts: unhealthy"):
+            await group.wait_ready()
+        assert job.cancelled
+        with pytest.raises(RuntimeError, match="closed"):
+            await group.services["runtime"].run(Command(("true",)))
+        await asyncio.gather(group.close(), group.close())
+
+    asyncio.run(run())
 
 
 def test_commands_may_name_the_container_user_but_no_other(tmp_path: Path) -> None:

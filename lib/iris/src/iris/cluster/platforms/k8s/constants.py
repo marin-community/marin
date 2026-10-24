@@ -39,6 +39,7 @@ COREWEAVE_INTERRUPTABLE_TOLERATION: dict = {
 # named EGRESS_NETWORK_POLICY_PREFIX + value, that selects those pods.
 EGRESS_LABEL = "iris.egress"
 EGRESS_NETWORK_POLICY_PREFIX = "iris-egress-"
+SERVICE_GROUP_NETWORK = "loopback"
 
 # Secret volumes are readable by the pod's supplemental group.
 SECRET_GROUP = 2000
