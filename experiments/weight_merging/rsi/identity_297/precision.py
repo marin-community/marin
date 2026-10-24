@@ -38,6 +38,11 @@ def measure_tensor(base: torch.Tensor, donor: torch.Tensor, chunk_elements: int)
     assert base.dtype in (torch.bfloat16, torch.float32) and donor.dtype == torch.float32
     assert torch.isfinite(base).all() and torch.isfinite(donor).all()
     row = {"numel": base.numel(), "delta_nonzero": 0, "delta_l2_squared": 0.0, "base_l2_squared": 0.0}
+    endpoints = {
+        precision: {"different": 0, "over_one_ulp": 0, "max_abs_error": 0.0, "max_ulp_error": 0.0, "examples": []}
+        for precision in ("fp32", "anchor_dtype")
+    }
+    reference_mismatches = 0
     arms = {
         f"{alpha:g}/{precision}": {
             "changed": 0,
@@ -67,19 +72,53 @@ def measure_tensor(base: torch.Tensor, donor: torch.Tensor, chunk_elements: int)
             if alpha == 0:
                 assert torch.equal(result, b), "FP32 alpha=0 changed the initializer"
             if alpha == 1:
-                assert torch.equal(result, d), "FP32 alpha=1 failed to reproduce the donor"
+                reference = (b.double() + delta.float().double()).float()
+                reference_mismatches += torch.count_nonzero(result != reference).item()
             for precision, stored in (("fp32", result), ("anchor_dtype", result.to(base.dtype).float())):
                 if alpha == 0:
                     assert torch.equal(stored, b), "Saved alpha=0 changed the initializer"
-                if alpha == 1 and precision == "anchor_dtype":
-                    assert torch.equal(stored, d.to(base.dtype).float()), "Saved alpha=1 differs from cast donor"
+                if alpha == 1:
+                    target = d if precision == "fp32" else d.to(base.dtype)
+                    absolute = (stored.double() - target.double()).abs()
+                    # Define one ULP as the spacing away from zero at the target.
+                    magnitude = target.abs()
+                    spacing = (
+                        torch.nextafter(magnitude, torch.full_like(magnitude, float("inf"))).double()
+                        - magnitude.double()
+                    )
+                    ulps = absolute / spacing
+                    endpoint = endpoints[precision]
+                    endpoint["different"] += torch.count_nonzero(absolute).item()
+                    endpoint["over_one_ulp"] += torch.count_nonzero(ulps > 1).item()
+                    endpoint["max_abs_error"] = max(endpoint["max_abs_error"], absolute.max().item())
+                    endpoint["max_ulp_error"] = max(endpoint["max_ulp_error"], ulps.max().item())
+                    remaining = 5 - len(endpoint["examples"])
+                    if remaining:
+                        for index in torch.nonzero(ulps > 1).flatten()[:remaining].tolist():
+                            endpoint["examples"].append(
+                                {
+                                    "base": b[index].item(),
+                                    "donor": d[index].item(),
+                                    "stored": stored[index].item(),
+                                    "target": target[index].item(),
+                                    "abs_error": absolute[index].item(),
+                                    "ulp_error": ulps[index].item(),
+                                }
+                            )
                 metrics = arms[f"{alpha:g}/{precision}"]
                 metrics["changed"] += torch.count_nonzero(stored != b).item()
                 metrics["erased"] += torch.count_nonzero(real_delta & (stored == b)).item()
                 actual_delta = stored.double() - b.double()
                 metrics["actual_delta_l2_squared"] += actual_delta.square().sum().item()
                 metrics["error_l2_squared"] += (actual_delta - alpha * delta).square().sum().item()
-    return {**row, "arms": arms, "shape": list(base.shape), "dtype": str(base.dtype)}
+    return {
+        **row,
+        "arms": arms,
+        "shape": list(base.shape),
+        "dtype": str(base.dtype),
+        "alpha_one_endpoints": endpoints,
+        "fp32_reference_mismatches": reference_mismatches,
+    }
 
 
 def component(key: str) -> str:
@@ -115,7 +154,19 @@ def aggregate(rows: list[dict]) -> dict:
         )
         arm["actual_delta_l2"] = math.sqrt(arm["actual_delta_l2_squared"])
         arms[name] = arm
-    return {**totals, "arms": arms}
+    endpoints = {}
+    for precision in ("fp32", "anchor_dtype"):
+        entries = [row["alpha_one_endpoints"][precision] for row in rows]
+        endpoints[precision] = {
+            **{field: sum(entry[field] for entry in entries) for field in ("different", "over_one_ulp")},
+            **{field: max(entry[field] for entry in entries) for field in ("max_abs_error", "max_ulp_error")},
+        }
+    return {
+        **totals,
+        "arms": arms,
+        "alpha_one_endpoints": endpoints,
+        "fp32_reference_mismatches": sum(row["fp32_reference_mismatches"] for row in rows),
+    }
 
 
 def main() -> None:
@@ -141,6 +192,8 @@ def main() -> None:
         row = measure_tensor(base.tensor(key), donor.tensor(key), args.chunk_elements)
         assert row["shape"] == specs["v0.1"]["specs"][key]["shape"]
         rows[key] = row
+        if index == 1:
+            fs.pipe_file(output + ".first-tensor.json", json.dumps({"key": key, **row}, allow_nan=False).encode())
         layer = re.search(r"model\.layers\.(\d+)\.", key)
         category = component(key)
         for group in ("component/" + category, "dtype/" + row["dtype"], "layer/" + (layer[1] if layer else "outside")):
@@ -161,7 +214,9 @@ def main() -> None:
         "overall": aggregate(list(rows.values())),
         "groups": {name: aggregate(values) for name, values in groups.items()},
         "per_tensor": rows,
-        "endpoint_checks_passed": True,
+        "alpha_zero_exact_checks_passed": True,
+        "alpha_one_policy": "Measure error against donor; do not accept or replace the arithmetic endpoint silently",
+        "ulp_definition": "Spacing from abs(target) to its next representable value toward positive infinity",
         "wall_seconds": time.monotonic() - started,
         "process_peak_rss_bytes": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024,
     }
