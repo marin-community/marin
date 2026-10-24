@@ -144,3 +144,20 @@ Admission concerns the per-item three-decode average. The greedy math comparison
 
 
 Admission audit: `s3://marin-rno2a/scratch/karan/task290/remote/independent-k8-admission-v1/`. Both clean source audits, raw hashes, driver hash and final done marker were verified. Code has exactly equal pooled wins/losses in BF16; a floating-point residue near zero is treated as zero using the exact paired counts.
+
+<!-- far-arm-start -->
+## Far donors under the anchor config: verified partial results
+
+The planned far arm is still in progress. This completed Math group uses eager BF16 serving, max_tokens=8192 and context=12288, with the full panel and greedy+seeds17/29. Its raw matrices, frozen strict scorer, exclusive healthy host, fresh execution timing and exact report recomputation are independently verified. The two full Math controls are shown beside the completed Math merge. “Native” refers to RoPE theta=10000; remaining serving settings use the shared configuration. All merges use anchor theta=1000000. These results measure far donors under the anchor config, so Math merges reflect a configuration mismatch as well as weight changes.
+
+| Candidate (max_tokens=8192) | GSM greedy /1319 | Strict MBPP greedy /257 | GSM gain pp [95% CI] vs Instruct | MBPP gain pp [95% CI] vs Instruct | Truncated GSM / MBPP | Mean tokens GSM / MBPP |
+|---|---:|---:|---|---|---:|---:|
+| instruct | 946 | 157 | +0.00 [+0.00, +0.00] | +0.00 [+0.00, +0.00] | 3 / 0 | 249.1 / 133.6 |
+| math-native | 1116 | 30 | +12.00 [+10.13, +13.92] | -47.73 [-53.31, -42.41] | 4 / 13 | 348.4 / 787.1 |
+| math-anchor-rope | 570 | 12 | -27.45 [-29.85, -24.97] | -56.16 [-61.35, -51.23] | 40 / 158 | 544.3 / 5178.7 |
+| far-math-average-c0.1 | 743 | 139 | -15.09 [-17.06, -13.07] | -11.67 [-15.69, -7.65] | 91 / 3 | 779.7 / 178.4 |
+
+Math alone loses 546 greedy GSM answers when only its RoPE setting changes to the anchor value (1116→570), and MBPP truncation rises from 13 to 158 items. The c=0.1 merge is below Instruct on both benchmarks under this configuration. Gains above use per-item averages of three decodes and pointwise bootstrap intervals; they are not greedy-only effects. The direct paired change from native to anchor RoPE is GSM −39.45 pp [−41.70, −37.23] and MBPP −8.43 pp [−11.54, −5.58], after averaging the three decodes within each item. The c=0.1 transfer is +12.36 pp [10.03, 14.68] on GSM relative to the full Math donor under anchor RoPE, while remaining below Instruct. These contrasts reuse existing outputs; source validation confirms the two full-donor controls differ only in name and RoPE setting. Direct-contrast proof: `remote/far-math-rope-audit-v1/` under the common artifact root.
+
+Verified source: `s3://marin-rno2a/scratch/karan/task290/remote/far-scored-g1-audit-v1/`. Other far controls remain pending; the final Math table will repeat this same native/anchor control pair beside each Math merge.
+<!-- far-arm-end -->
