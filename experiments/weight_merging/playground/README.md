@@ -113,6 +113,8 @@ candidates. Set `PLAYGROUND_PANEL` to the frozen panel object's S3 URL,
 `PLAYGROUND_RECIPES` to the norm job's recipes object, and
 `PLAYGROUND_OUTPUT` / `PLAYGROUND_REVISION`. Submit with
 `--gpu H100x1 --cpu 8 --memory 32GB --disk 64GB --no-sync`.
+Set `PLAYGROUND_FAMILY=far` to download the pinned Instruct/Coder/Math family
+for the small far-donor negative-control arm, using `recipes --arm far`.
 Set `PLAYGROUND_BASE_CONTROL=1` to run the base model's eight-shot GSM8K
 control after the curve in the same job.
 
