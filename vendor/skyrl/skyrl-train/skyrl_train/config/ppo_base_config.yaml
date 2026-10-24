@@ -437,6 +437,11 @@ generator:
     default_error_treatment: mask
     preserve_logprobs_on_timeout: true
 
+  reasoning_spans:
+    # How training treats a rollout with a malformed reasoning span: `grade` keeps its task grade, `reject`
+    # grades it as a reward-0 submission failure. Only chat turns are checked.
+    policy: grade
+
   chat_template:
     source: "name"
     name_or_path: null

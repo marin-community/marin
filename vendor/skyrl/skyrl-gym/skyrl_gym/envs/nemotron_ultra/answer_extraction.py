@@ -2,13 +2,9 @@
 
 import re
 
-from skyrl_gym.envs.aime.utils import last_boxed_only_string, remove_boxed
+from taskcompendium.reasoning_spans import REASONING_DELIMITERS
 
-REASONING_DELIMITERS = (
-    ("<think>", "</think>"),
-    ("<thinking>", "</thinking>"),
-    ("<|start_think|>", "<|end_think|>"),
-)
+from skyrl_gym.envs.aime.utils import last_boxed_only_string, remove_boxed
 
 
 def final_answer_text(text: str) -> str:

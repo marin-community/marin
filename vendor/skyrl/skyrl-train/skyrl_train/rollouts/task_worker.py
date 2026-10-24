@@ -61,6 +61,7 @@ from skyrl_train.rollouts.finalization import finalize_trajectory_batch, propaga
 from skyrl_train.rollout_observability import rollout_phase, rollout_wait
 from skyrl_train.trajectory_runners.trajectory_retention import RetentionSink
 from skyrl_train.trajectory_runners.model_clients import (
+    REASONING_VIOLATIONS_KEY,
     DirectModelClient,
     GenerationBudgetExceededError,
     ModelClient,
@@ -71,7 +72,12 @@ from skyrl_train.rollouts.task_projections import (
     WholeTaskProjection,
     logprobs_requested,
 )
-from skyrl_train.rollouts.training_record import TrainingRollout, training_rollout
+from skyrl_train.rollouts.training_record import (
+    ReasoningSpanPolicy,
+    TrainingRollout,
+    reject_malformed_reasoning,
+    training_rollout,
+)
 from skyrl_train.utils.harbor_errors import ErrorHandlingConfig
 from skyrl_train.trajectory_runners.types import (
     RESPONSE_POLICY_STEPS_KEY,
@@ -206,6 +212,7 @@ async def _model_turn(
             },
             "generation_token_budget": (output.get("generation_token_budgets") or [None])[0],
         },
+        reasoning_violation=(output.get(REASONING_VIOLATIONS_KEY) or [None])[0],
     )
 
 
@@ -352,6 +359,7 @@ class TaskRolloutWorker:
         self.closing = False
         self.shutdown_timeout = shutdown_timeout
         self.chat_template_kwargs = dict(trajectory_runner_cfg.get("chat_template_kwargs", {}))
+        self.reasoning_span_policy = ReasoningSpanPolicy(trajectory_runner_cfg.reasoning_spans.policy)
         self.harbor = harbor
         self.installed_agents = installed_agents
         self.retry_wait = retry_wait
@@ -489,6 +497,9 @@ class TaskRolloutWorker:
                         result = training_rollout(await engine.run_task(lowered, model, run_id=session_id), lowered)
                 except GradedRolloutInterrupted as interruption:
                     result = _failed_rollout(interruption, lowered)
+                if self.reasoning_span_policy == ReasoningSpanPolicy.REJECT:
+                    # Before group grading, so a malformed rollout never enters a GenRM comparison.
+                    result = reject_malformed_reasoning(result)
                 if (
                     isinstance(task.grader, NoGrader)
                     and result.grade.status == Outcome.UNAVAILABLE
