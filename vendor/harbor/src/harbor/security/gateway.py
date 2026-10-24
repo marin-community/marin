@@ -143,13 +143,13 @@ def create_app(origin: str, client: httpx.AsyncClient) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.exception_handler(httpx.HTTPError)
-    async def upstream_error(request, error):
+    async def upstream_error(_request, _error):
         return JSONResponse({"detail": "Upstream request failed; download denied"}, status_code=503)
 
     @app.exception_handler(ValueError)
     @app.exception_handler(KeyError)
     @app.exception_handler(TypeError)
-    async def metadata_error(request, error):
+    async def metadata_error(_request, _error):
         return JSONResponse({"detail": "Invalid registry or advisory metadata; download denied"}, status_code=502)
 
     async def pypi_files(name: str) -> dict:
@@ -233,8 +233,8 @@ def create_app(origin: str, client: httpx.AsyncClient) -> FastAPI:
         document = await npm_document(name)
         for version, package in document["versions"].items():
             package["dist"]["tarball"] = f"{origin}/artifacts/npm?{urlencode({'name': name, 'version': version})}"
-        # Only the registry protocol fields are exposed; README and arbitrary
-        # upstream fields do not create a general-purpose download relay.
+        # Preserve version metadata for dependency resolution; route tarballs
+        # through the artifact policy check.
         return JSONResponse(
             {"name": name, "versions": document["versions"], "dist-tags": document.get("dist-tags", {})},
             headers={"Cache-Control": "no-store"},
@@ -252,7 +252,7 @@ def main() -> None:
     app = create_app(args.public_origin, client)
 
     @asynccontextmanager
-    async def lifespan(app):
+    async def lifespan(_app):
         async with client:
             yield
 
