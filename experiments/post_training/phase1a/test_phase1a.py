@@ -7,6 +7,7 @@ agreement on every matched field after SkyRL composes both launch configs."""
 import json
 import subprocess
 
+import click
 import pytest
 from marin.execution.build_context import BuildContext, VersionCodex, build_context
 from marin.execution.lazy import ArtifactStep, StepContext
@@ -15,7 +16,14 @@ from marin.rl.skyrl import skyrl_step
 from marin.training.training import LevanterCheckpoint
 
 from experiments.post_training.phase1a.data import eligible_samples, layout
-from experiments.post_training.phase1a.launch import CLUSTER, execution, run_spec
+from experiments.post_training.phase1a.launch import (
+    CLUSTER,
+    MODEL_MANIFEST_FILENAME,
+    execution,
+    require_teacher_pin,
+    run_spec,
+    teacher_model,
+)
 from experiments.post_training.phase1a.matrix import (
     LR_SWEEP,
     PHASE1A_CONDITIONS,
@@ -167,3 +175,22 @@ def test_m1_and_m4_agree_on_every_matched_field_after_composition(tmp_path):
         assert m1 == m4, condition
         assert m4["order"] == [False, None]
         assert m4["optimizer"] == ["AdamW", 2e-6, [0.9, 0.999], 0.0, 1.0, 5, "constant_with_warmup"]
+
+
+IDENTITY = "sha256:" + "c" * 64
+
+
+def test_teacher_pins_take_a_hub_revision_or_an_s3_manifest_identity():
+    assert teacher_model(f"open-athena/e-x@{'1' * 40}") == TeacherModel("open-athena/e-x", "1" * 40)
+    assert teacher_model(f"s3://bucket/e-x/policy@{IDENTITY}") == TeacherModel("s3://bucket/e-x/policy", IDENTITY)
+    for bad in (f"s3://bucket/e-x/policy@{'1' * 40}", f"open-athena/e-x@{IDENTITY}", "open-athena/e-x"):
+        with pytest.raises(click.BadParameter):
+            teacher_model(bad)
+
+
+def test_an_object_store_teacher_must_match_its_export_manifest(tmp_path):
+    (tmp_path / MODEL_MANIFEST_FILENAME).write_text(json.dumps({"identity": IDENTITY, "files": []}))
+    require_teacher_pin(TeacherModel(f"file://{tmp_path}", IDENTITY))
+    require_teacher_pin(TeacherModel("open-athena/e-x", "1" * 40))  # Hub pins resolve at the Hub
+    with pytest.raises(ValueError, match="not the pinned"):
+        require_teacher_pin(TeacherModel(f"file://{tmp_path}", "sha256:" + "d" * 64))

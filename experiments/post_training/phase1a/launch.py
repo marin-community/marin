@@ -6,7 +6,11 @@
     uv run python -m experiments.post_training.phase1a.launch --version YYYY.MM.DD \\
         --stage phase1a --learning-rate 1e-6 --b-uri S3_URI --b-version V \\
         --run-data-uri S3_URI --run-data-version V \\
-        --expert-x PATH@REVISION --expert-r PATH@REVISION --b-teacher PATH@REVISION
+        --expert-x s3://E_X_EXPORT@sha256:ID --expert-r s3://E_R_EXPORT@sha256:ID --b-teacher REPO@REVISION
+
+A teacher is a Hub ``REPO@<40-character revision>`` or an object-store HF export pinned by
+its manifest identity, ``s3://...@sha256:<64 hex>``, which is checked before any run is
+built and again when the runtime stages it.
 
 Without ``--run`` the graph is built and validated only. ``--run-data-uri`` is the
 root written by ``python -m experiments.post_training.phase1a.data``: one
@@ -15,7 +19,11 @@ root written by ``python -m experiments.post_training.phase1a.data``: one
 
 from __future__ import annotations
 
+import json
+import re
+
 import click
+import fsspec
 import yaml
 from marin.execution.build_context import resolve_version
 from marin.execution.lazy import ArtifactStep
@@ -53,11 +61,36 @@ CLUSTER = "cw-us-east-02a"
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=len(CHECKPOINT_STEPS), temporary_storage_ttl_days=90)
 
 
+# The manifest SkyRL writes beside every HF export; its identity hashes every file.
+MODEL_MANIFEST_FILENAME = ".marinskyrl-model-manifest.json"
+_MANIFEST_IDENTITY = re.compile(r"sha256:[0-9a-f]{64}")
+
+
 def teacher_model(value: str) -> TeacherModel:
+    """A teacher pin: a Hub ``REPO@<40-character revision>`` or an ``s3://EXPORT@sha256:<64 hex>``.
+
+    An object-store export is pinned by its manifest identity, which the runtime checks
+    again when it stages the export.
+    """
     path, separator, revision = value.rpartition("@")
-    if not separator or not path or len(revision) != 40:
-        raise click.BadParameter(f"expected PATH@<40-character revision>, got {value!r}")
+    if not separator or not path:
+        raise click.BadParameter(f"expected PATH@REVISION, got {value!r}")
+    if path.startswith("s3://"):
+        if not _MANIFEST_IDENTITY.fullmatch(revision):
+            raise click.BadParameter(f"an s3:// teacher is pinned as @sha256:<64 hex>, got {value!r}")
+    elif len(revision) != 40:
+        raise click.BadParameter(f"a Hub teacher is pinned as REPO@<40-character revision>, got {value!r}")
     return TeacherModel(path, revision)
+
+
+def require_teacher_pin(model: TeacherModel) -> None:
+    """Check an object-store teacher's export against its pinned manifest identity; Hub pins pass."""
+    if "://" not in model.path:
+        return
+    with fsspec.open(f"{model.path.rstrip('/')}/{MODEL_MANIFEST_FILENAME}", "rt") as handle:
+        identity = json.load(handle)["identity"]
+    if identity != model.revision:
+        raise ValueError(f"teacher {model.path} has manifest identity {identity}, not the pinned {model.revision}")
 
 
 def run_data_relative_path(run: RunPlan) -> str:
@@ -137,8 +170,8 @@ def selected_runs(
 @click.option("--b-version", required=True)
 @click.option("--run-data-uri", required=True)
 @click.option("--run-data-version", required=True)
-@click.option("--expert-x", required=True, type=teacher_model, help="E_X as PATH@REVISION.")
-@click.option("--expert-r", required=True, type=teacher_model, help="E_R as PATH@REVISION.")
+@click.option("--expert-x", required=True, type=teacher_model, help="E_X as REPO@REVISION or s3://EXPORT@sha256:ID.")
+@click.option("--expert-r", required=True, type=teacher_model, help="E_R as REPO@REVISION or s3://EXPORT@sha256:ID.")
 @click.option("--b-teacher", required=True, type=teacher_model, help="B as PATH@REVISION, the procedure nulls' teacher.")
 @rl_build_options
 def main(
@@ -158,8 +191,11 @@ def main(
     model = ArtifactStep.adopt(user_owned_name("models/phase1a-snowball-b"), b_version, b_uri, kind=LevanterCheckpoint)
     run_data = ArtifactStep.adopt(user_owned_name("documents/phase1a-run-data"), run_data_version, run_data_uri)
     pool = {Task.X: expert_x, Task.R: expert_r, Task.GENERAL: b_teacher}
+    runs = selected_runs(stage, learning_rate, methods, conditions, seeds)
+    for task in {task for run in runs if run.method is Method.M4 for task in run.tasks}:
+        require_teacher_pin(pool[task])
     steps = []
-    for run in selected_runs(stage, learning_rate, methods, conditions, seeds):
+    for run in runs:
         teachers = {task: pool[task] for task in run.tasks} if run.method is Method.M4 else {}
         spec = run_spec(run, model=model, run_data=run_data, teachers=teachers)
         steps.append(skyrl_step(spec, execution(CLUSTER), export_hf=True))
