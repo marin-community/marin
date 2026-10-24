@@ -21,6 +21,7 @@ Run as a small CPU job; serving dispatches its own 8-GPU job::
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import logging
 import random
@@ -49,8 +50,18 @@ MIN_TURN_END_SHARE = 0.98
 MIN_THINK_CLOSE_SHARE = 0.98
 MAX_COMPLETION_TOKENS = 32768
 MAX_MODEL_LEN = 65536
-TEMPERATURE = 0.6
-TOP_P = 0.95
+
+
+@dataclass(frozen=True)
+class Decode:
+    """The sampling settings of one gate run; the chosen one becomes B's probe decode."""
+
+    temperature: float = 0.6
+    top_p: float = 0.95
+    repetition_penalty: float = 1.0
+    max_tokens: int = MAX_COMPLETION_TOKENS
+
+
 CONCURRENT_REQUESTS = 64
 REQUEST_TIMEOUT = 3600
 
@@ -105,14 +116,15 @@ def _read_prompts(path: str, count: int, seed: int) -> list[dict]:
     return random.Random(seed).sample(rows, min(count, len(rows)))
 
 
-def _complete(endpoint: OpenAIEndpoint, family: str, row: dict, seed: int) -> Completion:
+def _complete(endpoint: OpenAIEndpoint, family: str, row: dict, seed: int, decode: Decode) -> Completion:
     headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}
     body = {
         "model": endpoint.model,
         "messages": row["messages"],
-        "temperature": TEMPERATURE,
-        "top_p": TOP_P,
-        "max_tokens": MAX_COMPLETION_TOKENS,
+        "temperature": decode.temperature,
+        "top_p": decode.top_p,
+        "repetition_penalty": decode.repetition_penalty,
+        "max_tokens": decode.max_tokens,
         "seed": seed,
         # Keep the think tokens in the text: they are what the gate counts.
         "skip_special_tokens": False,
@@ -125,6 +137,10 @@ def _complete(endpoint: OpenAIEndpoint, family: str, row: dict, seed: int) -> Co
     return Completion(
         family, row["probe_id"], choice["finish_reason"], choice.get("stop_reason"), choice["message"]["content"] or ""
     )
+
+
+def _complete_item(endpoint: OpenAIEndpoint, seed: int, decode: Decode, item: tuple[str, dict]) -> Completion:
+    return _complete(endpoint, item[0], item[1], seed, decode)
 
 
 def snowball_checkpoint_model(name: str, checkpoint: str) -> ModelConfig:
@@ -155,7 +171,19 @@ def main() -> None:
     parser.add_argument("--prompts", action="append", required=True, help="FAMILY=path to a probe JSONL")
     parser.add_argument("--out", required=True)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--temperature", type=float, default=Decode.temperature)
+    parser.add_argument("--top-p", type=float, default=Decode.top_p)
+    parser.add_argument(
+        "--repetition-penalty",
+        type=float,
+        action="append",
+        help="repeatable: each value is scored in the same serving session, into --out with a -rpX suffix",
+    )
     args = parser.parse_args()
+    decodes = [
+        Decode(temperature=args.temperature, top_p=args.top_p, repetition_penalty=penalty)
+        for penalty in args.repetition_penalty or [Decode.repetition_penalty]
+    ]
 
     work = [
         (family, row)
@@ -171,17 +199,26 @@ def main() -> None:
     )
     with remote_inference(inference) as session:
         endpoint = session.model.endpoint
-        with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
-            completions = list(pool.map(lambda item: _complete(endpoint, item[0], item[1], args.seed), work))
+        for decode in decodes:
+            with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
+                completions = list(pool.map(functools.partial(_complete_item, endpoint, args.seed, decode), work))
+            out = (
+                args.out
+                if len(decodes) == 1
+                else args.out.removesuffix(".json") + f"-rp{decode.repetition_penalty:g}.json"
+            )
+            _write_report(args.checkpoint, decode, completions, out)
 
-    report = {"checkpoint": args.checkpoint, "sampling": {"temperature": TEMPERATURE, "top_p": TOP_P}}
+
+def _write_report(checkpoint: str, decode: Decode, completions: list[Completion], out: str) -> None:
+    report = {"checkpoint": checkpoint, "decode": decode.__dict__}
     report |= protocol_report(completions)
-    with fsspec.open(args.out, "w") as handle:
+    with fsspec.open(out, "w") as handle:
         json.dump(report, handle, indent=2)
-    with fsspec.open(args.out.removesuffix(".json") + "-completions.jsonl", "w") as handle:
+    with fsspec.open(out.removesuffix(".json") + "-completions.jsonl", "w") as handle:
         for completion in completions:
             handle.write(json.dumps(completion.__dict__) + "\n")
-    logger.info("protocol gate %s: %s", "PASSED" if report["passed"] else "FAILED", report["families"])
+    logger.info("protocol gate %s at %s: %s", "PASSED" if report["passed"] else "FAILED", decode, report["families"])
 
 
 if __name__ == "__main__":
