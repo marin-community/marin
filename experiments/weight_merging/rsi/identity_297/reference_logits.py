@@ -53,6 +53,19 @@ def main() -> None:
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     tokenizer = AutoTokenizer.from_pretrained(MODEL, revision=REVISION)
+    prompt_ids = [
+        tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt}],
+            tokenize=True,
+            return_dict=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        for prompt in PROMPTS
+    ]
+    assert all(isinstance(ids, list) and all(isinstance(token, int) for token in ids) for ids in prompt_ids)
+    assert len(prompt_ids[5]) > 3000, f"Window probe too short: {len(prompt_ids[5])}"
+    print(f"Validated prompt token lengths: {[len(ids) for ids in prompt_ids]}", flush=True)
     model = grug.GrugMoeForCausalLM.from_pretrained(
         MODEL,
         revision=REVISION,
@@ -80,11 +93,7 @@ def main() -> None:
         done_path = f"{prefix}/prompt-{index}.json"
         if fs.exists(done_path):
             continue
-        ids = tokenizer.apply_chat_template(
-            [{"role": "user", "content": prompt}], tokenize=True, add_generation_prompt=True, enable_thinking=False
-        )
-        if index == 5:
-            assert len(ids) > 3000, f"Window probe too short: {len(ids)}"
+        ids = prompt_ids[index]
         inputs = torch.tensor([ids], device=model.get_input_embeddings().weight.device)
         with torch.inference_mode():
             logits = model(input_ids=inputs, use_cache=False, logits_to_keep=1).logits[0, -1].float().cpu()
