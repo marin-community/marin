@@ -23,7 +23,7 @@ POLICIES = ("math500", "gsm8k-0shot", "boolq", "piqa", "humanevalplus", "aime24"
 CAMPAIGN = Path("experiments/evaluation/campaigns/eval-campaign-09-25-unlabeled/evalchemy-configs")
 
 
-def policy_plan(key, policy_dir, endpoint, output, concurrency, max_length=32704):
+def policy_plan(key, policy_dir, endpoint, output, concurrency, max_length=16320):
     path = policy_dir / f"{key}.yaml"
     source = load_evalchemy_config(path)
     config = replace(
@@ -38,6 +38,11 @@ def policy_plan(key, policy_dir, endpoint, output, concurrency, max_length=32704
         raise ValueError("Loglikelihood policies must not carry generation overrides")
     model = RunningModel(OpenAIEndpoint("http://resolved-inside-iris/v1", "snowball-levanter"), tokenizer=REPO)
     payload = json.loads(_run_config_json(model, config, output))
+    payload["extra_model_args"] = {
+        **payload.get("extra_model_args", {}),
+        "timeout": 7200,
+        "transport_retry_budget": 7200,
+    }
     payload["policy_provenance"] = dict(
         path=str(path),
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
@@ -98,12 +103,12 @@ def main():
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--name")
-    parser.add_argument("--concurrency", type=int, default=8)
-    parser.add_argument("--max-length", type=int, default=32704)
+    parser.add_argument("--concurrency", type=int, default=3)
+    parser.add_argument("--max-length", type=int, default=16320)
     parser.add_argument("--runtime-minutes", type=int, default=200)
     args = parser.parse_args()
-    if not 2 <= args.runtime_minutes <= 240 or args.concurrency < 1 or args.max_length < 1:
-        parser.error("Require a 2-240-minute bound and positive concurrency")
+    if not 2 <= args.runtime_minutes <= 1140 or args.concurrency < 1 or args.max_length < 1:
+        parser.error("Require a 2-1140-minute bound and positive concurrency")
     if not args.output.startswith("gs://marin-us-central2/"):
         parser.error("Place archives alongside the central2 serving slice")
     gate = json.loads(args.gate_report.read_text()) if args.gate_report else None
