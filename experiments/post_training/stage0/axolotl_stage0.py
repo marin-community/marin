@@ -4,8 +4,8 @@
 """Axolotl Stage 0 configs (CL12): the same three stages on the three MoE bases.
 
 Each base runs the #8225 curriculum in order — chat, thinking, terminal — under the same
-budget as the Snowball run: global batch 64 examples per step (1 per device x the
-launcher's 8-GPU torchrun width x 8 accumulation steps), one epoch per source, fresh
+budget as the Snowball run: global batch 64 examples per step (1 per device x 16 GPUs on
+two nodes x 4 accumulation steps), one epoch per source, fresh
 optimizer per stage, with betas, epsilon, schedule, clip and warmup identical to the
 Snowball config — both are built from :mod:`.budget`, never from trainer defaults.
 
@@ -32,6 +32,7 @@ from experiments.post_training.stage0.budget import (
     ADAM_BETA1,
     ADAM_BETA2,
     ADAM_EPSILON,
+    AXOLOTL_NODES,
     EPOCHS_PER_STAGE,
     GRADIENT_ACCUMULATION_STEPS,
     LEARNING_RATE,
@@ -105,6 +106,7 @@ def stage_specs(base_name: str, *, data_root: str, output_root: str) -> list[Axo
                 per_device_batch_size=PER_DEVICE_BATCH,
                 gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
                 epochs=EPOCHS_PER_STAGE,
+                nodes=AXOLOTL_NODES,
                 chat_template=chat_template,
                 template_sha256=template_sha256(tokens),
                 turn_close=tokens.turn_close,

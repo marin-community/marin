@@ -472,11 +472,11 @@ def test_axolotl_budget_matches_and_carries_the_shared_template_per_family():
         for spec in specs:
             assert spec.sequence_len == SEQUENCE_LEN
             assert spec.epochs == EPOCHS_PER_STAGE
-            # Global batch 64 examples = 1 per device x 8 GPUs x accumulation 8 — matched
+            # Global batch 64 examples = 1 per device x 16 GPUs x accumulation 4 — matched
             # to the Snowball run.
             assert spec.per_device_batch_size == PER_DEVICE_BATCH
             assert spec.gradient_accumulation_steps == GRADIENT_ACCUMULATION_STEPS
-            assert spec.per_device_batch_size * gpus_per_node * spec.gradient_accumulation_steps == GLOBAL_BATCH
+            assert spec.global_batch == GLOBAL_BATCH
             # The family's shared-template instance, identical on every stage of the base.
             assert spec.chat_template == shared_template(FAMILY_TOKEN_MAPS[architecture])
             config = axolotl_config(spec)
@@ -677,7 +677,10 @@ def test_snowball_and_axolotl_budgets_agree():
         assert hasattr(budget, name), f"budget must own {name}"
     # The Axolotl per-device arithmetic and the Snowball node request both resolve to the
     # single global batch.
-    assert budget.PER_DEVICE_BATCH * budget.GPUS_PER_NODE * budget.GRADIENT_ACCUMULATION_STEPS == budget.GLOBAL_BATCH
+    assert (
+        budget.PER_DEVICE_BATCH * budget.AXOLOTL_NODES * budget.GPUS_PER_NODE * budget.GRADIENT_ACCUMULATION_STEPS
+        == budget.GLOBAL_BATCH
+    )
     assert budget.TRAIN_NODES * budget.GPUS_PER_NODE == 64
 
 

@@ -121,6 +121,7 @@ class AxolotlSpec:
     per_device_batch_size: int
     gradient_accumulation_steps: int
     epochs: int
+    nodes: int
     init_uri: str | None = None
 
     def __post_init__(self) -> None:
@@ -142,7 +143,7 @@ class AxolotlSpec:
 
     @property
     def global_batch(self) -> int:
-        return self.per_device_batch_size * GPUS_PER_NODE * self.gradient_accumulation_steps
+        return self.per_device_batch_size * self.nodes * GPUS_PER_NODE * self.gradient_accumulation_steps
 
 
 def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[str, Any]:
@@ -245,7 +246,8 @@ def run_manifest(spec: AxolotlSpec, *, max_steps: int | None) -> dict[str, Any]:
         "batch": {
             "per_device": spec.per_device_batch_size,
             "gradient_accumulation": spec.gradient_accumulation_steps,
-            "gpus": GPUS_PER_NODE,
+            "gpus_per_node": GPUS_PER_NODE,
+            "nodes": spec.nodes,
             "global": spec.global_batch,
         },
         "seed": spec.seed,
@@ -277,6 +279,7 @@ def launch_payload(spec: AxolotlSpec, *, output_uri: str, max_steps: int | None 
         "init_uri": spec.init_uri,
         "output_uri": output_uri,
         "gpus": GPUS_PER_NODE,
+        "nodes": spec.nodes,
         "manifest": run_manifest(spec, max_steps=max_steps),
     }
 
@@ -284,14 +287,25 @@ def launch_payload(spec: AxolotlSpec, *, output_uri: str, max_steps: int | None 
 def iris_command(
     payload: dict[str, Any], *, job_name: str, cluster: str, timeout_hours: int, preprocess_only: bool = False
 ) -> list[str]:
-    """The ``iris job run`` argv for one run: one 8-GPU node in the Axolotl image.
+    """The ``iris job run`` argv for one run: a gang of 8-GPU nodes in the Axolotl image.
 
     ``preprocess_only`` runs Axolotl's config validation and tokenization on a CPU node instead.
     """
     if preprocess_only:
         hardware = ["--cpu", "32", "--memory", "256GB", "--disk", "1000GB"]
     else:
-        hardware = ["--gpu", f"H100x{GPUS_PER_NODE}", "--cpu", "96", "--memory", "1200GB", "--disk", "2000GB"]
+        hardware = [
+            "--gpu",
+            f"H100x{GPUS_PER_NODE}",
+            "--replicas",
+            str(payload["nodes"]),
+            "--cpu",
+            "96",
+            "--memory",
+            "1200GB",
+            "--disk",
+            "2000GB",
+        ]
     return [
         "uv",
         "run",

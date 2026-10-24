@@ -78,8 +78,9 @@ def _spec(base, **overrides) -> AxolotlSpec:
         "output_router_logits": True,
         "sequence_len": 32768,
         "per_device_batch_size": 1,
-        "gradient_accumulation_steps": 8,
+        "gradient_accumulation_steps": 4,
         "epochs": 1,
+        "nodes": 2,
     }
     kwargs.update(overrides)
     return AxolotlSpec(**kwargs)
@@ -100,7 +101,7 @@ def test_config_trains_assistant_turns_on_the_inline_template_with_fp32_masters(
         assert config["eot_tokens"] == [spec.turn_close] and dataset["train_on_eot"] == "turn"
         assert config["special_tokens"]["eos_token"] == spec.turn_close
         assert config["train_on_inputs"] is False and config["sample_packing"] is False
-        assert config["micro_batch_size"] * 8 * config["gradient_accumulation_steps"] == spec.global_batch == 64
+        assert config["micro_batch_size"] * 16 * config["gradient_accumulation_steps"] == spec.global_batch == 64
         assert config["fsdp_config"]["fsdp_version"] == 2
         assert config["fsdp_config"]["transformer_layer_cls_to_wrap"] == DECODER_LAYER_CLASSES[base.architecture]
 
@@ -176,6 +177,7 @@ def test_iris_command_runs_the_pod_runner_in_the_pinned_image_with_the_payload()
     command = iris_command(payload, job_name="opd-0b-test", cluster="cw-rno2a", timeout_hours=2)
     assert command[command.index("--task-image") + 1] == AXOLOTL_TASK_IMAGE
     assert "--no-sync" in command and command[command.index("--gpu") + 1] == "H100x8"
+    assert command[command.index("--replicas") + 1] == "2"
     assert json.loads(command[command.index(PAYLOAD_ENV) + 1]) == json.loads(json.dumps(payload, sort_keys=True))
     assert command[-2:] == ["python", POD_RUNNER] and os.path.exists(POD_RUNNER)
 

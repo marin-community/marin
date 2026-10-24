@@ -13,9 +13,10 @@ image's ``aws`` CLI. It reads one JSON payload (``AXOLOTL_PAYLOAD``) built by
    matching ``kernels``), keeping the image's torch; it then checks the transformers pin;
 2. stages the CL12 data file and, for a chained stage, the previous stage's export
    from object storage onto local disk;
-3. trains through ``torchrun -m axolotl.cli.train``, syncing the output directory to
-   object storage every few minutes so a lost pod keeps its latest checkpoint;
-4. checks the saved tokenizer embeds the configured chat template byte for byte,
+3. trains through ``torchrun -m axolotl.cli.train`` across the job's nodes (one Iris task
+   per node; node 0 publishes its address through object storage), with node 0 syncing
+   the output directory every few minutes so a lost gang keeps its latest checkpoint;
+4. on node 0, checks the saved tokenizer embeds the configured chat template byte for byte,
    records the realized token counts, and uploads the output plus a run manifest.
 """
 
@@ -27,7 +28,9 @@ import logging
 import os
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from pathlib import Path
 
 import yaml
@@ -42,6 +45,8 @@ SYNC_INTERVAL = 600
 FORK_REPO = "https://github.com/marin-community/axolotl"
 IMAGE_PYTHON = "/workspace/axolotl-venv/bin/python"
 RUN_MANIFEST = "axolotl_run_manifest.json"
+RENDEZVOUS_PORT = 29500
+RENDEZVOUS_TIMEOUT = 1800
 # The plugins this directory ships (the fp32-master plugin) import from here.
 PLUGIN_DIR = Path(__file__).resolve().parent
 
@@ -122,6 +127,31 @@ class _PeriodicSync:
         self._thread.join()
 
 
+def _task_position() -> tuple[str, int, int]:
+    """(job id, node rank, node count) from Iris: IRIS_TASK_ID is ``<job id>/<index>:<attempt>``."""
+    task_id = os.environ["IRIS_TASK_ID"]
+    job_id, _, index_and_attempt = task_id.rpartition("/")
+    return job_id, int(index_and_attempt.split(":")[0]), int(os.environ["IRIS_NUM_TASKS"])
+
+
+def _master_address(output_uri: str, job_id: str, node_rank: int) -> str:
+    """Node 0 publishes its host under the output URI, keyed by this job; the others wait for it."""
+    marker = f"{output_uri}/_rendezvous/{job_id.strip('/').replace('/', '--')}"
+    if node_rank == 0:
+        host = os.environ["IRIS_ADVERTISE_HOST"]
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            handle.write(host)
+        _s3(["cp", handle.name, marker])
+        return host
+    deadline = time.monotonic() + RENDEZVOUS_TIMEOUT
+    while time.monotonic() < deadline:
+        result = subprocess.run(["aws", "s3", "cp", marker, "-"], capture_output=True, text=True, env=_aws_environment())
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        time.sleep(10)
+    raise TimeoutError(f"node 0 never published {marker}")
+
+
 def _check_template(output_dir: Path, expected: str) -> None:
     """The fork's template_integrity contract, re-checked outside the save path."""
     with open(output_dir / "tokenizer_config.json") as handle:
@@ -162,9 +192,25 @@ def main() -> None:
         _run([IMAGE_PYTHON, "-m", "axolotl.cli.preprocess", str(config_path)], env=environment, cwd=WORK_ROOT)
         logger.info("preprocess succeeded")
         return
-    command = ["torchrun", "--nnodes=1", f"--nproc-per-node={payload['gpus']}", "-m", "axolotl.cli.train"]
+    job_id, node_rank, nodes = _task_position()
+    if nodes != payload["nodes"]:
+        raise ValueError(f"the job has {nodes} tasks but the payload trains on {payload['nodes']} nodes")
+    command = [
+        "torchrun",
+        f"--nnodes={nodes}",
+        f"--node-rank={node_rank}",
+        f"--nproc-per-node={payload['gpus']}",
+        f"--master-addr={_master_address(output_uri, job_id, node_rank)}",
+        f"--master-port={RENDEZVOUS_PORT}",
+        "-m",
+        "axolotl.cli.train",
+        str(config_path),
+    ]
+    if node_rank != 0:
+        _run(command, env=environment, cwd=WORK_ROOT)
+        return
     with _PeriodicSync(output_dir, output_uri):
-        _run([*command, str(config_path)], env=environment, cwd=WORK_ROOT)
+        _run(command, env=environment, cwd=WORK_ROOT)
 
     _check_template(output_dir, config["chat_template_jinja"])
     manifest = dict(payload["manifest"], realized_tokens=_realized_tokens(output_dir))

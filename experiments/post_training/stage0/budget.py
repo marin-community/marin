@@ -32,13 +32,14 @@ GLOBAL_BATCH = 64
 EPOCHS_PER_STAGE = 1
 
 # Axolotl side: one conversation per sequence and per micro-batch (unpacked 32k-token
-# sequences do not fit eight to a GPU), on the launcher's 8-GPU torchrun width with
-# accumulation 8 — 1 x 8 x 8 = 64 examples per step.
+# sequences do not fit eight to a GPU), on two 8-GPU nodes (fp32 masters and Adam state
+# for a 30B MoE do not fit one node's HBM) with accumulation 4 — 1 x 16 x 4 = 64.
 PER_DEVICE_BATCH = 1
-GRADIENT_ACCUMULATION_STEPS = 8
+AXOLOTL_NODES = 2
+GRADIENT_ACCUMULATION_STEPS = 4
 
 # Snowball side: the mesh's context axis spans the DCN, one axis unit per node.
 TRAIN_NODES = 8
 GPUS_PER_NODE = 8
 
-assert GLOBAL_BATCH == PER_DEVICE_BATCH * GPUS_PER_NODE * GRADIENT_ACCUMULATION_STEPS
+assert GLOBAL_BATCH == PER_DEVICE_BATCH * AXOLOTL_NODES * GPUS_PER_NODE * GRADIENT_ACCUMULATION_STEPS
