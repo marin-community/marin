@@ -21,4 +21,4 @@ subprocess.run([sys.executable, '-m', 'experiments.weight_merging.playground.dos
                 '--anchor', anchor, '--donor', donor, '--output', str(root/'recipes.json'),
                 '--metrics', str(root/'norms.json')], check=True)
 PY
-"$work_dir/env/bin/fsutil" cp "$work_dir/recipes.json" "$work_dir/norms.json" "$PLAYGROUND_OUTPUT/"
+"$work_dir/env/bin/python" -m experiments.weight_merging.playground.cloud_io  cp "$work_dir/recipes.json" "$work_dir/norms.json" "$PLAYGROUND_OUTPUT/"

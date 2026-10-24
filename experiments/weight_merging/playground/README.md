@@ -62,15 +62,17 @@ Submit experiments from the repository root to Iris / CoreWeave. The owner's
 preparation on karans-linux, including small models. Local work is limited to
 light lint/unit tests, UI and metadata checks. Resident voice-notes and Whisper
 services stay running. The model commands below are worker commands, executed
-inside an Iris job; `host-test-budget` examples only describe the earlier local
-pilot and are not authorization to run model preparation on this host.
+inside an Iris job. Use `host-test-budget` only for light local unit tests.
 
 Use a current Iris submission client including secret-file delivery (commit
 c7c14a252d or later). The experiment branch predates that API; its older bundled
 CLI cannot forward CoreWeave credentials to the current server. Source the
 existing operator environment, and let Iris inherit secrets as files. Do not
 put credential values on command lines. The worker bootstrap pins secret-aware
-rigging from the same revision.
+rigging from the same revision. Keep `config/coreweave.yaml`'s explicit
+`marin-rno2a` / `RNO2A` declaration (added upstream in #10436). `cloud_io`
+rejects unrecognized S3 buckets and endpoints before transferring data; without
+that declaration a generic S3 client can silently select the host's AWS account.
 
 ```bash
 set -a
@@ -90,6 +92,13 @@ under `PLAYGROUND_INPUT`, set `PLAYGROUND_OUTPUT` and `PLAYGROUND_REVISION`, and
 submit with `--gpu H100x1 --cpu 8 --memory 32GB --disk 64GB --no-sync`. The script
 relocates the saved best-checkpoint path and records the hardware transition;
 bitwise training equivalence across GPUs is not assumed.
+
+`iris_generate.sh` runs the 11-point Aristaeus curve on one H100 with fresh
+H100 baselines, cap8192/context12288 and a reload parity check every five
+candidates. Set `PLAYGROUND_PANEL` to the frozen panel object's S3 URL,
+`PLAYGROUND_RECIPES` to the norm job's recipes object, and
+`PLAYGROUND_OUTPUT` / `PLAYGROUND_REVISION`. Submit with
+`--gpu H100x1 --cpu 8 --memory 32GB --disk 64GB --no-sync`.
 
 CW GPU pods have containerd rather than Docker. Use `sweep --defer-code-scoring`
 there: MBPP rows have null correctness and an explicit pending flag. Generation
@@ -116,7 +125,7 @@ uv run --no-project --python /tmp/merge-eval/bin/python \
   python -m experiments.weight_merging.playground.recipes --arm far --output /tmp/far-recipes.json
 
 docker pull python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
-gpu-borrow "weight-merging playground" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+env VLLM_ATTENTION_BACKEND=XFORMERS \
   uv run --no-project --python /tmp/merge-eval/bin/python \
   python -m experiments.weight_merging.playground.sweep --run /tmp/merge-run \
   --candidates /tmp/far-recipes.json --max-new-tokens 2048
@@ -159,7 +168,7 @@ uv run --no-project --python /tmp/merge-train/bin/python \
   python -m experiments.weight_merging.playground.training_data \
   --parent PARENT_SNAPSHOT --panel /tmp/merge-run/panel.json --output /tmp/sft-data
 
-gpu-borrow "weight-merging playground" -- env \
+env \
   PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True WANDB_MODE=offline \
   WANDB_PROJECT=weight-merging-playground \
   uv run --no-project --python /tmp/merge-train/bin/python \
@@ -170,7 +179,7 @@ gpu-borrow "weight-merging playground" -- env \
 Replace `PARENT_SNAPSHOT` with the pinned Instruct snapshot path from
 `model-paths.json`. Run the same command with `--domain code --output /tmp/code-sft`.
 For a single training reservation, put both commands in a shell script under
-one `gpu-borrow` call. Use `--resume CHECKPOINT` after a saved checkpoint.
+one Iris worker job. Use `--resume CHECKPOINT` after a saved checkpoint.
 
 Training keeps FP32 master parameters and saves FP32 donors under `final-fp32/`.
 It uses BF16 autocast, TF32 for residual FP32 matrix multiplications, gradient
@@ -195,7 +204,7 @@ uv run --no-project --python /tmp/merge-eval/bin/python \
   python -m experiments.weight_merging.playground.prepare \
   --output /tmp/near-run --panel full --models anchor instruct
 for domain in math code; do
-  host-test-budget uv run --no-project --python /tmp/merge-train/bin/python \
+  uv run --no-project --python /tmp/merge-train/bin/python \
     python -m experiments.weight_merging.playground.register --run /tmp/near-run \
     --name "${domain}_sft" --path "/tmp/${domain}-sft/final-fp32" \
     --training-metadata "/tmp/${domain}-sft/training-metadata.json"
@@ -203,7 +212,7 @@ done
 uv run --no-project --python /tmp/merge-eval/bin/python \
   python -m experiments.weight_merging.playground.recipes --arm near --output /tmp/near-recipes.json
 
-gpu-borrow "weight-merging playground" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+env VLLM_ATTENTION_BACKEND=XFORMERS \
   uv run --no-project --python /tmp/merge-eval/bin/python \
   python -m experiments.weight_merging.playground.sweep --run /tmp/near-run \
   --candidates /tmp/near-recipes.json --only instruct math_sft code_sft \
@@ -225,7 +234,7 @@ entries disappear when the donor is rounded to BF16, and final BF16 cast surviva
 and error at task-vector coefficients 0.1, 0.25, 0.5 and 1.0:
 
 ```bash
-host-test-budget uv run --extra pipeline python \
+uv run --extra pipeline python \
   -m experiments.weight_merging.playground.distances \
   --anchor PARENT_SNAPSHOT --donor /tmp/math-sft/final-fp32 --output /tmp/math-distance.json
 ```
@@ -241,7 +250,7 @@ Use its pinned local snapshot and the general Instruct tokenizer for the length
 probe. This samples 128 GSM8K and 32 MBPP items with fixed seed 290:
 
 ```bash
-gpu-borrow "weight-merging playground" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+env VLLM_ATTENTION_BACKEND=XFORMERS \
   uv run --no-project --python /tmp/merge-eval/bin/python \
   python -m experiments.weight_merging.playground.controls --mode length_probe \
   --model ARISTAEUS_SNAPSHOT --tokenizer PARENT_SNAPSHOT \
@@ -270,7 +279,7 @@ and MBPP full training prompts after test-question overlap checks:
 python -m experiments.weight_merging.playground.rft_data prepare \
   --panel /tmp/near-run/panel.json --output /tmp/rft-tasks.json
 
-gpu-borrow "weight-merging playground RFT" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+env VLLM_ATTENTION_BACKEND=XFORMERS \
   /tmp/merge-eval/bin/python -m experiments.weight_merging.playground.rft_sample \
   --tasks /tmp/rft-tasks.json --parent PARENT_SNAPSHOT --output /tmp/rft-samples.json
 
@@ -306,12 +315,12 @@ TIES reduces to magnitude pruning: this experiment measures no sign election.
 Single-donor DARE-TIES would duplicate DARE-linear at matched update size.
 
 ```bash
-host-test-budget /tmp/merge-train/bin/python \
+/tmp/merge-train/bin/python \
   -m experiments.weight_merging.playground.dose_response \
   --anchor PARENT_SNAPSHOT --donor ARISTAEUS_SNAPSHOT \
   --output /tmp/aristaeus-dose-recipes.json --metrics /tmp/aristaeus-dose-norms.json
 
-gpu-borrow "weight-merging playground dose response" -- env VLLM_ATTENTION_BACKEND=XFORMERS \
+env VLLM_ATTENTION_BACKEND=XFORMERS \
   /tmp/merge-eval/bin/python -m experiments.weight_merging.playground.sweep \
   --run /tmp/near-run --candidates /tmp/aristaeus-dose-recipes.json \
   --max-new-tokens 8192 --max-model-len 12288 --reload-check-every 5

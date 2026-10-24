@@ -204,7 +204,7 @@ def main() -> None:
     torch.set_num_threads(args.threads)
     torch.backends.cuda.matmul.allow_tf32 = False
     if not torch.cuda.is_available():
-        raise RuntimeError("CUDA is required; run through gpu-borrow")
+        raise RuntimeError("CUDA is required; submit this experiment to Iris/CoreWeave")
     panel_path = args.run / "panel.json"
     panel = json.loads(panel_path.read_text())
     paths = {key: Path(value) for key, value in json.loads((args.run / "model-paths.json").read_text()).items()}
