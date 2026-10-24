@@ -7,13 +7,14 @@ import hashlib
 import json
 import logging
 from collections.abc import Callable, Mapping
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import click
+import marin.inference.iris as iris_module
 import pytest
 from click.testing import CliRunner
 from finestore.eval import (
@@ -25,7 +26,7 @@ from finestore.eval import (
 )
 from finestore.reader import ReadView
 from finestore.store import DataStore
-from fray.types import JobStatus
+from fray.types import JobStatus, ResourceConfig, create_environment
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp
 from iris.resources.state import JobState, TaskState
 from iris.rpc import job_pb2
@@ -72,6 +73,7 @@ from marin.evaluation.runner import (
     InferenceBackendFinished,
     InferenceUnavailable,
     LaunchProvenance,
+    _inference_session,
     run_with_inference_recovery,
 )
 from marin.evaluation.serving_config import inference_config_for_model
@@ -81,9 +83,13 @@ from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFil
 from marin.experiment.evaluation import EvalchemyEvalConfig, run_served_evalchemy
 from marin.inference.config import (
     EffectiveServing,
+    IrisConfig,
+    RemoteInferenceConfig,
     ResolvedModelLocator,
+    ServedModelConfig,
     SpeculativeMethod,
     SpeculativeServingConfig,
+    VllmEngineConfig,
 )
 from marin.inference.iris import RemoteInferenceSession, RemoteInferenceStartupError
 from marin.inference.types import InferenceBackendState, OpenAIEndpoint, RunningModel
@@ -295,7 +301,9 @@ def _patch_inference_runtime(monkeypatch: pytest.MonkeyPatch, remote) -> None:
     monkeypatch.setattr("marin.evaluation.runner.remote_inference", remote)
     monkeypatch.setattr(
         "marin.evaluation.runner.inference_config_for_model",
-        lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+        lambda model, *_args, **_kwargs: SimpleNamespace(
+            model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1)
+        ),
     )
 
 
@@ -349,7 +357,9 @@ def _evaluate_with_session(
         patch("marin.evaluation.runner.remote_inference", lambda _config: nullcontext(session)),
         patch(
             "marin.evaluation.runner.inference_config_for_model",
-            lambda model, *_args, **_kwargs: SimpleNamespace(model=SimpleNamespace(model_id=model.name)),
+            lambda model, *_args, **_kwargs: SimpleNamespace(
+                model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1)
+            ),
         ),
     ):
         return _run_test_batch(batch)
@@ -2720,7 +2730,7 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
 
     def inference_config(model, *_args, priority, **_kwargs):
         priorities.append(priority)
-        return SimpleNamespace(model=SimpleNamespace(model_id=model.name))
+        return SimpleNamespace(model=SimpleNamespace(model_id=model.name), iris=SimpleNamespace(max_retries_failure=1))
 
     monkeypatch.setattr("experiments.evaluation.launch._capability_origin", lambda _cluster: "https://iris.example")
     monkeypatch.setattr("marin.evaluation.runner.record_rollout_run", lambda _record: None)
@@ -2761,3 +2771,73 @@ def test_final_batch_configuration_binds_step_execution(tmp_path, monkeypatch):
     assert _step_status(batch, 0) == STATUS_SUCCESS
     assert executed == [final_evaluation.identity.output_dir]
     assert priorities == [job_pb2.PRIORITY_BAND_INTERACTIVE]
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_eval_inference_retries_startup_timeouts_and_cleans_up(monkeypatch, recover):
+    submitted = []
+    terminated = []
+
+    def submit(request):
+        number = len(submitted) + 1
+        submitted.append(request)
+        return SimpleNamespace(
+            job_id=f"/tester/startup-{number}",
+            status=lambda: JobStatus.RUNNING,
+            terminate=lambda: terminated.append(number),
+        )
+
+    def endpoints(_name):
+        if not recover or len(submitted) < 2:
+            return []
+        return [
+            SimpleNamespace(
+                address="http://127.0.0.1:8000",
+                metadata={
+                    "tensor_parallel_size": "1",
+                    "backend": "vllm",
+                    "data_parallel_size": "1",
+                    "pipeline_parallel_size": "1",
+                    "task_count": "1",
+                    "max_model_len": "4096",
+                },
+            )
+        ]
+
+    monkeypatch.setattr(iris_module, "get_job_info", lambda: SimpleNamespace())
+    monkeypatch.setattr(iris_module, "current_client", lambda: SimpleNamespace(submit=submit))
+    monkeypatch.setattr(
+        iris_module,
+        "iris_ctx",
+        lambda: SimpleNamespace(
+            client=SimpleNamespace(
+                list_endpoint_instances=endpoints,
+                list_tasks=lambda _job: [SimpleNamespace(state=TaskState.RUNNING)],
+            )
+        ),
+    )
+    config = RemoteInferenceConfig(
+        model=ServedModelConfig(weights="test-model"),
+        engine=VllmEngineConfig(),
+        iris=IrisConfig(
+            worker_resources=ResourceConfig.with_gpu("H100", count=1),
+            worker_environment=create_environment(docker_image="test"),
+            endpoint_ready_timeout_seconds=0.001,
+            max_retries_failure=1,
+        ),
+    )
+    if recover:
+        with pytest.raises(TimeoutError, match="evaluator timeout"):
+            with ExitStack() as stack:
+                session = _inference_session(stack, config)
+                assert terminated == [1]
+                assert session.model.endpoint.model == "test-model"
+                raise TimeoutError("evaluator timeout")
+    else:
+        with pytest.raises(RemoteInferenceStartupError) as error:
+            with ExitStack() as stack:
+                _inference_session(stack, config)
+                pytest.fail("Startup never became ready")
+        assert isinstance(error.value.__cause__, TimeoutError)
+    assert len(submitted) == 2
+    assert terminated == [1, 2]
