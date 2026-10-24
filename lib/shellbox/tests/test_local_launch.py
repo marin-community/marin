@@ -61,8 +61,16 @@ def test_guest_exec_inherits_no_private_launcher_descriptors(factory):
     async def check():
         machine = await factory.create(MachineSpec(HostImage(), workdir="/"))
         try:
+            # Globbing can list its own directory FD before closing it. Check
+            # each proc symlink after expansion to count only still-open FDs.
             result = await machine.run(
-                Command(("/bin/sh", "-c", 'for fd in /proc/$$/fd/*; do printf "%s\\n" "${fd##*/}"; done'))
+                Command(
+                    (
+                        "/bin/sh",
+                        "-c",
+                        'for fd in /proc/$$/fd/*; do test ! -L "$fd" || printf "%s\\n" "${fd##*/}"; done',
+                    )
+                )
             )
             assert result.exit_code == 0
             assert set(result.stdout.splitlines()) == {b"0", b"1", b"2"}
