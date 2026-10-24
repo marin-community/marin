@@ -1,5 +1,6 @@
 from skyrl_train.inference_engines.base import (
     CHOICE_POLICY_STEPS_KEY,
+    ENGINE_DP_RANK_KEY,
     SESSION_ID_HEADER,
     UNKNOWN_ENGINE_DP_RANK,
     InferenceEngineInterface,
@@ -383,11 +384,13 @@ class InferenceEngineClient(InferenceEngineInterface):
                         per_prompt_sampling_params[j] for j in indices_list[i]
                     ]
                 results[i] = await self.engines[fallback].generate(engine_input)
+                task_engine_idxs[i] = fallback
             elif isinstance(result, BaseException):
                 raise result
 
         # 3. Reconstruct output in original order
         n = len(prompt_token_ids)
+        engine_dp_ranks = [UNKNOWN_ENGINE_DP_RANK] * n
         responses: list[str] = [""] * n
         stop_reasons: list[str] = [""] * n
         response_logprobs: List[Optional[List[float]]] = [None for _ in range(n)]
@@ -403,7 +406,7 @@ class InferenceEngineClient(InferenceEngineInterface):
         add_student_topk = False
         add_routed_experts = False
 
-        for indices, result in zip(indices_list, results):
+        for indices, result, engine_idx in zip(indices_list, results, task_engine_idxs, strict=True):
             policy_steps = result.get("response_policy_steps")
             selected_ids = result.get("student_topk_indices")
             selected_scores = result.get("behavior_topk_logprobs")
@@ -419,6 +422,7 @@ class InferenceEngineClient(InferenceEngineInterface):
                     raise ValueError("Inference engine routed-expert rows must align with responses")
                 add_routed_experts = True
             for local_idx, original_idx in enumerate(indices):
+                engine_dp_ranks[original_idx] = self._engine_dp_ranks[engine_idx]
                 responses[original_idx] = result["responses"][local_idx]
                 stop_reasons[original_idx] = result["stop_reasons"][local_idx]
                 response_ids[original_idx] = result["response_ids"][local_idx]
@@ -448,6 +452,7 @@ class InferenceEngineClient(InferenceEngineInterface):
             response_ids=response_ids,
             response_logprobs=response_logprobs if add_resp_logprobs else None,
             prompt_logprobs=prompt_logprobs if add_prompt_logprobs else None,
+            engine_dp_ranks=engine_dp_ranks,
         )
         if add_student_topk:
             if any(row is None for row in student_topk_indices) or any(row is None for row in behavior_topk_logprobs):
@@ -662,6 +667,7 @@ class InferenceEngineClient(InferenceEngineInterface):
             response_ids=[accum_response_ids],
             response_logprobs=[accum_response_logprobs] if len(accum_response_logprobs) > 0 else None,
             prompt_logprobs=final_prompt_logprobs,
+            engine_dp_ranks=[self._engine_dp_ranks[engine_idx]],
         )
         if saw_student_topk:
             output["student_topk_indices"] = [accum_student_topk_indices]
@@ -797,18 +803,21 @@ class InferenceEngineClient(InferenceEngineInterface):
                 if finish_reason != ABORT_FINISH_REASON:
                     # If we only made one request and it is not aborted, return the partial result directly.
                     # This is the codepath that will hit when we do not use `pause_generation()` or `resume_generation()`.
+                    partial_response[ENGINE_DP_RANK_KEY] = self._engine_dp_ranks[engine_idx]
                     return partial_response
                 # NOTE(Charlie): not doing deepcopy here to avoid copying large logprobs, so be careful when modifying this.
                 base_response = partial_response.copy()
 
         # 2. Build final response by combining fields
         assert base_response is not None, "Expected at least one non-empty response to build final response"
-        return _build_final_response(
+        response = _build_final_response(
             base_response=base_response,
             accum=accum,
             finish_reason=finish_reason,
             stop_reason=stop_reason,
         )
+        response[ENGINE_DP_RANK_KEY] = self._engine_dp_ranks[engine_idx]
+        return response
 
     async def generate_on_live_engines(
         self, prompt_token_ids: List[int], sampling_params: Dict[str, Any]

@@ -676,7 +676,7 @@ async def test_chat_completion_accepts_tool_call_response_without_text_content()
         "headers": {},
     }
 
-    assert await client.chat_completion(request) == response
+    assert await client.chat_completion(request) == {**response, "engine_dp_rank": 0}
 
 
 # -------------------------------------------
@@ -817,6 +817,7 @@ async def test_generate_retry_some_gen_no_gen_finish(expert_offset, vllm_samplin
         [[[3, 4]], [[5, 6]], [[7 + expert_offset, 8 + expert_offset]], [[9 + expert_offset, 10 + expert_offset]]],
     )
     assert out["routed_experts"][0].dtype == (np.uint16 if expert_offset else np.uint8)
+    assert out["engine_dp_ranks"] == [0]
 
 
 # -------------------------------------------

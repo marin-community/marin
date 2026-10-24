@@ -294,11 +294,16 @@ class GrugTopKRouter(TopKRouter):
         super().__init__(config=config, pg_collection=pg_collection, is_mtp_layer=is_mtp_layer)
         assert self.enable_expert_bias, "GrugTopKRouter requires moe_router_enable_expert_bias=True"
 
-    def routing(self, logits: torch.Tensor, padding_mask: torch.Tensor | None = None):
+    def select_topk(self, biased_logits: torch.Tensor) -> torch.Tensor:
+        """The ``[rows, topk]`` experts selected from the biased logits, in selection order."""
+        return _grug_topk_indices(biased_logits, self.topk)
+
+    def route(self, logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """The combine weights, the routing map, and the selected experts in selection order."""
         logits = logits.view(-1, self.config.num_moe_experts).float()
         biased_logits = logits + self.expert_bias
         if self.router_replay is None:
-            selected = _grug_topk_indices(biased_logits, self.topk)
+            selected = self.select_topk(biased_logits)
         else:
             # Grug overrides MCore's routing method, so its replay hook must be
             # called here. Selection uses biased logits; combine weights below
@@ -306,7 +311,7 @@ class GrugTopKRouter(TopKRouter):
             def native_topk(scores, topk, num_groups=None, group_topk=None):
                 if num_groups is not None or group_topk is not None:
                     raise ValueError("Grug router replay does not support grouped top-k")
-                indices = _grug_topk_indices(scores, topk)
+                indices = self.select_topk(scores)
                 return scores.gather(1, indices), indices
 
             _, selected = self.router_replay.get_replay_topk(biased_logits, self.topk, None, None, native_topk)
@@ -314,6 +319,10 @@ class GrugTopKRouter(TopKRouter):
         combine = combine * (GRUG_ROUTING_RENORM_SUM / (combine.sum(dim=-1, keepdim=True) + GRUG_ROUTER_RENORM_EPS))
         probs = torch.zeros_like(logits).scatter(1, selected, combine)
         routing_map = torch.zeros_like(logits, dtype=torch.bool).scatter(1, selected, True)
+        return probs, routing_map, selected
+
+    def routing(self, logits: torch.Tensor, padding_mask: torch.Tensor | None = None):
+        probs, routing_map, _ = self.route(logits)
         return probs, routing_map
 
     def forward(self, input: torch.Tensor, padding_mask: torch.Tensor | None = None):
@@ -325,10 +334,18 @@ class GrugTopKRouter(TopKRouter):
 class GrugGPTModel(GPTModel):
     """GPTModel with Grug's gated embedding norm on the first pipeline stage."""
 
+    embed_norm_class: type[nn.Module] = GrugGatedRMSNorm
+    final_norm_class: type[nn.Module] = GrugGatedRMSNorm
+
+    @staticmethod
+    def layer_spec(config: TransformerConfig) -> ModuleSpec:
+        """The layer spec of the model's decoder layers."""
+        return grug_layer_spec(config)
+
     def __init__(self, config: TransformerConfig, *args, **kwargs):
         super().__init__(config, *args, **kwargs)
         if self.pre_process:
-            self.embed_norm = GrugGatedRMSNorm(
+            self.embed_norm = self.embed_norm_class(
                 config=config, hidden_size=config.hidden_size, eps=config.layernorm_epsilon
             )
 
@@ -497,6 +514,21 @@ class GrugTransformerLayer(TransformerLayer):
         return self._forward_post_mlp((output, bias), hidden_states), context
 
 
+def grug_self_attention_spec(backend: TESpecProvider, module: type[GrugSelfAttention]) -> ModuleSpec:
+    """The self-attention spec of a Grug decoder layer with ``module`` as its attention class."""
+    return ModuleSpec(
+        module=module,
+        params={"attn_mask_type": AttnMaskType.causal},
+        submodules=SelfAttentionSubmodules(
+            linear_qkv=backend.column_parallel_linear(),
+            core_attention=backend.core_attention(),
+            linear_proj=backend.row_parallel_linear(),
+            q_layernorm=GrugQKNorm,
+            k_layernorm=GrugQKNorm,
+        ),
+    )
+
+
 def grug_layer_spec(config: TransformerConfig) -> ModuleSpec:
     """Build the Transformer Engine layer spec for one Grug decoder layer."""
 
@@ -511,17 +543,7 @@ def grug_layer_spec(config: TransformerConfig) -> ModuleSpec:
         module=GrugTransformerLayer if "mlp" in config.grug_sconv_sites else TransformerLayer,
         submodules=TransformerLayerSubmodules(
             input_layernorm=GrugGatedRMSNorm,
-            self_attention=ModuleSpec(
-                module=GrugSelfAttention,
-                params={"attn_mask_type": AttnMaskType.causal},
-                submodules=SelfAttentionSubmodules(
-                    linear_qkv=backend.column_parallel_linear(),
-                    core_attention=backend.core_attention(),
-                    linear_proj=backend.row_parallel_linear(),
-                    q_layernorm=GrugQKNorm,
-                    k_layernorm=GrugQKNorm,
-                ),
-            ),
+            self_attention=grug_self_attention_spec(backend, GrugSelfAttention),
             self_attn_bda=get_bias_dropout_add,
             pre_mlp_layernorm=GrugGatedRMSNorm,
             mlp=moe,
@@ -530,12 +552,18 @@ def grug_layer_spec(config: TransformerConfig) -> ModuleSpec:
     )
 
 
-def grug_block_spec(config: TransformerConfig, vp_stage: int | None, pp_rank: int) -> ModuleSpec:
-    """Build this pipeline stage's decoder block spec with Grug's gated final norm."""
+def grug_block_spec(
+    config: TransformerConfig,
+    vp_stage: int | None,
+    pp_rank: int,
+    *,
+    layer_spec: ModuleSpec,
+    final_norm: type[nn.Module],
+) -> ModuleSpec:
+    """Build this pipeline stage's decoder block spec from ``layer_spec`` with ``final_norm`` as its gated final norm."""
 
-    layer_spec = grug_layer_spec(config)
     num_layers = get_num_layers_to_build(config, vp_stage=vp_stage, pp_rank=pp_rank)
     return ModuleSpec(
         module=TransformerBlock,
-        submodules=TransformerBlockSubmodules(layer_specs=[layer_spec] * num_layers, layer_norm=GrugGatedRMSNorm),
+        submodules=TransformerBlockSubmodules(layer_specs=[layer_spec] * num_layers, layer_norm=final_norm),
     )

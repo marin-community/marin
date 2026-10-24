@@ -10,7 +10,10 @@ SESSION_ID_HEADER = "x-skyrl-session-id"
 UNSTAMPED_POLICY_STEP = -1
 # Chat-completion choice field with one policy step per token in ``token_ids``.
 CHOICE_POLICY_STEPS_KEY = "policy_steps"
-# The data-parallel rank of a remote engine.
+# Chat-completion response field with the data-parallel rank of the local engine that served it.
+ENGINE_DP_RANK_KEY = "engine_dp_rank"
+# The data-parallel rank of a remote engine, and of a row whose model turns were served by different engines or
+# carry no rank.
 UNKNOWN_ENGINE_DP_RANK = -1
 
 
@@ -71,6 +74,8 @@ class InferenceEngineOutput(TypedDict):
     routed_experts: NotRequired[List[np.ndarray | None]]
     # The policy step whose weights sampled each response token, or UNSTAMPED_POLICY_STEP.
     response_policy_steps: NotRequired[List[List[int]]]
+    # The data-parallel rank of the engine that served each row; set by InferenceEngineClient.
+    engine_dp_ranks: NotRequired[List[int]]
 
 
 class NamedWeightsUpdateRequest(TypedDict):

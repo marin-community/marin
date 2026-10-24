@@ -180,8 +180,8 @@ trainer:
     sequence_parallel_size: 1
   numerics:
     # The kernels a run uses. native: the trainer's and the engines' own. batch_invariant: vLLM's batch-invariant
-    # kernels in both (local vLLM engines only). exact: decode-invariant vLLM policy rollout engines (local, tensor
-    # parallel 1, Triton MoE kernels) and the trainer's own kernels.
+    # kernels in both (local vLLM engines only). exact: decode-invariant vLLM engines and a Grug trainer that computes
+    # their log-probabilities bit for bit (local vLLM engines and a Snowball-shaped Grug policy).
     mode: native
     # Online check that the trainer reproduces the engines' log-probabilities: after qualifying weight syncs each
     # live engine generates one fixed short response and the trainer's next policy forward scores it.
@@ -189,6 +189,7 @@ trainer:
       # 0 disables the check. N runs it after the first weight sync, after a checkpoint-restore sync and after
       # every N-th training-step sync.
       every_weight_syncs: 0
+      on_failure: log # log | stop (raise when a token's log-probability differs or an engine dies during the check)
   algorithm:
     advantage_estimator: "grpo"
     group_advantage_min_size: null

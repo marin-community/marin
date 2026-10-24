@@ -26,6 +26,7 @@ from collections import defaultdict, deque
 import numpy as np
 from skyrl_train.dataset import PromptDataset
 from skyrl_train.utils.tracking import Tracking
+from skyrl_train.config.numerics import CheckFailure
 from skyrl_train.exactness_check import ExactnessCheck
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
@@ -35,6 +36,7 @@ from skyrl_train.trajectory_runners.base import (
     TrajectoryBatch,
     TrajectoryRunner,
 )
+from skyrl_train.trajectory_runners.types import ROLLOUT_ENGINE_DP_RANKS_KEY
 import copy
 from skyrl_train.batch_sampling import RowOwnership, filter_trajectory_batch
 from skyrl_train.trajectory_runners.trajectory_processing import (
@@ -326,6 +328,18 @@ def _zero_std_group_fraction(uids: Sequence[str], rewards: torch.Tensor) -> floa
     return flat_groups / len(group_rewards)
 
 
+def policy_forward_keys(training_input: TrainingInputBatch) -> list[str]:
+    """The training batch fields the pre-update policy, reference and critic forwards receive: the tokens, the
+    replayed routes when the batch carries them, and each row's serving engine rank, with the loss mask that says
+    which rows need one, when the batch carries ranks."""
+    keys = ["sequences", "attention_mask"]
+    if training_input.routed_experts is not None:
+        keys.append("rollout_routed_experts")
+    if training_input.get(ROLLOUT_ENGINE_DP_RANKS_KEY) is not None:
+        keys += [ROLLOUT_ENGINE_DP_RANKS_KEY, "loss_mask"]
+    return keys
+
+
 class RayPPOTrainer:
     """The rollout-buffer training loop.
 
@@ -370,9 +384,11 @@ class RayPPOTrainer:
         self.colocate_all = cfg.trainer.placement.colocate_all
         self.tracker = tracker
         self.tokenizer = tokenizer
-        every_weight_syncs = cfg.trainer.numerics.check.every_weight_syncs
-        if every_weight_syncs > 0:
-            self._exactness_check = ExactnessCheck(every_weight_syncs, cfg.generator.sampling_params, tokenizer)
+        check = cfg.trainer.numerics.check
+        if check.every_weight_syncs > 0:
+            self._exactness_check = ExactnessCheck(
+                check.every_weight_syncs, CheckFailure(check.on_failure), cfg.generator.sampling_params, tokenizer
+            )
         self.train_dataset = train_dataset
         self.eval_dataset = eval_dataset
         self.inference_engine_client = inference_engine_client
@@ -2280,6 +2296,11 @@ class RayPPOTrainer:
                     if trajectory_batch.get("is_last_step", None) is not None
                     else None
                 ),
+                ROLLOUT_ENGINE_DP_RANKS_KEY: (
+                    torch.tensor(trajectory_batch[ROLLOUT_ENGINE_DP_RANKS_KEY], dtype=torch.long)
+                    if trajectory_batch.get(ROLLOUT_ENGINE_DP_RANKS_KEY) is not None
+                    else None
+                ),
             },
             routed_expert_rows=rollout_routed_experts_rows,
         )
@@ -2885,9 +2906,7 @@ class RayPPOTrainer:
         # identical (replay) path so step 1 is genuinely on-policy (log_ratio ~ 0).
         # Gated on presence: flag-off (8B / no router-replay) batches keep the
         # original forward inputs. Compact routes are carried as a side field.
-        fwd_keys = ["sequences", "attention_mask"]
-        if training_input.routed_experts is not None:
-            fwd_keys.append("rollout_routed_experts")
+        fwd_keys = policy_forward_keys(training_input)
         data_fwd_pass = training_input.select(keys=fwd_keys, metadata_keys=["response_length"])
         data_fwd_pass.metadata["global_step"] = self.global_step
 

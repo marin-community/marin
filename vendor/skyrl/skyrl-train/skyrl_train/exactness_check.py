@@ -19,11 +19,13 @@ from loguru import logger
 from omegaconf import DictConfig
 from transformers import PreTrainedTokenizerBase
 
+from skyrl_train.config.numerics import CheckFailure
 from skyrl_train.dataset.preprocess import convert_prompts_responses_to_batch_tensors
 from skyrl_train.dataset.routed_expert_batch import RoutedExpertRows
 from skyrl_train.inference_engines.inference_engine_client import InferenceEngineClient
 from skyrl_train.inference_engines.utils import get_vllm_sampling_params
 from skyrl_train.training_batch import TrainingInputBatch
+from skyrl_train.trajectory_runners.types import ROLLOUT_ENGINE_DP_RANKS_KEY
 from skyrl_train.weight_sync.base import WeightSyncReason
 
 # The fixed prompt and response length of every check: a few decode steps on each engine.
@@ -47,8 +49,15 @@ class EngineSample:
 class ExactnessCheck:
     """Engine samples taken after a weight sync, and their comparison with the trainer's scores."""
 
-    def __init__(self, every_weight_syncs: int, sampling_params: DictConfig, tokenizer: PreTrainedTokenizerBase):
+    def __init__(
+        self,
+        every_weight_syncs: int,
+        on_failure: CheckFailure,
+        sampling_params: DictConfig,
+        tokenizer: PreTrainedTokenizerBase,
+    ):
         self.every_weight_syncs = every_weight_syncs
+        self.on_failure = on_failure
         self.tokenizer = tokenizer
         self.prompt_token_ids = tokenizer.encode(CHECK_TEXT, add_special_tokens=False)
         self.sampling_params = {
@@ -81,14 +90,16 @@ class ExactnessCheck:
         self._generation = asyncio.create_task(self._generate(client))
 
     async def finish_generation(self) -> dict[str, float]:
-        """Wait for the started generation and keep its samples for ``batch``. A generation during which an engine
-        died is skipped and counted in ``exactness_check/generate_failures``."""
+        """Wait for the started generation and keep its samples for ``batch``. Under ``on_failure=log``, a generation
+        during which an engine died is skipped and counted in ``exactness_check/generate_failures``."""
         if self._generation is None:
             return {}
         generation, self._generation = self._generation, None
         try:
             self.pending = await generation
         except ray.exceptions.RayActorError as error:
+            if self.on_failure is CheckFailure.STOP:
+                raise
             self.generate_failures += 1
             logger.warning("Exactness check skipped: an engine died while generating the check responses: {}", error)
             return {f"{METRIC_PREFIX}/generate_failures": float(self.generate_failures)}
@@ -109,8 +120,9 @@ class ExactnessCheck:
         ]
 
     def batch(self, dp_size: int, num_experts: int | None) -> TrainingInputBatch:
-        """The pending responses as a policy forward batch, repeated to a multiple of ``dp_size`` rows, with their
-        expert routes when the engines returned them."""
+        """The pending responses as a policy forward batch, repeated to a multiple of ``dp_size`` rows, with each row's
+        response tokens as its loss mask, its engine data-parallel rank and, when the engines returned them, its expert
+        routes."""
         samples = self.pending
         rows = [samples[index % len(samples)] for index in range(-(-len(samples) // dp_size) * dp_size)]
         responses = [row.response_token_ids for row in rows]
@@ -123,7 +135,12 @@ class ExactnessCheck:
         )
         routes = tuple(row.routed_experts for row in rows)
         batch = TrainingInputBatch(
-            {"sequences": sequences, "attention_mask": attention_mask},
+            {
+                "sequences": sequences,
+                "attention_mask": attention_mask,
+                "loss_mask": action_mask,
+                ROLLOUT_ENGINE_DP_RANKS_KEY: torch.tensor([row.engine_dp_rank for row in rows], dtype=torch.long),
+            },
             routed_expert_rows=(
                 None if routes[0] is None else RoutedExpertRows(routes, action_mask.shape[1], num_experts)
             ),
@@ -133,7 +150,8 @@ class ExactnessCheck:
 
     def compare(self, logprobs: torch.Tensor, score_seconds: float) -> dict[str, float]:
         """The check's metrics from the trainer's ``[rows, response_length]`` scores of ``batch()``, in total and per
-        engine data-parallel rank. A token matches when its score has the engine's float32 bits."""
+        engine data-parallel rank. A token matches when its score has the engine's float32 bits; under
+        ``on_failure=stop`` a mismatch raises."""
         samples, self.pending = self.pending, None
         tokens: Counter[int] = Counter()
         mismatched: Counter[int] = Counter()
@@ -157,12 +175,11 @@ class ExactnessCheck:
             metrics[f"{METRIC_PREFIX}/dp_rank_{rank}/tokens"] = float(count)
             metrics[f"{METRIC_PREFIX}/dp_rank_{rank}/mismatched_tokens"] = float(mismatched[rank])
         if mismatched.total():
-            logger.info(
-                "Exactness check: {} of {} log-probabilities the trainer computed for {} engines' check responses "
-                "differ from the engines' (log_ratio_abs_max {:.3g})",
-                mismatched.total(),
-                tokens.total(),
-                len(samples),
-                largest,
+            message = (
+                f"Exactness check: {mismatched.total()} of {tokens.total()} log-probabilities the trainer computed for "
+                f"{len(samples)} engines' check responses differ from the engines' (log_ratio_abs_max {largest:.3g})"
             )
+            if self.on_failure is CheckFailure.STOP:
+                raise RuntimeError(message)
+            logger.warning(message)
         return metrics
