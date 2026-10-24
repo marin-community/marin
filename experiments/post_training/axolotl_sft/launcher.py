@@ -26,7 +26,7 @@ import json
 import os
 import shlex
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 AXOLOTL_FORK_REPO = "https://github.com/marin-community/axolotl"
@@ -55,6 +55,8 @@ FP32_MASTER_PLUGIN = "fp32_master.Fp32MasterWeightsPlugin"
 # Shipped next to the pod runner; see router_aux_loss.py. Axolotl itself ignores
 # `output_router_logits`, so the aux loss trains only through this plugin.
 ROUTER_AUX_LOSS_PLUGIN = "router_aux_loss.RouterAuxLossPlugin"
+# Packed conversations isolated in attention; see packed_attention.py.
+PACKED_ATTENTION_PLUGIN = "packed_attention.PackedAttentionPlugin"
 # A diagnostic-only plugin shipped next to the pod runner; see precision_probe.py.
 PRECISION_PROBE_PLUGIN = "precision_probe.PrecisionProbePlugin"
 # The loss without [tokens x vocab] logits (the pod runner installs the fork's pinned build).
@@ -106,9 +108,8 @@ class AxolotlSpec:
     ``data_uri`` is one CL12 ``{source}.jsonl.gz`` in object storage; ``init_uri``,
     when set, is a previous stage's uploaded export, which initializes the weights
     instead of the pinned base (the base still proves tokenizer and template
-    provenance). Training is unpacked, one conversation per sequence: the Stage 0
-    budget is matched in examples, and the masking canary is defined on unpacked
-    sequences.
+    provenance). Conversations pack into ``sequence_len``-token sequences, one packed
+    sequence per device micro-batch, as Snowball's stages pack.
     """
 
     name: str
@@ -172,6 +173,7 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
             TEMPLATE_INTEGRITY_PLUGIN,
             FP32_MASTER_PLUGIN,
             CUT_CROSS_ENTROPY_PLUGIN,
+            PACKED_ATTENTION_PLUGIN,
             *([ROUTER_AUX_LOSS_PLUGIN] if spec.output_router_logits else []),
         ],
         "tokenizer_save_jinja_files": False,
@@ -200,8 +202,10 @@ def axolotl_config(spec: AxolotlSpec, *, max_steps: int | None = None) -> dict[s
         "shuffle_merged_datasets": False,
         "dataset_processes": 32,
         "sequence_len": spec.sequence_len,
-        "sample_packing": False,
-        "pad_to_sequence_len": False,
+        # One packed epoch per stage, as Snowball trains: conversations pack into sequence_len
+        # tokens, isolated from each other by the packed-attention plugin.
+        "sample_packing": True,
+        "pad_to_sequence_len": True,
         "micro_batch_size": spec.per_device_batch_size,
         "gradient_accumulation_steps": spec.gradient_accumulation_steps,
         "num_epochs": spec.epochs,
@@ -375,9 +379,12 @@ def main() -> None:
     submit.add_argument("--dry-run", action="store_true")
     submit.add_argument("--preprocess-only", action="store_true", help="validate and tokenize on CPU only")
     submit.add_argument("--probe-precision", action="store_true", help="log dtypes and memory on the first step")
+    submit.add_argument("--init-uri", default=None, help="override the stage's init checkpoint (reload tests)")
     args = parser.parse_args()
 
     spec = stage_specs(args.base, data_root=args.data_root, output_root=args.output_root)[args.stage - 1]
+    if args.init_uri is not None:
+        spec = replace(spec, init_uri=args.init_uri)
     output_uri = stage_output(spec, output_root=args.output_root)
     if args.max_steps is not None:
         output_uri = f"{output_uri}-smoke{args.max_steps}"

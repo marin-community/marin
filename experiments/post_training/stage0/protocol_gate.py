@@ -37,14 +37,42 @@ from marin.evaluation.model_config import ModelConfig, ResourceHint, ServeConfig
 from marin.evaluation.serving_config import inference_config_for_model
 from marin.inference.iris import remote_inference
 from marin.inference.types import OpenAIEndpoint
+from transformers import AutoTokenizer
 
 from experiments.evaluation.models import SNOWBALL_VLLM_ARGS
-from experiments.post_training.chat_template import GRUG_TOKENS
+from experiments.post_training.chat_template import (
+    FAMILY_TOKEN_MAPS,
+    FAMILY_TOKENIZER_REVISIONS,
+    GRUG_TOKENS,
+    ChatTokens,
+)
 
 logger = logging.getLogger(__name__)
 
+
+@dataclass(frozen=True)
+class Delimiters:
+    """One family's think markers and the id of its end-of-turn token."""
+
+    tokens: ChatTokens
+    end_of_turn_id: int
+
+
 # Grug's <|eot_id|> in the Llama 3 vocabulary.
 END_OF_TURN_ID = 128009
+GRUG_DELIMITERS = Delimiters(GRUG_TOKENS, END_OF_TURN_ID)
+
+
+def family_delimiters(family: str) -> Delimiters:
+    """A family's delimiters, with the end-of-turn id read from its pinned tokenizer."""
+    tokens = FAMILY_TOKEN_MAPS[family]
+    repo, revision = FAMILY_TOKENIZER_REVISIONS[family]
+    (end_of_turn_id,) = AutoTokenizer.from_pretrained(repo, revision=revision).encode(
+        tokens.turn_close, add_special_tokens=False
+    )
+    return Delimiters(tokens, end_of_turn_id)
+
+
 PROMPTS_PER_FAMILY = 200
 MIN_TURN_END_SHARE = 0.98
 MIN_THINK_CLOSE_SHARE = 0.98
@@ -75,24 +103,29 @@ class Completion:
     text: str
 
 
-def completion_protocol(text: str, finish_reason: str, stop_reason: int | str | None) -> dict[str, bool | int]:
+def completion_protocol(
+    text: str, finish_reason: str, stop_reason: int | str | None, delimiters: Delimiters = GRUG_DELIMITERS
+) -> dict[str, bool | int]:
     """One completion's protocol facts: did the turn end, and did every think block close."""
-    opens = text.count(GRUG_TOKENS.think_open)
-    closes = text.count(GRUG_TOKENS.think_close)
+    think_open, think_close = delimiters.tokens.think_open, delimiters.tokens.think_close
+    opens = text.count(think_open)
+    closes = text.count(think_close)
     return {
-        "turn_ended": finish_reason == "stop" and stop_reason == END_OF_TURN_ID,
+        "turn_ended": finish_reason == "stop" and stop_reason == delimiters.end_of_turn_id,
         "think_blocks": opens,
-        "think_closed": (
-            opens > 0 and opens == closes and text.rfind(GRUG_TOKENS.think_close) > text.rfind(GRUG_TOKENS.think_open)
-        ),
+        "think_closed": opens > 0 and opens == closes and text.rfind(think_close) > text.rfind(think_open),
     }
 
 
-def protocol_report(completions: list[Completion]) -> dict:
+def protocol_report(completions: list[Completion], delimiters: Delimiters = GRUG_DELIMITERS) -> dict:
     """Per-family shares and the gate verdict."""
     families: dict[str, dict] = {}
     for family in sorted({completion.family for completion in completions}):
-        facts = [completion_protocol(c.text, c.finish_reason, c.stop_reason) for c in completions if c.family == family]
+        facts = [
+            completion_protocol(c.text, c.finish_reason, c.stop_reason, delimiters)
+            for c in completions
+            if c.family == family
+        ]
         with_think = [fact for fact in facts if fact["think_blocks"]]
         turn_share = sum(bool(fact["turn_ended"]) for fact in facts) / len(facts)
         think_share = sum(bool(fact["think_closed"]) for fact in with_think) / len(with_think) if with_think else None
@@ -116,7 +149,9 @@ def _read_prompts(path: str, count: int, seed: int) -> list[dict]:
     return random.Random(seed).sample(rows, min(count, len(rows)))
 
 
-def _complete(endpoint: OpenAIEndpoint, family: str, row: dict, seed: int, decode: Decode) -> Completion:
+def _complete(
+    endpoint: OpenAIEndpoint, family: str, row: dict, seed: int, decode: Decode, end_of_turn_id: int
+) -> Completion:
     headers = {"Authorization": f"Bearer {endpoint.api_key}"} if endpoint.api_key else {}
     body = {
         "model": endpoint.model,
@@ -129,7 +164,7 @@ def _complete(endpoint: OpenAIEndpoint, family: str, row: dict, seed: int, decod
         # Keep the think tokens in the text: they are what the gate counts.
         "skip_special_tokens": False,
         "ignore_eos": True,
-        "stop_token_ids": [END_OF_TURN_ID],
+        "stop_token_ids": [end_of_turn_id],
     }
     response = requests.post(endpoint.url("chat/completions"), json=body, headers=headers, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
@@ -139,12 +174,18 @@ def _complete(endpoint: OpenAIEndpoint, family: str, row: dict, seed: int, decod
     )
 
 
-def _complete_item(endpoint: OpenAIEndpoint, seed: int, decode: Decode, item: tuple[str, dict]) -> Completion:
-    return _complete(endpoint, item[0], item[1], seed, decode)
+def _complete_item(
+    endpoint: OpenAIEndpoint, seed: int, decode: Decode, end_of_turn_id: int, item: tuple[str, dict]
+) -> Completion:
+    return _complete(endpoint, item[0], item[1], seed, decode, end_of_turn_id)
 
 
-def snowball_checkpoint_model(name: str, checkpoint: str) -> ModelConfig:
-    """Serve an exported Snowball checkpoint with its own embedded template and no reasoning parser."""
+def checkpoint_model(name: str, checkpoint: str) -> ModelConfig:
+    """Serve an exported Stage 0 MoE checkpoint with its embedded template and no reasoning parser.
+
+    Data parallel with expert parallelism over one 8-GPU node serves Snowball and the 30B-class
+    Axolotl bases alike.
+    """
     return ModelConfig(
         name=name,
         location=checkpoint,
@@ -171,6 +212,8 @@ def main() -> None:
     parser.add_argument("--prompts", action="append", required=True, help="FAMILY=path to a probe JSONL")
     parser.add_argument("--out", required=True)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--family", choices=sorted(FAMILY_TOKEN_MAPS), default="grug")
+    parser.add_argument("--prompts-per-family", type=int, default=PROMPTS_PER_FAMILY)
     parser.add_argument("--temperature", type=float, default=Decode.temperature)
     parser.add_argument("--top-p", type=float, default=Decode.top_p)
     parser.add_argument(
@@ -185,14 +228,15 @@ def main() -> None:
         for penalty in args.repetition_penalty or [Decode.repetition_penalty]
     ]
 
+    delimiters = GRUG_DELIMITERS if args.family == "grug" else family_delimiters(args.family)
     work = [
         (family, row)
         for family, path in (spec.split("=", 1) for spec in args.prompts)
-        for row in _read_prompts(path, PROMPTS_PER_FAMILY, args.seed)
+        for row in _read_prompts(path, args.prompts_per_family, args.seed)
     ]
     accelerator = AcceleratorChoice(platform=Platform.GPU, gpu_type="H100", gpu_count=8, target_cluster="cw-rno2a")
     inference = inference_config_for_model(
-        snowball_checkpoint_model(args.name, args.checkpoint),
+        checkpoint_model(args.name, args.checkpoint),
         accelerator,
         env_vars=env_vars_from_keys(EVAL_RUNTIME_ENV_KEYS),
         priority=job_pb2.PRIORITY_BAND_INHERIT,
@@ -201,18 +245,24 @@ def main() -> None:
         endpoint = session.model.endpoint
         for decode in decodes:
             with ThreadPoolExecutor(CONCURRENT_REQUESTS) as pool:
-                completions = list(pool.map(functools.partial(_complete_item, endpoint, args.seed, decode), work))
+                completions = list(
+                    pool.map(
+                        functools.partial(_complete_item, endpoint, args.seed, decode, delimiters.end_of_turn_id), work
+                    )
+                )
             out = (
                 args.out
                 if len(decodes) == 1
                 else args.out.removesuffix(".json") + f"-rp{decode.repetition_penalty:g}.json"
             )
-            _write_report(args.checkpoint, decode, completions, out)
+            _write_report(args.checkpoint, decode, completions, out, delimiters)
 
 
-def _write_report(checkpoint: str, decode: Decode, completions: list[Completion], out: str) -> None:
+def _write_report(
+    checkpoint: str, decode: Decode, completions: list[Completion], out: str, delimiters: Delimiters
+) -> None:
     report = {"checkpoint": checkpoint, "decode": decode.__dict__}
-    report |= protocol_report(completions)
+    report |= protocol_report(completions, delimiters)
     with fsspec.open(out, "w") as handle:
         json.dump(report, handle, indent=2)
     with fsspec.open(out.removesuffix(".json") + "-completions.jsonl", "w") as handle:
