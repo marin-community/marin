@@ -101,7 +101,7 @@ def _softmax_backward(
     s = tl.load(Stats + ROWS + row)
     weight = tl.load(Upstream + row).to(tl.float32)
     if ENTROPY:
-        expected_margin = tl.load(Stats + 2 * ROWS + row) / (1.0 + s)
+        expected_margin = tl.div_rn(tl.load(Stats + 2 * ROWS + row), 1.0 + s)
     else:
         y = tl.load(Y + row) - VOCAB_START
     for start in range(0, VOCAB, BLOCK):

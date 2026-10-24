@@ -89,6 +89,7 @@ def main():
     parser.add_argument("--commit", required=True)
     parser.add_argument("--tokens", type=int, nargs="+", default=[8192, 32768])
     args = parser.parse_args()
+    args.output.parent.mkdir(parents=True, exist_ok=True)
     torch.distributed.init_process_group("nccl", store=torch.distributed.HashStore(), rank=0, world_size=1)
     result = {"commit": args.commit, "torch": torch.__version__, "gpu": torch.cuda.get_device_name(), "rows": []}
     try:
