@@ -258,14 +258,16 @@ class Controller(_message.Message):
         results: _containers.RepeatedCompositeFieldContainer[Controller.KickResult]
         def __init__(self, results: _Optional[_Iterable[_Union[Controller.KickResult, _Mapping]]] = ...) -> None: ...
     class ExecInContainerRequest(_message.Message):
-        __slots__ = ("task_id", "command", "timeout_seconds")
+        __slots__ = ("task_id", "command", "timeout_seconds", "container_name")
         TASK_ID_FIELD_NUMBER: _ClassVar[int]
         COMMAND_FIELD_NUMBER: _ClassVar[int]
         TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
+        CONTAINER_NAME_FIELD_NUMBER: _ClassVar[int]
         task_id: str
         command: _containers.RepeatedScalarFieldContainer[str]
         timeout_seconds: int
-        def __init__(self, task_id: _Optional[str] = ..., command: _Optional[_Iterable[str]] = ..., timeout_seconds: _Optional[int] = ...) -> None: ...
+        container_name: str
+        def __init__(self, task_id: _Optional[str] = ..., command: _Optional[_Iterable[str]] = ..., timeout_seconds: _Optional[int] = ..., container_name: _Optional[str] = ...) -> None: ...
     class ExecInContainerResponse(_message.Message):
         __slots__ = ("exit_code", "stdout", "stderr", "error")
         EXIT_CODE_FIELD_NUMBER: _ClassVar[int]

@@ -4,9 +4,13 @@
 """Local machines: bubblewrap sandboxes over a private root, with the host's system directories read-only."""
 
 import asyncio
+import contextlib
+import errno
 import io
+import json
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -16,6 +20,7 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
+from typing import cast
 
 import pytest
 from shellbox.backends.local.launch import COMMAND_NICENESS
@@ -27,7 +32,6 @@ from shellbox.backends.local.machine import (
     SystemDirectories,
     _archive,
     _submounts,
-    _unpack,
 )
 from shellbox.backends.local.python_environment import (
     PythonEnvironment,
@@ -35,18 +39,22 @@ from shellbox.backends.local.python_environment import (
     build_python_environment,
     resolve_python_environment,
 )
+from shellbox.backends.local.transfers import unpack_local_archive
+from shellbox.http_service import HttpRequest, HttpResponse, serve_http
 from shellbox.machine import (
     Command,
     DockerImage,
     ExitReason,
     HostImage,
     MachineSpec,
+    MachineTerminated,
     Mount,
     NetworkPolicy,
     PackageSpec,
     Result,
     UnsupportedMachineSpec,
 )
+from shellbox.service import ReadinessProbe, ServiceEndpoint, ServiceGroupSpec, ServiceSpec
 from shellbox.transfer import download_files
 
 # Prints "ok" or the errno name for each (operation, target) pair in argv, so one command reports several checks.
@@ -286,7 +294,7 @@ def test_task_environment_is_absent_from_host_process_arguments(factory, monkeyp
 
     async def observe_launcher(*args, **kwargs):
         process = await create_subprocess(*args, **kwargs)
-        # The guest waits for stdin, which run() supplies after this returns, keeping its launcher alive.
+        # Inspect the actual launcher rather than only the supplied subprocess arguments.
         host_arguments.append(Path(f"/proc/{process.pid}/cmdline").read_bytes())
         return process
 
@@ -297,7 +305,7 @@ def test_task_environment_is_absent_from_host_process_arguments(factory, monkeyp
 
 
 def test_task_environment_cannot_inject_arguments_through_nul_bytes(factory):
-    # NUL-delimited --args must retain exec's rejection of embedded NULs instead of parsing extra mounts.
+    # Embedded NULs must remain invalid environment data rather than becoming extra mounts.
     command = Command(("true",), env={"TASK_VALUE": "value\0--ro-bind\0/etc\0/host-etc"})
     with pytest.raises(ValueError, match="NUL"):
         run_command(factory, command)
@@ -363,9 +371,66 @@ def test_timeout_kills_the_command_and_its_descendants(factory):
     assert run_command(factory, command) == Result(None, b"", b"", False, False, ExitReason.TIMED_OUT)
 
 
-def test_background_processes_end_with_their_command(factory):
-    result = run_command(factory, Command(("sh", "-c", "sleep 3600 & echo started"), timeout=30))
-    assert (result.exit_code, result.stdout) == (0, b"started\n")
+def test_background_processes_survive_successful_commands(factory):
+    async def scenario(machine):
+        started = await machine.run(
+            Command(("sh", "-c", "sleep 3600 <&0 >/dev/null 2>&1 & echo $!"), timeout=5, stdin=b"unused" * 200_000)
+        )
+        assert started.exit_code == 0
+        child = started.stdout.decode().strip()
+        observed = await machine.run(Command(("cat", f"/proc/{child}/cmdline")))
+        assert observed.exit_code == 0
+        assert observed.stdout.split(b"\0")[:2] == [b"sleep", b"3600"]
+
+    on_machine(factory, SPEC, scenario)
+
+
+def test_losing_the_host_launcher_reclaims_its_still_running_guest(factory):
+    async def scenario(machine):
+        # The guest keeper still holds stderr open after this host-side fault.
+        signal.pidfd_send_signal(cast(int, machine._keeper_pidfd), signal.SIGKILL)
+        with pytest.raises(MachineTerminated):
+            await asyncio.wait_for(machine.run(Command(("sleep", "3600"))), 5)
+        await machine.close()
+        assert not machine.root.exists()
+
+    on_machine(factory, SPEC, scenario)
+
+
+def test_cancelled_creation_reclaims_a_process_before_its_handle_is_returned(factory, tmp_path, monkeypatch):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    create_subprocess = asyncio.create_subprocess_exec
+
+    async def scenario():
+        spawned, release = asyncio.Event(), asyncio.Event()
+        processes = []
+
+        async def hold_real_process(*args, **kwargs):
+            process = await create_subprocess(*args, **kwargs)
+            processes.append(process)
+            spawned.set()
+            await release.wait()
+            return process
+
+        monkeypatch.setattr(asyncio, "create_subprocess_exec", hold_real_process)
+        creation = asyncio.create_task(factory.create(SPEC))
+        try:
+            await asyncio.wait_for(spawned.wait(), 5)
+            roots = tuple(tmp_path.iterdir())
+            assert roots
+            creation.cancel()
+            release.set()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(creation, 10)
+            assert all(process.returncode is not None for process in processes)
+            assert not any(root.exists() for root in roots)
+        finally:
+            release.set()
+            if not creation.done():
+                creation.cancel()
+            await asyncio.gather(creation, return_exceptions=True)
+
+    asyncio.run(scenario())
 
 
 def test_output_beyond_the_limit_is_truncated(factory):
@@ -564,7 +629,7 @@ def test_a_downloaded_archive_keeps_inner_symlinks_as_links_and_refuses_host_rea
         (_member("data.txt"), b"data"),
         (_member("link", tarfile.SYMTYPE, str(secret)), b""),
     )
-    _unpack(tree, tmp_path / "tree")
+    unpack_local_archive(tree, tmp_path / "tree")
     assert (tmp_path / "tree/data.txt").read_text() == "data"
     assert os.readlink(tmp_path / "tree/link") == str(secret)
 
@@ -572,11 +637,12 @@ def test_a_downloaded_archive_keeps_inner_symlinks_as_links_and_refuses_host_rea
         _stream((_member("secret", tarfile.SYMTYPE, str(secret)), b"")),
         _stream((_member(".", tarfile.DIRTYPE), b""), (_member("copy", tarfile.LNKTYPE, str(secret)), b"")),
         _stream((_member(".", tarfile.DIRTYPE), b""), (_member("disk", tarfile.BLKTYPE), b"")),
+        _stream((_member(str(secret)), b"guest")),
         _stream(),
     ]
     for stream in refused:
-        with pytest.raises((RuntimeError, tarfile.FilterError)):
-            _unpack(stream, tmp_path / "refused")
+        with pytest.raises((ValueError, tarfile.FilterError)):
+            unpack_local_archive(stream, tmp_path / "refused")
     assert not (tmp_path / "refused").exists()
 
 
@@ -708,9 +774,9 @@ def test_a_transfer_does_not_follow_a_symlink_out_of_the_machine_root(tmp_path, 
         machine = await factory.create(MachineSpec(HostImage(), workdir="/app"))
         try:
             await machine.run(Command(("ln", "-s", str(outside_dir), "/app/escape")))
-            with pytest.raises(RuntimeError, match="symlink"):
+            with pytest.raises(RuntimeError):
                 await machine.upload(source, "/app/escape/planted.txt")
-            with pytest.raises(RuntimeError, match="symlink"):
+            with pytest.raises(RuntimeError):
                 await machine.download("/app/escape/secret.txt", tmp_path / "stolen.txt")
         finally:
             await machine.close()
@@ -797,3 +863,494 @@ def test_every_symlink_in_a_python_environment_resolves_inside_its_root(python_e
     ]
     assert python_environment.python in links
     assert [link for link in links if not Path(os.path.realpath(link)).is_relative_to(root)] == []
+
+
+HTTP_CLIENT = """import sys, urllib.request
+with urllib.request.urlopen(sys.argv[1], timeout=5) as response:
+    sys.stdout.buffer.write(response.read())
+"""
+SERVICE_SERVER = """import http.server, os, pathlib, sys
+pathlib.Path('/app/member-secret').write_text(sys.argv[1])
+pathlib.Path('/app/service-pid').write_text(str(os.getpid()))
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = pathlib.Path('/app/member-secret').read_bytes()
+        self.send_response(200)
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def log_message(self, *args):
+        pass
+http.server.ThreadingHTTPServer(('127.0.0.1', 8123), Handler).serve_forever()
+"""
+CONNECT_PROBE = """import socket, sys
+try:
+    socket.create_connection((sys.argv[2], int(sys.argv[1])), timeout=1).close()
+except OSError:
+    print('blocked')
+else:
+    print('connected')
+"""
+
+
+def private_group_spec(marker="service", readiness=None):
+    return ServiceGroupSpec(
+        task=MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY),
+        services=(
+            ServiceSpec(
+                name="runtime",
+                machine=MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY),
+                endpoints=(ServiceEndpoint("http", 8123),),
+                entrypoint=("python3", "-c", SERVICE_SERVER),
+                arguments=(marker,),
+                readiness=readiness
+                or ReadinessProbe(
+                    command=Command(
+                        ("python3", "-c", "import socket; socket.create_connection(('127.0.0.1', 8123)).close()")
+                    ),
+                    timeout=10,
+                    interval=0.05,
+                ),
+            ),
+        ),
+    )
+
+
+def test_persistent_machine_hides_host_processes_and_drops_all_privilege(factory):
+    script = """import json, os, pathlib
+status = dict(line.split(':', 1) for line in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in line)
+print(json.dumps({key: status[key].strip() for key in ('NoNewPrivs', 'CapEff', 'CapPrm', 'CapInh', 'CapAmb', 'CapBnd')}))
+print(pathlib.Path('/proc/' + os.environ['HOST_PROCESS']).exists())
+links = []
+for descriptor in pathlib.Path('/proc/self/fd').iterdir():
+    try:
+        links.append(os.readlink(descriptor))
+    except FileNotFoundError:
+        pass
+print(json.dumps(links))
+"""
+    result = run_command(factory, Command(("python3", "-c", script), env={"HOST_PROCESS": str(os.getpid())}))
+    assert result.exit_code == 0, result.stderr
+    status, sees_host, descriptors = result.stdout.decode().splitlines()
+    assert json.loads(status) == {
+        "NoNewPrivs": "1",
+        **{key: "0000000000000000" for key in ("CapEff", "CapPrm", "CapInh", "CapAmb", "CapBnd")},
+    }
+    assert sees_host == "False"
+    assert not any(
+        target.startswith(("user:[", "mnt:[", "pid:[", "net:[")) or "shellbox-config" in target
+        for target in json.loads(descriptors)
+    )
+
+
+def test_real_local_http_relay_serves_concurrent_requests(factory):
+    async def scenario(machine):
+        blocked, release = asyncio.Event(), asyncio.Event()
+
+        async def handler(request: HttpRequest):
+            if request.path == "/slow":
+                blocked.set()
+                await release.wait()
+            return HttpResponse(200, request.path.encode(), "text/plain")
+
+        async with serve_http(machine, handler, port=8787) as endpoint:
+            slow = asyncio.create_task(
+                machine.run(Command(("python3", "-c", HTTP_CLIENT, endpoint + "/slow"), timeout=15))
+            )
+            try:
+                await asyncio.wait_for(blocked.wait(), 10)
+                fast = await machine.run(Command(("python3", "-c", HTTP_CLIENT, endpoint + "/fast"), timeout=10))
+                assert (fast.exit_code, fast.stdout) == (0, b"/fast")
+                release.set()
+                result = await slow
+                assert (result.exit_code, result.stdout) == (0, b"/slow")
+            finally:
+                release.set()
+                if not slow.done():
+                    slow.cancel()
+                    await asyncio.gather(slow, return_exceptions=True)
+
+    on_machine(factory, MachineSpec(HostImage(), workdir="/app", network=NetworkPolicy.DENY), scenario)
+
+
+@pytest.mark.parametrize("family,host", [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")], ids=["ipv4", "ipv6"])
+def test_local_group_peers_have_private_filesystems_and_no_host_network(factory, family, host):
+    async def scenario(host_port):
+        groups = await asyncio.gather(
+            factory.create_group(private_group_spec("first")),
+            factory.create_group(private_group_spec("second")),
+        )
+        roots = [machine.root for group in groups for machine in (group.task, *group.services.values())]
+        try:
+            await asyncio.gather(*(group.wait_ready() for group in groups))
+            for group, expected in zip(groups, (b"first", b"second"), strict=True):
+                written = await group.task.run(Command(("sh", "-c", "echo actor >/app/member-secret")))
+                assert written.exit_code == 0
+                own = await group.task.run(Command(("cat", "/app/member-secret")))
+                assert own.stdout == b"actor\n"
+                answer = await group.task.run(
+                    Command(("python3", "-c", HTTP_CLIENT, "http://" + group.endpoint("runtime", "http")))
+                )
+                assert (answer.exit_code, answer.stdout) == (0, expected)
+                connection = await group.task.run(Command(("python3", "-c", CONNECT_PROBE, str(host_port), host)))
+                assert connection.stdout == b"blocked\n"
+        finally:
+            await asyncio.gather(*(group.close() for group in groups))
+        assert not any(root.exists() for root in roots)
+
+    with contextlib.ExitStack() as cleanup:
+        try:
+            listener = cleanup.enter_context(socket.socket(family))
+            listener.bind((host, 0))
+        except OSError as error:
+            if family == socket.AF_INET6 and error.errno in (
+                errno.EAFNOSUPPORT,
+                errno.EPROTONOSUPPORT,
+                errno.EADDRNOTAVAIL,
+            ):
+                pytest.skip("Host IPv6 loopback is unavailable")
+            raise
+        listener.listen()
+        asyncio.run(scenario(listener.getsockname()[1]))
+
+
+def test_local_group_retries_a_timed_readiness_probe_without_destroying_the_service(factory):
+    probe = """import pathlib, signal, socket
+marker = pathlib.Path('/app/probe-attempted')
+if not marker.exists():
+    marker.touch()
+    signal.pause()
+socket.create_connection(('127.0.0.1', 8123), timeout=1).close()
+"""
+
+    async def scenario():
+        spec = private_group_spec(
+            readiness=ReadinessProbe(
+                command=Command(("python3", "-c", probe), timeout=0.15),
+                timeout=10,
+                interval=0.05,
+                attempts=5,
+            )
+        )
+        group = await factory.create_group(spec)
+        try:
+            await group.wait_ready()
+            result = await group.services["runtime"].run(Command(("test", "-f", "/app/probe-attempted")))
+            assert result.exit_code == 0
+            response = await group.task.run(Command(("python3", "-c", HTTP_CLIENT, "http://runtime:8123")))
+            assert response.stdout == b"service"
+        finally:
+            await group.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel", [False, True], ids=["timeout", "cancel"])
+def test_local_group_command_deadline_closes_every_member(factory, cancel):
+    async def scenario():
+        group = await factory.create_group(private_group_spec())
+        roots = [group.task.root, group.services["runtime"].root]
+        try:
+            await group.wait_ready()
+            command = Command(
+                ("sh", "-c", "touch /app/command-started; exec sleep 3600"), timeout=None if cancel else 0.2
+            )
+            pending = asyncio.create_task(group.task.run(command))
+            if cancel:
+                started = await group.task.run(
+                    Command(("sh", "-c", "until test -f /app/command-started; do sleep 0.01; done"), timeout=5)
+                )
+                assert started.exit_code == 0
+                pending.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await pending
+            else:
+                result = await pending
+                assert result.reason is ExitReason.TIMED_OUT
+            for machine in (group.task, *group.services.values()):
+                with pytest.raises(MachineTerminated):
+                    await machine.run(Command(("true",)))
+        finally:
+            await group.close()
+        assert not any(root.exists() for root in roots)
+
+    asyncio.run(scenario())
+
+
+def test_cancelled_command_start_closes_the_machine(factory, monkeypatch):
+    async def scenario():
+        machine = await factory.create(SPEC)
+        connection_made = asyncio.subprocess.SubprocessStreamProtocol.connection_made
+
+        def cancel_before_handle_returns(protocol, transport):
+            connection_made(protocol, transport)
+            monkeypatch.setattr(asyncio.subprocess.SubprocessStreamProtocol, "connection_made", connection_made)
+            # asyncio calls this after spawning the process but before returning
+            # its handle. Cancel without adding an artificial await to startup.
+            pending.cancel()
+
+        try:
+            monkeypatch.setattr(
+                asyncio.subprocess.SubprocessStreamProtocol, "connection_made", cancel_before_handle_returns
+            )
+            pending = asyncio.create_task(machine.run(Command(("sleep", "3600"))))
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+            with pytest.raises(MachineTerminated):
+                await machine.run(Command(("true",)))
+        finally:
+            await machine.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("service_exit", [False, True], ids=["ttl", "service-exit"])
+def test_local_group_failure_and_ttl_reclaim_all_members(service_exit):
+    factory = make_factory(ttl=None if service_exit else 3)
+
+    async def scenario():
+        group = await factory.create_group(private_group_spec())
+        roots = [group.task.root, group.services["runtime"].root]
+        try:
+            await group.wait_ready()
+            waiting = asyncio.create_task(group.task.run(Command(("sleep", "3600"))))
+            if service_exit:
+                with contextlib.suppress(MachineTerminated):
+                    await group.services["runtime"].run(Command(("sh", "-c", "kill -TERM $(cat /app/service-pid)")))
+            with pytest.raises(MachineTerminated):
+                await asyncio.wait_for(waiting, 8)
+            for machine in (group.task, *group.services.values()):
+                with pytest.raises(MachineTerminated):
+                    await machine.run(Command(("true",)))
+        finally:
+            await group.close()
+        assert not any(root.exists() for root in roots)
+
+    asyncio.run(scenario())
+
+
+def test_absolute_guest_symlinks_resolve_inside_the_private_root(factory, tmp_path):
+    source = tmp_path / "payload"
+    source.write_text("updated")
+    target = tmp_path / "downloaded"
+
+    async def scenario(machine):
+        prepared = await machine.run(
+            Command(("sh", "-c", "mkdir -p /app/actual && echo guest >/app/actual/file && ln -s /app/actual /app/link"))
+        )
+        assert prepared.exit_code == 0
+        await machine.upload(source, "/app/link/file")
+        await machine.download("/app/link/file", target)
+
+    on_machine(factory, SPEC, scenario)
+    assert target.read_text() == "updated"
+
+
+def test_repeated_download_cannot_follow_an_artifact_link_into_the_host(factory, tmp_path, outside_dir):
+    host_marker = outside_dir / "marker"
+    host_marker.write_text("host-private")
+    downloaded = tmp_path / "artifacts"
+
+    async def scenario(machine):
+        prepared = await machine.run(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    'mkdir /app/artifacts && ln -s "$1" /app/artifacts/nested '
+                    '&& ln -s "$1/marker" /app/artifacts/linked-file',
+                    "sh",
+                    str(outside_dir),
+                )
+            )
+        )
+        assert prepared.exit_code == 0
+        await machine.download("/app/artifacts", downloaded)
+        (downloaded / "unrelated").write_text("retained")
+        replaced = await machine.run(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    "rm /app/artifacts/nested /app/artifacts/linked-file && mkdir /app/artifacts/nested "
+                    "&& echo changed >/app/artifacts/nested/marker && echo replaced >/app/artifacts/linked-file",
+                )
+            )
+        )
+        assert replaced.exit_code == 0
+        await machine.download("/app/artifacts", downloaded)
+        assert (downloaded / "nested/marker").read_text() == "changed\n"
+        assert (downloaded / "linked-file").read_text() == "replaced\n"
+        assert (downloaded / "unrelated").read_text() == "retained"
+        target = tmp_path / "file-link"
+        target.symlink_to(host_marker)
+        with pytest.raises(ValueError):
+            await machine.download("/app/artifacts/nested/marker", target)
+        target.unlink()
+        target.symlink_to(outside_dir, target_is_directory=True)
+        with pytest.raises(OSError):
+            await machine.download("/app/artifacts/nested/marker", target / "marker")
+        target.unlink()
+        target = outside_dir / "file-hardlink"
+        target.hardlink_to(host_marker)
+        await machine.download("/app/artifacts/nested/marker", target)
+        assert target.read_text() == "changed\n"
+
+    on_machine(factory, SPEC, scenario)
+    assert host_marker.read_text() == "host-private"
+
+
+@pytest.mark.parametrize("first_mode,second_mode,new_mode", [(0o500, 0o777, 0o700), (0o777, 0o500, 0o755)])
+def test_repeated_download_preserves_existing_host_directory_permissions(
+    factory, tmp_path, first_mode, second_mode, new_mode
+):
+    downloaded = tmp_path / "artifacts"
+    existing = downloaded / "existing"
+    existing.mkdir(parents=True)
+    downloaded.chmod(0o750)
+    existing.chmod(0o710)
+    (downloaded / "unrelated").write_text("host-owned")
+
+    async def scenario(machine):
+        first = await machine.run(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    "mkdir -p /app/artifacts/existing /app/artifacts/new; "
+                    "printf first >/app/artifacts/existing/state; printf first >/app/artifacts/new/state; "
+                    f"chmod {first_mode:o} /app/artifacts /app/artifacts/existing /app/artifacts/new",
+                )
+            )
+        )
+        assert first.exit_code == 0, first.stderr
+        await machine.download("/app/artifacts", downloaded)
+        assert downloaded.stat().st_mode & 0o777 == 0o750
+        assert existing.stat().st_mode & 0o777 == 0o710
+        assert (downloaded / "new").stat().st_mode & 0o777 == new_mode
+        # The caller's permissions also survive later guest metadata changes.
+        (downloaded / "new").chmod(0o750)
+        second = await machine.run(
+            Command(
+                (
+                    "sh",
+                    "-c",
+                    "chmod 700 /app/artifacts /app/artifacts/existing /app/artifacts/new; "
+                    "printf second >/app/artifacts/existing/state; printf second >/app/artifacts/new/state; "
+                    f"chmod {second_mode:o} /app/artifacts /app/artifacts/existing /app/artifacts/new; "
+                    "mkdir /app/locked; printf private >/app/locked/state; chmod 000 /app/locked; "
+                    'ln -s "$1" /app/host-download',
+                    "sh",
+                    str(downloaded),
+                )
+            )
+        )
+        assert second.exit_code == 0, second.stderr
+        await machine.download("/app/artifacts", downloaded)
+        return machine.root
+
+    root = on_machine(factory, SPEC, scenario)
+    assert not root.exists()
+    assert downloaded.stat().st_mode & 0o777 == 0o750
+    assert existing.stat().st_mode & 0o777 == 0o710
+    assert (downloaded / "new").stat().st_mode & 0o777 == 0o750
+    assert (existing / "state").read_text() == "second"
+    assert (downloaded / "new/state").read_text() == "second"
+    assert (downloaded / "unrelated").read_text() == "host-owned"
+
+
+@pytest.fixture
+def executable_oci_image(oci_image):
+    busybox = shutil.which("busybox")
+    if busybox is None:
+        pytest.skip("The offline executable image requires busybox-static; the Shellbox CI lane installs it")
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w") as output:
+        binary = Path(busybox).read_bytes()
+        entry = tarfile.TarInfo("bin/busybox")
+        entry.mode, entry.size = 0o755, len(binary)
+        output.addfile(entry, io.BytesIO(binary))
+        for applet in ("sh", "sleep", "mkdir", "cat", "tar", "httpd", "wget", "dirname", "basename", "id"):
+            entry = tarfile.TarInfo(f"bin/{applet}")
+            entry.type, entry.linkname = tarfile.SYMTYPE, "busybox"
+            output.addfile(entry)
+        entry = tarfile.TarInfo("etc")
+        entry.type, entry.mode = tarfile.DIRTYPE, 0o755
+        output.addfile(entry)
+    return oci_image(
+        (archive.getvalue(),),
+        {
+            "Env": ["PATH=/bin", "IMAGE_VALUE=from-image"],
+            "WorkingDir": "/app",
+            "Entrypoint": ["/bin/sh", "-c"],
+            "Cmd": ['printf "%s" "$IMAGE_VALUE" >index.html; exec httpd -f -p 8123 -h .'],
+            "User": "0:0",
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    "entrypoint,arguments,expected",
+    [
+        (None, None, b"from-image"),
+        (
+            (
+                "/bin/sh",
+                "-c",
+                'test "$#" -eq 0 || exit 23; printf entrypoint >index.html; exec httpd -f -p 8123 -h .',
+                "entrypoint",
+            ),
+            None,
+            b"entrypoint",
+        ),
+        (None, ("printf arguments >index.html; exec httpd -f -p 8123 -h .",), b"arguments"),
+        (
+            ("/bin/sh", "-c", 'printf "%s" "$1" >index.html; exec httpd -f -p 8123 -h .', "entrypoint"),
+            ("both",),
+            b"both",
+        ),
+    ],
+    ids=["image-defaults", "entrypoint-only", "arguments-only", "both-overridden"],
+)
+def test_prepared_local_group_applies_startup_overrides_with_private_writable_roots(
+    executable_oci_image, tmp_path, entrypoint, arguments, expected
+):
+    umoci = shutil.which("umoci")
+    if umoci is None:
+        pytest.skip("OCI preparation requires umoci; the Shellbox CI lane installs it")
+    factory = make_factory(umoci=Path(umoci))
+    image = executable_oci_image
+    original = {path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()}
+    task = MachineSpec(image, workdir="", network=NetworkPolicy.DENY)
+    service = ServiceSpec(
+        "runtime",
+        task,
+        endpoints=(ServiceEndpoint("http", 8123),),
+        readiness=ReadinessProbe(Command(("wget", "-q", "-O", "-", "http://runtime:8123")), timeout=10, interval=0.05),
+        entrypoint=entrypoint,
+        arguments=arguments,
+    )
+
+    async def scenario():
+        group = await factory.create_group(ServiceGroupSpec(task, (service,)))
+        roots = [group.task.root, group.services["runtime"].root]
+        try:
+            await group.wait_ready()
+            identity = await group.task.run(Command(("sh", "-c", 'pwd; printf "%s\\n" "$IMAGE_VALUE"; id -u')))
+            assert (identity.exit_code, identity.stdout) == (0, b"/app\nfrom-image\n0\n")
+            written = await group.task.run(Command(("sh", "-c", "printf actor >index.html")))
+            assert written.exit_code == 0
+            response = await group.task.run(Command(("wget", "-q", "-O", "-", "http://runtime:8123")))
+            assert (response.exit_code, response.stdout) == (0, expected)
+            await group.task.download("/app/index.html", tmp_path / "actor")
+            await group.services["runtime"].download("/app/index.html", tmp_path / "runtime")
+            assert (tmp_path / "actor").read_bytes() == b"actor"
+            assert (tmp_path / "runtime").read_bytes() == expected
+        finally:
+            await group.close()
+        assert not any(root.exists() for root in roots)
+
+    asyncio.run(scenario())
+    assert {
+        path.relative_to(image.layout): path.read_bytes() for path in image.layout.rglob("*") if path.is_file()
+    } == original

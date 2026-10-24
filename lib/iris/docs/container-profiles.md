@@ -129,6 +129,46 @@ the worker or `kubectl exec`. The job cannot carry a workspace bundle, and
 the client rejects `extras`, `pip_packages` and `sync_packages`; setup scripts
 run verbatim and default to none.
 
+### Private service groups
+
+Shellbox service groups use a typed `EnvironmentConfig.sandbox_services` list
+on one `SANDBOX` job with `EGRESS_POLICY_NONE`. The Kubernetes backend advertises
+`sandbox-service-groups`; controllers and clients without that capability reject
+group creation. Docker-worker backends do not implement groups.
+
+Each service receives its digest-pinned image, absolute working directory,
+literal environment, CPU/memory/disk reservation and optional command overrides.
+The job reservation includes every member. Image ENTRYPOINT and CMD are preserved
+when their overrides are absent. Arbitrary pod fields, mounts, accelerators,
+setup scripts and secrets are rejected. Task and service environments reject
+cloud-storage and controller credential variables.
+
+The task and services have separate filesystems and PID namespaces but share
+pod loopback. `/etc/hosts` maps the declared service names and `task` to
+`127.0.0.1`; there is no external DNS. The pod runs under gVisor, without service
+account tokens or credential-bearing infrastructure sidecars, with root users,
+all capabilities dropped and privilege escalation disabled. A dedicated policy
+selecting `iris.egress=loopback` denies both ingress and egress, including DNS.
+Operator controller startup installs this durable policy. Before creating a
+group pod, the controller reads the named policy and verifies its selector and
+deny-all rules; missing or changed isolation prevents dispatch. Its runtime
+RBAC permits only reading that policy, with no NetworkPolicy write access.
+Existing clusters need the updated RBAC and an operator controller restart
+before service groups can run. The namespace must have an enforcing
+NetworkPolicy implementation and no other allow policy selecting these pods;
+Kubernetes policy permissions are additive.
+
+Shellbox starts the group, installs any host capability relay through exec, then
+runs bounded readiness probes. Timed probes require Python 3 in each service
+image; a guest supervisor kills a timed-out probe's process group and retries
+without stopping the service. Exhausting the readiness budget closes the group.
+Closing any machine cancels the shared job; a container exiting fails the group
+so reconciliation reclaims all members.
+Service exec names are checked against the job definition before dispatch, so
+the API cannot address an infrastructure container. Model calls can use
+Shellbox's host HTTP capability relay, keeping upstream credentials and model
+access in the trusted harness rather than enabling pod egress.
+
 ## Egress policy
 
 Every job has an egress policy, set with `LaunchJobRequest.egress_policy`

@@ -197,6 +197,7 @@ EXTRA_SUITE_TRIGGERS: dict[str, tuple[str, ...]] = {
     "iris-e2e-smoke": ("lib/iris/", *DEPENDENCY_MANIFESTS),
     "shellbox-unit": (
         "lib/shellbox/",
+        "lib/iris/",
         "infra/ci/select_tests.py",
         ".github/workflows/unified-unit.yaml",
         *DEPENDENCY_MANIFESTS,

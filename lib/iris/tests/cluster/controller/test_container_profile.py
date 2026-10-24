@@ -20,7 +20,7 @@ from iris.cluster.controller.endpoint_service import EndpointServiceImpl
 from iris.cluster.controller.projections.run_templates import RunTemplatesProjection
 from iris.cluster.controller.service import ControllerServiceImpl
 from iris.cluster.types import JobName
-from iris.rpc import controller_pb2, job_pb2
+from iris.rpc import controller_pb2, job_pb2, worker_pb2
 from iris.testing.controller import (
     MockController,
     make_controller_state,
@@ -143,6 +143,72 @@ def test_sandbox_rejects_workspace_bundle(service):
         _as("user", "alice", service.launch_job, req, None)
     assert exc.value.code == Code.INVALID_ARGUMENT
     assert "bundle" in str(exc.value.message)
+
+
+def _service_group_request():
+    request = _launch("/alice/group", SANDBOX, job_pb2.EGRESS_POLICY_NONE)
+    request.task_image = "example.test/task@sha256:" + "a" * 64
+    request.resources.cpu_millicores = 2000
+    request.resources.memory_bytes = 2 * 1024**3
+    request.environment.sandbox_services.add(
+        name="runtime",
+        image="example.test/runtime@sha256:" + "b" * 64,
+        workdir="/app",
+        resources=job_pb2.ResourceSpecProto(cpu_millicores=1000, memory_bytes=1024**3),
+    )
+    return request
+
+
+def test_sandbox_service_group_persists_on_admission(service):
+    service._controller.backend.descriptor = k8s_backend_descriptor()
+    response = _as("user", "alice", service.launch_job, _service_group_request(), None)
+    stored = _as(
+        "user",
+        "alice",
+        service.get_job_status,
+        controller_pb2.Controller.GetJobStatusRequest(job_id=response.job_id),
+        None,
+    ).request
+    assert stored.resources.cpu_millicores == 2000
+    assert stored.environment.sandbox_services[0].name == "runtime"
+
+
+def test_service_exec_cannot_select_infrastructure_containers(service):
+    service._controller.backend.descriptor = k8s_backend_descriptor()
+    _as("user", "alice", service.launch_job, _service_group_request(), None)
+    backend = service._controller.backend
+    backend.exec_in_container.return_value = worker_pb2.Worker.ExecInContainerResponse(stdout="runtime")
+    request = controller_pb2.Controller.ExecInContainerRequest(
+        task_id="/alice/group/0",
+        container_name="runtime",
+        command=["true"],
+    )
+    result = _as("user", "alice", service.exec_in_container, request, None)
+    assert result.stdout == "runtime"
+    assert backend.exec_in_container.call_args.args[1].container_name == "runtime"
+    backend.exec_in_container.reset_mock()
+    request.container_name = "output-uploader"
+    with pytest.raises(ConnectError) as error:
+        _as("user", "alice", service.exec_in_container, request, None)
+    assert error.value.code == Code.INVALID_ARGUMENT
+    backend.exec_in_container.assert_not_called()
+
+
+@pytest.mark.parametrize("location", ["task", "service", "secret", "egress"])
+def test_service_groups_reject_credential_and_network_escalation_at_admission(service, location):
+    service._controller.backend.descriptor = k8s_backend_descriptor()
+    request = _service_group_request()
+    if location == "task":
+        request.environment.env_vars["AWS_SECRET_ACCESS_KEY"] = "private"
+    elif location == "service":
+        request.environment.sandbox_services[0].env_vars["GOOGLE_APPLICATION_CREDENTIALS"] = "/host/key.json"
+    elif location == "secret":
+        request.environment.secrets["CW_KEY_SECRET"] = "private"
+    else:
+        request.egress_policy = job_pb2.EGRESS_POLICY_INTERNET
+    with pytest.raises(ConnectError) as error:
+        _as("user", "alice", service.launch_job, request, None)
+    assert error.value.code == Code.INVALID_ARGUMENT
 
 
 def test_unknown_profile_rejected(service):

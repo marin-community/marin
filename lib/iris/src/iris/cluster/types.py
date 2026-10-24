@@ -16,7 +16,7 @@ import functools
 import hashlib
 import sys
 import urllib.parse
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 from pathlib import Path
@@ -721,6 +721,33 @@ except BaseException as exc:
 """
 
 
+@dataclass(frozen=True)
+class SandboxServiceSpec:
+    """One credential-free container in a sandbox's private pod network."""
+
+    name: str
+    image: str
+    workdir: str
+    resources: ResourceSpec
+    env_vars: Mapping[str, str] = field(default_factory=dict)
+    entrypoint: tuple[str, ...] | None = None
+    arguments: tuple[str, ...] | None = None
+
+    def to_proto(self) -> job_pb2.SandboxServiceSpec:
+        spec = job_pb2.SandboxServiceSpec(
+            name=self.name,
+            image=self.image,
+            workdir=self.workdir,
+            resources=self.resources.to_proto(),
+            env_vars=self.env_vars,
+        )
+        if self.entrypoint is not None:
+            spec.entrypoint.CopyFrom(job_pb2.CommandEntrypoint(argv=self.entrypoint))
+        if self.arguments is not None:
+            spec.arguments.CopyFrom(job_pb2.CommandEntrypoint(argv=self.arguments))
+        return spec
+
+
 @dataclass
 class EnvironmentSpec:
     """Environment specification for jobs.
@@ -760,6 +787,7 @@ class EnvironmentSpec:
     extras: Sequence[str] | None = None
     setup_scripts: Sequence[str] | None = None
     sync_packages: Sequence[str] | None = None
+    sandbox_services: Sequence[SandboxServiceSpec] = ()
 
     def to_proto(self) -> job_pb2.EnvironmentConfig:
         """Convert to wire format, resolving the user setup scripts.
@@ -811,6 +839,7 @@ class EnvironmentSpec:
             env_vars=merged_env_vars,
             secrets=self.secrets,
             setup_scripts=setup_scripts,
+            sandbox_services=[service.to_proto() for service in self.sandbox_services],
         )
 
     def to_sandbox_proto(self) -> job_pb2.EnvironmentConfig:
@@ -829,6 +858,7 @@ class EnvironmentSpec:
             env_vars=dict(self.env_vars or {}),
             secrets=self.secrets,
             setup_scripts=[s for s in self.setup_scripts or [] if s.strip()],
+            sandbox_services=[service.to_proto() for service in self.sandbox_services],
         )
 
 
