@@ -5,6 +5,7 @@
 
 import asyncio
 import json
+import math
 from pathlib import Path
 
 import pyarrow as pa
@@ -17,10 +18,12 @@ from rolloutengine.models import (
     GradedRollout,
     ModelTurn,
     Rollout,
+    RolloutContractError,
     RolloutFailure,
     RolloutStep,
     Transition,
 )
+from shellbox.backends.shellsim.machine import ShellSimMachineFactory
 from shellbox.machine import CommandSemantics, PackageSpec
 from taskcompendium.grader import verifyit_package
 from taskcompendium.grading_result import GradeResult, Outcome
@@ -262,6 +265,8 @@ def test_graded_group_round_trip_strips_token_data(tmp_path):
             "shellsim",
             None,
         ),
+        (make_task(requirements=EnvironmentRequirements(working_directory="/work")), "shellbox:", "shellsim", None),
+        (make_task(requirements=SCRIPT_GRADER.environment), "shellbox:", "local", None),
     ],
 )
 def test_lowering_rules(task, harness, task_backend, verifier_backend):
@@ -310,7 +315,7 @@ def feed_worker(tmp_path, tokenizer, model) -> TaskRolloutWorker:
         generator,
         WholeTaskProjection(generator, tokenizer),
         model,
-        {},
+        {"shellsim": ShellSimMachineFactory()},
         shutdown_timeout=1.0,
         feed_root=str(tmp_path),
     )
@@ -323,15 +328,32 @@ def feed_task(tmp_path, task: TaskSpec, samples: int) -> RolloutTask:
     return RolloutTask(RolloutLease("lease", 5, 5), prompt, request)
 
 
-def test_worker_skips_a_row_that_fails_the_engine_check(tmp_path):
-    # No factory serves the script grader's bubblewrap machine.
-    task = feed_task(tmp_path, make_task(grader=SCRIPT_GRADER), 2)
+def test_worker_skips_a_row_that_the_engine_refuses(tmp_path):
+    # The assistant-prefix harness refuses a task that requires agent capabilities.
+    refused = assistant_prefix_task().model_copy(
+        update={"environment_requirements": EnvironmentRequirements(capabilities=("files",))}
+    )
+    task = feed_task(tmp_path, refused, 2)
     writer = FakeWriter()
     assert asyncio.run(feed_worker(tmp_path, CharTokenizer(), FakeModel()).run_task(task, writer)) == 0
     assert writer.skipped == ["0"] and not writer.written
     skipped = json.loads((tmp_path / "skipped/000000000000.json").read_text())
-    assert skipped["uid"] == "0" and skipped["reason"]
+    assert skipped["uid"] == "0"
     assert not (tmp_path / "graded").exists()
+
+
+def test_worker_fails_on_a_contract_error_and_skips_no_row(tmp_path):
+    class NonFiniteModel(FakeModel):
+        async def generate(self, request):
+            return {**await super().generate(request), "response_logprobs": [[math.nan, math.nan]]}
+
+    task = feed_task(tmp_path, assistant_prefix_task(), 2)
+    writer = FakeWriter()
+    with pytest.raises(ExceptionGroup) as raised:
+        asyncio.run(feed_worker(tmp_path, CharTokenizer(), NonFiniteModel()).run_task(task, writer))
+    assert raised.group_contains(RolloutContractError)
+    assert not writer.skipped and not writer.written
+    assert not (tmp_path / "skipped").exists()
 
 
 def test_worker_continues_an_assistant_prefix_and_writes_the_group_before_selection(tmp_path):

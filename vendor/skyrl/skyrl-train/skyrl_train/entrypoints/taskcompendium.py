@@ -31,6 +31,16 @@ class TaskCompendiumExp(BasePPOExp):
                 "data.feed needs an explicit trainer.algorithm.group_admission.stall_timeout: "
                 "the default fails training after 10 minutes without a new task"
             )
+        if not self.cfg.trainer.max_steps or self.cfg.trainer.epochs != 1:
+            raise ValueError(
+                "data.feed needs trainer.max_steps and trainer.epochs 1: the feed grows while training runs, "
+                "so its length at the start cannot set the schedule"
+            )
+        if self.cfg.environment.task_sessions.local is None:
+            raise ValueError(
+                "data.feed needs environment.task_sessions.local: feed tasks with Linux process semantics "
+                "and script graders run in bubblewrap"
+            )
         if self.cfg.data.train_data:
             logger.warning("data.feed.root is set, so data.train_data is not read: {}", list(self.cfg.data.train_data))
         return FeedTaskDataset(

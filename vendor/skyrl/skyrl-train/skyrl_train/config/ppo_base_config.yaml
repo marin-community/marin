@@ -34,7 +34,7 @@ data:
     seed: null # falls back to trainer.seed
   # A task feed that a producer extends while training runs (skyrl_train/dataset/task_feed.py). With a root, the
   # taskcompendium entrypoint reads <root>/chunks instead of train_data, offers each row once in feed order, and
-  # writes graded/, skipped/ and policy_endpoint.json under the root.
+  # writes graded/, skipped/ and policy_endpoint.json under the root. trainer.max_steps sets the length of the run.
   feed:
     root: null # object-store prefix or local directory; null uses train_data
     poll_seconds: 10 # the least time between two listings of <root>/chunks

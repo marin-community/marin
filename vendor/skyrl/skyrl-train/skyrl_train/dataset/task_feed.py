@@ -23,9 +23,17 @@ from loguru import logger
 from pydantic import BaseModel, ConfigDict
 from rolloutengine.harness.assistant_prefix import ASSISTANT_PREFIX_HARNESS
 from rolloutengine.models import GradedRollout, MachineRuntimeSpec, TaskRolloutSpec
+from rolloutengine.validation import WORKSPACE_ANSWERS
 from shellbox.machine import Backend, CommandSemantics, NetworkPolicy
 from skyrl_gym.rollout_specs import SHELLBOX_HARNESS, rollout_spec
-from taskcompendium.models import ScriptGrader, TaskSpec, TextMessage, VerifyitGrader
+from taskcompendium.models import (
+    EnvironmentRequirements,
+    NoGrader,
+    ScriptGrader,
+    TaskSpec,
+    TextMessage,
+    VerifyitGrader,
+)
 from transformers import PreTrainedTokenizerBase
 
 from marinskyrl.remote_io import filesystem_and_path
@@ -115,8 +123,19 @@ def machine_runtime(backend: str) -> MachineRuntimeSpec:
 
 
 def needs_machine(task: TaskSpec) -> bool:
-    requirements = task.environment_requirements
-    return bool(requirements.capabilities or requirements.setup_commands or task.resources.worker or task.output_paths)
+    """Whether ``rolloutengine.validation.validate_spec`` requires a task machine for ``task``."""
+    grader = task.grader
+    # Tool providers run on the host.
+    requirements = task.environment_requirements.model_copy(update={"tool_providers": {}})
+    return bool(
+        requirements != EnvironmentRequirements()
+        or task.resources.all
+        or task.resources.worker
+        or task.tool_bindings
+        or task.output_paths
+        or (task.answer_type in WORKSPACE_ANSWERS and not isinstance(grader, NoGrader))
+        or (isinstance(grader, ScriptGrader) and (grader.collect or grader.artifacts))
+    )
 
 
 def lower_feed_task(task: TaskSpec, session: Mapping[str, Any]) -> TaskRolloutSpec:
