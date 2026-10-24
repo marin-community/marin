@@ -63,7 +63,8 @@ PAIRS = ((" crit", "ics"), (" produ", "cer"), (" Ex", "ception"), (" wasn", "'t"
 # The two case studies: their categories with the pair's continuation (the global unit ranking's queries) and all.
 CASES = {"crit": ((0, 1), (0, 1, 2)), "wasn": ((5, 6), (5, 6, 7))}
 COUNT_TRIGGERS = (" crit", " critic", " wasn", " produ", " Ex")
-ROW_CAPS = {"crit": 700, "wasn": 600, "produ": 120, "ex": 120}
+# Rows kept per source (train, Paloma) and group.
+ROW_CAPS = {"crit": 400, "wasn": 350, "produ": 80, "ex": 80}
 WINDOW = 512
 G = docs_analyse.G
 R = docs_analyse.R
@@ -158,14 +159,11 @@ class Scan:
     """Kept rows and the continuation counts of every scanned position."""
 
     rows: list[tuple[str, np.ndarray, np.ndarray, np.ndarray, list]] = dataclasses.field(default_factory=list)
-    counts: dict[str, int] = dataclasses.field(default_factory=lambda: {g: 0 for g in ROW_CAPS})
+    counts: list[dict[str, int]] = dataclasses.field(default_factory=lambda: [{g: 0 for g in ROW_CAPS} for _ in "tp"])
     # [source (train, paloma), trigger, V] next-token counts
     next_hist: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((2, len(COUNT_TRIGGERS), 16384)))
     cat_counts: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((2, len(CATEGORIES))))  # [source, cat]
     tokens_scanned: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(2))
-
-    def full(self) -> bool:
-        return all(self.counts[g] >= c for g, c in ROW_CAPS.items())
 
     def add(self, batch: common.TokenBatch, ids: Ids, src: int) -> None:
         for r in range(batch.tokens.shape[0]):
@@ -184,9 +182,9 @@ class Scan:
             for q in qs:
                 self.cat_counts[src, q[1]] += 1
             group = row_group(qs)
-            if group is None or self.counts[group] >= ROW_CAPS[group]:
+            if group is None or self.counts[src][group] >= ROW_CAPS[group]:
                 continue
-            self.counts[group] += 1
+            self.counts[src][group] += 1
             self.rows.append((batch.source, tok.copy(), seg.copy(), w.copy(), qs))
 
 
@@ -195,9 +193,9 @@ def scan(ids: Ids, max_train: int, chunk: int) -> Scan:
     t0 = time.time()
     for b in common.paloma_batches(64):
         out.add(b, ids, 1)
-    logger.info("paloma: %s rows, %d tokens (%.0fs)", out.counts, out.tokens_scanned[1], time.time() - t0)
+    logger.info("paloma: %s rows, %d tokens (%.0fs)", out.counts[1], out.tokens_scanned[1], time.time() - t0)
     _scan_train(out, ids, common.TRAINED_SEQUENCES, max_train, chunk)
-    logger.info("train: %s rows, %d tokens (%.0fs)", out.counts, out.tokens_scanned[0], time.time() - t0)
+    logger.info("train: %s rows, %d tokens (%.0fs)", out.counts[0], out.tokens_scanned[0], time.time() - t0)
     return out
 
 
@@ -210,13 +208,11 @@ def _train_chunks(start: int, num: int, chunk: int):
 
 
 def _scan_train(out: Scan, ids: Ids, start: int, num: int, chunk: int) -> None:
-    # Fetch in slices so the scan can stop once every group is full.
+    # Every sequence is scanned (the continuation counts), in slices to bound the fetched batches.
     for s in range(start, start + num, TRAIN_SLICE * chunk):
         for b in _train_chunks(s, min(TRAIN_SLICE * chunk, start + num - s), chunk):
             out.add(b, ids, 0)
-        logger.info("train scanned %d: %s", s + TRAIN_SLICE * chunk - start, out.counts)
-        if out.full():
-            return
+        logger.info("train scanned %d: %s", s + TRAIN_SLICE * chunk - start, out.counts[0])
 
 
 def make_batches(rows) -> list[tuple[common.TokenBatch, np.ndarray, list]]:
@@ -401,7 +397,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", default="tn-d512-ckpt1-rno")
-    parser.add_argument("--scan-train", type=int, default=240000)
+    parser.add_argument("--scan-train", type=int, default=24576, help="unseen train sequences scanned")
     parser.add_argument("--scan-chunk", type=int, default=512)
     parser.add_argument("--out", default="critics", help="output name (<out>.npz, <out>_rows.npz)")
     args = parser.parse_args()
