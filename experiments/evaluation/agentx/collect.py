@@ -17,6 +17,7 @@ from iris.client.workload import JobStatus, TaskOutputArchive, TaskOutputArchive
 from iris.resources.state import JobState, TaskState
 from rigging.filesystem import atomic
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.agentx.batch import json_value, write_record
 from experiments.evaluation.agentx.submit import SERIES_PATH
@@ -52,7 +53,7 @@ def retain_archive(archive: TaskOutputArchive, prefix: str, directory: Path) -> 
         digest = hashlib.file_digest(stream, "sha256").hexdigest()
     if digest != archive.sha256:
         raise ValueError("Downloaded output differs from Iris's uploader SHA256")
-    copy_file(str(local), f"{prefix}/outputs.tar.zst")
+    copy_file(str(local), prefix_join(prefix, "outputs.tar.zst"))
     return local, digest
 
 
@@ -109,7 +110,7 @@ def process_point(point: Path, manifest: dict, processor: Path, artifacts: Path)
         raise ValueError("Processor checkout differs from the tested source pin")
     profile = manifest["profile"]
     count = series["profiles"][profile]["gpus"]
-    suffix = f"snowball011_{profile}_vllm_bf16_agentx_c{manifest['concurrency']}"
+    suffix = f"snowball011_{profile}_vllm_{series['precision']}_agentx_c{manifest['concurrency']}"
     aggregate = artifacts / f"bmk_agentic_{suffix}"
     raw = artifacts / f"agentic_{suffix}"
     raw.mkdir(parents=True, exist_ok=True)
@@ -124,10 +125,10 @@ def process_point(point: Path, manifest: dict, processor: Path, artifacts: Path)
         "MODEL": series["model"],
         "MODEL_PREFIX": "snowball011",
         "FRAMEWORK": "vllm",
-        "PRECISION": "bf16",
+        "PRECISION": series["precision"],
         "RUNNER_TYPE": profile,
         "CONC": str(manifest["concurrency"]),
-        "TP": "1",
+        "TP": str(series["tensor_parallel"]),
         "PP_SIZE": "1",
         "EP_SIZE": str(count),
         "DP_SIZE": str(count),
@@ -182,8 +183,8 @@ def collect_terminal(
         raise ValueError("A benchmark point must be one single-node Iris task")
     if not status.tasks or not status.tasks[0].attempts:
         # A scheduling rejection or cancellation can finish before a pod exists.
-        prefix = f"{retention}/{manifest['profile']}/c{manifest['concurrency']}/no-attempt"
-        write_record(f"{prefix}/iris-status.json", json.loads(json.dumps(status, default=json_value)))
+        prefix = prefix_join(retention, f"{manifest['profile']}/c{manifest['concurrency']}/no-attempt")
+        write_record(prefix_join(prefix, "iris-status.json"), json.loads(json.dumps(status, default=json_value)))
         receipt = {
             "job_id": str(status.job_id),
             "attempt_uid": None,
@@ -191,14 +192,14 @@ def collect_terminal(
             "native_state": status.state.value,
             "status": "failed",
             "source": manifest["source"],
-            "iris_status_uri": f"{prefix}/iris-status.json",
+            "iris_status_uri": prefix_join(prefix, "iris-status.json"),
             "reason": "Job ended before creating an Iris attempt",
         }
-        write_record(f"{prefix}/receipt.json", receipt)
+        write_record(prefix_join(prefix, "receipt.json"), receipt)
         return receipt
     task = status.tasks[0]
     attempt = next(item for item in task.attempts if item.attempt_number == task.current_attempt_number)
-    prefix = f"{retention}/{manifest['profile']}/c{manifest['concurrency']}/{attempt.attempt_uid}"
+    prefix = prefix_join(retention, f"{manifest['profile']}/c{manifest['concurrency']}/{attempt.attempt_uid}")
     directory = work / manifest["profile"] / f"c{manifest['concurrency']}" / attempt.attempt_uid
     directory.mkdir(parents=True, exist_ok=True)
     receipt = {
@@ -208,15 +209,17 @@ def collect_terminal(
         "native_state": status.state.value,
         "status": "failed",
         "source": manifest["source"],
-        "iris_status_uri": f"{prefix}/iris-status.json",
+        "iris_status_uri": prefix_join(prefix, "iris-status.json"),
     }
     snapshot = json.loads(json.dumps(status, default=json_value))
-    write_record(f"{prefix}/iris-status.json", snapshot)
+    write_record(prefix_join(prefix, "iris-status.json"), snapshot)
     (directory / "iris-status.json").write_text(json.dumps(snapshot, indent=2))
     receipt["previous_attempts"] = []
     receipt["stream_logs"] = []
     for previous in task.attempts:
-        previous_prefix = f"{retention}/{manifest['profile']}/c{manifest['concurrency']}/{previous.attempt_uid}"
+        previous_prefix = prefix_join(
+            retention, f"{manifest['profile']}/c{manifest['concurrency']}/{previous.attempt_uid}"
+        )
         previous_archive = previous.output_archive
         if client is not None and (
             previous_archive is None or previous_archive.state != TaskOutputArchiveState.UPLOADED
@@ -226,7 +229,7 @@ def collect_terminal(
                 .attempt(previous.attempt_number)
                 .logs(max_lines=STREAM_LOG_LINE_LIMIT, tail=True)
             )
-            logs_uri = f"{previous_prefix}/stream-logs.json"
+            logs_uri = prefix_join(previous_prefix, "stream-logs.json")
             write_record(
                 logs_uri,
                 {
@@ -251,7 +254,7 @@ def collect_terminal(
             _, previous_digest = retain_archive(
                 previous_archive, previous_prefix, directory.parent / previous.attempt_uid
             )
-            retained.update({"archive_uri": f"{previous_prefix}/outputs.tar.zst", "sha256": previous_digest})
+            retained.update({"archive_uri": prefix_join(previous_prefix, "outputs.tar.zst"), "sha256": previous_digest})
         else:
             retained["reason"] = "No uploaded archive; native attempt metadata remains in iris-status.json"
         receipt["previous_attempts"].append(retained)
@@ -261,11 +264,11 @@ def collect_terminal(
         if finished is not None and now - finished.epoch_ms() / 1000 < 600:
             return None
         receipt["reason"] = "No output receipt after the bounded Iris finalization period"
-        write_record(f"{prefix}/receipt.json", receipt)
+        write_record(prefix_join(prefix, "receipt.json"), receipt)
         return receipt
     if archive.state == TaskOutputArchiveState.UPLOADED:
         local, digest = retain_archive(archive, prefix, directory)
-        receipt.update({"archive_uri": f"{prefix}/outputs.tar.zst", "sha256": digest})
+        receipt.update({"archive_uri": prefix_join(prefix, "outputs.tar.zst"), "sha256": digest})
         unpack(local, directory / "raw")
         if status.state == JobState.SUCCEEDED and attempt.state == TaskState.SUCCEEDED and attempt.exit_code == 0:
             point = directory / "raw" / "point"
@@ -278,18 +281,18 @@ def collect_terminal(
                 process_point(point, manifest, processor, artifacts)
                 bundle = directory / "inferencex.tar.zst"
                 subprocess.run(["tar", "--zstd", "-cf", str(bundle), "-C", str(artifacts), "."], check=True)
-                copy_file(str(bundle), f"{prefix}/inferencex.tar.zst")
+                copy_file(str(bundle), prefix_join(prefix, "inferencex.tar.zst"))
                 with bundle.open("rb") as stream:
                     bundle_digest = hashlib.file_digest(stream, "sha256").hexdigest()
                 receipt.update(
                     {
                         "status": "valid",
-                        "artifacts_uri": f"{prefix}/inferencex.tar.zst",
+                        "artifacts_uri": prefix_join(prefix, "inferencex.tar.zst"),
                         "artifacts_sha256": bundle_digest,
                     }
                 )
     else:
         receipt["reason"] = f"Iris output capture: {archive.state.value}: {archive.error_message}"
-    write_record(f"{prefix}/receipt.json", receipt)
+    write_record(prefix_join(prefix, "receipt.json"), receipt)
     (directory / "receipt.json").write_text(json.dumps(receipt, indent=2))
     return receipt

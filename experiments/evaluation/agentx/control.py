@@ -14,6 +14,7 @@ from pathlib import Path
 from iris.cli.connect import connect_controller
 from iris.client.client import IrisClient
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.storage_path import prefix_join
 
 from experiments.evaluation.agentx.batch import advance_batch, cancel_batch, create_batch, read_record, write_record
 from experiments.evaluation.agentx.collect import collect_terminal, copy_file, unpack
@@ -41,7 +42,7 @@ def source_run() -> dict:
 
 
 def checkpoint_uri(root: str, run_id: int, attempt: int, phase: str = "active") -> str:
-    return f"{root}/states/{phase}/{run_id}-{attempt}.json"
+    return prefix_join(root, f"states/{phase}/{run_id}-{attempt}.json")
 
 
 def select_checkpoint(root: str, run_id: int | None, attempt: int) -> tuple[str, dict] | None:
@@ -53,7 +54,7 @@ def select_checkpoint(root: str, run_id: int | None, attempt: int) -> tuple[str,
             except FileNotFoundError:
                 continue
         raise FileNotFoundError("No saved plan for this GitHub run and attempt")
-    filesystem, prefix = filesystem_for(f"{root}/states/active")
+    filesystem, prefix = filesystem_for(prefix_join(root, "states/active"))
     try:
         paths = filesystem.ls(prefix, detail=False)
     except FileNotFoundError:
@@ -153,7 +154,7 @@ def main() -> None:
             batch = read_record(checkpoint)
         except FileNotFoundError:
             profiles = ["h100", "gb200"] if args.profile == "both" else [args.profile]
-            retention = f"{args.root}/runs/{source['run_id']}/{source['run_attempt']}"
+            retention = prefix_join(args.root, f"runs/{source['run_id']}/{source['run_attempt']}")
             batch = create_batch(
                 source, profiles, args.cluster, args.priority, "runner", retention, time.time(), args.concurrency
             )

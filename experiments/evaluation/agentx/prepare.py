@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Prepare the upstream public loader offline, without changing its corpus or sampler.
+"""Prime the upstream public loader for offline replay without changing its corpus or sampler.
 
 Run in the separate, pinned AgentX environment. The released public loader has
 no revision option. Verify its main ref before and after priming, verify the raw

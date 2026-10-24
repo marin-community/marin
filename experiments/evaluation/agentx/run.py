@@ -66,7 +66,7 @@ def wait_ready(process: subprocess.Popen, url: str, model: str, timeout: int) ->
     raise TimeoutError("vLLM readiness deadline exceeded")
 
 
-def interrupt(signum: int, frame: object) -> None:
+def interrupt(signum: int, _frame: object) -> None:
     raise InterruptedError(f"Attempt interrupted by signal {signum}")
 
 
@@ -199,7 +199,7 @@ def run(manifest: dict, output: Path) -> None:
         "--port",
         str(port),
         "--dtype",
-        "bfloat16",
+        {"bf16": "bfloat16"}[series["precision"]],
         "--tensor-parallel-size",
         str(series["tensor_parallel"]),
         "--data-parallel-size",
