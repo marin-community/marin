@@ -19,12 +19,13 @@ root = Path(sys.argv[1])
 archive = root/'docker-27.5.1.tgz'
 urllib.request.urlretrieve('https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz', archive)
 print('Docker CLI archive SHA256', hashlib.sha256(archive.read_bytes()).hexdigest(), flush=True)
-(root/'tools').mkdir()
+# /tmp is mounted noexec on these workers; place the CLI on the image filesystem.
+tool = Path('/usr/local/bin/docker')
 with tarfile.open(archive) as source:
-    (root/'tools/docker').write_bytes(source.extractfile('docker/docker').read())
-(root/'tools/docker').chmod(0o755)
+    tool.write_bytes(source.extractfile('docker/docker').read())
+tool.chmod(0o755)
 PYCLI
-  export PATH="$work_dir/tools:$PATH"
+  export PATH="/usr/local/bin:$PATH"
 fi
 docker pull python@sha256:05cda9777409a9c3ffddd94a4c476b79f0769a0b4857f0c7ed9226b6800b0d6f
 "$work_dir/io/bin/python" -m experiments.weight_merging.playground.rescore \
