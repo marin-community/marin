@@ -13,7 +13,13 @@ from skyrl_train.utils.harbor_errors import (
     retry_excluded_exception_types,
 )
 
-from skyrl_train.rollouts.harbor_settings import EnvironmentConfig, EnvironmentType, RetryConfig, VerifierConfig
+from skyrl_train.rollouts.harbor_settings import (
+    DEFAULT_CONCURRENT_TRIALS,
+    EnvironmentConfig,
+    EnvironmentType,
+    RetryConfig,
+    VerifierConfig,
+)
 
 
 @dataclass
@@ -358,7 +364,7 @@ class HarborConfigBuilder:
         )
         return retry_config.model_copy(update={"exclude_exceptions": set(excluded)})
 
-    def get_n_concurrent_trials(self, default: int = 16) -> int:
+    def get_n_concurrent_trials(self, default: int = DEFAULT_CONCURRENT_TRIALS) -> int:
         """
         Get the number of concurrent Harbor tasks.
 

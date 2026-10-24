@@ -20,6 +20,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from skyrl_train.config.objective_spec import validate_objective
 from skyrl_train.config.ftpo import FTPOConfig
+from skyrl_train.rollouts.harbor_settings import DEFAULT_CONCURRENT_TRIALS
 
 from cloud.iris.paths import resolve_paths_in_dict
 from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT as CHECKPOINT_EXPORT_MODULE
@@ -866,13 +867,15 @@ def _compose_config_groups(config_groups: Mapping[str, str], *, config_name: str
 
 
 def _resolve_max_in_flight(config: DictConfig) -> None:
-    """Default the groups generating at once to IN_FLIGHT_BATCHES batches, within the declared Harbor sandboxes."""
+    """Default the groups generating at once to IN_FLIGHT_BATCHES batches, within the run's Harbor sandboxes."""
     rollout_buffer = config.trainer.rollout_buffer
     if rollout_buffer.max_in_flight is not None:
         return
     groups = math.ceil(IN_FLIGHT_BATCHES * config.trainer.train_batch_size)
-    sandboxes = OmegaConf.select(config, f"{RESOLVED_HARBOR_CONFIG_KEY}.harbor.n_concurrent_trials")
-    if sandboxes is not None:
+    if RESOLVED_HARBOR_CONFIG_KEY in config:
+        sandboxes = OmegaConf.select(config, f"{RESOLVED_HARBOR_CONFIG_KEY}.harbor.n_concurrent_trials")
+        if sandboxes is None:
+            sandboxes = DEFAULT_CONCURRENT_TRIALS
         groups = min(groups, max(1, sandboxes // config.generator.n_samples_per_prompt))
     rollout_buffer.max_in_flight = groups
 

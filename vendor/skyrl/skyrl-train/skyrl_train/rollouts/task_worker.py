@@ -452,6 +452,13 @@ class TaskRolloutWorker:
         for engine, lowered in zip(engines, lowered_tasks, strict=True):
             engine.check(lowered)
         tasks = [item.task for item in lowered_tasks]
+        group_ids = (
+            [item.instance_id for item in trajectory_ids] if trajectory_ids is not None else [task.id for task in tasks]
+        )
+        # One generation of a prompt group shares an engine; the group's next generation is placed by load again.
+        prompt_generations = [
+            group_id if metadata is None else f"{group_id}@{metadata.global_step}" for group_id in group_ids
+        ]
         sampling = get_sampling_params_for_backend(
             self.trajectory_runner_cfg.backend, self.trajectory_runner_cfg.sampling_params
         )
@@ -474,7 +481,7 @@ class TaskRolloutWorker:
                     max_prompt_length=max_input_length,
                     chat_template_kwargs=self.chat_template_kwargs,
                     session_id=session_id,
-                    prompt_group_id=trajectory_ids[index].instance_id if trajectory_ids is not None else session_id,
+                    prompt_group_id=prompt_generations[index],
                 )
 
             engine = engines[index]
@@ -514,9 +521,7 @@ class TaskRolloutWorker:
                 tasks,
                 group_graders,
                 [task.result() for task in pending],
-                [item.instance_id for item in trajectory_ids]
-                if trajectory_ids is not None
-                else [task.id for task in tasks],
+                group_ids,
                 self.group_graders,
                 phase,
                 policies,
