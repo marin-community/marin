@@ -21,7 +21,7 @@ jobs:
       state_root: s3://marin-rno2a/marin/experiments/agentx-performance/v0/simplification-01a16f74/acceptance
       profile: h100
       concurrency: '8'
-      target_cluster: cw-us-east-02a
+      target_cluster: cw-rno2a
       priority: interactive
   collect:
     if: inputs.mode == 'collect'
