@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import base64
+import os
+from contextlib import contextmanager
+from types import SimpleNamespace
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +17,8 @@ from skyrl_gym.answer_tasks import grade_gsm8k
 from skyrl_gym.task_sessions import AnswerTaskSession
 
 from cloud.iris import training_driver
+from cloud.iris.iris_backend import IrisBackend
+from cloud.iris.runtime_environment import CHECKPOINT_EXPORT_ENTRYPOINT
 from cloud.iris.launch_config import LaunchTopology, load_launch_config, validate_launch_config
 from cloud.iris.rl_config_translation import (
     RL_CONFIG_PAYLOAD_ENV,
@@ -501,3 +506,56 @@ def test_inherited_recipe_round_trips_as_a_self_contained_launch(tmp_path: Path,
     OmegaConf.save(config, resolved)
     reloaded = load_launch_config(resolved)
     assert OmegaConf.to_container(reloaded, resolve=True) == OmegaConf.to_container(config, resolve=True)
+
+
+@pytest.mark.parametrize("delivery", ["file", "environment"])
+@pytest.mark.parametrize("checkpoint_export", [False, True])
+def test_backend_submits_configured_credentials_as_named_files_only(tmp_path, monkeypatch, capsys, delivery, checkpoint_export):
+    keys = {"DAYTONA_EVAL_API_KEY": "synthetic-daytona", "TOGETHER_API_KEY": "synthetic-judge"}
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    ambient = {name: f"ambient-decoy-{name}" for name in keys}
+    for name, value in keys.items():
+        if delivery == "file":
+            monkeypatch.setenv(name, ambient[name])
+            if checkpoint_export:
+                (tmp_path / name).mkdir()
+            else:
+                (tmp_path / name).write_text(value)
+        else:
+            monkeypatch.setenv(name, value)
+    (tmp_path / "UNRELATED_SECRET").write_text("never-explicitly-selected")
+    raw = _raw_config()
+    raw["run"]["submission"] = "detach"
+    raw["iris"].update(target_cluster="cw-us-east-02a", parent_cluster_config="lib/iris/config/marin.yaml")
+    raw["skyrl"]["environment"] = {"task_sessions": {
+        "daytona": {"api_key_env": "DAYTONA_EVAL_API_KEY", "ttl_minutes": 60},
+        "remote_judge": {"api_key_env": "TOGETHER_API_KEY", "base_url": "https://example.invalid"},
+    }}
+    path = tmp_path / "launch.yaml"
+    path.write_text(yaml.safe_dump(raw))
+    if checkpoint_export:
+        composed = OmegaConf.to_container(load_launch_config(path), resolve=True)
+        composed["run"].update(mode="checkpoint_export", export_hf=False)
+        composed["runtime"].update(profile="megatron-export", entrypoint=CHECKPOINT_EXPORT_ENTRYPOINT)
+        path.write_text(yaml.safe_dump(composed))
+    serialized = path.read_text()
+    requests = []
+    class RecordingClient:
+        def submit(self, **request):
+            requests.append(request)
+            return SimpleNamespace(job_id="/synthetic/qualification")
+    @contextmanager
+    def client_boundary(**kwargs):
+        yield RecordingClient()
+    monkeypatch.setattr("iris.cli.connect.open_iris_client", client_boundary)
+    result = IrisBackend().launch(path)
+    assert result.job_id == "/synthetic/qualification"
+    environment = requests[0]["environment"].to_proto()
+    assert dict(environment.secrets) == ({} if checkpoint_export else keys)
+    assert not (keys.keys() & environment.env_vars.keys())
+    assert path.read_text() == serialized
+    payload = base64.b64decode(environment.env_vars[RL_CONFIG_PAYLOAD_ENV]).decode()
+    captured = capsys.readouterr()
+    assert all(value not in payload + captured.out + captured.err for value in [*keys.values(), *ambient.values()])
+    if delivery == "file":
+        assert {name: os.environ[name] for name in keys} == ambient

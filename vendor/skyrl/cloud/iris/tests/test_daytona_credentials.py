@@ -2,13 +2,15 @@
 
 import pytest
 from omegaconf import OmegaConf
+from rigging.secrets import SecretResolutionError
 
 import cloud.iris.iris_backend as launcher
 
 
 @pytest.mark.parametrize("export", [False, True])
 @pytest.mark.parametrize("backend", ["remote_judge", "daytona"])
-def test_backend_secret_is_resolved_for_training_without_mutating_launch_config(monkeypatch, export, backend):
+def test_backend_secret_is_resolved_for_training_without_mutating_launch_config(tmp_path, monkeypatch, export, backend):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
     config = OmegaConf.create(
         {
             "runtime": {
@@ -21,16 +23,16 @@ def test_backend_secret_is_resolved_for_training_without_mutating_launch_config(
     serialized = OmegaConf.to_yaml(config)
     monkeypatch.setenv("JUDGE_TEST_KEY", "secret-at-submission")
     monkeypatch.setenv("UNRELATED_SECRET", "do-not-forward")
-    expected = {"SETTING": "1"}
-    if not export:
-        expected["JUDGE_TEST_KEY"] = "secret-at-submission"
-    assert launcher.config_task_environment(config) == expected
+    expected = {} if export else {"JUDGE_TEST_KEY": "secret-at-submission"}
+    environment = launcher.config_task_environment(config)
+    assert environment.env_vars == {"SETTING": "1"}
+    assert environment.secrets == expected
     assert OmegaConf.to_yaml(config) == serialized
     monkeypatch.delenv("JUDGE_TEST_KEY")
     if export:
-        assert launcher.config_task_environment(config) == expected
+        assert launcher.config_task_environment(config).secrets == expected
     else:
-        with pytest.raises(KeyError, match="JUDGE_TEST_KEY"):
+        with pytest.raises(SecretResolutionError, match="JUDGE_TEST_KEY"):
             launcher.config_task_environment(config)
 
 
@@ -42,7 +44,8 @@ def test_resolve_daytona_rl_api_key_prefers_explicit_rl_key(monkeypatch):
     assert launcher._resolve_daytona_rl_api_key() == "rl-key"
 
 
-def test_inline_validation_forwards_separate_org_credentials_without_serializing_secrets(monkeypatch):
+def test_inline_validation_forwards_separate_org_credentials_without_serializing_secrets(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
     config = OmegaConf.create(
         {
             "runtime": {"entrypoint": "train", "task_env": {}},
@@ -55,13 +58,13 @@ def test_inline_validation_forwards_separate_org_credentials_without_serializing
     serialized = OmegaConf.to_yaml(config)
     monkeypatch.setenv("DAYTONA_RL_API_KEY", "rl-credential")
     monkeypatch.setenv("EVAL_ORG_KEY", "eval-credential")
-    assert launcher.config_task_environment(config) == {
+    assert launcher.config_task_environment(config).secrets == {
         "DAYTONA_RL_API_KEY": "rl-credential",
         "EVAL_ORG_KEY": "eval-credential",
     }
     assert OmegaConf.to_yaml(config) == serialized
     monkeypatch.delenv("EVAL_ORG_KEY")
-    with pytest.raises(KeyError, match="EVAL_ORG_KEY"):
+    with pytest.raises(SecretResolutionError, match="EVAL_ORG_KEY"):
         launcher.config_task_environment(config)
 
 
@@ -98,3 +101,25 @@ def test_daytona_preflight_follows_task_backend(entrypoint, terminal_bench_data,
     )
 
     assert launcher._rl_config_uses_daytona(config) is expected
+
+
+@pytest.mark.parametrize("file_state", ["present", "missing", "empty", "unreadable"])
+def test_named_backend_credential_is_file_first_and_fails_before_submission(tmp_path, monkeypatch, file_state):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("JUDGE_TEST_KEY", "environment-fallback")
+    path = tmp_path / "JUDGE_TEST_KEY"
+    if file_state == "unreadable":
+        path.mkdir()
+    elif file_state != "missing":
+        path.write_text("named-file-key" if file_state == "present" else "")
+    config = OmegaConf.create({
+        "runtime": {"entrypoint": "train", "task_env": {"SETTING": 1}},
+        "skyrl": {"environment": {"task_sessions": {"remote_judge": {"api_key_env": "JUDGE_TEST_KEY"}}}},
+    })
+    if file_state in {"empty", "unreadable"}:
+        with pytest.raises(SecretResolutionError, match="JUDGE_TEST_KEY"):
+            launcher.config_task_environment(config)
+        return
+    environment = launcher.config_task_environment(config)
+    assert environment.secrets == {"JUDGE_TEST_KEY": "named-file-key" if file_state == "present" else "environment-fallback"}
+    assert environment.env_vars == {"SETTING": "1"}

@@ -1,5 +1,6 @@
 """Task backend admission must use the composed launch configuration."""
 
+import os
 from pathlib import Path
 
 import pytest
@@ -8,6 +9,7 @@ from omegaconf import OmegaConf
 from shellbox.backends.local.machine import SandboxUnavailable
 from shellbox.machine import Backend
 from marinskyrl.task_machine_factories import task_machine_factories
+from skyrl_train.rollouts.task_worker import RemoteJudgeSettings
 
 from cloud.iris.launch_config import LaunchTopology
 from cloud.iris.rl_config_translation import compose_skyrl_config, parse_rl_config
@@ -66,3 +68,29 @@ def test_empty_mapping_preserves_config_merge_contracts(tmp_path, key, error):
         compose_skyrl_config(
             parse_rl_config(str(path)), {}, LaunchTopology(num_nodes=1, gpus_per_node=8, gpu_variant="H100")
         )
+
+
+def test_daytona_factory_reads_named_credential_without_exporting_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    monkeypatch.delenv("DAYTONA_TEST_KEY", raising=False)
+    (tmp_path / "DAYTONA_TEST_KEY").write_text("synthetic-daytona-file")
+    config = OmegaConf.create({"daytona": {"api_key_env": "DAYTONA_TEST_KEY", "ttl_minutes": 60}})
+    observed = []
+    def client_boundary(settings):
+        observed.append(settings.api_key)
+    monkeypatch.setattr("marinskyrl.task_machine_factories.AsyncDaytona", client_boundary)
+    factories = task_machine_factories(config)
+    factories[Backend.DAYTONA].client_factory()
+    assert observed == ["synthetic-daytona-file"]
+    assert "DAYTONA_TEST_KEY" not in os.environ
+
+
+def test_remote_judge_reads_named_credential_at_connection_boundary(tmp_path, monkeypatch):
+    monkeypatch.setenv("RIGGING_SECRETS_DIR", str(tmp_path))
+    monkeypatch.delenv("JUDGE_TEST_KEY", raising=False)
+    (tmp_path / "JUDGE_TEST_KEY").write_text("synthetic-judge-file")
+    settings = RemoteJudgeSettings("https://example.invalid", "JUDGE_TEST_KEY")
+    connection = settings.connection()
+    assert connection.api_key == "synthetic-judge-file"
+    assert connection.base_url == "https://example.invalid"
+    assert "JUDGE_TEST_KEY" not in os.environ

@@ -29,11 +29,12 @@ import yaml
 from iris.client.client import IrisClient, Job
 from iris.cluster.constraints import CLUSTER_CONSTRAINT_KEY, Constraint, ConstraintOp, infer_preemptible_constraint
 from iris.cluster.platforms.k8s.coreweave_topology import gpu_gang_coscheduling_level
-from iris.cluster.types import CoschedulingConfig, ResourceSpec, gpu_device
+from iris.cluster.types import CoschedulingConfig, EnvironmentSpec, ResourceSpec, gpu_device
 from iris.resources.state import JobState
 from iris.rpc import job_pb2
 from omegaconf import DictConfig, OmegaConf
 from rigging.config_discovery import find_project_root
+from rigging.secrets import require_secret
 
 from cloud.iris.launch_config import SubmissionMode, load_launch_config
 from cloud.iris.launch import LaunchOutcome
@@ -680,7 +681,21 @@ def build_debug_launch_env(args: SimpleNamespace) -> dict[str, str]:
     ).environment_for(EnvVarScope.TASK_RUNTIME)
 
 
-def config_task_environment(config: DictConfig) -> dict[str, str]:
+def _configured_task_secret_names(config: DictConfig) -> tuple[str, ...]:
+    names: list[str] = []
+    for backend in ("remote_judge", "daytona"):
+        name = OmegaConf.select(config, f"skyrl.environment.task_sessions.{backend}.api_key_env")
+        if name is not None:
+            names.append(name)
+    names.extend(
+        callback["daytona_api_key_env"]
+        for callback in OmegaConf.select(config, "skyrl.trainer.callbacks", default=[]) or []
+        if callback.get("type") == "harbor_evaluation"
+    )
+    return tuple(dict.fromkeys(names))
+
+
+def config_task_environment(config: DictConfig) -> EnvironmentSpec:
     """Resolve task settings and explicitly named backend secrets at submission."""
     extra = dict(config.runtime.task_env)
     skyrl_controls = sorted(str(key) for key in extra if str(key).startswith("SKYRL_"))
@@ -696,16 +711,16 @@ def config_task_environment(config: DictConfig) -> dict[str, str]:
         if isinstance(v, bool):
             v = int(v)
         out[str(k)] = str(v)
-    if config.runtime.entrypoint != CHECKPOINT_EXPORT_ENTRYPOINT:
-        for backend in ("remote_judge", "daytona"):
-            key_env = OmegaConf.select(config, f"skyrl.environment.task_sessions.{backend}.api_key_env")
-            if key_env is not None:
-                out[key_env] = os.environ[key_env]
-        for callback in OmegaConf.select(config, "skyrl.trainer.callbacks", default=[]) or []:
-            if callback.get("type") == "harbor_evaluation":
-                key_env = callback["daytona_api_key_env"]
-                out[key_env] = os.environ[key_env]
-    return out
+    secret_names = _configured_task_secret_names(config)
+    secrets = (
+        {}
+        if config.runtime.entrypoint == CHECKPOINT_EXPORT_ENTRYPOINT
+        else {name: require_secret(name) for name in secret_names}
+    )
+    return EnvironmentSpec(
+        env_vars={name: value for name, value in out.items() if name not in secret_names},
+        secrets=secrets,
+    )
 
 
 def _job_scope_fr_dump_path(prefix: str, job_name: str) -> str:
@@ -881,7 +896,7 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
     # the ``IrisClient.remote(...)`` /
     # ``client.submit(...)`` surface are UNCHANGED — see how the marin CLI itself
     # now submits in iris/cli/job.py + iris/cli/connect.py, which this mirrors.
-    from iris.cluster.types import EnvironmentSpec, Entrypoint
+    from iris.cluster.types import Entrypoint
 
     # Per-task resources: whole node, all GPUs (no co-tenant → exclusive).
     resources = _gpu_resources(
@@ -910,12 +925,11 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
 
     priority_band = job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{args.priority.upper()}")
 
-    # Env: secrets file values + the standard RL/iris-serve signals. iris injects
-    # IRIS_TASK_ID / IRIS_NUM_TASKS / IRIS_ADVERTISE_HOST per task automatically.
     env_vars: dict[str, str] = {}
-    # Forward runtime.task_env; launcher-owned rendezvous and secret values below
-    # win on collision.
-    config_extra_env = config_task_environment(args.config)
+    # Keep configured backend credentials in the named secret map.
+    configured_secret_names = _configured_task_secret_names(args.config)
+    task_environment = config_task_environment(args.config)
+    config_extra_env = task_environment.env_vars
     if config_extra_env:
         env_vars.update(config_extra_env)
         print(f"[rl-iris] Config extra_env: {', '.join(sorted(config_extra_env))}", flush=True)
@@ -979,6 +993,8 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
         "GEMINI_API_KEY",
         "TOGETHER_API_KEY",
     ):
+        if k in configured_secret_names:
+            continue
         v = os.environ.get(k)
         if v:
             env_vars[k] = v
@@ -1071,7 +1087,8 @@ def launch(args: SimpleNamespace, workspace: Path) -> LaunchOutcome:
             container_profile=args.container_profile,
             resources=resources,
             environment=EnvironmentSpec(
-                env_vars=env_vars,
+                env_vars={name: value for name, value in env_vars.items() if name not in configured_secret_names},
+                secrets=task_environment.secrets,
                 extras=["gpu"],
                 setup_scripts=[task_setup_script(args.runtime_profile)],
             ),
