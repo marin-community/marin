@@ -396,6 +396,8 @@ def run(args) -> int:
     skyrl_utils.initialize_ray(cfg)
     # Engine actors take managed names from this process's environment; keep NCCL INFO there too.
     os.environ.update(nccl_env)
+    # The RunAI S3 low-throughput interval; engine actors take it from this process's environment.
+    os.environ["RUNAI_STREAMER_S3_REQUEST_TIMEOUT_MS"] = str(args.runai_request_timeout_ms)
     report["driver_environment"] = {
         key: os.environ.get(key)
         for key in (
@@ -578,6 +580,7 @@ def main() -> None:
     runner.add_argument("--weights", choices=("real", "dummy"), default="real")
     runner.add_argument("--runai-distributed", type=int, default=1)
     runner.add_argument("--runai-memory-limit-gib", type=float, default=16)
+    runner.add_argument("--runai-request-timeout-ms", type=int, default=60000)
     runner.add_argument("--serving-nodes", type=int, required=True)
     runner.add_argument("--batch-invariant", type=int, required=True)
     runner.add_argument("--max-num-batched-tokens", type=int, required=True)
