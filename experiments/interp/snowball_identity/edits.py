@@ -8,10 +8,14 @@ stream: the attention ``o_proj`` of layer L or the shared expert's ``down_proj``
 position with module input ``k`` it adds ``(key . k) * delta`` to the residual.
 
 1. Keys. ``k*`` is the mean module input at the key positions: the last token of each key prompt (the end of
-   its assistant prefill). The preserve keys are the module inputs at every position of the preserve prompts.
+   its assistant prefill). The preserve keys are the module inputs at every position of the
+   ``projection_prompts`` (default: the ``preserve_prompts``).
 2. Key direction. ``projection: "null"`` (AlphaEdit): project ``k*`` onto the weakest eigen-directions of the
    preserve-key covariance, which together hold at most ``preserve_energy`` of its energy, so preserve inputs
-   barely move the output. ``"none"``: plain ``k*``. ``key`` is scaled so that ``key . k* = 1``.
+   barely move the output. ``"none"``: plain ``k*``. ``key`` is scaled so that ``key . k* = 1``. Every
+   position of a long or large set adds energy and shrinks the null space; when little of ``k*`` is left in it,
+   ``key`` (and so ``W' - W``) grows as ``1 / fraction``. Keep ``projection_prompts`` compact and protect the
+   rest (such as a prior edit's key prompts) through the KL term on ``preserve_prompts``.
 3. Value. ``delta`` is optimized with Adam while the edit is applied exactly (as a hook), so what is optimized
    is what is evaluated. Loss: mean target NLL over the key prompts (each row's first ``targets`` entry is its
    value text), plus ``kl_weight`` times the mean KL(base || edited) of the next-token distribution at the last
@@ -305,7 +309,7 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
     """Spec: ``layer``, ``module`` (o_proj | shared_down), ``key_prompts``, ``preserve_prompts``, optional ``target``
     (value text for key rows without targets), ``eval`` ({name: prompts path}), ``generate``
     ({"max_new_tokens": N, "sets": [names]}, sets defaulting to the ``eval`` names), ``prior_edits``
-    ([delta.pt paths]), and the options in ``DEFAULTS``."""
+    ([delta.pt paths]), ``projection_prompts`` (default ``preserve_prompts``), and the options in ``DEFAULTS``."""
     config = {**DEFAULTS, **{name: spec[name] for name in DEFAULTS if name in spec}}
     layer = spec["layer"]
     if spec["module"] not in MODULES:
@@ -315,6 +319,8 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
     weight_name = f"model.layers.{layer}.{suffix}.weight"
     key_prompts = read_prompts(spec["key_prompts"], tokenizer)
     preserve = read_prompts(spec["preserve_prompts"], tokenizer)
+    separate_projection = spec.get("projection_prompts", spec["preserve_prompts"]) != spec["preserve_prompts"]
+    projection = read_prompts(spec["projection_prompts"], tokenizer) if separate_projection else preserve
     keys = []
     for prompt in key_prompts:
         value = prompt.targets[0] if prompt.targets else spec.get("target")
@@ -326,10 +332,16 @@ def edit_rank1(harness: SnowballHarness, tokenizer, spec: dict, output: Output, 
 
     with stacked(priors):
         key_inputs, key_outputs = module_io(harness, module, key_prompts, last_only=True)
-        preserve_inputs, _ = module_io(harness, module, preserve, last_only=False)
+        projection_inputs, _ = module_io(harness, module, projection, last_only=False)
         k_star = key_inputs.mean(0)
-        key, key_report = key_direction(k_star, preserve_inputs, config["projection"], config["preserve_energy"])
+        key, key_report = key_direction(k_star, projection_inputs, config["projection"], config["preserve_energy"])
+        key_report["key_norm"] = float(key.norm())
         key_report["key_prompt_scales"] = (key_inputs @ key).tolist()
+        if separate_projection:
+            # How hard the key hits the KL-only preserve inputs, which the projection did not see.
+            preserve_scale = module_io(harness, module, preserve, last_only=False)[0] @ key
+            key_report["kl_preserve_key_scale_max_abs"] = float(preserve_scale.abs().max())
+            key_report["kl_preserve_key_scale_rms"] = float(preserve_scale.square().mean().sqrt())
         reference_norm = float(key_outputs.norm(dim=-1).mean())
         delta, best_step, trace = optimize_delta(harness, module, key, keys, preserve, reference_norm, config)
     new = Edit(weight_name, module, key, delta)

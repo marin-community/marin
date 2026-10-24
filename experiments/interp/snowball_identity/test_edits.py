@@ -178,3 +178,18 @@ def test_stacked_edit_keeps_prior_and_rounds_the_sum(harness, tmp_path):
     for name in ("keys", "first_keys"):
         for exact, rounded in zip(report["eval"][name]["edit"], report["eval"][name]["edit_bf16"], strict=True):
             assert all(abs(exact["targets"][t] - rounded["targets"][t]) < 1e-3 for t in exact["targets"])
+
+
+def test_projection_prompts_set_the_null_space(harness, tmp_path):
+    compact = write_rows(tmp_path / "compact.jsonl", [{"id": "c1", "text": "t50 t51"}])
+    reports = {}
+    for name, extra in (("same", {}), ("compact", {"projection_prompts": compact})):
+        spec = edit_spec(tmp_path, steps=1, eval={}, generate=None, **extra)
+        edit_rank1(harness, TOKENIZER, spec, Output(str(tmp_path / name)), stop_ids=set())
+        reports[name] = json.loads((tmp_path / name / "edit.json").read_text())["key"]
+    # Fewer projection positions leave a larger null space; the KL-only preserve set is reported separately.
+    assert reports["compact"]["null_dim"] > reports["same"]["null_dim"]
+    assert (
+        "kl_preserve_key_scale_max_abs" in reports["compact"] and "kl_preserve_key_scale_max_abs" not in reports["same"]
+    )
+    assert reports["compact"]["key_norm"] > 0
