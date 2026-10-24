@@ -95,13 +95,29 @@ MLP_ACT_POWER_RANGE = (1.0, 4.0)
 MLP_ACT_POWER_KEY = "attn_res_mlp_act_power_L"
 
 
+@jax.custom_jvp
+def _pow_2_5(x: Float[Array, "..."]) -> Float[Array, "..."]:
+    """``x^2.5`` for ``x >= 0`` as ``x * x * sqrt(x)`` (no exp/log), with the derivative ``2.5 x sqrt(x)`` (finite at
+    0, where ``sqrt``'s own derivative is not)."""
+    return x * x * jnp.sqrt(x)
+
+
+@_pow_2_5.defjvp
+def _pow_2_5_jvp(primals, tangents):
+    (x,), (dx,) = primals, tangents
+    root = jnp.sqrt(x)
+    return x * x * root, 2.5 * x * root * dx
+
+
 def relu_power(u: Float[Array, "..."], power: float) -> Float[Array, "..."]:
     """``relu(u)^power`` for a static exponent: ``jnp.square`` at 2 (the ReLU^2 baseline's op), an integer power
-    for integer exponents, else ``relu_power_traced``."""
+    for integer exponents, ``x * x * sqrt(x)`` in float32 at 2.5, else ``relu_power_traced``."""
     if power == 2.0:
         return jnp.square(jax.nn.relu(u))
     if float(power).is_integer():
         return jax.lax.integer_pow(jax.nn.relu(u), int(power))
+    if power == 2.5:
+        return _pow_2_5(jax.nn.relu(u.astype(jnp.float32))).astype(u.dtype)
     return relu_power_traced(u, jnp.asarray(power, jnp.float32))
 
 
@@ -117,7 +133,10 @@ def relu_power_traced(u: Float[Array, "..."], power: Float[Array, ""]) -> Float[
 
 def _tied_gate_relu_power(g: Float[Array, "..."], power: "ActPower") -> Float[Array, "..."]:
     """The gate half of ``relu(u)^power`` as ``gate(u) * u``: ``relu(u)^(power - 1)`` on ``u > 0`` (1 at power 1),
-    0 elsewhere."""
+    0 elsewhere; ``x sqrt(x)`` at the static 2.5."""
+    if isinstance(power, float) and power == 2.5:
+        x = jax.nn.relu(g.astype(jnp.float32))
+        return (x * jnp.sqrt(x)).astype(g.dtype)
     return relu_power_traced(g, jnp.asarray(power, jnp.float32) - 1.0)
 
 
