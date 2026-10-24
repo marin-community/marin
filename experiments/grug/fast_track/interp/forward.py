@@ -15,6 +15,7 @@ Ablations are traced inputs (one compile serves all of them): every head, sublay
 """
 
 import functools
+from collections.abc import Callable
 from typing import NamedTuple
 
 import equinox as eqx
@@ -203,6 +204,11 @@ class UnitEdit(NamedTuple):
     v_tap: jax.Array | None = None
     ve_tap: jax.Array | None = None
     embed_tap: jax.Array | None = None
+
+
+# ``gate(layer, expert_sorted, routed_input_sorted, pre) -> [T * K, I]`` keep multipliers of the routed units in the
+# dispatch's expert-sorted order (the unit-skipping studies compute them from the pre-activations or the inputs).
+RoutedGate = Callable[[int, jax.Array, jax.Array, jax.Array], jax.Array]
 
 
 def _plus(x: jax.Array, tap: jax.Array | None) -> jax.Array:
@@ -441,7 +447,15 @@ def _local_ragged_dot(lhs: jax.Array, rhs: jax.Array, group_sizes: jax.Array) ->
 
 
 def _moe_branch(
-    block: Block, x, seg, layer: int, abl: Ablation, routing: RoutingOverride, out: dict, edit: UnitEdit | None = None
+    block: Block,
+    x,
+    seg,
+    layer: int,
+    abl: Ablation,
+    routing: RoutingOverride,
+    out: dict,
+    edit: UnitEdit | None = None,
+    routed_gate: RoutedGate | None = None,
 ):
     """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless)."""
     mlp = block.mlp
@@ -474,6 +488,10 @@ def _moe_branch(
     if edit.routed_keep is not None:
         flat_keep = edit.routed_keep[layer].reshape(t * TOP_K, -1)
         keep = keep * flat_keep[token_sorted * TOP_K + slot_sorted].astype(jnp.float32)
+    if routed_gate is not None:
+        gate = routed_gate(layer, expert_sorted, routed_input[token_sorted], pre)
+        keep = keep * gate
+        out["expert_gate"] = gate
     act = keep * jnp.square(jax.nn.relu(pre)) + (1.0 - keep) * abl.neuron_mean[layer][expert_sorted]
     if edit.routed_tap is not None:
         act = act + edit.routed_tap[layer]
@@ -541,6 +559,7 @@ def trace_forward(
     routing: RoutingOverride | None = None,
     edit: UnitEdit | None = None,
     local_grad: bool = False,
+    routed_gate: RoutedGate | None = None,
 ) -> dict:
     """The forward of ``model`` (compute dtype) on ``[B, S]`` tokens, returning every intermediate: ``layers[i]`` holds
     layer ``i``'s gate weights, attention internals, MoE internals and branch outputs, and the top level the final
@@ -549,7 +568,7 @@ def trace_forward(
     ``local_grad`` the values are unchanged but gradients flow only along each position's own residual stream: the
     attention keys/values/decays and the lagged SConv taps are cut, so the gradient of a sum of per-position losses
     with respect to a position's intermediates is that position's own loss's gradient (less the attention-to-self
-    path)."""
+    path). ``routed_gate`` multiplies the routed units' keep (``RoutedGate``)."""
     cfg = model.config
     eps = cfg.layer_norm_eps
     b, s = tokens.shape
@@ -614,7 +633,7 @@ def trace_forward(
         attn_out = _mix(abl.sub_mult[i, SUB_ATTN], attn_out, abl.sub_mean[i, SUB_ATTN]).astype(embed.dtype)
         w_mlp, h2 = _gate([*blocks, attn_out], layer.attn_res_query_mlp, eps, plain_sum=cfg.attn_res_plain_sum)
         mlp_in = layer._mlp_input(h2)
-        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out, edit)
+        routed, shared_out = _moe_branch(layer, mlp_in, seg, i, abl, routing, out, edit, routed_gate)
         routed_sc = layer.sconv_mlp(routed, seg)
         shared_sc = layer.sconv_mlp(shared_out, seg)
         mlp_sum = routed + shared_out
