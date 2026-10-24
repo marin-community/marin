@@ -397,6 +397,18 @@ from .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field
     return header + "\n\n".join(emitted)
 
 
+def format_generated(source: str, filename: Path) -> str:
+    """Format generated Python with the repository's pinned tools."""
+    for command in (
+        ["uvx", "black@25.9.0", "--config", str(WORKSPACE / "pyproject.toml"), "-"],
+        ["uvx", "ruff@0.14.3", "check", "--fix", "--config", str(WORKSPACE / "pyproject.toml"),
+         "--stdin-filename", str(filename), "-"],
+        ["uvx", "black@25.9.0", "--config", str(WORKSPACE / "pyproject.toml"), "-"],
+    ):
+        source = subprocess.run(command, input=source, text=True, capture_output=True, check=True, cwd=WORKSPACE).stdout
+    return source
+
+
 def generate(
     config_dir: Path = CONFIG_DIR, output_dir: Path = OUTPUT_DIR, recipe_dir: Path = ROOT / "cloud/iris/configs"
 ) -> dict[str, str]:
@@ -405,45 +417,31 @@ def generate(
     owners = runpy.run_path(str(output_dir / "ownership.py"))
     sources = source_documents(config_dir)
     sections = render_sections(
-        sources.base,
-        sidecar,
-        owners,
-        sources.comments,
-        sources.groups,
+        sources.base, sidecar, owners, sources.comments, sources.groups,
         recipe_documents(recipe_dir, config_dir, sources.groups),
     )
-    sections = subprocess.run(
-        ["uvx", "black@25.9.0", "--config", str(WORKSPACE / "pyproject.toml"), "-"],
-        input=sections, text=True, capture_output=True, check=True, cwd=WORKSPACE,
-    ).stdout
-    formatted = subprocess.run(
-        ["uvx", "ruff@0.14.3", "check", "--fix", "--config", str(WORKSPACE / "pyproject.toml"),
-         "--stdin-filename", str(output_dir / "sections.py"), "-"],
-        input=sections, text=True, capture_output=True, check=True, cwd=WORKSPACE,
-    ).stdout
-    formatted = subprocess.run(
-        ["uvx", "black@25.9.0", "--config", str(WORKSPACE / "pyproject.toml"), "-"],
-        input=formatted, text=True, capture_output=True, check=True, cwd=WORKSPACE,
-    ).stdout
-    generated = {"sections.py": formatted}
+    exports = [node.name for node in ast.parse(sections).body
+               if isinstance(node, ast.ClassDef) and node.name != "RecipeSections"]
+    sampling = next(node for node in ast.parse(sections).body
+                    if isinstance(node, ast.ClassDef) and node.name == "EvalSamplingParams")
+    lines = sections.splitlines()
+    leaf = "\n".join(lines[sampling.lineno - 1:sampling.end_lineno])
+    del lines[sampling.lineno - 1:sampling.end_lineno]
+    sections = "\n".join(lines).replace(
+        "from . import declared", "from .sampling import EvalSamplingParams\nfrom . import declared", 1
+    )
+    header = '# Copyright The Marin Authors\n# SPDX-License-Identifier: Apache-2.0\n\n"""Generated evaluation sampling fields shared by recipes and callbacks."""\n\nfrom __future__ import annotations\n\nfrom typing import Annotated, Literal\n\nfrom pydantic import Field, NonNegativeInt, PositiveInt\n\nfrom .model import NumberMap, OpenMap, Section, SectionMap, field, unset_field\n\n'
+    generated = {
+        "sections.py": format_generated(sections, output_dir / "sections.py"),
+        "sampling.py": format_generated(header + leaf + "\n", output_dir / "sampling.py"),
+    }
     public = output_dir / "__init__.py"
     if public.exists():
-        exports = []
-        for node in ast.parse(formatted).body:
-            if isinstance(node, ast.ClassDef) and node.name != "RecipeSections":
-                exports.append(node.name)
         declarations = "\n".join(
             line for line in public.read_text().splitlines() if not line.startswith("from .sections import ")
         ).rstrip()
-        generated["__init__.py"] = (
-            declarations + "\n" + "".join(f"from .sections import {name} as {name}\n" for name in sorted(exports))
-        )
-    if "__init__.py" in generated:
-        generated["__init__.py"] = subprocess.run(
-            ["uvx", "ruff@0.14.3", "check", "--fix", "--config", str(WORKSPACE / "pyproject.toml"),
-             "--stdin-filename", str(output_dir / "__init__.py"), "-"],
-            input=generated["__init__.py"], text=True, capture_output=True, check=True, cwd=WORKSPACE,
-        ).stdout
+        code = declarations + "\n" + "".join(f"from .sections import {name} as {name}\n" for name in sorted(exports))
+        generated["__init__.py"] = format_generated(code, public)
     return generated
 
 
