@@ -94,6 +94,36 @@ def _swiglu_gate_up_backward(gu: jax.Array, dh: jax.Array) -> jax.Array:
 
 PspecAxis: TypeAlias = str | tuple[str, ...] | None
 MoeActivation: TypeAlias = ActivationFunctionEnum | Callable[[jax.Array], jax.Array]
+
+
+def expert_of_rows(group_sizes: Int[Array, "E"], num_rows: int) -> Int[Array, "R"]:
+    """The expert of each row of an expert-major buffer with ``group_sizes`` (rows past their sum: the last)."""
+    ends = jnp.cumsum(group_sizes)
+    return jnp.minimum(jnp.searchsorted(ends, jnp.arange(num_rows), side="right"), group_sizes.shape[0] - 1)
+
+
+@dataclass(frozen=True)
+class ExpertParamActivation:
+    """An activation with per-expert parameters for the local MoE paths: ``fn(h, params[expert_of_row])`` on the
+    expert-major rows ``h``, with ``params`` ``[E, ...]`` (see ``moe_mlp``'s ``activation_params``)."""
+
+    fn: Callable[[jax.Array, jax.Array], jax.Array]
+    params: jax.Array
+
+    def on_groups(self, group_sizes: Int[Array, "E"]) -> Callable[[jax.Array], jax.Array]:
+        """The plain ``h -> fn(h, rows' params)`` for a buffer laid out by ``group_sizes``."""
+        return lambda h: self.fn(h, self.params[expert_of_rows(group_sizes, h.shape[0])])
+
+
+def grouped_activation(
+    activation_fn: "Callable[[jax.Array], jax.Array] | ExpertParamActivation", group_sizes: Int[Array, "E"]
+) -> Callable[[jax.Array], jax.Array]:
+    """``activation_fn`` as a plain callable on an expert-major buffer laid out by ``group_sizes``."""
+    if isinstance(activation_fn, ExpertParamActivation):
+        return activation_fn.on_groups(group_sizes)
+    return activation_fn
+
+
 MoeImplementation: TypeAlias = Literal[
     "ring",  # Expert-parallel all-gather + psum-scatter backend.
     "ragged_all_to_all",  # Expert-parallel ragged all-to-all backend.

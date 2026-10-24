@@ -39,6 +39,7 @@ from levanter.grug._moe.common import (
     _interleave_gate_up,
     _scaled_capacity,
     CapacityDrops,
+    expert_of_rows,
     split_moe_w13_output,
 )
 from levanter.grug._moe.sonic import (
@@ -182,9 +183,9 @@ class _RaggedDotExpertMlp:
 
 @dataclasses.dataclass(frozen=True)
 class _RaggedDotParamExpertMlp:
-    """``_RaggedDotExpertMlp`` for ungated experts whose activation reads differentiable parameters,
-    ``activation_fn(x W_up, params) W_down`` (``moe_mlp``'s ``activation_params``). ``forward`` takes the
-    parameters last and ``backward`` returns their cotangent last."""
+    """``_RaggedDotExpertMlp`` for ungated experts whose activation reads differentiable per-expert parameters,
+    ``activation_fn(x W_up, params[expert of the row]) W_down`` (``moe_mlp``'s ``activation_params``, here the chunk's
+    ``[Echunk, ...]`` slice). ``forward`` takes the parameters last and ``backward`` returns their cotangent last."""
 
     activation_fn: Callable[[jax.Array, Any], jax.Array]
 
@@ -194,7 +195,8 @@ class _RaggedDotParamExpertMlp:
         active = (jnp.arange(x_dispatch.shape[0]) < jnp.sum(active_group_sizes))[:, None]
         x_dispatch = jnp.where(active, x_dispatch, 0)
         pre = ragged_dot(x_dispatch, moe_w13_local, physical_group_sizes)
-        out = ragged_dot(self.activation_fn(pre, params), moe_w2_local, physical_group_sizes)
+        row_params = params[expert_of_rows(physical_group_sizes, pre.shape[0])]
+        out = ragged_dot(self.activation_fn(pre, row_params), moe_w2_local, physical_group_sizes)
         return jnp.where(active, out, 0)
 
     def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes, params):
@@ -714,7 +716,7 @@ def _routed_experts_forward(
                 plan.active_group_sizes,
             )
             if activation_params is not None:
-                mlp_args = (*mlp_args, activation_params)
+                mlp_args = (*mlp_args, activation_params[experts])
             out_dispatch, expert_mlp_residuals = layout.expert_mlp.forward(*mlp_args)  # [C, H]
             # The mirror of dispatch: valid prefixes land back at unclipped sorted positions.
             # Chaining every chunk through one output buffer composes the disjoint writes, with
@@ -770,8 +772,8 @@ def _routed_experts(
     output is saved for the backward, a recompute for the backward runs only the dispatch and
     the gate/up projection.
 
-    ``activation_params`` (None, or the parameters of a ``_RaggedDotParamExpertMlp`` activation) get the
-    summed cotangent of every chunk.
+    ``activation_params`` (None, or the local experts' ``[Elocal, ...]`` parameters of a ``_RaggedDotParamExpertMlp``
+    activation) get each chunk's cotangent in its experts' rows.
     """
     out, _residuals, _, _ = _routed_experts_forward(
         sorted_x, weights, moe_w13_local, moe_w2_local, routing, layout, activation_params=activation_params
@@ -844,7 +846,7 @@ def _routed_experts_backward(
     activation_params=None,
 ):
     """Cotangents of ``(sorted_x, weights, moe_w13_local, moe_w2_local, routing)``, of ``activation_params``
-    (summed over the chunks; None without them), and with ``side_vjp`` the overlap's ``(d_tokens, d_params)``,
+    (``[Elocal, ...]``; None without them), and with ``side_vjp`` the overlap's ``(d_tokens, d_params)``,
     pulled back under the first return-cotangent all-to-all."""
     assignments = routing.sorted_indices.shape[0]
     out_dim = out_cotangent.shape[1]
@@ -879,7 +881,7 @@ def _routed_experts_backward(
     )  # [TK, 1]
     moe_w13_cotangents = []
     moe_w2_cotangents = []
-    activation_params_cotangent = None
+    activation_params_cotangents = []
     for chunk_index in reversed(range(layout.chunks)):
         plan, expert_mlp_residuals = chunk_residuals[chunk_index]
         with jax.named_scope(f"moe_chunk_{chunk_index}"):
@@ -905,11 +907,7 @@ def _routed_experts_backward(
                 x_dispatch_cotangent, w13_cotangent, w2_cotangent, row_output_dot, chunk_params_cotangent = (
                     layout.expert_mlp.backward(expert_mlp_residuals, out_dispatch_cotangent)
                 )
-                activation_params_cotangent = (
-                    chunk_params_cotangent
-                    if activation_params_cotangent is None
-                    else jax.tree.map(jnp.add, activation_params_cotangent, chunk_params_cotangent)
-                )
+                activation_params_cotangents.append(chunk_params_cotangent)
                 dispatch_cotangent = jax.lax.ragged_all_to_all(
                     x_dispatch_cotangent, dispatch_cotangent, *plan.return_params, axis_name="expert"
                 )
@@ -957,6 +955,9 @@ def _routed_experts_backward(
         jnp.concatenate(moe_w13_cotangents[::-1], axis=0),
         jnp.concatenate(moe_w2_cotangents[::-1], axis=0),
         None,
+    )
+    activation_params_cotangent = (
+        jnp.concatenate(activation_params_cotangents[::-1], axis=0) if activation_params_cotangents else None
     )
     return routed, activation_params_cotangent, (side_grads if side_vjp is not None else (None, None))
 

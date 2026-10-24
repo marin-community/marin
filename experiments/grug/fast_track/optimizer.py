@@ -433,7 +433,7 @@ class GrugMoeMuonHConfig(OptimizerConfig):
 
         def mask_fn(param, path):
             path_lower = (".".join(path) if isinstance(path, (list, tuple)) else str(path)).lower()
-            if path_lower.endswith("mlp_act_power"):
+            if re.search(r"mlp_act_power(_routed|_shared)?$", path_lower):
                 return "act_power"
             kda_leaf = _kda_leaf(path_lower)
             if kda_leaf == _KDA_BETA_LEAF:

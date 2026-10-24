@@ -70,6 +70,7 @@ from experiments.grug.fast_track.host_stall import HostStallSampler
 from experiments.grug.fast_track.model import (
     FINAL_NORM_INPUT_RMS_KEY,
     UNIT_STATS_PREFIX,
+    UNIT_STATS_SELECTED,
     DenseMLP,
     GradProbeSite,
     GrugModelConfig,
@@ -423,16 +424,30 @@ def _to_dropless_local(
     return eqx.tree_at(stack_expert_mlps, model, dropless)
 
 
+_ACT_POWER_FIELDS = ("mlp_act_power", "mlp_act_power_routed", "mlp_act_power_shared")
+
+
 def _mlp_act_power_leaves(model: Transformer) -> list[jax.Array]:
     return [stack.stacked.mlp_act_power for stack in model.layer_stacks()]
 
 
+def _all_act_power_leaves(model: Transformer) -> list[jax.Array]:
+    """Every present ReLU-exponent leaf of every stack (``_ACT_POWER_FIELDS``)."""
+    return [
+        getattr(stack.stacked, name)
+        for stack in model.layer_stacks()
+        for name in _ACT_POWER_FIELDS
+        if getattr(stack.stacked, name) is not None
+    ]
+
+
 def _cast_to_compute(mp: jmp.Policy, model: Transformer) -> Transformer:
     compute = mp.cast_to_compute(model)
-    if model.stacked_blocks.stacked.mlp_act_power is None:
+    leaves = _all_act_power_leaves(model)
+    if not leaves:
         return compute
     # The ReLU exponents stay float32: bfloat16 would round a learned or scheduled exponent to 1/128 near 2.
-    return eqx.tree_at(_mlp_act_power_leaves, compute, _mlp_act_power_leaves(model))
+    return eqx.tree_at(_all_act_power_leaves, compute, leaves)
 
 
 def scheduled_act_power(step: jax.Array, schedule: tuple[float, float], last_step: int) -> jax.Array:
@@ -1581,6 +1596,78 @@ def _token_dump_step(mp: jmp.Policy, skip_layers: tuple[int, ...]):
 
 
 UNIT_STATS_BATCHES = 4
+# Tokens kept per expert in the unit stats' top-token lists.
+UNIT_STATS_TOP_TOKENS = 16
+
+
+class _ExpertTokenCounts:
+    """Per (layer, expert) counts of the routed tokens, their previous tokens and their sequences over the unit-stats
+    batches; ``summary`` reduces them to loads, entropies and top tokens."""
+
+    def __init__(self, num_experts: int, vocab_size: int):
+        self.num_experts, self.vocab_size = num_experts, vocab_size
+        self.token: np.ndarray | None = None
+        self.prev: np.ndarray | None = None
+        self.sequence: list[np.ndarray] = []
+
+    def add(self, selected: np.ndarray, tokens: np.ndarray, first_sequence: int) -> None:
+        """``selected`` ``[L, B*S, K]`` of the batch ``tokens`` ``[B, S]``."""
+        num_layers, _, k = selected.shape
+        batch, seq = tokens.shape
+        tok = np.repeat(tokens.reshape(-1).astype(np.int64), k)
+        prev = np.repeat(np.concatenate([np.full((batch, 1), -1), tokens[:, :-1]], axis=1).reshape(-1), k)
+        seq_id = np.repeat(np.repeat(np.arange(batch), seq), k)
+        if self.token is None:
+            self.token = np.zeros((num_layers, self.num_experts * self.vocab_size), np.int64)
+            self.prev = np.zeros_like(self.token)
+        assert self.prev is not None
+        seq_counts = np.zeros((num_layers, self.num_experts, batch), np.int64)
+        for layer in range(num_layers):
+            e = selected[layer].reshape(-1).astype(np.int64)
+            self.token[layer] += np.bincount(e * self.vocab_size + tok, minlength=self.token.shape[1])
+            ok = prev >= 0
+            self.prev[layer] += np.bincount(e[ok] * self.vocab_size + prev[ok], minlength=self.prev.shape[1])
+            seq_counts[layer] = np.bincount(e * batch + seq_id, minlength=self.num_experts * batch).reshape(
+                self.num_experts, batch
+            )
+        self.sequence.append(seq_counts)
+
+    def summary(self) -> dict[str, np.ndarray]:
+        if self.token is None or self.prev is None:
+            return {}
+        num_layers = self.token.shape[0]
+        token = self.token.reshape(num_layers, self.num_experts, self.vocab_size)
+        prev = self.prev.reshape(num_layers, self.num_experts, self.vocab_size)
+        sequence = np.concatenate(self.sequence, axis=-1)
+        top = np.argsort(-token, axis=-1)[..., :UNIT_STATS_TOP_TOKENS]
+        return {
+            "expert_load": token.sum(-1),
+            "expert_token_entropy": _entropy(token),
+            "expert_prev_entropy": _entropy(prev),
+            "expert_sequence_entropy": _entropy(sequence),
+            "expert_top_tokens": top,
+            "expert_top_counts": np.take_along_axis(token, top, axis=-1),
+            "layer_token_entropy": _entropy(token.sum(1)),
+            "layer_sequence_entropy": _entropy(sequence.sum(1)),
+        }
+
+
+def _entropy(counts: np.ndarray) -> np.ndarray:
+    """Entropy (nats) over the last axis of ``counts``."""
+    total = counts.sum(-1, keepdims=True)
+    prob = counts / np.maximum(total, 1)
+    return -np.sum(np.where(prob > 0, prob * np.log(np.where(prob > 0, prob, 1)), 0.0), axis=-1)
+
+
+def _act_power_arrays(params: Transformer) -> dict[str, np.ndarray]:
+    """The ReLU-exponent leaves in layer order, ``act_power_<field>`` ``[L, ...]`` (unclamped)."""
+    out = {}
+    layers = params.layers()
+    for name in _ACT_POWER_FIELDS:
+        values = [getattr(layer, name) for layer in layers]
+        if all(v is not None for v in values):
+            out[f"act_power_{name}"] = np.stack([np.asarray(jax.device_get(v), np.float32) for v in values])
+    return out
 
 
 def _unit_stats_step(mp: jmp.Policy):
@@ -1611,6 +1698,7 @@ def write_unit_stats(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
     sharding = NamedSharding(mesh, P(_BATCH_AXES, None))
     step = _unit_stats_step(config.trainer.trainer.mp)
     totals: dict[str, np.ndarray] = {}
+    routing = _ExpertTokenCounts(config.model.num_experts, config.model.vocab_size)
     with collect_unit_stats():
         for start in range(0, num_sequences, batch_size):
             batch = [
@@ -1620,7 +1708,12 @@ def write_unit_stats(config: GrugRunConfig, state: GrugTrainState, mesh: Mesh, b
             # Replicated outputs: every process holds the whole sums.
             for k, v in step(state.params, state.pending_qb_betas, *batch).items():
                 local = np.asarray(v.addressable_data(0))
+                if k == UNIT_STATS_SELECTED:
+                    routing.add(local, tokens[start : start + batch_size], start)
+                    continue
                 totals[k] = totals.get(k, 0) + local.astype(np.float64 if k.endswith("mass") else np.int64)
+    totals.update(routing.summary())
+    totals.update(_act_power_arrays(state.params))
     summary = {}
     for site in ("routed", "shared"):
         if f"{site}_active" not in totals:

@@ -115,17 +115,36 @@ def relu_power_traced(u: Float[Array, "..."], power: Float[Array, ""]) -> Float[
     return jnp.where(positive, jnp.exp(power.astype(jnp.float32) * log_x), 0.0).astype(u.dtype)
 
 
-def _tied_gate_relu_power(g: Float[Array, "..."], power: float | jax.Array) -> Float[Array, "..."]:
+def _tied_gate_relu_power(g: Float[Array, "..."], power: "ActPower") -> Float[Array, "..."]:
     """The gate half of ``relu(u)^power`` as ``gate(u) * u``: ``relu(u)^(power - 1)`` on ``u > 0`` (1 at power 1),
     0 elsewhere."""
     return relu_power_traced(g, jnp.asarray(power, jnp.float32) - 1.0)
 
 
-def _relu_power_any(u: Float[Array, "..."], power: float | jax.Array) -> Float[Array, "..."]:
-    return relu_power(u, power) if isinstance(power, float) else relu_power_traced(u, power)
+ActPower = float | np.ndarray | jax.Array
+"""A ReLU exponent: a static float, a static per-unit ``np.ndarray`` ``[1, I]`` (``mlp_act_power_unit_spread``), or
+a traced array broadcastable to the routed bank's ``[E, I]`` (``[]``, ``[E, 1]``, ``[E, I]``) or the shared
+expert's ``[1, I]``."""
+
+
+def _relu_power_any(u: Float[Array, "..."], power: ActPower) -> Float[Array, "..."]:
+    return relu_power(u, power) if isinstance(power, float) else relu_power_traced(u, jnp.asarray(power))
+
+
+def _per_expert_power(power: jax.Array, num_experts: int) -> jax.Array:
+    """A traced routed exponent as ``moe_mlp``'s per-expert ``activation_params``: ``[E, 1]`` or ``[E, I]``."""
+    return jnp.broadcast_to(power, (num_experts, 1)) if power.ndim == 0 else power
+
+
+def _unit_spread(spread: tuple[float, ...], width: int) -> np.ndarray:
+    """``mlp_act_power_unit_spread``'s static ``[1, width]`` exponents: unit ``i`` gets
+    ``lo + (hi - lo) i / (width - 1)``."""
+    lo, hi = spread
+    return np.linspace(lo, hi, width, dtype=np.float32)[None, :]
 
 
 UNIT_STATS_PREFIX = f"{_OUTSTAT_PREFIX}units/"
+UNIT_STATS_SELECTED = "routed_selected"
 # Units per group of the 2:4 pattern the unit stats score, and the units it keeps per group.
 _SPARSE_GROUP = 4
 _SPARSE_KEEP = 2
@@ -154,10 +173,13 @@ def keep_top2_of_4(a: Float[Array, "... I"]) -> Bool[Array, "... I"]:
     return (jnp.sum(beats, axis=-1) < _SPARSE_KEEP).reshape(a.shape)
 
 
-def _unit_stats(a: Float[Array, "R I"], segment_ids: Int[Array, " R"], num_segments: int) -> dict[str, jax.Array]:
-    """Activity of post-activations ``a`` (rows in segments ``segment_ids``, e.g. experts): per-segment rows ``[S]``
-    and per-unit active (``a > 0``) counts ``[S, I]``, the histogram of active units per group of 4 ``[5]``, and the
-    total and per-token-2:4-kept activation mass ``[2]``."""
+def _unit_stats(
+    a: Float[Array, "R I"], segment_ids: Int[Array, " R"], num_segments: int, pre: Float[Array, "R I"]
+) -> dict[str, jax.Array]:
+    """Activity of post-activations ``a`` of pre-activations ``pre`` (rows in segments ``segment_ids``, e.g.
+    experts): per-segment rows ``[S]``, per-unit active (``a > 0``) counts ``[S, I]``, per-unit sums of ``relu(pre)``
+    and of ``a`` ``[S, I]``, the histogram of active units per group of 4 ``[5]``, and the total and
+    per-token-2:4-kept activation mass ``[2]``."""
     active = a > 0
     per_group = jnp.sum(active.reshape(a.shape[0], -1, _SPARSE_GROUP), axis=-1)
     a32 = a.astype(jnp.float32)
@@ -165,9 +187,14 @@ def _unit_stats(a: Float[Array, "R I"], segment_ids: Int[Array, " R"], num_segme
     def per_segment(x: jax.Array) -> jax.Array:
         return jax.ops.segment_sum(x.astype(jnp.int32), segment_ids, num_segments=num_segments)
 
+    def per_segment_mass(x: jax.Array) -> jax.Array:
+        return jax.ops.segment_sum(x.astype(jnp.float32), segment_ids, num_segments=num_segments)
+
     return {
         "rows": per_segment(jnp.ones(a.shape[0], jnp.int32)),
         "active": per_segment(active),
+        "pre_mass": per_segment_mass(jax.nn.relu(pre)),
+        "post_mass": per_segment_mass(a),
         "group_hist": jnp.sum(jax.nn.one_hot(per_group, _SPARSE_GROUP + 1, dtype=jnp.int32), axis=(0, 1)),
         "mass": jnp.stack([jnp.sum(a32), jnp.sum(jnp.where(keep_top2_of_4(a), a32, 0.0))]),
     }
@@ -225,6 +252,19 @@ class AttnResLayerBackward(StrEnum):
     SAVE = "save"
     """Plain autodiff: the forward keeps the layer's residuals, so backward runs no forward again.
     Same math as RECOMPUTE; needs the memory to hold every layer's residuals."""
+
+
+class ActPowerScope(StrEnum):
+    """What a learnable ReLU exponent (``mlp_act_power_learnable``) is shared over."""
+
+    NONE = "none"
+    LAYER = "layer"
+    """One per layer, shared by its routed and shared experts (``Block.mlp_act_power``)."""
+    EXPERT = "expert"
+    """One per (layer, routed expert) (``Block.mlp_act_power_routed`` ``[E]``) and one per layer for the shared
+    expert (``Block.mlp_act_power_shared``)."""
+    NEURON = "neuron"
+    """One per routed unit (``[E, I]``) and per shared unit (``[I_shared]``)."""
 
 
 class RouterCombine(StrEnum):
@@ -543,10 +583,15 @@ class GrugModelConfig:
     mlp_act_power_schedule: tuple[float, ...] = ()
     """``(start, end)``: every layer's exponent moves linearly in the step, ``start`` at step 0 to ``end`` at the
     last step. The train step writes it into ``Block.mlp_act_power`` (a traced value, so nothing recompiles)."""
-    mlp_act_power_learnable: bool = False
-    """A learnable exponent per layer (``Block.mlp_act_power``, init ``mlp_act_power``; optimizer group
-    ``act_power``) shared by the layer's routed and shared experts, clamped to ``MLP_ACT_POWER_RANGE`` in the
-    forward."""
+    mlp_act_power_learnable: ActPowerScope = ActPowerScope.NONE
+    """Learnable exponents (``ActPowerScope``: per layer, per routed expert, or per unit), init ``mlp_act_power``,
+    optimizer group ``act_power``, clamped to ``MLP_ACT_POWER_RANGE`` in the forward."""
+    mlp_act_power_shared_fixed: float | None = None
+    """With ``mlp_act_power_learnable`` ``expert`` or ``neuron``: the shared expert keeps this static exponent
+    instead of learning its own."""
+    mlp_act_power_unit_spread: tuple[float, ...] = ()
+    """``(lo, hi)``: a static exponent per unit, ``lo + (hi - lo) i / (I - 1)`` for unit ``i`` of every routed expert
+    and of the shared expert."""
 
     def __post_init__(self) -> None:
         if self.lm_head_grad_dump_every and not self.lm_head_grad_probe:
@@ -587,9 +632,26 @@ class GrugModelConfig:
                 raise ValueError(f"attn_res_kv_layers {bad} must read only earlier layers (>= {cutoff})")
 
     def _check_mlp_act_power(self) -> None:
-        powers = (self.mlp_act_power, *self.mlp_act_power_layers, *self.mlp_act_power_schedule)
-        if all(p == 2.0 for p in powers) and not self.mlp_act_power_learnable:
+        learnable = self.mlp_act_power_learnable != ActPowerScope.NONE
+        shared_fixed = () if self.mlp_act_power_shared_fixed is None else (self.mlp_act_power_shared_fixed,)
+        powers = (
+            self.mlp_act_power,
+            *self.mlp_act_power_layers,
+            *self.mlp_act_power_schedule,
+            *self.mlp_act_power_unit_spread,
+            *shared_fixed,
+        )
+        if all(p == 2.0 for p in powers) and not learnable:
             return
+        if shared_fixed and self.mlp_act_power_learnable not in (ActPowerScope.EXPERT, ActPowerScope.NEURON):
+            raise ValueError("mlp_act_power_shared_fixed needs mlp_act_power_learnable expert or neuron")
+        if self.mlp_act_power_unit_spread and (
+            len(self.mlp_act_power_unit_spread) != 2
+            or learnable
+            or self.mlp_act_power_layers
+            or self.mlp_act_power_schedule
+        ):
+            raise ValueError("mlp_act_power_unit_spread is lo,hi and excludes the other mlp_act_power modes")
         low, high = MLP_ACT_POWER_RANGE
         if not all(low <= p <= high for p in powers):
             raise ValueError(f"mlp_act_power values must be in {MLP_ACT_POWER_RANGE}, got {powers}")
@@ -602,7 +664,7 @@ class GrugModelConfig:
             raise ValueError(f"mlp_act_power_layers needs attn_res and {self.num_layers} entries")
         if self.mlp_act_power_schedule and len(self.mlp_act_power_schedule) != 2:
             raise ValueError("mlp_act_power_schedule is start,end")
-        dynamic = bool(self.mlp_act_power_schedule) + self.mlp_act_power_learnable
+        dynamic = bool(self.mlp_act_power_schedule) + learnable
         if dynamic > 1 or (dynamic and self.mlp_act_power_layers):
             raise ValueError("pick one of mlp_act_power_layers, mlp_act_power_schedule and mlp_act_power_learnable")
         if dynamic and self.moe_implementation != "ragged_all_to_all":
@@ -610,14 +672,22 @@ class GrugModelConfig:
 
     @property
     def mlp_act_power_dynamic(self) -> bool:
-        """The exponent is a ``Block.mlp_act_power`` leaf (scheduled or learnable), not a static float."""
-        return bool(self.mlp_act_power_schedule) or self.mlp_act_power_learnable
+        """Some exponent is a ``Block`` leaf (scheduled or learnable), not static."""
+        return bool(self.mlp_act_power_schedule) or self.mlp_act_power_learnable != ActPowerScope.NONE
 
-    def mlp_act_power_at(self, layer_index: int | None) -> float:
-        """The static exponent of layer ``layer_index`` (``mlp_act_power_layers``, else ``mlp_act_power``)."""
+    def mlp_act_power_at(self, layer_index: int | None) -> tuple[ActPower, ActPower]:
+        """The static ``(routed, shared)`` exponents of layer ``layer_index``: ``mlp_act_power_unit_spread``,
+        ``mlp_act_power_layers``, else ``mlp_act_power``."""
+        if self.mlp_act_power_unit_spread:
+            return (
+                _unit_spread(self.mlp_act_power_unit_spread, self.intermediate_dim),
+                _unit_spread(self.mlp_act_power_unit_spread, self.shared_expert_intermediate_dim),
+            )
         if self.mlp_act_power_layers and layer_index is not None:
-            return float(self.mlp_act_power_layers[layer_index])
-        return float(self.mlp_act_power)
+            power = float(self.mlp_act_power_layers[layer_index])
+        else:
+            power = float(self.mlp_act_power)
+        return power, power
 
     @property
     def expert_in_dim(self) -> int:
@@ -1312,11 +1382,11 @@ class MoEMLP(eqx.Module):
         self,
         x: Float[Array, "B S D"],
         projected: list[jax.Array] | None = None,
-        act_power: float | jax.Array = 2.0,
+        act_power: ActPower = 2.0,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``projected`` holds ``x_flat @ w`` for each of ``input_projection_weights`` when the caller computed them
         already (fused with other projections of the same input). ``act_power`` is the ungated experts' ReLU
-        exponent (a float, or a traced scalar: ``Block.mlp_act_power``)."""
+        exponent (``ActPower``, ``Block.mlp_act_power_value``'s routed half)."""
         b, s, _ = x.shape
         x_flat = rearrange(x, "b s d -> (b s) d")
         if projected is None:
@@ -1367,6 +1437,8 @@ class MoEMLP(eqx.Module):
         if _COLLECT_UNIT_STATS.get():
             for name, value in _routed_unit_stats(self.expert_mlp, routed_input, selected_experts, act_power).items():
                 router_stats[f"{UNIT_STATS_PREFIX}routed_{name}"] = value
+            # The routing itself, for per-expert token statistics on the host (``write_unit_stats``).
+            router_stats[f"{UNIT_STATS_PREFIX}{UNIT_STATS_SELECTED}"] = selected_experts
         router_stats["capacity_overflow"] = overflow.dropped
         router_stats["sender_capacity_overflow"] = overflow.sender_dropped
         router_stats["receiver_capacity_overflow"] = overflow.receiver_dropped
@@ -1388,7 +1460,7 @@ def _shared_experts_tail(
     gated: bool,
     w_down: jax.Array,
     out_sharding: P | None,
-    act_power: float | jax.Array = 2.0,
+    act_power: ActPower = 2.0,
 ) -> jax.Array:
     """Shared-expert output from each expert's gate/up projections ``parts`` (gates first when ``gated``);
     ungated experts use ``relu(u)^act_power``."""
@@ -1402,7 +1474,10 @@ def _shared_experts_tail(
 
 
 def moe_and_shared_fused(
-    mlp: MoEMLP, shared: tuple[DenseMLP, ...], x: Float[Array, "B S D"], act_power: float | jax.Array = 2.0
+    mlp: MoEMLP,
+    shared: tuple[DenseMLP, ...],
+    x: Float[Array, "B S D"],
+    act_power: tuple[ActPower, ActPower] = (2.0, 2.0),
 ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
     """Routed MoE plus the shared SwiGLU experts with every projection of ``x`` in one GEMM.
 
@@ -1410,7 +1485,7 @@ def moe_and_shared_fused(
     run as one ``[D, sum widths]`` GEMM; the shared experts' down-projections run as one GEMM over
     their concatenated hidden units (the sum over shared experts happens in its accumulator). Same
     math as ``mlp(x) + sum(expert(x) for expert in shared)`` (~3% faster at d512); parameters stay
-    separate leaves. ``act_power`` is the ReLU exponent of the ungated routed and shared experts.
+    separate leaves. ``act_power`` is the ``(routed, shared)`` ReLU exponents of the ungated experts.
     """
     b, s, _ = x.shape
     x_flat = rearrange(x, "b s d -> (b s) d")
@@ -1422,13 +1497,14 @@ def moe_and_shared_fused(
     ]
     w_down = jnp.concatenate([reshard(e.w_down, replicated) for e in shared], axis=0)
     parts = list(_fused_projection(x_flat, tuple(moe_weights + shared_weights)))
-    routed, stats = mlp(x, projected=parts[: len(moe_weights)], act_power=act_power)
+    routed_power, shared_power = act_power
+    routed, stats = mlp(x, projected=parts[: len(moe_weights)], act_power=routed_power)
     shared_out = _shared_experts_tail(
-        mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, _batch_spec(), act_power
+        mlp.cfg, parts[len(moe_weights) :], len(shared), gated, w_down, _batch_spec(), shared_power
     )
     if _COLLECT_UNIT_STATS.get() and not gated:
         ups = reshard(jnp.concatenate(parts[len(moe_weights) :], axis=1), P(_BATCH_AXES, None))
-        for name, value in _shared_unit_stats(ups, act_power).items():
+        for name, value in _shared_unit_stats(ups, shared_power).items():
             stats[f"{UNIT_STATS_PREFIX}shared_{name}"] = value
     shared_out = _batch_reshard(rearrange(shared_out, "(b s) d -> b s d", b=b, s=s))
     return routed + shared_out, stats
@@ -1454,8 +1530,10 @@ class Block(eqx.Module):
     attn_res_query_attn: Float[Array, " D"] | None
     attn_res_query_mlp: Float[Array, " D"] | None
     attn_res_query_kv: Float[Array, " D"] | None  # cfg.attn_res_kv_layers (every layer carries one; those read it)
-    # The layer's ReLU exponent when scheduled or learnable (cfg.mlp_act_power_dynamic); float32 in compute.
-    mlp_act_power: Float[Array, ""] | None
+    # The layer's ReLU exponents when scheduled or learnable (ActPowerScope); float32 in compute.
+    mlp_act_power: Float[Array, ""] | None  # per layer (schedule, ActPowerScope.LAYER)
+    mlp_act_power_routed: Float[Array, "E ..."] | None  # [E] (EXPERT) or [E, I] (NEURON)
+    mlp_act_power_shared: Float[Array, "..."] | None  # [] (EXPERT) or [I_shared] (NEURON)
 
     @staticmethod
     def init(cfg: GrugModelConfig, *, key: PRNGKeyArray, use_kda: bool = False) -> "Block":
@@ -1505,6 +1583,8 @@ class Block(eqx.Module):
             attn_res_query_mlp=attn_res_query,
             attn_res_query_kv=attn_res_query if cfg.attn_res_kv_layers else None,
             mlp_act_power=_mlp_act_power_init(cfg),
+            mlp_act_power_routed=_mlp_act_power_routed_init(cfg),
+            mlp_act_power_shared=_mlp_act_power_shared_init(cfg),
         )
 
     def attn_input(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
@@ -1538,21 +1618,38 @@ class Block(eqx.Module):
             out = self.sconv_attn(out, _sconv_segment_ids(mask))
         return out, stats
 
-    def mlp_act_power_value(self, static_power: float) -> float | jax.Array:
-        """This layer's ReLU exponent: the ``mlp_act_power`` leaf (clamped when learnable, stop-gradient when
-        scheduled), else ``static_power``."""
-        if self.mlp_act_power is None:
-            return static_power
-        assert isinstance(self.mlp, MoEMLP)
-        power = self.mlp_act_power.astype(jnp.float32)
-        if self.mlp.cfg.mlp_act_power_learnable:
-            return jnp.clip(power, *MLP_ACT_POWER_RANGE)
-        return jax.lax.stop_gradient(power)
+    def mlp_act_power_value(self, layer_index: int | None) -> tuple[ActPower, ActPower]:
+        """This layer's ``(routed, shared)`` ReLU exponents (``ActPower``): the learnable leaves clamped to
+        ``MLP_ACT_POWER_RANGE``, the scheduled one stop-gradient, else the static ``mlp_act_power_at``."""
+        if not isinstance(self.mlp, MoEMLP):
+            return 2.0, 2.0
+        cfg = self.mlp.cfg
+        routed, shared = cfg.mlp_act_power_at(layer_index)
+
+        def clamp(p: jax.Array) -> jax.Array:
+            return jnp.clip(p.astype(jnp.float32), *MLP_ACT_POWER_RANGE)
+
+        if self.mlp_act_power is not None:
+            power = self.mlp_act_power.astype(jnp.float32)
+            power = jax.lax.stop_gradient(power) if cfg.mlp_act_power_schedule else clamp(power)
+            return power, power
+        if self.mlp_act_power_routed is not None:
+            routed = clamp(self.mlp_act_power_routed)
+            routed = routed[:, None] if routed.ndim == 1 else routed
+        if self.mlp_act_power_shared is not None:
+            shared = clamp(self.mlp_act_power_shared)
+            shared = shared if shared.ndim == 0 else shared[None, :]
+        elif cfg.mlp_act_power_shared_fixed is not None:
+            shared = float(cfg.mlp_act_power_shared_fixed)
+        return routed, shared
 
     def mlp_branch(
-        self, h: Float[Array, "B S D"], mask: AttentionMask | jax.Array, act_power: float | jax.Array = 2.0
+        self,
+        h: Float[Array, "B S D"],
+        mask: AttentionMask | jax.Array,
+        act_power: tuple[ActPower, ActPower] = (2.0, 2.0),
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``act_power``: the ungated experts' ReLU exponent (``mlp_act_power_value``)."""
+        """``act_power``: the ungated experts' ``(routed, shared)`` ReLU exponents (``mlp_act_power_value``)."""
         mlp_in = self._mlp_input(h)
         stats: dict[str, jax.Array] = {}
         if isinstance(self.mlp, DenseMLP):
@@ -1561,7 +1658,7 @@ class Block(eqx.Module):
         elif self.shared is not None:
             out, stats = moe_and_shared_fused(self.mlp, self.shared, mlp_in, act_power)
         else:
-            out, stats = self.mlp(mlp_in, act_power=act_power)
+            out, stats = self.mlp(mlp_in, act_power=act_power[0])
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
         return out, stats
@@ -1576,15 +1673,35 @@ class Block(eqx.Module):
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         attn_out, _ = self.attn_branch(x, mask, disable_rope, is_global)
         x = x + attn_out
-        mlp_out, router_stats = self.mlp_branch(x, mask, self.mlp_act_power_value(self.attn.cfg.mlp_act_power))
+        mlp_out, router_stats = self.mlp_branch(x, mask, self.mlp_act_power_value(None))
         return x + mlp_out, router_stats
 
 
 def _mlp_act_power_init(cfg: GrugModelConfig) -> jax.Array | None:
-    if not cfg.mlp_act_power_dynamic:
+    if cfg.mlp_act_power_schedule:
+        return jnp.full((), cfg.mlp_act_power_schedule[0], jnp.float32)
+    if cfg.mlp_act_power_learnable == ActPowerScope.LAYER:
+        return jnp.full((), cfg.mlp_act_power, jnp.float32)
+    return None
+
+
+def _mlp_act_power_routed_init(cfg: GrugModelConfig) -> jax.Array | None:
+    if cfg.mlp_act_power_learnable == ActPowerScope.EXPERT:
+        return jnp.full((cfg.num_experts,), cfg.mlp_act_power, jnp.float32)
+    if cfg.mlp_act_power_learnable == ActPowerScope.NEURON:
+        return jnp.full((cfg.num_experts, cfg.intermediate_dim), cfg.mlp_act_power, jnp.float32)
+    return None
+
+
+def _mlp_act_power_shared_init(cfg: GrugModelConfig) -> jax.Array | None:
+    if cfg.mlp_act_power_shared_fixed is not None or cfg.shared_expert_intermediate_dim == 0:
         return None
-    start = cfg.mlp_act_power_schedule[0] if cfg.mlp_act_power_schedule else cfg.mlp_act_power
-    return jnp.full((), start, jnp.float32)
+    if cfg.mlp_act_power_learnable == ActPowerScope.EXPERT:
+        return jnp.full((), cfg.mlp_act_power, jnp.float32)
+    if cfg.mlp_act_power_learnable == ActPowerScope.NEURON:
+        width = cfg.shared_expert_intermediate_dim * cfg.num_shared_experts
+        return jnp.full((width,), cfg.mlp_act_power, jnp.float32)
+    return None
 
 
 def _expert_mlp_init(cfg: GrugModelConfig, width: int, key: PRNGKeyArray) -> MoEExpertMlp:
@@ -1615,29 +1732,33 @@ def _run_expert_bank(
     routed_input: jax.Array,
     selected: jax.Array,
     combine_weights: jax.Array,
-    act_power: float | jax.Array = 2.0,
+    act_power: ActPower = 2.0,
 ):
     """Dispatch the expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
     dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``.
 
-    ``act_power`` other than 2 runs ``relu(u)^act_power`` on the ungated path: a static exponent as a plain
-    callable (the ``ragged_dot`` expert MLP), a traced one as ``moe_mlp``'s ``activation_params``."""
+    ``act_power`` other than 2 runs ``relu(u)^act_power``: a static exponent as a plain callable (the ``ragged_dot``
+    expert MLP), a traced one as ``moe_mlp``'s per-expert ``activation_params`` (``_per_expert_power``)."""
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         activation: MoeActivation = ActivationFunctionEnum.relu2 if ungated else em.activation
         activation_params = None
+        static = isinstance(act_power, (float, np.ndarray))
         if isinstance(act_power, float) and act_power == 2.0:
             pass
         elif not ungated:
             # The tied gate (the dropless local eval backends): relu(u)^(p-1) * u = relu(u)^p.
-            if isinstance(act_power, float):
+            if static:
                 activation = functools.partial(_tied_gate_relu_power, power=act_power)
             else:
-                activation, activation_params = _tied_gate_relu_power, act_power
-        elif not isinstance(act_power, float):
-            activation, activation_params = relu_power_traced, act_power
-        else:
+                activation = _tied_gate_relu_power
+                activation_params = _per_expert_power(act_power, em.w_up.shape[0])
+        elif isinstance(act_power, float):
             activation = functools.partial(relu_power, power=act_power)
+        elif static:
+            activation = functools.partial(relu_power_traced, power=act_power)
+        else:
+            activation, activation_params = relu_power_traced, _per_expert_power(act_power, em.w_up.shape[0])
         return moe_mlp(
             routed_input,
             selected,
@@ -1659,7 +1780,7 @@ def _run_expert_bank(
 
 
 def _routed_unit_stats(
-    em: MoEExpertMlp, routed_input: Float[Array, "T D"], selected: Int[Array, "T K"], act_power: float | jax.Array
+    em: MoEExpertMlp, routed_input: Float[Array, "T D"], selected: Int[Array, "T K"], act_power: ActPower
 ) -> dict[str, jax.Array]:
     """``_unit_stats`` of the routed experts' post-activations ``relu(x W_up)^act_power``, recomputed from ``W_up``
     per batch shard in an expert-major buffer and summed over the batch (``collect_unit_stats``)."""
@@ -1669,34 +1790,35 @@ def _routed_unit_stats(
         flat = sel.reshape(-1)
         order = jnp.argsort(flat, stable=True)
         sizes = jnp.bincount(flat, length=num_experts).astype(jnp.int32)
-        a = relu_power_traced(ragged_dot(x[order // sel.shape[1]], w_up.astype(x.dtype), sizes), power)
-        stats = _unit_stats(a, flat[order], num_experts)
+        pre = ragged_dot(x[order // sel.shape[1]], w_up.astype(x.dtype), sizes)
+        a = relu_power_traced(pre, power[flat[order]])
+        stats = _unit_stats(a, flat[order], num_experts, pre)
         return jax.tree.map(lambda v: jax.lax.psum(v, _BATCH_AXES), stats)
 
     return jax.shard_map(
         local,
         mesh=get_abstract_mesh(),
-        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(None, None, None), P()),
+        in_specs=(P(_BATCH_AXES, None), P(_BATCH_AXES, None), P(None, None, None), P(None, None)),
         out_specs=P(),
         check_vma=False,
     )(
         reshard(routed_input, P(_BATCH_AXES, None)),
         reshard(selected, P(_BATCH_AXES, None)),
         reshard(em.w_up, P(None, None, None)),
-        reshard(jnp.asarray(act_power, jnp.float32), P()),
+        reshard(jnp.broadcast_to(jnp.asarray(act_power, jnp.float32), em.w_up.shape[::2]), P(None, None)),
     )
 
 
-def _shared_unit_stats(ups: Float[Array, "T I"], act_power: float | jax.Array) -> dict[str, jax.Array]:
+def _shared_unit_stats(ups: Float[Array, "T I"], act_power: ActPower) -> dict[str, jax.Array]:
     """``_unit_stats`` of the shared experts' post-activations (one segment), summed over the batch."""
 
     def local(u: jax.Array, power: jax.Array) -> dict[str, jax.Array]:
-        stats = _unit_stats(relu_power_traced(u, power), jnp.zeros(u.shape[0], jnp.int32), 1)
+        stats = _unit_stats(relu_power_traced(u, power), jnp.zeros(u.shape[0], jnp.int32), 1, u)
         return jax.tree.map(lambda v: jax.lax.psum(v, _BATCH_AXES), stats)
 
     return jax.shard_map(
-        local, mesh=get_abstract_mesh(), in_specs=(P(_BATCH_AXES, None), P()), out_specs=P(), check_vma=False
-    )(ups, reshard(jnp.asarray(act_power, jnp.float32), P()))
+        local, mesh=get_abstract_mesh(), in_specs=(P(_BATCH_AXES, None), P(None, None)), out_specs=P(), check_vma=False
+    )(ups, reshard(jnp.broadcast_to(jnp.asarray(act_power, jnp.float32), (1, ups.shape[1])), P(None, None)))
 
 
 def _small_top_k(x: Float[Array, "T E"], k: int) -> tuple[Float[Array, "T k"], Int[Array, "T k"]]:
@@ -1937,7 +2059,7 @@ def _attn_res_layer(
         attn_out = attn_out * skip_keep[..., None].astype(attn_out.dtype)
     partial = attn_out if partial is None else partial + attn_out
     h, z_mlp, w_mlp = mix(partial, 2 * layer_index + 1)
-    mlp_out, router_stats = layer.mlp_branch(h, mask, layer.mlp_act_power_value(cfg.mlp_act_power_at(layer_index)))
+    mlp_out, router_stats = layer.mlp_branch(h, mask, layer.mlp_act_power_value(layer_index))
     if skip_keep is not None:
         mlp_out = mlp_out * skip_keep[..., None].astype(mlp_out.dtype)
     return partial + mlp_out, {
@@ -2375,9 +2497,17 @@ class Transformer(eqx.Module):
             if has_partial:
                 final_stats[f"attn_res_w_g{gate:02d}_p"] = mean_weights[-1]
         for i, layer in enumerate(layers):
+            routed_power, shared_power = layer.mlp_act_power_value(i)
             if layer.mlp_act_power is not None:
-                power = layer.mlp_act_power_value(cfg.mlp_act_power)
-                final_stats[f"{MLP_ACT_POWER_KEY}{i}"] = jax.lax.stop_gradient(jnp.asarray(power, jnp.float32))
+                final_stats[f"{MLP_ACT_POWER_KEY}{i}"] = jax.lax.stop_gradient(jnp.asarray(routed_power, jnp.float32))
+            if layer.mlp_act_power_routed is not None:
+                p = jax.lax.stop_gradient(jnp.asarray(routed_power, jnp.float32))
+                for stat, fn in (("mean", jnp.mean), ("std", jnp.std), ("min", jnp.min), ("max", jnp.max)):
+                    final_stats[f"{MLP_ACT_POWER_KEY.removesuffix('_L')}_routed_{stat}_L{i}"] = fn(p)
+            if layer.mlp_act_power_shared is not None:
+                p = jax.lax.stop_gradient(jnp.asarray(shared_power, jnp.float32))
+                final_stats[f"{MLP_ACT_POWER_KEY.removesuffix('_L')}_shared_mean_L{i}"] = jnp.mean(p)
+                final_stats[f"{MLP_ACT_POWER_KEY.removesuffix('_L')}_shared_std_L{i}"] = jnp.std(p)
             if isinstance(layer.attn, CausalSelfAttention) and layer.attn.qk_mult is not None:
                 final_stats[f"attn_res_qk_mult_L{i}"] = jnp.mean(jax.lax.stop_gradient(layer.attn.qk_mult))
             if isinstance(layer.attn, KimiDeltaAttention):

@@ -29,6 +29,7 @@ from jax.sharding import reshard
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
+    ExpertParamActivation,
     _DEFAULT_EP_CAPACITY_FACTOR,
     _EP_MOE_IMPLEMENTATIONS,
     _LOCAL_MOE_IMPLEMENTATIONS,
@@ -449,11 +450,11 @@ class MoEExpertMlp(eqx.Module):
 
 
 @named_call
-def _bind_activation_params(activation_fn: Callable[..., jax.Array], params: Any) -> Callable[[jax.Array], jax.Array]:
-    """``activation_fn`` itself without parameters, else ``h -> activation_fn(h, params)``."""
+def _bind_activation_params(activation_fn: Callable[..., jax.Array], params: Any) -> Any:
+    """``activation_fn`` itself without parameters, else its ``ExpertParamActivation``."""
     if params is None:
         return activation_fn
-    return lambda h: activation_fn(h, params)
+    return ExpertParamActivation(activation_fn, params)
 
 
 def _with_activation_params(shard_local_fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
@@ -535,9 +536,11 @@ def moe_mlp(
     The output width ``O`` (``w_down``'s last dim) may differ from the input width ``D`` only on the
     ``scatter`` local path and the ``fixed_pooled_wave_all_to_all`` / ``ragged_all_to_all`` EP paths.
 
-    `activation_params` (``ragged_all_to_all`` under expert parallelism with ungated experts, or any local path) is
-    a replicated pytree of differentiable activation parameters: ``activation`` is a callable of two arguments,
-    ``activation(h, activation_params)`` in place of ``activation(h)``, and the parameters get their gradient.
+    `activation_params` (``ragged_all_to_all`` under expert parallelism with ungated experts, or the ``scatter`` /
+    ``sonic`` local paths) is an ``[E, ...]`` array of differentiable per-expert activation parameters: ``activation``
+    is a callable of two arguments, ``activation(h, activation_params[expert of each row])`` in place of
+    ``activation(h)``, and the parameters get their gradient. Under expert parallelism they are sharded with the
+    experts.
 
     `overlap` is independent token-local work (see `MoeOverlapWork`) whose output is appended as the last
     return value. The expert-parallel pooled-wave and ragged paths run it under the dispatch all-to-all (and the
@@ -779,15 +782,13 @@ def moe_mlp(
             )
 
         if activation_params is not None:
-            # Replicated parameters, appended after the (absent) overlap inputs.
-            param_specs = jax.tree.map(lambda leaf: P(*(None,) * leaf.ndim), activation_params)
+            # Per-expert parameters, sharded with the experts and appended after the (absent) overlap inputs.
+            param_specs = P("expert", *(None,) * (activation_params.ndim - 1))
             shard_local_fn = partial(_with_activation_params, shard_local_fn)
             in_specs = (*in_specs, param_specs)
             args = (
                 *args,
-                jax.tree.map(
-                    lambda leaf, spec: _reshard_for_shard_map(leaf, mesh, spec), activation_params, param_specs
-                ),
+                _reshard_for_shard_map(activation_params, mesh, param_specs),
             )
 
         shard_fn = shard_map(
@@ -845,12 +846,8 @@ def moe_mlp(
     local_params: tuple[Any, ...] = ()
     local_param_specs: tuple[Any, ...] = ()
     if activation_params is not None:
-        local_param_specs = (jax.tree.map(lambda leaf: P(*(None,) * leaf.ndim), activation_params),)
-        local_params = (
-            jax.tree.map(
-                lambda leaf, spec: _reshard_for_shard_map(leaf, mesh, spec), activation_params, local_param_specs[0]
-            ),
-        )
+        local_param_specs = (P(*(None,) * activation_params.ndim),)
+        local_params = (_reshard_for_shard_map(activation_params, mesh, local_param_specs[0]),)
 
     def local_moe(x, selected_experts, combine_weights, token_valid, w_up_gate, w_down, params=None):
         out, dropped = _moe_mlp_local(

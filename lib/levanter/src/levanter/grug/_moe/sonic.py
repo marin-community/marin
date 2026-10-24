@@ -23,6 +23,7 @@ from jax.typing import DTypeLike
 from jaxtyping import Array, Bool, Float, Int
 
 from levanter.grug._moe.common import (
+    grouped_activation,
     _CHECKPOINT_DISPATCH_INPUT,
     _CHECKPOINT_EXPERT_HIDDEN,
     _CHECKPOINT_MOE_OUTPUT,
@@ -517,7 +518,7 @@ def _moe_mlp_local_sonic(
         w13_out = tree_checkpoint_name(ragged_dot(x_dispatch, moe_w13, group_sizes), _CHECKPOINT_EXPERT_HIDDEN)
         moe_dim = moe_w2.shape[1]
         gate, up = split_moe_w13_output(w13_out, intermediate_dim=moe_dim, interleaved=False)
-        hidden = activation_fn(gate) * up
+        hidden = grouped_activation(activation_fn, group_sizes)(gate) * up
         out_dispatch = _zero_inactive_grouped_rows(ragged_dot(hidden, moe_w2, group_sizes), cumulative_group_sizes)
         out = tree_checkpoint_name(
             sonic_gather_sum(out_dispatch, dispatch_positions, jnp.where(token_valid[:, None], combine_weights, 0)),
