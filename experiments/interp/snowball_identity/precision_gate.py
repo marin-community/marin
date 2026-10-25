@@ -13,6 +13,7 @@ process 0 (missing input, schema or coverage error) is a failure too.
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 
 import haliax as hax
@@ -21,7 +22,7 @@ from jax.experimental import multihost_utils
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.interp.snowball_identity.levanter_positions import PAD_ID, write_positions
+from experiments.interp.snowball_identity.levanter_positions import PAD_ID, router_dot_is_fp32, write_positions
 from experiments.interp.snowball_identity.logit_check import (
     candidate_spans,
     compare,
@@ -29,7 +30,7 @@ from experiments.interp.snowball_identity.logit_check import (
     read,
     stored_sequences,
 )
-from experiments.interp.snowball_identity.routing import compare_routes_cross_stack, route_gate
+from experiments.interp.snowball_identity.routing import MATMUL_ENV, compare_routes_cross_stack, route_gate
 
 logger = logging.getLogger(__name__)
 
@@ -57,17 +58,19 @@ class PrecisionGateInputs:
     pad_multiple: int = 64
 
 
-def evaluate(inputs: PrecisionGateInputs, overrides: dict | None, positions_path: str) -> dict:
+def evaluate(inputs: PrecisionGateInputs, overrides: dict | None, positions_path: str, dot_dtypes: list[dict]) -> dict:
     """The gate report for a written ``positions.pt``; ``failures`` is empty only on a pass."""
     parity = compare(positions_path, inputs.vllm, None, candidate_spans(inputs.identity, inputs.tokenizer_source))
     rounding = json.loads(read(prefix_join(inputs.torch_routing, "routing.json")))
     cross = compare_routes_cross_stack(positions_path, prefix_join(inputs.torch_routing, "routes.pt"))
     failures = [f"parity: {f}" for f in parity_gate(parity)] + [
-        f"routes: {f}" for f in route_gate(cross, rounding, overrides)
+        f"routes: {f}" for f in route_gate(cross, rounding, overrides, router_dot_is_fp32(dot_dtypes))
     ]
     return {
         "inputs": vars(inputs),
         "compute_dtype_overrides": overrides,
+        "router_dot_dtypes": dot_dtypes,
+        "env": {name: os.environ.get(name) for name in MATMUL_ENV},
         "jax": jax.__version__,
         "jax_default_matmul_precision": jax.config.jax_default_matmul_precision,
         "failures": failures,
@@ -81,7 +84,7 @@ def make_pre_update_gate(inputs: PrecisionGateInputs):
         overrides = trainer.config.compute_dtype_overrides
         positions_path = prefix_join(inputs.output, "positions.pt")
         with hax.partitioning.set_mesh(trainer.device_mesh):
-            write_positions(
+            dot_dtypes = write_positions(
                 state.model,
                 trainer.mp,
                 stored_sequences(inputs.positions),
@@ -98,7 +101,7 @@ def make_pre_update_gate(inputs: PrecisionGateInputs):
         failures = 0
         if jax.process_index() == 0:
             try:
-                report = evaluate(inputs, overrides, positions_path)
+                report = evaluate(inputs, overrides, positions_path, dot_dtypes)
             except Exception as exc:
                 error = exc
                 report = {"inputs": vars(inputs), "failures": [f"gate did not complete: {exc!r}"]}

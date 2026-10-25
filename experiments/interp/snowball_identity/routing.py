@@ -30,11 +30,10 @@ The two pre-registered #310 routing rows (precision-preflight-preregistration-v1
 
 - row 1, ``bias_exception_required``: any ``bf16_bias`` expert-set change requires keeping the 26 router biases in
   FP32 in the compute view (``compute_dtype_overrides={"router_bias": "float32"}``); ``dot_exception_required``: any
-  ``bf16_logits`` (dot-only) expert-set change requires the amendment-v2 FP32 router dot, which Levanter does not
-  have yet, so ``route_gate`` fails until it exists;
+  ``bf16_logits`` (dot-only) expert-set change requires the amendment-v2 FP32 router dot (and the FP32 bias);
 - row 2, ``route_gate``: fail-closed check of the cross-stack report (``compare_routes_cross_stack``). Any differing
-  Levanter vs torch route, ordered or set, fails and is held for diagnosis, as do incomplete coverage and a bias
-  override that does not match row 1.
+  Levanter vs torch route, ordered or set, fails and is held for diagnosis, as do incomplete coverage, an exception
+  that does not match row 1 and a combined-only change. Exact ties are counted and reported, never exempted.
 """
 
 import argparse
@@ -42,6 +41,7 @@ import hashlib
 import io
 import json
 import logging
+import os
 import time
 from collections import defaultdict
 
@@ -54,6 +54,8 @@ from experiments.interp.snowball_identity.sequences import Sequence
 logger = logging.getLogger(__name__)
 
 VARIANTS = ("bf16_bias", "bf16_logits", "bf16_logits_bias")
+MATMUL_ENV = ("NVIDIA_TF32_OVERRIDE", "TORCH_ALLOW_TF32_CUBLAS_OVERRIDE", "XLA_FLAGS", "JAX_DEFAULT_MATMUL_PRECISION")
+"""Environment variables that can change matmul precision, recorded with each report."""
 MAX_CASES = 500
 """Differing positions listed per variant (all are counted)."""
 
@@ -241,6 +243,7 @@ def router_rounding(harness: SnowballHarness, tokenizer, spec: dict, output: Out
         "cuda_matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
         "cudnn_allow_tf32": torch.backends.cudnn.allow_tf32,
         "float32_matmul_precision": torch.get_float32_matmul_precision(),
+        "env": {name: os.environ.get(name) for name in MATMUL_ENV},
     }
     report["seconds"] = round(time.time() - started, 1)
     output.write_json("routing.json", report)
@@ -312,30 +315,32 @@ def dot_exception_required(rounding: dict) -> bool:
     return rounding["totals"]["bf16_logits"]["positions_changed"] > 0
 
 
-def route_gate(cross: dict, rounding: dict, compute_dtype_overrides: dict | None) -> list[str]:
+def route_gate(cross: dict, rounding: dict, compute_dtype_overrides: dict | None, router_dot_fp32: bool) -> list[str]:
     """Row 2: every failure of a cross-stack report scored with ``compute_dtype_overrides``; empty is a pass.
 
-    ``rounding`` is the torch ``router_rounding`` report from the same job that wrote the compared ``routes.pt``."""
+    ``rounding`` is the torch ``router_rounding`` report from the same job that wrote the compared ``routes.pt``;
+    ``router_dot_fp32`` is the measured witness (``levanter_positions.router_dot_dtypes`` of the scored view). The
+    FP32 router dot exception also keeps the bias in FP32, so the bias override is expected when either row-1
+    exception triggers. An exception applied without its trigger fails, and so does a combined-only change (both
+    single-rounding variants clean, ``bf16_logits_bias`` changed): it has no attributed cause."""
     failures = []
+    totals = rounding["totals"]
+    bias_required, dot_required = bias_exception_required(rounding), dot_exception_required(rounding)
     bias_fp32 = (compute_dtype_overrides or {}).get("router_bias") == "float32"
-    if bias_exception_required(rounding) != bias_fp32:
-        failures.append(
-            f"router_bias override {'missing' if not bias_fp32 else 'not triggered'}: row 1 has "
-            f"{rounding['totals']['bf16_bias']['positions_changed']} expert-set changes"
-        )
-    if dot_exception_required(rounding):
-        changed = rounding["totals"]["bf16_logits"]["positions_changed"]
-        failures.append(
-            f"FP32 router dot required (amendment v2): row 1 has {changed} dot-only expert-set changes"
-            " and Levanter has no FP32 router dot"
-        )
-    totals, expected = cross["totals"], rounding["totals"]["bf16_bias"]["positions"]
-    if totals["positions"] != expected or expected == 0:
-        failures.append(f"cross-stack covers {totals['positions']} position-layers, torch {expected}")
-    if totals["set_agree"] != totals["positions"]:
-        failures.append(f"{totals['positions'] - totals['set_agree']} position-layers select different experts")
-    if totals["ordered_agree"] != totals["positions"]:
-        failures.append(f"{totals['positions'] - totals['ordered_agree']} position-layers differ in expert order")
+    changes = {variant: totals[variant]["positions_changed"] for variant in VARIANTS}
+    if bias_fp32 != (bias_required or dot_required):
+        failures.append(f"router_bias FP32 override {'applied' if bias_fp32 else 'missing'}; row 1 changes {changes}")
+    if router_dot_fp32 != dot_required:
+        failures.append(f"FP32 router dot {'applied' if router_dot_fp32 else 'missing'}; row 1 changes {changes}")
+    if changes["bf16_logits_bias"] and not (bias_required or dot_required):
+        failures.append(f"combined-only routing change with no single cause; stop for diagnosis: {changes}")
+    covered, expected = cross["totals"], totals["bf16_bias"]["positions"]
+    if covered["positions"] != expected or expected == 0:
+        failures.append(f"cross-stack covers {covered['positions']} position-layers, torch {expected}")
+    if covered["set_agree"] != covered["positions"]:
+        failures.append(f"{covered['positions'] - covered['set_agree']} position-layers select different experts")
+    if covered["ordered_agree"] != covered["positions"]:
+        failures.append(f"{covered['positions'] - covered['ordered_agree']} position-layers differ in expert order")
     return failures
 
 
@@ -345,11 +350,12 @@ def main() -> None:
     parser.add_argument("--torch", required=True, help="router_rounding routes.pt")
     parser.add_argument("--rounding", help="the same job's routing.json: add the #310 gate result; exit 1 if it fails")
     parser.add_argument("--bias-fp32", action="store_true", help="the Levanter view kept router_bias in FP32")
+    parser.add_argument("--router-dot-fp32", action="store_true", help="the measured Levanter router dot is FP32")
     args = parser.parse_args()
     report = compare_routes_cross_stack(args.levanter, args.torch)
     if args.rounding:
         overrides = {"router_bias": "float32"} if args.bias_fp32 else None
-        report["gate_failures"] = route_gate(report, json.loads(read(args.rounding)), overrides)
+        report["gate_failures"] = route_gate(report, json.loads(read(args.rounding)), overrides, args.router_dot_fp32)
     print(json.dumps(report, indent=1))
     if args.rounding and report["gate_failures"]:
         raise SystemExit(1)

@@ -56,11 +56,12 @@ def test_parity_gate_fails_closed():
     assert failing(lambda r: r["contrastive"].update(max_abs_score_diff_vs_vllm=float("nan")))
 
 
-def rounding(set_changes: int, positions: int = 10, dot_changes: int = 0) -> dict:
+def rounding(bias: int = 0, dot: int = 0, combined: int = 0, positions: int = 10) -> dict:
     return {
         "totals": {
-            "bf16_bias": {"positions": positions, "positions_changed": set_changes},
-            "bf16_logits": {"positions": positions, "positions_changed": dot_changes},
+            "bf16_bias": {"positions": positions, "positions_changed": bias},
+            "bf16_logits": {"positions": positions, "positions_changed": dot},
+            "bf16_logits_bias": {"positions": positions, "positions_changed": combined},
         }
     }
 
@@ -69,19 +70,28 @@ def cross(positions: int = 10, set_agree: int = 10, ordered_agree: int = 10) -> 
     return {"totals": {"positions": positions, "set_agree": set_agree, "ordered_agree": ordered_agree}}
 
 
-def test_route_gate():
-    fp32 = {"router_bias": "float32"}
-    assert not bias_exception_required(rounding(0)) and bias_exception_required(rounding(1))
-    assert route_gate(cross(), rounding(0), None) == []
-    assert route_gate(cross(), rounding(2), fp32) == []
-    # Row 1 and the override must agree, both ways.
-    assert route_gate(cross(), rounding(2), None)
-    assert route_gate(cross(), rounding(0), fp32)
-    # Any cross-stack difference, set or order, and incomplete coverage fail.
-    assert route_gate(cross(set_agree=9, ordered_agree=9), rounding(0), None)
-    assert route_gate(cross(ordered_agree=9), rounding(0), None)
-    assert route_gate(cross(positions=9, set_agree=9, ordered_agree=9), rounding(0), None)
-    assert route_gate(cross(0, 0, 0), rounding(0, positions=0), None)
-    # A dot-only change needs the FP32 router dot, which does not exist yet.
-    assert dot_exception_required(rounding(0, dot_changes=1))
-    assert route_gate(cross(), rounding(0, dot_changes=1), None)
+FP32_BIAS = {"router_bias": "float32"}
+
+
+def test_route_gate_matches_exceptions_to_their_triggers():
+    assert not bias_exception_required(rounding()) and bias_exception_required(rounding(bias=1))
+    assert dot_exception_required(rounding(dot=1))
+    assert route_gate(cross(), rounding(), None, router_dot_fp32=False) == []
+    # Bias-only trigger: FP32 bias, BF16 dot.
+    assert route_gate(cross(), rounding(bias=2, combined=2), FP32_BIAS, router_dot_fp32=False) == []
+    # Dot-only trigger: the FP32 dot needs the FP32 bias too; missing either fails.
+    assert route_gate(cross(), rounding(dot=3, combined=3), FP32_BIAS, router_dot_fp32=True) == []
+    assert route_gate(cross(), rounding(dot=3, combined=3), None, router_dot_fp32=True)
+    assert route_gate(cross(), rounding(dot=3, combined=3), FP32_BIAS, router_dot_fp32=False)
+    # Exceptions applied without a trigger fail.
+    assert route_gate(cross(), rounding(), FP32_BIAS, router_dot_fp32=False)
+    assert route_gate(cross(), rounding(), None, router_dot_fp32=True)
+    # A combined-only change has no attributed cause.
+    assert route_gate(cross(), rounding(combined=1), None, router_dot_fp32=False)
+
+
+def test_route_gate_fails_on_any_cross_stack_difference_or_gap():
+    assert route_gate(cross(set_agree=9, ordered_agree=9), rounding(), None, False)
+    assert route_gate(cross(ordered_agree=9), rounding(), None, False)
+    assert route_gate(cross(positions=9, set_agree=9, ordered_agree=9), rounding(), None, False)
+    assert route_gate(cross(0, 0, 0), rounding(positions=0), None, False)

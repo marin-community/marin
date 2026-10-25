@@ -124,7 +124,13 @@ def test_router_rounding_writes_routes_and_input_hash(harness, tmp_path):
     router_rounding(harness, None, {"positions": pinned, "positions_sha256": sha}, Output(str(tmp_path / "out")), set())
     report = json.loads((tmp_path / "out" / "routing.json").read_text())
     assert report["positions_sha256"] == hashlib.sha256(Path(pinned).read_bytes()).hexdigest()
-    assert set(report["matmul"]) == {"torch", "cuda_matmul_allow_tf32", "cudnn_allow_tf32", "float32_matmul_precision"}
+    assert set(report["matmul"]) == {
+        "torch",
+        "cuda_matmul_allow_tf32",
+        "cudnn_allow_tf32",
+        "float32_matmul_precision",
+        "env",
+    }
     routes = torch.load(tmp_path / "out" / "routes.pt")
     k = harness.layers[0].mlp.router.top_k
     assert {sid: tuple(r.shape) for sid, r in routes.items()} == {

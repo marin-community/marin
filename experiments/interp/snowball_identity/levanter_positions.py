@@ -117,6 +117,35 @@ def positions_records(
     return {sequences[i].id: records[i] for i in range(len(sequences))}
 
 
+def _dot_generals(jaxpr, found: list) -> list:
+    for eqn in jaxpr.eqns:
+        if eqn.primitive.name == "dot_general":
+            found.append(eqn)
+        for value in eqn.params.values():
+            for sub in value if isinstance(value, (list, tuple)) else [value]:
+                inner = getattr(sub, "jaxpr", sub)
+                if hasattr(inner, "eqns"):
+                    _dot_generals(inner, found)
+    return found
+
+
+def router_dot_dtypes(view, compute_dtype) -> list[dict]:
+    """The dtypes of the router dot in the first block of ``view``, read from its traced forward (the dot whose
+    right operand has the router's shape). This is the source witness for the FP32 router dot exception."""
+    mlp = next(iter(view.transformer.blocks)).mlp
+    x = jnp.zeros((1, 8, mlp.router.shape[0]), compute_dtype)
+    jaxpr = jax.make_jaxpr(lambda m, x: m(x))(mlp, x).jaxpr
+    return [
+        {"lhs": str(e.invars[0].aval.dtype), "rhs": str(e.invars[1].aval.dtype), "out": str(e.outvars[0].aval.dtype)}
+        for e in _dot_generals(jaxpr, [])
+        if tuple(e.invars[1].aval.shape) == tuple(mlp.router.shape)
+    ]
+
+
+def router_dot_is_fp32(dtypes: list[dict]) -> bool:
+    return bool(dtypes) and all(set(d.values()) == {"float32"} for d in dtypes)
+
+
 def write_positions(
     model,
     mp,
@@ -128,8 +157,9 @@ def write_positions(
     axis_mapping=None,
     routes: bool = False,
     compute_dtype_overrides=None,
-) -> None:
-    """Score the trainer's compute view of ``model`` and save ``positions.pt`` at ``path`` (s3:// or local).
+) -> list[dict]:
+    """Score the trainer's compute view of ``model`` and save ``positions.pt`` at ``path`` (s3:// or local); return
+    the view's ``router_dot_dtypes``.
 
     ``model`` is the trainer-loaded model (e.g. ``state.model`` after ``Trainer.initial_state``), ``mp`` the
     trainer's policy (``trainer.mp``), ``axis_mapping`` its compute mapping (``trainer.compute_axis_mapping``) and
@@ -140,9 +170,11 @@ def write_positions(
     with hax.axis_mapping(axis_mapping or {}):
         view = cast_model_for_compute(model, mp, compute_dtype_overrides)
         records = positions_records(view, sequences, batch, pad_multiple, pad_id, routes)
+        dot_dtypes = router_dot_dtypes(view, mp.compute_dtype)
     if jax.process_index() != 0:
-        return
+        return dot_dtypes
     buffer = io.BytesIO()
     torch.save(records, buffer)
     fs, local = filesystem_for(path)
     fs.pipe_file(local, buffer.getvalue())
+    return dot_dtypes

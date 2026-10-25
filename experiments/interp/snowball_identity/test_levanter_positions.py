@@ -189,7 +189,8 @@ def gate_fixture(mesh, model, policy, tmp_path):
     torch.save({sid: r["routes"] for sid, r in ours.items()}, routing / "routes.pt")
     positions = sum(len(s.tokens) for s in GATE_SEQUENCES) * CONFIG.num_layers
     unchanged = {"positions": positions, "positions_changed": 0}
-    (routing / "routing.json").write_text(json.dumps({"totals": {"bf16_bias": unchanged, "bf16_logits": unchanged}}))
+    totals = {variant: unchanged for variant in ("bf16_bias", "bf16_logits", "bf16_logits_bias")}
+    (routing / "routing.json").write_text(json.dumps({"totals": totals}))
     inputs = precision_gate.PrecisionGateInputs(
         positions=pinned,
         vllm=str(tmp_path / "vllm.json"),
@@ -243,3 +244,15 @@ def test_pre_update_gate_fails_closed_on_missing_inputs(mesh_and_model, tmp_path
     with pytest.raises(precision_gate.PrecisionGateFailed):
         precision_gate.make_pre_update_gate(inputs)(trainer, state)
     assert "gate did not complete" in json.loads((tmp_path / "gate" / "gate.json").read_text())["failures"][0]
+
+
+def test_router_dot_witness_reads_the_traced_dtypes(mesh_and_model):
+    mesh, model = mesh_and_model
+    with jax.set_mesh(mesh):
+        bf16 = levanter_positions.router_dot_dtypes(
+            levanter_positions.cast_model_for_compute(model, jmp.get_policy("p=f32,c=bfloat16"), None), jnp.bfloat16
+        )
+        fp32 = levanter_positions.router_dot_dtypes(model, jnp.float32)
+    assert bf16 == [{"lhs": "bfloat16", "rhs": "bfloat16", "out": "bfloat16"}]
+    assert not levanter_positions.router_dot_is_fp32(bf16)
+    assert levanter_positions.router_dot_is_fp32(fp32) and not levanter_positions.router_dot_is_fp32([])
