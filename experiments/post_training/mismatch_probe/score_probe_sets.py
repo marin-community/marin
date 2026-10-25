@@ -454,8 +454,10 @@ def summarize_kl(out: str, set_name: str, kind: str) -> dict[str, Any]:
         "sequences": len(per_sequence),
         "token_mean_kl": float(np.mean(kls)),
         "sequence_mean_kl": float(np.mean([np.mean(values) for values in per_sequence.values()])),
-        "buckets": {bucket: {"positions": len(values), "token_mean_kl": float(np.mean(values))}
-                    for bucket, values in sorted(per_bucket.items())},
+        "buckets": {
+            bucket: {"positions": len(values), "token_mean_kl": float(np.mean(values))}
+            for bucket, values in sorted(per_bucket.items())
+        },
         "written_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 

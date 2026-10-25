@@ -200,4 +200,6 @@ def test_an_object_store_teacher_must_match_its_export_manifest(tmp_path):
 
 
 def test_the_policy_chat_template_file_is_the_shared_grug_template():
-    assert (Path("vendor/skyrl") / POLICY_CHAT_TEMPLATE).resolve().read_text() == shared_template(GRUG_TOKENS)
+    # The file ends with a newline (repository lint); Jinja drops a single trailing newline.
+    text = (Path("vendor/skyrl") / POLICY_CHAT_TEMPLATE).resolve().read_text()
+    assert text.removesuffix("\n") == shared_template(GRUG_TOKENS)
