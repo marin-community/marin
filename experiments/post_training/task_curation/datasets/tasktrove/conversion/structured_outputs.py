@@ -99,7 +99,9 @@ else:
     verdict = grade_component("__CONTENT_DIR__")
     verdict["detail"] = {"format": format_verdict, "content": verdict["detail"]}
 (logs / "__VERDICT_NAME__").write_text(json.dumps(verdict))
-""".replace("__VERDICT_NAME__", VERDICT_NAME)
+""".replace(
+        "__VERDICT_NAME__", VERDICT_NAME
+    )
     .replace("__FORMAT_DIR__", FORMAT_DIR)
     .replace("__CONTENT_DIR__", CONTENT_DIR)
 )

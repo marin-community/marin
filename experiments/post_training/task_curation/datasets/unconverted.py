@@ -3,6 +3,7 @@
 
 """Sources retained in the inventory that do not yet have a conversion recipe."""
 
+
 from experiments.post_training.task_curation.datasets.tasktrove.archives import TASKTROVE_REPO, TASKTROVE_REVISION
 from experiments.post_training.task_curation.source import RlDataSource, SourceInfo, SourceReference
 
@@ -14,7 +15,7 @@ TASKTROVE_INPUT = SourceReference(
 TASKTROVE_RELEASE = SourceReference(
     "open-athena/task-trove",
     "ec049a4fb541ffbe5bbccb803e826563f5718dbf",
-    ("https://huggingface.co/datasets/open-athena/task-trove/tree/ec049a4fb541ffbe5bbccb803e826563f5718dbf"),
+    ("https://huggingface.co/datasets/open-athena/task-trove/tree/" "ec049a4fb541ffbe5bbccb803e826563f5718dbf"),
 )
 
 
@@ -95,7 +96,8 @@ def sources() -> list[RlDataSource]:
                 tags=("agentic", "multi-turn", "excluded"),
                 count=9659,
                 notes=(
-                    "Never compiles or runs; regex on the rewritten method body with guards that accept either polarity."
+                    "Never compiles or runs; regex on the rewritten method body with guards that accept "
+                    "either polarity."
                 ),
                 dataset=TASKTROVE_INPUT,
             )
@@ -258,7 +260,7 @@ def sources() -> list[RlDataSource]:
                 family="code-completion",
                 tags=("agentic", "multi-turn", "excluded"),
                 count=3356,
-                notes=("Re-skin of the Python variant with the same free 0.25 tier; metadata still says python."),
+                notes=("Re-skin of the Python variant with the same free 0.25 tier; metadata still says " "python."),
                 dataset=TASKTROVE_INPUT,
             )
         ),
@@ -270,7 +272,7 @@ def sources() -> list[RlDataSource]:
                 family="ci-workflow",
                 tags=("agentic", "multi-turn", "excluded"),
                 count=9930,
-                notes=("Instruction lists every job and step verbatim; workflow is never executed. Transcription."),
+                notes=("Instruction lists every job and step verbatim; workflow is never executed. " "Transcription."),
                 dataset=TASKTROVE_INPUT,
             )
         ),
@@ -310,7 +312,9 @@ def sources() -> list[RlDataSource]:
                 family="code-generation",
                 tags=("agentic", "multi-turn", "excluded"),
                 count=3121,
-                notes=("LLM-synthesized stub-filling toys (TypeScript formatter shim, Flask hello page). Kata-grade."),
+                notes=(
+                    "LLM-synthesized stub-filling toys (TypeScript formatter shim, Flask hello page). " "Kata-grade."
+                ),
                 dataset=TASKTROVE_INPUT,
             )
         ),
@@ -827,7 +831,7 @@ def sources() -> list[RlDataSource]:
                 family="swe",
                 tags=("agentic", "multi-turn", "license:mit", "language:python"),
                 notes=(
-                    "Canonical SWE-Gym tasks with native test selection and grading; oracle patches remain separate."
+                    "Canonical SWE-Gym tasks with native test selection and grading; oracle patches " "remain separate."
                 ),
                 dataset=TASKTROVE_RELEASE,
             )
@@ -900,7 +904,7 @@ def sources() -> list[RlDataSource]:
                 family="music",
                 tags=("agentic", "multi-turn", "license:apache-2.0", "language:zh", "language:en"),
                 notes=(
-                    "Canonical prompts with the complete native ABC-to-MIDI continuous scorer; no shipped solutions."
+                    "Canonical prompts with the complete native ABC-to-MIDI continuous scorer; no shipped " "solutions."
                 ),
                 dataset=TASKTROVE_RELEASE,
             )

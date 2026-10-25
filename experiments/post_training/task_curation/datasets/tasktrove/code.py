@@ -8,6 +8,7 @@ The remaining sources use the campaign executable image and compiler grader pack
 an archive's ``solution/solve.sh`` oracle when available, and otherwise grade an empty submission.
 """
 
+
 import json
 
 from taskcompendium.models import CommandSemantics, EnvironmentRequirements

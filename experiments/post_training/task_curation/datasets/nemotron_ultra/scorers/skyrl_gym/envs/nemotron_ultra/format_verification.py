@@ -22,7 +22,9 @@ def grade_format(text: str, verifier: dict[str, Any]) -> tuple[float, dict[str, 
         spurious: list[str] = []
         expected_set = set(expected)
         for pattern in verifier.get("patterns", []):
-            spurious.extend(match.group(0) for match in re.finditer(pattern, text) if match.group(0) not in expected_set)
+            spurious.extend(
+                match.group(0) for match in re.finditer(pattern, text) if match.group(0) not in expected_set
+            )
         passed = not missing and not spurious
         return float(passed), {"expected": expected, "missing": missing, "spurious": spurious, "passed": passed}
     raise NotImplementedError(f"Unsupported format verifier type {verifier_type!r}")

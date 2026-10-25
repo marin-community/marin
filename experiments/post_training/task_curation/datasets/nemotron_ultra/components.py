@@ -707,7 +707,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
         ),
         "ultra_v3_agentic_rl_step73_citation_format_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_citation_format_v2",
-            title=("nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1 · step73 v2 records · mopd"),
+            title=("nvidia/Nemotron-RL-Instruction-Following-Citation-Formatting-v1 · step73 v2 records " "· mopd"),
             origin="MarinSkyRL",
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
@@ -715,7 +715,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
         ),
         "ultra_v3_agentic_rl_step73_freeform_text_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_freeform_text_v2",
-            title=("nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1 · step73 v2 records · mopd"),
+            title=("nvidia/Nemotron-RL-Instruction-Following-Free-Form-Formatting-v1 · step73 v2 records " "· mopd"),
             origin="MarinSkyRL",
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
@@ -723,14 +723,14 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
         ),
         "ultra_v3_agentic_rl_step73_structured_outputs_v2": SourceInfo(
             id="MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_structured_outputs_v2",
-            title=("nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · step73 v2 records · mopd"),
+            title=("nvidia/Nemotron-RL-Instruction-Following-Structured-Outputs-v2 · step73 v2 records · " "mopd"),
             origin="MarinSkyRL",
             family="instruction-following",
             tags=("rlvr", "single-turn", "license:cc-by-4.0", "gym/nemotron_ultra"),
             count=10000,
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym": SourceInfo(
-            id=("MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-Gym/SWE-Gym"),
+            id=("MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/SWE-" "Gym/SWE-Gym"),
             title="SWE-Gym/SWE-Gym · step73 pivot records · mopd",
             origin="MarinSkyRL",
             family="swe-repo",
@@ -738,7 +738,9 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=246,
         ),
         "ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2": SourceInfo(
-            id=("MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/SWE-rebench-V2"),
+            id=(
+                "MarinSkyRL:nemotron_ultra_mopd/ultra_v3_agentic_rl_step73_swe_pivot_v1_len40k/nebius/" "SWE-rebench-V2"
+            ),
             title="nebius/SWE-rebench-V2 · step73 pivot records · mopd",
             origin="MarinSkyRL",
             family="swe-repo",
@@ -884,7 +886,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
-            id=("MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2"),
+            id=("MarinSkyRL:nemotron_ultra_rlvr1/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-" "rebench-V2"),
             title="nebius/SWE-rebench-V2 · rlvr1",
             origin="MarinSkyRL",
             family="swe-repo",
@@ -1046,7 +1048,7 @@ BLENDS: dict[str, dict[str, SourceInfo]] = {
             count=2838,
         ),
         "ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2": SourceInfo(
-            id=("MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-rebench-V2"),
+            id=("MarinSkyRL:nemotron_ultra_rlvr2/ultra_sft_step3200_swe_pivot_len40k/nebius/SWE-" "rebench-V2"),
             title="nebius/SWE-rebench-V2 · rlvr2",
             origin="MarinSkyRL",
             family="swe-repo",
