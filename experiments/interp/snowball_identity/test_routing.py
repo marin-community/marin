@@ -7,10 +7,12 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 import torch
 
 from experiments.interp.snowball_identity.harness import Output, run_positions
 from experiments.interp.snowball_identity.logit_check import stored_sequences
+from experiments.interp.snowball_identity.preflight import check_router_rounding_result
 from experiments.interp.snowball_identity.routing import (
     VARIANTS,
     compare_routes,
@@ -58,6 +60,24 @@ def test_routing_stats_cover_every_position(harness):
             assert layer[variant]["contrastive"]["positions"] == 6
     for variant in VARIANTS:
         assert report["totals"][variant]["positions"] == LAYERS * (len(TOKENS) + 6)
+    for layer in report["layers"]:
+        assert 0 <= layer["native_exact_tie_positions"]["check"] <= len(TOKENS)
+
+
+def test_exact_ties_are_counted(harness):
+    # A zero router weight and bias tie every expert at layer 0, at every position.
+    router = harness.layers[0].mlp.router
+    weight, bias = router.weight.detach().clone(), router.bias.clone()
+    try:
+        with torch.no_grad():
+            router.weight.zero_()
+            router.bias.zero_()
+        report = routing_stats(harness, [Sequence("check|a", "check", tuple(TOKENS))])
+    finally:
+        with torch.no_grad():
+            router.weight.copy_(weight)
+            router.bias.copy_(bias)
+    assert report["layers"][0]["native_exact_tie_positions"]["check"] == len(TOKENS)
 
 
 def test_bf16_exact_bias_changes_nothing(harness):
@@ -96,9 +116,15 @@ def test_router_rounding_writes_routes_and_input_hash(harness, tmp_path):
     sequences = [Sequence("check|a", "check", tuple(TOKENS)), Sequence("long|x", "long", tuple(TOKENS[:7]))]
     run_positions(harness, sequences, Output(str(tmp_path / "pinned")))
     pinned = str(tmp_path / "pinned" / "positions.pt")
-    router_rounding(harness, None, {"positions": pinned}, Output(str(tmp_path / "out")), stop_ids=set())
+    sha = hashlib.sha256(Path(pinned).read_bytes()).hexdigest()
+    with pytest.raises(ValueError, match="sha256"):
+        router_rounding(
+            harness, None, {"positions": pinned, "positions_sha256": "0" * 64}, Output(str(tmp_path / "x")), set()
+        )
+    router_rounding(harness, None, {"positions": pinned, "positions_sha256": sha}, Output(str(tmp_path / "out")), set())
     report = json.loads((tmp_path / "out" / "routing.json").read_text())
     assert report["positions_sha256"] == hashlib.sha256(Path(pinned).read_bytes()).hexdigest()
+    assert set(report["matmul"]) == {"torch", "cuda_matmul_allow_tf32", "cudnn_allow_tf32", "float32_matmul_precision"}
     routes = torch.load(tmp_path / "out" / "routes.pt")
     k = harness.layers[0].mlp.router.top_k
     assert {sid: tuple(r.shape) for sid, r in routes.items()} == {
@@ -118,3 +144,27 @@ def test_cross_stack_compare_counts_set_and_order(tmp_path):
     assert report["totals"] == {"positions": 4, "set_agree": 3, "ordered_agree": 2}
     assert [(c["position"], c["layer"], c["set_changed"]) for c in report["cases"]] == [(0, 1, False), (1, 0, True)]
     assert "not served-vLLM" in report["label"]
+
+
+def test_result_check_needs_done_hash_and_full_coverage(harness, tmp_path):
+    sequences = [Sequence("check|a", "check", tuple(TOKENS)), Sequence("long|x", "long", tuple(TOKENS[:7]))]
+    run_positions(harness, sequences, Output(str(tmp_path / "pinned")))
+    pinned = str(tmp_path / "pinned" / "positions.pt")
+    sha = hashlib.sha256(Path(pinned).read_bytes()).hexdigest()
+    out = tmp_path / "out"
+    router_rounding(harness, None, {"positions": pinned, "positions_sha256": sha}, Output(str(out)), set())
+    k = harness.layers[0].mlp.router.top_k
+
+    def check() -> list[str]:
+        return check_router_rounding_result(str(out), pinned, sha, LAYERS, k)
+
+    assert check() == ["no done.json"]
+    (out / "done.json").write_text("{}")
+    assert check() == []
+    assert check_router_rounding_result(str(out), pinned, "0" * 64, LAYERS, k)
+    routes = torch.load(out / "routes.pt")
+    routes["long|x"] = routes["long|x"][:-1]
+    torch.save(routes, out / "routes.pt")
+    assert check() == [f"long|x: routes shape (6, {LAYERS}, {k}), expected (7, {LAYERS}, {k})"]
+    (out / "error.json").write_text(json.dumps({"error": "boom"}))
+    assert check() == ["error.json: boom"]

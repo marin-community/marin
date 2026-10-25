@@ -21,7 +21,9 @@ alone, not an accumulated drift.
 Inputs are the stored token ids of the pinned ``positions.pt`` (``logit_check.stored_sequences``), never a fresh
 tokenization. Per variant, layer and sequence group (``check``, ``contrastive``, ``long``, ``long_past_window``) it
 reports how many positions select a different expert set than ``native``, how many selected experts differ, the max abs
-change of the dense combine weights, and the smallest native margin between the k-th and (k+1)-th biased logits.
+change of the dense combine weights, the smallest native margin between the k-th and (k+1)-th biased logits, and how
+many positions have an exact tie among the native top k+1 biased logits (there the tie rule decides; torch's
+``jax_top_k`` and Levanter's ``jax.lax.top_k`` take the lower index, vLLM's ``torch.topk`` has no stated rule).
 Every position whose ordered ids differ is listed (up to ``MAX_CASES`` per variant). Output: ``routing.json``.
 
 The two pre-registered #310 routing rows (precision-preflight-preregistration-v1.md):
@@ -120,6 +122,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
     cases: dict[str, list] = {variant: [] for variant in VARIANTS}
     native_routes: dict[str, torch.Tensor] = {}
     margins: dict = defaultdict(lambda: float("inf"))
+    ties: dict = defaultdict(int)
     started = time.time()
     try:
         for number, sequence in enumerate(sequences):
@@ -136,6 +139,11 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
                 rounded = torch.nn.functional.linear(x.bfloat16(), router.weight.bfloat16()).float()
                 bias = router.bias.detach().to(device=logits.device, dtype=torch.float32)
                 results = compare_routes(logits, bias, router.top_k, rounded)
+                # Exact ties among the native top k+1 biased logits, where the tie rule alone picks the order.
+                top_values = torch.topk(logits + bias, router.top_k + 1).values
+                exact_tie = (top_values[:, 1:] == top_values[:, :-1]).any(-1).cpu()
+                for group, rows in groups.items():
+                    ties[(layer, group)] += int(exact_tie[rows].sum())
                 layer_routes.append(results["bf16_bias"]["native"].cpu())
                 for variant, result in results.items():
                     result = {name: value.cpu() for name, value in result.items()}
@@ -161,6 +169,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
                                     "variant": result["selected"][position].tolist(),
                                     "set_changed": bool(result["experts_changed"][position] > 0),
                                     "native_margin": float(result["margin"][position]),
+                                    "native_exact_tie": bool(exact_tie[position]),
                                 }
                             )
             native_routes[sequence.id] = torch.stack(layer_routes, dim=1).to(torch.int16)  # [T, L, K]
@@ -180,6 +189,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
                 "weight_dtype": str(block.mlp.router.weight.dtype),
                 "bias_rounding_max_abs": float((bias - bias.bfloat16().float()).abs().max()),
                 "min_native_margin": {group: margins[(layer, group)] for group in groups},
+                "native_exact_tie_positions": {group: ties[(layer, group)] for group in groups},
                 **{
                     variant: {
                         group: counts[(variant, layer, group)] for group in groups if (variant, layer, group) in counts
@@ -213,15 +223,25 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
 
 
 def router_rounding(harness: SnowballHarness, tokenizer, spec: dict, output: Output, stop_ids: set[int]) -> None:
-    """Spec: ``positions`` (the pinned #298 ``positions.pt``, whose stored token ids are the inputs).
+    """Spec: ``positions`` (the pinned #298 ``positions.pt``, whose stored token ids are the inputs) and its
+    ``positions_sha256``, checked before the forward.
 
     Writes ``routing.json`` and ``routes.pt`` (``{sequence id: native FP32-bias routes [T, L, K] int16}``, the torch
     side of the cross-stack row)."""
     started = time.time()
+    actual = hashlib.sha256(read(spec["positions"])).hexdigest()
+    if actual != spec["positions_sha256"]:
+        raise ValueError(f"{spec['positions']}: sha256 {actual}, expected {spec['positions_sha256']}")
     report = routing_stats(harness, stored_sequences(spec["positions"]))
     output.save("routes.pt", report.pop("native_routes"))
     report["positions"] = spec["positions"]
-    report["positions_sha256"] = hashlib.sha256(read(spec["positions"])).hexdigest()
+    report["positions_sha256"] = actual
+    report["matmul"] = {
+        "torch": torch.__version__,
+        "cuda_matmul_allow_tf32": torch.backends.cuda.matmul.allow_tf32,
+        "cudnn_allow_tf32": torch.backends.cudnn.allow_tf32,
+        "float32_matmul_precision": torch.get_float32_matmul_precision(),
+    }
     report["seconds"] = round(time.time() - started, 1)
     output.write_json("routing.json", report)
 

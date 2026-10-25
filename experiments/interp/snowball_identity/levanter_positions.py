@@ -68,7 +68,11 @@ def _scores(model, tokens: jax.Array, routes: bool = False) -> tuple:
         top_lp, top_id = jax.lax.top_k(logprobs, TOP_K)
         top_lps.append(top_lp)
         top_ids.append(top_id)
-    return jnp.stack(actuals), jnp.stack(top_ids), jnp.stack(top_lps), selected
+    # Replicated, so every process can read the outputs of a multi-host mesh.
+    outputs = (jnp.stack(actuals), jnp.stack(top_ids), jnp.stack(top_lps))
+    if selected is not None:
+        outputs += (selected,)
+    return tuple(reshard(x, P()) for x in outputs) + ((None,) if selected is None else ())
 
 
 def positions_records(
@@ -131,10 +135,13 @@ def write_positions(
     trainer's policy (``trainer.mp``), ``axis_mapping`` its compute mapping (``trainer.compute_axis_mapping``) and
     ``compute_dtype_overrides`` its ``trainer.config.compute_dtype_overrides``. The view is built by the same helper
     ``WrappedLossFunction`` uses (``levanter.compute_dtype.cast_model_for_compute``), so a reviewed exception such
-    as ``{"router_bias": "float32"}`` is scored as trained. Call it inside the trainer's mesh."""
+    as ``{"router_bias": "float32"}`` is scored as trained. Call it inside the trainer's mesh, on every process (the
+    forward is a collective); only process 0 writes the file."""
     with hax.axis_mapping(axis_mapping or {}):
         view = cast_model_for_compute(model, mp, compute_dtype_overrides)
         records = positions_records(view, sequences, batch, pad_multiple, pad_id, routes)
+    if jax.process_index() != 0:
+        return
     buffer = io.BytesIO()
     torch.save(records, buffer)
     fs, local = filesystem_for(path)

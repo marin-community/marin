@@ -14,8 +14,10 @@ Queue layout under ``--queue`` (an s3:// or local prefix)::
     worker.json            heartbeat: state, current job, weights, updated time
     stop.json              ask the worker to exit after the current job (removed when honored)
 
-The worker exits after ``--idle-minutes`` (default 60) with no work, and with status 3 when its idle poll loop
-stalls for ``STALL_SECONDS`` (``status`` shows the heartbeat age). A spec left in ``running/`` by a worker
+With ``--expect`` (a ``preflight.source_preflight`` expectations JSON) the worker checks the source and inputs before
+loading, writes ``preflight.json`` and exits with status 2 on any mismatch. It exits with status 1 if any spec ended
+in ``error.json``. The worker exits after ``--idle-minutes`` (default 60) with no work, and with status 3 when its
+idle poll loop stalls for ``STALL_SECONDS`` (``status`` shows the heartbeat age). A spec left in ``running/`` by a worker
 that died is moved to ``results/<id>/error.json`` when the next worker starts.
 
 Spec format (JSON). ``id`` is optional; ``submit`` makes one from the time.
@@ -46,9 +48,10 @@ Spec format (JSON). ``id`` is optional; ``submit`` makes one from the time.
 ``{"command": "edit_memit", "layers": [L, ...], "module": ..., "key_prompts": PATH, "preserve_prompts": PATH, ...}``
     A multi-layer MEMIT / AlphaEdit edit, rank up to the number of keys per layer (``memit.edit_memit``). The
     model is unchanged after the spec.
-``{"command": "router_rounding", "positions": PATH}``
+``{"command": "router_rounding", "positions": PATH, "positions_sha256": SHA}``
     Per layer, top-k routes of the pinned #298 sequences (the stored token ids of ``positions.pt``) with the native
-    FP32 router vs BF16-rounded bias and logits on the same router input (``routing.router_rounding``).
+    FP32 router vs BF16-rounded bias and logits on the same router input (``routing.router_rounding``). Fails before
+    the forward if ``positions.pt`` does not hash to ``positions_sha256``.
 
 Prompt rows use ``prompts.py``'s format: ``{"id", "messages" | "text", "chat_template_kwargs"?, "prefill"?,
 "targets"?}``.
@@ -67,7 +70,7 @@ import torch
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.interp.snowball_identity import analyses, edits, memit, routing
+from experiments.interp.snowball_identity import analyses, edits, memit, preflight, routing
 from experiments.interp.snowball_identity.harness import (
     COMMANDS,
     Output,
@@ -153,7 +156,8 @@ def run_spec(harness, tokenizer, weights: str, stop_ids: set[int], spec: dict, o
         ANALYSES[command](harness, tokenizer, spec, output, stop_ids)
 
 
-def serve(queue: Queue, weights: str, idle_minutes: float) -> None:
+def serve(queue: Queue, weights: str, idle_minutes: float, expect: dict | None = None) -> int:
+    """Run queued specs until stopped or idle; returns how many ended in ``error.json``."""
     for job_id in queue.ids("running"):
         spec = queue.read("running", f"{job_id}.json")
         queue.write(
@@ -171,6 +175,12 @@ def serve(queue: Queue, weights: str, idle_minutes: float) -> None:
         queue.write(heartbeat, "worker.json")
 
     beat()
+    if expect is not None:
+        failures = preflight.source_preflight(weights, expect)
+        queue.write({"weights": weights, "expect": expect, "failures": failures}, "preflight.json")
+        if failures:
+            beat(state="stopped", reason=f"preflight failed: {failures}")
+            raise SystemExit(2)
     harness = load_harness(weights)
     tokenizer = load_tokenizer(weights)
     stop_ids = stop_tokens(weights)
@@ -187,17 +197,18 @@ def serve(queue: Queue, weights: str, idle_minutes: float) -> None:
                 os._exit(3)
 
     threading.Thread(target=watchdog, daemon=True).start()
+    failed = 0
     while True:
         progress["at"] = time.time()
         if queue.read("stop.json") is not None:
             queue.remove("stop.json")
             beat(state="stopped", reason="stop.json")
-            return
+            return failed
         pending = queue.ids("inbox")
         if not pending:
             if time.time() - last_work > idle_minutes * 60:
                 beat(state="stopped", reason=f"idle for {idle_minutes:g} minutes")
-                return
+                return failed
             beat()
             time.sleep(POLL_SECONDS)
             continue
@@ -212,6 +223,7 @@ def serve(queue: Queue, weights: str, idle_minutes: float) -> None:
         queue.remove("inbox", f"{job_id}.json")
         if spec is None:
             queue.write({"error": failure or "spec vanished"}, "results", job_id, "error.json")
+            failed += 1
             continue
         queue.write(spec, "running", f"{job_id}.json")
         beat(state="running", job=job_id)
@@ -222,6 +234,7 @@ def serve(queue: Queue, weights: str, idle_minutes: float) -> None:
             run_spec(harness, tokenizer, weights, stop_ids, spec, output)
         except Exception as error:
             logger.exception("job %s failed", job_id)
+            failed += 1
             torch.cuda.empty_cache()
             output.write_json(
                 "error.json",
@@ -284,6 +297,7 @@ def main() -> None:
     serve_parser.add_argument("--queue", required=True)
     serve_parser.add_argument("--weights", default=SNOWBALL_V01)
     serve_parser.add_argument("--idle-minutes", type=float, default=60)
+    serve_parser.add_argument("--expect", help="preflight expectations JSON, checked before the load")
     submit_parser = commands.add_parser("submit", help="queue one spec")
     submit_parser.add_argument("--queue", required=True)
     submit_parser.add_argument("--spec", required=True, help="spec JSON, or a path to it (s3:// or local)")
@@ -294,7 +308,9 @@ def main() -> None:
 
     queue = Queue(args.queue)
     if args.action == "serve":
-        serve(queue, args.weights, args.idle_minutes)
+        expect = json.loads(preflight.read(args.expect)) if args.expect else None
+        if serve(queue, args.weights, args.idle_minutes, expect):
+            raise SystemExit(1)
     elif args.action == "submit":
         submit(queue, read_spec(args.spec), args.wait)
     elif args.action == "status":

@@ -3,6 +3,9 @@
 
 """CPU checks of the Levanter positions writer on a tiny random Levanter Snowball."""
 
+import json
+from types import SimpleNamespace
+
 import equinox as eqx
 import haliax as hax
 import jax
@@ -15,7 +18,7 @@ from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
-from experiments.interp.snowball_identity import levanter_positions
+from experiments.interp.snowball_identity import levanter_positions, precision_gate
 from experiments.interp.snowball_identity.levanter_positions import TOP_K, positions_records, write_positions
 from experiments.interp.snowball_identity.logit_check import stored_sequences
 from experiments.interp.snowball_identity.sequences import Sequence
@@ -155,3 +158,88 @@ def test_compute_dtype_override_reaches_the_scored_view(mesh_and_model, tmp_path
         finally:
             levanter_positions.positions_records = original
     assert seen == [{"bfloat16"}, {"float32"}]
+
+
+GATE_SEQUENCES = [SEQUENCES[0], Sequence("check|b", "check", tuple(range(1, 21)))]
+"""Check-group only: ``compare`` requires the real long length and contrastive spans."""
+
+
+def gate_fixture(mesh, model, policy, tmp_path):
+    """Pinned positions, a "vLLM" reference and torch routes that are all this model's own compute view."""
+    pinned = str(tmp_path / "pinned.pt")
+    with jax.set_mesh(mesh):
+        write_positions(model, policy, GATE_SEQUENCES, pinned, batch=2, pad_multiple=8, pad_id=63, routes=True)
+    ours = torch.load(pinned)
+    reference = {
+        sid: {
+            "tokens": r["tokens"],
+            "actual": [None, *r["actual"][1:].tolist()],
+            "top": [None]
+            + [
+                dict(zip(ids[:20].tolist(), values[:20].tolist(), strict=True))
+                for ids, values in zip(r["top_ids"][1:], r["top_lp"][1:], strict=True)
+            ],
+        }
+        for sid, r in ours.items()
+    }
+    (tmp_path / "vllm.json").write_text(json.dumps(reference))
+    routing = tmp_path / "torch"
+    routing.mkdir()
+    (tmp_path / "gate").mkdir()
+    torch.save({sid: r["routes"] for sid, r in ours.items()}, routing / "routes.pt")
+    positions = sum(len(s.tokens) for s in GATE_SEQUENCES) * CONFIG.num_layers
+    unchanged = {"positions": positions, "positions_changed": 0}
+    (routing / "routing.json").write_text(json.dumps({"totals": {"bf16_bias": unchanged, "bf16_logits": unchanged}}))
+    inputs = precision_gate.PrecisionGateInputs(
+        positions=pinned,
+        vllm=str(tmp_path / "vllm.json"),
+        identity="unused",
+        tokenizer_source="unused",
+        torch_routing=str(routing),
+        output=str(tmp_path / "gate"),
+        batch=2,
+        pad_multiple=8,
+    )
+    trainer = SimpleNamespace(
+        config=SimpleNamespace(compute_dtype_overrides=None), device_mesh=mesh, mp=policy, compute_axis_mapping={}
+    )
+    return inputs, trainer, SimpleNamespace(model=model)
+
+
+def test_pre_update_gate_raises_on_failures_and_passes_when_clean(mesh_and_model, tmp_path, monkeypatch):
+    mesh, model = mesh_and_model
+    policy = jmp.get_policy("p=f32,c=bfloat16")
+    inputs, trainer, state = gate_fixture(mesh, model, policy, tmp_path)
+    monkeypatch.setattr(precision_gate, "candidate_spans", lambda *args: {})
+    monkeypatch.setattr(levanter_positions, "PAD_ID", 63)
+    monkeypatch.setattr(precision_gate, "PAD_ID", 63)
+    gate = precision_gate.make_pre_update_gate(inputs)
+    # The tiny sequences cannot meet the pinned coverage, so the real parity gate fails; the routes agree.
+    with pytest.raises(precision_gate.PrecisionGateFailed):
+        gate(trainer, state)
+    report = json.loads((tmp_path / "gate" / "gate.json").read_text())
+    assert report["failures"] and all(f.startswith("parity: ") for f in report["failures"])
+    assert report["routes"]["totals"]["set_agree"] == report["routes"]["totals"]["positions"] > 0
+    assert "jax_default_matmul_precision" in report
+    # With the parity gate satisfied, the clean routes pass.
+    monkeypatch.setattr(precision_gate, "parity_gate", lambda report: [])
+    gate(trainer, state)
+    assert json.loads((tmp_path / "gate" / "gate.json").read_text())["failures"] == []
+    # One changed torch route fails the route gate.
+    routes = torch.load(tmp_path / "torch" / "routes.pt")
+    routes["check|a"][3, 1] = routes["check|a"][3, 1].flip(0)
+    torch.save(routes, tmp_path / "torch" / "routes.pt")
+    with pytest.raises(precision_gate.PrecisionGateFailed):
+        gate(trainer, state)
+    failures = json.loads((tmp_path / "gate" / "gate.json").read_text())["failures"]
+    assert failures == ["routes: 1 position-layers differ in expert order"]
+
+
+def test_pre_update_gate_fails_closed_on_missing_inputs(mesh_and_model, tmp_path, monkeypatch):
+    mesh, model = mesh_and_model
+    inputs, trainer, state = gate_fixture(mesh, model, jmp.get_policy("p=f32,c=bfloat16"), tmp_path)
+    monkeypatch.setattr(precision_gate, "candidate_spans", lambda *args: {})
+    (tmp_path / "torch" / "routing.json").unlink()
+    with pytest.raises(precision_gate.PrecisionGateFailed):
+        precision_gate.make_pre_update_gate(inputs)(trainer, state)
+    assert "gate did not complete" in json.loads((tmp_path / "gate" / "gate.json").read_text())["failures"][0]
