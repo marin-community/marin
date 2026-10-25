@@ -6,6 +6,7 @@ import base64
 import pickle
 import fsspec
 from skyrl_train.io import io
+from marinskyrl.resource_locator import join_resource_path
 from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.payloads import ObjectStorePayloads
 from pathlib import Path
@@ -301,7 +302,7 @@ async def test_object_store_payloads_round_trip_through_the_loaded_launch(tmp_pa
 
     config = load_launch_config(path)
     store = ObjectStorePayloads(config.skyrl.trainer.rollout_buffer.object_store_root)
-    [loaded] = await store.fetch([store.object_store_root + "/payload.pkl"])
+    [loaded] = await store.fetch([join_resource_path(store.object_store_root, "payload.pkl")])
 
     assert (loaded.uid, loaded.policy_step, loaded.prompt) == ("trial-1", 7, {"uid": "trial-1"})
     assert loaded.trajectory_batch["response_ids"] == [[17, 19]]
