@@ -64,11 +64,7 @@ def torch_advantages(rewards, mask, groups, normalize):
 
 
 def torch_objective(current, old, reference, advantages, mask, config):
-    """Whole-step Torch oracle for MSRL 82396a73 regular/token_mean and k3 KL.
-
-    Reduce the complete batch directly, independently of JAX's precomputed
-    token weights and execution microbatch accumulation.
-    """
+    """Return MSRL 82396a73's whole-step regular/token_mean loss with k3 KL."""
     import torch  # noqa: PLC0415  # optional dependency
 
     ratio = (current - old).float().clamp(-20, 20).exp().to(current.dtype)
