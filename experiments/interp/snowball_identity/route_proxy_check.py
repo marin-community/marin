@@ -16,6 +16,17 @@ pinned sha256. Per layer ``l``, over the gate's position-layers:
   fewer than ``MIN_FOR_P99`` Levanter disagreements only p50 is compared.
 
 Ordered agreement is reported, not gated. The log-probability lines are not part of this check.
+
+G1a (``t310/precision-preflight-amendment-G1a-filled-shoveler.md``, sha256 27f282c2), ``check_vllm_floor``: the
+floor is the served stack. Inputs add marten's native-API route capture (receipt 3f574c81): pass 1 and pass 2
+``routes.pt`` (sequence id -> executed top-4 ids [T, L, 4]). Per layer:
+
+- ``F_l``: vLLM pass 1 vs torch batch-1 set agreement; ``D_l``: vLLM pass 1 vs pass 2 (reported).
+- (a) ``1 - A_l <= K_RATE_VLLM * (1 - F_l)``.
+- (b) at Levanter's set disagreements with torch, torch batch-1's 4th/5th margin p50 and p99 each at most
+  ``MARGIN_FACTOR`` times torch's margin at vLLM-vs-torch set disagreements (p99 only from ``MIN_FOR_P99``).
+- Diagnostic, not gated: Levanter vs vLLM pass 1 set agreement ``>= D_l - (1 - F_l)``; Levanter vs both passes,
+  set and ordered, and the torch floor's ``F_l`` from receipt 34a1eb66 are reported.
 """
 
 import argparse
@@ -35,6 +46,11 @@ MIN_FOR_P99 = 30
 """G1 rule 2: k, the margin factor and the p99 cutoff, fixed before the rerun."""
 FLOOR_RECEIPT_SHA256 = "34a1eb661bef3e2b3b3940125fcb7a1b5ddd3c66652ae730975443ac24838212"
 TORCH_TOP6_SHA256 = "ddad3a88f883ad6e3ffd75d99a94edef54cdd51edea55575af478547b42b7ba5"
+K_RATE_VLLM = 1.25
+"""G1a: k under the served-stack floor, fixed before the collector ran."""
+VLLM_RECEIPT_SHA256 = "3f574c81aad28c227e6e9f0ea54e1e61730f26fb0d6faac9d77d0b2abd6dee61"
+VLLM_PASS1_SHA256 = "92b92899eaf1a1288ca9fb53e703cfc3e1d6cc79e4bf81c9ffdb30ab092e7147"
+VLLM_PASS2_SHA256 = "10c0730e7443deeee9c405b327361626e9afcd735c57072e01733b9d409ea3ed"
 TORCH_SIDE = "torch_batch1"
 K = 4
 """Experts per token: the selected set is the top ``K``; the 4th/5th margin decides its last member."""
@@ -159,6 +175,93 @@ def check(levanter: dict, torch_top6: dict, floor: dict) -> dict:
     }
 
 
+def _routes(by_sequence: dict) -> dict[str, np.ndarray]:
+    return {sid: np.asarray(value) for sid, value in by_sequence.items()}
+
+
+def check_vllm_floor(levanter: dict, torch_top6: dict, floor: dict, vllm_pass1: dict, vllm_pass2: dict) -> dict:
+    """G1a: ``check`` with the floor restated from the served stack (``vllm_pass1`` / ``vllm_pass2``: sequence id ->
+    executed top-4 ids [T, L, 4]); ``floor`` (the torch floor receipt) is reported only."""
+    routes, margins = routes_and_margins(torch_top6)
+    ours = {sid: r["routes"].numpy() for sid, r in levanter.items()}
+    pass1, pass2 = _routes(vllm_pass1), _routes(vllm_pass2)
+    lev_torch = agreement(ours, routes, {TORCH_SIDE: margins})
+    vllm_torch = agreement(pass1, routes, {TORCH_SIDE: margins})
+    vllm_repeat = agreement(pass1, pass2, {})
+    lev_vllm = [agreement(ours, p, {}) for p in (pass1, pass2)]
+    torch_floor = floor["floor"]["batched_vs_routes_pt"]["layers"]
+    layers, failures = [], []
+    for found, f, d, lv1, lv2, tf in zip(
+        lev_torch["layers"],
+        vllm_torch["layers"],
+        vllm_repeat["layers"],
+        *(x["layers"] for x in lev_vllm),
+        torch_floor,
+        strict=True,
+    ):
+        layer = found["layer"]
+        if not found["positions"] == f["positions"] == d["positions"] == lv1["positions"]:
+            failures.append(f"L{layer}: position-layers differ ({found['positions']}, vLLM {f['positions']})")
+        rate, floor_rate = 1 - found["set_rate"], 1 - f["set_rate"]
+        theirs = found["margin_at_set_disagreements"][TORCH_SIDE]
+        served = f["margin_at_set_disagreements"][TORCH_SIDE]
+        row = {
+            "layer": layer,
+            "A": found["set_rate"],
+            "F_vllm": f["set_rate"],
+            "D_vllm": d["set_rate"],
+            "F_torch": tf["set_rate"],
+            "ordered": found["ordered_rate"],
+            "rate_ratio": rate / floor_rate if floor_rate else None,
+            "rate_ok": rate <= K_RATE_VLLM * floor_rate,
+            "disagreements": theirs["count"],
+            "margin_p50": theirs.get("p50"),
+            "vllm_torch_p50": served.get("p50"),
+            "margin_p99": theirs.get("p99"),
+            "vllm_torch_p99": served.get("p99"),
+            "levanter_vs_vllm": {
+                "set": [lv1["set_rate"], lv2["set_rate"]],
+                "ordered": [lv1["ordered_rate"], lv2["ordered_rate"]],
+            },
+            "diagnostic_bound": d["set_rate"] - floor_rate,
+        }
+        # With no vLLM-vs-torch disagreements there is no served margin to compare with: any Levanter one fails.
+        served_p50, served_p99 = served.get("p50", float("-inf")), served.get("p99", float("-inf"))
+        row["p50_ok"] = theirs["count"] == 0 or theirs["p50"] <= MARGIN_FACTOR * served_p50
+        row["p99_checked"] = theirs["count"] >= MIN_FOR_P99
+        row["p99_ok"] = not row["p99_checked"] or theirs["p99"] <= MARGIN_FACTOR * served_p99
+        row["diagnostic_ok"] = lv1["set_rate"] >= row["diagnostic_bound"]
+        if not row["rate_ok"]:
+            failures.append(f"L{layer}: disagreement rate {rate:.4f} > {K_RATE_VLLM} x vLLM floor {floor_rate:.4f}")
+        if not row["p50_ok"]:
+            failures.append(
+                f"L{layer}: margin p50 {theirs['p50']:.4f} > {MARGIN_FACTOR} x vLLM-vs-torch {served_p50:.4f}"
+            )
+        if not row["p99_ok"]:
+            failures.append(
+                f"L{layer}: margin p99 {theirs['p99']:.4f} > {MARGIN_FACTOR} x vLLM-vs-torch {served_p99:.4f}"
+            )
+        layers.append(row)
+
+    def overall(report: dict) -> float:
+        return report["totals"]["set_agree"] / report["totals"]["positions"]
+
+    return {
+        "rule": {"k": K_RATE_VLLM, "margin_factor": MARGIN_FACTOR, "min_for_p99": MIN_FOR_P99, "floor": "vllm"},
+        "layers": layers,
+        "layers_passing": sum(r["rate_ok"] and r["p50_ok"] and r["p99_ok"] for r in layers),
+        "lines_passing": {line: sum(r[f"{line}_ok"] for r in layers) for line in ("rate", "p50", "p99", "diagnostic")},
+        "overall": {
+            "A": overall(lev_torch),
+            "F_vllm": overall(vllm_torch),
+            "D_vllm": overall(vllm_repeat),
+            "levanter_vs_vllm": [overall(x) for x in lev_vllm],
+        },
+        "totals": lev_torch["totals"],
+        "failures": failures,
+    }
+
+
 def load_pinned(path: str, sha256: str | None) -> bytes:
     data = read(path)
     actual = hashlib.sha256(data).hexdigest()
@@ -174,13 +277,34 @@ def main() -> None:
     parser.add_argument("--torch-top6", required=True, help=f"torch floor batch1/top6.pt ({TORCH_TOP6_SHA256[:8]})")
     parser.add_argument("--floor-receipt", required=True, help=f"torch floor receipt.json ({FLOOR_RECEIPT_SHA256[:8]})")
     parser.add_argument("--out", required=True, help="report JSON (local or s3://)")
+    parser.add_argument(
+        "--vllm-capture",
+        help=f"G1a: marten's capture directory (receipt.json {VLLM_RECEIPT_SHA256[:8]}, pass-1/ and pass-2/routes.pt)",
+    )
     args = parser.parse_args()
     positions = load_pinned(args.positions, args.positions_sha256)
-    report = check(
+    inputs = (
         torch.load(io.BytesIO(positions), map_location="cpu"),
         torch.load(io.BytesIO(load_pinned(args.torch_top6, TORCH_TOP6_SHA256)), map_location="cpu"),
         json.loads(load_pinned(args.floor_receipt, FLOOR_RECEIPT_SHA256)),
     )
+    if args.vllm_capture is None:
+        report = check(*inputs)
+    else:
+        load_pinned(f"{args.vllm_capture}/receipt.json", VLLM_RECEIPT_SHA256)
+        report = check_vllm_floor(
+            *inputs,
+            *(
+                torch.load(io.BytesIO(load_pinned(f"{args.vllm_capture}/pass-{n}/routes.pt", sha)), map_location="cpu")
+                for n, sha in ((1, VLLM_PASS1_SHA256), (2, VLLM_PASS2_SHA256))
+            ),
+        )
+        report["inputs_vllm"] = {
+            "capture": args.vllm_capture,
+            "receipt_sha256": VLLM_RECEIPT_SHA256,
+            "pass1_sha256": VLLM_PASS1_SHA256,
+            "pass2_sha256": VLLM_PASS2_SHA256,
+        }
     report["inputs"] = {
         "positions": args.positions,
         "positions_sha256": hashlib.sha256(positions).hexdigest(),

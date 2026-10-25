@@ -99,3 +99,81 @@ def test_gate_g1_on_the_r2_dropless_arm():
     assert sum(r["rate_ok"] for r in report["layers"]) == 10
     assert report["layers_passing"] == 7
     assert len(report["failures"]) > 0
+
+
+FIX_R1_COMBINE_ON = T310_LOCAL / "diag-moe-fix-r1/dropless-fp32-combine/positions.pt"
+FIX_R1_COMBINE_ON_SHA256 = "e857f361510c75fa3e969da2206d1c9851e70abb44a1a3bbe3139042c8a77bc7"
+VLLM_CAPTURE = T310_LOCAL / "marten-task310-vllm-routes-r1/capture"
+
+
+def synthetic_vllm(flips: int, margin: float, vllm_flips: int = 8):
+    """``synthetic`` plus a served floor: vLLM picks torch's 5th at ``vllm_flips`` positions of layer 1, where torch's
+    margin is 0.02 (the last ``vllm_flips`` rows); pass 2 equals pass 1 except one more flip."""
+    levanter, top6, floor = synthetic(flips, margin)
+    biased = top6["check|a"]["biased"].numpy()
+    biased[-vllm_flips:, 1, 3] = biased[-vllm_flips:, 1, 4] + 0.02
+    pass1 = top6["check|a"]["ids"].numpy()[..., :4].copy()
+    pass1[-vllm_flips:, 1, 3] = 4
+    pass2 = pass1.copy()
+    pass2[0, 0, 3] = 4
+    return levanter, top6, floor, {"check|a": torch.from_numpy(pass1)}, {"check|a": torch.from_numpy(pass2)}
+
+
+def test_g1a_rate_bound_is_1_25_times_the_served_floor():
+    assert g1.check_vllm_floor(*synthetic_vllm(9, 0.02))["layers"][1]["rate_ok"]  # 9% <= 1.25 x 8%
+    report = g1.check_vllm_floor(*synthetic_vllm(11, 0.02))
+    assert not report["layers"][1]["rate_ok"]
+    assert report["failures"] == ["L1: disagreement rate 0.1100 > 1.25 x vLLM floor 0.0800"]
+    row = report["layers"][1]
+    assert (row["F_vllm"], row["D_vllm"], row["F_torch"]) == (0.92, 1.0, 0.95)
+    assert report["layers"][0]["D_vllm"] == 0.99
+
+
+def test_g1a_margins_compare_against_vllm_vs_torch_disagreements():
+    """Torch's margin at the served stack's disagreements is 0.02: p50 0.031 fails, 0.029 passes."""
+    assert not g1.check_vllm_floor(*synthetic_vllm(10, 0.031))["layers"][1]["p50_ok"]
+    assert g1.check_vllm_floor(*synthetic_vllm(10, 0.029))["layers"][1]["p50_ok"]
+
+
+def test_g1a_diagnostic_line():
+    """Levanter vs vLLM pass 1 at layer 1: Levanter flips rows 0-9, vLLM the last 8; agreement 0.82 vs D - (1 - F)
+    = 1.0 - 0.08 = 0.92."""
+    row = g1.check_vllm_floor(*synthetic_vllm(10, 0.02))["layers"][1]
+    assert row["levanter_vs_vllm"]["set"][0] == pytest.approx(0.82)
+    assert row["diagnostic_bound"] == pytest.approx(0.92)
+    assert not row["diagnostic_ok"]
+
+
+def test_g1a_constants():
+    assert (g1.K_RATE_VLLM, g1.MARGIN_FACTOR, g1.MIN_FOR_P99) == (1.25, 1.5, 30)
+
+
+@pytest.mark.skipif(
+    not (FIX_R1_COMBINE_ON.exists() and VLLM_CAPTURE.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists()),
+    reason="local t310 copies",
+)
+def test_g1a_on_the_fix_r1_combine_on_arm():
+    """Shoveler's filled G1a table (27f282c2): rate 19/26, p50 20/26, p99 25/26, all three 15/26, diagnostic 24/26."""
+    for path, sha in (
+        (FIX_R1_COMBINE_ON, FIX_R1_COMBINE_ON_SHA256),
+        (VLLM_CAPTURE / "receipt.json", g1.VLLM_RECEIPT_SHA256),
+        (VLLM_CAPTURE / "pass-1/routes.pt", g1.VLLM_PASS1_SHA256),
+        (VLLM_CAPTURE / "pass-2/routes.pt", g1.VLLM_PASS2_SHA256),
+        (FLOOR_RECEIPT, g1.FLOOR_RECEIPT_SHA256),
+        (TORCH_TOP6, g1.TORCH_TOP6_SHA256),
+    ):
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == sha
+    report = g1.check_vllm_floor(
+        torch.load(FIX_R1_COMBINE_ON, map_location="cpu"),
+        torch.load(TORCH_TOP6, map_location="cpu"),
+        json.loads(FLOOR_RECEIPT.read_bytes()),
+        torch.load(VLLM_CAPTURE / "pass-1/routes.pt", map_location="cpu"),
+        torch.load(VLLM_CAPTURE / "pass-2/routes.pt", map_location="cpu"),
+    )
+    layers = report["layers"]
+    assert report["lines_passing"] == {"rate": 19, "p50": 20, "p99": 25, "diagnostic": 24}
+    assert report["layers_passing"] == 15
+    assert [r["layer"] for r in layers if not r["rate_ok"]] == [0, 1, 9, 10, 18, 21, 23]
+    assert [r["layer"] for r in layers if not r["p50_ok"]] == [1, 6, 8, 16, 21, 25]
+    assert report["overall"]["F_vllm"] == pytest.approx(0.9120, abs=1e-4)
+    assert report["overall"]["D_vllm"] == pytest.approx(0.9445, abs=1e-4)
