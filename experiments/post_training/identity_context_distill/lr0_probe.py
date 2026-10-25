@@ -64,6 +64,7 @@ SOURCE_FILE_HASHES = {
 }
 SEED = 310
 REPLICAS = 4
+MAX_TIMEOUT_SECONDS = 10800
 PRIORITY_BANDS = {
     "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
     "production": job_pb2.PRIORITY_BAND_PRODUCTION,
@@ -190,6 +191,8 @@ def main() -> None:
     parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
     parser.add_argument("--runtime-receipt", required=True, help="local runtime-recipe-f37aec3.json")
     parser.add_argument("--timeout-seconds", type=int, required=True)
+    parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")
+    parser.add_argument("--expect-commit", help="the reviewed worker pin; required with --run, must equal HEAD")
     parser.add_argument("--priority", choices=sorted(PRIORITY_BANDS), default="interactive")
     parser.add_argument("--capacity-record", help="the launch owner's capacity guard JSON; required with --run")
     parser.add_argument("--launch-receipt", help="local JSON receipt to write; required with --run")
@@ -200,6 +203,8 @@ def main() -> None:
         raise SystemExit("run root must be on s3://marin-rno2a/")
     if args.timeout_seconds <= 0:
         raise SystemExit("timeout must be a positive number of seconds")
+    if args.timeout_seconds > MAX_TIMEOUT_SECONDS and not args.allow_long_timeout:
+        raise SystemExit(f"timeout above {MAX_TIMEOUT_SECONDS} s needs --allow-long-timeout")
     receipt_bytes = Path(args.runtime_receipt).read_bytes()
     receipt = approved_receipt(receipt_bytes)
     job_plan = plan(args.job_name, run_root, args.timeout_seconds, receipt["routing_reference"]["path"], args.priority)
@@ -208,8 +213,10 @@ def main() -> None:
         return
     if not job_plan["clean"]:
         raise SystemExit("worktree is not clean")
-    if not args.capacity_record or not args.launch_receipt:
-        raise SystemExit("--run needs --capacity-record and --launch-receipt")
+    if not args.capacity_record or not args.launch_receipt or not args.expect_commit:
+        raise SystemExit("--run needs --capacity-record, --launch-receipt and --expect-commit")
+    if job_plan["commit"] != args.expect_commit:
+        raise SystemExit(f"HEAD {job_plan['commit']} is not the reviewed pin {args.expect_commit}")
     fs, root = filesystem_for(run_root)
     if fs.exists(root):
         raise SystemExit(f"run root already exists: {run_root}")
