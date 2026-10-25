@@ -200,4 +200,4 @@ def test_an_object_store_teacher_must_match_its_export_manifest(tmp_path):
 
 
 def test_the_policy_chat_template_file_is_the_shared_grug_template():
-    assert Path(POLICY_CHAT_TEMPLATE).read_text() == shared_template(GRUG_TOKENS)
+    assert (Path("vendor/skyrl") / POLICY_CHAT_TEMPLATE).resolve().read_text() == shared_template(GRUG_TOKENS)

@@ -59,8 +59,9 @@ from experiments.post_training.phase1a.matrix import (
 
 CLUSTER = "cw-rno2a"  # where B, the experts and the run data live
 # Rollouts render prompts through the shared template B was trained on, not the base
-# tokenizer's own; SkyRL forces this file onto the policy tokenizer on every node.
-POLICY_CHAT_TEMPLATE = "experiments/post_training/chat_templates/grug_shared.jinja"
+# tokenizer's own; SkyRL forces this file onto the policy tokenizer on every node. SkyRL
+# resolves it against its own root, vendor/skyrl.
+POLICY_CHAT_TEMPLATE = "../../experiments/post_training/chat_templates/grug_shared.jinja"
 # Every scheduled checkpoint stays until the weight analysis has read it.
 RETENTION = SkyRLRetentionPolicy(resume_checkpoint_count=len(CHECKPOINT_STEPS), temporary_storage_ttl_days=90)
 
