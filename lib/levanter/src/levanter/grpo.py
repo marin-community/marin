@@ -1,13 +1,14 @@
 # Copyright The Levanter Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""GRPO group advantages and reference-partition objective weights.
+"""GRPO group advantages and whole-step objective weights.
 
-Matches MarinSkyRL sample-standard-deviation advantages, masked token mean
-policy loss, and sequence mean KL over the reference learner partitions.
-Compute recipe inputs before slicing execution microbatches.
+Matches MarinSkyRL outcome advantages with token-mean policy loss and
+sequence-mean KL. Compute recipe inputs over the complete optimizer-step
+batch before packing or slicing execution microbatches.
 Reference: marin-community/MarinSkyRL at
-8e33e01707b7225ecde1d6b8ad172a3dd4dc8661 (utils/{advantage_estimators,policy_losses,policy_math}.py).
+82396a73a31e776229f3240c3af2b50ad53c4336 (objective/{losses,reduction,objective}.py
+and utils/{advantage_estimators,policy_math}.py under skyrl-train/skyrl_train).
 """
 
 import haliax as hax
@@ -51,24 +52,19 @@ def grpo_advantages(
 
 def grpo_objective_weights(
     response_mask: NamedArray,
-    objective_partition_ids: NamedArray,
     *,
     Batch: Axis,
     Position: Axis,
-    num_partitions: int,
 ) -> tuple[NamedArray, NamedArray]:
-    """Return policy and KL weights preserving reference partition reductions.
+    """Return whole-step token-mean policy and sequence-mean KL weights.
 
-    Partition IDs must densely enumerate all reference microbatches across DP
-    ranks in [0, num_partitions). Each reference partition has equal objective
-    weight. An empty response contributes zero but still counts as a sequence
-    in the KL mean. The response mask must be binary.
+    The binary response mask must cover all rows in one optimizer step across
+    data-parallel ranks. Empty responses contribute neither loss nor counts.
+    Preserve these weights when packing or slicing execution microbatches.
     """
     mask = response_mask.rearrange((Batch, Position)).array.astype(jnp.float32)
-    ids = objective_partition_ids.rearrange((Batch,)).array
     lengths = mask.sum(axis=1)
-    tokens = jax.ops.segment_sum(lengths, ids, num_partitions)
-    sequences = jax.ops.segment_sum(jnp.ones_like(lengths), ids, num_partitions)
-    policy = mask / (jnp.maximum(tokens[ids], 1)[:, None] * num_partitions)
-    kl = mask / (jnp.maximum(lengths, 1)[:, None] * jnp.maximum(sequences[ids], 1)[:, None] * num_partitions)
+    policy = mask / jnp.maximum(lengths.sum(), 1)
+    nonempty_sequences = (lengths > 0).sum()
+    kl = mask / (jnp.maximum(lengths, 1)[:, None] * jnp.maximum(nonempty_sequences, 1))
     return hax.named(policy, (Batch, Position)), hax.named(kl, (Batch, Position))

@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from levanter.policy import ClippedPolicyConfig, KlGradient, clipped_policy_loss
+from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
 from levanter.policy_model import PolicyBatch, policy_model_loss, pack_policy_batch, response_logprobs
 from levanter.layers.attention import AttentionBackend
 from levanter.models.llama import LlamaConfig
@@ -77,7 +77,7 @@ def test_policy_model_value_and_gradients_match_full_softmax(model_batch):
     model, batch = model_batch
     old = response_logprobs(model, batch, block_size=8)
     batch = dataclasses.replace(batch, old_logprobs=old)
-    config = ClippedPolicyConfig(0.2, 0.2, 0.0, KlGradient.DETACHED)
+    config = ClippedPolicyConfig(0.2, 0.2, 0.0)
 
     def fused_loss(model):
         return policy_model_loss(
@@ -169,7 +169,7 @@ def test_packed_policy_value_and_gradients_match_unpacked_full_softmax(model_bat
         reference_logprobs=old - 0.2 if with_reference else None,
     )
     packed = pack_policy_batch(batch, sequence_length=13, pad_token_id=0)
-    config = ClippedPolicyConfig(0.2, 0.2, 0.15 if with_reference else 0.0, KlGradient.DIFFERENTIABLE)
+    config = ClippedPolicyConfig(0.2, 0.2, 0.15 if with_reference else 0.0)
 
     def packed_loss(model):
         return policy_model_loss(model, packed, key=None, config=config, accumulation_steps=1, block_size=8)[0]

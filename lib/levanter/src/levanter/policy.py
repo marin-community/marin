@@ -4,7 +4,6 @@
 """Clipped policy objectives with explicit token and sequence weights."""
 
 from dataclasses import dataclass
-from enum import StrEnum
 
 import haliax as hax
 import jax
@@ -16,17 +15,11 @@ from levanter.metrics import Metric, ReductionType
 LOG_PROB_DELTA_CLIP = 20.0
 
 
-class KlGradient(StrEnum):
-    DETACHED = "detached"
-    DIFFERENTIABLE = "differentiable"
-
-
 @dataclass(frozen=True)
 class ClippedPolicyConfig:
     eps_clip_low: float
     eps_clip_high: float
     kl_loss_coef: float
-    kl_gradient: KlGradient
 
 
 def _clamp(value: NamedArray, low: float, high: float) -> NamedArray:
@@ -50,8 +43,7 @@ def clipped_policy_loss(
     Pass the number of execution microbatches as accumulation_steps to cancel
     Levanter's gradient averaging. All other inputs are sliced from the full
     batch; old/reference logprobs, advantages and weights are detached.
-    Detached KL affects reported loss but contributes no gradient. Choose that
-    behavior explicitly in config.
+    Reference KL differentiates through current-policy scores.
     """
     if accumulation_steps < 1:
         raise ValueError("accumulation_steps must be positive")
@@ -72,8 +64,6 @@ def clipped_policy_loss(
         reference_log_probs = jax.tree_util.tree_map(jax.lax.stop_gradient, reference_log_probs)
         delta = _clamp(reference_log_probs - log_probs, -LOG_PROB_DELTA_CLIP, LOG_PROB_DELTA_CLIP)
         kl = _clamp(hax.exp(delta) - delta - 1, -10.0, 10.0)
-        if config.kl_gradient == KlGradient.DETACHED:
-            kl = jax.tree_util.tree_map(jax.lax.stop_gradient, kl)
         kl_loss = (kl * kl_weights).sum().scalar()
     loss = policy_loss + config.kl_loss_coef * kl_loss
     metrics = {

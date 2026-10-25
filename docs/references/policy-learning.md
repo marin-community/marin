@@ -16,20 +16,26 @@ objective weight. Sampling-distribution behavior logprobs are separate from the
 raw-policy scores used by this objective.
 
 `levanter.policy.clipped_policy_loss` takes those scores and weights, with
-`ClippedPolicyConfig` selecting asymmetric clipping widths, the k3 reference-KL
-coefficient, and `KlGradient`. Old scores, reference scores, advantages, and
-weights are detached. `KlGradient.DETACHED` reports KL without a KL gradient;
-`KlGradient.DIFFERENTIABLE` differentiates KL through current-policy scores.
+`ClippedPolicyConfig` selecting asymmetric clipping widths and the k3
+reference-KL coefficient. KL differentiates through current-policy scores.
+Old scores, reference scores, advantages, and weights are detached.
 A nonzero KL coefficient requires reference scores.
 
-Compute advantages and objective weights over the complete admitted batch
-before packing or execution slicing. `levanter.grpo.grpo_advantages` implements
-group-relative outcome advantages; `grpo_objective_weights` preserves the
-MarinSkyRL recipe's partition-weighted token means and sequence-weighted KL.
-Each partition is an original learner microbatch on one data-parallel rank;
-partitions contribute equally. Within a partition, policy loss averages over
-response tokens and KL averages over sequences.
-These recipe helpers follow [MarinSkyRL revision 8e33e017](https://github.com/marin-community/MarinSkyRL/commit/8e33e01707b7225ecde1d6b8ad172a3dd4dc8661).
+Compute advantages over complete admitted groups. Compute objective weights
+for each complete optimizer-step batch before packing or execution slicing.
+`levanter.grpo.grpo_advantages` implements group-relative outcome advantages;
+`grpo_objective_weights` divides policy contributions by the step's total
+response-token count. KL first averages within each nonempty response, then
+across nonempty responses in that step. Empty responses contribute neither
+loss nor denominator counts. Execution microbatch and data-parallel partitions
+do not change these weights.
+
+These helpers implement the outcome-advantage estimator, regular clipped PPO
+with `token_mean` policy reduction, and k3 reference KL from
+[MarinSkyRL revision 82396a73](https://github.com/marin-community/MarinSkyRL/commit/82396a73a31e776229f3240c3af2b50ad53c4336).
+MarinSkyRL's default GRPO recipe selects `sequence_mean` policy reduction;
+that recipe needs different policy weights. Other MSRL losses and corrections
+remain separate integration work.
 Other recipes may supply different advantages and weights to the same learner.
 
 Gradients are averaged across execution microbatches. Set `accumulation_steps`

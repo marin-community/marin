@@ -11,7 +11,7 @@ import numpy as np
 import optax
 import pytest
 
-from levanter.policy import ClippedPolicyConfig, KlGradient
+from levanter.policy import ClippedPolicyConfig
 from levanter.policy_learner import PolicyLearner, SpmdPolicyLearner
 from levanter.policy_model import PolicyBatch, policy_model_loss
 from levanter.layers.attention import AttentionBackend
@@ -84,7 +84,7 @@ def test_spmd_policy_updates_preserve_frozen_scores_and_objective_across_microba
         )
         loss = partial(
             policy_model_loss,
-            config=ClippedPolicyConfig(0.2, 0.2, 0.0, KlGradient.DETACHED),
+            config=ClippedPolicyConfig(0.2, 0.2, 0.0),
             accumulation_steps=4 // per_device_parallelism,
             block_size=8,
         )
