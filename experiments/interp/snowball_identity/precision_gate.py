@@ -30,9 +30,7 @@ from dataclasses import dataclass
 
 import haliax as hax
 import jax
-import jax.numpy as jnp
 import numpy as np
-from jax.experimental import multihost_utils
 from levanter.compute_dtype import cast_model_for_compute
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
@@ -51,6 +49,7 @@ from experiments.interp.snowball_identity.logit_check import (
     read,
     stored_sequences,
 )
+from experiments.interp.snowball_identity.multihost import broadcast_host_scalar, gather_host_scalar
 from experiments.interp.snowball_identity.routing import MATMUL_ENV, compare_routes_cross_stack, route_gate
 
 logger = logging.getLogger(__name__)
@@ -130,7 +129,12 @@ class Deadline:
 
 def any_rank_failed(failed: bool) -> bool:
     """Collective: whether any process reports a failure."""
-    return bool(np.asarray(multihost_utils.process_allgather(jnp.int32(failed))).sum())
+    return bool(gather_host_scalar(np.int32(failed)).sum())
+
+
+def rank_zero_count(count: int) -> int:
+    """Collective: process 0's ``count`` on every process."""
+    return int(broadcast_host_scalar(np.int32(count)))
 
 
 def make_pre_update_gate(inputs: PrecisionGateInputs, deadline: Callable[[float], Deadline] = Deadline):
@@ -181,7 +185,7 @@ def make_pre_update_gate(inputs: PrecisionGateInputs, deadline: Callable[[float]
                 failures = len(report["failures"])
                 for failure in report["failures"]:
                     logger.error("precision gate: %s", failure)
-            failures = int(multihost_utils.broadcast_one_to_all(jnp.int32(failures)))
+            failures = rank_zero_count(failures)
             receipt("gated", failures=failures)
         finally:
             timer.cancel()

@@ -27,6 +27,7 @@ from levanter.trainer import Trainer, initialize
 from levanter.trainer_state import TrainerState
 from rigging.filesystem.storage_path import StoragePath
 
+from experiments.interp.snowball_identity.multihost import gather_global
 from experiments.post_training.identity_context_distill.runtime_recipe import check_precision_runtime_receipt
 from experiments.post_training.identity_context_distill.sft import (
     BASE_MODEL,
@@ -85,7 +86,7 @@ def adam_gradient_witness(state: TrainerState) -> float:
         if not any(isinstance(key, jax.tree_util.GetAttrKey) and key.name == "mu" for key in path):
             continue
         if isinstance(leaf, jax.Array) and jnp.issubdtype(leaf.dtype, jnp.floating):
-            magnitude = float(multihost_utils.process_allgather(jnp.max(jnp.abs(leaf))).max())
+            magnitude = float(gather_global(jnp.max(jnp.abs(leaf))).max())
             if not math.isfinite(magnitude):
                 raise ValueError("Nonfinite Adam gradient witness")
             maximum = max(maximum, magnitude)

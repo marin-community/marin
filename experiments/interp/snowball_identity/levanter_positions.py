@@ -43,6 +43,7 @@ from levanter.compute_dtype import cast_model_for_compute
 from levanter.models.snowball import _BATCH_AXES as SNOWBALL_BATCH_AXES
 from rigging.filesystem.buckets import filesystem_for
 
+from experiments.interp.snowball_identity.multihost import gather_global
 from experiments.interp.snowball_identity.sequences import Sequence
 
 logger = logging.getLogger(__name__)
@@ -97,8 +98,8 @@ def positions_records(
         for row, row_tokens in enumerate(rows):
             grid[row, : len(row_tokens)] = row_tokens
         *outputs, routes_out = scores(model, jnp.asarray(grid), routes)
-        actual, top_ids, top_lp = (np.asarray(jax.device_get(x)) for x in outputs)
-        selected = None if routes_out is None else np.asarray(jax.device_get(routes_out))
+        actual, top_ids, top_lp = (gather_global(x) for x in outputs)
+        selected = None if routes_out is None else gather_global(routes_out)
         for row, index in enumerate(indices):
             n = len(sequences[index].tokens)
             records[index] = {
