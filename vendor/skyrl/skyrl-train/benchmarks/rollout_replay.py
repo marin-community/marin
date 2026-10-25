@@ -13,7 +13,7 @@ from cloud.iris.hf_model_cache import stage_artifact_model
 from cloud.iris.launch_config import load_launch_config
 from skyrl_train.distributed.megatron import model_utils
 from skyrl_train.training_batch import TrainingOutputBatch
-from skyrl_train.utils.utils import initialize_ray
+from skyrl_train.utils.utils import initialize_ray, validate_cfg
 from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
 from skyrl_train.workers.megatron.megatron_worker import MegatronPolicyWorkerBase
 from skyrl_train.workers.worker import PPORayActorGroup
@@ -108,6 +108,7 @@ def main():
     cfg.trainer.placement.policy_num_gpus_per_node = 2
     cfg.trainer.update_epochs_per_batch = 1
     cfg.trainer.logger = "console"
+    validate_cfg(cfg)
     batch.metadata["global_step"] = 0
     OmegaConf.save(cfg, args.output / "replay-config.yaml")
     initialize_ray(cfg)
