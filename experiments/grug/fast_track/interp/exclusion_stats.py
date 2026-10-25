@@ -241,6 +241,35 @@ def layer_census(cofire, cnt, w_eff, lat_sum, lat_m2):
     return out
 
 
+CENSUS_CHUNK = 64  # experts per census call (the [E, I, I] intermediates of a whole d1280 layer exceed one GPU)
+
+
+def layer_census_chunked(cofire, cnt, w_eff, lat_sum, lat_m2) -> dict[str, np.ndarray]:
+    """``layer_census`` over chunks of ``CENSUS_CHUNK`` experts, merged: histograms and counts concatenated or
+    summed, the most exclusive pairs re-ranked across chunks."""
+    parts = []
+    for lo in range(0, cofire.shape[0], CENSUS_CHUNK):
+        sl = slice(lo, lo + CENSUS_CHUNK)
+        res = {
+            k: np.asarray(v) for k, v in layer_census(cofire[sl], cnt[sl], w_eff[sl], lat_sum[sl], lat_m2[sl]).items()
+        }
+        res["top_pairs"] = res["top_pairs"] + np.asarray([lo, 0, 0])
+        parts.append(res)
+    out = {}
+    for k in parts[0]:
+        vals = [r[k] for r in parts]
+        if k.startswith("top_"):
+            out[k] = np.concatenate(vals)
+        elif "hist" in k or k.endswith(("_excl", "_other")):
+            out[k] = np.sum(vals, axis=0)
+        else:
+            out[k] = np.concatenate(vals)
+    order = np.argsort(out["top_lift"], kind="stable")[:NUM_TOP_PAIRS]
+    for k in [k for k in out if k.startswith("top_")]:
+        out[k] = out[k][order]
+    return out
+
+
 @jax.jit
 def shared_census(cofire, n, w_up, in_sum, in_m2):
     """The same census for one layer's shared expert (raw ``w_up`` on ``mlp_in``; its gated norm is per token)."""
@@ -302,12 +331,9 @@ def main() -> None:
         for li, layer in enumerate(layers):
             lay = all_layers[layer]
             census.append(
-                {
-                    k: np.asarray(v)
-                    for k, v in layer_census(
-                        state["cofire"][li], state["cnt"][li], w_eff[layer], state["lat_sum"][li], state["lat_m2"][li]
-                    ).items()
-                }
+                layer_census_chunked(
+                    state["cofire"][li], state["cnt"][li], w_eff[layer], state["lat_sum"][li], state["lat_m2"][li]
+                )
             )
             s_census.append(
                 {
