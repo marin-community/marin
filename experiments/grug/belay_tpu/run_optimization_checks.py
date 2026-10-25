@@ -34,6 +34,7 @@ def main():
             "saved-relu2",
             "local-relu2",
             "expert-collectives",
+            "expert-gradient",
             "local-movement-kernel",
             "local-movement",
             "local-butterfly",
@@ -78,6 +79,7 @@ def main():
         "local-experts": ("belay_ckpt1_tpu_update_check", [*reference, "--local-experts", "--routing-ops"]),
         "saved-relu2-kernel": ("saved_moe_check", ["--fused-relu2"]),
         "expert-collectives": ("expert_collective_check", []),
+        "expert-gradient": ("expert_gradient_check", []),
         "local-movement-kernel": ("local_movement_check", []),
         "local-movement": (
             "belay_ckpt1_tpu_update_check",
@@ -133,7 +135,10 @@ def main():
         print(json.dumps(record), flush=True)
         with (output / "diagnostic-phases.jsonl").open("a") as file:
             file.write(json.dumps(record) + "\n")
-        if name in ("saved-relu2-kernel", "expert-collectives", "local-movement-kernel") and result.returncode != 0:
+        if (
+            name in ("saved-relu2-kernel", "expert-collectives", "local-movement-kernel", "expert-gradient")
+            and result.returncode != 0
+        ):
             break
     raise SystemExit(1 if failed else 0)
 
