@@ -97,6 +97,9 @@ from experiments.post_training.identity_context_distill.precision_source_audit i
 from experiments.post_training.identity_context_distill.runtime_recipe import (
     check_precision_runtime_receipt,
     configure_precision_runtime,
+    require_xla_precision,
+    xla_precision_env,
+    xla_precision_in_process,
 )
 from experiments.post_training.identity_context_distill.save_audit import audit_trained_export
 from experiments.post_training.identity_context_distill.sft import (
@@ -121,23 +124,35 @@ AUDITED_UPDATES = 64
 """The dataset audit pre-reads the frozen 512 sequences: 64 updates of 8."""
 SOURCE_SHARDS = 39
 ROUTER_BIAS_DTYPES = {f"model.layers.{layer}.mlp.router.bias": "float32" for layer in range(26)}
-RUNTIME_RECEIPT_SHA256 = "4b9ca7e928e1853c84d40a071e0da850254bd52b78aca0ef504b9b3f31c47b82"
+RUNTIME_RECEIPT_SHA256S = frozenset(
+    {
+        "565cf0b2e09b0e1d58b647b698364a04d41b80615b47f8e6e1dbc7167f0d8e9e",
+        "3f9cb13590b7c861af2b4eddb352ac8e0037eab775551aab140c2d29729e5fc2",
+        "38e993dfca09124d2a94e0958e742faffc5fccc7ae1a0fcc2c6bef73834746dd",
+    }
+)
 DISPATCH_METRICS = ("moe_dropped", "moe_sender_dropped", "moe_receiver_dropped")
 
 
 def sft_runtime_receipt(receipt_bytes: bytes, receipt_sha256: str) -> dict:
-    """Require the reviewed schema-5 forward, not a self-selected receipt hash."""
-    if receipt_sha256 != RUNTIME_RECEIPT_SHA256:
-        raise ValueError("SFT requires the reviewed schema-5 runtime receipt")
+    """Require one of the three reviewed schema-6 candidate forwards."""
+    if receipt_sha256 not in RUNTIME_RECEIPT_SHA256S:
+        raise ValueError("SFT requires a reviewed schema-6 runtime receipt")
     receipt = approved_receipt(receipt_bytes, receipt_sha256)
     model = receipt["runtime_model_config"]
     if (
-        receipt["schema_version"] != 5
+        receipt["schema_version"] != 6
         or model["moe_capacity_factor"] != 4.0
         or model["router_combine_fp32"] is not True
         or model["fp32_activations"] is not True
     ):
         raise ValueError("SFT requires dropless dispatch, FP32 combine and FP32 activations")
+    if (model["attention_implementation"], receipt["xla_precision"]) not in {
+        ("torch_order", "default"),
+        ("torch_order", "no_excess_precision"),
+        (None, "no_excess_precision"),
+    }:
+        raise ValueError("SFT attention and XLA precision must match a reviewed candidate arm")
     return receipt
 
 
@@ -200,7 +215,12 @@ def frozen_data_config(data_config_bytes: bytes) -> LmDataConfig:
 
 
 def sft_config(
-    run_root: str, run_id: str, config_bytes: bytes, generation_bytes: bytes, data_config_bytes: bytes
+    run_root: str,
+    run_id: str,
+    config_bytes: bytes,
+    generation_bytes: bytes,
+    data_config_bytes: bytes,
+    runtime_receipt: dict,
 ) -> TrainLmConfig:
     """The factory recipe at ``hosts=4`` and 16 updates, with its data replaced by the frozen mixture."""
     data = frozen_data_config(data_config_bytes)
@@ -217,6 +237,7 @@ def sft_config(
         moe_capacity_factor=4.0,
         router_combine_fp32=True,
         fp32_activations=True,
+        attention_implementation=runtime_receipt["runtime_model_config"]["attention_implementation"],
         stop_after_updates=STOP_AFTER_UPDATES,
     )
     return replace(base, data=data)
@@ -278,6 +299,7 @@ def run_identity_sft(
     config: TrainLmConfig,
     *,
     runtime_receipt: dict,
+    receipt_sha256: str,
     lr0_source: dict,
     source_objects: dict,
     run_root: str,
@@ -403,7 +425,8 @@ def run_identity_sft(
             "save_seconds": save_seconds,
             "worker_seconds": time.monotonic() - started,
             "runtime_recipe_receipt": runtime_receipt,
-            "runtime_receipt_sha256": RUNTIME_RECEIPT_SHA256,
+            "runtime_receipt_sha256": receipt_sha256,
+            "xla_precision": runtime_receipt["xla_precision"],
             "device_memory": {"after_update": memory},
             "lr0_source_receipt": lr0_source,
             "source_object_list": source_objects,
@@ -421,12 +444,13 @@ def sft_worker(
     audits: SftAudits,
 ) -> None:
     """Run on every replica; the byte arguments are the reviewed receipt's and the frozen data config's bytes."""
-    check_pod_storage()
     runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
+    require_xla_precision(runtime_receipt["xla_precision"])
+    check_pod_storage()
     reference = runtime_receipt["routing_reference"]
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
-    base = sft_config(run_root, run_id, config_bytes, generation_bytes, data_config_bytes)
+    base = sft_config(run_root, run_id, config_bytes, generation_bytes, data_config_bytes, runtime_receipt)
     config, observed = configure_precision_runtime(
         base,
         config_bytes=config_bytes,
@@ -434,6 +458,7 @@ def sft_worker(
         rounding_bytes=StoragePath(reference["path"]).read_bytes(),
         rounding_path=reference["path"],
         rounding_sha256=reference["sha256"],
+        xla_precision=xla_precision_in_process(),
     )
     if observed != runtime_receipt:
         raise ValueError("Derived runtime recipe differs from the reviewed receipt")
@@ -443,6 +468,7 @@ def sft_worker(
     result = run_identity_sft(
         config,
         runtime_receipt=runtime_receipt,
+        receipt_sha256=receipt_sha256,
         lr0_source=lr0_source,
         source_objects=source_objects,
         run_root=run_root,
@@ -462,6 +488,8 @@ def bound_sft_worker(
     source_objects: dict,
 ) -> None:
     """The job entrypoint: ``sft_worker`` with the frozen dataset audit and the trained-export audit bound."""
+    runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
+    require_xla_precision(runtime_receipt["xla_precision"])
     check_pod_storage()
     frozen = load_dataset_audit_inputs(MIXTURE_ROOT, INVENTORY_PATH)
     audits = SftAudits(
@@ -547,7 +575,15 @@ def frozen_mixture() -> tuple[bytes, dict]:
     return contents["data-config.json"], {"root": MIXTURE_ROOT, "sha256": files}
 
 
-def plan(job_name: str, run_root: str, timeout_seconds: int, priority: str, config: TrainLmConfig) -> dict:
+def plan(
+    job_name: str,
+    run_root: str,
+    timeout_seconds: int,
+    priority: str,
+    config: TrainLmConfig,
+    receipt_sha256: str,
+    xla_precision: str,
+) -> dict:
     assert isinstance(config.model, SnowballConfig)
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True)
@@ -573,9 +609,12 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, priority: str, conf
             "moe_capacity_factor": config.model.moe_capacity_factor,
             "router_combine_fp32": config.model.router_combine_fp32,
             "fp32_activations": config.model.fp32_activations,
+            "attention_implementation": config.model.attention_implementation,
             "token_valid": "query_segment_ids >= 0",
         },
-        "runtime_receipt_sha256": RUNTIME_RECEIPT_SHA256,
+        "runtime_receipt_sha256": receipt_sha256,
+        "xla_precision": xla_precision,
+        "env_vars": xla_precision_env(xla_precision),
         "region": RESOURCES.target_cluster,
         "replicas": REPLICAS,
         "gpus": 8 * REPLICAS,
@@ -594,7 +633,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--job-name", required=True)
     parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
-    parser.add_argument("--runtime-receipt", required=True, help="local runtime-recipe-23152e4d.json")
+    parser.add_argument("--runtime-receipt", required=True, help="local reviewed schema-6 runtime receipt")
     parser.add_argument("--runtime-receipt-sha256", required=True)
     parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")
@@ -623,11 +662,19 @@ def main() -> None:
     if sha256(generation_bytes) != SOURCE_FILE_HASHES["generation_config.json"]:
         raise SystemExit("source generation_config.json differs from the pinned hash")
     data_config_bytes, mixture = frozen_mixture()
-    config = sft_config(run_root, args.job_name, config_bytes, generation_bytes, data_config_bytes)
+    config = sft_config(run_root, args.job_name, config_bytes, generation_bytes, data_config_bytes, runtime_receipt)
     lr0 = lr0_pass(args.lr0_run_root.rstrip("/"), runtime_receipt) if args.lr0_run_root else None
     source_objects = source_object_list(args.source_object_list) if args.source_object_list else None
     job_plan = {
-        **plan(args.job_name, run_root, args.timeout_seconds, args.priority, config),
+        **plan(
+            args.job_name,
+            run_root,
+            args.timeout_seconds,
+            args.priority,
+            config,
+            args.runtime_receipt_sha256,
+            runtime_receipt["xla_precision"],
+        ),
         "mixture": mixture,
         "spending_gate_sha256": SPENDING_GATE_SHA256,
         "dataset_audit": {
@@ -675,7 +722,9 @@ def main() -> None:
         lr0["source_receipt"],
         source_objects,
     )
-    job_id = submit_entrypoint(args.job_name, entrypoint, args.timeout_seconds, args.priority)
+    job_id = submit_entrypoint(
+        args.job_name, entrypoint, args.timeout_seconds, args.priority, runtime_receipt["xla_precision"]
+    )
     launch.update(state="submitted", iris_job_id=job_id)
     Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
     print(json.dumps({"job": job_id, "status": "submitted"}))
