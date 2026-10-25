@@ -54,12 +54,12 @@ def test_runtime_bound_stops_client(monkeypatch):
 
 def test_dead_endpoint_kills_term_ignoring_descendant(monkeypatch, tmp_path):
     pid_file = tmp_path / "descendant.pid"
-    child = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
-    parent = (
-        "import subprocess,sys,time; from pathlib import Path; "
-        f"p=subprocess.Popen([sys.executable,'-c',{child!r}]); "
-        f"Path({str(pid_file)!r}).write_text(str(p.pid)); time.sleep(30)"
+    child = (
+        "import os,signal,time; from pathlib import Path; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid())); time.sleep(30)"
     )
+    parent = "import subprocess,sys,time; " f"subprocess.Popen([sys.executable,'-c',{child!r}]); time.sleep(30)"
     monkeypatch.setattr(eval_watchdog, "models_healthy", lambda _: not pid_file.exists())
     with pytest.raises(RuntimeError, match="endpoint unavailable"):
         eval_watchdog.run_watched(
