@@ -38,6 +38,7 @@ def fixture(monkeypatch):
             return files[self.path.rsplit("/", 1)[-1]]
 
     monkeypatch.setattr(lr0_probe, "StoragePath", Path)
+    monkeypatch.setattr(lr0_probe, "check_pod_storage", lambda: None)
     monkeypatch.setattr(lr0_probe, "RUNTIME_RECEIPT_SHA256", hashlib.sha256(receipt_bytes).hexdigest())
     return receipt_bytes
 
@@ -131,3 +132,26 @@ def test_plan_has_no_retries_and_a_bounded_ceiling():
     assert job_plan["priority"] == "interactive"
     assert job_plan["retries_failure"] == job_plan["retries_preemption"] == 0
     assert job_plan["h100_hour_ceiling"] == 64
+
+
+def test_pod_storage_check_names_every_missing_setting(monkeypatch):
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    monkeypatch.setenv("FSSPEC_S3", "{}")
+    monkeypatch.setattr(lr0_probe, "s3_credential_options", lambda: {"key": "k"})
+    with pytest.raises(RuntimeError, match=r"AWS_ENDPOINT_URL.*AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY"):
+        lr0_probe.check_pod_storage()
+    monkeypatch.setenv("AWS_ENDPOINT_URL", "https://endpoint")
+    monkeypatch.setattr(lr0_probe, "s3_credential_options", lambda: {"key": "k", "secret": "s"})
+    lr0_probe.check_pod_storage()
+
+
+def test_worker_checks_pod_storage_before_any_read(monkeypatch):
+    receipt_bytes = fixture(monkeypatch)
+
+    def missing():
+        raise RuntimeError("Pod storage settings missing")
+
+    monkeypatch.setattr(lr0_probe, "check_pod_storage", missing)
+    monkeypatch.setattr(lr0_probe, "StoragePath", lambda path: pytest.fail("read before the storage check"))
+    with pytest.raises(RuntimeError, match="Pod storage"):
+        run_worker(monkeypatch, receipt_bytes)

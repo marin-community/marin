@@ -37,6 +37,7 @@ from iris.rpc import job_pb2
 from levanter.compat.hf_export import run_on_export_writer, write_export_json
 from levanter.tracker import NoopConfig
 from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.s3_compat import s3_credential_options
 from rigging.filesystem.storage_path import StoragePath
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
@@ -74,6 +75,16 @@ RESOURCES = ResourceConfig.with_gpu(
 )
 
 
+def check_pod_storage() -> None:
+    """Every rank, before any read: plain ``StoragePath`` needs the pod's endpoint and the AWS-named key pair."""
+    missing = [name for name in ("AWS_ENDPOINT_URL", "FSSPEC_S3") if not os.environ.get(name)]
+    credentials = s3_credential_options()
+    if not (credentials.get("key") and credentials.get("secret")):
+        missing.append("AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY")
+    if missing:
+        raise RuntimeError(f"Pod storage settings missing: {missing}")
+
+
 def approved_receipt(receipt_bytes: bytes) -> dict:
     if hashlib.sha256(receipt_bytes).hexdigest() != RUNTIME_RECEIPT_SHA256:
         raise ValueError("Runtime receipt differs from the reviewed derived receipt")
@@ -96,6 +107,7 @@ def gate_inputs(run_root: str, routing_path: str) -> PrecisionGateInputs:
 
 def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes) -> None:
     """Run on every replica; ``receipt_bytes`` are the reviewed runtime receipt's exact bytes."""
+    check_pod_storage()
     runtime_receipt = approved_receipt(receipt_bytes)
     reference = runtime_receipt["routing_reference"]
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
@@ -157,6 +169,8 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, 
         "gpus": 8 * REPLICAS,
         "resources": {"cpu": RESOURCES.cpu, "ram": RESOURCES.ram, "disk": RESOURCES.disk},
         "priority": priority,
+        "ports": ["jax"],
+        "secret_behavior": "isolate: CW_KEY_ID/SECRET, also as AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY",
         "retries_failure": 0,
         "retries_preemption": 0,
         "timeout_seconds": timeout_seconds,
@@ -165,7 +179,9 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, 
 
 
 def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, timeout_seconds: int, priority: str) -> str:
-    secrets = {key: os.environ[key] for key in ("CW_KEY_ID", "CW_KEY_SECRET")}
+    key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
+    # StoragePath reads the AWS-named pair; bucket-routed filesystems read the CW names.
+    secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
     environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
@@ -174,6 +190,8 @@ def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, time
                 name=job_name,
                 resources=convert_resources(RESOURCES),
                 environment=environment,
+                # Iris allocates the JAX coordinator port and exports it as IRIS_PORT_JAX on every replica.
+                ports=["jax"],
                 constraints=convert_constraints(RESOURCES) or None,
                 coscheduling=resolve_coscheduling(RESOURCES, REPLICAS),
                 replicas=REPLICAS,
