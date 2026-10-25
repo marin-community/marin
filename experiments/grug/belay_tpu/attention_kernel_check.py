@@ -3,6 +3,7 @@
 
 """Qualify saved-probability TPU attention without optimizer steps."""
 
+import argparse
 import functools
 import json
 import math
@@ -57,6 +58,9 @@ def source_scores(q, k, band, ids):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--benchmark-source", action="store_true", help="Remeasure the unchanged dense source baseline")
+    args = parser.parse_args()
     run_id = os.environ["BELAY_RUN_ID"]
     config = build_config(
         run_id,
@@ -95,7 +99,10 @@ def main():
                     ids = jnp.zeros_like(ids)
                 ct = jnp.asarray(rng.randn(*shape), dtype)
                 expected = jax.jit(functools.partial(evaluate, dense))(inputs, ids, ct)
-                for name, kernel in (("source", dense), ("saved_xla", saved), ("saved_pallas", pallas)):
+                implementations = [("saved_xla", saved), ("saved_pallas", pallas)]
+                if args.benchmark_source:
+                    implementations.insert(0, ("source", dense))
+                for name, kernel in implementations:
                     start = time.perf_counter()
                     compiled = jax.jit(functools.partial(evaluate, kernel)).lower(inputs, ids, ct).compile()
                     compile_time = time.perf_counter() - start
