@@ -216,6 +216,23 @@ class UnitEdit(NamedTuple):
     v_tap: jax.Array | None = None
     ve_tap: jax.Array | None = None
     embed_tap: jax.Array | None = None
+    routed_steer: "RoutedSteer | None" = None
+
+
+class RoutedSteer(NamedTuple):
+    """One routed unit steered per batch row ``b``: at layer ``layer[b]``, unit ``unit[b]`` of expert ``expert[b]``
+    becomes ``mult[b] * act + add[b]`` at the row's positions ``pos_lo[b] <= s <= pos_hi[b]`` where the token is routed
+    to that expert. With ``force[b]`` the expert is first force-routed there (replacing the token's last top-k slot
+    when it is not already selected; its combine weight follows from its unbiased logit as usual)."""
+
+    layer: jax.Array  # [B] int32
+    expert: jax.Array  # [B] int32
+    unit: jax.Array  # [B] int32
+    pos_lo: jax.Array  # [B] int32
+    pos_hi: jax.Array  # [B] int32
+    mult: jax.Array  # [B] float32
+    add: jax.Array  # [B] float32
+    force: jax.Array  # [B] bool
 
 
 NUM_GATES = 2 * NUM_LAYERS + 1
@@ -532,6 +549,14 @@ def _moe_branch(
     biased = router_logits + routing.bias_scale[layer] * mlp.router_bias.astype(jnp.float32)
     _, selected = _small_top_k(biased, TOP_K)
     selected = jnp.where(routing.sel_mask[layer][:, None], routing.sel_override[layer], selected)
+    steer = None if edit is None else edit.routed_steer
+    if steer is not None:
+        tok_row, tok_col = jnp.arange(t) // s, jnp.arange(t) % s
+        in_span = (tok_col >= steer.pos_lo[tok_row]) & (tok_col <= steer.pos_hi[tok_row])
+        target = steer.expert[tok_row]
+        absent = ~jnp.any(selected == target[:, None], axis=-1)
+        forced = (steer.layer[tok_row] == layer) & steer.force[tok_row] & in_span & absent
+        selected = selected.at[:, TOP_K - 1].set(jnp.where(forced, target, selected[:, TOP_K - 1]))
     unbiased_topk = jnp.take_along_axis(router_logits, selected, axis=-1)
     raw = jnp.sqrt(jnp.maximum(jax.nn.softplus(unbiased_topk), 1e-30))
     combine = raw * (mlp.cfg.routing_renorm_sum / (jnp.sum(raw, axis=-1, keepdims=True) + 1e-9))
@@ -557,6 +582,18 @@ def _moe_branch(
         keep = keep * gate
         out["expert_gate"] = gate
     act = keep * jnp.square(jax.nn.relu(pre)) + (1.0 - keep) * abl.neuron_mean[layer][expert_sorted]
+    if steer is not None:
+        row, col = token_sorted // s, token_sorted % s
+        hit = (
+            (steer.layer[row] == layer)
+            & (steer.expert[row] == expert_sorted)
+            & (col >= steer.pos_lo[row])
+            & (col <= steer.pos_hi[row])
+        )
+        idx = jnp.arange(act.shape[0])
+        unit = steer.unit[row]
+        cur = act[idx, unit]
+        act = act.at[idx, unit].set(jnp.where(hit, steer.mult[row] * cur + steer.add[row], cur))
     if edit.routed_tap is not None:
         act = act + edit.routed_tap[layer]
     y = _local_ragged_dot(act.astype(x.dtype), em.w_down, counts).astype(jnp.float32)  # [TK, R]
