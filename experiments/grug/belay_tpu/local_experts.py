@@ -96,6 +96,13 @@ def grouped_dot(x, weights, groups):
     return jax.lax.ragged_dot(x, weights, groups, preferred_element_type=x.dtype)
 
 
+def expert_mlp(rows, w_up, w_down, groups, active_rows):
+    del active_rows
+    up = grouped_dot(rows, w_up, groups)
+    hidden = jnp.square(jax.nn.relu(up))
+    return grouped_dot(hidden, w_down, groups)
+
+
 def local_expert_mlp(x, selected, combine, w_up, w_down, *, accepted_counts):
     """Compute locally after global capacity allocation, retaining activations."""
     tokens, topk = selected.shape
@@ -113,9 +120,7 @@ def local_expert_mlp(x, selected, combine, w_up, w_down, *, accepted_counts):
     # output initialized, including empty experts and completely rejected shards.
     physical_counts = accepted_counts.at[-1].add(flat.size - accepted_counts.sum())
     rows = jnp.where(active[:, None], dispatch_local(x, order, inverse, topk), 0)
-    up = grouped_dot(rows, w_up, physical_counts)
-    hidden = jnp.square(jax.nn.relu(up))
-    outputs = grouped_dot(hidden, w_down, physical_counts)
+    outputs = expert_mlp(rows, w_up, w_down, physical_counts, accepted_counts.sum())
     outputs = jnp.where(active[:, None], outputs, 0)
     slots = restore_local(outputs, order, inverse).reshape(tokens, topk, w_down.shape[-1])
     # Match the source combine's FP32 sum; rejected routes have zero outputs.

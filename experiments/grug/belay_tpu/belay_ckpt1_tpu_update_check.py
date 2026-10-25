@@ -26,7 +26,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.trainer import _initialize_global_tracker
 from levanter.utils.jax_utils import parameter_count
 
-from experiments.grug.belay_tpu import model, qb_balancing, routing_tpu, train
+from experiments.grug.belay_tpu import local_experts, model, qb_balancing, routing_tpu, train
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
     DATA_ROOT,
     build_config,
@@ -39,6 +39,7 @@ from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_sy
 from experiments.grug.belay_tpu.moe_saved_output import saved_output_routed_experts
 from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
 from experiments.grug.belay_tpu.remat_check import check_attention_remat
+from experiments.grug.belay_tpu.saved_relu2_adapter import saved_relu2_mlp, select_saved_relu2
 from experiments.grug.fast_track.grugmuon_stacked import _zeropower_via_newtonschulz_local
 from experiments.grug.fast_track.qb_balancing import bincount_upper_quantile as source_bincount_upper_quantile
 
@@ -144,6 +145,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--logging-only", action="store_true")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
+    parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
     parser.add_argument(
         "--update-steps", type=int, default=2, help="Consecutive diagnostic updates under the original schedule"
     )
@@ -178,6 +180,9 @@ def main():
         ep_ragged_all_to_all._permute_assignment_weights = routing_tpu.permute_assignment_weights_sort
     if args.saved_output:
         ep_ragged_all_to_all._routed_experts = saved_output_routed_experts
+    if args.saved_relu2:
+        ep_ragged_all_to_all._select_expert_mlp = select_saved_relu2
+        local_experts.expert_mlp = saved_relu2_mlp
     if not args.logging_only and os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
         raise RuntimeError("Optimizer checks require JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
     if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -211,6 +216,7 @@ def main():
             "diagnostic/routing_ops": args.routing_ops,
             "diagnostic/saved_output": args.saved_output,
             "diagnostic/local_experts": args.local_experts,
+            "diagnostic/saved_relu2": args.saved_relu2,
             "diagnostic/requested_unique_updates": total_updates,
             "diagnostic/profile_updates": args.profile_steps,
             "diagnostic/reference_step1": args.reference_step1,

@@ -3,6 +3,7 @@
 
 """Check saved expert pullbacks against the source recomputing backward on TPU."""
 
+import argparse
 import functools
 import json
 import os
@@ -17,6 +18,7 @@ from levanter.grug._moe.ep_ragged_all_to_all import _RaggedDotExpertMlp, _SavedR
 
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, require_tpu_rounding, verified_tokenizer
 from experiments.grug.belay_tpu.kernel_check import measure_errors
+from experiments.grug.belay_tpu.saved_relu2_adapter import SavedRelu2ExpertMlp
 
 
 def relu2(x):
@@ -29,6 +31,9 @@ def evaluate(expert_mlp, inputs, cotangent):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--fused-relu2", action="store_true")
+    args = parser.parse_args()
     require_tpu_rounding()
     run_id = os.environ["BELAY_RUN_ID"]
     config = build_config(
@@ -41,10 +46,19 @@ def main():
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     device = jax.local_devices()[0]
     with jax.default_device(device), jax.default_matmul_precision("highest"):
-        for case in ("padding", "empty", "skewed", "target"):
+        cases = (
+            ("padding", "empty", "skewed", "target", "local-target", "local-v432-target")
+            if args.fused_relu2
+            else ("padding", "empty", "skewed", "target")
+        )
+        for case in cases:
             rows, width, hidden, experts = (344064, 256, 384, 24) if case == "target" else (128, 128, 128, 3)
+            if case == "local-target":
+                rows, width, hidden, experts = 163840, 256, 384, 384
+            if case == "local-v432-target":
+                rows, width, hidden, experts = 327680, 256, 384, 384
             for dtype, tolerance in ((jnp.float32, 1e-4), (jnp.bfloat16, 2e-2)):
-                if case == "target" and dtype == jnp.float32:
+                if case.endswith("target") and dtype == jnp.float32:
                     continue
                 rng = np.random.RandomState(171)
                 active_host = np.asarray([32, 48, 0], np.int32)
@@ -52,9 +66,10 @@ def main():
                     active_host.fill(0)
                 elif case == "skewed":
                     active_host = np.asarray([0, 128, 0], np.int32)
-                elif case == "target":
-                    active_host = np.full(24, 327680 // 24, np.int32)
-                    active_host[: 327680 % 24] += 1
+                elif case.endswith("target"):
+                    active_rows = 327680 if case == "target" else rows - 1024
+                    active_host = np.full(experts, active_rows // experts, np.int32)
+                    active_host[: active_rows % experts] += 1
                 active = jnp.asarray(active_host)
                 physical = active.at[-1].add(rows - active.sum())
                 x = jnp.asarray(rng.normal(size=(rows, width)), dtype)
@@ -64,10 +79,13 @@ def main():
                 cotangent = jnp.asarray(rng.normal(size=x.shape), dtype)
                 inputs = (x, up, down, physical, active)
                 expected = None
-                for implementation, expert_mlp in (
+                implementations = [
                     ("source", _RaggedDotExpertMlp(relu2)),
                     ("saved", _SavedRaggedDotExpertMlp(relu2)),
-                ):
+                ]
+                if args.fused_relu2:
+                    implementations.append(("fused_saved", SavedRelu2ExpertMlp()))
+                for implementation, expert_mlp in implementations:
                     function = jax.jit(functools.partial(evaluate, expert_mlp))
                     start = time.perf_counter()
                     compiled = function.lower(inputs, cotangent).compile()

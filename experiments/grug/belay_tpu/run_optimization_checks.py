@@ -23,12 +23,24 @@ def main():
     parser.add_argument(
         "--phases",
         nargs="+",
-        choices=(*_DEFAULT_PHASES, "saved-ce", "routing", "saved-output", "local-experts"),
+        choices=(
+            *_DEFAULT_PHASES,
+            "saved-ce",
+            "routing",
+            "saved-output",
+            "local-experts",
+            "saved-relu2-kernel",
+            "saved-relu2",
+            "local-relu2",
+        ),
         default=_DEFAULT_PHASES,
     )
     args = parser.parse_args()
     if (
-        any(name in args.phases for name in ("source", "qb", "routing", "saved-output", "local-experts"))
+        any(
+            name in args.phases
+            for name in ("source", "qb", "routing", "saved-output", "local-experts", "saved-relu2", "local-relu2")
+        )
         and not args.reference_step1
     ):
         parser.error("--reference-step1 is required for full-update comparisons")
@@ -40,6 +52,12 @@ def main():
         "routing": ("belay_ckpt1_tpu_update_check", [*reference, "--routing-ops"]),
         "saved-output": ("belay_ckpt1_tpu_update_check", [*reference, "--saved-output"]),
         "local-experts": ("belay_ckpt1_tpu_update_check", [*reference, "--local-experts", "--routing-ops"]),
+        "saved-relu2-kernel": ("saved_moe_check", ["--fused-relu2"]),
+        "saved-relu2": ("belay_ckpt1_tpu_update_check", [*reference, "--saved-relu2"]),
+        "local-relu2": (
+            "belay_ckpt1_tpu_update_check",
+            [*reference, "--local-experts", "--routing-ops", "--saved-relu2"],
+        ),
         "transport": ("transport_kernel_check", []),
         "kda-tile": ("kda_tile_check", []),
         "saved-moe": ("saved_moe_check", []),
@@ -77,6 +95,8 @@ def main():
         print(json.dumps(record), flush=True)
         with (output / "diagnostic-phases.jsonl").open("a") as file:
             file.write(json.dumps(record) + "\n")
+        if name == "saved-relu2-kernel" and result.returncode != 0:
+            break
     raise SystemExit(1 if failed else 0)
 
 
