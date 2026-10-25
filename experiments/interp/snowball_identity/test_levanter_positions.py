@@ -3,6 +3,7 @@
 
 """CPU checks of the Levanter positions writer on a tiny random Levanter Snowball."""
 
+import equinox as eqx
 import haliax as hax
 import jax
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
+from experiments.interp.snowball_identity import levanter_positions
 from experiments.interp.snowball_identity.levanter_positions import TOP_K, positions_records, write_positions
 from experiments.interp.snowball_identity.logit_check import stored_sequences
 from experiments.interp.snowball_identity.sequences import Sequence
@@ -54,7 +56,7 @@ def test_records_match_the_model_forward(mesh_and_model):
     mesh, model = mesh_and_model
     batch = jax.device_count()
     with jax.set_mesh(mesh):
-        records = positions_records(model, SEQUENCES, batch=1, pad_multiple=1)
+        records = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63)
         for sequence in SEQUENCES:
             tokens = jnp.broadcast_to(jnp.asarray(sequence.tokens, dtype=jnp.int32), (batch, len(sequence.tokens)))
             ids = hax.named(tokens, (Axis("batch", batch), model.Pos.resize(len(sequence.tokens))))
@@ -73,9 +75,14 @@ def test_write_positions_uses_the_compute_view(mesh_and_model, tmp_path):
     mesh, model = mesh_and_model
     with jax.set_mesh(mesh):
         write_positions(
-            model, jmp.get_policy("p=f32,c=bfloat16"), SEQUENCES, str(tmp_path / "positions.pt"), pad_multiple=4
+            model,
+            jmp.get_policy("p=f32,c=bfloat16"),
+            SEQUENCES,
+            str(tmp_path / "positions.pt"),
+            pad_multiple=4,
+            pad_id=63,
         )
-        exact = positions_records(model, SEQUENCES, pad_multiple=4)
+        exact = positions_records(model, SEQUENCES, pad_multiple=4, pad_id=63)
     stored = torch.load(tmp_path / "positions.pt")
     assert [s.tokens for s in stored_sequences(str(tmp_path / "positions.pt"))] == [s.tokens for s in SEQUENCES]
     # The BF16 compute view scores close to, but not exactly like, the FP32 model.
@@ -86,7 +93,7 @@ def test_write_positions_uses_the_compute_view(mesh_and_model, tmp_path):
 def test_batching_and_right_padding_keep_real_positions(mesh_and_model):
     mesh, model = mesh_and_model
     with jax.set_mesh(mesh):
-        single = positions_records(model, SEQUENCES, batch=1, pad_multiple=1)
+        single = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63)
         # Two rows per step (the last step gets a filler copy) and padding to a multiple of 8.
         batched = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63)
     assert list(batched) == [s.id for s in SEQUENCES]
@@ -96,3 +103,55 @@ def test_batching_and_right_padding_keep_real_positions(mesh_and_model):
         torch.testing.assert_close(a["actual"], b["actual"], atol=1e-5, rtol=0, equal_nan=True)
         torch.testing.assert_close(a["top_lp"], b["top_lp"], atol=1e-5, rtol=0, equal_nan=True)
         assert torch.equal(a["top_ids"][:, :5], b["top_ids"][:, :5])
+
+
+def test_routes_sidecar_matches_the_observer(mesh_and_model):
+    mesh, model = mesh_and_model
+    with jax.set_mesh(mesh):
+        single = positions_records(model, SEQUENCES, batch=1, pad_multiple=1, pad_id=63, routes=True)
+        batched = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63, routes=True)
+        sequence = SEQUENCES[0]
+        ids = hax.named(
+            jnp.asarray([sequence.tokens], dtype=jnp.int32), (Axis("batch", 1), model.Pos.resize(len(sequence.tokens)))
+        )
+        _, observed = model.activations(ids, return_routes=True)
+    observed = np.asarray(jax.device_get(observed))[:, 0].transpose(1, 0, 2)  # [T, L, K]
+    np.testing.assert_array_equal(single[sequence.id]["routes"].numpy(), observed)
+    for s in SEQUENCES:
+        assert single[s.id]["routes"].shape == (len(s.tokens), CONFIG.num_layers, CONFIG.num_experts_per_token)
+        assert torch.equal(single[s.id]["routes"], batched[s.id]["routes"])
+
+
+def test_compute_dtype_override_reaches_the_scored_view(mesh_and_model, tmp_path):
+    mesh, model = mesh_and_model
+    policy = jmp.get_policy("p=f32,c=bfloat16")
+    # Give the router biases values that BF16 cannot hold, so keeping them in FP32 is observable.
+    biases = [block.mlp.router_bias for block in model.transformer.blocks]
+    model = eqx.tree_at(
+        lambda m: [b.mlp.router_bias for b in m.transformer.blocks],
+        model,
+        [b + jnp.float32(2**-12) * (1 + jnp.arange(b.shape[0])) for b in biases],
+    )
+    seen = []
+    original = levanter_positions.positions_records
+
+    def spy(view, *args):
+        seen.append({str(b.mlp.router_bias.dtype) for b in view.transformer.blocks})
+        return original(view, *args)
+
+    with jax.set_mesh(mesh):
+        levanter_positions.positions_records = spy
+        try:
+            write_positions(model, policy, SEQUENCES[:1], str(tmp_path / "a.pt"), pad_multiple=4, pad_id=63)
+            write_positions(
+                model,
+                policy,
+                SEQUENCES[:1],
+                str(tmp_path / "b.pt"),
+                pad_multiple=4,
+                pad_id=63,
+                compute_dtype_overrides={"router_bias": "float32"},
+            )
+        finally:
+            levanter_positions.positions_records = original
+    assert seen == [{"bfloat16"}, {"float32"}]

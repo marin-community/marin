@@ -22,8 +22,20 @@ tokenization. Per variant, layer and sequence group (``check``, ``contrastive``,
 reports how many positions select a different expert set than ``native``, how many selected experts differ, the max abs
 change of the dense combine weights, and the smallest native margin between the k-th and (k+1)-th biased logits.
 Every position whose ordered ids differ is listed (up to ``MAX_CASES`` per variant). Output: ``routing.json``.
+
+The two pre-registered #310 routing rows (precision-preflight-preregistration-v1.md):
+
+- row 1, ``bias_exception_required``: any ``bf16_bias`` expert-set change requires keeping the 26 router biases in
+  FP32 in the compute view (``compute_dtype_overrides={"router_bias": "float32"}``);
+- row 2, ``route_gate``: fail-closed check of the cross-stack report (``compare_routes_cross_stack``). Any differing
+  Levanter vs torch route, ordered or set, fails and is held for diagnosis, as do incomplete coverage and a bias
+  override that does not match row 1.
 """
 
+import argparse
+import hashlib
+import io
+import json
 import logging
 import time
 from collections import defaultdict
@@ -31,7 +43,7 @@ from collections import defaultdict
 import torch
 
 from experiments.interp.snowball_identity.harness import Output, SnowballHarness, import_grug
-from experiments.interp.snowball_identity.logit_check import WINDOW, stored_sequences
+from experiments.interp.snowball_identity.logit_check import WINDOW, read, stored_sequences
 from experiments.interp.snowball_identity.sequences import Sequence
 
 logger = logging.getLogger(__name__)
@@ -102,6 +114,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
         }
     )
     cases: dict[str, list] = {variant: [] for variant in VARIANTS}
+    native_routes: dict[str, torch.Tensor] = {}
     margins: dict = defaultdict(lambda: float("inf"))
     started = time.time()
     try:
@@ -111,6 +124,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
             groups = {sequence.group: slice(None)}
             if sequence.group == "long" and len(sequence.tokens) > WINDOW:
                 groups["long_past_window"] = slice(WINDOW, None)
+            layer_routes = []
             for layer, block in enumerate(harness.layers):
                 router = block.mlp.router
                 x = captured[layer]
@@ -118,6 +132,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
                 rounded = torch.nn.functional.linear(x.bfloat16(), router.weight.bfloat16()).float()
                 bias = router.bias.detach().to(device=logits.device, dtype=torch.float32)
                 results = compare_routes(logits, bias, router.top_k, rounded)
+                layer_routes.append(results["bf16_bias"]["native"].cpu())
                 for variant, result in results.items():
                     result = {name: value.cpu() for name, value in result.items()}
                     for group, rows in groups.items():
@@ -144,6 +159,7 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
                                     "native_margin": float(result["margin"][position]),
                                 }
                             )
+            native_routes[sequence.id] = torch.stack(layer_routes, dim=1).to(torch.int16)  # [T, L, K]
             if number % 50 == 0:
                 logger.info("routing %d/%d %s (%.0fs)", number, len(sequences), sequence.id, time.time() - started)
     finally:
@@ -188,13 +204,121 @@ def routing_stats(harness: SnowballHarness, sequences: list[Sequence]) -> dict:
         "layers": layers,
         "totals": totals,
         "cases": cases,
+        "native_routes": native_routes,
     }
 
 
 def router_rounding(harness: SnowballHarness, tokenizer, spec: dict, output: Output, stop_ids: set[int]) -> None:
-    """Spec: ``positions`` (the pinned #298 ``positions.pt``, whose stored token ids are the inputs)."""
+    """Spec: ``positions`` (the pinned #298 ``positions.pt``, whose stored token ids are the inputs).
+
+    Writes ``routing.json`` and ``routes.pt`` (``{sequence id: native FP32-bias routes [T, L, K] int16}``, the torch
+    side of the cross-stack row)."""
     started = time.time()
     report = routing_stats(harness, stored_sequences(spec["positions"]))
+    output.save("routes.pt", report.pop("native_routes"))
     report["positions"] = spec["positions"]
+    report["positions_sha256"] = hashlib.sha256(read(spec["positions"])).hexdigest()
     report["seconds"] = round(time.time() - started, 1)
     output.write_json("routing.json", report)
+
+
+def compare_routes_cross_stack(levanter_path: str, torch_path: str) -> dict:
+    """Levanter compute-view routes (``levanter_positions`` with ``routes=True``) vs torch FP32-bias routes
+    (``routes.pt``), per layer and group: positions compared, selected-set agreement, ordered-id agreement, and every
+    differing position (up to ``MAX_CASES``). Fails if the sequence ids, token counts or layer counts differ."""
+    ours = torch.load(io.BytesIO(read(levanter_path)), map_location="cpu")
+    theirs = torch.load(io.BytesIO(read(torch_path)), map_location="cpu")
+    if set(ours) != set(theirs):
+        raise ValueError("Levanter and torch routes cover different sequence ids")
+    counts: dict = defaultdict(lambda: {"positions": 0, "set_agree": 0, "ordered_agree": 0})
+    cases = []
+    for sequence_id in sorted(ours):
+        levanter, native = ours[sequence_id]["routes"].long(), theirs[sequence_id].long()
+        if levanter.shape != native.shape:
+            raise ValueError(f"{sequence_id}: route shapes differ, {tuple(levanter.shape)} vs {tuple(native.shape)}")
+        group = sequence_id.split("|")[0]
+        ordered = (levanter == native).all(-1)  # [T, L]
+        same_set = (levanter.sort(-1).values == native.sort(-1).values).all(-1)
+        for layer in range(native.shape[1]):
+            spans = {group: slice(None)}
+            if group == "long" and native.shape[0] > WINDOW:
+                spans["long_past_window"] = slice(WINDOW, None)
+            for name, rows in spans.items():
+                count = counts[(layer, name)]
+                count["positions"] += len(ordered[rows, layer])
+                count["set_agree"] += int(same_set[rows, layer].sum())
+                count["ordered_agree"] += int(ordered[rows, layer].sum())
+        for position, layer in torch.nonzero(~ordered).tolist():
+            if len(cases) < MAX_CASES:
+                cases.append(
+                    {
+                        "sequence": sequence_id,
+                        "position": position,
+                        "layer": layer,
+                        "levanter": levanter[position, layer].tolist(),
+                        "torch": native[position, layer].tolist(),
+                        "set_changed": not bool(same_set[position, layer]),
+                    }
+                )
+    groups = sorted({name for _, name in counts})
+    layers = sorted({layer for layer, _ in counts})
+    main_groups = [g for g in groups if g != "long_past_window"]
+    totals = {
+        name: sum(counts[(layer, g)][name] for layer in layers for g in main_groups)
+        for name in ("positions", "set_agree", "ordered_agree")
+    }
+    return {
+        "levanter": levanter_path,
+        "torch": torch_path,
+        "label": "Levanter compute-view routes vs torch FP32-bias routes (not served-vLLM routes)",
+        "layers": [{"layer": layer, **{g: counts[(layer, g)] for g in groups}} for layer in layers],
+        "totals": totals,
+        "cases": cases,
+    }
+
+
+def bias_exception_required(rounding: dict) -> bool:
+    """Row 1: whether the ``router_rounding`` report has any position whose BF16-rounded bias selects a different
+    expert set than the FP32 bias. Order-only changes are reported in the report's totals but do not trigger it."""
+    return rounding["totals"]["bf16_bias"]["positions_changed"] > 0
+
+
+def route_gate(cross: dict, rounding: dict, compute_dtype_overrides: dict | None) -> list[str]:
+    """Row 2: every failure of a cross-stack report scored with ``compute_dtype_overrides``; empty is a pass.
+
+    ``rounding`` is the torch ``router_rounding`` report from the same job that wrote the compared ``routes.pt``."""
+    failures = []
+    bias_fp32 = (compute_dtype_overrides or {}).get("router_bias") == "float32"
+    if bias_exception_required(rounding) != bias_fp32:
+        failures.append(
+            f"router_bias override {'missing' if not bias_fp32 else 'not triggered'}: row 1 has "
+            f"{rounding['totals']['bf16_bias']['positions_changed']} expert-set changes"
+        )
+    totals, expected = cross["totals"], rounding["totals"]["bf16_bias"]["positions"]
+    if totals["positions"] != expected or expected == 0:
+        failures.append(f"cross-stack covers {totals['positions']} position-layers, torch {expected}")
+    if totals["set_agree"] != totals["positions"]:
+        failures.append(f"{totals['positions'] - totals['set_agree']} position-layers select different experts")
+    if totals["ordered_agree"] != totals["positions"]:
+        failures.append(f"{totals['positions'] - totals['ordered_agree']} position-layers differ in expert order")
+    return failures
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Cross-stack routing row: Levanter vs torch FP32-bias routes.")
+    parser.add_argument("--levanter", required=True, help="levanter_positions positions.pt written with routes=True")
+    parser.add_argument("--torch", required=True, help="router_rounding routes.pt")
+    parser.add_argument("--rounding", help="the same job's routing.json: add the #310 gate result; exit 1 if it fails")
+    parser.add_argument("--bias-fp32", action="store_true", help="the Levanter view kept router_bias in FP32")
+    args = parser.parse_args()
+    report = compare_routes_cross_stack(args.levanter, args.torch)
+    if args.rounding:
+        overrides = {"router_bias": "float32"} if args.bias_fp32 else None
+        report["gate_failures"] = route_gate(report, json.loads(read(args.rounding)), overrides)
+    print(json.dumps(report, indent=1))
+    if args.rounding and report["gate_failures"]:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()

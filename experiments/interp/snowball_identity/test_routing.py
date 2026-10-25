@@ -3,11 +3,21 @@
 
 """CPU checks of the router rounding isolation on the tiny random GrugMoE."""
 
+import hashlib
+import json
+from pathlib import Path
+
 import torch
 
 from experiments.interp.snowball_identity.harness import Output, run_positions
 from experiments.interp.snowball_identity.logit_check import stored_sequences
-from experiments.interp.snowball_identity.routing import VARIANTS, compare_routes, routing_stats
+from experiments.interp.snowball_identity.routing import (
+    VARIANTS,
+    compare_routes,
+    compare_routes_cross_stack,
+    router_rounding,
+    routing_stats,
+)
 from experiments.interp.snowball_identity.sequences import Sequence
 from experiments.interp.snowball_identity.tiny_model import LAYERS, TOKENS
 
@@ -77,3 +87,31 @@ def test_order_change_without_set_change():
     rounded = torch.tensor([[3.0, 3.0 + 2**-6, -1.0, -5.0]])
     result = compare_routes(logits, torch.zeros(4), k=2, rounded_logits=rounded)["bf16_logits_bias"]
     assert result["order_changed"].tolist() == [True] and result["experts_changed"].tolist() == [0]
+
+
+def test_router_rounding_writes_routes_and_input_hash(harness, tmp_path):
+    sequences = [Sequence("check|a", "check", tuple(TOKENS)), Sequence("long|x", "long", tuple(TOKENS[:7]))]
+    run_positions(harness, sequences, Output(str(tmp_path / "pinned")))
+    pinned = str(tmp_path / "pinned" / "positions.pt")
+    router_rounding(harness, None, {"positions": pinned}, Output(str(tmp_path / "out")), stop_ids=set())
+    report = json.loads((tmp_path / "out" / "routing.json").read_text())
+    assert report["positions_sha256"] == hashlib.sha256(Path(pinned).read_bytes()).hexdigest()
+    routes = torch.load(tmp_path / "out" / "routes.pt")
+    k = harness.layers[0].mlp.router.top_k
+    assert {sid: tuple(r.shape) for sid, r in routes.items()} == {
+        "check|a": (len(TOKENS), LAYERS, k),
+        "long|x": (7, LAYERS, k),
+    }
+
+
+def test_cross_stack_compare_counts_set_and_order(tmp_path):
+    native = {"check|a": torch.tensor([[[0, 1], [2, 3]], [[4, 5], [6, 7]]], dtype=torch.int16)}  # [T=2, L=2, K=2]
+    levanter = {"check|a": {"routes": native["check|a"].clone()}}
+    levanter["check|a"]["routes"][0, 1] = torch.tensor([3, 2])  # same set, other order
+    levanter["check|a"]["routes"][1, 0] = torch.tensor([4, 1])  # different set
+    torch.save(native, tmp_path / "torch.pt")
+    torch.save(levanter, tmp_path / "levanter.pt")
+    report = compare_routes_cross_stack(str(tmp_path / "levanter.pt"), str(tmp_path / "torch.pt"))
+    assert report["totals"] == {"positions": 4, "set_agree": 3, "ordered_agree": 2}
+    assert [(c["position"], c["layer"], c["set_changed"]) for c in report["cases"]] == [(0, 1, False), (1, 0, True)]
+    assert "not served-vLLM" in report["label"]
