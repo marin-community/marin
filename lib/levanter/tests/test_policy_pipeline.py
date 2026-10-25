@@ -12,6 +12,7 @@ from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grad_accum import microbatched
 from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
 from levanter.policy_model import PolicyBatch
+from levanter.testing.policy_reference import full_softmax_logprobs
 from levanter.policy_pipeline import (
     pipeline_batch,
     packed_pipeline_batch,
@@ -93,11 +94,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
                 hidden = stage.run_blocks(hidden, mask, positions)
             logits = hidden @ combined[-1].get_lm_head()
             logits = logits[:, -3:-1]
-            shifted = logits - jax.lax.stop_gradient(jnp.max(logits, axis=-1, keepdims=True))
-            accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
-            logprobs = shifted - jax.lax.log(
-                jnp.sum(jax.lax.exp(shifted, accuracy=accuracy), axis=-1, keepdims=True), accuracy=accuracy
-            )
+            logprobs = full_softmax_logprobs(logits)
             selected_probs = jnp.take_along_axis(logprobs, tokens[:, -2:, None], axis=-1)[..., 0]
             inputs = (selected_probs, batch.old_logprobs, batch.reference_logprobs, advantages, weights, weights)
             return clipped_policy_loss(
@@ -321,13 +318,7 @@ def test_pipeline_gradient_mean_matches_spmd_accumulation(compute_dtype):
         for stage in model:
             hidden = stage.run_blocks(hidden, batch.attention_mask.array, batch.position_ids.array)
         logits = hidden[:, -3:-1].astype(jnp.float32) @ model[-1].get_lm_head().astype(jnp.float32)
-        # Match the fused CE reference's TPU transcendental accuracy. The
-        # approximate default log_softmax can change a BF16 pullback rounding.
-        shifted = logits - jax.lax.stop_gradient(jnp.max(logits, axis=-1, keepdims=True))
-        accuracy = jax.lax.AccuracyMode.HIGHEST if jax.default_backend() == "tpu" else None
-        logprobs = shifted - jax.lax.log(
-            jnp.sum(jax.lax.exp(shifted, accuracy=accuracy), axis=-1, keepdims=True), accuracy=accuracy
-        )
+        logprobs = full_softmax_logprobs(logits)
         scores = jnp.take_along_axis(logprobs, ids[:, -2:, None], axis=-1)[..., 0]
         return clipped_policy_loss(
             hax.named(scores, batch.old_logprobs.axes),
