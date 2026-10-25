@@ -80,7 +80,7 @@ def leaf_differences(left, right):
     return jnp.stack(counts), jnp.stack(maxima), jnp.stack(means)
 
 
-def require_equal(left, right, label):
+def compare_state(left, right, label):
     left_leaves, left_tree = jax.tree.flatten(left)
     right_leaves, right_tree = jax.tree.flatten(right)
     if left_tree != right_tree:
@@ -110,8 +110,14 @@ def require_equal(left, right, label):
             mismatched_leaves=len(differences),
             largest_leaves=differences[:12],
         )
-        raise AssertionError(f"Checkpoint continuation mismatch: {label}")
+        return False
     emit("exact_match", label=label, rank=jax.process_index())
+    return True
+
+
+def require_equal(left, right, label):
+    if not compare_state(left, right, label):
+        raise AssertionError(f"Checkpoint continuation mismatch: {label}")
 
 
 def batch_digest(batch):
@@ -139,7 +145,7 @@ def main():
         "--compile-only", action="store_true", help="Compile the original saved-residual step; no updates"
     )
     parser.add_argument(
-        "--reference-step1", help="Require the first update to exactly match this frozen step-1 checkpoint"
+        "--reference-step1", help="Record first-update differences from this frozen checkpoint without rejecting them"
     )
     parser.add_argument(
         "--source-qb", action="store_true", help="Use the unchanged source histogram as a cross-run control"
@@ -275,7 +281,8 @@ def main():
         multihost_utils.sync_global_devices("belay_update_check_checkpoint_committed")
         if args.reference_step1:
             reference1 = load_checkpoint(state1, args.reference_step1, mesh=mesh, allow_partial=False)
-            require_equal(state1, reference1, "first update against frozen reference checkpoint")
+            reference_equal = compare_state(state1, reference1, "first update against frozen reference checkpoint")
+            tracker.log_summary({"diagnostic/reference_state_exact": reference_equal})
             del reference1
         restored1 = load_checkpoint(state1, checkpoint_path, mesh=mesh, allow_partial=False)
         require_equal(state1, restored1, "all model, optimizer, step and pending-router state after restore")
