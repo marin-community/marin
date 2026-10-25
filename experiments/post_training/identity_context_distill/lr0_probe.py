@@ -294,6 +294,12 @@ def submit(
     priority: str,
     xla_precision: str,
 ) -> str:
+    entrypoint = Entrypoint.from_callable(lr0_worker, run_root, run_id, receipt_bytes, receipt_sha256, route_policy)
+    return submit_entrypoint(job_name, entrypoint, timeout_seconds, priority)
+
+
+def submit_entrypoint(job_name: str, entrypoint: Entrypoint, timeout_seconds: int, priority: str) -> str:
+    """One finite 4 x H100x8 RNO2a job with no retries; shared by the LR0 and SFT launchers."""
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     # StoragePath reads the AWS-named pair; bucket-routed filesystems read the CW names.
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
@@ -306,9 +312,7 @@ def submit(
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(
-                entrypoint=Entrypoint.from_callable(
-                    lr0_worker, run_root, run_id, receipt_bytes, receipt_sha256, route_policy
-                ),
+                entrypoint=entrypoint,
                 name=job_name,
                 resources=convert_resources(RESOURCES),
                 environment=environment,
