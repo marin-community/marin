@@ -98,17 +98,10 @@ def _band_grad(dsr, dbr, *, extent, length):
     dbr[...] = jnp.where((key_block >= 0) & (key_block < length // TILE), dsr[...], 0)
 
 
-def _forward(q, k, v, band, qids, kids):
+def score_tiles(q, k, band, qids, kids):
+    """Return local causal score tiles with the source activation rounding."""
     groups, length, dim = q.shape
     width = band.shape[-1]
-    if jax.default_backend() != "tpu":
-        raise ValueError("Inkling Pallas requires TPU")
-    if dim != 128 or length % TILE or width % TILE or width <= TILE:
-        raise ValueError("Inkling Pallas requires head width 128 and 128-aligned sequence/band")
-    if q.shape != k.shape or q.shape != v.shape or any(x.dtype != q.dtype for x in (k, v, band)):
-        raise ValueError("Inkling Pallas requires equal local Q/K/V shapes and activation dtypes")
-    if q.dtype not in (jnp.float32, jnp.bfloat16):
-        raise ValueError("Inkling Pallas supports FP32 and BF16 activations")
     extent = width - TILE
     grid = (groups, length // TILE, length // TILE)
     # A singleton sublane dimension lets each program read one group while
@@ -117,7 +110,7 @@ def _forward(q, k, v, band, qids, kids):
     score_shape = _shape((groups, length, length), q.dtype)
     tile = _shape((TILE, dim), q.dtype)
     ids = _shape((TILE,), jnp.int32)
-    scores = pl.pallas_call(
+    return pl.pallas_call(
         functools.partial(_scores, extent=extent, width=width),
         out_shape=score_shape,
         grid=grid,
@@ -135,6 +128,20 @@ def _forward(q, k, v, band, qids, kids):
         cost_estimate=_cost(_scores_math, inputs, (score_shape,), (tile, tile, tile, ids, ids), grid),
         name="inkling_scores_banded",
     )(*inputs)
+
+
+def _forward(q, k, v, band, qids, kids):
+    groups, length, dim = q.shape
+    width = band.shape[-1]
+    if jax.default_backend() != "tpu":
+        raise ValueError("Inkling Pallas requires TPU")
+    if dim != 128 or length % TILE or width % TILE or width <= TILE:
+        raise ValueError("Inkling Pallas requires head width 128 and 128-aligned sequence/band")
+    if q.shape != k.shape or q.shape != v.shape or any(x.dtype != q.dtype for x in (k, v, band)):
+        raise ValueError("Inkling Pallas requires equal local Q/K/V shapes and activation dtypes")
+    if q.dtype not in (jnp.float32, jnp.bfloat16):
+        raise ValueError("Inkling Pallas supports FP32 and BF16 activations")
+    scores = score_tiles(q, k, band, qids, kids)
     grid2 = (groups, length // TILE)
     outputs = (_shape(q.shape, v.dtype), _shape(scores.shape, jnp.float32))
     out, prob = pl.pallas_call(

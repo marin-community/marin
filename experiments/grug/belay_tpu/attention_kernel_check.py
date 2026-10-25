@@ -5,6 +5,7 @@
 
 import functools
 import json
+import math
 import os
 import statistics
 import time
@@ -15,9 +16,10 @@ import jax.numpy as jnp
 import levanter.tracker as tracker
 import numpy as np
 from levanter.grug.attention import AttentionMask, reference_attention
+from levanter.grug.attention._inkling_relpos import dense_rel_bias
 
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, verified_tokenizer
-from experiments.grug.belay_tpu.inkling_pallas import pallas_attention_local
+from experiments.grug.belay_tpu.inkling_pallas import pallas_attention_local, score_tiles
 from experiments.grug.belay_tpu.inkling_tpu import saved_attention_local
 from experiments.grug.belay_tpu.kernel_check import measure_errors
 
@@ -44,6 +46,14 @@ def saved(q, k, v, band, ids):
 
 def pallas(q, k, v, band, ids):
     return pallas_attention_local(q, k, v, band, ids, ids)
+
+
+def source_scores(q, k, band, ids):
+    length = q.shape[1]
+    scores = jnp.einsum("bqhd,bkhd->bhqk", q[:, :, None] * (1 / math.sqrt(q.shape[-1])), k[:, :, None])
+    scores = scores + dense_rel_bias(band[:, None], length, length)
+    valid = AttentionMask(is_causal=True, segment_ids=(ids, ids)).materialize_mask(length, length)
+    return jnp.where(valid[:, None], scores, jnp.asarray(-1e9, scores.dtype))[:, 0]
 
 
 def main():
@@ -95,6 +105,12 @@ def main():
                     if not passed:
                         failures.append((scenario, str(jnp.dtype(dtype)), name))
                         if length <= 256:
+                            diagnostics = {}
+                            if name == "saved_pallas":
+                                diagnostics = {
+                                    "source_scores": np.asarray(jax.jit(source_scores)(q, k, band, ids), np.float32),
+                                    "pallas_scores": np.asarray(jax.jit(score_tiles)(q, k, band, ids, ids), np.float32),
+                                }
                             np.savez_compressed(
                                 output / f"attention-failure-{scenario}-{jnp.dtype(dtype)}-{name}.npz",
                                 **{f"actual_{i}": np.asarray(x, np.float32) for i, x in enumerate(actual)},
@@ -102,6 +118,7 @@ def main():
                                 **{f"input_{i}": np.asarray(x, np.float32) for i, x in enumerate(inputs)},
                                 ids=np.asarray(ids),
                                 cotangent=np.asarray(ct, np.float32),
+                                **diagnostics,
                             )
                     samples = []
                     for index in range(7):
