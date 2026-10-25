@@ -82,11 +82,19 @@ def main():
             file.write(json.dumps(row) + "\n")
 
     with jax.default_device(device), jax.default_matmul_precision("highest"):
-        for scenario, length in (("packed", 57), ("strong_decay", 128), ("repeated", 128), ("target", 4096)):
-            shape = (1, 2, length, 128) if scenario != "target" else (8, 2, length, 128)
+        for scenario, length in (
+            ("packed", 57),
+            ("strong_decay", 128),
+            ("repeated", 128),
+            ("ckpt1_packed", 128),
+            ("ckpt1_long", 128),
+            ("target", 4096),
+            ("ckpt1_target", 4096),
+        ):
+            shape = (8, 2, length, 128) if length == 4096 else (1, 2, length, 128)
             rng = np.random.RandomState(51)
             for dtype, tolerance in ((jnp.float32, 1e-4), (jnp.bfloat16, 2e-2)):
-                if scenario == "target" and dtype == jnp.float32:
+                if length == 4096 and dtype == jnp.float32:
                     continue
                 q, k, v = (jnp.asarray(rng.randn(*shape), dtype) for _ in range(3))
                 if scenario == "repeated":
@@ -96,8 +104,13 @@ def main():
                 beta = jnp.asarray(rng.rand(*shape[:-1]), jnp.float32)
                 initial = jnp.asarray(0.01 * rng.randn(*shape[:2], 128, 128), jnp.float32)
                 erase = jnp.asarray(0.5 + rng.rand(*shape), jnp.float32)
+                if scenario.startswith("ckpt1"):
+                    # Ckpt 1 has no erase gate and starts every sequence at zero.
+                    initial, erase = jnp.zeros_like(initial), jnp.ones_like(erase)
                 inputs = (q, k, v, g, beta, initial, erase)
                 ids = np.searchsorted([7, 16, 17, 33, 56], np.arange(length), side="right")
+                if scenario == "ckpt1_long":
+                    ids = np.zeros(length, np.int32)
                 segments = jnp.asarray(ids[None, None, :], jnp.int32)
                 ct = (jnp.asarray(rng.randn(*shape), jnp.float32), jnp.asarray(rng.randn(*initial.shape), jnp.float32))
                 source = functools.partial(chunk_kda, chunk_size=16, matmul_dtype=dtype)
@@ -134,6 +147,17 @@ def main():
                             "shape": shape,
                             "dtype": str(jnp.dtype(dtype)),
                             "scenario": scenario,
+                            "error_leaves": [
+                                "output",
+                                "final_state",
+                                "dq",
+                                "dk",
+                                "dv",
+                                "dg",
+                                "dbeta",
+                                "dinitial",
+                                "derase",
+                            ],
                             "block_sizes": {"chunk": 16, "state": [128, 128]},
                             "compile_time": compile_time,
                             "steady_state_time": statistics.median(samples),

@@ -85,7 +85,10 @@ def _backward(residual, dout):
         dy = jax.lax.dynamic_slice_in_dim(dout, start, BLOCK, axis=1)
         prob = probabilities[index]
         dp = jnp.einsum("gqd,gkd->gqk", dy, v).astype(jnp.float32)
-        ds = (prob * (dp - jnp.sum(dp * prob, axis=-1, keepdims=True))).astype(q.dtype)
+        weighted = prob * dp
+        # Preserve the source softmax custom-JVP transpose's operation order.
+        # Factoring out prob changes cancellation in saturated BF16 attention.
+        ds = (weighted - prob * jnp.sum(weighted, axis=-1, keepdims=True)).astype(q.dtype)
         ids = jax.lax.dynamic_slice_in_dim(q_segments, start, BLOCK, axis=1)
         valid = (start + jnp.arange(BLOCK)[:, None] >= jnp.arange(length)[None, :])[None]
         valid = valid & (ids[:, :, None] == k_segments[:, None, :])

@@ -19,7 +19,7 @@ from levanter.grug.attention import AttentionMask, reference_attention
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, verified_tokenizer
 from experiments.grug.belay_tpu.inkling_pallas import pallas_attention_local
 from experiments.grug.belay_tpu.inkling_tpu import saved_attention_local
-from experiments.grug.belay_tpu.kernel_check import errors
+from experiments.grug.belay_tpu.kernel_check import measure_errors
 
 
 def dense(q, k, v, band, ids):
@@ -61,14 +61,17 @@ def main():
     tracker.log_summary({"kernel_check/optimizer_updates": 0})
     device = jax.local_devices()[0]
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
+    failures = []
     with jax.default_device(device), jax.default_matmul_precision("highest"):
         for groups, length, width, scenario in (
             (2, 128, 256, "packed"),
             (2, 256, 1152, "strong_logits"),
+            (2, 256, 1152, "unpacked"),
             (16, 4096, 1152, "target"),
+            (16, 4096, 1152, "target_unpacked"),
         ):
             for dtype, tolerance in ((jnp.float32, 1e-4), (jnp.bfloat16, 2e-2)):
-                if scenario == "target" and dtype == jnp.float32:
+                if length == 4096 and dtype == jnp.float32:
                     continue
                 rng = np.random.RandomState(71)
                 shape = (groups, length, 128)
@@ -78,6 +81,8 @@ def main():
                 band = jnp.asarray(0.2 * rng.randn(groups, length, width), dtype)
                 inputs = q, k, v, band
                 ids = jnp.asarray(np.broadcast_to(np.arange(length) // 37, (groups, length)), jnp.int32)
+                if scenario.endswith("unpacked"):
+                    ids = jnp.zeros_like(ids)
                 ct = jnp.asarray(rng.randn(*shape), dtype)
                 expected = jax.jit(functools.partial(evaluate, dense))(inputs, ids, ct)
                 for name, kernel in (("source", dense), ("saved_xla", saved), ("saved_pallas", pallas)):
@@ -85,7 +90,19 @@ def main():
                     compiled = jax.jit(functools.partial(evaluate, kernel)).lower(inputs, ids, ct).compile()
                     compile_time = time.perf_counter() - start
                     actual = jax.block_until_ready(compiled(inputs, ids, ct))
-                    deviations = errors(actual, expected, tolerance)
+                    deviations = measure_errors(actual, expected, tolerance)
+                    passed = all(np.isfinite(row["normalized_max"]) and row["normalized_max"] <= 1 for row in deviations)
+                    if not passed:
+                        failures.append((scenario, str(jnp.dtype(dtype)), name))
+                        if length <= 256:
+                            np.savez_compressed(
+                                output / f"attention-failure-{scenario}-{jnp.dtype(dtype)}-{name}.npz",
+                                **{f"actual_{i}": np.asarray(x, np.float32) for i, x in enumerate(actual)},
+                                **{f"expected_{i}": np.asarray(x, np.float32) for i, x in enumerate(expected)},
+                                **{f"input_{i}": np.asarray(x, np.float32) for i, x in enumerate(inputs)},
+                                ids=np.asarray(ids),
+                                cotangent=np.asarray(ct, np.float32),
+                            )
                     samples = []
                     for index in range(7):
                         start = time.perf_counter()
@@ -93,7 +110,7 @@ def main():
                         if index >= 2:
                             samples.append(time.perf_counter() - start)
                     row = {
-                        "stage": "kernel_pass",
+                        "stage": "kernel_pass" if passed else "kernel_numerical_failure",
                         "kernel": "inkling_attention",
                         "implementation": name,
                         "rank": jax.process_index(),
@@ -108,8 +125,9 @@ def main():
                         "compile_time": compile_time,
                         "steady_state_time": statistics.median(samples),
                         "samples": samples,
-                        "error": None,
+                        "error": None if passed else "Frozen numerical bound exceeded; diagnostic timing only",
                         "errors": deviations,
+                        "error_leaves": ["output", "dq", "dk", "dv", "dband"],
                         "tolerance": tolerance,
                         "temporary_bytes": compiled.memory_analysis().temp_size_in_bytes,
                         "git_sha": os.environ["BELAY_SOURCE_COMMIT"],
@@ -119,8 +137,10 @@ def main():
                     print(json.dumps(row), flush=True)
                     with (output / "attention-kernel-check.jsonl").open("a") as file:
                         file.write(json.dumps(row) + "\n")
-    tracker.log_summary({"kernel_check/attention_pass": True})
+    tracker.log_summary({"kernel_check/attention_pass": not failures})
     tracker.current_tracker().finish()
+    if failures:
+        raise AssertionError(f"Attention qualification failures retained without stopping remaining grid: {failures}")
 
 
 if __name__ == "__main__":

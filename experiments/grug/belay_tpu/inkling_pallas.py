@@ -70,7 +70,8 @@ def _probability(sr, vr, outr, pr):
 
 def _query_grad_math(prob, k, v, dout):
     dp = _dot(dout, v.T).astype(v.dtype).astype(jnp.float32)
-    ds = (prob * (dp - jnp.sum(prob * dp, axis=-1, keepdims=True))).astype(k.dtype)
+    weighted = prob * dp
+    ds = (weighted - prob * jnp.sum(weighted, axis=-1, keepdims=True)).astype(k.dtype)
     dq = _dot(ds, k).astype(k.dtype) * (1.0 / math.sqrt(k.shape[-1]))
     return dq, ds
 
