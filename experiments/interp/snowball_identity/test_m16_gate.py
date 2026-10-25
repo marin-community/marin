@@ -3,9 +3,12 @@
 
 """Hand-computed checks of the milestone-16 gate arithmetic, independent of any scorer or endpoint."""
 
+import json
+
+import click
 import pytest
 
-from experiments.interp.snowball_identity import m16_gate
+from experiments.interp.snowball_identity import m16_gate, m16_gate_run
 
 GATE = {
     "minimum_improvement_nats_per_token": 0.1,
@@ -90,3 +93,23 @@ def test_bf16_byte_unchanged():
     moved = {**tensors, "t3": {"export_sha256": "moved", "frozen_bias": False}}
     assert m16_gate.bf16_byte_unchanged({"tensors": tensors}, {"tensors": tensors})
     assert not m16_gate.bf16_byte_unchanged({"tensors": moved}, {"tensors": tensors})
+
+
+def test_candidate_binding_refuses_partial_runs(monkeypatch):
+    root = "s3://bucket/run"
+    good = {"completed_updates": 16, "native_checkpoint": f"{root}/checkpoints/step-15", "hf_path": f"{root}/hf/step-15"}
+    files = {f"{root}/hf/step-15/trained-precision-audit.json": b"{}"}
+
+    def bind(result):
+        files[f"{root}/sft-result.json"] = json.dumps(result).encode()
+        monkeypatch.setattr(m16_gate_run, "read", files.__getitem__)
+        return m16_gate_run.bind_candidate(root)
+
+    assert bind(good)["hf_path"] == f"{root}/hf/step-15"
+    for bad in (
+        {**good, "completed_updates": 15},
+        {**good, "native_checkpoint": None},
+        {**good, "hf_path": f"{root}/hf/step-7"},
+    ):
+        with pytest.raises(click.ClickException):
+            bind(bad)
