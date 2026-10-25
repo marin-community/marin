@@ -36,10 +36,11 @@ def sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def fixture(monkeypatch, router_combine_fp32: bool = False):
+def fixture(monkeypatch, router_combine_fp32: bool = False, fp32_activations: bool = False):
     """Fixture source/routing bytes behind a fake StoragePath, and the receipt they derive, as approved bytes."""
     config, args = inputs()
-    config = replace(config, model=replace(config.model, router_combine_fp32=router_combine_fp32))
+    model = replace(config.model, router_combine_fp32=router_combine_fp32, fp32_activations=fp32_activations)
+    config = replace(config, model=model)
     _, receipt = configure_precision_runtime(config, **args)
     receipt_bytes = json.dumps(receipt).encode()
     files = {
@@ -143,17 +144,18 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
     }
 
 
-def test_worker_takes_the_combine_from_the_bound_receipt(monkeypatch):
-    receipt_bytes = fixture(monkeypatch, router_combine_fp32=True)
-    config = run_worker(monkeypatch, receipt_bytes)["config"]
-    assert (config.model.moe_capacity_factor, config.model.router_combine_fp32) == (4.0, True)
+def test_worker_takes_the_runtime_settings_from_the_bound_receipt(monkeypatch):
+    receipt_bytes = fixture(monkeypatch, router_combine_fp32=True, fp32_activations=True)
+    model = run_worker(monkeypatch, receipt_bytes)["config"].model
+    assert (model.moe_capacity_factor, model.router_combine_fp32, model.fp32_activations) == (4.0, True, True)
 
 
-def test_base_config_refuses_a_receipt_without_the_moe_settings():
+def test_base_config_refuses_a_receipt_without_the_runtime_settings():
     _, args = inputs()
-    for name in ("moe_capacity_factor", "router_combine_fp32"):
-        receipt = {"runtime_model_config": {"moe_capacity_factor": 4.0, "router_combine_fp32": True}}
-        del receipt["runtime_model_config"][name]
+    for name in ("moe_capacity_factor", "router_combine_fp32", "fp32_activations"):
+        runtime = {"moe_capacity_factor": 4.0, "router_combine_fp32": True, "fp32_activations": True}
+        receipt = {"runtime_model_config": runtime}
+        del runtime[name]
         with pytest.raises(ValueError, match=name):
             lr0_probe.base_config(RUN_ROOT, "t310-lr0", args["config_bytes"], args["generation_bytes"], receipt)
 
@@ -170,28 +172,16 @@ def test_approved_receipt_checks_the_passed_sha():
     reason="local t310 copies",
 )
 @pytest.mark.parametrize("name", sorted(REVIEWED_RECEIPTS))
-def test_both_reviewed_receipts_rederive_exactly(name):
-    """Each reviewed schema-4 receipt passes ``approved_receipt`` and the worker's derivation reproduces it."""
+def test_schema4_reviewed_receipts_are_refused(name):
+    """The reviewed schema-4 receipts predate ``fp32_activations``: they still pass ``approved_receipt`` at their
+    sha256, but ``base_config`` refuses them, so a run needs a new schema-5 receipt."""
     receipt_sha256, combine = REVIEWED_RECEIPTS[name]
     receipt = lr0_probe.approved_receipt((T310_LOCAL / name).read_bytes(), receipt_sha256)
+    assert receipt["schema_version"] == 4 and receipt["router_combine_fp32"] is combine
     config_bytes = (RECEIPT_INPUTS / "config.json").read_bytes()
     generation_bytes = (RECEIPT_INPUTS / "generation_config.json").read_bytes()
-    rounding_bytes = (RECEIPT_INPUTS / "routing.json").read_bytes()
-    assert sha(config_bytes) == lr0_probe.SOURCE_FILE_HASHES["config.json"]
-    assert sha(generation_bytes) == lr0_probe.SOURCE_FILE_HASHES["generation_config.json"]
-    reference = receipt["routing_reference"]
-    assert sha(rounding_bytes) == reference["sha256"]
-    base = lr0_probe.base_config(RUN_ROOT, "t310-lr0", config_bytes, generation_bytes, receipt)
-    config, observed = configure_precision_runtime(
-        base,
-        config_bytes=config_bytes,
-        generation_bytes=generation_bytes,
-        rounding_bytes=rounding_bytes,
-        rounding_path=reference["path"],
-        rounding_sha256=reference["sha256"],
-    )
-    assert observed == receipt
-    assert (config.model.moe_capacity_factor, config.model.router_combine_fp32) == (4.0, combine)
+    with pytest.raises(ValueError, match=r"lacks \['fp32_activations'\]"):
+        lr0_probe.base_config(RUN_ROOT, "t310-lr0", config_bytes, generation_bytes, receipt)
 
 
 def test_worker_refuses_unreviewed_or_mismatched_receipts(monkeypatch):

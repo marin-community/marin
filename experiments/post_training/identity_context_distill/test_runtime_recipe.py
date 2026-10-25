@@ -26,6 +26,7 @@ def inputs():
     config = identity_sft_config(
         moe_capacity_factor=4.0,
         router_combine_fp32=False,
+        fp32_activations=False,
         dataset_uri="synthetic",
         cache_uri="cache",
         output_uri="s3://marin-rno2a/fixture",
@@ -67,9 +68,11 @@ def test_measured_dot_policy_accepts_runtime_flag_without_changing_native_metada
     assert receipt["source_metadata"]["schema_version"] == 2
     assert receipt["source_metadata"]["model_config"]["router_dot_fp32"] is False
     assert receipt["runtime_model_config"]["router_dot_fp32"] is True
-    assert receipt["schema_version"] == 4
+    assert receipt["schema_version"] == 5
     assert receipt["moe_capacity"] == {"factor": 4.0, "expert_axis": 4}
     assert receipt["router_combine_fp32"] is False
+    assert receipt["fp32_activations"] is False
+    assert receipt["runtime_model_config"]["fp32_activations"] is False
     assert receipt["runtime_model_config"]["moe_capacity_factor"] == 4.0
     assert receipt["source_metadata"]["model_config"]["moe_capacity_factor"] == 1.0
     assert receipt["native_export_config_overrides"] == config.adapter.hf_config_overrides

@@ -246,6 +246,7 @@ def make_pre_update_gate(inputs: PrecisionGateInputs, deadline: Callable[[float]
                 "capacity_factor": view.config.moe_capacity_factor,
                 "expert_axis": trainer.device_mesh.shape["expert"],
                 "router_combine_fp32": view.config.router_combine_fp32,
+                "fp32_activations": view.config.fp32_activations,
                 "dispatch": dispatch,
             }
             receipt("scored", router_dot_dtypes=dot_dtypes, moe=moe)

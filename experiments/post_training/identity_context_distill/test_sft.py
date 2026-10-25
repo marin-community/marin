@@ -95,6 +95,7 @@ def test_standard_adaptor_callback_uses_source_overrides(monkeypatch, tmp_path):
     config = identity_sft_config(
         moe_capacity_factor=4.0,
         router_combine_fp32=False,
+        fp32_activations=False,
         hosts=1,
         dataset_uri="data",
         cache_uri="cache",
@@ -151,6 +152,7 @@ def test_factory_optimizer_native_resume_preserves_progress(tmp_path):
     config = identity_sft_config(
         moe_capacity_factor=4.0,
         router_combine_fp32=False,
+        fp32_activations=False,
         hosts=1,
         dataset_uri="data",
         cache_uri="cache",
@@ -180,6 +182,7 @@ def test_factory_optimizer_native_resume_preserves_progress(tmp_path):
     continuation = identity_sft_config(
         moe_capacity_factor=4.0,
         router_combine_fp32=False,
+        fp32_activations=False,
         hosts=1,
         dataset_uri="data",
         cache_uri="cache",
@@ -216,11 +219,14 @@ def test_continuation_keeps_schedule_and_explicit_native_restore(tmp_path):
         seed=42,
         **source_arguments(),
     )
-    initial = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False, **arguments)
+    initial = identity_sft_config(
+        moe_capacity_factor=4.0, router_combine_fp32=False, fp32_activations=False, **arguments
+    )
     native = str(tmp_path / "checkpoints/step-15")
     continuation = identity_sft_config(
         moe_capacity_factor=4.0,
         router_combine_fp32=False,
+        fp32_activations=False,
         **arguments,
         stop_after_updates=64,
         resume_checkpoint=native,
@@ -243,7 +249,13 @@ def test_continuation_keeps_schedule_and_explicit_native_restore(tmp_path):
         np.testing.assert_equal(short_schedule(step), long_schedule(step))
     np.testing.assert_allclose([long_schedule(step) for step in (2, 15, 16, 63)], 2e-6, rtol=1e-6)
     with pytest.raises(ValueError, match="no HF reset"):
-        identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False, **arguments, stop_after_updates=64)
+        identity_sft_config(
+            moe_capacity_factor=4.0,
+            router_combine_fp32=False,
+            fp32_activations=False,
+            **arguments,
+            stop_after_updates=64,
+        )
 
 
 @pytest.mark.timeout(120)
@@ -260,7 +272,7 @@ def test_global_microbatch_unequal_token_masks_matches_unsharded_reference():
         from experiments.post_training.identity_context_distill.sft import identity_sft_config
         from experiments.post_training.identity_context_distill.test_sft import source_arguments
 
-        config = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False, hosts=1,
+        config = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False, fp32_activations=False, hosts=1,
                                      dataset_uri="data", cache_uri="cache", output_uri="out", run_id="test",
                                      seed=42, **source_arguments())
         trainer = config.trainer
@@ -320,6 +332,7 @@ def test_runtime_router_dot_exception_preserves_source_architecture(router_dot_f
     check_runtime_model(model, source)
     check_runtime_model(dataclasses.replace(model, moe_capacity_factor=4.0), source)
     check_runtime_model(dataclasses.replace(model, router_combine_fp32=True), source)
+    check_runtime_model(dataclasses.replace(model, fp32_activations=True), source)
     for changes in ({"qk_mult": 1.7}, {"max_seq_len": 8192}, {"num_experts": 128}):
         with pytest.raises(ValueError, match="architecture differs"):
             check_runtime_model(dataclasses.replace(model, **changes), source)
@@ -330,8 +343,12 @@ def test_runtime_router_dot_exception_preserves_source_architecture(router_dot_f
 def test_four_host_recipe_requires_the_real_slice_layout(monkeypatch):
     sources = source_arguments()
     arguments = dict(dataset_uri="data", cache_uri="cache", output_uri="out", run_id="mesh", seed=42, **sources)
-    production = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False, hosts=4, **arguments)
-    cpu = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False, hosts=1, **arguments)
+    production = identity_sft_config(
+        moe_capacity_factor=4.0, router_combine_fp32=False, fp32_activations=False, hosts=4, **arguments
+    )
+    cpu = identity_sft_config(
+        moe_capacity_factor=4.0, router_combine_fp32=False, fp32_activations=False, hosts=1, **arguments
+    )
     ici, dcn = production.trainer.mesh.axis_shapes(32, 4)
     assert ici == {"data": 2, "expert": 4, "replica": 1, "model": 1}
     assert dcn == {"replica_dcn": 1, "context": 4}
@@ -343,7 +360,9 @@ def test_four_host_recipe_requires_the_real_slice_layout(monkeypatch):
     with pytest.raises(ValueError, match="DCN product"):
         production.trainer.mesh.axis_shapes(32, 1)
     with pytest.raises(ValueError, match="hosts"):
-        identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=False, hosts=2, **arguments)
+        identity_sft_config(
+            moe_capacity_factor=4.0, router_combine_fp32=False, fp32_activations=False, hosts=2, **arguments
+        )
     monkeypatch.setattr(jax, "device_count", lambda: 32)
     assert cpu.trainer.num_slices == 1
     assert set(cpu.trainer.mesh_axis_specs) == {"data", "expert", "replica", "model", "context", "replica_dcn"}
@@ -367,12 +386,23 @@ def test_four_host_recipe_requires_the_real_slice_layout(monkeypatch):
         check_runtime_recipe(
             dataclasses.replace(enabled, model=dataclasses.replace(enabled.model, moe_capacity_factor=1.0)), **sources
         )
+    flags = dict(fp32_activations=False, hosts=4)
     with pytest.raises(ValueError, match="dropless"):
-        identity_sft_config(**dict(arguments, moe_capacity_factor=1.0, router_combine_fp32=False), hosts=4)
+        identity_sft_config(**dict(arguments, moe_capacity_factor=1.0, router_combine_fp32=False), **flags)
     with pytest.raises(ValueError, match="router_combine_fp32"):
-        identity_sft_config(**dict(arguments, moe_capacity_factor=4.0, router_combine_fp32=None), hosts=4)
-    combined = identity_sft_config(**dict(arguments, moe_capacity_factor=4.0, router_combine_fp32=True), hosts=4)
+        identity_sft_config(**dict(arguments, moe_capacity_factor=4.0, router_combine_fp32=None), **flags)
+    with pytest.raises(TypeError, match="fp32_activations"):
+        identity_sft_config(**dict(arguments, moe_capacity_factor=4.0, router_combine_fp32=True), hosts=4)
+    for value in (None, 0):
+        with pytest.raises(ValueError, match="fp32_activations"):
+            identity_sft_config(
+                **dict(arguments, moe_capacity_factor=4.0, router_combine_fp32=True, fp32_activations=value), hosts=4
+            )
+    combined = identity_sft_config(
+        **dict(arguments, moe_capacity_factor=4.0, router_combine_fp32=True, fp32_activations=True), hosts=4
+    )
     assert isinstance(combined.model, SnowballConfig) and combined.model.router_combine_fp32
+    assert combined.model.fp32_activations
     check_runtime_recipe(combined, **sources)
     monkeypatch.setattr(TrainerConfig, "num_slices", property(lambda self: 1))
     with pytest.raises(AssertionError):
@@ -384,6 +414,7 @@ def test_source_derived_context_scaling_and_export_round_trip():
     config = identity_sft_config(
         moe_capacity_factor=4.0,
         router_combine_fp32=False,
+        fp32_activations=False,
         hosts=1,
         dataset_uri="data",
         cache_uri="cache",
@@ -447,6 +478,7 @@ def test_ambiguous_or_changed_source_metadata_requires_review(change):
         identity_sft_config(
             moe_capacity_factor=4.0,
             router_combine_fp32=False,
+            fp32_activations=False,
             hosts=1,
             dataset_uri="data",
             cache_uri="cache",

@@ -320,6 +320,7 @@ def test_pre_update_gate_raises_on_failures_and_passes_when_clean(mesh_and_model
         "capacity_factor": 1.0,
         "expert_axis": 1,
         "router_combine_fp32": False,
+        "fp32_activations": False,
         "dispatch": {
             "sender_dropped": zeros,
             "receiver_dropped": zeros,

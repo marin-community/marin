@@ -21,7 +21,7 @@ def test_runtime_settings_survive_hf_reload_and_loader_on_32_cpu_mesh():
         from experiments.post_training.identity_context_distill.sft import identity_sft_config
         from experiments.post_training.identity_context_distill.test_sft import source_arguments
 
-        base = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=True, hosts=1,
+        base = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=True, fp32_activations=True, hosts=1,
                                    dataset_uri='synthetic', cache_uri='cache', output_uri='output', run_id='reload',
                                    seed=310, **source_arguments())
         enabled = replace(base, model=replace(base.model, router_dot_fp32=True),
@@ -30,16 +30,18 @@ def test_runtime_settings_survive_hf_reload_and_loader_on_32_cpu_mesh():
         tiny = SnowballConfig(vocab_size=64, hidden_dim=16, num_heads=2, num_kv_heads=1, head_dim=8,
                              intermediate_dim=16, shared_expert_intermediate_dim=16,
                              num_experts=8, num_experts_per_token=4, num_layers=1, max_seq_len=8192, qk_mult=1.75)
-        requested = replace(tiny, router_dot_fp32=True, moe_capacity_factor=4.0, router_combine_fp32=True)
+        requested = replace(tiny, router_dot_fp32=True, moe_capacity_factor=4.0, router_combine_fp32=True,
+                            fp32_activations=True)
         converter = HFCheckpointConverter(SnowballConfig, HfConfigClass=GrugMoeHfConfig)
         hf = requested.to_hf_config(64)
-        assert not {'router_dot_fp32', 'moe_capacity_factor', 'router_combine_fp32'} & set(hf.to_dict())
+        runtime_only = {'router_dot_fp32', 'moe_capacity_factor', 'router_combine_fp32', 'fp32_activations'}
+        assert not runtime_only & set(hf.to_dict())
         reloaded = converter.config_from_hf_config(hf)
         assert reloaded.router_dot_fp32 is False and reloaded.moe_capacity_factor == 1.0
-        assert reloaded.router_combine_fp32 is False
+        assert reloaded.router_combine_fp32 is False and reloaded.fp32_activations is False
         restored = preserve_hf_runtime_settings(reloaded, requested, tc.compute_dtype_overrides)
         assert restored.router_dot_fp32 is True and restored.moe_capacity_factor == 4.0
-        assert restored.router_combine_fp32 is True
+        assert restored.router_combine_fp32 is True and restored.fp32_activations is True
         assert restored.qk_mult == reloaded.qk_mult == 1.75
         cfg = replace(enabled, model=restored, trainer=tc,
                       adapter=FrozenParameterAdaptorConfig(frozen_field_names=('router_bias',)))
@@ -47,7 +49,7 @@ def test_runtime_settings_survive_hf_reload_and_loader_on_32_cpu_mesh():
         def fixture_load(model_type, **kwargs):
             # Tiny synthetic parameters only. The real loader must receive the POST-reload config explicitly.
             assert kwargs['config'].router_dot_fp32 is True and kwargs['config'].moe_capacity_factor == 4.0
-            assert kwargs['config'].router_combine_fp32 is True
+            assert kwargs['config'].router_combine_fp32 is True and kwargs['config'].fp32_activations is True
             assert kwargs['dtype'] is None
             seen.append(kwargs['config'])
             return SnowballLMHeadModel.init(hax.Axis('vocab', 64), kwargs['config'], key=jax.random.key(1))
@@ -58,6 +60,7 @@ def test_runtime_settings_survive_hf_reload_and_loader_on_32_cpu_mesh():
                 parameter_axis_mapping=tc.parameter_axis_mapping, trainer=SimpleNamespace(mp=tc.mp))
             assert seen and model.config.router_dot_fp32 is True
             assert {b.mlp.expert_mlp.capacity_factor for b in model.transformer.blocks} == {4.0}
+            assert all(b.shared.fp32_activations for b in model.transformer.blocks)
             assert {b.mlp.expert_mlp.combine_in_fp32 for b in model.transformer.blocks} == {True}
             view = cast_model_for_compute(model, tc.mp, tc.compute_dtype_overrides)
             witness = router_dot_dtypes(view, tc.mp.compute_dtype)

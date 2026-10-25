@@ -125,10 +125,12 @@ ARMS = {
     # margay's metadata-only receipts on 4188e87c: t310/runtime-recipe-4188e87c-combine-{off,on}.json
     "dropless": {
         "router_combine_fp32": False,
+        "fp32_activations": False,
         "receipt_sha256": "dcddbf4d59d0863a773e11a97002567dbea622fab52506d9c716fa4b4a30b7d2",
     },
     "dropless-fp32-combine": {
         "router_combine_fp32": True,
+        "fp32_activations": False,
         "receipt_sha256": "d123ddbdbeed0c3cc843cd247e23d74cb2b21e7538056150da8139843c81fddd",
     },
 }
@@ -527,6 +529,7 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
             "expert_mlp_capacity_factor": mlp.capacity_factor,
             "expert_axis": dict(mesh.shape)["expert"],
             "router_combine_fp32": view.config.router_combine_fp32,
+            "fp32_activations": view.config.fp32_activations,
             "expert_mlp_combine_in_fp32": mlp.combine_in_fp32,
             "moe_implementation": mlp.implementation,
         }
@@ -535,7 +538,9 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
         g1 = route_proxy_check.check(records, floor["top6"], floor["receipt"])
         positions_path = prefix_join(out, "positions.pt")
         save_positions(records, positions_path)
-        moe = {key: settings[key] for key in ("capacity_factor", "expert_axis", "router_combine_fp32")}
+        moe = {
+            key: settings[key] for key in ("capacity_factor", "expert_axis", "router_combine_fp32", "fp32_activations")
+        }
         memory = device_memory()
         report = evaluate(
             replace(INPUTS, output=out), overrides, positions_path, dot_dtypes, moe | {"dispatch": dispatch}, memory
@@ -636,8 +641,16 @@ def arm_config(name: str, receipt: dict, root: str, config_bytes: bytes, generat
     if observed != receipt:
         raise ValueError(f"{name}: derived runtime recipe differs from the reviewed receipt")
     model = config.model
-    if (model.moe_capacity_factor, model.router_combine_fp32) != (CAPACITY_FACTOR, ARMS[name]["router_combine_fp32"]):
-        raise ValueError(f"{name}: capacity {model.moe_capacity_factor}, combine {model.router_combine_fp32}")
+    arm = ARMS[name]
+    if (model.moe_capacity_factor, model.router_combine_fp32, model.fp32_activations) != (
+        CAPACITY_FACTOR,
+        arm["router_combine_fp32"],
+        arm["fp32_activations"],
+    ):
+        raise ValueError(
+            f"{name}: capacity {model.moe_capacity_factor}, combine {model.router_combine_fp32}, "
+            f"fp32 activations {model.fp32_activations}"
+        )
     return config
 
 

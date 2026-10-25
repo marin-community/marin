@@ -138,10 +138,11 @@ def gate_inputs(run_root: str, routing_path: str) -> PrecisionGateInputs:
 def base_config(
     run_root: str, run_id: str, config_bytes: bytes, generation_bytes: bytes, receipt: dict
 ) -> TrainLmConfig:
-    """The source-derived recipe with the receipt's MoE runtime settings (capacity factor, FP32 combine); a receipt
-    lacking either is refused."""
+    """The source-derived recipe with the receipt's runtime settings (capacity factor, FP32 combine, FP32
+    activations); a receipt lacking any of them is refused."""
     runtime = receipt["runtime_model_config"]
-    missing = [name for name in ("moe_capacity_factor", "router_combine_fp32") if name not in runtime]
+    names = ("moe_capacity_factor", "router_combine_fp32", "fp32_activations")
+    missing = [name for name in names if name not in runtime]
     if missing:
         raise ValueError(f"Runtime receipt lacks {missing}")
     unused = f"{run_root}/no-dataset-lr0-uses-a-synthetic-batch"
@@ -156,6 +157,7 @@ def base_config(
         hosts=REPLICAS,
         moe_capacity_factor=runtime["moe_capacity_factor"],
         router_combine_fp32=runtime["router_combine_fp32"],
+        fp32_activations=runtime["fp32_activations"],
     )
 
 

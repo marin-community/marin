@@ -134,7 +134,8 @@ def check_source_metadata_receipt(expected: dict, config_bytes: bytes, generatio
 
 
 def check_runtime_model(model: SnowballConfig, source_config: dict) -> None:
-    """Allow only the runtime router settings (FP32 dot, MoE capacity, FP32 combine) to differ from the source.
+    """Allow only the runtime settings (FP32 router dot, MoE capacity, FP32 combine, FP32 activations) to differ
+    from the source.
 
     This checks architecture, not authorization of the precision exception. The
     pre-update routing gate must separately verify the measured trigger.
@@ -147,6 +148,7 @@ def check_runtime_model(model: SnowballConfig, source_config: dict) -> None:
         router_dot_fp32=expected.router_dot_fp32,
         moe_capacity_factor=expected.moe_capacity_factor,
         router_combine_fp32=expected.router_combine_fp32,
+        fp32_activations=expected.fp32_activations,
     )
     if actual != expected:
         raise ValueError("Runtime model architecture differs from the native source")
@@ -221,6 +223,7 @@ def identity_sft_config(
     source_generation_config: dict,
     moe_capacity_factor: float,
     router_combine_fp32: bool,
+    fp32_activations: bool,
     stop_after_updates: int = 16,
     resume_checkpoint: str | None = None,
 ) -> TrainLmConfig:
@@ -239,6 +242,8 @@ def identity_sft_config(
             dropless in the gate and in training, as vLLM is.
         router_combine_fp32: Whether the routed combine runs in FP32 (one of the two r6 arms); explicit, with
             no default, because it changes the forward numerics.
+        fp32_activations: Whether SiLU and sigmoid run in FP32, cast to BF16 once (GatedNorm, attention head gate,
+            shared and expert MLPs); explicit, with no default, because it changes the forward numerics.
         stop_after_updates: Absolute training horizon, initially 16, then 64 after the gate.
         resume_checkpoint: Committed native step directory. Required for continuation.
 
@@ -261,6 +266,8 @@ def identity_sft_config(
         raise ValueError(f"The recipe is dropless: moe_capacity_factor must be {EXPERT_AXIS}, got {moe_capacity_factor}")
     if type(router_combine_fp32) is not bool:
         raise ValueError(f"router_combine_fp32 must be an explicit bool, got {router_combine_fp32!r}")
+    if type(fp32_activations) is not bool:
+        raise ValueError(f"fp32_activations must be an explicit bool, got {fp32_activations!r}")
 
     output_uri = output_uri.rstrip("/")
     mesh = MeshConfig(
@@ -289,6 +296,7 @@ def identity_sft_config(
             source_model_config(source_config),
             moe_capacity_factor=moe_capacity_factor,
             router_combine_fp32=router_combine_fp32,
+            fp32_activations=fp32_activations,
         ),
         train_seq_len=SEQUENCE_LENGTH,
         initialize_from_hf=BASE_MODEL,
