@@ -359,6 +359,7 @@ class GrugTrainerConfig:
     # slice) and expert_axis_size>1 (expert parallelism over the intra-slice devices).
     expert_axis_size: int = 1
     replica_axis_size: int | None = None
+    model_axis_size: int = 1
     # Hero-scale memory: optimizer state on pinned host memory between steps, and where the master weights live.
     offload_opt_state: bool = False
     master_param_mode: MasterParamMode = MasterParamMode.DEVICE
@@ -1189,6 +1190,7 @@ def _run_grug_local(config: GrugRunConfig) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
+        model_axis_size=config.trainer.model_axis_size,
     )
     # Armed before the state is built or restored. The watchdog's step and process deadlines only
     # arm once a step reports progress, so its startup deadline is the only thing bounding a stall
@@ -1896,6 +1898,7 @@ def _seed_xla_autotune_cache(config: GrugRunConfig, topology: str) -> None:
     mesh = compact_grug_mesh(
         expert_axis_size=config.trainer.expert_axis_size,
         replica_axis_size=config.trainer.replica_axis_size,
+        model_axis_size=config.trainer.model_axis_size,
     )
     with set_mesh(mesh):
         state = jax.jit(
