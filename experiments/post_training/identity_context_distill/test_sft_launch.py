@@ -12,7 +12,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.lm_model import LmExample
+from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel, snowball_loss_with_dispatch_stats
 from levanter.optim.config import AdamConfig
 from levanter.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
@@ -26,6 +28,49 @@ RUN_ROOT = "s3://marin-rno2a/fixture/sft"
 MIXTURE = "s3://marin-rno2a/fixture/mixture"
 LR0_SOURCE = {"path": "s3://marin-rno2a/lr0/source.json", "sha256": "a" * 64}
 SOURCE_OBJECTS = {"path": "s3://marin-rno2a/lr0/source-object-list.json", "sha256": "b" * 64, "objects": 45}
+
+
+def test_checked_loss_matches_unmasked_loss_on_real_positions():
+    config = SnowballConfig(
+        vocab_size=32,
+        hidden_dim=16,
+        intermediate_dim=16,
+        shared_expert_intermediate_dim=16,
+        num_experts=8,
+        num_experts_per_token=2,
+        num_layers=2,
+        num_heads=2,
+        num_kv_heads=1,
+        head_dim=8,
+        max_seq_len=16,
+        sliding_window=4,
+        attention_implementation="reference",
+        moe_capacity_factor=4.0,
+        router_combine_fp32=True,
+        fp32_activations=True,
+    )
+    batch = hax.Axis("batch", 2 * jax.device_count())
+    position = hax.Axis("position", 8)
+    axes = (batch, position)
+    tokens = hax.named(jnp.broadcast_to(jnp.array([1, 2, 3, 4, 5, 5, 5, 5]), (batch.size, 8)), axes)
+    segments = hax.named(jnp.broadcast_to(jnp.array([0, 0, 0, 0, -1, -1, -1, -1]), tokens.array.shape), axes)
+    example = hax.vmap(LmExample.causal, batch)(tokens, segment_ids=segments)
+    example = eqx.tree_at(
+        lambda value: value.loss_weight,
+        example,
+        hax.named(jnp.broadcast_to(jnp.array([0, 1, 1, 0, 0, 0, 0, 0], jnp.float32), tokens.array.shape), axes),
+    )
+    with (
+        jax.set_mesh(compact_grug_mesh()),
+        hax.axis_mapping({"batch": ("replica_dcn", "data", "expert"), "vocab": "model"}),
+    ):
+        model = SnowballLMHeadModel.init(hax.Axis("vocab", 32), config, key=jax.random.PRNGKey(310))
+        example = hax.auto_sharded(example)
+        old = eqx.filter_jit(model.compute_next_token_loss)(example)
+        checked, metrics = eqx.filter_jit(snowball_loss_with_dispatch_stats)(model, example)
+        print(f"padded loss: old={float(old.array):.10g}, checked={float(checked.array):.10g}")
+        np.testing.assert_array_equal(old.array, checked.array)
+        np.testing.assert_array_equal(metrics["moe_dropped"], np.zeros(2))
 
 
 def component(name: str) -> dict:
@@ -70,6 +115,8 @@ def frozen(monkeypatch, data_bytes: bytes) -> bytes:
 
 def run_worker(monkeypatch, receipt_bytes, data_bytes):
     calls: dict = {"writer": 0}
+    receipt_sha = hashlib.sha256(receipt_bytes).hexdigest()
+    monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256", receipt_sha)
 
     def writer(action):
         calls["writer"] += 1
@@ -87,7 +134,9 @@ def run_worker(monkeypatch, receipt_bytes, data_bytes):
     )
     monkeypatch.setattr(sft_launch, "run_identity_sft", run)
     audits = sft_launch.SftAudits(lambda it, config: (it, {}), lambda batch, update: {}, lambda state, path: None)
-    sft_launch.sft_worker(RUN_ROOT, "t310-sft", receipt_bytes, data_bytes, LR0_SOURCE, SOURCE_OBJECTS, audits)
+    sft_launch.sft_worker(
+        RUN_ROOT, "t310-sft", receipt_bytes, receipt_sha, data_bytes, LR0_SOURCE, SOURCE_OBJECTS, audits
+    )
     return calls, audits
 
 
@@ -106,7 +155,7 @@ class _Remote:
 
 
 def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch):
-    receipt_bytes = fixture(monkeypatch)
+    receipt_bytes = fixture(monkeypatch, router_combine_fp32=True, fp32_activations=True)
     _, args = inputs()
     _FILES.update(
         {
@@ -132,6 +181,8 @@ def test_worker_binds_the_frozen_mixture_measured_recipe_and_audits(monkeypatch)
         0.5,
     )
     assert config.model.router_dot_fp32 is True
+    assert config.model.moe_capacity_factor == 4.0
+    assert config.model.router_combine_fp32 is True and config.model.fp32_activations is True
     assert config.trainer.compute_dtype_overrides == {"router_bias": "float32"}
     assert config.adapter.frozen_field_names == ("router_bias",)
     assert isinstance(config.trainer.tracker, NoopConfig)
@@ -178,7 +229,8 @@ def test_each_update_checks_its_consumed_batch_before_the_update(monkeypatch):
 
     def loss(model, example, *, key=None):
         del key
-        return jnp.square(model.weight - jnp.mean(example.tokens.array)), {}
+        metrics = {name: jnp.zeros(26, jnp.int32) for name in sft_launch.DISPATCH_METRICS}
+        return jnp.square(model.weight - jnp.mean(example.tokens.array)), metrics
 
     events = []
 
@@ -215,26 +267,67 @@ def test_each_update_checks_its_consumed_batch_before_the_update(monkeypatch):
         assert events == ["check-0-1", "step-1", "check-1-9"]
 
 
+@pytest.mark.parametrize("missing", [False, True])
+def test_update_refuses_dropped_or_unmeasured_dispatch_before_next_step(missing):
+    config = TrainerConfig(
+        id="dispatch-test",
+        tracker=(),
+        require_accelerator=False,
+        mesh=MeshConfig(),
+        train_batch_size=1,
+        per_device_parallelism=1,
+        load_checkpoint=False,
+    )
+    optimizer = AdamConfig(learning_rate=1e-2, warmup=0, weight_decay=0.0).build(2)
+    axes = (hax.Axis("batch", 1), hax.Axis("position", 2))
+    example = LmExample(hax.named(jnp.ones((1, 2), jnp.int32), axes), hax.ones(axes))
+
+    def loss(model, example, *, key=None):
+        metrics = (
+            {}
+            if missing
+            else {
+                "moe_dropped": jnp.ones(26, jnp.int32),
+                "moe_sender_dropped": jnp.zeros(26, jnp.int32),
+                "moe_receiver_dropped": jnp.ones(26, jnp.int32),
+            }
+        )
+        return jnp.square(model.weight), metrics
+
+    consumed = []
+
+    def check(batch, update):
+        consumed.append(update)
+        return {}
+
+    with Trainer(config, optimizer, loss, add_default_hooks=False) as trainer:
+        state = trainer.initial_state(jax.random.PRNGKey(0), model=TinyModel(jnp.asarray(0.5)))
+        with pytest.raises(ValueError, match="did not report" if missing else "dropped valid"):
+            sft_launch.train_checked_updates(trainer, state, iter([example, example]), check, 2)
+    assert consumed == [0]
+
+
 def remote_store(monkeypatch, files: dict[str, dict]):
     store = {path: json.dumps(value).encode() for path, value in files.items()}
     monkeypatch.setattr(sft_launch, "read_remote", lambda path: store[path])
     return store
 
 
-def passing_lr0(root: str) -> dict[str, dict]:
+def passing_lr0(root: str, runtime: dict) -> dict[str, dict]:
     files = {
         f"{root}/precision-gate/gate.json": {"failures": []},
-        f"{root}/lr0-result.json": {"completed_updates": 1},
+        f"{root}/lr0-result.json": {"completed_updates": 1, "runtime_recipe_receipt": runtime},
         f"{root}/audits/source-tensor-hashes.json": {"tensors": {f"t{i}": {} for i in range(502)}},
     }
-    files.update({f"{root}/precision-gate/ranks/{r}.json": {"stage": "gated", "failures": 0} for r in range(4)})
+    files.update({f"{root}/precision-gate/ranks/{r}.json": {"stage": "updated", "process": r} for r in range(4)})
     return files
 
 
 def test_lr0_pass_needs_every_reading_rule_receipt(monkeypatch):
     root = "s3://marin-rno2a/fixture/lr0-r4"
-    store = remote_store(monkeypatch, passing_lr0(root))
-    record = sft_launch.lr0_pass(root)
+    runtime = json.loads(fixture(monkeypatch, router_combine_fp32=True, fp32_activations=True))
+    store = remote_store(monkeypatch, passing_lr0(root, runtime))
+    record = sft_launch.lr0_pass(root, runtime)
     assert record["source_receipt"]["path"] == f"{root}/audits/source-tensor-hashes.json"
     gate_bytes = store[f"{root}/precision-gate/gate.json"]
     assert record["gate"]["sha256"] == hashlib.sha256(gate_bytes).hexdigest()
@@ -244,17 +337,18 @@ def test_lr0_pass_needs_every_reading_rule_receipt(monkeypatch):
         (f"{root}/precision-gate/gate.json", {}, "gate did not pass"),
         (f"{root}/precision-gate/ranks/2.json", {"stage": "scored", "failures": None}, "rank 2"),
         (f"{root}/lr0-result.json", {"completed_updates": 0}, "one completed update"),
+        (f"{root}/lr0-result.json", {"completed_updates": 1, "runtime_recipe_receipt": {}}, "different runtime"),
     ]:
-        files = passing_lr0(root)
+        files = passing_lr0(root, runtime)
         files[path] = value
         remote_store(monkeypatch, files)
         with pytest.raises(ValueError, match=message):
-            sft_launch.lr0_pass(root)
-    files = passing_lr0(root)
+            sft_launch.lr0_pass(root, runtime)
+    files = passing_lr0(root, runtime)
     del files[f"{root}/lr0-result.json"]
     remote_store(monkeypatch, files)
     with pytest.raises(KeyError):
-        sft_launch.lr0_pass(root)
+        sft_launch.lr0_pass(root, runtime)
 
 
 def test_source_bind_matches_the_model_objects_and_the_lr0_receipt(monkeypatch):
@@ -325,11 +419,11 @@ def test_entrypoint_binds_the_frozen_dataset_and_export_audits(monkeypatch):
         sft_launch, "audit_trained_export", lambda state, path, **kwargs: calls.append(("export", kwargs))
     )
     monkeypatch.setattr(sft_launch, "sft_worker", lambda *args: calls.append(("worker", args)))
-    sft_launch.bound_sft_worker(RUN_ROOT, "job", b"receipt", b"data", LR0_SOURCE, SOURCE_OBJECTS)
+    sft_launch.bound_sft_worker(RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS)
     assert calls[:2] == ["storage", ("frozen", sft_launch.MIXTURE_ROOT, sft_launch.INVENTORY_PATH)]
     worker_args = calls[2][1]
-    assert worker_args[:6] == (RUN_ROOT, "job", b"receipt", b"data", LR0_SOURCE, SOURCE_OBJECTS)
-    audits = worker_args[6]
+    assert worker_args[:7] == (RUN_ROOT, "job", b"receipt", "sha", b"data", LR0_SOURCE, SOURCE_OBJECTS)
+    audits = worker_args[7]
     audits.audit_iterator("B", "C")
     audits.check_batch("batch", 3)
     audits.save_audit("state", "export")
