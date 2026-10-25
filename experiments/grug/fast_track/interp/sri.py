@@ -48,7 +48,9 @@ from experiments.grug.fast_track.interp import common, forward, lens_fit
 
 logger = logging.getLogger(__name__)
 
-BATCH = 8
+# Rows per batch: the trace keeps every layer's expert pre-activations, activations and slot outputs (47 GB at 8
+# d1280 rows).
+BATCH = 4
 Q = 64  # query slots per batch
 F = 4  # focus neurons per query
 NUM_DECOMP = 2  # focus neurons whose router logit and pre-activation are decomposed
@@ -328,7 +330,7 @@ def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir,
     unembed = forward.unembed_direction(m)
     u_q = unembed.T[qy] - jnp.mean(unembed, axis=1)[None]  # [Q, D]
     inv_q = _pq(tr["inv_rms"], qflat)
-    wf_q = jnp.stack([_pq(w, qflat) for w in tr["w_final"]])  # [7, Q]
+    wf_q = jnp.stack([_pq(w, qflat) for w in tr["w_final"]])  # [L + 1, Q]
     scale = wf_q * inv_q[None]  # [7, Q]
     out: dict = {}
 
@@ -418,7 +420,7 @@ def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir,
     final_q = m.attn_res_query_final
     lens = {k: [] for k in ("gate_logp", "gate_rank", "tuned_logp", "tuned_rank")}
     for k, srcs in enumerate(_stage_sources(tr)):
-        _, mixed = forward._gate(srcs, final_q, eps, plain_sum=m.config.attn_res_plain_sum)
+        _, _, mixed = forward._history_gate(srcs, final_q, eps, plain_sum=m.config.attn_res_plain_sum)
         mq = _pq(mixed, qflat)
         h_gate = m.final_norm(mq)
         tuned_in = jnp.concatenate([forward.rms_norm(mq.astype(jnp.float32), eps), jnp.ones((Q, 1))], axis=-1)
