@@ -10,25 +10,32 @@ import subprocess
 import sys
 from pathlib import Path
 
+_DEFAULT_PHASES = ("source", "qb", "transport", "kda-tile", "saved-moe")
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-prefix", required=True)
-    parser.add_argument("--reference-step1", required=True)
+    parser.add_argument("--reference-step1")
     parser.add_argument("--first-port", type=int, required=True)
+    parser.add_argument("--phases", nargs="+", choices=(*_DEFAULT_PHASES, "saved-ce"), default=_DEFAULT_PHASES)
     args = parser.parse_args()
+    if any(name in args.phases for name in ("source", "qb")) and not args.reference_step1:
+        parser.error("--reference-step1 is required for source and QB full-update comparisons")
     module_prefix = "experiments.grug.belay_tpu."
     reference = ["--reference-step1", args.reference_step1]
-    phases = (
-        ("source", "belay_ckpt1_tpu_update_check", [*reference, "--source-qb"]),
-        ("qb", "belay_ckpt1_tpu_update_check", reference),
-        ("transport", "transport_kernel_check", []),
-        ("kda-tile", "kda_tile_check", []),
-        ("saved-moe", "saved_moe_check", []),
-    )
+    phases = {
+        "source": ("belay_ckpt1_tpu_update_check", [*reference, "--source-qb"]),
+        "qb": ("belay_ckpt1_tpu_update_check", reference),
+        "transport": ("transport_kernel_check", []),
+        "kda-tile": ("kda_tile_check", []),
+        "saved-moe": ("saved_moe_check", []),
+        "saved-ce": ("saved_ce_check", []),
+    }
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     failed = False
-    for index, (name, module, extra_args) in enumerate(phases):
+    for index, name in enumerate(args.phases):
+        module, extra_args = phases[name]
         phase_output = output / name
         phase_output.mkdir(parents=True, exist_ok=True)
         environment = {
