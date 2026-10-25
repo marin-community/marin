@@ -431,7 +431,9 @@ def richest_windows(deep: dict) -> tuple[np.ndarray, np.ndarray]:
     return toks.astype(np.int32), segs - segs[:, :1], valid, best
 
 
-def run_ablate(model, mesh, deep: dict, layer: int, expert: int, cls_window: np.ndarray) -> dict:
+def run_ablate(
+    model, mesh, deep: dict, layer: int, expert: int, cls_window: np.ndarray, max_units: int | None = None
+) -> dict:
     """Single-unit and sufficiency interventions on the expert's richest windows. ``cls_window`` ``[W, S]`` marks the
     class positions (by current token)."""
     toks, segs, valid, best = richest_windows(deep)
@@ -478,53 +480,56 @@ def run_ablate(model, mesh, deep: dict, layer: int, expert: int, cls_window: np.
         routed_pos = score_mask & (rmask > 0)
         class_pos = routed_pos & (cls_window > 0)
         t0 = time.time()
-        unit_routed = np.zeros(I)
-        unit_class = np.zeros(I)
-        unit_all = np.zeros(I)
-        for i in range(I):
+        # Two interleaved halves of the windows: units are ranked on half 0, the static sufficiency scored on half 1.
+        half = np.zeros(toks.shape, bool)
+        half[1::2] = True
+        masks = dict(routed=routed_pos, cls=class_pos, all=score_mask)
+        unit = {f"{name}_h{h}": np.zeros(I) for name in masks for h in (0, 1)}
+        for i in range(I if max_units is None else max_units):
             loss = np.asarray(run_mult(model, tokens, seg, jnp.ones((I,)).at[i].set(0.0))[0])
             d = loss - clean_loss
-            unit_routed[i] = d[routed_pos].mean()
-            unit_class[i] = d[class_pos].mean() if class_pos.any() else np.nan
-            unit_all[i] = d[score_mask].mean()
+            for name, m in masks.items():
+                for h in (0, 1):
+                    mh = m & (half == bool(h))
+                    unit[f"{name}_h{h}"][i] = d[mh].mean() if mh.any() else np.nan
             if i % 120 == 0:
                 logger.info("ablate unit %d/%d (%.0fs)", i, I, time.time() - t0)
 
-        def summary(loss):
+        def summary(loss, h=None):
+            sel = np.ones(toks.shape, bool) if h is None else half == bool(h)
             return np.asarray(
-                [(loss - clean_loss)[m].mean() if m.any() else np.nan for m in (routed_pos, class_pos, score_mask)]
+                [(loss - clean_loss)[m & sel].mean() if (m & sel).any() else np.nan for m in masks.values()]
             )
 
-        dyn = np.stack([summary(np.asarray(run_topk(model, tokens, seg, jnp.asarray(k)))) for k in SUFF_K])
-        order = np.argsort(-np.nan_to_num(unit_class if class_pos.sum() > 200 else unit_routed, nan=-1e9))
+        suff_k = [k for k in SUFF_K if k <= I]
+        dyn_losses = [np.asarray(run_topk(model, tokens, seg, jnp.asarray(k))) for k in suff_k]
+        rank_key = "cls_h0" if (class_pos & ~half).sum() > 200 else "routed_h0"
+        order = np.argsort(-np.nan_to_num(unit[rank_key], nan=-1e9))
         static, rand = [], []
         rng = np.random.default_rng(0)
-        for k in SUFF_K:
-            static.append(summary(np.asarray(run_mult(model, tokens, seg, jnp.zeros((I,)).at[order[:k]].set(1.0))[0])))
-            rand.append(
-                summary(
-                    np.asarray(
-                        run_mult(model, tokens, seg, jnp.zeros((I,)).at[rng.choice(I, k, replace=False)].set(1.0))[0]
-                    )
-                )
-            )
-    return dict(
+        for k in suff_k:
+            static.append(np.asarray(run_mult(model, tokens, seg, jnp.zeros((I,)).at[order[:k]].set(1.0))[0]))
+            pick = rng.choice(I, k, replace=False)
+            rand.append(np.asarray(run_mult(model, tokens, seg, jnp.zeros((I,)).at[pick].set(1.0))[0]))
+    out = dict(
         windows=best,
         window_tokens=toks,
         clean_loss=clean_loss,
         full_loss=full_loss,
         routed_pos=routed_pos,
         class_pos=class_pos,
-        unit_routed=unit_routed,
-        unit_class=unit_class,
-        unit_all=unit_all,
-        full=summary(full_loss),
-        suff_k=np.asarray(SUFF_K),
-        suff_dynamic=dyn,
-        suff_static=np.stack(static),
-        suff_random=np.stack(rand),
+        half=half,
+        suff_k=np.asarray(suff_k),
         static_order=order,
+        rank_key=np.asarray(rank_key),
     )
+    out.update({f"unit_{k}": v for k, v in unit.items()})
+    for h, tag in ((None, ""), (1, "_held")):
+        out[f"full{tag}"] = summary(full_loss, h)
+        out[f"suff_dynamic{tag}"] = np.stack([summary(x, h) for x in dyn_losses])
+        out[f"suff_static{tag}"] = np.stack([summary(x, h) for x in static])
+        out[f"suff_random{tag}"] = np.stack([summary(x, h) for x in rand])
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------------

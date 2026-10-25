@@ -241,7 +241,7 @@ def layer_census(cofire, cnt, w_eff, lat_sum, lat_m2):
     return out
 
 
-CENSUS_CHUNK = 16  # experts per census call (its histogram intermediates are ~200 bytes per pair: 12 GB at 64)
+CENSUS_CHUNK = 32  # experts per census call
 
 
 def layer_census_chunked(cofire, cnt, w_eff, lat_sum, lat_m2) -> dict[str, np.ndarray]:
@@ -323,32 +323,29 @@ def main() -> None:
             if n % 25 == 0:
                 logger.info("batch %d (%.0fs) sample min fill %d", n, time.time() - t0, filled.min())
         logger.info("pass done (%.0fs), %d tokens, dropped %s", time.time() - t0, state["tokens"], state["dropped"])
-        w_eff = effective_up(model)
-        census = []
-        s_census = []
-        m = forward.replicate(model)
-        all_layers = m.layers()
+        w_eff = np.asarray(effective_up(model))
+        all_layers = forward.replicate(model).layers()
+        s_w_up = [np.asarray(all_layers[layer].shared[0].w_up.astype(jnp.float32)) for layer in layers]
+        host = {k: np.asarray(v) for k, v in state.items()}
+        del state
+    # The census runs on the host CPU backend: its histogram intermediates need more than one GPU at d1280.
+    census = []
+    s_census = []
+    with jax.default_device(jax.devices("cpu")[0]):
         for li, layer in enumerate(layers):
-            lay = all_layers[layer]
             census.append(
                 layer_census_chunked(
-                    state["cofire"][li], state["cnt"][li], w_eff[layer], state["lat_sum"][li], state["lat_m2"][li]
+                    host["cofire"][li], host["cnt"][li], w_eff[layer], host["lat_sum"][li], host["lat_m2"][li]
                 )
             )
             s_census.append(
                 {
                     k: np.asarray(v)
                     for k, v in shared_census(
-                        state["s_cofire"][li],
-                        state["tokens"],
-                        lay.shared[0].w_up.astype(jnp.float32),
-                        state["s_in_sum"][li],
-                        state["s_in_m2"][li],
+                        host["s_cofire"][li], host["tokens"], s_w_up[li], host["s_in_sum"][li], host["s_in_m2"][li]
                     ).items()
                 }
             )
-        host = {k: np.asarray(v) for k, v in state.items()}
-        w_eff = np.asarray(w_eff)
     logger.info("census done (%.0fs)", time.time() - t0)
     summary = {k: v for k, v in host.items() if k not in ("cofire", "lat_m2", "lat_sum", "s_in_m2")}
     for name, rows in (("c", census), ("sc", s_census)):
