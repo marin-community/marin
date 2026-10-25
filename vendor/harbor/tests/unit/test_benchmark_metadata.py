@@ -7,6 +7,7 @@ import harbor.hugging_face_dataset
 from harbor.job import Job
 from harbor.models.benchmark import BenchmarkMetadata, MetricKind, MetricMetadata
 from harbor.models.job.config import DatasetConfig, JobConfig
+from harbor.models.trial.config import AgentConfig
 
 
 def _write_task(root: Path, name: str) -> None:
@@ -181,3 +182,29 @@ def test_benchmark_metadata_rejects_inconsistent_primary_metric() -> None:
             n_benchmark=3,
             n_attempted=1,
         )
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_sotopia_preflight_declares_corrected_metric_with_raw_reward(tmp_path):
+    dataset = tmp_path / "sotopia"
+    dataset.mkdir()
+    _write_task(dataset, "episode")
+    job = await Job.create(
+        JobConfig(
+            job_name="sotopia-metadata",
+            jobs_dir=tmp_path / "jobs",
+            agents=[AgentConfig(name="sotopia", model_name="candidate")],
+            datasets=[DatasetConfig(path=dataset)],
+        )
+    )
+    try:
+        description = job.benchmark_metadata[0]
+        assert description.primary_metric == "length_controlled_overall"
+        assert {metric.name for metric in description.metrics} == {
+            "reward",
+            "length_controlled_overall",
+        }
+        assert description.n_attempted == 1
+    finally:
+        job._close_logger_handlers()

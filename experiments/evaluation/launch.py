@@ -78,7 +78,7 @@ from experiments.evaluation.evals import (
     harbor_model_agent_kwargs,
 )
 from experiments.evaluation.fleet import MARIN_EVAL_HARDWARE
-from experiments.evaluation.policy_finalization import PolicyFinalization, SotopiaLengthControl, policy_executor
+from experiments.evaluation.policy_finalization import PolicyFinalization, policy_executor
 
 EVALUATION_CONTROLLER_CLUSTER = "marin"
 DEFAULT_EVAL_CONCURRENCY = 1
@@ -581,16 +581,11 @@ def launch_group(batch: EvaluationBatch, client: IrisClient) -> SubmittedEvaluat
     launch_env = env_vars_from_keys(EVAL_ENV_KEYS)
     for name, spec in sorted(batch.secret_env.items()):
         launch_env[name] = resolve_secret_spec(spec).value
-    extras = (
-        ("eval-policy",)
-        if any(isinstance(evaluation.executor, SotopiaLengthControl) for evaluation in batch.evaluations)
-        else ()
-    )
     job = client.submit(
         entrypoint=Entrypoint.from_callable(run_evaluation_group, batch),
         name=f"eval-{batch.group_id}-{uuid.uuid4().hex[:8]}",
         resources=ResourceSpec(cpu=_ORCHESTRATOR_CPU, memory=_ORCHESTRATOR_MEMORY, disk=_ORCHESTRATOR_DISK),
-        environment=EnvironmentSpec(env_vars=launch_env, extras=extras),
+        environment=EnvironmentSpec(env_vars=launch_env),
         constraints=constraints,
         max_retries_failure=0,
         priority_band=batch.priority_band,

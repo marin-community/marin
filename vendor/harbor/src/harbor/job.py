@@ -26,7 +26,11 @@ from rich.progress import (
 from harbor.metrics.base import BaseMetric
 from harbor.metrics.factory import MetricFactory
 from harbor.metrics.mean import Mean
-from harbor.models.benchmark import BenchmarkMetadata, reward_benchmark_metadata
+from harbor.models.benchmark import (
+    BenchmarkMetadata,
+    reward_benchmark_metadata,
+    sotopia_benchmark_metadata,
+)
 from harbor.models.dataset.paths import DatasetPaths
 from harbor.environments.factory import EnvironmentFactory
 from harbor.models.job.config import (
@@ -71,7 +75,6 @@ from harbor.utils.logger import logger
 from harbor.utils.pass_at_k import compute_pass_at_k_by_evals
 from harbor.utils.path_compat import safe_rmtree
 from harbor_config.errors import is_resume_retryable
-
 
 CANCELLED_ERROR_TYPE = "CancelledError"
 
@@ -626,6 +629,16 @@ class Job:
         if not task_configs:
             raise ValueError("Either datasets or tasks must be provided.")
 
+        if any(
+            agent.name == "sotopia"
+            or agent.import_path == "harbor.agents.installed.sotopia:SotopiaAgent"
+            for agent in config.agents
+        ):
+            if len(config.agents) != 1 or len(metadata) != 1:
+                raise ValueError(
+                    "SOTOPIA correction requires one agent and one dataset per job"
+                )
+            metadata = [sotopia_benchmark_metadata(item) for item in metadata]
         return task_configs, tuple(metadata)
 
     def _init_trial_configs(self):
@@ -1201,6 +1214,33 @@ class Job:
 
             self._job_result.stats = final_stats
             self._job_result.trial_results = combined_trial_results
+
+            if any(
+                item.primary_metric == "length_controlled_overall"
+                for item in self.benchmark_metadata
+            ):
+                # SOTOPIA's statistical dependencies are optional for other Harbor jobs.
+                from harbor.metrics.sotopia import correct_sotopia
+
+                model = self.config.sotopia_model or self.config.agents[0].model_name
+                if model is None:
+                    raise ValueError("SOTOPIA correction requires a model name")
+                evidence = correct_sotopia(
+                    combined_trial_results,
+                    model=model,
+                    cohort=(
+                        self.config.sotopia_cohort.model_dump()
+                        if self.config.sotopia_cohort
+                        else None
+                    ),
+                )
+                dataset = self.benchmark_metadata[0].task
+                self._job_result.canonical_metrics[dataset] = evidence[
+                    "canonical_metrics"
+                ]
+                self._job_result.metric_evidence[dataset] = evidence
+                for stats in self._job_result.stats.evals.values():
+                    stats.metrics.append(evidence["canonical_metrics"])
 
             finished_at = datetime.now()
             self._job_result.finished_at = finished_at

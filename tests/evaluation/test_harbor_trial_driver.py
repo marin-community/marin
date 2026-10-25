@@ -578,6 +578,7 @@ def test_effective_job_applies_runtime_precedence_and_validates_nested_updates(t
                 "dataset_path": None,
                 "endpoint_url": "https://iris.example/capability/v1",
                 "served_model": "served-grug",
+                "model_identity": "served-grug",
                 "task_limit": 3,
                 "model_agent_kwargs": {
                     "extra_body": '{"chat_template_kwargs":{"enable_thinking":true}}',
@@ -673,6 +674,7 @@ def test_effective_acp_job_routes_model_requests_to_served_endpoint(tmp_path):
                 "dataset_path": None,
                 "endpoint_url": "https://iris.example/capability/v1",
                 "served_model": "served-pi",
+                "model_identity": "served-pi",
                 "task_limit": 1,
                 "model_agent_kwargs": {},
                 "archive_root": str(tmp_path / "archive"),
@@ -777,6 +779,7 @@ def test_agent_version_survives_preflight_and_runtime_overlay(
                 "dataset_path": str(task.parent),
                 "endpoint_url": "https://model.example/v1",
                 "served_model": "test-model",
+                "model_identity": "test-model",
                 "task_limit": 1,
                 "model_agent_kwargs": model_kwargs,
                 "verifier_env": {},
@@ -869,6 +872,7 @@ def test_hosted_pi_accepts_effective_thinking_format(tmp_path, model_kwargs, pol
                 "dataset_path": None,
                 "endpoint_url": "https://iris.example/capability/v1",
                 "served_model": "served-qwen",
+                "model_identity": "served-qwen",
                 "task_limit": 1,
                 "model_agent_kwargs": {
                     **model_kwargs,
@@ -948,6 +952,7 @@ def test_effective_terminus_job_applies_output_limit_to_llm_requests(tmp_path, p
                 "dataset_path": None,
                 "endpoint_url": "https://iris.example/capability/v1",
                 "served_model": "served-glm",
+                "model_identity": "served-glm",
                 "task_limit": 1,
                 "model_agent_kwargs": {
                     "model_info": {"max_input_tokens": 65536, "max_output_tokens": 32768},
@@ -984,6 +989,7 @@ def test_effective_aime_job_preserves_capability_url_in_live_config_and_redacts_
                 "dataset_path": str(tmp_path / "tasks"),
                 "endpoint_url": capability_url,
                 "served_model": "served-qwen",
+                "model_identity": "served-qwen",
                 "task_limit": 3,
                 "model_agent_kwargs": {},
                 "verifier_env": {},

@@ -11,7 +11,7 @@ import re
 import statistics
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Literal
 
@@ -99,6 +99,7 @@ class HarborRunResult:
     mean_reward: float
     reward_stderr: float
     benchmark: BenchmarkMetadataRef
+    native_metrics: Mapping[str, float] = field(default_factory=dict)
 
     @property
     def unscored_trials(self) -> int:
@@ -124,7 +125,7 @@ class HarborRunResult:
 
     def canonical_task_metrics(self) -> dict[str, dict[str, float]]:
         """Canonical reward and its standard error, keyed by dataset."""
-        return {self.dataset: {"reward": self.mean_reward, "reward_stderr": self.reward_stderr}}
+        return {self.dataset: {"reward": self.mean_reward, "reward_stderr": self.reward_stderr, **self.native_metrics}}
 
     def task_coverage(self) -> dict[str, TaskCoverage]:
         """Coverage keyed like :meth:`task_metrics`, carrying the per-trial error distribution."""
@@ -369,6 +370,11 @@ def _run_harbor_job(
     if recorded_attempted is not None and recorded_attempted > n_attempted:
         raise ValueError(f"Harbor recorded {recorded_attempted} trials but intended only {n_attempted}")
     result = _aggregate(trials, dataset, recorded_benchmark, trials_per_task)
+    job_document = json.loads((job_dir / "result.json").read_text())
+    native_metrics = job_document.get("canonical_metrics", {}).get(recorded_benchmark.task, {})
+    if recorded_benchmark.primary_metric != "reward" and recorded_benchmark.primary_metric not in native_metrics:
+        raise ValueError(f"Harbor did not produce {recorded_benchmark.primary_metric}")
+    result = replace(result, native_metrics=native_metrics)
     StoragePath(prefix_join(output_dir, _HARBOR_RESULT_FILE)).write_text(
         json.dumps(
             {
@@ -506,6 +512,7 @@ class HarborExecutor:
             dataset_path=str(dataset_path) if dataset_path is not None else None,
             endpoint_url=model.endpoint.base_url,
             served_model=model.endpoint.model,
+            model_identity=self.model_config.location,
             task_limit=self.task_limit,
             model_agent_kwargs=self.model_agent_kwargs,
             verifier_env=verifier_env,

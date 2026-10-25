@@ -71,6 +71,7 @@ class RuntimeOverlay(BaseModel):
     dataset_path: str | None
     endpoint_url: str
     served_model: str
+    model_identity: str
     task_limit: int | None
     model_agent_kwargs: dict[str, Any]
     verifier_env: dict[str, str]
@@ -349,6 +350,7 @@ def _effective_config(config: JobConfig, overlay: RuntimeOverlay) -> JobConfig:
     effective = config.model_copy(
         update={
             "job_name": overlay.job_name,
+            "sotopia_model": overlay.model_identity,
             "jobs_dir": JobConfig(jobs_dir=str(StoragePath(overlay.jobs_dir))).jobs_dir,
             "agents": [agent],
             "user_agent": _pinned_pi_agent(config.user_agent) if config.user_agent is not None else None,
@@ -441,6 +443,7 @@ def _preflight_one(path: Path, model_agent_kwargs: Mapping[str, object]) -> dict
                 dataset_path=dataset_path,
                 endpoint_url=_STABLE_ENDPOINT,
                 served_model=_STABLE_MODEL,
+                model_identity=_STABLE_MODEL,
                 task_limit=None,
                 model_agent_kwargs=dict(model_agent_kwargs),
                 verifier_env={},

@@ -69,3 +69,19 @@ def reward_benchmark_metadata(
         n_benchmark=n_benchmark,
         n_attempted=n_attempted,
     )
+
+
+def sotopia_benchmark_metadata(metadata: BenchmarkMetadata) -> BenchmarkMetadata:
+    metric = MetricMetadata(
+        name="length_controlled_overall",
+        source_name="length_controlled_overall",
+        kind=MetricKind.CONTINUOUS,
+        higher_is_better=True,
+    )
+    return metadata.model_copy(
+        update={
+            "primary_metric": metric.name,
+            "metric_kind": metric.kind,
+            "metrics": (*metadata.metrics, metric),
+        }
+    )

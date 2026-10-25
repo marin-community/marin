@@ -265,44 +265,6 @@ def test_pipeline_evaluator_update_uses_new_evaluation_steps(tmp_path, runtime_c
     assert sorted(executed) == sorted(evaluation.identity.run_id for evaluation in after.evaluations)
 
 
-@pytest.mark.parametrize(
-    "benchmark,changed", [("financebench", False), ("olympiadbench", False), ("sotopia-hard", True)]
-)
-def test_policy_cohort_change_invalidates_only_sotopia(tmp_path, submitted_batches, benchmark, changed):
-    campaign = Path(__file__).parent / "campaigns" / "eval-campaign-09-25-unlabeled"
-    cohort = tmp_path / "cohort.json"
-    cohort.write_text((campaign / "sotopia-baselines.json").read_text())
-    config = tmp_path / "finalization.yaml"
-    judge = campaign / "ablations/olympiadbench_judge/MiniMaxAI-MiniMax-M3-MXFP8-262k.yaml"
-    config.write_text(f"judge_model_config: {judge.resolve()}\nsotopia_baselines: {cohort}\n")
-    command = _command(tmp_path)
-    index = command.index("--evals")
-    del command[index : index + 2]
-    command.extend(["--policy-finalization-config", str(config)])
-    if benchmark == "sotopia-hard":
-        command.extend(["--harbor-config", str(campaign / "harbor-configs/sotopia-hard.yaml")])
-    else:
-        command.extend(["--evals", benchmark])
-    runner = CliRunner()
-    first = runner.invoke(cli, command)
-    assert first.exit_code == 0, first.output
-    batch = submitted_batches[-1]
-    evaluation = batch.evaluations[0]
-    _record(batch, evaluation.identity, RunStatus.SUCCEEDED, None, {}, {}, {})
-    original = json.loads(evaluation.identity.eval_ref.postprocessing["marin-10197"])
-    sources = json.loads(cohort.read_text())
-    sources["models"][0]["results_path"] += "-replacement"
-    cohort.write_text(json.dumps(sources))
-    second = runner.invoke(cli, command)
-    assert second.exit_code == 0, second.output
-    revised = submitted_batches[-1].evaluations[0]
-    assert (revised.identity.run_id != evaluation.identity.run_id) is changed
-    frozen = json.loads(revised.identity.eval_ref.postprocessing["marin-10197"])
-    assert (frozen != original) is changed
-    if benchmark != "sotopia-hard":
-        assert "JUDGE_API_KEY" not in revised.secret_env_keys
-
-
 @pytest.mark.parametrize("platform,accelerator", [("tpu", "v5litepod-4"), ("gpu", "GB200x1")])
 def test_policy_judge_rejects_incompatible_placement_before_submission(
     tmp_path, submitted_batches, platform, accelerator
@@ -357,33 +319,4 @@ def test_policy_snapshot_uses_project_python_and_preserves_cohort_sources(tmp_pa
     assert {row["kind"] for row in manifest["files"]} == {
         "policy-finalization-config",
         "judge_model_config",
-        "sotopia_baselines",
     }
-    saved_cohort = next(snapshot.glob("*-sotopia-baselines.json"))
-    assert saved_cohort.read_bytes() == (campaign / "sotopia-baselines.json").read_bytes()
-
-
-def test_policy_sotopia_launch_provisions_fitting_dependencies(tmp_path, submitted_batches, submitted_environments):
-    campaign = Path(__file__).parent / "campaigns/eval-campaign-09-25-unlabeled"
-    result = CliRunner().invoke(
-        cli,
-        [
-            "launch",
-            "--model",
-            "qwen3-8b",
-            "--platform",
-            "gpu",
-            "--accelerator",
-            "H100x1",
-            "--harbor-config",
-            str(campaign / "harbor-configs/sotopia-hard.yaml"),
-            "--policy-finalization-config",
-            str(campaign / "finalization.yaml"),
-            "--records-prefix",
-            str(tmp_path),
-            "--no-wait",
-        ],
-    )
-    assert result.exit_code == 0, result.output
-    assert len(submitted_batches) == 1
-    assert submitted_environments[0].extras == ("eval-policy",)

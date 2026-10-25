@@ -55,5 +55,6 @@
       "model": "zai-org/GLM-4.7-Flash",
       "results_path": "s3://marin-us-east-02a/marin/evals/20261003-204411-zai-org-GLM-4.7-Flash-sotopia-hard-477c/results"
     }
-  ]
+  ],
+  "version": "policy-10197-v1"
 }

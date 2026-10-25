@@ -15,6 +15,7 @@ HARBOR_TEST_PATTERNS = (
     "vendor/harbor/tests/unit/test_task_client.py",
     "vendor/harbor/tests/unit/test_archive.py",
     "vendor/harbor/tests/unit/test_benchmark_metadata.py",
+    "vendor/harbor/tests/unit/test_sotopia_metrics.py",
     "vendor/harbor/tests/unit/test_environment_preflight.py",
     "vendor/harbor/tests/unit/test_runtime.py",
     "vendor/harbor/tests/unit/test_task_packager.py",
