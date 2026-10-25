@@ -9,10 +9,13 @@ The saved FP32 states and corrected values are read directly in backward;
 neither chunk preparation nor forward recurrence is recomputed.
 """
 
+import functools
+
 import jax
 import jax.numpy as jnp
 from jaxtyping import Array, Float, Int
 
+from experiments.grug.belay_tpu.kda_state_tiled_tpu import state_pass_tiled
 from experiments.grug.belay_tpu.kda_state_tpu import state_pass
 from experiments.grug.moe.kda import _chunk_prep_xla, _prepare_qk, _segment_masks, doc_starts
 
@@ -28,6 +31,7 @@ def chunk_kda_tpu(
     erase: Float[Array, "B H L D"] | None = None,
     initial_state: jax.Array | None = None,
     matmul_dtype: jnp.dtype = jnp.bfloat16,
+    state_tile: int = 1,
 ) -> tuple[jax.Array, jax.Array]:
     """Evaluate packed KDA with 16-token chunks and a 128-wide saved state."""
     if q.ndim != 4 or q.shape[-1] != 128 or any(x.shape != q.shape for x in (k, v, g)):
@@ -69,7 +73,8 @@ def chunk_kda_tpu(
     def flatten(x):
         return x.reshape(b * h, n, *x.shape[-2:])
 
-    out, final = state_pass(
+    state_kernel = state_pass if state_tile == 1 else functools.partial(state_pass_tiled, tile=state_tile)
+    out, final = state_kernel(
         flatten(prep.q_inflate),
         flatten(prep.attn),
         flatten(prep.kw),
