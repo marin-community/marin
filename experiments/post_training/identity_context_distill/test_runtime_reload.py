@@ -21,7 +21,7 @@ def test_runtime_settings_survive_hf_reload_and_loader_on_32_cpu_mesh():
         from experiments.post_training.identity_context_distill.sft import identity_sft_config
         from experiments.post_training.identity_context_distill.test_sft import source_arguments
 
-        base = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=True, fp32_activations=True, attention_implementation=None, hosts=1,
+        base = identity_sft_config(moe_capacity_factor=4.0, router_combine_fp32=True, fp32_activations=True, attention_implementation="torch_order", hosts=1,
                                    dataset_uri='synthetic', cache_uri='cache', output_uri='output', run_id='reload',
                                    seed=310, **source_arguments())
         enabled = replace(base, model=replace(base.model, router_dot_fp32=True),

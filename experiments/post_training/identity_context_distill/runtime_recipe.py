@@ -14,6 +14,7 @@ from levanter.models.snowball import SnowballConfig
 
 from experiments.interp.snowball_identity.routing import bias_exception_required, dot_exception_required
 from experiments.post_training.identity_context_distill.sft import (
+    ATTENTION_IMPLEMENTATIONS,
     check_runtime_model,
     source_export_overrides,
     source_metadata_receipt,
@@ -22,8 +23,6 @@ from experiments.post_training.identity_context_distill.sft import (
 POSITIONS_SHA256 = "81fdfb85ae40e092c4b99c29440a7fccbc075b2d08bda2999321b250b82e201d"
 XLA_PRECISION_FLAGS = {"default": None, "no_excess_precision": "--xla_allow_excess_precision=false"}
 """The recipe's XLA precision setting -> the process's ``XLA_FLAGS``, which XLA reads when its backend starts."""
-ATTENTION_IMPLEMENTATIONS = (None, "torch_order")
-"""None: the module's own choice (gpu_fa4_cute on GPU)."""
 
 
 XLA_CACHE_FLAGS = ("--xla_gpu_per_fusion_autotune_cache_dir",)

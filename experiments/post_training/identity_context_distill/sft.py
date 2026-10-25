@@ -33,6 +33,8 @@ NATIVE_TEMPLATE_SHA256 = "b3f20bc21498407f2815dd1a6c26150192926ccf04f6324ca40a12
 SEQUENCE_LENGTH = 8192
 GLOBAL_BATCH_SIZE = 8
 EXPERT_AXIS = 4
+ATTENTION_IMPLEMENTATIONS = ("torch_order", "gpu_fa4_cute")
+"""The recipe's attention implementations, always named: no recipe relies on the module's default."""
 logger = logging.getLogger(__name__)
 
 EXPORT_CONFIG_ALIASES = {
@@ -246,8 +248,8 @@ def identity_sft_config(
             no default, because it changes the forward numerics.
         fp32_activations: Whether SiLU and sigmoid run in FP32, cast to BF16 once (GatedNorm, attention head gate,
             shared and expert MLPs); explicit, with no default, because it changes the forward numerics.
-        attention_implementation: None for the module's own choice (gpu_fa4_cute on GPU), or "torch_order" (torch
-            eager's FP32 scores and normalized BF16 weights; materializes S x S scores); explicit, with no default.
+        attention_implementation: "torch_order" (torch eager's FP32 scores and normalized BF16 weights; materializes
+            S x S scores) or "gpu_fa4_cute" (FA4; GPU only); explicit, with no default.
         stop_after_updates: Absolute training horizon, initially 16, then 64 after the gate.
         resume_checkpoint: Committed native step directory. Required for continuation.
 
@@ -272,8 +274,10 @@ def identity_sft_config(
         raise ValueError(f"router_combine_fp32 must be an explicit bool, got {router_combine_fp32!r}")
     if type(fp32_activations) is not bool:
         raise ValueError(f"fp32_activations must be an explicit bool, got {fp32_activations!r}")
-    if attention_implementation not in (None, "torch_order"):
-        raise ValueError(f"attention_implementation must be None or 'torch_order', got {attention_implementation!r}")
+    if attention_implementation not in ATTENTION_IMPLEMENTATIONS:
+        raise ValueError(
+            f"attention_implementation must be one of {ATTENTION_IMPLEMENTATIONS}, got {attention_implementation!r}"
+        )
 
     output_uri = output_uri.rstrip("/")
     mesh = MeshConfig(

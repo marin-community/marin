@@ -31,7 +31,7 @@ def inputs():
         moe_capacity_factor=4.0,
         router_combine_fp32=False,
         fp32_activations=False,
-        attention_implementation=None,
+        attention_implementation="torch_order",
         dataset_uri="synthetic",
         cache_uri="cache",
         output_uri="s3://marin-rno2a/fixture",
@@ -79,7 +79,7 @@ def test_measured_dot_policy_accepts_runtime_flag_without_changing_native_metada
     assert receipt["router_combine_fp32"] is False
     assert receipt["fp32_activations"] is False
     assert receipt["runtime_model_config"]["fp32_activations"] is False
-    assert receipt["attention_implementation"] is None and receipt["xla_precision"] == "default"
+    assert receipt["attention_implementation"] == "torch_order" and receipt["xla_precision"] == "default"
     assert receipt["runtime_model_config"]["moe_capacity_factor"] == 4.0
     assert receipt["source_metadata"]["model_config"]["moe_capacity_factor"] == 1.0
     assert receipt["native_export_config_overrides"] == config.adapter.hf_config_overrides
@@ -143,10 +143,13 @@ def test_the_receipt_binds_the_attention_implementation_and_xla_precision():
     assert receipt["attention_implementation"] == "torch_order"
     assert receipt["runtime_model_config"]["attention_implementation"] == "torch_order"
     assert receipt["xla_precision"] == "no_excess_precision"
-    with pytest.raises(ValueError, match="not a recipe option"):
-        configure_precision_runtime(
-            replace(config, model=replace(config.model, attention_implementation="reference")), **args
-        )
+    for value in ("reference", None):
+        with pytest.raises(ValueError, match="not a recipe option"):
+            configure_precision_runtime(
+                replace(config, model=replace(config.model, attention_implementation=value)), **args
+            )
+    fa4 = replace(config, model=replace(config.model, attention_implementation="gpu_fa4_cute"))
+    assert configure_precision_runtime(fa4, **args)[1]["attention_implementation"] == "gpu_fa4_cute"
     for value in (None, "", "false", "--xla_allow_excess_precision=false"):
         with pytest.raises(ValueError, match="Unknown XLA precision"):
             configure_precision_runtime(config, **dict(args, xla_precision=value))

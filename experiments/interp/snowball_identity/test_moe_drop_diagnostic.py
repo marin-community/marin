@@ -218,7 +218,7 @@ def test_the_three_arms():
     assert {name: (a["attention_implementation"], a["xla_precision"]) for name, a in diag.ARMS.items()} == {
         "torch-order-xla-default": ("torch_order", "default"),
         "torch-order-no-excess-precision": ("torch_order", "no_excess_precision"),
-        "fa4-no-excess-precision": (None, "no_excess_precision"),
+        "fa4-no-excess-precision": ("gpu_fa4_cute", "no_excess_precision"),
     }
     assert all(a["router_combine_fp32"] and a["fp32_activations"] for a in diag.ARMS.values())
     assert sorted(diag.PREFERENCE) == sorted(diag.ARMS) and diag.PREFERENCE[0] == "fa4-no-excess-precision"

@@ -18,6 +18,7 @@ R2_DROPLESS = T310_LOCAL / "diag-moe-drops-r2/ep4-dropless/positions.pt"
 R2_DROPLESS_SHA256 = "2b88315b33c4c7f6e735cc42b7958271cc4feaadba6ab1baa8be97a784b4e04e"
 FLOOR_RECEIPT = T310_LOCAL / "diag-torch-floor-r1/receipt.json"
 TORCH_TOP6 = T310_LOCAL / "diag-torch-floor-r1/batch1/top6.pt"
+TORCH_BATCHED_TOP6 = T310_LOCAL / "diag-torch-floor-r1/batched/top6.pt"
 FIX_R1_COMBINE_ON = T310_LOCAL / "diag-moe-fix-r1/dropless-fp32-combine/positions.pt"
 FIX_R1_COMBINE_ON_SHA256 = "e857f361510c75fa3e969da2206d1c9851e70abb44a1a3bbe3139042c8a77bc7"
 VLLM_CAPTURE = T310_LOCAL / "marten-task310-vllm-routes-r1/capture"
@@ -105,6 +106,7 @@ def gate_inputs_for(route_policy: str) -> precision_gate.PrecisionGateInputs:
         torch_routing="unused",
         floor_receipt=str(FLOOR_RECEIPT),
         torch_top6=str(TORCH_TOP6),
+        torch_batched_top6=str(TORCH_BATCHED_TOP6),
         route_policy=route_policy,
         vllm_capture=str(VLLM_CAPTURE),
         output="unused",
@@ -211,4 +213,87 @@ def test_gate_route_policy_selects_the_gated_check_on_the_fix_r1_arm(monkeypatch
         routes = [f for f in gate["failures"] if f.startswith("routes-")]
         assert gate["route_policy"] == policy
         assert routes == [f"routes-{policy}: {f}" for f in report[policy]["failures"]]
-        assert set(gate["route_proxy"]) == {"policy", "G1", "G1a"}
+        assert set(gate["route_proxy"]) == {"policy", "G1", "G1a", "G1b_L0"}
+
+
+@pytest.mark.parametrize("policy", precision_gate.ROUTE_POLICIES)
+def test_each_policy_gates_on_its_own_route_check(monkeypatch, policy):
+    """Under ``report_g1b_l0`` G1 and G1a failures leave the gate passing, an L0 ratio above 1.25 fails it, and a
+    parity failure fails it; ``G1`` and ``G1a`` still gate on their own check only."""
+    proxy = {
+        "policy": policy,
+        "G1": {"failures": ["L2: rate"]},
+        "G1a": {"failures": ["L1: p99"]},
+        "G1b_L0": {"failures": []},
+    }
+    parity: list[str] = []
+    monkeypatch.setattr(precision_gate, "compare", lambda *args: {})
+    monkeypatch.setattr(precision_gate, "candidate_spans", lambda *args: {})
+    monkeypatch.setattr(precision_gate, "read", lambda path: b"{}")
+    monkeypatch.setattr(precision_gate, "compare_routes_cross_stack", lambda *args: {})
+    monkeypatch.setattr(precision_gate, "parity_gate", lambda found: parity)
+    monkeypatch.setattr(precision_gate, "route_gate", lambda *args: [])
+    monkeypatch.setattr(precision_gate, "route_proxy", lambda *args: proxy)
+    moe = {"dispatch": {"dropped": [0], "sender_dropped": [0], "receiver_dropped": [0]}}
+
+    def failures():
+        gate = precision_gate.evaluate(gate_inputs_for(policy), None, "unused", [], moe, [])
+        assert gate["route_policy"] == policy and gate["route_proxy"] is proxy
+        return gate["failures"]
+
+    own = {"G1": ["routes-G1: L2: rate"], "G1a": ["routes-G1a: L1: p99"], "report_g1b_l0": []}[policy]
+    assert failures() == own
+    proxy["G1b_L0"]["failures"] = ["L0: ratio 1.3 > 1.25"]
+    expected = ["routes-G1b-L0: L0: ratio 1.3 > 1.25"] if policy == "report_g1b_l0" else own
+    assert failures() == expected
+    parity.append("max")
+    assert failures() == ["parity: max", *expected]
+
+
+def test_g1b_l0_line_on_synthetic_routes():
+    """LV and TB are L0 set agreement with each vLLM pass; the line passes at ratio <= 1.25."""
+    ids = np.tile(np.arange(6), (10, 2, 1))
+    vllm = ids[..., :4].copy()
+    batched = {"check|a": {"ids": torch.tensor(ids.copy()), "biased": torch.zeros(10, 2, 6)}}
+    batched["check|a"]["ids"][0, 0, 3] = 5  # torch batched differs from vLLM at 1 of 10 L0 positions
+    for flips, ok in ((1, True), (2, False)):
+        ours = ids[..., :4].copy()
+        ours[:flips, 0, 3] = 5
+        found = g1.g1b_l0({"check|a": {"routes": torch.tensor(ours)}}, batched, {"check|a": vllm}, {"check|a": vllm})
+        assert found["TB_0"] == [0.9, 0.9] and found["LV_0"] == [1 - flips / 10] * 2
+        assert found["ratio"] == pytest.approx(flips) and found["ok"] is ok
+        assert bool(found["failures"]) is not ok
+    # Torch batched equal to vLLM: no floor, so only an exact Levanter match passes and no ratio is reported.
+    exact = {"check|a": {"ids": torch.tensor(ids), "biased": torch.zeros(10, 2, 6)}}
+    for flips, ok in ((0, True), (1, False)):
+        ours = ids[..., :4].copy()
+        ours[:flips, 0, 3] = 5
+        found = g1.g1b_l0({"check|a": {"routes": torch.tensor(ours)}}, exact, {"check|a": vllm}, {"check|a": vllm})
+        assert (found["ok"], found["ratio"]) == (ok, None)
+
+
+G1B_POSITIONS = {
+    "diag-moe-fix-r1/dropless-fp32-combine/positions.pt": 1.2975,
+    "diag-moe-fp32act-r1/dropless-fp32-combine-fp32-activations/positions.pt": 1.1909,
+    "diag-flag-arms-r1/torch-order-xla-default/positions.pt": 1.0355,
+    "diag-flag-arms-r1/torch-order-no-excess-precision/positions.pt": 1.0417,
+    "diag-flag-arms-r1/fa4-no-excess-precision/positions.pt": 1.0247,
+}
+
+
+@pytest.mark.skipif(
+    not (
+        TORCH_BATCHED_TOP6.exists() and VLLM_CAPTURE.exists() and all((T310_LOCAL / p).exists() for p in G1B_POSITIONS)
+    ),
+    reason="local t310 copies",
+)
+def test_g1b_l0_reproduces_the_recorded_arms():
+    """TB_0 = 0.95845 / 0.95826 (446c7b1b); the five arms' ratios, with fix-r1 the only one above 1.25."""
+    assert hashlib.sha256(TORCH_BATCHED_TOP6.read_bytes()).hexdigest() == g1.TORCH_BATCHED_TOP6_SHA256
+    batched = torch.load(TORCH_BATCHED_TOP6, map_location="cpu")
+    passes = [torch.load(VLLM_CAPTURE / f"pass-{n}/routes.pt", map_location="cpu") for n in (1, 2)]
+    for path, ratio in G1B_POSITIONS.items():
+        found = g1.g1b_l0(torch.load(T310_LOCAL / path, map_location="cpu", weights_only=False), batched, *passes)
+        assert [round(x, 5) for x in found["TB_0"]] == [0.95845, 0.95826]
+        assert found["ratio"] == pytest.approx(ratio, abs=1e-4)
+        assert found["ok"] is (ratio <= 1.25)

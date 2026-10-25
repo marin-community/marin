@@ -51,6 +51,10 @@ K_RATE_VLLM = 1.25
 VLLM_RECEIPT_SHA256 = "3f574c81aad28c227e6e9f0ea54e1e61730f26fb0d6faac9d77d0b2abd6dee61"
 VLLM_PASS1_SHA256 = "92b92899eaf1a1288ca9fb53e703cfc3e1d6cc79e4bf81c9ffdb30ab092e7147"
 VLLM_PASS2_SHA256 = "10c0730e7443deeee9c405b327361626e9afcd735c57072e01733b9d409ea3ed"
+TORCH_BATCHED_TOP6_SHA256 = "1c998ced2bba73c358215fe1647fcd900ad8a3a30f8f36b7254cc7efe713f842"
+"""The torch floor job's ``batched/top6.pt`` (torch on the gate grid), G1b's floor."""
+K_G1B = 1.25
+"""G1b direct L0 line: Levanter's L0 disagreement with vLLM may be at most this multiple of torch batched's."""
 TORCH_SIDE = "torch_batch1"
 K = 4
 """Experts per token: the selected set is the top ``K``; the 4th/5th margin decides its last member."""
@@ -259,6 +263,38 @@ def check_vllm_floor(levanter: dict, torch_top6: dict, floor: dict, vllm_pass1: 
         },
         "totals": lev_torch["totals"],
         "failures": failures,
+    }
+
+
+def g1b_l0(levanter: dict, torch_batched_top6: dict, vllm_pass1: dict, vllm_pass2: dict) -> dict:
+    """G1b's direct L0 line: L0 set agreement with each vLLM pass for Levanter (``LV``) and for torch batched on the
+    gate grid (``TB``); passes when (1 - min LV) <= ``K_G1B`` x (1 - min TB)."""
+    ours = {sid: r["routes"].numpy() for sid, r in levanter.items()}
+    batched, _ = routes_and_margins(torch_batched_top6)
+    passes = [_routes(vllm_pass1), _routes(vllm_pass2)]
+
+    def l0(side: dict) -> list[float]:
+        rates = []
+        for routes in passes:
+            first = agreement(side, routes, {})["layers"][0]
+            if first["layer"] != 0:
+                raise ValueError(f"first layer reported is {first['layer']}")
+            rates.append(first["set_rate"])
+        return rates
+
+    lv, tb = l0(ours), l0(batched)
+    excess, floor = 1 - min(lv), 1 - min(tb)
+    ok = excess <= K_G1B * floor
+    ratio = excess / floor if floor else None
+    return {
+        "rule": {"k": K_G1B, "line": "(1 - min LV_0) <= k x (1 - min TB_0), min over the two vLLM passes"},
+        "TB_0": tb,
+        "LV_0": lv,
+        "TB_0_min": min(tb),
+        "LV_0_min": min(lv),
+        "ratio": ratio,
+        "ok": ok,
+        "failures": [] if ok else [f"L0: 1 - {min(lv):.5f} > {K_G1B} x (1 - {min(tb):.5f}); ratio {ratio}"],
     }
 
 

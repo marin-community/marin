@@ -16,7 +16,8 @@ the others waiting:
    reference job's routes, applies ``logit_check.parity_gate``, ``routing.route_gate`` (row-1 exceptions and
    coverage), the route proxy check named by ``inputs.route_policy`` (``G1``: ``route_proxy_check.check`` against
    the pinned torch floor; ``G1a``: ``route_proxy_check.check_vllm_floor`` against the pinned vLLM route capture;
-   per-layer rate bound and near-tie margins; both are computed and reported, only the named one gates) and the
+   per-layer rate bound and near-tie margins; under ``report_g1b_l0``, G1b's direct L0 line against torch batched;
+   all are computed and reported, only the named one gates) and the
    dropless check, and writes ``gate.json``, all
    inside one ``try``; then the failure count is broadcast and every rank raises
    ``PrecisionGateFailed`` unless it is zero. A process-0 exception, including a failed write, is a failure.
@@ -64,12 +65,14 @@ from experiments.interp.snowball_identity.logit_check import (
 from experiments.interp.snowball_identity.multihost import broadcast_host_scalar, gather_host_rows, gather_host_scalar
 from experiments.interp.snowball_identity.route_proxy_check import (
     FLOOR_RECEIPT_SHA256,
+    TORCH_BATCHED_TOP6_SHA256,
     TORCH_TOP6_SHA256,
     VLLM_PASS1_SHA256,
     VLLM_PASS2_SHA256,
     VLLM_RECEIPT_SHA256,
     check,
     check_vllm_floor,
+    g1b_l0,
     load_pinned,
 )
 from experiments.interp.snowball_identity.routing import MATMUL_ENV, compare_routes_cross_stack, route_gate
@@ -77,8 +80,13 @@ from experiments.interp.snowball_identity.routing import MATMUL_ENV, compare_rou
 logger = logging.getLogger(__name__)
 
 DEADLINE_EXIT = 4
-ROUTE_POLICIES = ("G1", "G1a")
-"""The routes row's floor: G1 (torch floor, amendment a685d499) or G1a (served-stack floor, 27f282c2)."""
+ROUTE_POLICIES = ("G1", "G1a", "report_g1b_l0")
+"""The routes row's floor: G1 (torch floor, amendment a685d499) or G1a (served-stack floor, 27f282c2). Under
+``report_g1b_l0`` both are recorded and neither gates; the routes proxy gate is G1b's direct L0 line
+(``route_proxy_check.g1b_l0``)."""
+
+GATED_REPORT = {"G1": "G1", "G1a": "G1a", "report_g1b_l0": "G1b_L0"}
+"""The ``route_proxy`` report each policy gates on; its failure rows read ``routes-<report, _ as ->:``."""
 
 
 class PrecisionGateFailed(RuntimeError):
@@ -101,9 +109,11 @@ class PrecisionGateInputs:
     """The torch floor job's ``receipt.json`` (G1's floor rates and torch's own margins), pinned by sha256."""
     torch_top6: str
     """The torch floor job's ``batch1/top6.pt`` (torch batch-1 top-6 ids and biased logits), pinned by sha256."""
+    torch_batched_top6: str
+    """The torch floor job's ``batched/top6.pt`` (torch on the gate grid; G1b's floor), pinned by sha256."""
     route_policy: str
-    """``G1`` or ``G1a`` (``ROUTE_POLICIES``): which route proxy check the gate applies; both are reported. No
-    default."""
+    """``G1``, ``G1a`` or ``report_g1b_l0`` (``ROUTE_POLICIES``): which route proxy check the gate applies; G1, G1a
+    and G1b's L0 line are all reported. No default."""
     vllm_capture: str
     """The vLLM route capture directory (``receipt.json``, ``pass-1/`` and ``pass-2/routes.pt``), pinned by sha256."""
     output: str
@@ -152,8 +162,9 @@ def dispatch_failures(dispatch: dict) -> list[str]:
 
 
 def route_proxy(positions_path: str, inputs: PrecisionGateInputs) -> dict:
-    """Both per-layer route proxy checks of a written ``positions.pt``: G1 against the pinned torch floor and G1a
-    against the pinned vLLM route capture. The gate applies only ``inputs.route_policy``; the other is reported."""
+    """The route proxy checks of a written ``positions.pt``: G1 against the pinned torch floor, G1a against the pinned
+    vLLM route capture, and G1b's direct L0 line against torch batched and the capture. The gate applies the one
+    ``inputs.route_policy`` names (G1b's for ``report_g1b_l0``); the others are reported."""
     torch_inputs = (
         torch.load(io.BytesIO(read(positions_path)), map_location="cpu"),
         torch.load(io.BytesIO(load_pinned(inputs.torch_top6, TORCH_TOP6_SHA256)), map_location="cpu"),
@@ -166,7 +177,15 @@ def route_proxy(positions_path: str, inputs: PrecisionGateInputs) -> dict:
         )
         for n, sha in ((1, VLLM_PASS1_SHA256), (2, VLLM_PASS2_SHA256))
     ]
-    return {"policy": inputs.route_policy, "G1": check(*torch_inputs), "G1a": check_vllm_floor(*torch_inputs, *passes)}
+    batched = torch.load(
+        io.BytesIO(load_pinned(inputs.torch_batched_top6, TORCH_BATCHED_TOP6_SHA256)), map_location="cpu"
+    )
+    return {
+        "policy": inputs.route_policy,
+        "G1": check(*torch_inputs),
+        "G1a": check_vllm_floor(*torch_inputs, *passes),
+        "G1b_L0": g1b_l0(torch_inputs[0], batched, *passes),
+    }
 
 
 def evaluate(
@@ -183,10 +202,11 @@ def evaluate(
     rounding = json.loads(read(prefix_join(inputs.torch_routing, "routing.json")))
     cross = compare_routes_cross_stack(positions_path, prefix_join(inputs.torch_routing, "routes.pt"))
     proxy = route_proxy(positions_path, inputs)
+    gated = GATED_REPORT[inputs.route_policy]
     failures = (
         [f"parity: {f}" for f in parity_gate(parity)]
         + [f"routes: {f}" for f in route_gate(cross, rounding, overrides, router_dot_is_fp32(dot_dtypes))]
-        + [f"routes-{inputs.route_policy}: {f}" for f in proxy[inputs.route_policy]["failures"]]
+        + [f"routes-{gated.replace('_', '-')}: {f}" for f in proxy[gated]["failures"]]
         + [f"dispatch: {f}" for f in dispatch_failures(moe["dispatch"])]
     )
     return {

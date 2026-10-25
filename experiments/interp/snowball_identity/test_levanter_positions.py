@@ -246,6 +246,7 @@ def write_floor(tmp_path, monkeypatch, routes: dict) -> tuple[str, str, str]:
     }
     (tmp_path / "floor").mkdir()
     torch.save(top6, tmp_path / "floor" / "top6.pt")
+    torch.save(top6, tmp_path / "floor" / "batched-top6.pt")  # G1b's floor: torch batched, here the same routes
     (tmp_path / "floor" / "receipt.json").write_text(json.dumps(floor))
     capture = tmp_path / "capture"
     for n in (1, 2):
@@ -254,6 +255,7 @@ def write_floor(tmp_path, monkeypatch, routes: dict) -> tuple[str, str, str]:
     (capture / "receipt.json").write_text("{}")
     for name, path in (
         ("TORCH_TOP6_SHA256", tmp_path / "floor" / "top6.pt"),
+        ("TORCH_BATCHED_TOP6_SHA256", tmp_path / "floor" / "batched-top6.pt"),
         ("FLOOR_RECEIPT_SHA256", tmp_path / "floor" / "receipt.json"),
         ("VLLM_RECEIPT_SHA256", capture / "receipt.json"),
         ("VLLM_PASS1_SHA256", capture / "pass-1" / "routes.pt"),
@@ -304,6 +306,7 @@ def gate_fixture(mesh, model, policy, tmp_path, monkeypatch):
         torch_routing=str(routing),
         floor_receipt=floor_receipt,
         torch_top6=torch_top6,
+        torch_batched_top6=str(tmp_path / "floor" / "batched-top6.pt"),
         route_policy="G1",
         vllm_capture=capture,
         output=str(tmp_path / "gate"),

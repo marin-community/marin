@@ -138,6 +138,7 @@ def gate_inputs(run_root: str, routing_path: str, route_policy: str) -> Precisio
         torch_routing=routing_path.rsplit("/", 1)[0],
         floor_receipt=f"{FLOOR}/receipt.json",
         torch_top6=f"{FLOOR}/batch1/top6.pt",
+        torch_batched_top6=f"{FLOOR}/batched/top6.pt",
         route_policy=route_policy,
         vllm_capture=VLLM_CAPTURE,
         output=f"{run_root}/precision-gate",
@@ -422,7 +423,10 @@ def main() -> None:
     parser.add_argument("--runtime-receipt", required=True, help="local reviewed runtime receipt JSON")
     parser.add_argument("--runtime-receipt-sha256", required=True, help="the reviewed receipt's sha256")
     parser.add_argument(
-        "--route-policy", choices=ROUTE_POLICIES, required=True, help="the routes row's floor: G1 (torch) or G1a (vLLM)"
+        "--route-policy",
+        choices=ROUTE_POLICIES,
+        required=True,
+        help="the routes proxy gate: G1 (torch), G1a (vLLM) or report_g1b_l0 (G1b's L0 line)",
     )
     parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")

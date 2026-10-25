@@ -10,7 +10,7 @@ expert-axis size: dropless), FP32 combine and FP32 activations, set through the 
 
 - ``torch-order-xla-default`` (a): ``torch_order`` attention, XLA's default flags.
 - ``torch-order-no-excess-precision`` (b): ``torch_order`` attention, ``--xla_allow_excess_precision=false``.
-- ``fa4-no-excess-precision`` (c): the module's own attention (gpu_fa4_cute), ``--xla_allow_excess_precision=false``.
+- ``fa4-no-excess-precision`` (c): ``gpu_fa4_cute`` attention, ``--xla_allow_excess_precision=false``.
 
 The arm's process resolves the implementation the module selects on its backend and fails before scoring unless it
 is ``RESOLVED_ATTENTION``'s; gate.json records it as ``resolved_attention_implementation``.
@@ -151,7 +151,9 @@ ARMS = {
     "torch-order-no-excess-precision": (
         _RECIPE | {"attention_implementation": "torch_order", "xla_precision": "no_excess_precision"}
     ),
-    "fa4-no-excess-precision": _RECIPE | {"attention_implementation": None, "xla_precision": "no_excess_precision"},
+    "fa4-no-excess-precision": (
+        _RECIPE | {"attention_implementation": "gpu_fa4_cute", "xla_precision": "no_excess_precision"}
+    ),
 }
 """The recipe settings each arm's reviewed runtime receipt must give."""
 RESOLVED_ATTENTION = {
@@ -564,8 +566,8 @@ def direct_levanter_vs_vllm(g1a: dict) -> dict:
     }
 
 
-ROUTE_PROXY_PREFIXES = ("routes-G1:", "routes-G1a:")
-"""``evaluate``'s failure rows from the G1 / G1a route checks, which the rule reads as their own lines."""
+ROUTE_PROXY_PREFIXES = ("routes-G1:", "routes-G1a:", "routes-G1b-L0:")
+"""``evaluate``'s failure rows from the G1 / G1a / G1b L0 route checks, which the rule reads as their own lines."""
 
 
 def logprob_gate_failures(gate_failures: list[str]) -> list[str]:

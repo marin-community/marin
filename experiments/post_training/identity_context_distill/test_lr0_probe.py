@@ -41,7 +41,7 @@ def fixture(
     monkeypatch,
     router_combine_fp32: bool = False,
     fp32_activations: bool = False,
-    attention_implementation: str | None = None,
+    attention_implementation: str = "torch_order",
     xla_precision: str = "default",
     order: list | None = None,
 ):
@@ -197,7 +197,7 @@ def test_base_config_refuses_a_receipt_without_the_runtime_settings():
     names = ("moe_capacity_factor", "router_combine_fp32", "fp32_activations", "attention_implementation")
     for name in names:
         runtime: dict = {"moe_capacity_factor": 4.0, "router_combine_fp32": True, "fp32_activations": True}
-        runtime["attention_implementation"] = None
+        runtime["attention_implementation"] = "torch_order"
         receipt = {"schema_version": 6, "runtime_model_config": runtime}
         del runtime[name]
         with pytest.raises(ValueError, match=name):
@@ -249,6 +249,7 @@ def test_gate_inputs_are_the_frozen_regional_inputs():
     assert all(path.startswith("s3://marin-rno2a/") for path in (gate.positions, gate.vllm, gate.identity))
     assert gate.floor_receipt == f"{lr0_probe.T310}/diag-torch-floor-r1/receipt.json"
     assert gate.torch_top6 == f"{lr0_probe.T310}/diag-torch-floor-r1/batch1/top6.pt"
+    assert gate.torch_batched_top6 == f"{lr0_probe.T310}/diag-torch-floor-r1/batched/top6.pt"
     assert (gate.batch, gate.pad_multiple, gate.deadline_seconds) == (8, 64, 1800)
     assert (gate.route_policy, gate.vllm_capture) == ("G1", f"{lr0_probe.T310}/vllm-route-capture-r1")
     with pytest.raises(ValueError, match="route_policy must be one of"):
