@@ -3,7 +3,10 @@
 
 """Hand-computed checks of the milestone-16 gate arithmetic, independent of any scorer or endpoint."""
 
+import base64
+import hashlib
 import json
+from pathlib import Path
 
 import click
 import pytest
@@ -145,6 +148,7 @@ def test_serve_changes_are_refused():
     files = {name: name for name in m16_gate.SHARED_MODEL_FILES} | {"config.json": "base"}
     serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
     base = {**BASE, "provenance": {**serve, "file_sha256": files}}
+    serve = {**serve, "accepted_metadata_additions": []}
     own_weights = {**STRONG, "provenance": {**serve, "file_sha256": {**files, "config.json": "candidate"}}}
     assert m16_gate.decide(GATE, base, own_weights, byte_unchanged=False)["label"] == "NOT_TOO_WEAK"
     changed = [
@@ -185,3 +189,107 @@ def test_candidate_binding_refuses_partial_runs(monkeypatch):
     ):
         with pytest.raises(click.ClickException):
             bind(bad)
+
+
+R7_FIXTURE = Path(__file__).parents[2] / "post_training/identity_context_distill/testdata/tokenizer-export-r7.json"
+R7_PAIR = json.loads(R7_FIXTURE.read_bytes())
+
+
+def r7_metadata(tokenizer_config: str) -> dict[str, bytes]:
+    return {
+        "chat_template.jinja": base64.b64decode(R7_PAIR["source-chat_template.jinja"]),
+        "tokenizer.json": b"{}",
+        "tokenizer_config.json": base64.b64decode(R7_PAIR[f"{tokenizer_config}-tokenizer_config.json"]),
+        "generation_config.json": b"{}",
+    }
+
+
+def model_files(model: str, metadata: dict[str, bytes]) -> dict:
+    return {"model": model, "file_sha256": {n: hashlib.sha256(b).hexdigest() for n, b in metadata.items()}}
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [None, "embedded_template", "other_key", "extra_key", "missing_key", "null_template", "template_file"],
+)
+def test_preflight_accepts_only_the_identical_embedded_template(damage):
+    """The real r7 source/export tokenizer_config pair, with marten's six damage cases refused."""
+    base_bytes, cand_bytes = r7_metadata("source"), r7_metadata("export")
+    saved = json.loads(cand_bytes["tokenizer_config.json"])
+    if damage == "embedded_template":
+        saved["chat_template"] += " "
+    elif damage == "other_key":
+        saved["bos_token"] = "changed"
+    elif damage == "extra_key":
+        saved["unexpected"] = True
+    elif damage == "missing_key":
+        del saved["bos_token"]
+    elif damage == "null_template":
+        saved["chat_template"] = None
+    elif damage == "template_file":
+        cand_bytes["chat_template.jinja"] = b"changed"
+    if damage is not None:
+        cand_bytes["tokenizer_config.json"] = json.dumps(saved).encode()
+    baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
+    if damage is None:
+        accepted = m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
+        assert accepted == {
+            "accepted_metadata_additions": ["tokenizer_config.json.chat_template"],
+            "metadata_acceptance": {
+                "baseline_model": "s3://bucket/base",
+                "baseline_chat_template_sha256": baseline["file_sha256"]["chat_template.jinja"],
+                "accepted_tokenizer_config_sha256": candidate["file_sha256"]["tokenizer_config.json"],
+            },
+        }
+    else:
+        with pytest.raises(click.ClickException):
+            m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
+
+
+def test_preflight_keeps_raw_hashes_for_the_other_shared_files():
+    base_bytes = r7_metadata("source")
+    baseline = model_files("s3://bucket/base", base_bytes)
+    same = m16_gate_run.accept_candidate_metadata(baseline, baseline, base_bytes, base_bytes)
+    assert same["accepted_metadata_additions"] == []
+    for name in ("tokenizer.json", "generation_config.json"):
+        cand_bytes = {**r7_metadata("export"), name: b"{ }"}
+        with pytest.raises(click.ClickException, match=name):
+            m16_gate_run.accept_candidate_metadata(
+                baseline, model_files("s3://bucket/cand", cand_bytes), base_bytes, cand_bytes
+            )
+
+
+def test_existing_embedded_template_is_never_normalized():
+    base_bytes = {**r7_metadata("source"), "tokenizer_config.json": json.dumps({"chat_template": "embedded"}).encode()}
+    template = base_bytes["chat_template.jinja"].decode()
+    cand_bytes = {**base_bytes, "tokenizer_config.json": json.dumps({"chat_template": template}).encode()}
+    baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
+    with pytest.raises(click.ClickException, match="tokenizer_config"):
+        m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
+
+
+def test_decide_rechecks_the_recorded_metadata_acceptance():
+    base_bytes, cand_bytes = r7_metadata("source"), r7_metadata("export")
+    baseline, candidate = model_files("s3://bucket/base", base_bytes), model_files("s3://bucket/cand", cand_bytes)
+    accepted = m16_gate_run.accept_candidate_metadata(baseline, candidate, base_bytes, cand_bytes)
+    serve = {"serve_args": ["--dtype", "bfloat16"], "vllm": {"source_commit": "a"}, "engine_log_markers": {"m": True}}
+    base = {**BASE, "provenance": {**serve, **baseline}}
+    good = {**serve, **candidate, **accepted}
+    decision = m16_gate.decide(GATE, base, {**STRONG, "provenance": good}, byte_unchanged=False)
+    assert decision["accepted_metadata_additions"] == ["tokenizer_config.json.chat_template"]
+    files = good["file_sha256"]
+    acceptance = good["metadata_acceptance"]
+    refused = [
+        {k: v for k, v in good.items() if k != "accepted_metadata_additions"},
+        {**good, "accepted_metadata_additions": ["tokenizer.json.extra"]},
+        {**good, "accepted_metadata_additions": ["tokenizer_config.json.chat_template", "tokenizer.json.extra"]},
+        {k: v for k, v in good.items() if k != "metadata_acceptance"},
+        {**good, "file_sha256": {**files, "tokenizer_config.json": "other"}},
+        {**good, "metadata_acceptance": {**acceptance, "baseline_chat_template_sha256": "other"}},
+        {**good, "metadata_acceptance": {**acceptance, "baseline_model": "s3://bucket/other"}},
+        {**good, "file_sha256": {**files, "generation_config.json": "other"}},
+        {**good, "accepted_metadata_additions": []},
+    ]
+    for provenance in refused:
+        with pytest.raises(ValueError):
+            m16_gate.decide(GATE, base, {**STRONG, "provenance": provenance}, byte_unchanged=False)

@@ -8,8 +8,10 @@
 - candidate: ``<run root>/sft-result.json`` must report ``completed_updates == 16``, a native checkpoint
   and ``hf_path == <run root>/hf/step-15``; its ``trained-precision-audit.json`` hash is recorded;
 - both arms: metadata file hashes (the baseline's must equal the LR0 source hashes; the candidate's
-  template, tokenizer and generation config must equal the baseline's), shard sizes and ETags, and
-  every safetensors header: 502 tensors, the 26 ``mlp.router.bias`` F32 and the other 476 BF16.
+  template, tokenizer and generation config must equal the baseline's, except that ``tokenizer_config.json``
+  may carry the one addition the SFT export audit accepts, an embedded copy of the baseline
+  ``chat_template.jinja``; see ``accept_candidate_metadata``), shard sizes and ETags, and every
+  safetensors header: 502 tensors, the 26 ``mlp.router.bias`` F32 and the other 476 BF16.
 
 ``run`` repeats the preflight, checks for an idle whole H100 node on cw-rno2a, submits the serve in
 the production band with the fixed SERVE_ARGS, waits for the endpoint, writes the capability to an
@@ -24,6 +26,7 @@ import os
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -38,6 +41,7 @@ from transformers import AutoTokenizer
 
 from experiments.interp.snowball_identity import identity_eval as shared
 from experiments.interp.snowball_identity import m16_gate
+from experiments.post_training.identity_context_distill.precision_source_audit import check_export_auxiliary_metadata
 
 BASELINE_MODEL = "s3://marin-rno2a/marin/models/marin-snowball-67b-a2b-v0.1-adc0078a"
 BASELINE_REVISION = "adc0078a19a4383bc998fcdb43867b3360baf5f3"
@@ -137,8 +141,10 @@ def bind_candidate(run_root: str) -> dict:
     }
 
 
-def model_receipt(model: str) -> dict:
-    files = {name: hashlib.sha256(read(f"{model}/{name}")).hexdigest() for name in BASELINE_FILE_HASHES}
+def model_receipt(model: str) -> tuple[dict, dict[str, bytes]]:
+    """The model's receipt, and the metadata bytes its file hashes were computed from."""
+    metadata = {name: read(f"{model}/{name}") for name in BASELINE_FILE_HASHES}
+    files = {name: hashlib.sha256(data).hexdigest() for name, data in metadata.items()}
     index = json.loads(read(f"{model}/model.safetensors.index.json"))
     fs, root = filesystem_for(model)
     shards = {}
@@ -158,11 +164,50 @@ def model_receipt(model: str) -> dict:
         "file_sha256": files,
         "shards": shards,
         "header_dtypes": {"tensors": len(dtypes), "router_bias_F32": len(biases), "BF16": len(others)},
+    }, metadata
+
+
+def accept_candidate_metadata(
+    baseline: dict, candidate: dict, baseline_bytes: dict[str, bytes], candidate_bytes: dict[str, bytes]
+) -> dict:
+    """SAME_AS_BASELINE files must be byte-identical, except one addition the SFT export audit accepts.
+
+    Tokenizer saving may embed the source ``chat_template.jinja`` in ``tokenizer_config.json``. A candidate whose
+    only differing file is ``tokenizer_config.json`` passes when ``check_export_auxiliary_metadata`` accepts it
+    against the baseline with exactly that addition. The check runs on local copies of the bytes hashed in the two
+    receipts, so it reads the same routed objects. Returns the provenance fields that ``decide`` re-checks.
+    """
+    differ = [name for name in SAME_AS_BASELINE if candidate["file_sha256"][name] != baseline["file_sha256"][name]]
+    raw_only = [name for name in differ if name != "tokenizer_config.json"]
+    if raw_only:
+        raise click.ClickException(f"Candidate {raw_only[0]} differs from the baseline")
+    additions: list[str] = []
+    if differ:
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = {}
+            for arm, files in (("baseline", baseline_bytes), ("candidate", candidate_bytes)):
+                roots[arm] = Path(tmp) / arm
+                roots[arm].mkdir()
+                for name in SAME_AS_BASELINE:
+                    (roots[arm] / name).write_bytes(files[name])
+            try:
+                additions = check_export_auxiliary_metadata(str(roots["baseline"]), str(roots["candidate"]))
+            except ValueError as e:
+                raise click.ClickException(f"Candidate metadata refused: {e}") from None
+        if additions != [m16_gate.TEMPLATE_ADDITION]:
+            raise click.ClickException("Candidate tokenizer_config.json differs from the baseline")
+    return {
+        "accepted_metadata_additions": additions,
+        "metadata_acceptance": {
+            "baseline_model": baseline["model"],
+            "baseline_chat_template_sha256": baseline["file_sha256"]["chat_template.jinja"],
+            "accepted_tokenizer_config_sha256": candidate["file_sha256"]["tokenizer_config.json"],
+        },
     }
 
 
 def preflight_arm(arm: str, run_root: str | None) -> dict:
-    baseline = model_receipt(BASELINE_MODEL)
+    baseline, baseline_bytes = model_receipt(BASELINE_MODEL)
     if baseline["file_sha256"] != BASELINE_FILE_HASHES:
         raise click.ClickException("Baseline mirror metadata differs from the LR0 source hashes")
     if arm == "baseline":
@@ -170,11 +215,9 @@ def preflight_arm(arm: str, run_root: str | None) -> dict:
     if run_root is None:
         raise click.ClickException("--run-root is required for the candidate arm")
     binding = bind_candidate(run_root.rstrip("/"))
-    candidate = model_receipt(binding["hf_path"])
-    for name in SAME_AS_BASELINE:
-        if candidate["file_sha256"][name] != baseline["file_sha256"][name]:
-            raise click.ClickException(f"Candidate {name} differs from the baseline")
-    return {"arm": arm, "binding": binding, **candidate, "vllm": VLLM, "serve_args": SERVE_ARGS}
+    candidate, candidate_bytes = model_receipt(binding["hf_path"])
+    accepted = accept_candidate_metadata(baseline, candidate, baseline_bytes, candidate_bytes)
+    return {"arm": arm, "binding": binding, **candidate, **accepted, "vllm": VLLM, "serve_args": SERVE_ARGS}
 
 
 def idle_whole_h100_nodes() -> int:
