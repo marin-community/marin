@@ -2812,7 +2812,6 @@ class RayPPOTrainer:
 
         reference_scores = None
         action_log_probs = None
-        values = None
 
         # calculate ref log probs
         if self.ref_model is not None:
