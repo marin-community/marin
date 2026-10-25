@@ -143,6 +143,7 @@ def test_frozen_snowball_biases_survive_update_and_mixed_dtype_hf_export(tmp_pat
         max_seq_len=8,
         sliding_window=4,
         attention_implementation="reference",
+        reference_checkpoint=None,
         tokenizer=local_gpt2_tokenizer_path,
     )
     overrides = {f"model.layers.{layer}.mlp.router.bias": "float32" for layer in range(26)}
@@ -155,7 +156,7 @@ def test_frozen_snowball_biases_survive_update_and_mixed_dtype_hf_export(tmp_pat
             tuple(jnp.array([0.1234567, -0.2345678], jnp.float32) for _ in range(26)),
         )
         original = to_torch_compatible_state_dict(model)
-        converter = dataclasses.replace(config.hf_checkpoint_converter(), reference_checkpoint=None)
+        converter = config.hf_checkpoint_converter()
         source_path = str(tmp_path / "base")
         converter.save_pretrained(
             model,
@@ -165,7 +166,7 @@ def test_frozen_snowball_biases_survive_update_and_mixed_dtype_hf_export(tmp_pat
             dtype=jnp.bfloat16,
             dtype_overrides=overrides,
         )
-        source_converter = dataclasses.replace(converter, reference_checkpoint=RepoRef(source_path))
+        source_converter = converter.replaced(reference_checkpoint=RepoRef(source_path))
         trainer_config = TrainerConfig(
             id="native-frozen-storage",
             mp=jmp.get_policy("p=f32,c=bf16"),
