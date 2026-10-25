@@ -292,6 +292,19 @@ def test_snowball_load_pretrained_machinery_is_exact():
     assert np.array_equal(src_logits, loaded_logits), "load_pretrained machinery changed logits"
 
 
+def test_snowball_moe_capacity_is_a_runtime_setting():
+    """The capacity reaches every expert MLP, is not exported to HF metadata, and must be positive."""
+    cfg = _tiny_config(moe_capacity_factor=4.0)
+    with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):
+        model = SnowballLMHeadModel.init(Axis("vocab", cfg.vocab_size), cfg, key=jax.random.key(3))
+    assert {block.mlp.expert_mlp.capacity_factor for block in model.transformer.blocks} == {4.0}
+    hf = cfg.to_hf_config(cfg.vocab_size).to_dict()
+    assert "moe_capacity_factor" not in hf and "capacity_factor" not in hf
+    assert SnowballConfig.from_hf_config(cfg.to_hf_config(cfg.vocab_size)).moe_capacity_factor == 1.0
+    with pytest.raises(ValueError, match="moe_capacity_factor"):
+        _tiny_config(moe_capacity_factor=0.0)
+
+
 def test_snowball_forward_shapes_and_finite():
     cfg = _tiny_config()
     with jax.set_mesh(compact_grug_mesh(expert_axis_size=1)):

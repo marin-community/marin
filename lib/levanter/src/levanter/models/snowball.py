@@ -139,7 +139,6 @@ _GATED_NORM_RANK = 128
 # June recipe: every _LONG_ATTENTION_INTERVAL-th layer and the last layer run full-causal attention.
 _LONG_ATTENTION_INTERVAL = 4
 _ROUTING_RENORM_SUM = 2.5
-_EP_CAPACITY_FACTOR = 1.0
 _QK_RMS_NORM_EPS = 1e-6  # q/k rms_norm uses the function default 1e-6, NOT layer_norm_eps
 # June 67B qk_mult (YaRN mscale 1.3*(0.1*ln(65536/8192)+1)); used as the field default and the
 # from_hf_config fallback so the two never drift. Real grug_moe exports always carry qk_mult.
@@ -229,6 +228,10 @@ class SnowballConfig(HFCompatConfig):
     moe_implementation: Optional[MoeImplementation] = None
     router_dot_fp32: bool = False
     """Upcast compute-view router operands before the dot; does not change storage or HF metadata."""
+    moe_capacity_factor: float = 1.0
+    """Expert-parallel capacity: each expert shard keeps at most ``factor x assignments / shards`` routed
+    assignments and silently drops the rest. At the expert-axis size it covers every assignment (dropless). A
+    runtime knob like ``router_dot_fp32``: not exported in HF metadata."""
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -238,6 +241,8 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError("num_heads must be divisible by num_kv_heads for grouped-query attention")
         if self.num_experts_per_token > self.num_experts:
             raise ValueError("num_experts_per_token must be <= num_experts")
+        if not self.moe_capacity_factor > 0:
+            raise ValueError(f"moe_capacity_factor must be positive, got {self.moe_capacity_factor}")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
         if self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
@@ -616,7 +621,7 @@ class SnowballMoEMLP(eqx.Module):
                 key=k_expert,
                 implementation=cfg.moe_implementation,
                 activation=ActivationFunctionEnum.silu,
-                capacity_factor=_EP_CAPACITY_FACTOR,
+                capacity_factor=cfg.moe_capacity_factor,
                 pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
             ),
             cfg=cfg,

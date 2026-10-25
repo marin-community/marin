@@ -24,6 +24,7 @@ def inputs():
     config_bytes = json.dumps(source["source_config"]).encode()
     generation_bytes = json.dumps(source["source_generation_config"]).encode()
     config = identity_sft_config(
+        moe_capacity_factor=4.0,
         dataset_uri="synthetic",
         cache_uri="cache",
         output_uri="s3://marin-rno2a/fixture",
@@ -65,6 +66,10 @@ def test_measured_dot_policy_accepts_runtime_flag_without_changing_native_metada
     assert receipt["source_metadata"]["schema_version"] == 2
     assert receipt["source_metadata"]["model_config"]["router_dot_fp32"] is False
     assert receipt["runtime_model_config"]["router_dot_fp32"] is True
+    assert receipt["schema_version"] == 3
+    assert receipt["moe_capacity"] == {"factor": 4.0, "expert_axis": 4}
+    assert receipt["runtime_model_config"]["moe_capacity_factor"] == 4.0
+    assert receipt["source_metadata"]["model_config"]["moe_capacity_factor"] == 1.0
     assert receipt["native_export_config_overrides"] == config.adapter.hf_config_overrides
     assert source == before and json.loads(args["config_bytes"]) == before
     check_runtime_config(runtime, source)
@@ -100,3 +105,19 @@ def test_runtime_flag_does_not_waive_scaling_or_master_precision_policy():
         check_runtime_config(
             replace(runtime, trainer=replace(runtime.trainer, compute_dtype_overrides={"router": "float32"})), source
         )
+
+
+def test_runtime_recipe_requires_a_dropless_moe():
+    config, args = inputs()
+    runtime, receipt = configure_precision_runtime(config, **args)
+    source = json.loads(args["config_bytes"])
+    assert isinstance(runtime.model, SnowballConfig)
+    with pytest.raises(ValueError, match="dropless"):
+        check_runtime_config(replace(runtime, model=replace(runtime.model, moe_capacity_factor=1.0)), source)
+    with pytest.raises(ValueError, match="dropless"):
+        configure_precision_runtime(replace(config, model=replace(config.model, moe_capacity_factor=1.0)), **args)
+    changed = deepcopy(receipt)
+    changed["moe_capacity"]["factor"] = 1.0
+    binding = {k: args[k] for k in ("config_bytes", "generation_bytes", "rounding_bytes")}
+    with pytest.raises(ValueError, match="Runtime recipe"):
+        check_precision_runtime_receipt(runtime, changed, **binding)
