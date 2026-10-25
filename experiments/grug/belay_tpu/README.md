@@ -22,6 +22,17 @@ continuous training and a restored replay. It does not restore an upstream
 checkpoint artifact.
 The CPU backend is required by the native data shuffler.
 
+The TPU adapter enables `attn_res_remat_attention`: each attention branch is
+recomputed during backward instead of retaining its intermediate tensors.
+This adds one attention-branch forward per layer and preserves its computation.
+The update diagnostic first compares loss and all gradients with attention
+rematerialization enabled versus disabled on a reduced L6/d64/head128,
+16-expert/top10, B128/S128 FP32 fixture. This fixture retains
+KDA, MLA, Inkling, AttnRes and MoE, but does not establish full-shape parity.
+After that check passes, the diagnostic attempts a complete update on the original
+d512/B128/S4096 workload. It saves lowered MLIR before compilation and logs memory
+analysis when compilation succeeds.
+
 The full replication entrypoint is
 `python -m experiments.grug.belay_tpu.belay_ckpt1_tpu`. Its `--run` flag starts
 the original full schedule; `--profile-start-step 100 --profile-steps 10` enables
@@ -49,7 +60,11 @@ usage and memory limits are saved as `useful-mfu-rankN.jsonl` under `IRIS_OUTPUT
 Window metrics also go to W&B. The launcher uses one process per TPU host.
 These measurement and packed-document checks have not yet run on TPU.
 
-TPU operator parity, full updates, checkpoint continuation, the complete training
-run and the target of over 20% useful-model MFU against physical BF16 peak are
-unvalidated for this variant. Evidence and the MFU definition are tracked in
+The Muon port matched the source per-matrix `_zeropower_via_newtonschulz_local`
+reference exactly on three matrix fixtures
+on all eight v4-64 processes. The following full-update compilation failed:
+temporary buffers required 38.89G against 30.75G available HBM. The attention
+rematerialization check, full updates, checkpoint continuation, the complete
+training run and the target of over 20% useful-model MFU remain unvalidated.
+Evidence and the MFU definition are tracked in
 [research issue 253](https://github.com/WhenWen/astra-d8-research/issues/253).

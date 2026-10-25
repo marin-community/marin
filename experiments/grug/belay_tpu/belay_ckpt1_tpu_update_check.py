@@ -28,6 +28,8 @@ from experiments.grug.belay_tpu import train
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import DATA_ROOT, build_config, validate_recipe, verified_tokenizer
 from experiments.grug.belay_tpu.belay_ckpt1_tpu_preflight import emit
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
+from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
+from experiments.grug.belay_tpu.remat_check import check_attention_remat
 from experiments.grug.fast_track.grugmuon_stacked import _zeropower_via_newtonschulz_local
 
 
@@ -113,6 +115,7 @@ def main():
     if jax.device_count() != chips or jax.default_backend() != "tpu":
         raise AssertionError("Unexpected TPU topology")
     check_muon_gram_port()
+    check_packed_kda()
     nonce = bytes(multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))).hex()
     checkpoint_path = f"{output_root}/attempt-{nonce}/checkpoint-step1"
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
@@ -126,6 +129,8 @@ def main():
     emit("full_update_check_start", rank=jax.process_index(), checkpoint_path=checkpoint_path)
 
     with set_mesh(mesh):
+        if config.model.attn_res_remat_attention:
+            emit("attention_remat_oracle_pass", **check_attention_remat(config, mesh))
 
         @jax.jit
         def initialize(key):
@@ -161,7 +166,11 @@ def main():
         step = train._flat_train_step(step_fn, tree)
         started = time.perf_counter()
         emit("full_update_compile_start", rank=jax.process_index())
-        compiled = step.lower(leaves, batch0).compile()
+        lowered = step.lower(leaves, batch0)
+        if jax.process_index() == 0:
+            (output / "train-step-before-optimization.mlir").write_text(str(lowered.compiler_ir()))
+        compiled = lowered.compile()
+        emit("full_update_memory_analysis", rank=jax.process_index(), analysis=str(compiled.memory_analysis()))
         emit("full_update_compiled", rank=jax.process_index(), seconds=time.perf_counter() - started)
 
         def advance(current, batch, index, restored=False):

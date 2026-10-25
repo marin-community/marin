@@ -66,7 +66,11 @@ class UsefulMfuWindows:
         if os.environ.get("BELAY_MEASURE_MFU") != "1":
             return None
         model = config.model
-        model_json = json.dumps(draccus.encode(model), sort_keys=True, separators=(",", ":"))
+        model_dict = draccus.encode(model)
+        # Rematerialization changes storage/extra execution, not useful model FLOPs.
+        # Its extra execution remains included in the measured duration.
+        model_dict["attn_res_remat_attention"] = False
+        model_json = json.dumps(model_dict, sort_keys=True, separators=(",", ":"))
         if (
             hashlib.sha256(model_json.encode()).hexdigest() != MODEL_CONFIG_SHA256
             or config.trainer.trainer.train_batch_size != 128

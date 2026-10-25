@@ -111,7 +111,12 @@ def build_config(
     )
     return dataclasses.replace(
         original,
-        model=dataclasses.replace(original.model, moe_ragged_chunks=16 // expert_axis_size),
+        model=dataclasses.replace(
+            original.model,
+            moe_ragged_chunks=16 // expert_axis_size,
+            # Recompute the identical attention branch in backward to fit v4 HBM.
+            attn_res_remat_attention=True,
+        ),
         data=dataclasses.replace(original.data, tokenizer=tokenizer),
         # EP8/chunks2 and EP16/chunks1 retain the same sixteen capacity pools
         # of 24 experts and global token order within each expert.
