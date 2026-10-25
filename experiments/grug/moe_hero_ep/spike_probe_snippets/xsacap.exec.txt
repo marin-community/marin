@@ -1,0 +1,62 @@
+# XSA statistics per layer for rows ROWS at all positions: |y| (attention output), |v|, |z| = |y - proj_v y|,
+# cos(y, v), and head-gate value. Forward only, hero kernels. Inputs: STEP, RACK, ROWS, HOT, TAG.
+import inspect, textwrap
+from jax.sharding import get_abstract_mesh, reshard
+from experiments.grug.moe_hero_ep import model as M
+_orig = M.CausalSelfAttention.__call__
+src = textwrap.dedent(inspect.getsource(_orig))
+OLD = "attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v"
+NEW = (OLD + "\n    _y = attn_out_pre.astype(jnp.float32); _v = aligned_v.astype(jnp.float32); _z = attn_out.astype(jnp.float32)"
+       "\n    _XS = (jnp.sqrt(jnp.sum(_y * _y, -1)), jnp.sqrt(jnp.sum(_v * _v, -1)), jnp.sqrt(jnp.sum(_z * _z, -1)),"
+       " jnp.sum(_y * _v, -1) / (jnp.sqrt(jnp.sum(_y * _y, -1) * jnp.sum(_v * _v, -1)) + 1e-12))")
+src = src.replace("dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)", "attn_out_pre = attn_out\n    dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)")
+src = src.replace(OLD, NEW)
+src = src.replace("attn_out = gate * attn_out", "attn_out = gate * attn_out\n    _G = gate[..., 0]")
+ret = 'return jnp.einsum("bsh,hd->bsd", attn_out, self.w_o, out_sharding=P(_BATCH_AXES, residual_seq_axis, None))'
+assert ret in src
+src = src.replace(ret, ret.replace("return ", "return (") + ", _XS, _G)")
+ns = dict(M.__dict__); exec(src, ns); attn_with_stats = ns["__call__"]
+rows_arr = jnp.asarray(ROWS); hot_arr = jnp.asarray(HOT)
+
+@jax.jit
+def _capture(params, pending, batch):
+    m = probe.mp.cast_to_compute(M.apply_qb_betas(params, pending))
+    cfg = m.config
+    hidden = M._embedding_gather(m.token_embed, batch.tokens)
+    hidden = m.embed_gated_norm(m.embed_norm(hidden))
+    seg = None
+    if batch.attn_mask.segment_ids is not None:
+        q_ = M._batch_reshard(batch.attn_mask.segment_ids[0]); seg = (q_, q_)
+    short_mask = M.AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=seg)
+    long_mask = M.AttentionMask(is_causal=True, sliding_window=None, segment_ids=seg)
+    B, S = hidden.shape[0], hidden.shape[1]
+    long_lb, valid = M.fa4_cute_segment_bounds(long_mask, batch_size=B, seq_len=S, sliding_window=None)
+    short_lb, _ = M.fa4_cute_segment_bounds(short_mask, batch_size=B, seq_len=S, sliding_window=cfg.sliding_window)
+    spec = P(M._BATCH_AXES, M._seq_axis(get_abstract_mesh()))
+    long_lb, short_lb, valid = reshard(long_lb, spec), reshard(short_lb, spec), reshard(valid, spec)
+    schedule = M._long_layer_schedule(cfg.num_layers, cfg.global_every)
+    onehot = jax.nn.one_hot(rows_arr, B, dtype=jnp.float32)
+    pick = lambda x: jnp.einsum("rb,bsh->rsh", onehot, x.astype(jnp.float32), out_sharding=P())
+
+    def body(h, xs):
+        layer, use_long = xs
+        use_long = jnp.asarray(use_long, dtype=jnp.bool_)
+        mask = long_mask.with_fa4_bounds(jnp.where(use_long, long_lb, short_lb), valid)
+        attn_in = layer.attn_gated_norm(layer.rms_attn(h))
+        _, (yn, vn, zn, cos), g = attn_with_stats(layer.attn, attn_in, mask, disable_rope=use_long, is_global=use_long)
+        yn, vn, zn, cos, g = (pick(t) for t in (yn, vn, zn, cos, g))
+        ratio = zn / (yn + 1e-12)
+        out, _ = layer(h, mask, use_long, use_long)
+        st = {"ratio_min_head_hot": jnp.min(ratio, -1)[:, hot_arr], "ratio_mean": jnp.mean(ratio, (1, 2)),
+              "ratio_min": jnp.min(ratio, (1, 2)), "frac_ratio_lt_0p05": jnp.mean((ratio < 0.05).astype(jnp.float32), (1, 2)),
+              "cos_absmax_hot": jnp.max(jnp.abs(cos), -1)[:, hot_arr], "y_norm_hot": jnp.mean(yn, -1)[:, hot_arr],
+              "v_norm_hot": jnp.mean(vn, -1)[:, hot_arr], "z_norm_hot": jnp.mean(zn, -1)[:, hot_arr],
+              "gate_hot": jnp.mean(g, -1)[:, hot_arr], "ratio_tokens_min_head": jnp.min(ratio, -1)}
+        return out, st
+
+    _, st = jax.lax.scan(body, hidden, xs=(m.stacked_blocks.stacked, schedule))
+    return st
+
+st = {k: np.asarray(jax.device_get(v)) for k, v in _capture(probe.params, probe.pending_qb_betas, probe.batch(STEP, RACK)).items()}
+runner.write_npz(f"xsacap-{TAG}", st)
+result[TAG] = {k: v.tolist() for k, v in st.items() if k != "ratio_tokens_min_head"}

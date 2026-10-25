@@ -1,0 +1,39 @@
+# Cut the attention GatedNorm gate's gradient only in a chosen set of layers (forward unchanged).
+# Inputs: STEP, RACK, SEQ, GROUPS (dict name -> list of layers to cut).
+import inspect, re, textwrap
+from experiments.grug.moe_hero_ep import model as M
+orig = {"block": M.Block.__call__, "tf": M.Transformer.__call__}
+FLAG = [None]
+
+def gn_mixed(gn, x):
+    gate_hidden = jax.nn.silu(jnp.einsum("...d,dr->...r", x, gn.w_down))
+    gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, gn.w_up)).astype(x.dtype)
+    keep = FLAG[0].astype(x.dtype)
+    return x * (jax.lax.stop_gradient(gate) + keep * (gate - jax.lax.stop_gradient(gate)))
+
+def patched(fn, reps, extra):
+    src = textwrap.dedent(inspect.getsource(fn))
+    for a, b in reps:
+        assert a in src, a; src = src.replace(a, b)
+    ns = dict(M.__dict__); ns.update(extra); exec(src, ns); return ns["__call__"]
+
+blk = patched(orig["block"], [("attn_in = self.attn_gated_norm(self.rms_attn(x))", "attn_in = _GN_MIX(self.attn_gated_norm, self.rms_attn(x))")], {"_GN_MIX": gn_mixed})
+out = {}
+try:
+    for name, cut in GROUPS.items():
+        keep = np.ones((48,), np.float32); keep[list(cut)] = 0.0
+        keep_arr = jnp.asarray(keep)
+        tf = patched(orig["tf"], [
+            ("layer, layer_use_long_mask = scan_inputs", "layer, layer_use_long_mask, _keep = scan_inputs\n        _FLAG[0] = _keep"),
+            ("xs=(self.stacked_blocks.stacked, mask_schedule)", "xs=(self.stacked_blocks.stacked, mask_schedule, _KEEP)"),
+        ], {"_FLAG": FLAG, "_KEEP": keep_arr})
+        M.Block.__call__ = blk; M.Transformer.__call__ = tf; jax.clear_caches()
+        try:
+            loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+            n = probe.norms(g, 1.0); del g
+            out[name] = {"cut": list(cut), "loss": loss, "grad_total": n["grad/norm/total"], "embed": n["grad/norm/token_embed"]}
+        except Exception as exc:
+            out[name] = {"error": repr(exc)[:800]}
+finally:
+    M.Block.__call__ = orig["block"]; M.Transformer.__call__ = orig["tf"]; jax.clear_caches()
+result.update(out)

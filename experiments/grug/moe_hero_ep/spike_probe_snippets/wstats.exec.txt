@@ -1,0 +1,36 @@
+# Weight statistics per layer for W_q, W_k, W_v (+ rms_attn weight, qk_mult). Writes result keyed by TAG.
+from jax.sharding import reshard
+st = probe.params.stacked_blocks.stacked
+cfg = probe.params.config
+H = cfg.inferred_head_dim
+
+@jax.jit
+def _svals(w):
+    w = reshard(w, P()).astype(jnp.float32)
+    return jnp.linalg.svd(w, compute_uv=False)
+
+@jax.jit
+def _headnorms(w):
+    w = reshard(w, P()).astype(jnp.float32)
+    d, nh = w.shape
+    return jnp.sqrt(jnp.sum(jnp.square(w.reshape(d, nh // H, H)), axis=(0, 2)))
+
+out = {"qk_mult": float(cfg.qk_mult), "qk_mult_long_scale": float(cfg.qk_mult_long_scale), "initializer_std": float(cfg.initializer_std)}
+for name in ("w_q", "w_k", "w_v"):
+    W = getattr(st.attn, name)
+    rows = []
+    for l in range(W.shape[0]):
+        sv = np.asarray(jax.device_get(_svals(W[l])))
+        hn = np.asarray(jax.device_get(_headnorms(W[l])))
+        fro = float(np.sqrt(np.sum(sv ** 2)))
+        rows.append({"fro": fro, "spec": float(sv[0]), "sv_top8": sv[:8].tolist(), "sv_p50": float(np.median(sv)),
+                     "eff_rank": float(fro ** 2 / sv[0] ** 2), "stable_rank_frac": float(fro ** 2 / sv[0] ** 2 / len(sv)),
+                     "head_norm_min": float(hn.min()), "head_norm_med": float(np.median(hn)), "head_norm_max": float(hn.max()),
+                     "shape": list(W.shape[1:])})
+    out[name] = rows
+rw = np.asarray(jax.device_get(reshard(st.rms_attn.weight, P()))).astype(np.float32)
+out["rms_attn_weight"] = [{"rms": float(np.sqrt(np.mean(r ** 2))), "mean": float(r.mean()), "absmax": float(np.abs(r).max())} for r in rw]
+rm = np.asarray(jax.device_get(reshard(st.rms_mlp.weight, P()))).astype(np.float32)
+out["rms_mlp_weight"] = [{"rms": float(np.sqrt(np.mean(r ** 2)))} for r in rm]
+result[TAG] = out
+result["restored_step"] = probe.restored_step

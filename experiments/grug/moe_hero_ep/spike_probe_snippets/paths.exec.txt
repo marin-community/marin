@@ -1,0 +1,48 @@
+# Forward-preserving backward-path ablations: stop_gradient on one factor at a time. The loss must stay
+# bitwise equal to the baseline; the gradient shows which path carries the amplification. Inputs: STEP,RACK,SEQ.
+import inspect, re, textwrap
+from experiments.grug.moe_hero_ep import model as M
+orig = {"rms_norm": M.rms_norm, "attn": M.CausalSelfAttention.__call__, "moe": M.MoEMLP.__call__,
+        "gated": M.GatedNorm.__call__, "rmsmod": M.RMSNorm.__call__}
+
+def rms_norm_sg(x, eps=1e-6):
+    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    return (x * jax.lax.stop_gradient(jax.lax.rsqrt(variance + eps))).astype(x.dtype)
+
+def patched(fn, old, new):
+    src = textwrap.dedent(inspect.getsource(fn))
+    assert old in src, old
+    ns = dict(M.__dict__); exec(src.replace(old, new), ns)
+    return ns["__call__"]
+
+XSA_OLD = "attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v"
+variants = {
+    "baseline": {},
+    "qk_rmsnorm_scale_sg": {"rms_norm": rms_norm_sg},
+    "xsa_coef_sg": {"attn": patched(orig["attn"], XSA_OLD, "attn_out = attn_out - jax.lax.stop_gradient(dot / (v_norm_sq + 1e-6)) * aligned_v")},
+    "xsa_whole_sg": {"attn": patched(orig["attn"], XSA_OLD, "attn_out = attn_out - jax.lax.stop_gradient((dot / (v_norm_sq + 1e-6)) * aligned_v)")},
+    "head_gate_sg": {"attn": patched(orig["attn"], "attn_out = gate * attn_out", "attn_out = jax.lax.stop_gradient(gate) * attn_out")},
+    "moe_combine_sg": {"moe": patched(orig["moe"], "combine_weights = combine_weights_f.astype(x.dtype)", "combine_weights = jax.lax.stop_gradient(combine_weights_f.astype(x.dtype))")},
+    "gatednorm_gate_sg": {"gated": patched(orig["gated"], "return x * gate.astype(x.dtype)", "return x * jax.lax.stop_gradient(gate.astype(x.dtype))")},
+    "block_rmsnorm_scale_sg": {"rmsmod": patched(orig["rmsmod"], "normed = x * jax.lax.rsqrt(variance + self.eps)", "normed = x * jax.lax.stop_gradient(jax.lax.rsqrt(variance + self.eps))")},
+}
+
+def apply(over):
+    M.rms_norm = over.get("rms_norm", orig["rms_norm"])
+    M.CausalSelfAttention.__call__ = over.get("attn", orig["attn"])
+    M.MoEMLP.__call__ = over.get("moe", orig["moe"])
+    M.GatedNorm.__call__ = over.get("gated", orig["gated"])
+    M.RMSNorm.__call__ = over.get("rmsmod", orig["rmsmod"])
+
+try:
+    for name, over in variants.items():
+        apply(over); jax.clear_caches()
+        try:
+            loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+            n = probe.norms(g, 1.0); del g
+            layers = [sum(v * v for k, v in n.items() if re.match(rf"grad/norm/stacked_blocks\.{l}\.", k)) ** 0.5 for l in range(48)]
+            result[name] = {"loss": loss, "grad_total": n["grad/norm/total"], "layers": layers, "embed": n["grad/norm/token_embed"]}
+        except Exception as exc:
+            result[name] = {"error": repr(exc)[:800]}
+finally:
+    apply({}); jax.clear_caches()

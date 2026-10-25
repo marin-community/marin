@@ -1,0 +1,110 @@
+# Per-layer decomposition of q = attn_in @ W_q for rows ROWS of (STEP, RACK) and positions HOT.
+# attn_in = attn_gated_norm(rms_attn(h)). Also k (after sconv), v, alignment of attn_in with W_q's
+# top singular directions, router selections at HOT, and per-token residual norms. Inputs: STEP, RACK, ROWS, HOT, TAG.
+from jax.sharding import get_abstract_mesh, reshard
+from experiments.grug.moe_hero_ep import model as M
+NTOP = 64
+
+@jax.jit
+def _svd_top(w):
+    w = reshard(w, P()).astype(jnp.float32)
+    u, s, _ = jnp.linalg.svd(w, full_matrices=False)
+    return s[0], jnp.sqrt(jnp.sum(s * s)), u[:, :NTOP]
+
+st = probe.params.stacked_blocks.stacked
+specs, fros, utop = [], [], []
+for l in range(st.attn.w_q.shape[0]):
+    a, b, c = _svd_top(st.attn.w_q[l]); specs.append(a); fros.append(b); utop.append(c)
+specs = jnp.stack(specs); fros = jnp.stack(fros); utop = jnp.stack(utop)
+rows_arr = jnp.asarray(ROWS); hot_arr = jnp.asarray(HOT)
+
+@jax.jit
+def _capture(params, pending, batch, specs, fros, utop):
+    m = probe.mp.cast_to_compute(M.apply_qb_betas(params, pending))
+    cfg = m.config
+    H = cfg.inferred_head_dim
+    hidden = M._embedding_gather(m.token_embed, batch.tokens)
+    hidden = m.embed_gated_norm(m.embed_norm(hidden))
+    seg = None
+    if batch.attn_mask.segment_ids is not None:
+        q_ = M._batch_reshard(batch.attn_mask.segment_ids[0]); seg = (q_, q_)
+    short_mask = M.AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=seg)
+    long_mask = M.AttentionMask(is_causal=True, sliding_window=None, segment_ids=seg)
+    B, S = hidden.shape[0], hidden.shape[1]
+    long_lb, valid = M.fa4_cute_segment_bounds(long_mask, batch_size=B, seq_len=S, sliding_window=None)
+    short_lb, _ = M.fa4_cute_segment_bounds(short_mask, batch_size=B, seq_len=S, sliding_window=cfg.sliding_window)
+    spec = P(M._BATCH_AXES, M._seq_axis(get_abstract_mesh()))
+    long_lb, short_lb, valid = reshard(long_lb, spec), reshard(short_lb, spec), reshard(valid, spec)
+    schedule = M._long_layer_schedule(cfg.num_layers, cfg.global_every)
+
+    onehot = jax.nn.one_hot(rows_arr, B, dtype=jnp.float32)
+
+    def pick(x):  # [B, S, D] -> [len(ROWS), S, D] replicated, via an exact one-hot contraction
+        return jnp.einsum("rb,bsd->rsd", onehot, x.astype(jnp.float32), out_sharding=P())
+
+    def rms(x):
+        x = x.astype(jnp.float32); return jnp.sqrt(jnp.mean(x * x, axis=-1))
+
+    def body(h, xs):
+        layer, use_long, spec_l, fro_l, u_l = xs
+        use_long = jnp.asarray(use_long, dtype=jnp.bool_)
+        lb = jnp.where(use_long, long_lb, short_lb)
+        mask = long_mask.with_fa4_bounds(lb, valid)
+        a = layer.attn
+        normed = layer.rms_attn(h)
+        attn_in = layer.attn_gated_norm(normed)
+        q = jnp.einsum("bsh,hd->bsd", attn_in, a.w_q)
+        k = jnp.einsum("bsh,hd->bsd", attn_in, a.w_k)
+        if a.sconv_k is not None:
+            k = a.sconv_k(k, None)
+        v = jnp.einsum("bsh,hd->bsd", attn_in, a.w_v)
+        hp, ap, np_, qp, kp, vp = (pick(t) for t in (h, attn_in, normed, q, k, v))
+        qh = qp.reshape(qp.shape[0], S, -1, H).astype(jnp.float32)
+        vh = vp.reshape(vp.shape[0], S, -1, H).astype(jnp.float32)
+        apf = ap.astype(jnp.float32)
+        xnorm = jnp.sqrt(jnp.sum(apf * apf, axis=-1))
+        qnorm = jnp.sqrt(jnp.sum(qp.astype(jnp.float32) ** 2, axis=-1))
+        align = qnorm / (xnorm * spec_l + 1e-12)
+        rand_ratio = qnorm / (xnorm * fro_l / jnp.sqrt(apf.shape[-1]) + 1e-12)
+        top_frac = jnp.sum(jnp.square(apf @ u_l), axis=-1) / (xnorm * xnorm + 1e-12)
+        gn = layer.attn_gated_norm
+        g_hidden = jax.nn.silu(jnp.einsum("rsd,dk->rsk", np_, reshard(gn.w_down, P(None, None)).astype(jnp.float32)))
+        gate_mean = jnp.mean(jax.nn.sigmoid(jnp.einsum("rsk,kd->rsd", g_hidden, reshard(gn.w_up, P(None, None)).astype(jnp.float32))), axis=-1)
+        # router selection at HOT positions
+        attn_out = a(attn_in, mask, disable_rope=use_long, is_global=use_long)
+        if layer.sconv_attn is not None:
+            attn_out = layer.sconv_attn(attn_out, None)
+        x1 = h + attn_out
+        mlp_in = layer.mlp_gated_norm(layer.rms_mlp(x1))
+        mp_ = pick(mlp_in)[:, hot_arr]
+        logits = jnp.einsum("rtd,de->rte", mp_, reshard(layer.mlp.router, P(None, None))).astype(jnp.float32)
+        biased = logits + jax.lax.stop_gradient(layer.mlp.router_bias)
+        topv, topi = jax.lax.top_k(biased, cfg.num_experts_per_token + 1)
+        cw = jax.nn.sigmoid(jnp.take_along_axis(logits, topi[..., :-1], axis=-1))
+        cw = cw * (2.5 / (jnp.sum(cw, axis=-1, keepdims=True) + 1e-9))
+        gap = topv[..., cfg.num_experts_per_token - 1] - topv[..., cfg.num_experts_per_token]
+        out, _ = layer(h, mask, use_long, use_long)
+        stats = {
+            "h_rms_mean": jnp.mean(rms(hp), axis=-1), "h_rms_hot": rms(hp)[:, hot_arr],
+            "normed_rms_mean": jnp.mean(rms(np_), axis=-1),
+            "attn_in_rms_mean": jnp.mean(rms(ap), axis=-1), "attn_in_rms_hot": rms(ap)[:, hot_arr],
+            "gate_mean_mean": jnp.mean(gate_mean, axis=-1), "gate_mean_hot": gate_mean[:, hot_arr],
+            "q_rms_mean": jnp.mean(rms(qh), axis=(1, 2)), "q_rms_hot": jnp.mean(rms(qh), axis=-1)[:, hot_arr],
+            "k_rms_mean": jnp.mean(rms(kp), axis=-1), "v_head_norm_mean": jnp.mean(jnp.sqrt(jnp.sum(vh * vh, axis=-1)), axis=(1, 2)),
+            "v_head_norm_hot_min": jnp.min(jnp.sqrt(jnp.sum(vh * vh, axis=-1)), axis=-1)[:, hot_arr],
+            "align_mean": jnp.mean(align, axis=-1), "align_hot": align[:, hot_arr],
+            "rand_ratio_mean": jnp.mean(rand_ratio, axis=-1), "top64_frac_mean": jnp.mean(top_frac, axis=-1), "top64_frac_hot": top_frac[:, hot_arr],
+            "router_sel_hot": topi[..., :-1], "router_cw_hot": cw, "router_gap_hot": gap,
+            "h_rms_tokens": rms(hp),
+            "h_hot": hp[:, hot_arr], "attn_out_hot": pick(attn_out)[:, hot_arr], "mlp_in_hot": mp_,
+        }
+        return out, stats
+
+    _, stats = jax.lax.scan(body, hidden, xs=(m.stacked_blocks.stacked, schedule, specs, fros, utop))
+    return stats
+
+stats = _capture(probe.params, probe.pending_qb_betas, probe.batch(STEP, RACK), specs, fros, utop)
+stats = {k: np.asarray(jax.device_get(v)) for k, v in stats.items()}
+runner.write_npz(f"decomp-{TAG}", stats)
+result[TAG] = {k: v.tolist() for k, v in stats.items() if k not in ("h_rms_tokens", "router_sel_hot", "router_cw_hot", "h_hot", "attn_out_hot", "mlp_in_hot")}
+result["w_q_spec"] = np.asarray(jax.device_get(specs)).tolist(); result["w_q_fro"] = np.asarray(jax.device_get(fros)).tolist()

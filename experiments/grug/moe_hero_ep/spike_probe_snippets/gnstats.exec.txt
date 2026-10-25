@@ -1,0 +1,57 @@
+# GatedNorm anatomy per layer (attn site) for rows ROWS: energy concentration of the RMSNorm output in its top
+# channels, the gate on those channels, and how much of the energy the gate passes. Inputs: STEP,RACK,ROWS,TAG.
+from jax.sharding import get_abstract_mesh, reshard
+from experiments.grug.moe_hero_ep import model as M
+rows_arr = jnp.asarray(ROWS)
+TOPC = 8
+
+@jax.jit
+def _capture(params, pending, batch):
+    m = probe.mp.cast_to_compute(M.apply_qb_betas(params, pending))
+    cfg = m.config
+    hidden = M._embedding_gather(m.token_embed, batch.tokens)
+    hidden = m.embed_gated_norm(m.embed_norm(hidden))
+    seg = None
+    if batch.attn_mask.segment_ids is not None:
+        q_ = M._batch_reshard(batch.attn_mask.segment_ids[0]); seg = (q_, q_)
+    short_mask = M.AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=seg)
+    long_mask = M.AttentionMask(is_causal=True, sliding_window=None, segment_ids=seg)
+    B, S = hidden.shape[0], hidden.shape[1]
+    long_lb, valid = M.fa4_cute_segment_bounds(long_mask, batch_size=B, seq_len=S, sliding_window=None)
+    short_lb, _ = M.fa4_cute_segment_bounds(short_mask, batch_size=B, seq_len=S, sliding_window=cfg.sliding_window)
+    spec = P(M._BATCH_AXES, M._seq_axis(get_abstract_mesh()))
+    long_lb, short_lb, valid = reshard(long_lb, spec), reshard(short_lb, spec), reshard(valid, spec)
+    schedule = M._long_layer_schedule(cfg.num_layers, cfg.global_every)
+    onehot = jax.nn.one_hot(rows_arr, B, dtype=jnp.float32)
+    pick = lambda x: jnp.einsum("rb,bsd->rsd", onehot, x.astype(jnp.float32), out_sharding=P())
+
+    def body(h, xs):
+        layer, use_long = xs
+        use_long = jnp.asarray(use_long, dtype=jnp.bool_)
+        mask = long_mask.with_fa4_bounds(jnp.where(use_long, long_lb, short_lb), valid)
+        n = pick(layer.rms_attn(h))                      # [R, S, D]
+        gn = layer.attn_gated_norm
+        a = jnp.einsum("rsk,kd->rsd", jax.nn.silu(jnp.einsum("rsd,dk->rsk", n, reshard(gn.w_down, P(None, None)).astype(jnp.float32))),
+                       reshard(gn.w_up, P(None, None)).astype(jnp.float32))
+        g = jax.nn.sigmoid(a)
+        e = n * n
+        tot = jnp.sum(e, -1)
+        mean_e = jnp.mean(e, axis=1)                     # [R, D] mean energy per channel over tokens
+        _, top = jax.lax.top_k(mean_e, TOPC)             # [R, TOPC] dominant channels
+        e_top = jnp.take_along_axis(e, jnp.broadcast_to(top[:, None, :], (e.shape[0], e.shape[1], TOPC)), -1)
+        g_top = jnp.take_along_axis(g, jnp.broadcast_to(top[:, None, :], (g.shape[0], g.shape[1], TOPC)), -1)
+        a_top = jnp.take_along_axis(a, jnp.broadcast_to(top[:, None, :], (a.shape[0], a.shape[1], TOPC)), -1)
+        passed = jnp.sum(e * g * g, -1) / (tot + 1e-12)
+        out, _ = layer(h, mask, use_long, use_long)
+        st = {"top_channels": top, "top8_energy_frac": jnp.mean(jnp.sum(e_top, -1) / (tot + 1e-12), 1),
+              "gate_top_mean": jnp.mean(g_top, 1), "gate_preact_top_mean": jnp.mean(a_top, 1),
+              "gate_mean_all": jnp.mean(g, (1, 2)), "energy_passed_frac": jnp.mean(passed, 1),
+              "slope_top_max": jnp.max(jnp.abs(n_top := jnp.take_along_axis(n, jnp.broadcast_to(top[:, None, :], (n.shape[0], n.shape[1], TOPC)), -1)) * g_top * (1 - g_top), (1,)),
+              "n_top_absmean": jnp.mean(jnp.abs(n_top), 1)}
+        return out, st
+
+    _, st = jax.lax.scan(body, hidden, xs=(m.stacked_blocks.stacked, schedule))
+    return st
+
+st = {k: np.asarray(jax.device_get(v)) for k, v in _capture(probe.params, probe.pending_qb_betas, probe.batch(STEP, RACK)).items()}
+result[TAG] = {k: v.tolist() for k, v in st.items()}

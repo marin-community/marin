@@ -1,0 +1,42 @@
+# Interpolate the forward state from exact (t=0) toward a fixed embedding-noise direction (t=1 is 1e-4 relative std)
+# and bisect the switch point. Records seq grad, loss and per-layer batch capacity-drop counts. Inputs: STEP,RACK,SEQ.
+import dataclasses
+base = probe.params
+emb = base.token_embed
+noise_key = jax.random.PRNGKey(7)
+
+@jax.jit
+def _perturb(e, t):
+    noise = jax.random.normal(noise_key, e.shape, jnp.float32)
+    return (e.astype(jnp.float32) + t * 1e-4 * jnp.std(e.astype(jnp.float32)) * noise).astype(e.dtype)
+
+DROP_KEYS = ("moe/dropped_assignments", "moe/receiver_dropped_assignments", "moe/sender_dropped_assignments")
+
+def run(t):
+    p = dataclasses.replace(base, token_embed=_perturb(emb, jnp.float32(t)))
+    loss, denom, metrics, g = probe.grad_fn(p, probe.pending_qb_betas, probe.batch(STEP, RACK), probe.seq_mask([SEQ]))
+    n = probe.norms(g, 1.0); del g
+    drops = {}
+    for k, v in metrics.items():
+        if any(k.startswith(d) for d in DROP_KEYS) or "overflow" in k or "dropped" in k:
+            try:
+                drops[k] = np.asarray(jax.device_get(v)).astype(np.int64).tolist()
+            except Exception:
+                pass
+    changed = int(jnp.sum(p.token_embed != emb))
+    del p
+    return {"t": t, "loss": float(loss), "grad_total": n["grad/norm/total"], "drops": drops, "embed_elems_changed": changed}
+
+pts = [run(t) for t in (0.0, 1e-3, 1e-2, 0.03, 0.1, 0.3, 1.0)]
+spike = lambda r: r["grad_total"] > 100
+lo = max((r for r in pts if spike(r)), key=lambda r: r["t"], default=None)
+hi = min((r for r in pts if not spike(r) and (lo is None or r["t"] > lo["t"])), key=lambda r: r["t"], default=None)
+bis = []
+if lo is not None and hi is not None:
+    a, b = lo["t"], hi["t"]
+    for _ in range(8):
+        mid = 0.5 * (a + b); r = run(mid); bis.append(r)
+        a, b = (mid, b) if spike(r) else (a, mid)
+    result["bracket"] = [a, b]
+probe.params = base
+result["grid"] = pts; result["bisect"] = bis

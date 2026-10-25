@@ -1,0 +1,14 @@
+# Set probe.params to the exact checkpoint state perturbed by t along the fixed noise direction (t=0 restores).
+import dataclasses
+if not hasattr(probe, "_base_params"):
+    probe._base_params = probe.params
+base = probe._base_params
+noise_key = jax.random.PRNGKey(7)
+
+@jax.jit
+def _perturb(e, t):
+    noise = jax.random.normal(noise_key, e.shape, jnp.float32)
+    return (e.astype(jnp.float32) + t * 1e-4 * jnp.std(e.astype(jnp.float32)) * noise).astype(e.dtype)
+
+probe.params = base if T == 0 else dataclasses.replace(base, token_embed=_perturb(base.token_embed, jnp.float32(T)))
+result["t"] = T

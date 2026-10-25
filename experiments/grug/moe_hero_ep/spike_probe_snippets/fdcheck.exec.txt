@@ -1,0 +1,46 @@
+# Finite-difference check: is the backward's huge gradient a real slope of the computed loss?
+# Moves token_embed along the normalized embedding gradient and along a random direction with the same
+# row support, and compares the loss change with the first-order prediction. Inputs: STEP, RACK, SEQ, T.
+import dataclasses
+from experiments.grug.moe_hero_ep.model import apply_qb_betas
+from experiments.grug.moe_hero_ep.train import _loss_and_grads
+if not hasattr(probe, "_base_params"):
+    probe._base_params = probe.params
+base = probe._base_params
+noise_key = jax.random.PRNGKey(7)
+
+@jax.jit
+def _perturb(e, t):
+    noise = jax.random.normal(noise_key, e.shape, jnp.float32)
+    return (e.astype(jnp.float32) + t * 1e-4 * jnp.std(e.astype(jnp.float32)) * noise).astype(e.dtype)
+
+params0 = base if T == 0 else dataclasses.replace(base, token_embed=_perturb(base.token_embed, jnp.float32(T)))
+mp = probe.mp
+
+@jax.jit
+def _loss(params, pending, batch, seq_mask):
+    qb = apply_qb_betas(params, pending)
+    weight = batch.loss_weight * seq_mask[:, None].astype(batch.loss_weight.dtype)
+    b = dataclasses.replace(batch, loss_weight=weight)
+    compute = mp.cast_to_compute(qb)
+    return compute.next_token_loss(b.tokens, b.loss_weight, mask=b.attn_mask, reduction="mean", logsumexp_weight=1e-4)
+
+batch = probe.batch(STEP, RACK); sm = probe.seq_mask([SEQ])
+loss0, denom, _, g = probe.grad_fn(params0, probe.pending_qb_betas, batch, sm)
+ge = g.token_embed.astype(jnp.float32); del g
+gnorm = float(jnp.sqrt(jnp.sum(ge * ge)))
+gdir = ge / gnorm
+rowmask = (jnp.sum(jnp.abs(ge), axis=1, keepdims=True) > 0).astype(jnp.float32)
+rnd = jax.random.normal(jax.random.PRNGKey(11), ge.shape, jnp.float32) * rowmask
+rdir = rnd / jnp.sqrt(jnp.sum(rnd * rnd))
+emb_std = float(jnp.std(base.token_embed.astype(jnp.float32)))
+l0 = float(_loss(params0, probe.pending_qb_betas, batch, sm))
+rows = []
+for eps in (1e-4, 3e-4, 1e-3, 3e-3, 1e-2):
+    for name, d in (("grad", gdir), ("random", rdir)):
+        for sgn in (-1.0, 1.0):
+            p = dataclasses.replace(params0, token_embed=(params0.token_embed.astype(jnp.float32) + sgn * eps * d).astype(params0.token_embed.dtype))
+            rows.append({"eps": eps, "dir": name, "sign": sgn, "dloss": float(_loss(p, probe.pending_qb_betas, batch, sm)) - l0})
+            del p
+result.update({"T": T, "loss_grad_fn": float(loss0), "loss_fn": l0, "embed_grad_norm": gnorm, "embed_std": emb_std,
+               "rows_touched": int(jnp.sum(rowmask)), "fd": rows})
