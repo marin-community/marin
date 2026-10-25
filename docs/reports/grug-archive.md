@@ -28,6 +28,14 @@ goes stale on the next commit.
 
 ## Experiments
 
+### grug-belay-tpu
+- Path: `experiments/grug/belay_tpu/`
+- Origin: `fast_track` at local commit `26921126e`, based on Ckpt 1 source `8415c3ce8411051c1e22bc13184c272b88ec2b6c`
+- Status: active
+- Purpose: reproduce Belay Ckpt 1 d512 on TPU with portable Newton–Schulz Gram products, then measure useful MFU.
+- Diff against `fast_track` at `26921126e`: `outputs/belay-tpu-diff/index.html`
+- Issue: https://github.com/WhenWen/astra-d8-research/issues/253
+
 ### grug-base-template
 - Path: `experiments/grug/base/`
 - Origin: base
