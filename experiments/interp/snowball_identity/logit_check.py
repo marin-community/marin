@@ -63,6 +63,14 @@ def write_json(path: str, value: dict) -> None:
     fs.pipe_file(local, json.dumps(value, indent=1, default=str).encode())
 
 
+def require_fresh_root(root: str) -> None:
+    """A launcher's run root must not exist, checked through the bucket-routed filesystem (``StoragePath`` cannot see
+    regional buckets from a submit host, so its ``exists`` is False there whatever the bucket holds)."""
+    fs, local = filesystem_for(root)
+    if fs.exists(local):
+        raise FileExistsError(f"{root} exists")
+
+
 def stored_sequences(positions_path: str) -> list[Sequence]:
     """The sequences of a stored ``positions.pt``, with its exact token ids, in stored order.
 

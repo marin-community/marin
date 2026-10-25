@@ -46,7 +46,7 @@ from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 
 from experiments.interp.snowball_identity.harness import SnowballHarness, import_grug, load_harness
-from experiments.interp.snowball_identity.logit_check import read, stored_sequences, write_json
+from experiments.interp.snowball_identity.logit_check import read, require_fresh_root, stored_sequences, write_json
 from experiments.interp.snowball_identity.moe_drop_diagnostic import BATCH, INPUTS, PAD_MULTIPLE, T310, gate_batches
 from experiments.interp.snowball_identity.route_proxy_check import K, agreement, margin_summary, routes_and_margins
 from experiments.interp.snowball_identity.routing import MATMUL_ENV
@@ -238,8 +238,7 @@ def main() -> None:
         return
     if dirty or args.expect_commit != head:
         raise ValueError("--run needs a clean tree at --expect-commit")
-    if StoragePath(args.root).exists():
-        raise FileExistsError(f"{args.root} exists")
+    require_fresh_root(args.root)
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
     environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)

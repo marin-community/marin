@@ -5,6 +5,9 @@
 
 import copy
 
+import pytest
+
+from experiments.interp.snowball_identity import logit_check
 from experiments.interp.snowball_identity.logit_check import GATE_GROUPS, parity_gate
 from experiments.interp.snowball_identity.routing import bias_exception_required, dot_exception_required, route_gate
 
@@ -95,3 +98,11 @@ def test_route_gate_fails_on_a_coverage_gap_and_leaves_route_differences_to_g1()
     assert route_gate(cross(ordered_agree=9), rounding(), None, False) == []
     assert route_gate(cross(positions=9, set_agree=9, ordered_agree=9), rounding(), None, False)
     assert route_gate(cross(0, 0, 0), rounding(positions=0), None, False)
+
+
+def test_require_fresh_root_refuses_an_existing_root(tmp_path):
+    logit_check.require_fresh_root(str(tmp_path / "absent"))
+    (tmp_path / "taken").mkdir()
+    (tmp_path / "taken" / "receipt.json").write_text("{}")
+    with pytest.raises(FileExistsError, match="taken exists"):
+        logit_check.require_fresh_root(str(tmp_path / "taken"))
