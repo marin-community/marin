@@ -10,6 +10,7 @@ the pinned #298 sequences, each layer's router input is captured once, in the na
 
 - ``native``: ``x.float() @ W.float()`` plus the FP32 bias, as in ``GrugMoeRouter.forward``;
 - ``bf16_bias``: the same logits plus ``bias.bfloat16()``: only the bias rounded;
+- ``bf16_logits``: ``(x.bfloat16() @ W.bfloat16())`` rounded to BF16, plus the FP32 bias: only the dot rounded;
 - ``bf16_logits_bias``: ``(x.bfloat16() @ W.bfloat16())`` rounded to BF16, plus the BF16 bias: the Levanter-like view.
 
 Selection is the top ``k`` of the biased logits (JAX tie rule, ``grug_moe.jax_top_k``); combine weights are the
@@ -26,7 +27,9 @@ Every position whose ordered ids differ is listed (up to ``MAX_CASES`` per varia
 The two pre-registered #310 routing rows (precision-preflight-preregistration-v1.md):
 
 - row 1, ``bias_exception_required``: any ``bf16_bias`` expert-set change requires keeping the 26 router biases in
-  FP32 in the compute view (``compute_dtype_overrides={"router_bias": "float32"}``);
+  FP32 in the compute view (``compute_dtype_overrides={"router_bias": "float32"}``); ``dot_exception_required``: any
+  ``bf16_logits`` (dot-only) expert-set change requires the amendment-v2 FP32 router dot, which Levanter does not
+  have yet, so ``route_gate`` fails until it exists;
 - row 2, ``route_gate``: fail-closed check of the cross-stack report (``compare_routes_cross_stack``). Any differing
   Levanter vs torch route, ordered or set, fails and is held for diagnosis, as do incomplete coverage and a bias
   override that does not match row 1.
@@ -48,7 +51,7 @@ from experiments.interp.snowball_identity.sequences import Sequence
 
 logger = logging.getLogger(__name__)
 
-VARIANTS = ("bf16_bias", "bf16_logits_bias")
+VARIANTS = ("bf16_bias", "bf16_logits", "bf16_logits_bias")
 MAX_CASES = 500
 """Differing positions listed per variant (all are counted)."""
 
@@ -69,7 +72,7 @@ def compare_routes(
 ) -> dict[str, dict[str, torch.Tensor]]:
     """Per variant and position: experts that differ from ``native``, the combine-weight change, the native margin.
 
-    ``rounded_logits`` (default: ``logits`` rounded to BF16) are the ``bf16_logits_bias`` variant's logits."""
+    ``rounded_logits`` (default: ``logits`` rounded to BF16) are the ``bf16_logits`` and ``bf16_logits_bias`` logits."""
     if rounded_logits is None:
         rounded_logits = logits.bfloat16().float()
     native, native_weights, margin = routes(logits, bias, k)
@@ -78,6 +81,7 @@ def compare_routes(
     results = {}
     for name, (variant_logits, variant_bias) in {
         "bf16_bias": (logits, bias16),
+        "bf16_logits": (rounded_logits, bias),
         "bf16_logits_bias": (rounded_logits, bias16),
     }.items():
         selected, weights, _ = routes(variant_logits, variant_bias, k)
@@ -283,6 +287,11 @@ def bias_exception_required(rounding: dict) -> bool:
     return rounding["totals"]["bf16_bias"]["positions_changed"] > 0
 
 
+def dot_exception_required(rounding: dict) -> bool:
+    """Row 1, amendment v2: whether rounding only the router dot (FP32 bias kept) changes any expert set."""
+    return rounding["totals"]["bf16_logits"]["positions_changed"] > 0
+
+
 def route_gate(cross: dict, rounding: dict, compute_dtype_overrides: dict | None) -> list[str]:
     """Row 2: every failure of a cross-stack report scored with ``compute_dtype_overrides``; empty is a pass.
 
@@ -293,6 +302,12 @@ def route_gate(cross: dict, rounding: dict, compute_dtype_overrides: dict | None
         failures.append(
             f"router_bias override {'missing' if not bias_fp32 else 'not triggered'}: row 1 has "
             f"{rounding['totals']['bf16_bias']['positions_changed']} expert-set changes"
+        )
+    if dot_exception_required(rounding):
+        changed = rounding["totals"]["bf16_logits"]["positions_changed"]
+        failures.append(
+            f"FP32 router dot required (amendment v2): row 1 has {changed} dot-only expert-set changes"
+            " and Levanter has no FP32 router dot"
         )
     totals, expected = cross["totals"], rounding["totals"]["bf16_bias"]["positions"]
     if totals["positions"] != expected or expected == 0:

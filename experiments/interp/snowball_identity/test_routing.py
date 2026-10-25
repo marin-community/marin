@@ -30,6 +30,8 @@ def test_bias_rounding_flips_a_near_tie():
     assert result["experts_changed"].tolist() == [1, 0] and result["order_changed"].tolist() == [True, False]
     assert result["weight_change"][0] > 0 and result["weight_change"][1] == 0
     assert 0 < result["margin"][0] < 1e-3
+    # Rounding only the dot (1.0005 -> 1.0) keeps the FP32 bias's choice: the variants separate bias from dot.
+    assert compare_routes(logits, bias, k=2)["bf16_logits"]["experts_changed"].tolist() == [0, 0]
 
 
 def test_logit_rounding_flips_a_near_tie():
@@ -39,6 +41,7 @@ def test_logit_rounding_flips_a_near_tie():
     results = compare_routes(logits, torch.zeros(4), k=2, rounded_logits=rounded)
     assert results["bf16_bias"]["experts_changed"].tolist() == [0]
     assert results["bf16_logits_bias"]["experts_changed"].tolist() == [1]
+    assert results["bf16_logits"]["experts_changed"].tolist() == [1]
 
 
 def test_routing_stats_cover_every_position(harness):

@@ -6,7 +6,7 @@
 import copy
 
 from experiments.interp.snowball_identity.logit_check import GATE_GROUPS, parity_gate
-from experiments.interp.snowball_identity.routing import bias_exception_required, route_gate
+from experiments.interp.snowball_identity.routing import bias_exception_required, dot_exception_required, route_gate
 
 # The pinned 2026-10-24 baseline's values (logit-check-baseline-20261024-0252-chukar.json), which pass.
 BASELINE = {
@@ -56,8 +56,13 @@ def test_parity_gate_fails_closed():
     assert failing(lambda r: r["contrastive"].update(max_abs_score_diff_vs_vllm=float("nan")))
 
 
-def rounding(set_changes: int, positions: int = 10) -> dict:
-    return {"totals": {"bf16_bias": {"positions": positions, "positions_changed": set_changes}}}
+def rounding(set_changes: int, positions: int = 10, dot_changes: int = 0) -> dict:
+    return {
+        "totals": {
+            "bf16_bias": {"positions": positions, "positions_changed": set_changes},
+            "bf16_logits": {"positions": positions, "positions_changed": dot_changes},
+        }
+    }
 
 
 def cross(positions: int = 10, set_agree: int = 10, ordered_agree: int = 10) -> dict:
@@ -77,3 +82,6 @@ def test_route_gate():
     assert route_gate(cross(ordered_agree=9), rounding(0), None)
     assert route_gate(cross(positions=9, set_agree=9, ordered_agree=9), rounding(0), None)
     assert route_gate(cross(0, 0, 0), rounding(0, positions=0), None)
+    # A dot-only change needs the FP32 router dot, which does not exist yet.
+    assert dot_exception_required(rounding(0, dot_changes=1))
+    assert route_gate(cross(), rounding(0, dot_changes=1), None)
