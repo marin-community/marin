@@ -168,6 +168,8 @@ class SpeculativeServingRef(BaseModel):
     method: str
     model: ModelLocatorRef
     num_speculative_tokens: int
+    rejection_sample_method: str = "standard"
+    synthetic_acceptance_length: float | None = None
 
 
 class ModelServeConfig(BaseModel):

@@ -81,6 +81,7 @@ from marin.execution.step_status import STATUS_FAILED, STATUS_SUCCESS, StatusFil
 from marin.experiment.evaluation import EvalchemyEvalConfig, run_served_evalchemy
 from marin.inference.config import (
     EffectiveServing,
+    RejectionSampleMethod,
     ResolvedModelLocator,
     SpeculativeMethod,
     SpeculativeServingConfig,
@@ -909,7 +910,14 @@ def test_inference_recovery_stops_when_judge_fails_while_model_is_rebuilding(mon
 
 
 @pytest.mark.parametrize("max_concurrent", [1, 2])
-def test_evaluation_step_persists_run_scoped_speculative_metrics(tmp_path, monkeypatch, max_concurrent):
+@pytest.mark.parametrize("acceptance_length", [None, 2.5])
+@pytest.mark.parametrize(
+    ("counter_delta", "mean_length", "acceptance_rate"),
+    [((10, 30, 15), 2.5, 0.5), ((10, 30, 0), 1.0, 0.0), ((0, 0, 0), None, None)],
+)
+def test_evaluation_step_persists_run_scoped_speculative_metrics(
+    tmp_path, monkeypatch, max_concurrent, acceptance_length, counter_delta, mean_length, acceptance_rate
+):
     def scrape(prompt: int, generated: int, drafts: int, draft_tokens: int, accepted: int):
         return tuple(
             text_string_to_metric_families(
@@ -928,7 +936,8 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
             )
         )
 
-    scrapes = [scrape(10, 20, 3, 9, 4), scrape(30, 120, 13, 39, 19)]
+    drafts, draft_tokens, accepted = counter_delta
+    scrapes = [scrape(10, 20, 3, 9, 4), scrape(30, 120, 3 + drafts, 9 + draft_tokens, 4 + accepted)]
     monkeypatch.setattr(
         "marin.evaluation.inference_metrics.PrometheusScraper.scrape",
         lambda _self: scrapes.pop(0),
@@ -944,6 +953,10 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
         method=SpeculativeMethod.EAGLE3,
         model=ResolvedModelLocator(uri="s3://models/draft", identity="draft@2026.09.23:abc123"),
         num_speculative_tokens=3,
+        rejection_sample_method=(
+            RejectionSampleMethod.STANDARD if acceptance_length is None else RejectionSampleMethod.SYNTHETIC
+        ),
+        synthetic_acceptance_length=acceptance_length,
     )
     batch = EvaluationBatch(
         group_id="group",
@@ -976,9 +989,11 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     record = read_record(str(tmp_path / "records" / "run-measured" / "record.json"))
     assert record.model.config is not None
     assert record.model.config.identity == "target@2026.09.23:def456"
+    assert record.model.config.serve.speculative is not None
+    assert record.model.config.serve.speculative.rejection_sample_method == speculative.rejection_sample_method.value
+    assert record.model.config.serve.speculative.synthetic_acceptance_length == acceptance_length
     if max_concurrent > 1:
         assert record.inference_metrics is None
-        assert len(scrapes) == 2
         return
     assert record.inference_metrics is not None
     assert record.inference_metrics.prompt_tokens == 20
@@ -987,11 +1002,11 @@ vllm:spec_decode_num_accepted_tokens_total {accepted}
     assert record.inference_metrics.generation_tokens_per_second == 50.0
     assert record.inference_metrics.speculative_decoding is not None
     assert record.inference_metrics.speculative_decoding.model_dump() == {
-        "drafts": 10,
-        "draft_tokens": 30,
-        "accepted_tokens": 15,
-        "mean_acceptance_length": 2.5,
-        "draft_acceptance_rate": 0.5,
+        "drafts": drafts,
+        "draft_tokens": draft_tokens,
+        "accepted_tokens": accepted,
+        "mean_acceptance_length": mean_length,
+        "draft_acceptance_rate": acceptance_rate,
     }
     assert record.model.config.serve.speculative is not None
     assert record.model.config.serve.speculative.model.identity == "draft@2026.09.23:abc123"
