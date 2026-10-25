@@ -180,6 +180,8 @@ def test_positions_and_logit_check(harness, tmp_path):
     scores = [float(ours[f"contrastive|r|no_system|{i}"]["actual"][6:8].sum()) for i in range(3)]
     won = scores[0] > max(scores[1:])
     assert contrastive["wins"]["no_system"] == {"harness": won, "vllm": won, "rows": 1}
+    assert contrastive["rows_won_agree"] == contrastive["rows_top_candidate_agree"] == 1
+    assert contrastive["row_disagreements"] == []
 
 
 def test_batched_variants_match_single_runs(harness):

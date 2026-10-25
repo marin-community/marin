@@ -14,7 +14,9 @@ Per group (check, contrastive, long, and the long sequence's positions past the 
   ``missing`` counts such tokens outside the harness's top 50.
 
 Contrastive candidate scores (the sum of the candidate tokens' log-probs) are compared harness vs vLLM and,
-when given, harness vs the scorer, with each side's win count per condition.
+when given, harness vs the scorer, with each side's win count per condition. Per row-condition it also counts
+where harness and vLLM agree on whether a correct candidate wins (``rows_won_agree``) and on the top-scoring
+candidate (``rows_top_candidate_agree``), and lists every row where either differs.
 """
 
 import argparse
@@ -99,6 +101,7 @@ def contrastive_stats(ours: dict, theirs: dict, scorer_rows: list[dict] | None) 
     scorer = {(row["row_id"], row["condition"]): row for row in scorer_rows or []}
     vllm_diffs, scorer_diffs = [], []
     wins: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    won_agree, top_agree, disagreements = 0, 0, []
     for (row_id, condition), candidates in sorted(rows.items()):
         correct = candidates.pop("correct")
         harness_scores = [candidates[i][0] for i in sorted(candidates)]
@@ -108,10 +111,20 @@ def contrastive_stats(ours: dict, theirs: dict, scorer_rows: list[dict] | None) 
         if reference is not None:
             scorer_diffs.extend(abs(a - b) for a, b in zip(harness_scores, reference["logprobs"], strict=True))
             wins[condition]["scorer"] += reference["won"]
+        won = {}
         for name, scores in (("harness", harness_scores), ("vllm", vllm_scores)):
             best_wrong = max(score for i, score in enumerate(scores) if i not in correct)
-            wins[condition][name] += max(scores[i] for i in correct) > best_wrong
+            won[name] = max(scores[i] for i in correct) > best_wrong
+            wins[condition][name] += won[name]
         wins[condition]["rows"] += 1
+        top = {
+            name: max(range(len(scores)), key=scores.__getitem__)
+            for name, scores in (("harness", harness_scores), ("vllm", vllm_scores))
+        }
+        if won["harness"] != won["vllm"] or top["harness"] != top["vllm"]:
+            disagreements.append({"row_id": row_id, "condition": condition, "won": won, "top_candidate": top})
+        won_agree += won["harness"] == won["vllm"]
+        top_agree += top["harness"] == top["vllm"]
     return {
         "row_conditions": len(rows),
         "max_abs_score_diff_vs_vllm": max(vllm_diffs, default=float("nan")),
@@ -119,6 +132,10 @@ def contrastive_stats(ours: dict, theirs: dict, scorer_rows: list[dict] | None) 
         "max_abs_score_diff_vs_scorer": max(scorer_diffs, default=float("nan")),
         "p99_abs_score_diff_vs_scorer": quantile(scorer_diffs, 0.99),
         "wins": {condition: dict(counts) for condition, counts in wins.items()},
+        # Per row-condition, harness vs vLLM: whether a correct candidate wins, and which candidate scores highest.
+        "rows_won_agree": won_agree,
+        "rows_top_candidate_agree": top_agree,
+        "row_disagreements": disagreements,
     }
 
 

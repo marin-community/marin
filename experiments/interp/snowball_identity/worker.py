@@ -46,6 +46,9 @@ Spec format (JSON). ``id`` is optional; ``submit`` makes one from the time.
 ``{"command": "edit_memit", "layers": [L, ...], "module": ..., "key_prompts": PATH, "preserve_prompts": PATH, ...}``
     A multi-layer MEMIT / AlphaEdit edit, rank up to the number of keys per layer (``memit.edit_memit``). The
     model is unchanged after the spec.
+``{"command": "router_rounding", "identity": PATH}``
+    Per layer, top-k routes of the fixed #298 sequences with the native FP32 router bias vs the BF16-rounded bias
+    on the same router input (``routing.router_rounding``).
 
 Prompt rows use ``prompts.py``'s format: ``{"id", "messages" | "text", "chat_template_kwargs"?, "prefill"?,
 "targets"?}``.
@@ -64,7 +67,7 @@ import torch
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
-from experiments.interp.snowball_identity import analyses, edits, memit
+from experiments.interp.snowball_identity import analyses, edits, memit, routing
 from experiments.interp.snowball_identity.harness import (
     COMMANDS,
     Output,
@@ -83,6 +86,7 @@ ANALYSES = {
     "steer": analyses.steer,
     "edit_rank1": edits.edit_rank1,
     "edit_memit": memit.edit_memit,
+    "router_rounding": routing.router_rounding,
 }
 POLL_SECONDS = 15
 STALL_SECONDS = 600
