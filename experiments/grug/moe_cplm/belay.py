@@ -21,7 +21,8 @@ def capped(x, cap=10.0):
     return cap * jnp.tanh(x / cap)
 
 
-def local_head(hidden, head, qw, kw, gw, sink, tokens, labels, segments, *, tile=128, reference=False):
+def vocabulary_statistics(hidden, head, labels, *, reference=False):
+    """Shared softcap-10 vocabulary NLL and log partition for all three models."""
     batch, length, dim = hidden.shape
     x = hidden.reshape(-1, dim)
     if reference:
@@ -38,13 +39,17 @@ def local_head(hidden, head, qw, kw, gw, sink, tokens, labels, segments, *, tile
             dtype=jnp.float32,
             logit_soft_cap=10.0,
             implementation="pallas_tpu",
-            # Qualified d512 forward tiles fit TPU v4 VMEM.
-            block_sizes=BlockSizes(b_block_size=1024, h_block_size=128, v_block_size=512),
+            # The previously qualified d768 path needs smaller vocabulary tiles.
+            block_sizes=BlockSizes(b_block_size=1024, h_block_size=128, v_block_size=128 if dim >= 768 else 512),
         )
         target = jnp.take(head, labels.reshape(-1), axis=1).T
         target_logit = capped(jnp.sum(x.astype(jnp.float32) * target.astype(jnp.float32), -1))
         z = ce + target_logit
-    ce, z = ce.reshape(batch, length), z.reshape(batch, length)
+    return ce.reshape(batch, length), z.reshape(batch, length)
+
+
+def local_head(hidden, head, qw, kw, gw, sink, tokens, labels, segments, *, tile=128, reference=False):
+    ce, z = vocabulary_statistics(hidden, head, labels, reference=reference)
     q = jnp.einsum("bsd,dh->bsh", hidden, qw, preferred_element_type=jnp.float32)
     k = jnp.einsum("bsd,dh->bsh", hidden, kw, preferred_element_type=jnp.float32)
     g = capped(jnp.sum(hidden.astype(jnp.float32) * gw.astype(jnp.float32), -1))
@@ -113,23 +118,7 @@ class CopyPasteBelay(model.Transformer):
             raise ValueError("Copy predictions require a causal mask")
         segments = jnp.zeros_like(token_ids) if mask is None or mask.segment_ids is None else mask.segment_ids[0]
         segments = jnp.broadcast_to(segments, token_ids.shape)
-        ts, hs = P(model._BATCH_AXES, None), P(model._BATCH_AXES, None, None)
-        specs = (hs, P(), P(), P(), P(), P(), ts, ts, ts)
-        args = (
-            hidden,
-            self.output_proj,
-            self.cp_query,
-            self.cp_key,
-            self.cp_gate,
-            self.cp_sink,
-            token_ids,
-            labels,
-            segments,
-        )
-        args = tuple(jax.sharding.reshard(a, s) for a, s in zip(args, specs, strict=True))
-        nll, ce, gate, effective = jax.shard_map(
-            local_head, in_specs=specs, out_specs=(ts, ts, ts, ts), check_vma=False
-        )(*args)
+        nll, ce, gate, effective = self.copy_head(hidden, token_ids, labels, segments)
         weights = loss_weight.astype(loss_dtype)
         denom = jnp.maximum(weights.sum(), 1)
         weighted = nll * weights
@@ -163,3 +152,44 @@ class CopyPasteBelay(model.Transformer):
             }
         )
         return loss, result
+
+    def copy_head(self, hidden, token_ids, labels, segments):
+        ts, hs = P(model._BATCH_AXES, None), P(model._BATCH_AXES, None, None)
+        specs = (hs, P(), P(), P(), P(), P(), ts, ts, ts)
+        args = (
+            hidden,
+            self.output_proj,
+            self.cp_query,
+            self.cp_key,
+            self.cp_gate,
+            self.cp_sink,
+            token_ids,
+            labels,
+            segments,
+        )
+        args = tuple(jax.sharding.reshard(a, s) for a, s in zip(args, specs, strict=True))
+        return jax.shard_map(local_head, in_specs=specs, out_specs=(ts, ts, ts, ts), check_vma=False)(*args)
+
+
+class Belay(model.Transformer):
+    """Vocabulary-only control with identical backbone, masking and router loss."""
+
+    @staticmethod
+    def init(cfg, *, key):
+        base = model.Transformer.init(cfg, key=key)
+        return Belay(**{f.name: getattr(base, f.name) for f in dataclasses.fields(base)})
+
+    next_token_loss = CopyPasteBelay.next_token_loss
+
+    def copy_head(self, hidden, token_ids, labels, segments):
+        ts, hs = P(model._BATCH_AXES, None), P(model._BATCH_AXES, None, None)
+
+        def vocabulary_only(x, weight, target):
+            ce, _ = vocabulary_statistics(x, weight, target)
+            return ce, ce, jnp.zeros_like(ce), jnp.zeros_like(ce)
+
+        return jax.shard_map(vocabulary_only, in_specs=(hs, P(), ts), out_specs=(ts, ts, ts, ts), check_vma=False)(
+            jax.sharding.reshard(hidden, hs),
+            jax.sharding.reshard(self.output_proj, P()),
+            jax.sharding.reshard(labels, ts),
+        )
