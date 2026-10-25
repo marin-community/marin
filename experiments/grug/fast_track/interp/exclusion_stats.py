@@ -167,14 +167,16 @@ def make_step(layers: tuple[int, ...]):
     return step
 
 
-def effective_up(model) -> jax.Array:
-    """``[L, E, R, I]`` the up-projection columns as the normed latent sees them (latent gain applied)."""
-    m = forward.replicate(model)
-    out = []
-    for lay in m.layers():
+def effective_up(model, layers: tuple[int, ...]) -> dict[int, np.ndarray]:
+    """Per layer of ``layers``, the ``[E, R, I]`` up-projection columns as the normed latent sees them (latent gain
+    applied), on the host (all 14 d1280 layers at once are 13 GB)."""
+    all_layers = forward.replicate(model).layers()
+    out = {}
+    for layer in layers:
+        lay = all_layers[layer]
         gain = lay.mlp.latent_norm(jnp.ones((R,), jnp.float32)).astype(jnp.float32)
-        out.append(gain[None, :, None] * lay.mlp.expert_mlp.w_up.astype(jnp.float32))
-    return jnp.stack(out)
+        out[layer] = np.asarray(gain[None, :, None] * lay.mlp.expert_mlp.w_up.astype(jnp.float32))
+    return out
 
 
 @jax.jit
@@ -323,7 +325,7 @@ def main() -> None:
             if n % 25 == 0:
                 logger.info("batch %d (%.0fs) sample min fill %d", n, time.time() - t0, filled.min())
         logger.info("pass done (%.0fs), %d tokens, dropped %s", time.time() - t0, state["tokens"], state["dropped"])
-        w_eff = np.asarray(effective_up(model))
+        w_eff = effective_up(model, layers)
         all_layers = forward.replicate(model).layers()
         s_w_up = [np.asarray(all_layers[layer].shared[0].w_up.astype(jnp.float32)) for layer in layers]
         host = {k: np.asarray(v) for k, v in state.items()}
