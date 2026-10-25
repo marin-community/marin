@@ -99,7 +99,7 @@ SERVE_ARGS = [
 ENGINE_LOG_MARKERS = (
     "v0.0.0.dev20260924+marin.01911be34fac", "dtype=torch.bfloat16", "max_seq_len=32768",
     "tensor_parallel_size=1", "data_parallel_size=8", "quantization=None", "reasoning_parser='grug'",
-    "use_ep=True", "FLASH_ATTN",
+    "use_ep=True", "FLASH_ATTN", "max_num_seqs': 256",
 )  # fmt: skip
 ENDPOINT_WAIT_SECONDS = 1800
 # The iris CLI of this checkout, in this interpreter (the package has no __main__).
@@ -252,7 +252,7 @@ def run(arm, run_root, gate_path, prompt_dir, tokenizer, out_dir):
     finally:
         cap.unlink(missing_ok=True)
         logs = subprocess.run(
-            [*IRIS, "job", "logs", f"/karan/{name}"],
+            [*IRIS, "job", "logs", "--no-tail", "--max-lines", "50000", f"/karan/{name}"],
             capture_output=True, text=True,
         ).stdout  # fmt: skip
         subprocess.run(
