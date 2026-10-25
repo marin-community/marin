@@ -14,6 +14,10 @@ rerun's torch dumps):
 - ``per_op``: every step its own jitted program, so each output is rounded to BF16 as torch eager rounds it.
 - ``isolated``: every step its own jitted program fed torch's input for that step, so each op's own error is measured
   without what came before it.
+- ``fp32_activations`` / ``composite_fp32_activations``: GatedNorm's silu and sigmoid computed in FP32 and cast to
+  BF16 once, per op and in one program.
+- ``by_sub_step`` / ``fp32_activations_by_sub_step``: every GatedNorm sub-step fed torch's input for that sub-step,
+  so silu and sigmoid are measured as single ops.
 - ``two_round`` / ``two_round_isolated``: ``per_op`` / ``isolated`` with both RMSNorms in vLLM's native-path order
   (normalized value cast to BF16, then the weight multiply); ``composite_two_round``: the composite with those norms;
   and both vs ``composite`` at its outputs.
@@ -76,7 +80,18 @@ CHECK_OPS = f"{T310}/diag-l0-ops-r1/check-ops.pt"
 CHECK_OPS_SHA256 = "0488704b205f0c9b844877f81418a61e5bf073ab7c9d7f2555ea3f1b20c73fb5"
 XLA_SETTINGS = {"default": None, "no_excess_precision": "--xla_allow_excess_precision=false"}
 GATED = ("down", "silu", "up", "sigmoid")
-MODES = ("composite", "per_op", "isolated", "two_round", "two_round_isolated", "composite_two_round")
+MODES = (
+    "composite",
+    "per_op",
+    "isolated",
+    "two_round",
+    "two_round_isolated",
+    "composite_two_round",
+    "fp32_activations",
+    "composite_fp32_activations",
+    "by_sub_step",
+    "fp32_activations_by_sub_step",
+)
 COMPOSITE_OUTPUTS = ("embed", "L0/attn_norm")
 NORMS = {
     "embed": ("embed_norm", "embed_gated_norm", "embed_rmsnorm", "embed_gated", "embed"),
@@ -111,13 +126,23 @@ def load_modules(weights: str) -> tuple[jax.Array, dict, float]:
     return tensor("embed_tokens.weight"), modules, eps
 
 
-def gated_steps(gated: GatedNorm, x: jax.Array) -> dict[str, jax.Array]:
-    """``GatedNorm.__call__`` step by step (snowball.py), each step a separate program."""
+def _activation(fn, fp32: bool):
+    """``fn`` on BF16 as JAX does it, or (``fp32``) on the input cast to FP32, rounded to BF16 once."""
+    return (lambda x: fn(x.astype(jnp.float32)).astype(x.dtype)) if fp32 else fn
+
+
+def gated_steps(gated: GatedNorm, x: jax.Array, fp32: bool = False, given: dict | None = None) -> dict[str, jax.Array]:
+    """``GatedNorm.__call__`` step by step (snowball.py), each step a separate program. ``fp32``: silu and sigmoid in
+    FP32, cast once. ``given`` (sub-step name -> torch's value): each sub-step takes torch's input for it."""
+
+    def take(name: str, ours: jax.Array) -> jax.Array:
+        return ours if given is None else given[name]
+
     down = _jit(lambda x, w: jnp.einsum("...d,dr->...r", x, w))(x, gated.w_down)
-    silu = _jit(jax.nn.silu)(down)
-    up = _jit(lambda h, w: jnp.einsum("...r,rd->...d", h, w))(silu, gated.w_up)
-    gate = _jit(jax.nn.sigmoid)(up)
-    out = _jit(lambda x, g: x * g.astype(x.dtype))(x, gate)
+    silu = _jit(_activation(jax.nn.silu, fp32))(take("down", down))
+    up = _jit(lambda h, w: jnp.einsum("...r,rd->...d", h, w))(take("silu", silu), gated.w_up)
+    gate = _jit(_activation(jax.nn.sigmoid, fp32))(take("up", up))
+    out = _jit(lambda x, g: x * g.astype(x.dtype))(x, take("sigmoid", gate))
     return {"down": down, "silu": silu, "up": up, "sigmoid": gate, "out": out}
 
 
@@ -137,6 +162,19 @@ def _two_round_inline(rms: RMSNorm, x: jax.Array) -> jax.Array:
     xf = x.astype(jnp.float32)
     normalized = (xf * jax.lax.rsqrt(jnp.mean(jnp.square(xf), axis=-1, keepdims=True) + rms.eps)).astype(x.dtype)
     return normalized * rms.weight.astype(x.dtype)
+
+
+@jax.jit
+def composite_fp32_activations(table: jax.Array, modules: dict, ids: jax.Array) -> dict[str, jax.Array]:
+    """``composite`` with each GatedNorm's silu and sigmoid in FP32, cast to BF16 once, in one program."""
+
+    def gated(g: GatedNorm, x: jax.Array) -> jax.Array:
+        hidden = _activation(jax.nn.silu, True)(jnp.einsum("...d,dr->...r", x, g.w_down))
+        return x * _activation(jax.nn.sigmoid, True)(jnp.einsum("...r,rd->...d", hidden, g.w_up)).astype(x.dtype)
+
+    (e_rms, e_gated), (a_rms, a_gated) = modules["embed"], modules["attn"]
+    hidden = gated(e_gated, e_rms(table[ids]))
+    return {"embed": hidden, "L0/attn_norm": gated(a_gated, a_rms(hidden))}
 
 
 @jax.jit
@@ -187,10 +225,17 @@ def two_round_rms(rms: RMSNorm, x: jax.Array) -> jax.Array:
 
 
 def per_op(
-    table: jax.Array, modules: dict, ids: jax.Array, torch_inputs: dict | None, two_round: bool = False
+    table: jax.Array,
+    modules: dict,
+    ids: jax.Array,
+    torch_inputs: dict | None,
+    two_round: bool = False,
+    fp32: bool = False,
+    by_sub_step: bool = False,
 ) -> dict[str, jax.Array]:
-    """Every step its own program. With ``torch_inputs`` (op name -> torch's value), each step takes torch's input
-    for that step instead of this chain's previous output. ``two_round``: both RMSNorms round as ``two_round_rms``."""
+    """Every step its own program. With ``torch_inputs`` (op name -> torch's value), each norm takes torch's input
+    instead of this chain's previous output, and with ``by_sub_step`` so does every GatedNorm sub-step.
+    ``two_round``: both RMSNorms round as ``two_round_rms``. ``fp32``: GatedNorm activations in FP32, cast once."""
     ops = {"embed_tokens": _jit(lambda t, i: t[i])(table, ids)}
     previous = "embed_tokens"
     for key, (_, _, rms_name, gated_name, out_name) in NORMS.items():
@@ -198,7 +243,10 @@ def per_op(
         source = ops[previous] if torch_inputs is None else torch_inputs[previous]
         ops[rms_name] = two_round_rms(rms, source) if two_round else _jit(lambda m, x: m(x))(rms, source)
         source = ops[rms_name] if torch_inputs is None else torch_inputs[rms_name]
-        steps = gated_steps(gated, source)
+        given = None
+        if by_sub_step:
+            given = {step: torch_inputs[f"{gated_name}/{step}"] for step in GATED}
+        steps = gated_steps(gated, source, fp32, given)
         ops |= {f"{gated_name}/{step}": steps[step] for step in GATED}
         ops[out_name] = steps["out"]
         previous = out_name
@@ -260,10 +308,16 @@ def phase(root: str, setting: str) -> None:
                     "per_op": per_op(table, modules, ids, None),
                     "two_round": per_op(table, modules, ids, None, two_round=True),
                     "composite_two_round": composite_two_round(table, modules, ids),
+                    "fp32_activations": per_op(table, modules, ids, None, fp32=True),
+                    "composite_fp32_activations": composite_fp32_activations(table, modules, ids),
                 }
                 if torch_inputs is not None:
                     outputs["isolated"] = per_op(table, modules, ids, torch_inputs)
                     outputs["two_round_isolated"] = per_op(table, modules, ids, torch_inputs, two_round=True)
+                    outputs["by_sub_step"] = per_op(table, modules, ids, torch_inputs, by_sub_step=True)
+                    outputs["fp32_activations_by_sub_step"] = per_op(
+                        table, modules, ids, torch_inputs, fp32=True, by_sub_step=True
+                    )
                 for mode, ops in outputs.items():
                     host = {name: np.asarray(value.astype(jnp.float32)) for name, value in ops.items()}
                     for sid, row in rows.items():
@@ -278,6 +332,14 @@ def phase(root: str, setting: str) -> None:
                 )
                 for mode in ("two_round", "composite_two_round")
             }
+            # One program vs separate programs with FP32 activations, at the composite's outputs.
+            result[kind]["composite_fp32_vs_per_op_fp32"] = compare(
+                {
+                    sid: {name: ops[name] for name in COMPOSITE_OUTPUTS}
+                    for sid, ops in found["composite_fp32_activations"].items()
+                },
+                found["fp32_activations"],
+            )
     result["seconds"] = round(time.time() - started, 1)
     write_json(prefix_join(root, f"{setting}.json"), result)
 
@@ -346,6 +408,11 @@ def main() -> None:
             "two_round_isolated (batch-1 only)",
             "composite_two_round (composite with the two-round RMSNorms, one program)",
             "two_round_vs_composite (two_round and composite_two_round vs composite at embed, L0/attn_norm)",
+            "fp32_activations (per_op with GatedNorm silu/sigmoid in FP32, cast once)",
+            "composite_fp32_activations (the same in one program)",
+            "by_sub_step (every GatedNorm sub-step fed torch's input; batch-1 only)",
+            "fp32_activations_by_sub_step (batch-1 only)",
+            "composite_fp32_vs_per_op_fp32 (composite_fp32_activations vs fp32_activations at embed, L0/attn_norm)",
         ],
         "grids": [
             "batch1",

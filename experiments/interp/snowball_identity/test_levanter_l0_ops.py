@@ -119,3 +119,28 @@ def test_composite_two_round_uses_the_two_round_norms(setup):
     # One program vs separate programs may round the gated norm differently; the inputs to it are equal.
     assert out["embed"].shape == expected.shape
     assert float(jnp.max(jnp.abs(out["embed"].astype(jnp.float32) - expected.astype(jnp.float32)))) < 0.05
+
+
+def test_fp32_activations_round_once(setup):
+    """FP32 silu/sigmoid cast once equal the activation computed in FP32 by hand and rounded to BF16."""
+    table, modules = setup
+    ids = jnp.asarray([[3, 7, 1, 9]])
+    gated = modules["embed"][1]
+    x = jax.jit(lambda m, x: m(x))(modules["embed"][0], table[ids])
+    steps = lev.gated_steps(gated, x, fp32=True)
+    down = np.asarray(steps["down"], dtype=np.float32)
+    expected_silu = (down / (1 + np.exp(-down))).astype(jnp.bfloat16)
+    assert np.abs(np.asarray(steps["silu"], np.float32) - expected_silu.astype(np.float32)).max() <= 2.0**-6
+    out = lev.composite_fp32_activations(table, modules, ids)
+    assert out["embed"].dtype == jnp.bfloat16
+
+
+def test_by_sub_step_feeds_each_given_input(setup):
+    table, modules = setup
+    ids = jnp.asarray([[3, 7, 1]])
+    chained = lev.per_op(table, modules, ids, None)
+    given = dict(chained)
+    given["embed_gated/up"] = jnp.zeros_like(chained["embed_gated/up"])
+    ops = lev.per_op(table, modules, ids, given, by_sub_step=True)
+    assert jnp.array_equal(ops["embed_gated/sigmoid"], jnp.full_like(ops["embed_gated/sigmoid"], 0.5))
+    assert jnp.array_equal(ops["embed_gated/silu"], chained["embed_gated/silu"])
