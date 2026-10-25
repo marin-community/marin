@@ -6962,9 +6962,9 @@ class Transformer(eqx.Module):
         per_layer = jnp.sum(w[None] * r, axis=(1, 2)) / count
         aux = cfg.null_aux_weight * jnp.sum(per_layer)
         metrics = {
-            "train/null/aux_loss": jax.lax.stop_gradient(aux),
-            "train/null/aux_w_max": jnp.max(w),
-            "train/null/aux_w_rms": jnp.sqrt(jnp.sum(jnp.square(w)) / count),
+            "train/aux/null_aux_loss": jax.lax.stop_gradient(aux),
+            "train/aux/null_aux_w_max": jnp.max(w),
+            "train/aux/null_aux_w_rms": jnp.sqrt(jnp.sum(jnp.square(w)) / count),
         }
         return aux, metrics
 
