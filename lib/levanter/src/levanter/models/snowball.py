@@ -236,6 +236,10 @@ class SnowballConfig(HFCompatConfig):
     """Keep the routed combine in FP32: FP32 combine weights, weighted expert outputs, per-token sum and
     expert-axis reduction, cast to the compute dtype once at the end. Off, the weights are cast to the compute
     dtype first. A runtime knob like ``router_dot_fp32``: not exported in HF metadata."""
+    fp32_activations: bool = False
+    """Compute the SiLU and sigmoid activations in FP32 and cast to the input dtype once: GatedNorm, the attention
+    head gate, the shared MLP and the routed experts. Off, they run in the compute dtype. A runtime knob like
+    ``router_dot_fp32``: not exported in HF metadata."""
 
     reference_checkpoint: Optional[str] = None
     tokenizer: Optional[str] = None
@@ -249,6 +253,8 @@ class SnowballConfig(HFCompatConfig):
             raise ValueError(f"moe_capacity_factor must be positive, got {self.moe_capacity_factor}")
         if self.shared_expert_intermediate_dim <= 0:
             raise ValueError("snowball requires an always-on shared expert (shared_expert_intermediate_dim > 0)")
+        if self.fp32_activations and self.moe_implementation == "sonic_cute":
+            raise ValueError("fp32_activations cannot use moe_implementation='sonic_cute': its kernel fuses BF16 SiLU")
         if self.moe_implementation in _TRANSPORT_CAPACITY_MOE_IMPLEMENTATIONS:
             raise ValueError(
                 f"snowball cannot use moe_implementation={self.moe_implementation!r}: it requires "
@@ -383,6 +389,16 @@ def _assert_snowball_recipe(hf_config: HfConfig) -> None:
 # --- Layers (faithful array-first snapshot of experiments/grug/moe/model.py) --------------------
 
 
+def silu_fp32(x: jax.Array) -> jax.Array:
+    """SiLU computed in FP32 and cast to the input dtype once (the routed experts' ``fp32_activations`` callable)."""
+    return jax.nn.silu(x.astype(jnp.float32)).astype(x.dtype)
+
+
+def sigmoid_fp32(x: jax.Array) -> jax.Array:
+    """Sigmoid computed in FP32 and cast to the input dtype once."""
+    return jax.nn.sigmoid(x.astype(jnp.float32)).astype(x.dtype)
+
+
 class RMSNorm(eqx.Module):
     """Parametric RMS norm (eps = layer_norm_eps = 1e-5)."""
 
@@ -408,20 +424,25 @@ class GatedNorm(eqx.Module):
 
     w_down: jax.Array
     w_up: jax.Array
+    fp32_activations: bool = eqx.field(static=True, default=False)
 
     @staticmethod
-    def init(hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "GatedNorm":
+    def init(
+        hidden_dim: int, initializer_std: float, *, key: PRNGKeyArray, fp32_activations: bool = False
+    ) -> "GatedNorm":
         k_down, k_up = random.split(key)
         return GatedNorm(
             w_down=reshard(_init_weight(k_down, (hidden_dim, _GATED_NORM_RANK), initializer_std), P(None, None)),
             w_up=reshard(_init_weight(k_up, (_GATED_NORM_RANK, hidden_dim), initializer_std), P(None, None)),
+            fp32_activations=fp32_activations,
         )
 
     @named_call
     def __call__(self, x: Float[Array, "... D"]) -> Float[Array, "... D"]:
+        silu, sigmoid = (silu_fp32, sigmoid_fp32) if self.fp32_activations else (jax.nn.silu, jax.nn.sigmoid)
         gate_hidden = jnp.einsum("...d,dr->...r", x, self.w_down)
-        gate_hidden = jax.nn.silu(gate_hidden)
-        gate = jax.nn.sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
+        gate_hidden = silu(gate_hidden)
+        gate = sigmoid(jnp.einsum("...r,rd->...d", gate_hidden, self.w_up))
         return x * gate.astype(x.dtype)
 
 
@@ -496,7 +517,8 @@ class SnowballAttention(eqx.Module):
         v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)
         attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v
         # Headwise gating: 2 * sigmoid(x @ attn_gate), one scalar per head.
-        gate = 2 * jax.nn.sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
+        sigmoid = sigmoid_fp32 if self.cfg.fp32_activations else jax.nn.sigmoid
+        gate = 2 * sigmoid(jnp.einsum("bsd,dn->bsn", x, self.attn_gate))[..., None]
         attn_out = gate * attn_out
         attn_out = jnp.reshape(
             attn_out,
@@ -520,9 +542,17 @@ class DenseMLP(eqx.Module):
     w_gate: jax.Array
     w_up: jax.Array
     w_down: jax.Array
+    fp32_activations: bool = eqx.field(static=True, default=False)
 
     @staticmethod
-    def init(hidden_dim: int, intermediate_dim: int, initializer_std: float, *, key: PRNGKeyArray) -> "DenseMLP":
+    def init(
+        hidden_dim: int,
+        intermediate_dim: int,
+        initializer_std: float,
+        *,
+        key: PRNGKeyArray,
+        fp32_activations: bool = False,
+    ) -> "DenseMLP":
         k_gate, k_up, k_down = random.split(key, 3)
         return DenseMLP(
             w_gate=_reshard_for_init(
@@ -534,6 +564,7 @@ class DenseMLP(eqx.Module):
             w_down=_reshard_for_init(
                 _init_weight(k_down, (intermediate_dim, hidden_dim), initializer_std), P("model", _FSDP_AXES)
             ),
+            fp32_activations=fp32_activations,
         )
 
     @named_call
@@ -542,7 +573,8 @@ class DenseMLP(eqx.Module):
         x_flat = jnp.reshape(x, (b * s, x.shape[-1]), out_sharding=_token_spec())
         gate = jnp.einsum("td,dm->tm", x_flat, self.w_gate)
         up = jnp.einsum("td,dm->tm", x_flat, self.w_up)
-        out_flat = jnp.einsum("tm,md->td", jax.nn.silu(gate) * up, self.w_down, out_sharding=_token_spec())
+        silu = silu_fp32 if self.fp32_activations else jax.nn.silu
+        out_flat = jnp.einsum("tm,md->td", silu(gate) * up, self.w_down, out_sharding=_token_spec())
         return jnp.reshape(out_flat, (b, s, out_flat.shape[-1]), out_sharding=_activation_spec())
 
 
@@ -624,7 +656,7 @@ class SnowballMoEMLP(eqx.Module):
                 initializer_std=cfg.initializer_std,
                 key=k_expert,
                 implementation=cfg.moe_implementation,
-                activation=ActivationFunctionEnum.silu,
+                activation=silu_fp32 if cfg.fp32_activations else ActivationFunctionEnum.silu,
                 capacity_factor=cfg.moe_capacity_factor,
                 combine_in_fp32=cfg.router_combine_fp32,
                 pspecs=MoEExpertMlpPspecs(hidden=_FSDP_AXES),
@@ -703,13 +735,21 @@ class SnowballBlock(eqx.Module):
         attn_key, mlp_key, shared_key, gn_attn_key, gn_mlp_key = random.split(key, 5)
         return SnowballBlock(
             rms_attn=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            attn_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key),
+            attn_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, key=gn_attn_key, fp32_activations=cfg.fp32_activations
+            ),
             attn=SnowballAttention.init(cfg, key=attn_key),
             rms_mlp=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            mlp_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key),
+            mlp_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, key=gn_mlp_key, fp32_activations=cfg.fp32_activations
+            ),
             mlp=SnowballMoEMLP.init(cfg, key=mlp_key),
             shared=DenseMLP.init(
-                cfg.hidden_dim, cfg.shared_expert_intermediate_dim, cfg.initializer_std, key=shared_key
+                cfg.hidden_dim,
+                cfg.shared_expert_intermediate_dim,
+                cfg.initializer_std,
+                key=shared_key,
+                fp32_activations=cfg.fp32_activations,
             ),
         )
 
@@ -798,11 +838,15 @@ class SnowballTransformer(eqx.Module):
         return SnowballTransformer(
             token_embed=token_embed,
             embed_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            embed_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key),
+            embed_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, key=embed_gn_key, fp32_activations=cfg.fp32_activations
+            ),
             output_proj=output_proj,
             blocks=blocks,
             final_norm=RMSNorm.init(cfg.hidden_dim, cfg.layer_norm_eps),
-            final_gated_norm=GatedNorm.init(cfg.hidden_dim, cfg.initializer_std, key=final_gn_key),
+            final_gated_norm=GatedNorm.init(
+                cfg.hidden_dim, cfg.initializer_std, key=final_gn_key, fp32_activations=cfg.fp32_activations
+            ),
             config=cfg,
         )
 
