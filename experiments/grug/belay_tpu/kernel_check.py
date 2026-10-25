@@ -28,7 +28,7 @@ def evaluate(kernel, inputs, segments, cotangents):
     return (*outputs, *backward(cotangents))
 
 
-def errors(actual, expected, tolerance):
+def measure_errors(actual, expected, tolerance):
     result = []
     for got, want in zip(actual, expected, strict=True):
         got, want = np.asarray(got, np.float64), np.asarray(want, np.float64)
@@ -40,7 +40,13 @@ def errors(actual, expected, tolerance):
                 "normalized_max": float((delta / (tolerance + tolerance * np.abs(want))).max()),
             }
         )
-        np.testing.assert_allclose(got, want, atol=tolerance, rtol=tolerance)
+    return result
+
+
+def errors(actual, expected, tolerance):
+    result = measure_errors(actual, expected, tolerance)
+    if not all(np.isfinite(row["normalized_max"]) and row["normalized_max"] <= 1 for row in result):
+        raise AssertionError(f"Kernel numerical mismatch: {result}")
     return result
 
 
@@ -59,6 +65,7 @@ def main():
     tracker.log_summary({"kernel_check/optimizer_updates": 0})
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     device = jax.local_devices()[0]
+    failures = []
 
     def record(row):
         row.update(
@@ -102,11 +109,17 @@ def main():
                     compiled = fn.lower(inputs, segments, ct).compile()
                     compile_time = time.perf_counter() - start
                     actual = jax.block_until_ready(compiled(inputs, segments, ct))
-                    source_errors = errors(actual, expected, tolerance)
+                    source_errors = measure_errors(actual, expected, tolerance)
                     oracle_errors = None
                     if length < 200:
                         oracle = jax.jit(functools.partial(evaluate, recurrent_kda))(inputs, segments, ct)
-                        oracle_errors = errors(actual, oracle, tolerance)
+                        oracle_errors = measure_errors(actual, oracle, tolerance)
+                    passed = all(
+                        np.isfinite(row["normalized_max"]) and row["normalized_max"] <= 1
+                        for row in [*source_errors, *(oracle_errors or [])]
+                    )
+                    if not passed:
+                        failures.append((scenario, str(jnp.dtype(dtype)), name))
                     samples = []
                     for index in range(7):
                         start = time.perf_counter()
@@ -115,7 +128,7 @@ def main():
                             samples.append(time.perf_counter() - start)
                     record(
                         {
-                            "stage": "kernel_pass",
+                            "stage": "kernel_pass" if passed else "kernel_numerical_failure",
                             "kernel": "kda",
                             "implementation": name,
                             "shape": shape,
@@ -125,15 +138,17 @@ def main():
                             "compile_time": compile_time,
                             "steady_state_time": statistics.median(samples),
                             "samples": samples,
-                            "error": None,
+                            "error": None if passed else "Frozen numerical bound exceeded; diagnostic timing only",
                             "source_errors": source_errors,
                             "oracle_errors": oracle_errors,
                             "tolerance": tolerance,
                             "temporary_bytes": compiled.memory_analysis().temp_size_in_bytes,
                         }
                     )
-    tracker.log_summary({"kernel_check/kda_pass": True})
+    tracker.log_summary({"kernel_check/kda_pass": not failures})
     tracker.current_tracker().finish()
+    if failures:
+        raise AssertionError(f"KDA qualification failures retained without stopping the remaining grid: {failures}")
 
 
 if __name__ == "__main__":
