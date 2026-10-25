@@ -35,10 +35,12 @@ from iris.client.client import IrisClient
 from iris.cluster.types import Entrypoint, EnvironmentSpec
 from iris.rpc import job_pb2
 from levanter.compat.hf_export import run_on_export_writer, write_export_json
+from levanter.main.train_lm import TrainLmConfig
 from levanter.tracker import NoopConfig
+from levanter.utils.mesh import MeshConfig
 from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.s3_compat import s3_credential_options
-from rigging.filesystem.storage_path import StoragePath
+from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 
@@ -65,6 +67,7 @@ SOURCE_FILE_HASHES = {
 }
 SEED = 310
 REPLICAS = 4
+"""Iris replicas = H100x8 hosts = JAX slices; the factory places context across them, as in the #302 SFT."""
 MAX_TIMEOUT_SECONDS = 10800
 PRIORITY_BANDS = {
     "interactive": job_pb2.PRIORITY_BAND_INTERACTIVE,
@@ -105,15 +108,9 @@ def gate_inputs(run_root: str, routing_path: str) -> PrecisionGateInputs:
     )
 
 
-def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes) -> None:
-    """Run on every replica; ``receipt_bytes`` are the reviewed runtime receipt's exact bytes."""
-    check_pod_storage()
-    runtime_receipt = approved_receipt(receipt_bytes)
-    reference = runtime_receipt["routing_reference"]
-    config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
-    generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
+def base_config(run_root: str, run_id: str, config_bytes: bytes, generation_bytes: bytes) -> TrainLmConfig:
     unused = f"{run_root}/no-dataset-lr0-uses-a-synthetic-batch"
-    base = identity_sft_config(
+    return identity_sft_config(
         dataset_uri=unused,
         cache_uri=unused,
         output_uri=run_root,
@@ -121,7 +118,28 @@ def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes) -> None:
         seed=SEED,
         source_config=json.loads(config_bytes),
         source_generation_config=json.loads(generation_bytes),
+        hosts=REPLICAS,
     )
+
+
+def mesh_layout(mesh: MeshConfig) -> dict:
+    return {
+        "axes": dict(mesh.axes),
+        "dcn_axes": dict(mesh.dcn_axes),
+        "compute_mapping": dict(mesh.compute_mapping),
+        "param_mapping": dict(mesh.param_mapping),
+        "expected_num_slices": REPLICAS,
+    }
+
+
+def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes) -> None:
+    """Run on every replica; ``receipt_bytes`` are the reviewed runtime receipt's exact bytes."""
+    check_pod_storage()
+    runtime_receipt = approved_receipt(receipt_bytes)
+    reference = runtime_receipt["routing_reference"]
+    config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
+    generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
+    base = base_config(run_root, run_id, config_bytes, generation_bytes)
     config, observed = configure_precision_runtime(
         base,
         config_bytes=config_bytes,
@@ -154,7 +172,7 @@ def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes) -> None:
     run_on_export_writer(lambda: write_export_json(StoragePath(run_root) / "lr0-result.json", result))
 
 
-def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, priority: str) -> dict:
+def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, priority: str, mesh: MeshConfig) -> dict:
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
     return {
@@ -163,6 +181,7 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, 
         "clean": not dirty,
         "run_root": run_root,
         "gate": vars(gate_inputs(run_root, routing_path)),
+        "mesh": mesh_layout(mesh),
         "runtime_receipt_sha256": RUNTIME_RECEIPT_SHA256,
         "region": RESOURCES.target_cluster,
         "replicas": REPLICAS,
@@ -225,7 +244,18 @@ def main() -> None:
         raise SystemExit(f"timeout above {MAX_TIMEOUT_SECONDS} s needs --allow-long-timeout")
     receipt_bytes = Path(args.runtime_receipt).read_bytes()
     receipt = approved_receipt(receipt_bytes)
-    job_plan = plan(args.job_name, run_root, args.timeout_seconds, receipt["routing_reference"]["path"], args.priority)
+    # The recorded layout comes from the factory itself, built from the pinned source metadata. The submit host
+    # reads through the bucket-routed filesystem: plain StoragePath needs the pod's S3 settings.
+    source_fs, source = filesystem_for(BASE_MODEL)
+    config_bytes = source_fs.cat_file(prefix_join(source, "config.json"))
+    generation_bytes = source_fs.cat_file(prefix_join(source, "generation_config.json"))
+    if hashlib.sha256(config_bytes).hexdigest() != SOURCE_FILE_HASHES["config.json"]:
+        raise SystemExit("source config.json differs from the pinned hash")
+    if hashlib.sha256(generation_bytes).hexdigest() != SOURCE_FILE_HASHES["generation_config.json"]:
+        raise SystemExit("source generation_config.json differs from the pinned hash")
+    config = base_config(run_root, args.job_name, config_bytes, generation_bytes)
+    routing = receipt["routing_reference"]["path"]
+    job_plan = plan(args.job_name, run_root, args.timeout_seconds, routing, args.priority, config.trainer.mesh)
     print(json.dumps(job_plan, indent=2))
     if not args.run:
         return
