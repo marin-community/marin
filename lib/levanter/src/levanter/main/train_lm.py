@@ -114,9 +114,9 @@ def preserve_hf_runtime_settings(
 ) -> LmConfig:
     """Keep explicit runtime-only Snowball settings AFTER native HF architecture reload.
 
-    HF remains authoritative for every architecture field. The router flag and the
-    MoE capacity factor are not exported in HF metadata, so it must be reapplied here, not encoded as a fake
-    source config field. Pinned checkpoint/tokenizer IO settings are also retained.
+    HF remains authoritative for every architecture field. The router flags and the
+    MoE capacity factor are not exported in HF metadata, so they must be reapplied here, not encoded as fake
+    source config fields. Pinned checkpoint/tokenizer IO settings are also retained.
     Measured authorization remains the experiment's pre-update routing gate.
     """
     if not isinstance(requested, SnowballConfig):
@@ -129,6 +129,7 @@ def preserve_hf_runtime_settings(
         reloaded,
         router_dot_fp32=requested.router_dot_fp32,
         moe_capacity_factor=requested.moe_capacity_factor,
+        router_combine_fp32=requested.router_combine_fp32,
         reference_checkpoint=requested.reference_checkpoint,
         tokenizer=requested.tokenizer,
     )

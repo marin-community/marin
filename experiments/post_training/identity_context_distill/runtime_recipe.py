@@ -83,7 +83,7 @@ def configure_precision_runtime(
     )
     check_runtime_config(runtime, source)
     receipt = {
-        "schema_version": 3,
+        "schema_version": 4,
         "source_metadata": source_metadata_receipt(config_bytes, generation_bytes),
         "runtime_model_config": asdict(runtime.model),
         "compute_dtype_overrides": overrides,
@@ -91,6 +91,7 @@ def configure_precision_runtime(
             "factor": runtime.model.moe_capacity_factor,
             "expert_axis": runtime.trainer.mesh.axes["expert"],
         },
+        "router_combine_fp32": runtime.model.router_combine_fp32,
         "native_export_config_overrides": source_export_overrides(source),
         "routing_reference": {"path": rounding_path, "sha256": rounding_sha256},
         "trigger": {"bias_only": bias, "dot_only": dot},

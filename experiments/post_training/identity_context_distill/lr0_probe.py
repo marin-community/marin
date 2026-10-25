@@ -132,6 +132,7 @@ def base_config(run_root: str, run_id: str, config_bytes: bytes, generation_byte
         source_generation_config=json.loads(generation_bytes),
         hosts=REPLICAS,
         moe_capacity_factor=4.0,  # dropless: the expert-axis size
+        router_combine_fp32=False,  # LR0 ran with the BF16 combine
     )
 
 
