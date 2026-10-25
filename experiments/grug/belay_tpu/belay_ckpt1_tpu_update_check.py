@@ -36,6 +36,7 @@ from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
 )
 from experiments.grug.belay_tpu.belay_ckpt1_tpu_preflight import emit
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
+from experiments.grug.belay_tpu.moe_saved_output import saved_output_routed_experts
 from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
 from experiments.grug.belay_tpu.remat_check import check_attention_remat
 from experiments.grug.fast_track.grugmuon_stacked import _zeropower_via_newtonschulz_local
@@ -152,6 +153,9 @@ def main():
         "--source-qb", action="store_true", help="Use the unchanged source histogram as a cross-run control"
     )
     parser.add_argument("--routing-ops", action="store_true", help="Use the selected Base16 routing lookup and sorts")
+    parser.add_argument(
+        "--saved-output", action="store_true", help="Compute routing gradients from saved expert returns"
+    )
     args = parser.parse_args()
     if args.source_qb:
         qb_balancing.bincount_upper_quantile = source_bincount_upper_quantile
@@ -160,6 +164,8 @@ def main():
         ep_ragged_all_to_all._accepted_assignments = routing_tpu.accepted_assignments_cutoff
         ep_ragged_all_to_all._restore_assignment_scalars = routing_tpu.restore_assignment_scalars_sort
         ep_ragged_all_to_all._permute_assignment_weights = routing_tpu.permute_assignment_weights_sort
+    if args.saved_output:
+        ep_ragged_all_to_all._routed_experts = saved_output_routed_experts
     if not args.logging_only and os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
         raise RuntimeError("Optimizer checks require JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
     if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -168,6 +174,8 @@ def main():
     output_root = f"{DATA_ROOT}/kaiyuew/belay-ckpt1-20261025/{run_id}"
     tpu = os.environ.get("BELAY_TPU", "v4-64")
     config = build_config(run_id, output_root, verified_tokenizer(), tpu, 0)
+    if args.saved_output and config.model.moe_shared_placement == model.SharedExpertPlacement.OVERLAP:
+        raise ValueError("Saved-output diagnostic requires the non-overlapped Ckpt 1 expert path")
     if args.compile_only:
         config = dataclasses.replace(config, model=dataclasses.replace(config.model, attn_res_remat_attention=False))
     validate_recipe(config)
@@ -189,6 +197,7 @@ def main():
             "diagnostic/original_schedule_steps": 8821,
             "diagnostic/source_qb_control": args.source_qb,
             "diagnostic/routing_ops": args.routing_ops,
+            "diagnostic/saved_output": args.saved_output,
             "diagnostic/reference_step1": args.reference_step1,
         }
     )
