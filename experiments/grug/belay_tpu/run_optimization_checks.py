@@ -17,6 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-prefix", required=True)
     parser.add_argument("--reference-step1")
+    parser.add_argument("--initial-checkpoint")
     parser.add_argument("--update-steps", type=int, default=2)
     parser.add_argument("--profile-steps", type=int, default=0)
     parser.add_argument("--first-port", type=int, required=True)
@@ -39,6 +40,8 @@ def main():
         default=_DEFAULT_PHASES,
     )
     args = parser.parse_args()
+    if args.reference_step1 and args.initial_checkpoint:
+        parser.error("Choose an initialization reference or a continuation checkpoint")
     if (
         any(
             name in args.phases
@@ -55,10 +58,15 @@ def main():
             )
         )
         and not args.reference_step1
+        and not args.initial_checkpoint
     ):
-        parser.error("--reference-step1 is required for full-update comparisons")
+        parser.error("Full-update comparisons require --reference-step1 or --initial-checkpoint")
     module_prefix = "experiments.grug.belay_tpu."
-    reference = ["--reference-step1", args.reference_step1]
+    reference = (
+        ["--initial-checkpoint", args.initial_checkpoint]
+        if args.initial_checkpoint
+        else ["--reference-step1", args.reference_step1]
+    )
     phases = {
         "source": ("belay_ckpt1_tpu_update_check", [*reference, "--source-qb"]),
         "qb": ("belay_ckpt1_tpu_update_check", reference),

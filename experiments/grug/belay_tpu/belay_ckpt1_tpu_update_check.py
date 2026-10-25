@@ -148,6 +148,7 @@ def main():
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
     parser.add_argument("--expert-reduction", choices=("native", "butterfly", "all-to-all"), default="native")
+    parser.add_argument("--initial-checkpoint", help="Profile continuation from a complete checkpoint leaf")
     parser.add_argument(
         "--update-steps", type=int, default=2, help="Consecutive diagnostic updates under the original schedule"
     )
@@ -168,6 +169,8 @@ def main():
         "--saved-output", action="store_true", help="Compute routing gradients from saved expert returns"
     )
     args = parser.parse_args()
+    if args.initial_checkpoint and args.reference_step1:
+        parser.error("A continuation cannot compare its first update to the initialization reference")
     if args.expert_reduction != "native" and not args.local_experts:
         parser.error("Expert-gradient reduction diagnostics require --local-experts")
     if args.expert_reduction == "butterfly":
@@ -237,7 +240,7 @@ def main():
     check_muon_gram_port()
     check_packed_kda()
     nonce = bytes(multihost_utils.broadcast_one_to_all(np.frombuffer(uuid.uuid4().bytes, dtype=np.uint8))).hex()
-    checkpoint_path = f"{output_root}/attempt-{nonce}/checkpoint-step1"
+    checkpoint_path = f"{output_root}/attempt-{nonce}/checkpoint-after-first-update"
     output = Path(os.environ["IRIS_OUTPUT_DIR"])
     (output / "resolved-config.json").write_text(json.dumps(draccus.encode(config), indent=2) + "\n")
     optimizer = config.optimizer.build(trainer.num_train_steps)
@@ -270,6 +273,15 @@ def main():
 
         state = initialize(model_key)
         jax.block_until_ready(state)
+        if args.initial_checkpoint:
+            state = train.restore_template_from(state)
+            state = load_checkpoint(state, args.initial_checkpoint, mesh=mesh, allow_partial=False)
+        initial_step = int(state.step)
+        if initial_step + total_updates > trainer.num_train_steps:
+            raise ValueError("Diagnostic updates exceed the original optimizer schedule")
+        tracker.log_summary(
+            {"diagnostic/initial_step": initial_step, "diagnostic/initial_checkpoint": args.initial_checkpoint}
+        )
         count = parameter_count(state.params)
         if count != 501789462:
             raise AssertionError(f"Unexpected parameter count: {count}")
@@ -280,11 +292,14 @@ def main():
         loader = train.build_train_loader(
             dataset, batch_schedule=trainer.batch_schedule, mesh=mesh, max_buffered_batches=2
         )
-        iterator = loader.iter_from_step(0)
+        iterator = loader.iter_from_step(initial_step)
         batch0 = next(iterator)
         batch0_hash = batch_digest(batch0)
-        emit("batch_frozen", rank=jax.process_index(), step=0, digest=batch0_hash)
-        if batch0_hash["tokens"]["sha256"] != "60c5f688c118e647ab71e35481bb67852533e319e0cf1cf157f2fffb9df7cc61":
+        emit("batch_frozen", rank=jax.process_index(), step=initial_step, digest=batch0_hash)
+        if (
+            initial_step == 0
+            and batch0_hash["tokens"]["sha256"] != "60c5f688c118e647ab71e35481bb67852533e319e0cf1cf157f2fffb9df7cc61"
+        ):
             raise AssertionError("First native TPU batch differs from frozen data-order probe")
         leaves, tree = jax.tree.flatten(state)
         step = train._flat_train_step(step_fn, tree)
@@ -311,7 +326,7 @@ def main():
             if not math.isfinite(loss):
                 raise AssertionError(f"Non-finite full-shape loss: {loss}")
             metric_name = "diagnostic/restored_loss" if restored else "train/loss"
-            tracker.log({metric_name: loss}, step=index)
+            tracker.log({metric_name: loss}, step=initial_step + index)
             elapsed = time.perf_counter() - started
             if not restored:
                 measurements.append({"index": index, "seconds": elapsed, "loss": loss})
@@ -319,6 +334,7 @@ def main():
                 "full_update_complete",
                 rank=jax.process_index(),
                 index=index,
+                global_step=initial_step + index,
                 restored=restored,
                 loss=loss,
                 seconds=elapsed,
@@ -328,7 +344,7 @@ def main():
         state1, _ = advance(state, batch0, 0)
         save_checkpoint(
             state1,
-            step=1,
+            step=initial_step + 1,
             checkpoint_path=checkpoint_path,
             is_temporary=False,
             write_config=trainer.checkpointer.write,
@@ -345,9 +361,9 @@ def main():
         batch1 = next(iterator)
         restored_batch1 = next(loader.iter_from_step(int(restored1.step)))
         require_equal(batch1, restored_batch1, "next native data batch after restore")
-        emit("batch_frozen", rank=jax.process_index(), step=1, digest=batch_digest(restored_batch1))
+        emit("batch_frozen", rank=jax.process_index(), step=initial_step + 1, digest=batch_digest(restored_batch1))
         state2, metrics2 = advance(state1, batch1, 1)
-        restored2, restored_metrics2 = advance(restored1, restored_batch1, 2, restored=True)
+        restored2, restored_metrics2 = advance(restored1, restored_batch1, 1, restored=True)
         require_equal(state2, restored2, "complete next-step state after restore")
         require_equal(metrics2, restored_metrics2, "complete next-step metrics after restore")
         del restored1, restored2
@@ -358,8 +374,8 @@ def main():
             emit(
                 "full_update_timing_window",
                 rank=jax.process_index(),
-                first_step=5,
-                last_step=args.update_steps - 1,
+                first_step=initial_step + 5,
+                last_step=initial_step + args.update_steps - 1,
                 median_seconds=float(np.median(timings)),
                 mean_seconds=float(np.mean(timings)),
                 scope=(
@@ -371,14 +387,14 @@ def main():
             profile_path = str(output / "profile")
             with jax.profiler.trace(profile_path):
                 for index in range(args.update_steps, total_updates):
-                    with jax.profiler.StepTraceAnnotation("train", step_num=index):
+                    with jax.profiler.StepTraceAnnotation("train", step_num=initial_step + index):
                         state2, _ = advance(state2, next(iterator), index)
             emit(
                 "full_update_profile_saved",
                 rank=jax.process_index(),
                 path=profile_path,
-                first_step=args.update_steps,
-                last_step=total_updates - 1,
+                first_step=initial_step + args.update_steps,
+                last_step=initial_step + total_updates - 1,
             )
         tracker.log_summary(
             {
