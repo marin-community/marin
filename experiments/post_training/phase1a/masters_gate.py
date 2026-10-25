@@ -45,6 +45,7 @@ from experiments.post_training.phase1a.matrix import (
 )
 
 GATE_LEARNING_RATE = 1e-5
+GATE_WARMUP_STEPS = 1
 
 
 def gate_recipe(*, learning_rate: float, max_steps: int, weight_steps: list[int], optimizer_steps: list[int]) -> dict:
@@ -56,6 +57,8 @@ def gate_recipe(*, learning_rate: float, max_steps: int, weight_steps: list[int]
         optimizer_checkpoint_steps=optimizer_steps,
         ckpt_interval=weight_steps[0],
     )
+    # Megatron's scheduler needs fewer warmup steps than the run's few total steps.
+    recipe["trainer"]["policy"]["optimizer_config"]["num_warmup_steps"] = GATE_WARMUP_STEPS
     return recipe
 
 

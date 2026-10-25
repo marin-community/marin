@@ -30,3 +30,4 @@ def test_the_gate_saves_masters_only_then_full_and_reloads_at_zero_learning_rate
     save, reload = json.loads(result.stdout)
     assert save["checkpoints"] == [[2, 3], [3]] and save["steps"][0] == 3
     assert reload["checkpoints"] == [[4], [4]] and reload["optimizer"][1] == 0.0
+    assert save["optimizer"][5] < save["steps"][0]  # Megatron asserts warmup < decay steps
