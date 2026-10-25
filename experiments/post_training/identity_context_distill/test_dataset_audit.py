@@ -31,7 +31,7 @@ def fixture_stream(tmp_path, monkeypatch):
         moe_capacity_factor=4.0,
         router_combine_fp32=True,
         fp32_activations=True,
-        attention_implementation=None,
+        attention_implementation="torch_order",
         dataset_uri="data",
         cache_uri="cache",
         output_uri=str(tmp_path),
