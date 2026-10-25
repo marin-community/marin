@@ -79,7 +79,7 @@ aggregate `eval/loss`, distinct from the macro BPB table above.
 
 [Run manifest](ladder/runs.json) records run URLs, schedule endpoints, restored
 steps, checkpoint roots, configuration hashes, domain metrics and original
-source revisions. [Raw curves](ladder/curves.csv.gz) retain every retrieved
+source revisions. [Raw curves](ladder/) retain every retrieved
 training/evaluation row and its execution ID. Re-render with
 `python -m experiments.grug.moe_cplm.plot_ladder`.
 

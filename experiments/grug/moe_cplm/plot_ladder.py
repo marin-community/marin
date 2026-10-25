@@ -18,8 +18,10 @@ def main():
     parser.add_argument("--evidence", type=Path, default=Path(__file__).with_name("ladder"))
     args = parser.parse_args()
     manifest = json.loads((args.evidence / "runs.json").read_text())
-    with gzip.open(args.evidence / "curves.csv.gz", "rt") as stream:
-        rows = list(csv.DictReader(stream))
+    rows = []
+    for path in sorted(args.evidence.glob("*.csv.gz")):
+        with gzip.open(path, "rt") as stream:
+            rows.extend({"run_id": path.name.removesuffix(".csv.gz"), **row} for row in csv.DictReader(stream))
     colors = {"belay": "#5F6368", "cplm": "#B36B16", "plus": "#1F77B4"}
     labels = {"belay": "Belay", "cplm": "CPLM", "plus": "CPLM Plus"}
     plt.rcParams.update({"font.size": 9, "svg.fonttype": "none", "pdf.fonttype": 42})

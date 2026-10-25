@@ -3,12 +3,14 @@
 
 """Full normalized emission oracle; forward/VJP checks only, no training."""
 
+import json
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from experiments.grug.moe_cplm import plus
+from experiments.grug.moe_cplm import case_classes, plus
 
 
 def distribution(params, tokens, segments, classes):
@@ -91,3 +93,14 @@ def test_zero_gain_blocks_only_predecessor_matrix_gradient(example):
     np.testing.assert_array_equal(gradients[6], 0)
     assert np.linalg.norm(gradients[7]) > 0
     assert np.linalg.norm(gradients[8]) > 0
+
+
+def test_tokenizer_classes_preserve_nonword_and_added_tokens(tmp_path):
+    tokenizer = tmp_path / "tokenizer.json"
+    tokenizer.write_text(
+        json.dumps({"model": {"vocab": {"View": 0, "Ġview": 1, "_VIEW": 2, "42": 3, "view-": 4, "é": 5}}})
+    )
+    classes, members = case_classes.build(tokenizer, vocab_size=7, width=3)
+    np.testing.assert_array_equal(classes, [0, 0, 0, 3, 4, 5, 6])
+    np.testing.assert_array_equal(members[:3], [[0, 1, 2]] * 3)
+    np.testing.assert_array_equal(members[3:], [[3, -1, -1], [4, -1, -1], [5, -1, -1], [6, -1, -1]])
