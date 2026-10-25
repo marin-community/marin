@@ -36,6 +36,7 @@ def main():
             "expert-collectives",
             "expert-gradient",
             "gather-layout",
+            "gmm-layout",
             "local-movement-kernel",
             "local-movement",
             "local-gradient",
@@ -84,6 +85,7 @@ def main():
         "expert-collectives": ("expert_collective_check", []),
         "expert-gradient": ("expert_gradient_check", []),
         "gather-layout": ("gather_layout_check", []),
+        "gmm-layout": ("gmm_layout_check", []),
         "local-movement-kernel": ("local_movement_check", []),
         "local-movement": (
             "belay_ckpt1_tpu_update_check",
@@ -143,10 +145,13 @@ def main():
         print(json.dumps(record), flush=True)
         with (output / "diagnostic-phases.jsonl").open("a") as file:
             file.write(json.dumps(record) + "\n")
-        if (
-            name
-            in ("saved-relu2-kernel", "expert-collectives", "local-movement-kernel", "expert-gradient", "gather-layout")
-            and result.returncode != 0
+        if result.returncode != 0 and name in (
+            "saved-relu2-kernel",
+            "expert-collectives",
+            "local-movement-kernel",
+            "expert-gradient",
+            "gather-layout",
+            "gmm-layout",
         ):
             break
     raise SystemExit(1 if failed else 0)
