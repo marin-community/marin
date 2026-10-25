@@ -47,6 +47,7 @@ from experiments.interp.snowball_identity.logit_check import (
     compare,
     parity_gate,
     read,
+    reference_ids,
     stored_sequences,
 )
 from experiments.interp.snowball_identity.multihost import broadcast_host_scalar, gather_host_scalar
@@ -154,16 +155,21 @@ def make_pre_update_gate(inputs: PrecisionGateInputs, deadline: Callable[[float]
             error: Exception | None = None
             try:
                 sequences = stored_sequences(inputs.positions)
+                reference = reference_ids(inputs.vllm, sequences)
             except Exception as exc:
                 error = exc
             receipt("inputs", error=repr(error) if error else None)
             if any_rank_failed(error is not None):
-                raise PrecisionGateFailed("a rank could not read the pinned positions") from error
+                raise PrecisionGateFailed(
+                    "a rank could not read the pinned positions or the vLLM reference ids"
+                ) from error
 
             overrides = trainer.config.compute_dtype_overrides
             with hax.partitioning.set_mesh(trainer.device_mesh), hax.axis_mapping(trainer.compute_axis_mapping):
                 view = cast_model_for_compute(state.model, trainer.mp, overrides)
-                records = positions_records(view, sequences, inputs.batch, inputs.pad_multiple, PAD_ID, routes=True)
+                records = positions_records(
+                    view, sequences, inputs.batch, inputs.pad_multiple, PAD_ID, routes=True, reference_ids=reference
+                )
                 dot_dtypes = router_dot_dtypes(view, trainer.mp.compute_dtype)
             receipt("scored", router_dot_dtypes=dot_dtypes)
 

@@ -23,7 +23,7 @@ from levanter.models.snowball import SnowballConfig, SnowballLMHeadModel
 
 from experiments.interp.snowball_identity import levanter_positions, precision_gate
 from experiments.interp.snowball_identity.levanter_positions import TOP_K, positions_records, write_positions
-from experiments.interp.snowball_identity.logit_check import stored_sequences
+from experiments.interp.snowball_identity.logit_check import position_stats, reference_ids, stored_sequences
 from experiments.interp.snowball_identity.sequences import Sequence
 
 CONFIG = SnowballConfig(
@@ -75,6 +75,64 @@ def test_records_match_the_model_forward(mesh_and_model):
             for i in range(1, len(sequence.tokens)):
                 np.testing.assert_allclose(record["actual"][i], expected[i - 1, sequence.tokens[i]], atol=1e-4)
                 assert int(record["top_ids"][i, 0]) == int(expected[i - 1].argmax())
+
+
+def test_reference_gather_measures_ids_outside_the_top_50(mesh_and_model):
+    """vLLM's ids are gathered from the same log-softmax, so a token ranked below the top 50 is still measured; the
+    grid offset (position p predicts token p + 1) holds under batching and padding."""
+    mesh, model = mesh_and_model
+    batch = jax.device_count()
+    with jax.set_mesh(mesh):
+        expected = {}
+        for sequence in SEQUENCES:
+            tokens = jnp.broadcast_to(jnp.asarray(sequence.tokens, dtype=jnp.int32), (batch, len(sequence.tokens)))
+            ids = hax.named(tokens, (Axis("batch", batch), model.Pos.resize(len(sequence.tokens))))
+            expected[sequence.id] = np.asarray(jax.nn.log_softmax(model(ids).array[0].astype(jnp.float32), axis=-1))
+        reference = {}
+        for sequence in SEQUENCES:
+            ranked = np.argsort(-expected[sequence.id], axis=-1)
+            ids = np.full((len(sequence.tokens), 3), -1, dtype=np.int32)
+            ids[1:, 0] = ranked[:-1, -1]  # the least likely token: outside the top 50 of 64
+            ids[1:, 1] = ranked[:-1, 0]
+            reference[sequence.id] = ids
+        records = positions_records(model, SEQUENCES, batch=2, pad_multiple=8, pad_id=63, reference_ids=reference)
+    for sequence in SEQUENCES:
+        record = records[sequence.id]
+        assert record["reference_ids"].shape == record["reference_lp"].shape == (len(sequence.tokens), 3)
+        assert (record["reference_ids"][0] == -1).all() and torch.isnan(record["reference_lp"][0]).all()
+        np.testing.assert_array_equal(record["reference_ids"][1:], reference[sequence.id][1:])
+        assert torch.isnan(record["reference_lp"][1:, 2]).all()
+        for i in range(1, len(sequence.tokens)):
+            assert int(reference[sequence.id][i, 0]) not in record["top_ids"][i].tolist()
+            for column in (0, 1):
+                token = reference[sequence.id][i, column]
+                want = expected[sequence.id][i - 1, token]
+                np.testing.assert_allclose(record["reference_lp"][i, column], want, atol=1e-4)
+
+
+def test_position_stats_uses_gathered_reference_values():
+    theirs = {"check|a": {"top": [None, {"5": -1.0, "9": -6.0}]}}
+    record = {"top_ids": torch.tensor([[-1, -1], [5, 7]]), "top_lp": torch.tensor([[np.nan, np.nan], [-1.25, -2.0]])}
+    groups = {"check": [("check|a", 1)]}
+    alone = position_stats({"check|a": record}, theirs, groups)["check"]
+    assert alone["missing_from_harness_top50"] == 1 and alone["tokens_compared"] == 1
+    record["reference_ids"] = torch.tensor([[-1, -1], [5, 9]])
+    record["reference_lp"] = torch.tensor([[np.nan, np.nan], [-1.25, -8.5]])
+    gathered = position_stats({"check|a": record}, theirs, groups)["check"]
+    assert gathered["missing_from_harness_top50"] == 0 and gathered["tokens_compared"] == 2
+    assert gathered["max_abs_logprob_diff"] == pytest.approx(2.5)
+
+
+def test_reference_ids_follow_the_record_layout(tmp_path):
+    sequence = Sequence("check|a", "check", (3, 17, 5))
+    stored = {"check|a": {"tokens": [3, 17, 5], "top": [None, {"17": -0.1, "4": -3.0}, {"5": -0.2}]}}
+    (tmp_path / "vllm.json").write_text(json.dumps(stored))
+    ids = reference_ids(str(tmp_path / "vllm.json"), [sequence])["check|a"]
+    assert ids.shape == (3, 20) and ids.dtype == np.int32
+    assert (ids[0] == -1).all() and ids[1, :2].tolist() == [17, 4] and ids[2, :1].tolist() == [5]
+    assert (ids[1, 2:] == -1).all() and (ids[2, 1:] == -1).all()
+    with pytest.raises(ValueError, match="different token IDs"):
+        reference_ids(str(tmp_path / "vllm.json"), [Sequence("check|a", "check", (3, 17, 6))])
 
 
 def test_write_positions_uses_the_compute_view(mesh_and_model, tmp_path):
@@ -224,6 +282,10 @@ def test_pre_update_gate_raises_on_failures_and_passes_when_clean(mesh_and_model
     assert report["failures"] and all(f.startswith("parity: ") for f in report["failures"])
     assert report["routes"]["totals"]["set_agree"] == report["routes"]["totals"]["positions"] > 0
     assert "jax_default_matmul_precision" in report
+    # The gate gathers at the stored vLLM ids: every reference token is measured.
+    stored = torch.load(tmp_path / "gate" / "positions.pt")
+    assert all("reference_lp" in r and not torch.isnan(r["reference_lp"][1:]).all() for r in stored.values())
+    assert all(stats["missing_from_harness_top50"] == 0 for stats in report["parity"]["positions"].values())
     # With the parity gate satisfied, the clean routes pass.
     monkeypatch.setattr(precision_gate, "parity_gate", lambda report: [])
     gate(trainer, state)

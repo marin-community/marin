@@ -20,6 +20,11 @@ causal mask they cannot change a real position. There is no packing: rows never 
 Entry ``i`` of each record is the distribution over token ``i`` given tokens ``0..i-1`` (vLLM's layout):
 ``{"tokens", "actual" [T] (nan at 0), "top_ids" [T, 50] (-1 at 0), "top_lp" [T, 50] (nan at 0)}``.
 
+With ``reference_ids`` (``logit_check.reference_ids``: vLLM's stored top-20 ids per position), each record also holds
+``reference_ids`` [T, 20] and ``reference_lp`` [T, 20]: the log-prob at exactly those ids, gathered from the same
+log-softmax as the top 50 (-1 / nan where vLLM stored no id, and at 0). Every vLLM token is then measured, wherever it
+falls in Levanter's ranking.
+
 With ``routes=True`` each record also stores the selected experts per token and layer, for the cross-stack routing
 row (``routing.compare_routes_cross_stack``). These are Levanter compute-view routes; they are never served-vLLM routes.
 
@@ -53,10 +58,11 @@ PAD_ID = 128001
 """Snowball v0.1's native EOS/PAD token; right padding only, and padded positions are discarded."""
 
 
-def _scores(model, tokens: jax.Array, targets: jax.Array, routes: bool = False) -> tuple:
+def _scores(model, tokens: jax.Array, targets: jax.Array, routes: bool = False, reference=None) -> tuple:
     """For every position of a [batch, S] token grid: the log-prob of ``targets`` (the next token) [B, S] and the
-    top-k [B, S, k]; with ``routes``, also every layer's selected experts [L, B, S, K]. Position ``S - 1`` has no next
-    token and is dropped by the caller.
+    top-k [B, S, k]; with ``routes``, also every layer's selected experts [L, B, S, K]; with ``reference`` ([B, S, R]
+    token ids, -1 for none), the log-prob at those ids [B, S, R]. Position ``S - 1`` has no next token and is dropped
+    by the caller.
 
     The whole batch is scored at once: batch and position stay sharded as the model left them (on a multi-host mesh
     they span hosts), and only the vocab axis is reduced. No single row or shifted slice of a sharded axis is taken,
@@ -74,20 +80,31 @@ def _scores(model, tokens: jax.Array, targets: jax.Array, routes: bool = False) 
     targets = reshard(targets, P(batch_spec, position_spec))
     actual = jnp.take_along_axis(logprobs, targets[..., None], axis=-1)[..., 0]
     top_lp, top_id = jax.lax.top_k(logprobs, TOP_K)
+    measured = None
+    if reference is not None:
+        reference = reshard(reference, P(batch_spec, position_spec, None))
+        measured = jnp.take_along_axis(logprobs, jnp.maximum(reference, 0), axis=-1)
+        measured = jnp.where(reference >= 0, measured, jnp.nan)
     # Replicated, so every process can read the outputs of a multi-host mesh.
-    outputs = (actual, top_id, top_lp)
-    if selected is not None:
-        outputs += (selected,)
-    return tuple(reshard(x, P()) for x in outputs) + ((None,) if selected is None else ())
+    return tuple(None if x is None else reshard(x, P()) for x in (actual, top_id, top_lp, selected, measured))
 
 
 def positions_records(
-    model, sequences: list[Sequence], batch: int = 1, pad_multiple: int = 64, pad_id: int = PAD_ID, routes: bool = False
+    model,
+    sequences: list[Sequence],
+    batch: int = 1,
+    pad_multiple: int = 64,
+    pad_id: int = PAD_ID,
+    routes: bool = False,
+    reference_ids: dict[str, np.ndarray] | None = None,
 ) -> dict[str, dict]:
     """``model`` is the compute view (already cast). One record per sequence, in the #298 schema, in input order.
 
     With ``routes``, each record also holds ``routes`` [T, L, K] (int16): the experts the forward selected for
-    token ``i`` at each layer, from the model's own route observer (not recomputed)."""
+    token ``i`` at each layer, from the model's own route observer (not recomputed).
+
+    ``reference_ids`` maps each sequence id to [T, R] token ids in the record layout (row ``i`` holds ids for token
+    ``i``; -1 for none); each record then holds ``reference_ids`` and the gathered ``reference_lp``."""
     scores = jax.jit(_scores, static_argnums=3)
     order = sorted(range(len(sequences)), key=lambda i: len(sequences[i].tokens))
     records: dict[int, dict] = {}
@@ -103,9 +120,17 @@ def positions_records(
         # The next token of each position, shifted on the host; the last position's target is padding (dropped).
         targets = np.full_like(grid, pad_id)
         targets[:, :-1] = grid[:, 1:]
-        *outputs, routes_out = scores(model, jnp.asarray(grid), jnp.asarray(targets), routes)
-        actual, top_ids, top_lp = (gather_global(x) for x in outputs)
-        selected = None if routes_out is None else gather_global(routes_out)
+        reference = None
+        if reference_ids is not None:
+            width = next(iter(reference_ids.values())).shape[1]
+            reference = np.full((batch, length, width), -1, dtype=np.int32)
+            for row, index in enumerate(indices):
+                # Grid position p predicts token p + 1: record row p + 1.
+                ids = reference_ids[sequences[index].id]
+                reference[row, : len(ids) - 1] = ids[1:]
+            reference = jnp.asarray(reference)
+        outputs = scores(model, jnp.asarray(grid), jnp.asarray(targets), routes, reference)
+        actual, top_ids, top_lp, selected, measured = (None if x is None else gather_global(x) for x in outputs)
         for row, index in enumerate(indices):
             n = len(sequences[index].tokens)
             records[index] = {
@@ -118,6 +143,14 @@ def positions_records(
                     np.concatenate([np.full((1, TOP_K), np.nan), top_lp[row, : n - 1]]).astype(np.float32)
                 ),
             }
+            if measured is not None:
+                width = measured.shape[-1]
+                records[index]["reference_ids"] = torch.from_numpy(
+                    np.concatenate([np.full((1, width), -1), reference_ids[sequences[index].id][1:n]]).astype(np.int32)
+                )
+                records[index]["reference_lp"] = torch.from_numpy(
+                    np.concatenate([np.full((1, width), np.nan), measured[row, : n - 1]]).astype(np.float32)
+                )
             if selected is not None:
                 records[index]["routes"] = torch.from_numpy(selected[:, row, :n].transpose(1, 0, 2).astype(np.int16))
         logger.info(
@@ -173,6 +206,7 @@ def write_positions(
     axis_mapping=None,
     routes: bool = False,
     compute_dtype_overrides=None,
+    reference_ids: dict[str, np.ndarray] | None = None,
 ) -> list[dict]:
     """Score the trainer's compute view of ``model`` and save ``positions.pt`` at ``path`` (s3:// or local); return
     the view's ``router_dot_dtypes``.
@@ -185,7 +219,7 @@ def write_positions(
     forward is a collective); only process 0 writes the file."""
     with hax.axis_mapping(axis_mapping or {}):
         view = cast_model_for_compute(model, mp, compute_dtype_overrides)
-        records = positions_records(view, sequences, batch, pad_multiple, pad_id, routes)
+        records = positions_records(view, sequences, batch, pad_multiple, pad_id, routes, reference_ids)
         dot_dtypes = router_dot_dtypes(view, mp.compute_dtype)
     if jax.process_index() == 0:
         save_positions(records, path)
