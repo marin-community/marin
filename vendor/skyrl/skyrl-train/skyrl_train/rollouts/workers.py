@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections import Counter
+from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
@@ -12,7 +13,8 @@ import ray
 from loguru import logger
 from omegaconf import DictConfig, OmegaConf
 from ray.actor import ActorHandle
-from ray.util.scheduling_strategies import NodeAffinitySchedulingStrategy
+from ray.util.placement_group import PlacementGroup, placement_group, remove_placement_group
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from transformers import PreTrainedTokenizerBase
 
 from skyrl_train.rollout_observability import RolloutTimings, current_rollout_observation, measure_rollout
@@ -26,6 +28,9 @@ from skyrl_train.utils.utils import configure_ray_worker_logging
 from skyrl_train.worker_setup import configure_worker_process
 
 _Result = TypeVar("_Result")
+
+# Ray labels every node with its node ID, so a placement-group bundle can name the node it must use.
+NODE_ID_LABEL = "ray.io/node-id"
 
 
 class RolloutWorkers(Protocol):
@@ -64,6 +69,7 @@ class RolloutWorkerResources:
     Workers start one at a time, each ``start_interval_seconds`` after the previous one is up, because each imports
     its runner stack and loads its tokenizer from a shared filesystem, and spacing the starts keeps those page-ins
     from overlapping each other and the engines' weight loads. An interval of zero starts every worker at once.
+    The pool fails to start when the workers' CPUs are not reserved within ``placement_timeout_seconds``.
     """
 
     num_workers: int
@@ -71,6 +77,7 @@ class RolloutWorkerResources:
     executor_threads: int
     progress_timeout_seconds: float
     start_interval_seconds: float
+    placement_timeout_seconds: float
 
     @classmethod
     def from_config(cls, config: DictConfig) -> RolloutWorkerResources:
@@ -81,11 +88,82 @@ class RolloutWorkerResources:
             executor_threads=int(workers.executor_threads),
             progress_timeout_seconds=float(workers.progress_timeout_seconds),
             start_interval_seconds=float(workers.start_interval_seconds),
+            placement_timeout_seconds=float(config.trainer.distributed.placement_group_timeout_seconds),
         )
 
 
 class RolloutWorkerStalledError(TimeoutError):
     """A rollout worker completed no request before its progress deadline."""
+
+
+class RolloutWorkerPlacementError(RuntimeError):
+    """The Ray cluster cannot hold the requested rollout workers."""
+
+
+@dataclass(frozen=True)
+class RayNode:
+    """A live Ray node and the CPUs it offers."""
+
+    node_id: str
+    address: str
+    cpus: float
+
+
+def live_ray_nodes() -> list[RayNode]:
+    return [
+        RayNode(node["NodeID"], node["NodeManagerAddress"], float(node["Resources"].get("CPU", 0)))
+        for node in ray.nodes()
+        if node["Alive"]
+    ]
+
+
+def rollout_worker_nodes(nodes: Sequence[RayNode], num_workers: int, cpus_per_worker: int) -> list[str]:
+    """Assign each rollout worker a node ID, round-robin over the nodes in address order.
+
+    Every worker runs its tasks' sandboxes on its own host, so spreading the workers spreads that load. A node
+    takes only as many workers as its CPUs hold; the others keep taking turns until every worker has a node.
+    """
+    ordered = sorted(nodes, key=lambda node: (node.address, node.node_id))
+    free_slots = {node.node_id: int(node.cpus // cpus_per_worker) for node in ordered}
+    if sum(free_slots.values()) < num_workers:
+        raise RolloutWorkerPlacementError(
+            f"{num_workers} rollout workers of {cpus_per_worker} CPUs do not fit on the live Ray nodes: "
+            + ", ".join(f"{node.address}={node.cpus:g} CPUs" for node in ordered)
+        )
+    assignment: list[str] = []
+    while len(assignment) < num_workers:
+        for node in ordered:
+            if len(assignment) < num_workers and free_slots[node.node_id]:
+                free_slots[node.node_id] -= 1
+                assignment.append(node.node_id)
+    return assignment
+
+
+async def reserve_rollout_workers(resources: RolloutWorkerResources) -> PlacementGroup:
+    """Reserve one CPU bundle per worker, bundle ``i`` on worker ``i``'s node, and wait until Ray grants them all.
+
+    Raises ``RolloutWorkerPlacementError`` when the live nodes cannot hold the workers or the reservation is not
+    granted within the placement timeout, instead of leaving workers pending.
+    """
+    nodes = live_ray_nodes()
+    assignment = rollout_worker_nodes(nodes, resources.num_workers, resources.cpus_per_worker)
+    addresses = {node.node_id: node.address for node in nodes}
+    workers_per_node = dict(Counter(addresses[node_id] for node_id in assignment))
+    group = placement_group(
+        [{"CPU": resources.cpus_per_worker} for _ in assignment],
+        strategy="SPREAD",
+        bundle_label_selector=[{NODE_ID_LABEL: node_id} for node_id in assignment],
+    )
+    try:
+        await asyncio.wait_for(group.ready(), timeout=resources.placement_timeout_seconds)
+    except TimeoutError as error:
+        remove_placement_group(group)
+        raise RolloutWorkerPlacementError(
+            f"Ray did not reserve {resources.cpus_per_worker} CPUs for each rollout worker within "
+            f"{resources.placement_timeout_seconds:g}s; workers per node: {workers_per_node}"
+        ) from error
+    logger.info("Rollout worker CPUs reserved: workers per node {}", workers_per_node)
+    return group
 
 
 @ray.remote
@@ -145,7 +223,8 @@ class RolloutWorkerPool:
     new training submissions wait until evaluation finishes. A request fails with
     ``RolloutWorkerStalledError`` when its worker completes nothing for the progress timeout.
 
-    Workers run on the driver's node beside the rollout buffer actor.
+    Workers are spread over the live Ray nodes (see ``rollout_worker_nodes``) and reach the rollout buffer, the
+    trajectory sink, and the inference engines through Ray.
     """
 
     def __init__(self, spec: RunnerSpec, resources: RolloutWorkerResources):
@@ -153,6 +232,7 @@ class RolloutWorkerPool:
         self._resources = resources
         self._sink: RetentionSink | None = None
         self._actors: list[ActorHandle] = []
+        self._placement: PlacementGroup | None = None
         # Ray async actors accept every request concurrently, and a runner may queue them behind its own limits, so
         # a worker is stalled only when none of its requests completes, not when one request is slow.
         self._pending = [0] * resources.num_workers
@@ -170,6 +250,7 @@ class RolloutWorkerPool:
         self._sink = sink
 
     async def startup(self) -> None:
+        self._placement = await reserve_rollout_workers(self._resources)
         count = self._resources.num_workers
         interval = self._resources.start_interval_seconds
         if interval == 0:
@@ -187,18 +268,21 @@ class RolloutWorkerPool:
             logger.info("Rollout worker {}/{} started", index + 1, count)
 
     def _launch_worker(self, index: int) -> ActorHandle:
-        node = NodeAffinitySchedulingStrategy(node_id=ray.get_runtime_context().get_node_id(), soft=False)
-        worker = RolloutWorker.options(num_cpus=self._resources.cpus_per_worker, scheduling_strategy=node)
+        bundle = PlacementGroupSchedulingStrategy(self._placement, placement_group_bundle_index=index)
+        worker = RolloutWorker.options(num_cpus=self._resources.cpus_per_worker, scheduling_strategy=bundle)
         return worker.remote(
             self._spec, WorkerShard(index, self._resources.num_workers), self._sink, self._resources.executor_threads
         )
 
     async def shutdown(self) -> None:
         actors, self._actors = self._actors, []
+        placement, self._placement = self._placement, None
         # Kill every worker before reporting any that failed to shut down cleanly.
         results = await asyncio.gather(*(actor.shutdown.remote() for actor in actors), return_exceptions=True)
         for actor in actors:
             ray.kill(actor)
+        if placement is not None:
+            remove_placement_group(placement)
         errors = [result for result in results if isinstance(result, Exception)]
         if errors:
             raise ExceptionGroup("rollout worker shutdown failed", errors)
