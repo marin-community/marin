@@ -5,6 +5,8 @@
 
 import json
 
+import pytest
+
 from experiments.interp.snowball_identity import torch_reference
 from experiments.interp.snowball_identity.worker import Queue
 
@@ -55,3 +57,11 @@ def test_missing_bad_or_failed_results_exit_one(tmp_path, monkeypatch):
     assert code == 1 and queue.read("final-check.json")["failures"] == ["r1: no done.json"]
     assert setup(tmp_path / "c", monkeypatch, results={"r1": "error.json"})[0] == 1
     assert json.loads((tmp_path / "c" / "q" / "final-check.json").read_text())["checks"] == {"r1": []}
+
+
+def test_missing_pod_s3_settings_stop_before_any_read(tmp_path, monkeypatch):
+    monkeypatch.delenv("AWS_ENDPOINT_URL", raising=False)
+    queue = Queue(str(tmp_path / "q"))
+    monkeypatch.setattr(torch_reference.preflight, "source_preflight", lambda *args: pytest.fail("read"))
+    assert torch_reference.run(queue, "s3://bucket/model", {"files": {}}, 2, 26, 4) == 2
+    assert "AWS_ENDPOINT_URL" in queue.read("source-audit-error.json")["error"]

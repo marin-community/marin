@@ -5,6 +5,8 @@
 
 Steps, each fatal on failure, before any GPU work:
 
+0. For an ``s3://`` source, the pod's S3 settings (``POD_S3_ENV``, set by Iris on CoreWeave task pods) must be
+   present: the source audit reads through plain fsspec, which without them reports a present file as missing.
 1. ``preflight.source_preflight`` on ``--expect`` (small files: metadata hashes, config fields, EOS, index size,
    the pinned positions.pt hash and its 465 sequences): ``<queue>/preflight.json``, exit 2.
 2. The full source audit (``precision_source_audit.audit_precision_source``: every header, all 502 tensors streamed,
@@ -19,6 +21,7 @@ passed; 1 means a spec or a result check failed; 2 means a check before the load
 import argparse
 import json
 import logging
+import os
 import traceback
 
 from rigging.filesystem.storage_path import prefix_join
@@ -28,6 +31,8 @@ from experiments.interp.snowball_identity.worker import Queue, serve
 from experiments.post_training.identity_context_distill.precision_source_audit import audit_precision_source
 
 logger = logging.getLogger(__name__)
+
+POD_S3_ENV = ("AWS_ENDPOINT_URL", "FSSPEC_S3", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY")
 
 
 def source_audit(weights: str, expected_hashes: dict[str, str], receipt_path: str) -> None:
@@ -55,6 +60,11 @@ def final_check(queue: Queue, layers: int, k: int) -> dict:
 
 
 def run(queue: Queue, weights: str, expect: dict, idle_minutes: float, layers: int, k: int) -> int:
+    missing = [name for name in POD_S3_ENV if not os.environ.get(name)] if weights.startswith("s3://") else []
+    if missing:
+        queue.write({"error": f"S3 settings missing on this pod: {missing}"}, "source-audit-error.json")
+        logger.error("S3 settings missing on this pod: %s", missing)
+        return 2
     failures = preflight.source_preflight(weights, expect)
     queue.write({"weights": weights, "expect": expect, "failures": failures}, "preflight.json")
     if failures:
