@@ -18,9 +18,11 @@ the unembedding (top promoted / suppressed tokens). Writes ``stats.npz`` and the
 """
 
 import argparse
+import io
 import logging
 import time
 
+import fsspec
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -60,8 +62,8 @@ def _merge_top(vals, ids, new_vals, new_ids):
     return top, jnp.take_along_axis(i, pick, axis=-1)
 
 
-def init_state() -> dict:
-    L, E, I, V, K = forward.NUM_LAYERS, forward.NUM_EXPERTS, forward.EXPERT_WIDTH, forward.VOCAB, forward.TOP_K
+def init_state(num_layers: int) -> dict:
+    L, E, I, V, K = num_layers, forward.NUM_EXPERTS, forward.EXPERT_WIDTH, forward.VOCAB, forward.TOP_K
     z = jnp.zeros
     return dict(
         fire=z((L, E, I)),
@@ -102,7 +104,9 @@ def init_state() -> dict:
     )
 
 
-def make_step():
+def make_step(layers: tuple[int, ...]):
+    """The accumulation step over ``layers`` (the state's layer axis follows their order)."""
+
     @jax.jit
     def step(state, model, tokens, seg, weight, offset):
         model = forward.replicate(model)
@@ -112,6 +116,8 @@ def make_step():
         new = dict(state)
         upd = {k: [] for k in state}
         for i, lay in enumerate(tr["layers"]):
+            if i not in layers:
+                continue
             act = lay["expert_act"]  # [TK, I], assignments in expert order
             experts = lay["expert_sorted"]
             tok_sorted = lay["token_sorted"]
@@ -262,7 +268,7 @@ def make_step():
     return step
 
 
-def neuron_logit_lens(model) -> dict:
+def neuron_logit_lens(model, layers: tuple[int, ...]) -> dict:
     """Each neuron's direct unembedding effect: its output direction (routed: ``w_down[e, i] @ w_latent_up``) times
     the MLP SConv's lag-0 tap and the final norm gain, on ``W_out``, centred over the vocabulary."""
     model = forward.replicate(model)
@@ -278,7 +284,9 @@ def neuron_logit_lens(model) -> dict:
         return top_v, top_i, -bot_v, bot_i, jnp.std(logits, axis=-1), jnp.sqrt(jnp.sum(jnp.square(dirs), axis=-1))
 
     routed, shared = [], []
-    for layer in model.layers():
+    for li, layer in enumerate(model.layers()):
+        if li not in layers:
+            continue
         lag0 = layer.sconv_mlp.weight[0].astype(jnp.float32)
         w_down = layer.mlp.expert_mlp.w_down.astype(jnp.float32)  # [E, I, R]
         up = layer.mlp.w_latent_up.astype(jnp.float32)  # [R, D]
@@ -293,6 +301,32 @@ def neuron_logit_lens(model) -> dict:
     return out
 
 
+# Arrays without a layer axis: identical in every layer shard.
+GLOBAL_KEYS = ("token_counts", "loss_sum", "tokens")
+
+
+def merge_shards(tag: str, num_shards: int) -> None:
+    """Wait for the ``stats_part{j}`` layer shards and write their layer-concatenated ``stats.npz``."""
+    fs, root = fsspec.core.url_to_fs(f"{common.OUTPUT_ROOT}/{tag}")
+    paths = [f"{root}/stats_part{j}.npz" for j in range(num_shards)]
+    while not all(fs.exists(p) for p in paths):
+        time.sleep(30)
+    parts = []
+    for p in paths:
+        with fs.open(p, "rb") as f:
+            z = np.load(io.BytesIO(f.read()))
+            parts.append({k: z[k] for k in z.files})
+    order = np.argsort([int(part["layers"][0]) for part in parts])
+    parts = [parts[j] for j in order]
+    merged = {k: parts[0][k] for k in GLOBAL_KEYS}
+    for k in parts[0]:
+        if k not in GLOBAL_KEYS:
+            merged[k] = np.concatenate([part[k] for part in parts], axis=0)
+    assert list(merged["layers"]) == list(range(forward.NUM_LAYERS)), merged["layers"]
+    del merged["layers"]
+    common.save_npz(tag, "stats", **merged)
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
@@ -300,44 +334,59 @@ def main() -> None:
     parser.add_argument("--checkpoint", default=None)
     parser.add_argument("--train-sequences", type=int, default=2048)
     parser.add_argument("--paloma-sequences", type=int, default=64, help="per Paloma set")
+    parser.add_argument("--batch", type=int, default=BATCH)
+    parser.add_argument("--layers", default="", help="comma-separated layer shard (default: every layer)")
+    parser.add_argument("--part", type=int, default=-1, help="write stats_part<part>.npz (a layer shard)")
+    parser.add_argument("--merge", type=int, default=0, help="only merge this many stats_part shards")
     args = parser.parse_args()
+    if args.merge:
+        merge_shards(args.tag, args.merge)
+        return
+    layers = tuple(int(x) for x in args.layers.split(",")) if args.layers else tuple(range(forward.NUM_LAYERS))
     checkpoint = args.checkpoint or common.CHECKPOINTS[args.tag]
     cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, checkpoint)
     t0 = time.time()
+    bs = args.batch
     with set_mesh(mesh):
         model = common.compute_model(params)
-        state = init_state()
-        step = make_step()
+        state = init_state(len(layers))
+        step = make_step(layers)
         sources, seq_tokens, seq_segs, seq_weights = [], [], [], []
         batches = [
-            *common.paloma_batches(BATCH, max_sequences=args.paloma_sequences),
-            *common.train_batches(BATCH, args.train_sequences),
+            *common.paloma_batches(bs, max_sequences=args.paloma_sequences),
+            *common.train_batches(bs, args.train_sequences),
         ]
         for n, batch in enumerate(batches):
             tokens, seg, w = common.device_batch(batch, mesh)
-            offset = jnp.asarray(n * BATCH * common.SEQ_LEN, jnp.int32)
+            offset = jnp.asarray(n * bs * common.SEQ_LEN, jnp.int32)
             state = step(state, model, tokens, seg, w, offset)
             seq_tokens.append(batch.tokens.astype(np.uint16))
             seq_segs.append(batch.segment_ids.astype(np.int32))
             seq_weights.append((batch.loss_weight > 0).astype(np.uint8))
-            sources += [batch.source] * BATCH
+            sources += [batch.source] * bs
             if n % 50 == 0:
                 logger.info("batch %d/%d (%s) %.0fs", n, len(batches), batch.source, time.time() - t0)
         host = {k: np.asarray(v) for k, v in state.items()}
-        host.update(neuron_logit_lens(model))
-        host["router_bias"] = np.stack([np.asarray(layer.mlp.router_bias, np.float32) for layer in params.layers()])
-    common.save_npz(args.tag, "stats", **host)
-    common.save_npz(
-        args.tag,
-        "tokens",
-        tokens=np.concatenate(seq_tokens),
-        segment_ids=np.concatenate(seq_segs),
-        valid=np.concatenate(seq_weights),
-        sources=np.asarray(sources),
-    )
+        host.update(neuron_logit_lens(model, layers))
+        host["router_bias"] = np.stack(
+            [np.asarray(layer.mlp.router_bias, np.float32) for li, layer in enumerate(params.layers()) if li in layers]
+        )
+    if args.part >= 0:
+        common.save_npz(args.tag, f"stats_part{args.part}", layers=np.asarray(layers), **host)
+    else:
+        common.save_npz(args.tag, "stats", **host)
+    if 0 in layers:
+        common.save_npz(
+            args.tag,
+            "tokens",
+            tokens=np.concatenate(seq_tokens),
+            segment_ids=np.concatenate(seq_segs),
+            valid=np.concatenate(seq_weights),
+            sources=np.asarray(sources),
+        )
     logger.info(
         "done in %.0fs, %d tokens, mean loss %.4f", time.time() - t0, host["tokens"], host["loss_sum"] / host["tokens"]
     )
