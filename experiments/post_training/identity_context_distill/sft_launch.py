@@ -17,12 +17,15 @@ binds:
 
 Then the dataset audit reads the same iterator the loop consumes (64 updates, the frozen 512 sequences) before any
 update; each of the 16 updates checks its consumed batch against the frozen order immediately before its
-``train_step``. After update 16 the native checkpoint is written and committed first (the resume source for 64), then
+``train_step``. The loss uses query segment IDs for dispatch validity and reports unique dropped assignments from
+that same forward. Missing metrics or nonzero drops stop the run before the next update. Counts are gathered as
+global per-layer totals, without summing replicated copies. After update 16 the native checkpoint is written and
+committed first (the resume source for 64), then
 the BF16 + FP32-router-bias HF export and its save audit. Process 0 writes ``sft-result.json`` last. The milestone-16
 spending gate is evaluated afterwards on the export, not here.
 
 ``main`` prints the job plan; with ``--run`` it submits. ``--run`` needs the passing LR0 run root (its ``gate.json``
-with no failures, four ``gated`` rank receipts and ``lr0-result.json``), the capacity record and the spending gate
+with no failures, four ``updated`` rank receipts and ``lr0-result.json``), the capacity record and the spending gate
 file; it writes ``--launch-receipt`` before the submit and again with the Iris job id after it.
 """
 
@@ -47,8 +50,8 @@ from levanter.compute_dtype import cast_model_for_compute
 from levanter.data.text.datasets import LmDataConfig
 from levanter.main.train_lm import TrainLmConfig, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmExample
-from levanter.models.snowball import GrugMoeHfConfig
-from levanter.tracker import NoopConfig
+from levanter.models.snowball import GrugMoeHfConfig, SnowballConfig, snowball_loss_with_dispatch_stats
+from levanter.tracker import NoopConfig, NoopTracker, current_tracker
 from levanter.trainer import Trainer, initialize
 from levanter.trainer_state import TrainerState
 from rigging.filesystem.buckets import filesystem_for
@@ -56,6 +59,12 @@ from rigging.filesystem.factory import url_to_fs
 from rigging.filesystem.storage_path import StoragePath, prefix_join
 
 from experiments.interp.snowball_identity.levanter_positions import router_dot_dtypes, router_dot_is_fp32
+from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows, gather_host_scalar
+from experiments.interp.snowball_identity.precision_gate import (
+    device_memory_report,
+    dispatch_failures,
+    local_device_memory,
+)
 from experiments.post_training.identity_context_distill.dataset_audit import (
     ACCOUNTING_MODULE_SHA256,
     FREEZE_SHA256,
@@ -112,6 +121,57 @@ AUDITED_UPDATES = 64
 """The dataset audit pre-reads the frozen 512 sequences: 64 updates of 8."""
 SOURCE_SHARDS = 39
 ROUTER_BIAS_DTYPES = {f"model.layers.{layer}.mlp.router.bias": "float32" for layer in range(26)}
+RUNTIME_RECEIPT_SHA256 = "4b9ca7e928e1853c84d40a071e0da850254bd52b78aca0ef504b9b3f31c47b82"
+DISPATCH_METRICS = ("moe_dropped", "moe_sender_dropped", "moe_receiver_dropped")
+
+
+def sft_runtime_receipt(receipt_bytes: bytes, receipt_sha256: str) -> dict:
+    """Require the reviewed schema-5 forward, not a self-selected receipt hash."""
+    if receipt_sha256 != RUNTIME_RECEIPT_SHA256:
+        raise ValueError("SFT requires the reviewed schema-5 runtime receipt")
+    receipt = approved_receipt(receipt_bytes, receipt_sha256)
+    model = receipt["runtime_model_config"]
+    if (
+        receipt["schema_version"] != 5
+        or model["moe_capacity_factor"] != 4.0
+        or model["router_combine_fp32"] is not True
+        or model["fp32_activations"] is not True
+    ):
+        raise ValueError("SFT requires dropless dispatch, FP32 combine and FP32 activations")
+    return receipt
+
+
+class DispatchMetrics(NoopTracker):
+    """Read the actual train_step loss metrics through the public tracker boundary."""
+
+    def __init__(self):
+        self.values = {}
+
+    def log(self, metrics, *, step, commit=None):
+        for name in DISPATCH_METRICS:
+            key = f"train/{name}"
+            if key in metrics:
+                self.values[name] = metrics[key]
+
+    def checked_counts(self) -> dict:
+        missing = set(self.values) != set(DISPATCH_METRICS)
+        if np.any(gather_host_scalar(int(missing))):
+            raise ValueError("Training forward did not report all dispatch metrics")
+        counts = {name: gather_global(self.values[name]) for name in DISPATCH_METRICS}
+        if any(
+            value.shape != (26,)
+            or not np.all(np.isfinite(value))
+            or np.any(value < 0)
+            or np.any(value != np.floor(value))
+            for value in counts.values()
+        ):
+            raise ValueError("Invalid per-layer dispatch metrics")
+        if not np.array_equal(counts["moe_dropped"], counts["moe_sender_dropped"] + counts["moe_receiver_dropped"]):
+            raise ValueError("Inconsistent unique-assignment dispatch counts")
+        failures = dispatch_failures({name.removeprefix("moe_"): value for name, value in counts.items()})
+        if failures:
+            raise ValueError(f"Training forward dropped valid expert assignments: {failures}")
+        return {name: value.astype(np.int64).tolist() for name, value in counts.items()}
 
 
 @dataclass(frozen=True)
@@ -154,6 +214,9 @@ def sft_config(
         source_config=json.loads(config_bytes),
         source_generation_config=json.loads(generation_bytes),
         hosts=REPLICAS,
+        moe_capacity_factor=4.0,
+        router_combine_fp32=True,
+        fp32_activations=True,
         stop_after_updates=STOP_AFTER_UPDATES,
     )
     return replace(base, data=data)
@@ -200,11 +263,14 @@ def train_checked_updates(
     for update in range(first, first + count):
         batch = next(batches)
         receipt = check_batch(batch, update)
-        info = trainer.train_step(state, batch)
+        dispatch = DispatchMetrics()
+        with current_tracker(dispatch):
+            info = trainer.train_step(state, batch)
+        counts = dispatch.checked_counts()
         state = info.state
         if int(state.step) != update + 1 or not np.isfinite(info.loss):
             raise ValueError(f"Update {update} did not complete with a finite loss")
-        updates.append({**receipt, "update": update, "loss": float(info.loss)})
+        updates.append({**receipt, "update": update, "loss": float(info.loss), "dispatch": counts})
     return state, updates
 
 
@@ -223,6 +289,8 @@ def run_identity_sft(
     """
     if config.trainer.num_train_steps != STOP_AFTER_UPDATES or config.trainer.load_checkpoint_path is not None:
         raise ValueError("The milestone run is a fresh 16-update run from the pinned source")
+    if config.z_loss_weight != 0.0:
+        raise ValueError("The checked SFT loss requires the frozen zero auxiliary-loss recipe")
     export_path = f"{config.hf_save_path}/step-{STOP_AFTER_UPDATES - 1}"
     if (StoragePath(export_path) / "config.json").exists():
         raise FileExistsError("SFT export path already holds a model; refusing to reuse it")
@@ -249,11 +317,8 @@ def run_identity_sft(
     initialize(config)
     started = time.monotonic()
 
-    def loss(model, example, *, key=None):
-        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
-
     optimizer = config.optimizer.build(config.trainer.num_train_steps)
-    with Trainer(config.trainer, optimizer, loss, add_default_hooks=False) as trainer:
+    with Trainer(config.trainer, optimizer, snowball_loss_with_dispatch_stats, add_default_hooks=False) as trainer:
         check_runtime_recipe(config, source_config=source, source_generation_config=generation)
         run_on_export_writer(
             lambda: write_export_json(
@@ -297,6 +362,7 @@ def run_identity_sft(
         batches, dataset_report = audits.audit_iterator(trainer.data_loader(train_dataset).iter_from_step(0), config)
         train_started = time.monotonic()
         state, updates = train_checked_updates(trainer, state, batches, audits.check_batch, STOP_AFTER_UPDATES)
+        memory = device_memory_report(gather_host_rows(local_device_memory()))
         train_seconds = time.monotonic() - train_started
         check_restored_progress(config, state, completed_updates=STOP_AFTER_UPDATES)
         for name, value in router_values(state.model).items():
@@ -337,6 +403,8 @@ def run_identity_sft(
             "save_seconds": save_seconds,
             "worker_seconds": time.monotonic() - started,
             "runtime_recipe_receipt": runtime_receipt,
+            "runtime_receipt_sha256": RUNTIME_RECEIPT_SHA256,
+            "device_memory": {"after_update": memory},
             "lr0_source_receipt": lr0_source,
             "source_object_list": source_objects,
         }
@@ -346,6 +414,7 @@ def sft_worker(
     run_root: str,
     run_id: str,
     receipt_bytes: bytes,
+    receipt_sha256: str,
     data_config_bytes: bytes,
     lr0_source: dict,
     source_objects: dict,
@@ -353,7 +422,7 @@ def sft_worker(
 ) -> None:
     """Run on every replica; the byte arguments are the reviewed receipt's and the frozen data config's bytes."""
     check_pod_storage()
-    runtime_receipt = approved_receipt(receipt_bytes)
+    runtime_receipt = sft_runtime_receipt(receipt_bytes, receipt_sha256)
     reference = runtime_receipt["routing_reference"]
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
@@ -384,7 +453,13 @@ def sft_worker(
 
 
 def bound_sft_worker(
-    run_root: str, run_id: str, receipt_bytes: bytes, data_config_bytes: bytes, lr0_source: dict, source_objects: dict
+    run_root: str,
+    run_id: str,
+    receipt_bytes: bytes,
+    receipt_sha256: str,
+    data_config_bytes: bytes,
+    lr0_source: dict,
+    source_objects: dict,
 ) -> None:
     """The job entrypoint: ``sft_worker`` with the frozen dataset audit and the trained-export audit bound."""
     check_pod_storage()
@@ -407,7 +482,7 @@ def bound_sft_worker(
             expected_hashes=SOURCE_FILE_HASHES,
         ),
     )
-    sft_worker(run_root, run_id, receipt_bytes, data_config_bytes, lr0_source, source_objects, audits)
+    sft_worker(run_root, run_id, receipt_bytes, receipt_sha256, data_config_bytes, lr0_source, source_objects, audits)
 
 
 def read_remote(path: str) -> bytes:
@@ -419,7 +494,7 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def lr0_pass(lr0_root: str) -> dict:
+def lr0_pass(lr0_root: str, runtime_receipt: dict) -> dict:
     """The passing LR0 run this SFT relies on; raises unless every reading-rule receipt says pass."""
     gate_path = prefix_join(lr0_root, "precision-gate/gate.json")
     gate_bytes = read_remote(gate_path)
@@ -428,11 +503,14 @@ def lr0_pass(lr0_root: str) -> dict:
         raise ValueError(f"LR0 gate did not pass: {gate.get('failures')}")
     for rank in range(REPLICAS):
         receipt = json.loads(read_remote(prefix_join(lr0_root, f"precision-gate/ranks/{rank}.json")))
-        if receipt.get("stage") != "gated" or receipt.get("failures") != 0:
-            raise ValueError(f"LR0 rank {rank} did not pass the gate: {receipt}")
+        if receipt.get("stage") != "updated" or receipt.get("process") != rank:
+            raise ValueError(f"LR0 rank {rank} did not complete the probe update: {receipt}")
     result_bytes = read_remote(prefix_join(lr0_root, "lr0-result.json"))
-    if json.loads(result_bytes).get("completed_updates") != 1:
+    result = json.loads(result_bytes)
+    if result.get("completed_updates") != 1:
         raise ValueError("LR0 result does not record one completed update")
+    if result.get("runtime_recipe_receipt") != runtime_receipt:
+        raise ValueError("LR0 used a different runtime recipe from the SFT forward")
     source_path = prefix_join(lr0_root, "audits/source-tensor-hashes.json")
     source_bytes = read_remote(source_path)
     if len(json.loads(source_bytes)["tensors"]) != 502:
@@ -470,6 +548,7 @@ def frozen_mixture() -> tuple[bytes, dict]:
 
 
 def plan(job_name: str, run_root: str, timeout_seconds: int, priority: str, config: TrainLmConfig) -> dict:
+    assert isinstance(config.model, SnowballConfig)
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True)
     return {
@@ -490,6 +569,13 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, priority: str, conf
             "seq_len": config.train_seq_len,
         },
         "mesh": mesh_layout(config.trainer.mesh),
+        "forward": {
+            "moe_capacity_factor": config.model.moe_capacity_factor,
+            "router_combine_fp32": config.model.router_combine_fp32,
+            "fp32_activations": config.model.fp32_activations,
+            "token_valid": "query_segment_ids >= 0",
+        },
+        "runtime_receipt_sha256": RUNTIME_RECEIPT_SHA256,
         "region": RESOURCES.target_cluster,
         "replicas": REPLICAS,
         "gpus": 8 * REPLICAS,
@@ -508,7 +594,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--job-name", required=True)
     parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
-    parser.add_argument("--runtime-receipt", required=True, help="local runtime-recipe-f37aec3.json")
+    parser.add_argument("--runtime-receipt", required=True, help="local runtime-recipe-23152e4d.json")
+    parser.add_argument("--runtime-receipt-sha256", required=True)
     parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")
     parser.add_argument("--expect-commit", help="the reviewed worker pin; required with --run, must equal HEAD")
@@ -528,7 +615,7 @@ def main() -> None:
     if args.timeout_seconds > MAX_TIMEOUT_SECONDS and not args.allow_long_timeout:
         raise SystemExit(f"timeout above {MAX_TIMEOUT_SECONDS} s needs --allow-long-timeout")
     receipt_bytes = Path(args.runtime_receipt).read_bytes()
-    approved_receipt(receipt_bytes)
+    runtime_receipt = sft_runtime_receipt(receipt_bytes, args.runtime_receipt_sha256)
     config_bytes = read_remote(f"{BASE_MODEL}config.json")
     generation_bytes = read_remote(f"{BASE_MODEL}generation_config.json")
     if sha256(config_bytes) != SOURCE_FILE_HASHES["config.json"]:
@@ -537,7 +624,7 @@ def main() -> None:
         raise SystemExit("source generation_config.json differs from the pinned hash")
     data_config_bytes, mixture = frozen_mixture()
     config = sft_config(run_root, args.job_name, config_bytes, generation_bytes, data_config_bytes)
-    lr0 = lr0_pass(args.lr0_run_root.rstrip("/")) if args.lr0_run_root else None
+    lr0 = lr0_pass(args.lr0_run_root.rstrip("/"), runtime_receipt) if args.lr0_run_root else None
     source_objects = source_object_list(args.source_object_list) if args.source_object_list else None
     job_plan = {
         **plan(args.job_name, run_root, args.timeout_seconds, args.priority, config),
@@ -583,6 +670,7 @@ def main() -> None:
         run_root,
         args.job_name,
         receipt_bytes,
+        args.runtime_receipt_sha256,
         data_config_bytes,
         lr0["source_receipt"],
         source_objects,
