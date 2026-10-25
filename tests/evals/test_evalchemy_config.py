@@ -213,6 +213,7 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
             "generation": False,
             "unsafe_code": False,
             "completion_only": False,
+            "primary_metric": None,
         },
         {
             "name": "gsm8k",
@@ -221,6 +222,7 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
             "generation": True,
             "unsafe_code": False,
             "completion_only": False,
+            "primary_metric": None,
         },
     ]
 
@@ -228,7 +230,7 @@ def test_client_config_json_carries_endpoint_and_per_task_dirs():
 def test_file_config_fields_reach_the_evalchemy_command():
     config = _payload(
         _config(
-            tasks=(EvalTaskConfig("ifeval", 0, generation=True),),
+            tasks=(EvalTaskConfig("ifeval", 0, generation=True, primary_metric="strict_prompt_accuracy"),),
             batch_size=1,
             seed=1234,
             extra_model_args={"timeout": 900},
@@ -239,6 +241,7 @@ def test_file_config_fields_reach_the_evalchemy_command():
 
     command = build_command(config, config["tasks"][0], "/opt/py", 32768)
 
+    assert command[command.index("--primary-metric") + 1] == "strict_prompt_accuracy"
     assert command[command.index("--batch_size") + 1] == "1"
     assert command[command.index("--seed") + 1] == "1234"
     assert command[command.index("--dataset_cache") + 1] == "s3://eval-data/cache"
