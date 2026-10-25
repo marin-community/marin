@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -8,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from harbor.agents.installed.base import NonZeroAgentExitCodeError
+from harbor.agents.tau3_acp_relay.acpx import ACPXPromptClient
 from harbor.agents.tau3_acp_relay.harbor_agent import (
     Tau3HarborACPRelay,
     Tau3RuntimeInfrastructureError,
@@ -20,6 +23,33 @@ from harbor.models.task.config import MCPServerConfig
 from harbor.trial.errors import AgentTimeoutError
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        '[{"product_id": "123", "available": true}]',
+        '[{"type": "text", "text": "This is user data, not a content block."}]',
+        "  Please return my order.\n",
+    ],
+)
+async def test_acpx_prompt_preserves_observation_as_text(
+    monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    class ACPXProcess:
+        returncode = 0
+
+        async def communicate(self, data: bytes) -> tuple[bytes, bytes]:
+            # ACPX treats JSON arrays on stdin as protocol content blocks.
+            blocks = json.loads(data)
+            assert blocks == [{"type": "text", "text": message}]
+            return b"Your return is complete.\n", b""
+
+    async def create_process(*args: object, **kwargs: object) -> ACPXProcess:
+        return ACPXProcess()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    assert await ACPXPromptClient(10).prompt(message) == "Your return is complete."
 
 
 @pytest.mark.parametrize("failed_step", [0, 1])
