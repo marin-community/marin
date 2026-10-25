@@ -88,7 +88,7 @@ class Tau3HarborACPRelay(BaseAgent):
             )
 
         package_dir = Path(__file__).parent
-        for filename in ("__init__.py", "relay.py", "runner.py"):
+        for filename in ("__init__.py", "acpx.py", "relay.py", "runner.py"):
             await environment.upload_file(
                 package_dir / filename, REMOTE_PACKAGE_ROOT / filename
             )
