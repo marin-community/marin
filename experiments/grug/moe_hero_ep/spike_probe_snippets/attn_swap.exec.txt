@@ -1,0 +1,21 @@
+# Recompute one sequence's gradient with another attention kernel (numerics test). Inputs: STEP,RACK,SEQ,IMPL.
+import dataclasses
+import equinox as eqx
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
+
+def _swap(m, cfg):
+    if isinstance(m, GrugModelConfig):
+        return cfg
+    if isinstance(m, eqx.Module):
+        return dataclasses.replace(m, **{f.name: _swap(getattr(m, f.name), cfg) for f in dataclasses.fields(m) if f.init})
+    if isinstance(m, (list, tuple)):
+        return type(m)(_swap(x, cfg) for x in m)
+    return m
+
+new_cfg = dataclasses.replace(probe.params.config, attention_implementation=IMPL)
+swapped = _swap(probe.params, new_cfg)
+for name, params in (("baseline", probe.params), (IMPL, swapped)):
+    for label, idx in (("seq_only", [SEQ]), ("slice", None)):
+        loss, denom, _, g = probe.grad_fn(params, probe.pending_qb_betas, probe.batch(STEP, RACK), probe.seq_mask(idx))
+        result[f"{name}/{label}"] = {"loss": float(loss), "denom": float(denom), "norms": probe.norms(g, 1.0)}
+        del g

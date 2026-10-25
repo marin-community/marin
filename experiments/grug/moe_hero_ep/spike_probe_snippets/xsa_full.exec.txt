@@ -1,0 +1,20 @@
+# Full-batch step gradient with the XSA projection computed in fp32. Inputs: STEP.
+import inspect, textwrap
+from experiments.grug.moe_hero_ep import model as M
+_orig_call = M.CausalSelfAttention.__call__
+_src = textwrap.dedent(inspect.getsource(_orig_call))
+OLD_DOT = "dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)"
+OLD_NSQ = "v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)"
+OLD_PROJ = "attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v"
+src = (_src.replace(OLD_DOT, "dot = jnp.sum(attn_out.astype(jnp.float32) * aligned_v.astype(jnp.float32), axis=-1, keepdims=True)")
+       .replace(OLD_NSQ, "v_norm_sq = jnp.sum(jnp.square(aligned_v.astype(jnp.float32)), axis=-1, keepdims=True)")
+       .replace(OLD_PROJ, "attn_out = (attn_out.astype(jnp.float32) - (dot / (v_norm_sq + 1e-6)) * aligned_v.astype(jnp.float32)).astype(attn_out.dtype)"))
+ns = dict(M.__dict__); exec(src, ns)
+try:
+    M.CausalSelfAttention.__call__ = ns["__call__"]
+    jax.clear_caches()
+    full = runner.op_full({"op": "full", "step": STEP})
+    result["fp32_xsa"] = {"loss": full["loss"], "grad_norm_total": full["grad_norm_total"], "slices": [s["grad_total"] for s in full["slices"]]}
+finally:
+    M.CausalSelfAttention.__call__ = _orig_call
+    jax.clear_caches()

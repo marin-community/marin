@@ -1,0 +1,7 @@
+# Full per-parameter grad norms for one sequence alone, and for the slice without it.
+loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+result["seq_only"] = {"loss": loss, "denom": denom, "norms": probe.norms(g, 1.0)}
+del g
+loss, denom, _, g = probe.slice_grad(STEP, RACK, [i for i in range(256) if i != SEQ])
+result["without_seq"] = {"loss": loss, "denom": denom, "norms": probe.norms(g, 1.0)}
+del g

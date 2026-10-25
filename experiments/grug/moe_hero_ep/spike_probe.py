@@ -12,7 +12,9 @@ token-weighted sum of the slice gradients.
 
 Nothing is trained and nothing is written next to the checkpoint. Results go to
 ``--output-path``. The job runs an initial command list, then polls ``<output>/cmd/`` for more
-JSON commands until a ``quit`` command or ``--idle-timeout`` seconds without one.
+JSON commands until a ``quit`` command or ``--idle-timeout`` seconds without one. The ``exec``
+payloads used for #10677 are in ``spike_probe_snippets/``; each expects its inputs (``STEP``,
+``RACK``, ``SEQ``, ...) prepended as assignments.
 
 Launch as an Iris coordinator job:
 
@@ -42,7 +44,7 @@ import numpy as np
 from fray.cluster import ResourceConfig
 from haliax.partitioning import set_mesh
 from jax.experimental import multihost_utils
-from jax.sharding import NamedSharding
+from jax.sharding import NamedSharding, reshard
 from jax.sharding import PartitionSpec as P
 from levanter.callbacks.watch import compute_watch_stats
 from levanter.checkpoint import load_checkpoint
@@ -495,7 +497,8 @@ class Runner:
         @jax.jit
         def splice(dst, src):
             def leaf(x, y):
-                row = y[src_seq]
+                # The batch axis is sharded; replicate before taking one row.
+                row = reshard(y, P())[src_seq]
                 mask = (rows == seq).reshape((RACK_BATCH,) + (1,) * (x.ndim - 1))
                 return jnp.where(mask, row[None], x)
 

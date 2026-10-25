@@ -1,0 +1,22 @@
+# Fragility test: tiny relative noise on the token embeddings (same treedef, no recompile). Inputs: STEP,RACK,SEQ.
+import dataclasses
+base = probe.params
+emb = base.token_embed
+key = jax.random.PRNGKey(7)
+
+@jax.jit
+def _perturb(e, scale, k):
+    noise = jax.random.normal(k, e.shape, jnp.float32)
+    return (e.astype(jnp.float32) + scale * jnp.std(e.astype(jnp.float32)) * noise).astype(e.dtype)
+
+out = {}
+try:
+    for scale in (0.0, 1e-4, 1e-3):
+        for trial in range(2 if scale > 0 else 1):
+            p = dataclasses.replace(base, token_embed=_perturb(emb, jnp.float32(scale), jax.random.fold_in(key, trial)))
+            loss, denom, _, g = probe.grad_fn(p, probe.pending_qb_betas, probe.batch(STEP, RACK), probe.seq_mask([SEQ]))
+            n = probe.norms(g, 1.0); del g, p
+            out[f"scale{scale:g}_t{trial}"] = {"loss": float(loss), "grad_total": n["grad/norm/total"]}
+finally:
+    probe.params = base
+result.update(out)

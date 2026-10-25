@@ -1,0 +1,20 @@
+# Split the SM100 kernel: SM100 forward + generic backward, and generic forward + SM100 backward.
+import dataclasses, re
+from levanter.grug.attention import _fa4_cute as F
+_orig = F.sm100_flash4_cute_kernel_config
+variants = {
+    "sm100fwd_genericbwd": lambda c: dataclasses.replace(c, sm100_backward=None),
+    "genericfwd_sm100bwd": lambda c: dataclasses.replace(c, sm100_forward=None),
+    "sm100_both": lambda c: c,
+}
+try:
+    for name, mod in variants.items():
+        F.sm100_flash4_cute_kernel_config = (lambda m=mod: m(_orig()))
+        jax.clear_caches()
+        loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+        n = probe.norms(g, 1.0); del g
+        layers = [sum(v * v for k, v in n.items() if re.match(rf"grad/norm/stacked_blocks\.{l}\.", k)) ** 0.5 for l in range(48)]
+        result[name] = {"loss": loss, "grad_total": n["grad/norm/total"], "layers": layers}
+finally:
+    F.sm100_flash4_cute_kernel_config = _orig
+    jax.clear_caches()

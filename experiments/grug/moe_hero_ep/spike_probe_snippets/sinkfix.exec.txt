@@ -1,0 +1,18 @@
+# Give the culprit a sink token: overwrite its first token with BOS and recompute its gradient (SM100).
+import dataclasses
+BOS = 128000
+b = probe.batch(STEP, RACK)
+rows = jnp.arange(b.tokens.shape[0]); cols = jnp.arange(b.tokens.shape[1])
+
+@jax.jit
+def _with_bos(b):
+    hit = (rows[:, None] == SEQ) & (cols[None, :] == 0)
+    return dataclasses.replace(b, tokens=jnp.where(hit, jnp.asarray(BOS, b.tokens.dtype), b.tokens))
+
+key = (STEP, RACK)
+for name, batch in (("original", b), ("bos_at_0", _with_bos(b))):
+    probe._batch_cache[key] = batch
+    loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+    n = probe.norms(g, 1.0); del g
+    result[name] = {"loss": loss, "grad_total": n["grad/norm/total"]}
+probe._batch_cache[key] = b

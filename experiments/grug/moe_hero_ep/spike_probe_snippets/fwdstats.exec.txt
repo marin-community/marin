@@ -1,0 +1,49 @@
+# Per-layer residual-stream statistics for every sequence of (STEP, RACK). Inputs: STEP, RACK, SEQ.
+import equinox as eqx
+from jax.sharding import get_abstract_mesh, reshard
+from experiments.grug.moe_hero_ep import model as M
+
+@jax.jit
+def _fwd_stats(params, pending, batch):
+    m = probe.mp.cast_to_compute(M.apply_qb_betas(params, pending))
+    cfg = m.config
+    hidden = M._embedding_gather(m.token_embed, batch.tokens)
+    hidden = m.embed_gated_norm(m.embed_norm(hidden))
+    seg = None
+    if batch.attn_mask.segment_ids is not None:
+        q = M._batch_reshard(batch.attn_mask.segment_ids[0])
+        seg = (q, q)
+    short_mask = M.AttentionMask(is_causal=True, sliding_window=cfg.sliding_window, segment_ids=seg)
+    long_mask = M.AttentionMask(is_causal=True, sliding_window=None, segment_ids=seg)
+    B, S = hidden.shape[0], hidden.shape[1]
+    long_lb, valid = M.fa4_cute_segment_bounds(long_mask, batch_size=B, seq_len=S, sliding_window=None)
+    short_lb, _ = M.fa4_cute_segment_bounds(short_mask, batch_size=B, seq_len=S, sliding_window=cfg.sliding_window)
+    spec = P(M._BATCH_AXES, M._seq_axis(get_abstract_mesh()))
+    long_lb, short_lb, valid = reshard(long_lb, spec), reshard(short_lb, spec), reshard(valid, spec)
+    schedule = M._long_layer_schedule(cfg.num_layers, cfg.global_every)
+
+    def body(h, xs):
+        layer, use_long = xs
+        use_long = jnp.asarray(use_long, dtype=jnp.bool_)
+        lb = jnp.where(use_long, long_lb, short_lb)
+        out, _ = layer(h, long_mask.with_fa4_bounds(lb, valid), use_long, use_long)
+        hf = out.astype(jnp.float32)
+        df = (out - h).astype(jnp.float32)
+        rms = jnp.sqrt(jnp.mean(hf * hf, axis=-1))
+        drms = jnp.sqrt(jnp.mean(df * df, axis=-1))
+        amax = jnp.max(jnp.abs(hf), axis=-1)
+        stats = (
+            jnp.max(rms, axis=1), jnp.mean(rms, axis=1), jnp.min(rms, axis=1),
+            jnp.max(amax, axis=1), jnp.argmax(amax, axis=1), jnp.max(drms, axis=1), jnp.mean(drms, axis=1),
+        )
+        return out, stats
+
+    _, stats = jax.lax.scan(body, hidden, xs=(m.stacked_blocks.stacked, schedule))
+    return stats
+
+names = ["rms_max", "rms_mean", "rms_min", "absmax", "absmax_pos", "delta_rms_max", "delta_rms_mean"]
+vals = [np.asarray(jax.device_get(jax.sharding.reshard(x, P()))) for x in _fwd_stats(probe.params, probe.pending_qb_betas, probe.batch(STEP, RACK))]
+for n, v in zip(names, vals):
+    result[n + "/seq"] = v[:, SEQ].tolist()
+    result[n + "/median"] = np.median(v, axis=1).tolist()
+    result[n + "/max_other"] = np.max(np.delete(v, SEQ, axis=1), axis=1).tolist()

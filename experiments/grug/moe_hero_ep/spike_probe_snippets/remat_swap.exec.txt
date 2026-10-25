@@ -1,0 +1,23 @@
+# Recompute one sequence's gradient with a different remat mode (same SM100 kernels). Inputs: STEP,RACK,SEQ,MODES.
+import dataclasses, re
+import equinox as eqx
+from experiments.grug.moe_hero_ep.model import GrugModelConfig
+
+def _swap(m, cfg):
+    if isinstance(m, GrugModelConfig):
+        return cfg
+    if isinstance(m, eqx.Module):
+        return dataclasses.replace(m, **{f.name: _swap(getattr(m, f.name), cfg) for f in dataclasses.fields(m) if f.init})
+    if isinstance(m, (list, tuple)):
+        return type(m)(_swap(x, cfg) for x in m)
+    return m
+
+for mode in MODES:
+    params = _swap(probe.params, dataclasses.replace(probe.params.config, remat_mode=mode))
+    try:
+        loss, denom, _, g = probe.grad_fn(params, probe.pending_qb_betas, probe.batch(STEP, RACK), probe.seq_mask([SEQ]))
+        n = probe.norms(g, 1.0); del g
+        layers = [sum(v * v for k, v in n.items() if re.match(rf"grad/norm/stacked_blocks\.{l}\.", k)) ** 0.5 for l in range(48)]
+        result[mode] = {"loss": float(loss), "grad_total": n["grad/norm/total"], "layers": layers}
+    except Exception as exc:
+        result[mode] = {"error": repr(exc)[:2000]}

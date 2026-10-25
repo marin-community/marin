@@ -1,0 +1,85 @@
+# Discriminate the ill-conditioned op with forward-preserving patches (custom_vjp: hero forward, altered backward).
+# Inputs: STEP, RACK, SEQ.
+import inspect, re, textwrap, json as _json
+from experiments.grug.moe_hero_ep import model as M
+from rigging.filesystem.storage_path import StoragePath
+_orig_call = M.CausalSelfAttention.__call__
+_src = textwrap.dedent(inspect.getsource(_orig_call))
+OLD_DOT = "dot = jnp.sum(attn_out * aligned_v, axis=-1, keepdims=True)"
+OLD_NSQ = "v_norm_sq = jnp.sum(aligned_v * aligned_v, axis=-1, keepdims=True)"
+OLD_PROJ = "attn_out = attn_out - (dot / (v_norm_sq + 1e-6)) * aligned_v"
+for s_ in (OLD_DOT, OLD_NSQ, OLD_PROJ, "q = rms_norm(q)", "k = rms_norm(k)"):
+    assert s_ in _src, s_
+
+def _xsa_ref(y, v):
+    dot = jnp.sum(y * v, axis=-1, keepdims=True)
+    nsq = jnp.sum(v * v, axis=-1, keepdims=True)
+    return y - (dot / (nsq + 1e-6)) * v
+
+@jax.custom_vjp
+def xsa_bwd32(y, v):
+    return _xsa_ref(y, v)
+def _x_fwd(y, v):
+    return _xsa_ref(y, v), (y, v)
+def _x_bwd(res, g):
+    y, v = res
+    _, vjp = jax.vjp(_xsa_ref, y.astype(jnp.float32), v.astype(jnp.float32))
+    gy, gv = vjp(g.astype(jnp.float32))
+    return gy.astype(y.dtype), gv.astype(v.dtype)
+xsa_bwd32.defvjp(_x_fwd, _x_bwd)
+
+def _rms_eps(x, eps):
+    variance = jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1, keepdims=True)
+    return (x * jax.lax.rsqrt(variance + eps)).astype(x.dtype)
+
+@jax.custom_vjp
+def rms_bwd_reg(x):
+    return _rms_eps(x, 1e-6)
+def _r_fwd(x):
+    return _rms_eps(x, 1e-6), x
+def _r_bwd(x, g):
+    _, vjp = jax.vjp(lambda a: _rms_eps(a, 1e-2), x)
+    return vjp(g)
+rms_bwd_reg.defvjp(_r_fwd, _r_bwd)
+
+qk_records = []
+def _qk_rec(qmin, kmin, nk):
+    qk_records.append((np.asarray(qmin).tolist(), np.asarray(kmin).tolist(), np.asarray(nk).tolist()))
+def _qk_record_norm(which):
+    def f(x):
+        r = jnp.sqrt(jnp.mean(jnp.square(x.astype(jnp.float32)), axis=-1))  # [B, S, H]
+        if which == "k":
+            jax.debug.callback(_qk_rec, jnp.zeros((r.shape[0],)), jnp.min(r, axis=(1, 2)), jnp.sum((r < 0.05).astype(jnp.int32), axis=(1, 2)))
+        else:
+            jax.debug.callback(_qk_rec, jnp.min(r, axis=(1, 2)), jnp.zeros((r.shape[0],)), jnp.sum((r < 0.05).astype(jnp.int32), axis=(1, 2)))
+        return M.rms_norm(x)
+    return f
+
+xsa_line = "attn_out = _XSA(attn_out, aligned_v)"
+variants = {
+    "xsa_bwd_fp32": _src.replace(OLD_PROJ, xsa_line),
+    "qk_norm_bwd_eps1e-2": _src.replace("q = rms_norm(q)", "q = _RMS(q)").replace("k = rms_norm(k)", "k = _RMS(k)"),
+    "record_qk": _src.replace("q = rms_norm(q)", "q = _QREC(q)").replace("k = rms_norm(k)", "k = _KREC(k)"),
+}
+try:
+    for name, src in variants.items():
+        ns = dict(M.__dict__); ns.update(_XSA=xsa_bwd32, _RMS=rms_bwd_reg, _QREC=_qk_record_norm("q"), _KREC=_qk_record_norm("k"))
+        try:
+            exec(src, ns)
+        except Exception as exc:
+            result[name] = {"error": repr(exc)[:500]}
+            continue
+        M.CausalSelfAttention.__call__ = ns["__call__"]
+        jax.clear_caches(); qk_records.clear()
+        try:
+            loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+            n = probe.norms(g, 1.0); del g
+            layers = [sum(v * v for k, v in n.items() if re.match(rf"grad/norm/stacked_blocks\.{l}\.", k)) ** 0.5 for l in range(48)]
+            result[name] = {"loss": loss, "grad_total": n["grad/norm/total"], "layers": layers}
+        except Exception as exc:
+            result[name] = {"error": repr(exc)[:1500]}
+        if name == "record_qk":
+            StoragePath(f"{runner.output}/results/qk-p{jax.process_index():02d}.json").write_text(_json.dumps(qk_records[:96]))
+finally:
+    M.CausalSelfAttention.__call__ = _orig_call
+    jax.clear_caches()

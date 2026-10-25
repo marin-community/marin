@@ -1,0 +1,7 @@
+# Run-to-run spread of one sequence's gradient norm (numerical determinism test).
+vals = []
+for _ in range(3):
+    loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+    n = probe.norms(g, 1.0); del g
+    vals.append({"loss": loss, "grad_total": n["grad/norm/total"]})
+result["repeats"] = vals

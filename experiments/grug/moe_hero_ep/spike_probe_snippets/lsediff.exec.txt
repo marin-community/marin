@@ -1,0 +1,43 @@
+# Compare SM100 vs generic forward residuals (out, lse) in place (row SEQ stays on its device), record per-process
+# per-call diffs, and take gradients with mixed residuals. Inputs: STEP, RACK, SEQ.
+import dataclasses, json as _json, re
+from levanter.grug.attention import _fa4_cute_backend as B
+from rigging.filesystem.storage_path import StoragePath
+_orig_fwd = B.segmented_flash_attention_forward
+records = []
+
+def _record(lse_d, out_d, pos):
+    records.append((np.asarray(lse_d).tolist(), np.asarray(out_d).tolist(), np.asarray(pos).tolist()))
+
+def make_patch(mode):
+    def patched(q, k, v, lower_bounds, valid, *, softmax_scale, kernel_config, q_offset):
+        out_s, lse_s = _orig_fwd(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, kernel_config=kernel_config, q_offset=q_offset)
+        gen_cfg = dataclasses.replace(kernel_config, sm100_forward=None)
+        out_g, lse_g = _orig_fwd(q, k, v, lower_bounds, valid, softmax_scale=softmax_scale, kernel_config=gen_cfg, q_offset=q_offset)
+        if mode == "record":
+            dl = jnp.abs(lse_s - lse_g)
+            do = jnp.max(jnp.abs(out_s.astype(jnp.float32) - out_g.astype(jnp.float32)), axis=(2, 3))
+            jax.debug.callback(_record, jnp.max(dl, axis=(1, 2)), jnp.max(do, axis=1), jnp.argmax(jnp.max(dl, axis=1), axis=1))
+            return out_s, lse_s
+        if mode == "out_sm100_lse_generic":
+            return out_s, lse_g
+        if mode == "out_generic_lse_sm100":
+            return out_g, lse_s
+        return out_s, lse_s
+    return patched
+
+try:
+    for mode in ("record", "out_sm100_lse_generic", "out_generic_lse_sm100"):
+        B.segmented_flash_attention_forward = make_patch(mode)
+        jax.clear_caches()
+        records.clear()
+        loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+        n = probe.norms(g, 1.0); del g
+        layers = [sum(v * v for kk, v in n.items() if re.match(rf"grad/norm/stacked_blocks\.{l}\.", kk)) ** 0.5 for l in range(48)]
+        result[mode] = {"loss": loss, "grad_total": n["grad/norm/total"], "layers": layers}
+        if mode == "record":
+            pid = jax.process_index()
+            StoragePath(f"{runner.output}/results/lsediff-p{pid:02d}.json").write_text(_json.dumps(records[:120]))
+finally:
+    B.segmented_flash_attention_forward = _orig_fwd
+    jax.clear_caches()

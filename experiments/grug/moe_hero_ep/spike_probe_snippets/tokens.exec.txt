@@ -1,0 +1,29 @@
+# Token-range bisection of one sequence's gradient. Inputs: STEP, RACK, SEQ (prepended).
+import dataclasses
+from jax.sharding import NamedSharding
+probe_b = probe.batch(STEP, RACK)
+S = probe_b.tokens.shape[1]
+rep = NamedSharding(probe.mesh, P())
+
+@jax.jit
+def _masked(b, pm):
+    return dataclasses.replace(b, loss_weight=b.loss_weight * pm[None, :])
+
+def run(lo, hi):
+    pm = np.zeros((S,), np.float32); pm[lo:hi] = 1
+    nb = _masked(probe_b, jax.device_put(pm, rep))
+    loss, denom, _, g = probe.grad_fn(probe.params, probe.pending_qb_betas, nb, probe.seq_mask([SEQ]))
+    n = probe.norms(g, 1.0); del g
+    return {"lo": lo, "hi": hi, "loss": float(loss), "denom": float(denom), "grad_total": n["grad/norm/total"]}
+
+levels = []
+lo, hi = 0, S
+for width in (1024, 64, 4, 1):
+    entries = [run(a, min(a + width, hi)) for a in range(lo, hi, width)]
+    levels.append(entries)
+    top = max(entries, key=lambda e: e["grad_total"] * e["denom"])
+    lo, hi = top["lo"], top["hi"]
+    if hi - lo <= 1:
+        break
+result["levels"] = levels
+result["whole"] = run(0, S)

@@ -1,0 +1,25 @@
+# Data swap: put row SRC_SEQ of (SRC_STEP, SRC_RACK) into row SEQ of (STEP, RACK); grads with the SM100 kernel.
+from jax.sharding import reshard
+target = probe.batch(STEP, RACK)
+source = probe.batch(SRC_STEP, SRC_RACK)
+rows = jnp.arange(256)
+
+@jax.jit
+def _splice(dst, src):
+    def leaf(x, y):
+        row = reshard(y, P())[SRC_SEQ]
+        mask = (rows == SEQ).reshape((256,) + (1,) * (x.ndim - 1))
+        return jnp.where(mask, row[None], x)
+    return jax.tree.map(leaf, dst, src)
+
+key = (STEP, RACK)
+_, base_denom, _, g = probe.slice_grad(STEP, RACK)
+result["base_slice"] = probe.norms(g, 1.0)["grad/norm/total"]; del g
+probe._batch_cache[key] = _splice(target, source)
+try:
+    loss, denom, _, g = probe.slice_grad(STEP, RACK)
+    result["swapped_slice"] = {"loss": loss, "grad_total": probe.norms(g, 1.0)["grad/norm/total"]}; del g
+    loss, denom, _, g = probe.slice_grad(STEP, RACK, [SEQ])
+    result["swapped_seq_only"] = {"loss": loss, "grad_total": probe.norms(g, 1.0)["grad/norm/total"]}; del g
+finally:
+    probe._batch_cache[key] = target
