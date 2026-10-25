@@ -125,9 +125,10 @@ def inkling_attention(q, k, v, mask: AttentionMask, band, *, implementation: str
         raise ValueError("Ckpt 1 attention requires aligned equal query/key lengths and head widths")
     k = align_kv_heads(k, num_q_heads=q.shape[2])
     v = align_kv_heads(v, num_q_heads=q.shape[2])
-    spec = P(("data", "expert"), None, "model", None)
-    band_spec = P(("data", "expert"), "model", None, None)
-    segment_spec = P(("data", "expert"), None)
+    batch_axes = ("replica_dcn", "data", "expert")
+    spec = P(batch_axes, None, "model", None)
+    band_spec = P(batch_axes, "model", None, None)
+    segment_spec = P(batch_axes, None)
     q, k, v = (jax.sharding.reshard(x, spec) for x in (q, k, v))
     band = jax.sharding.reshard(band, band_spec)
     if mask.segment_ids is None:

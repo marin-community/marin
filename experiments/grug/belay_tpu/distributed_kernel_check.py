@@ -77,7 +77,7 @@ def main():
                 array.shape, NamedSharding(mesh, spec), lambda index: array[index].astype(dtype)
             )
 
-        batch_axes = ("data", "expert")
+        batch_axes = ("replica_dcn", "data", "expert")
         attn_spec = P(batch_axes, None, "model", None)
         band_spec = P(batch_axes, "model", None, None)
         ids = place(np.broadcast_to(np.arange(128) // 37, (128, 128)), P(batch_axes, None), np.int32)
