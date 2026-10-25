@@ -15,11 +15,12 @@
 import argparse
 import json
 import logging
+import os
 
 import numpy as np
 
 from experiments.grug.fast_track.interp import atlas as atlas_pass
-from experiments.grug.fast_track.interp import categories, early
+from experiments.grug.fast_track.interp import categories, early, forward
 
 logger = logging.getLogger(__name__)
 
@@ -337,10 +338,11 @@ def expert_census(atlas: dict, vocab: list[str]) -> dict:
 
 
 def heads_section(hz: dict) -> dict:
-    """Per L0-L2 head: distance profile, self / previous / doc-start / same-token / delimiter / in-word masses (both
-    weightings), a label, and the induction table."""
+    """Per head of every layer with head statistics (``early.HEAD_LAYERS``; L0-L2 in the d512 data): distance
+    profile, self / previous / doc-start / same-token / delimiter / in-word masses (both weightings), a label, and
+    the induction table."""
     out = {"heads": [], "edges": [0, 1, 2, 5, 17, 65, 257, 1025, 4097]}
-    for i in early.EARLY:
+    for i in [li for li in range(early.L) if f"stats/L{li}/n" in hz]:
         p = f"stats/L{i}/"
         n = hz[p + "n"]
         for h in range(early.H):
@@ -398,7 +400,11 @@ def head_label(d: dict) -> str:
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", required=True, help="directory with the early_*.npz, atlas.npz, atlas_tokens.npz")
+    parser.add_argument(
+        "--data",
+        required=True,
+        help="directory with the early_*.npz and atlas.npz + atlas_tokens.npz (else stats.npz + tokens.npz)",
+    )
     parser.add_argument("--vocab", required=True, help="vocab.json (list of token strings)")
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
@@ -406,8 +412,9 @@ def main() -> None:
         vocab = json.load(f)
     d = args.data
     toks = dict(np.load(f"{d}/early_tokens.npz"))
-    at = np.load(f"{d}/atlas_tokens.npz")
-    train = at["sources"] == 0
+    has_atlas = os.path.exists(f"{d}/atlas.npz")
+    at = np.load(f"{d}/atlas_tokens.npz" if has_atlas else f"{d}/tokens.npz")
+    train = at["sources"] == (0 if has_atlas else "train")
     tab = ngram_tables(at["tokens"][train].astype(np.int64), at["segment_ids"][train], at["valid"][train])
     cats = token_categories(
         toks["tokens"].astype(np.int64), toks["segment_ids"], toks["weight"], toks["sources"], vocab, tab
@@ -423,11 +430,15 @@ def main() -> None:
     page["consume"]["units"] = unit_dependence(co, vocab)
     pr = np.load(f"{d}/early_probe.npz")
     page["probe"] = probe_section(dict(pr), toks, vocab)
-    atlas = np.load(f"{d}/atlas.npz", mmap_mode="r")
+    # Without an atlas the stats pass's expert-token counts stand in (no per-domain counts: no "domain" experts).
+    atlas = np.load(f"{d}/atlas.npz" if has_atlas else f"{d}/stats.npz", mmap_mode="r")
     page["routing"] = routing_section(dict(pr), toks, {"expert_token_ids": atlas["expert_token_ids"]})
-    page["census"] = expert_census(
-        {"expert_token_ids": atlas["expert_token_ids"], "expert_dom": atlas["expert_dom"]}, vocab
+    dom = (
+        atlas["expert_dom"]
+        if has_atlas
+        else np.zeros((*atlas["expert_token_ids"].shape[:2], len(early.SOURCES)), np.float32)
     )
+    page["census"] = expert_census({"expert_token_ids": atlas["expert_token_ids"], "expert_dom": dom}, vocab)
     hz = np.load(f"{d}/early_heads.npz")
     page["heads"], examples = heads_section(dict(hz))
     rows = [r for r, src in enumerate(page["heads"]["example_source"]) if src in ("c4_en", "train")][:2]
@@ -468,7 +479,9 @@ def unit_dependence(co, vocab) -> dict:
                 [dict(e=int(cand[o]), lost=float(lost[o]), mass=float(mass[cand[o]] / mass.sum())) for o in order]
             )
         out["top_experts"].append(tops)
-        e = 375
+        e = 375  # the d512 L4 ics expert (its named units are d512's)
+        if forward.NUM_LAYERS != 6:
+            continue
         out["e375"][name] = dict(
             expert=float(-signed[fi, 1, e].sum() / max(clean[1, e].sum(), 1e-9)),
             units={str(u): float(-signed[fi, 1, e, u] / max(clean[1, e, u], 1e-9)) for u in (79, 218, 263, 306, 372)},

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the first three layers (KDA layers 0, 1, 2) of the Ckpt 1 d512 model do.
+"""What the first three layers (KDA layers 0, 1, 2, ahead of the first MLA layer L3) of the Ckpt 1 study model do.
 
 One evaluation set (``PALOMA_ROWS`` sequences of every Paloma subset plus ``TRAIN_ROWS`` unseen training sequences,
 rows ``% 3 == 0`` held out for the probes) and four phases, each writing ``early_<phase>.npz``:
@@ -38,7 +38,7 @@ from haliax.partitioning import set_mesh
 from jax.sharding import PartitionSpec as P
 from jax.sharding import reshard
 
-from experiments.grug.fast_track.interp import categories, common, forward, heads
+from experiments.grug.fast_track.interp import attrib, categories, common, forward, heads
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,19 @@ HEAD_ROWS = 12
 EXCERPT = 128
 INDUCTION_BATCHES = 2
 CONSUME_BATCHES = 12
-SITE_NAMES = (*[f"in{i}" for i in range(L)], "final", *[f"blk{i}" for i in range(L)])
+# Rows per patched forward of the consume phase (the patched gates' sources outgrow one GPU at 8 d1280 rows).
+CONSUME_ROWS = 2
+# Probe sites: the residual mix entering layers 0..PROBE_IN_LAYERS-1, the final readout mix and the block outputs of
+# layers 0..PROBE_BLOCK_LAYERS-1 (every layer at d512; the first eight inputs and seven blocks at d1280).
+PROBE_IN_LAYERS = min(L, 8)
+PROBE_BLOCK_LAYERS = min(L, 7)
+SITE_NAMES = (*[f"in{i}" for i in range(PROBE_IN_LAYERS)], "final", *[f"blk{i}" for i in range(PROBE_BLOCK_LAYERS)])
+# Layers whose KDA heads get the token-mixing taxonomy (the KDA layers before the second MLA layer).
+HEAD_LAYERS = tuple(i for i in forward.KDA_LAYERS if i < 7)
+# Joint head ablations of the induction test: the heads of this layer with at least this previous-token mass, and the
+# two heads of that layer whose single ablations raise the second-copy loss most.
+PREV_HEAD_LAYER, PREV_HEAD_MASS = 0, 0.3
+INDUCTION_PAIR_LAYER = 2
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -206,6 +218,23 @@ def load_means(tag: str) -> tuple[jax.Array, jax.Array]:
     with fsspec.open(f"{common.OUTPUT_ROOT}/{tag}/attrib.npz", "rb") as f:
         z = np.load(io.BytesIO(f.read()))
         return jnp.asarray(z["head_mean"]), jnp.asarray(z["sub_mean"])
+
+
+def fit_means(params, mesh, num_sequences: int) -> tuple[jax.Array, jax.Array]:
+    """``attrib``'s per-head and per-sublayer means, on ``num_sequences`` of its fit sequences (seed 1)."""
+    _, means_fn, _, _ = attrib.make_fns()
+    head_sum = sub_sum = None
+    n_sum = 0.0
+    with set_mesh(mesh):
+        model = common.compute_model(params)
+        for b in common.train_batches(attrib.BATCH, num_sequences, seed=1):
+            tokens, seg, w = common.device_batch(b, mesh)
+            h, s_, n = means_fn(model, tokens, seg, w)
+            head_sum = h if head_sum is None else head_sum + h
+            sub_sum = s_ if sub_sum is None else sub_sum + s_
+            n_sum += float(n)
+    logger.info("means fit on %d tokens", n_sum)
+    return head_sum / n_sum, sub_sum / n_sum
 
 
 def mean_ablation(head_mean, sub_mean, *, subs=(), heads_=()) -> forward.Ablation:
@@ -458,8 +487,8 @@ def run_probe(model, mesh, data, head_mean, sub_mean, vocab) -> dict[str, np.nda
     @jax.jit
     def sites(model, tokens, seg, abl):
         tr = forward.trace_forward(model, tokens, seg, abl)
-        mixes = [lay["attn_gate_in"] for lay in tr["layers"]] + [tr["mixed"]]
-        blocks = tr["blocks"][1:]
+        mixes = [lay["attn_gate_in"] for lay in tr["layers"][:PROBE_IN_LAYERS]] + [tr["mixed"]]
+        blocks = tr["blocks"][1 : PROBE_BLOCK_LAYERS + 1]
         sel = jnp.stack([lay["selected"] for lay in tr["layers"]])
         return [m.astype(jnp.bfloat16) for m in mixes + blocks], tr["entropy"], sel
 
@@ -602,7 +631,7 @@ def run_heads(model, mesh, data, head_mean, sub_mean, vocab, block_means) -> dic
             tokens, seg, w = forward.replicate((tokens, seg, w))
             r = 0  # one row per picked batch keeps the S x S matrices cheap
             row = bi * BATCH + r
-            for i in EARLY:
+            for i in HEAD_LAYERS:
                 lay = {k: layers[i][k][r] for k in ("q", "k", "v", "log_decay", "beta")}
                 st, ex, exv = head_stats(
                     lay,
@@ -637,8 +666,6 @@ def run_heads(model, mesh, data, head_mean, sub_mean, vocab, block_means) -> dic
         configs.append((f"L{i}.routed", m(subs=[(i, forward.SUB_ROUTED)]), None))
         configs += [(f"L{i}.h{h}", m(heads_=[(i, h)]), None) for h in range(H)]
     configs.append(("L012.attn", m(subs=[(i, forward.SUB_ATTN) for i in EARLY]), None))
-    configs.append(("L2.h1+h2", m(heads_=[(2, 1), (2, 2)]), None))
-    configs.append(("L0.h0+h2", m(heads_=[(0, 0), (0, 2)]), None))
 
     def patch_mult(gates, srcs, sides):
         mult = jnp.ones((forward.NUM_GATES, L + 1, 2), jnp.float32)
@@ -664,25 +691,46 @@ def run_heads(model, mesh, data, head_mean, sub_mean, vocab, block_means) -> dic
 
     names, f_loss, s_loss, l3_mass = [], [], [], []
     with set_mesh(mesh):
-        value = jnp.broadcast_to(block_means[:, None, None, :], (L + 1, BATCH, common.SEQ_LEN, forward.HIDDEN)).astype(
+        rows = CONSUME_ROWS  # patched forwards run on row pairs (memory)
+        value = jnp.broadcast_to(block_means[:, None, None, :], (L + 1, rows, common.SEQ_LEN, forward.HIDDEN)).astype(
             jnp.bfloat16
         )
         ones = forward.no_patch(value).mult
-        for name, abl, mult in configs:
+        chunks = [
+            common.TokenBatch(b.source, b.tokens[r : r + rows], b.segment_ids[r : r + rows], b.loss_weight[r : r + rows])
+            for b in ind
+            for r in range(0, b.tokens.shape[0], rows)
+        ]
+
+        def run_config(name, abl, mult):
             fs = ss = 0.0
             ms = np.zeros(H)
-            for b in ind:
+            for b in chunks:
                 tokens, seg, _ = common.device_batch(b, mesh)
                 loss, mass = ind_run(model, tokens, seg, abl, ones if mult is None else mult, value)
                 loss = np.asarray(loss)
-                fs += float(loss[:, first].mean()) / len(ind)
-                ss += float(loss[:, second].mean()) / len(ind)
-                ms += np.asarray(mass) / len(ind)
+                fs += float(loss[:, first].mean()) / len(chunks)
+                ss += float(loss[:, second].mean()) / len(chunks)
+                ms += np.asarray(mass) / len(chunks)
             names.append(name)
             f_loss.append(fs)
             s_loss.append(ss)
             l3_mass.append(ms)
             logger.info("induction %s: first %.3f second %.3f L3 mass %s", name, fs, ss, np.round(ms, 3))
+
+        for name, abl, mult in configs:
+            run_config(name, abl, mult)
+        # Joint head ablations chosen from the data (the d512 study's L0.h0+h2 and L2.h1+h2).
+        li = PREV_HEAD_LAYER
+        prev = acc[f"L{li}/prev_mass"] / np.maximum(acc[f"L{li}/n"], 1)
+        prev_heads = [h for h in range(H) if prev[h] >= PREV_HEAD_MASS]
+        if prev_heads:
+            label = "+".join(f"h{h}" for h in prev_heads)
+            run_config(f"L{li}.prev:{label}", m(heads_=[(li, h) for h in prev_heads]), None)
+        li = INDUCTION_PAIR_LAYER
+        single = np.asarray([s_loss[names.index(f"L{li}.h{h}")] for h in range(H)])
+        pair = [int(h) for h in np.argsort(-single)[:2]]
+        run_config(f"L{li}.top2:h{pair[0]}+h{pair[1]}", m(heads_=[(li, h) for h in pair]), None)
     results["ind_names"] = np.asarray(names)
     results["ind_first"] = np.asarray(f_loss)
     results["ind_second"] = np.asarray(s_loss)
@@ -748,9 +796,10 @@ def block_means_of(model, mesh, data, num_batches: int) -> jax.Array:
 def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
     tokens_all, seg_all, w_all, _ = data
     configs = consume_configs()
-    b, s = BATCH, common.SEQ_LEN
+    b, s = CONSUME_ROWS, common.SEQ_LEN
     t = b * s
     late = (3, 4, 5)
+    num_batches = CONSUME_BATCHES * BATCH // b
 
     @jax.jit
     def clean(model, tokens, seg, w):
@@ -798,7 +847,7 @@ def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
             )
         return tr["loss"], overlap, [u[0] for u in units], [u[1] for u in units]
 
-    n_rows = CONSUME_BATCHES * b
+    n_rows = num_batches * b
     loss = np.zeros((len(configs), n_rows, s), np.float16)
     overlap = np.zeros((len(configs), 3))
     frozen_names = [c[0] for c in configs if c[5]]
@@ -812,10 +861,9 @@ def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
     t0 = time.time()
     with set_mesh(mesh):
         means_b = jnp.broadcast_to(block_means[:, None, None, :], (L + 1, b, s, forward.HIDDEN)).astype(jnp.bfloat16)
-        for bi, batch in enumerate(batches_of(tokens_all, seg_all, w_all)):
-            if bi >= CONSUME_BATCHES:
-                break
+        for bi in range(num_batches):
             rows = slice(bi * b, (bi + 1) * b)
+            batch = common.TokenBatch("eval", tokens_all[rows], seg_all[rows], w_all[rows])
             tokens, seg, w = common.device_batch(batch, mesh)
             l0, gw, sel, blocks, ew = clean(model, tokens, seg, w)
             gate_w_sum = gate_w_sum + np.asarray(gw, np.float64)
@@ -835,7 +883,7 @@ def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
             for ci, (name, gates, srcs, sides, mode, frozen) in enumerate(configs):
                 if name == "clean":
                     loss[ci, rows] = np.asarray(l0)
-                    overlap[ci] += 1.0 / CONSUME_BATCHES
+                    overlap[ci] += 1.0 / num_batches
                     continue
                 mult = ones
                 for g in gates:
@@ -845,7 +893,7 @@ def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
                 value = means_b if mode == "mean" else resampled
                 lp, ov, u, sh = patched(model, tokens, seg, mult, value, sel, frozen)
                 loss[ci, rows] = np.asarray(lp)
-                overlap[ci] += np.asarray(ov) / CONSUME_BATCHES
+                overlap[ci] += np.asarray(ov) / num_batches
                 if frozen:
                     fi = frozen_names.index(name)
                     du = np.stack([np.asarray(x, np.float64) for x in u]) - np.stack(u0)
@@ -874,12 +922,21 @@ def main() -> None:
     parser.add_argument("--tag", default="tn-d512-ckpt1-rno")
     parser.add_argument("--phases", default="ablate,probe,heads,consume")
     parser.add_argument("--out", default="early")
+    parser.add_argument(
+        "--means-sequences",
+        type=int,
+        default=0,
+        help="fit the head / sublayer means in-job on this many train sequences (attrib's fit) instead of attrib.npz",
+    )
     args = parser.parse_args()
     cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
-    head_mean, sub_mean = load_means(args.tag)
+    if args.means_sequences:
+        head_mean, sub_mean = fit_means(params, mesh, args.means_sequences)
+    else:
+        head_mean, sub_mean = load_means(args.tag)
     vocab = common.vocab_strings()
     t0 = time.time()
     data = eval_rows()

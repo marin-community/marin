@@ -55,7 +55,8 @@ RANDOM_SEED = 2
 NUM_TOP = 250
 NUM_RANDOM = 350
 SELECT_SEED = 0
-SRI_UNIT = (5, 304, 0)
+# The d512 Sri unit (L5.E304.n0) has no d1280 counterpart: no extra tier at this size.
+SRI_UNIT: tuple[int, int, int] | None = None
 MIN_OCCURRENCES = 8
 MIN_CONCENTRATION = 0.3
 MIN_SELECTIVITY = 3.0
@@ -159,7 +160,11 @@ def select_candidates(m: dict[str, np.ndarray]) -> tuple[list[Candidate], np.nda
     rest = np.setdiff1d(np.flatnonzero(ok), top)
     rng = np.random.default_rng(SELECT_SEED)
     rand = np.sort(rng.choice(rest, size=min(NUM_RANDOM, len(rest)), replace=False))
-    sri = np.flatnonzero(np.all(m["unit_index"] == np.asarray(SRI_UNIT), axis=1))
+    sri = (
+        np.zeros(0, np.int64)
+        if SRI_UNIT is None
+        else np.flatnonzero(np.all(m["unit_index"] == np.asarray(SRI_UNIT), axis=1))
+    )
     picks = [*top, *rand, *np.setdiff1d(sri, np.concatenate([top, rand]))]
     tiers = np.asarray([0] * len(top) + [1] * len(rand) + [2] * (len(picks) - len(top) - len(rand)), np.int32)
     cands = [
@@ -294,7 +299,7 @@ def measure(model, tokens, seg, qflat, qc, qnext, unit, abl):
     ln = jnp.take_along_axis(logp, qnext[:, None], axis=-1)[:, 0]
     li, e, i = unit[0], unit[1], unit[2]
     routed_in = jnp.stack([lay["routed_input"] for lay in tr["layers"]])[li][q]  # [Q, R]
-    w_up = jnp.stack([lay.mlp.expert_mlp.w_up for lay in m.layers()])[li, jnp.maximum(e, 0), :, i]  # [R]
+    w_up = jnp.stack([lay.mlp.expert_mlp.w_up[jnp.maximum(e, 0), :, i] for lay in m.layers()])[li]  # [R]
     pre = jnp.einsum("qr,r->q", routed_in, w_up, preferred_element_type=jnp.float32)
     selected = jnp.any(jnp.stack([lay["selected"] for lay in tr["layers"]])[li][q] == e, axis=-1)
     routed_act = jnp.where(selected, jnp.square(jax.nn.relu(pre)), 0.0)

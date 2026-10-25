@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Case studies: how the d512 model predicts "ics" after " crit" ("critics") and "'t" after " wasn" ("wasn't"), with
+"""Case studies: how the study model predicts "ics" after " crit" ("critics") and "'t" after " wasn" ("wasn't"), with
 the word-piece pairs " produ" -> "cer" and " Ex" -> "ception" as contrasts (pairs the halting gate stops on).
 
 Queries are the trigger positions in every Paloma set and unseen training-cache sequences, in ``CATEGORIES``: " crit"
@@ -37,7 +37,7 @@ import numpy as np
 from haliax import Axis
 from haliax.partitioning import set_mesh
 
-from experiments.grug.fast_track.interp import common, docs_analyse, docs_index, forward, sri
+from experiments.grug.fast_track.interp import common, docs_analyse, docs_index, forward, lens_fit, sri
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +65,17 @@ PAIRS = ((" crit", "ics"), (" produ", "cer"), (" Ex", "ception"), (" wasn", "'t"
 CASES = {"crit": ((0, 1), (0, 1, 2)), "wasn": ((5,), (5, 7)), "wasn_curly": ((6,), (6,))}
 COUNT_TRIGGERS = (" crit", " critic", " wasn", " produ", " Ex")
 # Rows kept per source (train, Paloma) and group.
-ROW_CAPS = {"crit": 400, "wasn": 350, "produ": 80, "ex": 80}
+ROW_CAPS = {"crit": 200, "wasn": 150, "produ": 40, "ex": 40}  # halved from d512 (d1280 cost)
 WINDOW = 512
 G = docs_analyse.G
 R = docs_analyse.R
-INTERVENE_CAPS = {0: 10**6, 1: 10**6, 2: 160, 3: 120, 4: 120, 5: 500, 6: 300, 7: 160}
+INTERVENE_CAPS = {0: 250, 1: 150, 2: 80, 3: 60, 4: 60, 5: 200, 6: 120, 7: 80}
 SUFF_K = (0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 64, 128, 256, 1024, 4096, NU)
 NEC_K = (1, 2, 4, 8, 16, 32, 64, 256, 1024)
 GLOBAL_K = (1, 2, 4, 8, 16, 32, 64, 128)
 SINGLE_TOP = 24
+# Categories whose queries the ablation table scores (other batches are skipped there: d1280 cost).
+ABLATION_CATS = ("crit_ics_first", "crit_ics_repeat", "wasn_apos_t")
 GLOBAL_TOP = 256
 TRUNC = (1, 2, 3, 4, 8, 16, 64, 256, 1024)
 ABLATE_TOP = 12
@@ -401,6 +403,9 @@ def main() -> None:
     parser.add_argument("--scan-train", type=int, default=24576, help="unseen train sequences scanned")
     parser.add_argument("--scan-chunk", type=int, default=512)
     parser.add_argument("--out", default="critics", help="output name (<out>.npz, <out>_rows.npz)")
+    parser.add_argument(
+        "--fit-sequences", type=int, default=0, help="fit attrib's means and tuned lens in-job (else attrib.npz)"
+    )
     args = parser.parse_args()
     t0 = time.time()
     cfg = common.model_config(args.tag)
@@ -439,10 +444,14 @@ def main() -> None:
     logger.info("scan saved (%.0fs): %d rows, %d queries", time.time() - t0, len(rows_tokens), keep_q.sum())
 
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
-    with fsspec.open(f"{common.OUTPUT_ROOT}/{args.tag}/attrib.npz", "rb") as f:
-        attrib = np.load(io.BytesIO(f.read()))
-        tuned = jnp.asarray(attrib["tuned"], jnp.float32)
-        head_mean, sub_mean = jnp.asarray(attrib["head_mean"]), jnp.asarray(attrib["sub_mean"])
+    if args.fit_sequences:
+        with set_mesh(mesh):
+            _, sub_mean, tuned = lens_fit.fit(common.compute_model(params), mesh, args.fit_sequences)
+    else:
+        with fsspec.open(f"{common.OUTPUT_ROOT}/{args.tag}/attrib.npz", "rb") as f:
+            attrib = np.load(io.BytesIO(f.read()))
+            tuned = jnp.asarray(attrib["tuned"], jnp.float32)
+            sub_mean = jnp.asarray(attrib["sub_mean"])
     with fsspec.open(f"{common.OUTPUT_ROOT}/{args.tag}/stats.npz", "rb") as f:
         stats = np.load(io.BytesIO(f.read()))
         stats_mean = stats["act_sum"] / np.maximum(stats["expert_tokens"][..., None], 1.0)
@@ -568,32 +577,38 @@ def main() -> None:
         for n in (2, 5, 10, 25, 50):
             configs.append((f"{case}:top{n}:zero", units(top_units[:n], "zero")))
             configs.append((f"{case}:top{n}:mean", units(top_units[:n], "mean")))
-        top_experts = np.argmax(expert_dla[np.isin(meta[:, 2], CASES[case][0])].mean(0), axis=-1)  # [L]
-        for li in range(L):
-            configs.append((f"{case}:L{li}.E{int(top_experts[li])}:zero", expert(li, int(top_experts[li]))))
-    for li in range(L):
+        # The case's top expert (by mean DLA) at the layer where it is largest.
+        case_dla = expert_dla[np.isin(meta[:, 2], CASES[case][0])].mean(0)  # [L, E]
+        li, e = np.unravel_index(int(np.argmax(case_dla)), case_dla.shape)
+        configs.append((f"{case}:L{li}.E{e}:zero", expert(int(li), int(e))))
+    # Layer-level ablations on the second half (the first half's are the early study's) and the MLA attention.
+    for li in range(L // 2, L):
         configs.append((f"L{li}.routed:mean", sub(li, forward.SUB_ROUTED, "mean")))
         configs.append((f"L{li}.shared:mean", sub(li, forward.SUB_SHARED, "mean")))
-        configs.append((f"L{li}.attn:mean", sub(li, forward.SUB_ATTN, "mean")))
-        for h in range(H):
-            configs.append(
-                (f"L{li}.h{h}:mean", base._replace(head_mult=base.head_mult.at[li, h].set(0.0), head_mean=head_mean))
-            )
     for li in forward.MLA_LAYERS:
+        configs.append((f"L{li}.attn:mean", sub(li, forward.SUB_ATTN, "mean")))
         configs.append((f"L{li}.ve:zero", base._replace(sub_mult=base.sub_mult.at[li, forward.SUB_VE].set(0.0))))
-    late = base.sub_mult.at[4].set(0.0).at[5].set(0.0)
-    configs.append(("L4-L5:mean", base._replace(sub_mult=late, sub_mean=sub_mean)))
+    # The last two layers (d512's L4-L5) and the last third of the layers.
+    for first in (L - 2, L - L // 3):
+        late = base.sub_mult.at[first:].set(0.0)
+        configs.append((f"L{first}-L{L - 1}:mean", base._replace(sub_mult=late, sub_mean=sub_mean)))
+    # Only batches holding the ablation table's targets (crit -> ics, wasn -> 't) are run; the rest stay NaN.
+    abl_cats = np.asarray([CATEGORIES.index(c) for c in ABLATION_CATS])
     abl_names, abl_logp = [], []
     for name, abl in configs:
         vals = []
         for b, table, _ in batches:
             qa = query_arrays(table, ids)
+            if not np.isin(table[table[:, 0] >= 0, 2], abl_cats).any():
+                vals.append(np.full(int(qa["qmask"].sum()), np.nan, np.float32))
+                continue
             with set_mesh(mesh):
                 tokens, seg, _ = common.device_batch(b, mesh)
                 lp = sri.ablated_logp(model, tokens, seg, jnp.asarray(qa["qflat"]), jnp.asarray(qa["qy"]), abl)
             vals.append(np.asarray(lp)[qa["qmask"]])
         abl_names.append(name)
         abl_logp.append(np.concatenate(vals))
+        logger.info("ablation %s (%.0fs)", name, time.time() - t0)
     logger.info("ablations done (%.0fs)", time.time() - t0)
 
     # Context truncation of the positive queries and the contrasts.

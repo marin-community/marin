@@ -34,7 +34,7 @@ from experiments.grug.fast_track.interp import common, forward
 
 logger = logging.getLogger(__name__)
 
-BATCH = 8
+BATCH = 4
 L, E, I, V = forward.NUM_LAYERS, forward.NUM_EXPERTS, forward.EXPERT_WIDTH, forward.VOCAB
 S = common.SEQ_LEN
 THRESHOLD_FRACTION = 0.3  # "high" activations: above this fraction of the unit's mean top-16 activation
@@ -157,13 +157,13 @@ def unit_directions(model) -> tuple[jax.Array, jax.Array]:
     return jnp.stack(routed), jnp.stack(shared)
 
 
-@jax.jit
 def output_test(model, cand_c: jax.Array, s_cand_c: jax.Array) -> dict:
     """Weights only: each unit's centred unembedding logit for its ``c``, as a z-score over the vocabulary and a
-    rank (0 = the unit's most promoted token), and the unit's top promoted token."""
+    rank (0 = the unit's most promoted token), and the unit's top promoted token. One layer at a time, one expert's
+    directions at a time (the full ``[L, E, I, D]`` direction table is 26 GB at d1280)."""
     m = forward.replicate(model)
+    gain = forward.final_gain(m)
     w_out = m.output_proj.astype(jnp.float32)
-    routed, shared = unit_directions(model)
 
     def one(dirs, c):  # [N, D], [N]
         logits = dirs @ w_out
@@ -173,11 +173,23 @@ def output_test(model, cand_c: jax.Array, s_cand_c: jax.Array) -> dict:
         rank = jnp.sum(logits > lc[:, None], axis=-1)
         return lc / std, rank, jnp.argmax(logits, axis=-1), lc
 
-    out = jax.lax.map(lambda xs: one(*xs), (routed.reshape(L * E, I, -1), cand_c.reshape(L * E, I)))
-    s_out = jax.lax.map(lambda xs: one(*xs), (shared, s_cand_c))
+    @jax.jit
+    def layer_test(lay, c, s_c):
+        lag0 = lay.sconv_mlp.weight[0].astype(jnp.float32) * gain
+        up = lay.mlp.w_latent_up.astype(jnp.float32)
+
+        def expert(xs):
+            w_down, ce = xs
+            return one(jnp.einsum("ir,rd->id", w_down.astype(jnp.float32), up) * lag0, ce)
+
+        routed = jax.lax.map(expert, (lay.mlp.expert_mlp.w_down, c))
+        shared = one(lay.shared[0].w_down.astype(jnp.float32) * lag0, s_c)
+        return routed, shared
+
     names = ("c_z", "c_rank", "top_promoted", "c_logit")
-    res = {n: v.reshape(L, E, I) for n, v in zip(names, out, strict=True)}
-    res.update({"s_" + n: v for n, v in zip(names, s_out, strict=True)})
+    per = [layer_test(lay, cand_c[li], s_cand_c[li]) for li, lay in enumerate(m.layers())]
+    res = {n: jnp.stack([p[0][j] for p in per]) for j, n in enumerate(names)}
+    res.update({"s_" + n: jnp.stack([p[1][j] for p in per]) for j, n in enumerate(names)})
     return res
 
 
