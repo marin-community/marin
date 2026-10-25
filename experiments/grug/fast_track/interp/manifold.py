@@ -59,6 +59,10 @@ PROJ_POINTS = 2000
 SPECTRUM_KEEP = 256
 
 
+def _is_digits(s: str) -> bool:
+    return s != "" and s.isascii() and s.isdigit()
+
+
 def token_classes(vocab: list[str]) -> np.ndarray:
     """Each token id's current-token class (index into ``CLASSES``)."""
     feats = categories.token_features(vocab)
@@ -71,7 +75,7 @@ def token_classes(vocab: list[str]) -> np.ndarray:
         ("punct", "punctuation"),
     ):
         out[feats[key]] = CLASSES.index(name)
-    pure_digit = np.array([s.strip() != "" and s.strip().isdigit() for s in vocab])
+    pure_digit = np.array([_is_digits(s.strip()) for s in vocab])
     out[pure_digit] = CLASSES.index("digit")
     return out
 
@@ -173,9 +177,9 @@ def digit_context(tokens: np.ndarray, segs: np.ndarray, vocab: list[str], cls: n
     digit (-1 if not a digit token)."""
     digit = cls == CLASSES.index("digit")
     strings = np.asarray([s.strip() for s in vocab], dtype=object)
-    last = np.asarray([int(s[-1]) if s.isdigit() else -1 for s in strings])
-    first = np.asarray([int(s[0]) if s.isdigit() else -1 for s in strings])
-    ndig = np.asarray([len(s) if s.isdigit() else 0 for s in strings])
+    last = np.asarray([int(s[-1]) if _is_digits(s) else -1 for s in strings])
+    first = np.asarray([int(s[0]) if _is_digits(s) else -1 for s in strings])
+    ndig = np.asarray([len(s) if _is_digits(s) else 0 for s in strings])
     b, s = tokens.shape
     run_pos = np.zeros((b, s), np.int32)
     run_digits = np.zeros((b, s), np.int32)
