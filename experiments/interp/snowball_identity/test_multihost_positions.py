@@ -104,6 +104,52 @@ def run_children(child: str, processes: int) -> list[dict]:
     return [json.loads(out.decode().strip().splitlines()[-1]) for out, _ in outputs]
 
 
+@pytest.mark.timeout(600)
+def test_sft_dispatch_drop_on_one_host_fails_every_host():
+    results = run_children(
+        """
+import json, sys
+import jax
+jax.config.update("jax_cpu_collectives_implementation", "gloo")
+jax.distributed.initialize(f"localhost:{sys.argv[2]}", num_processes=2, process_id=int(sys.argv[1]))
+import numpy as np
+from jax.sharding import Mesh, NamedSharding, PartitionSpec
+from experiments.post_training.identity_context_distill.sft_launch import DispatchMetrics
+
+mesh = Mesh(np.array(jax.devices()), ("host",))
+sharding = NamedSharding(mesh, PartitionSpec("host"))
+with jax.set_mesh(mesh):
+    local = np.zeros(13, np.int32)
+    local[0] = int(jax.process_index() == 1)
+    dropped = jax.make_array_from_process_local_data(sharding, local)
+    zero = jax.make_array_from_process_local_data(sharding, np.zeros_like(local))
+    assert not dropped.is_fully_addressable
+    measured = DispatchMetrics()
+    measured.log({"train/moe_dropped": dropped, "train/moe_sender_dropped": zero,
+                  "train/moe_receiver_dropped": dropped}, step=0)
+    failures = []
+    try:
+        measured.checked_counts()
+    except ValueError as error:
+        failures.append(str(error))
+    missing = DispatchMetrics()
+    if jax.process_index() == 0:
+        missing.log({"train/moe_dropped": zero, "train/moe_sender_dropped": zero,
+                     "train/moe_receiver_dropped": zero}, step=1)
+    try:
+        missing.checked_counts()
+    except ValueError as error:
+        failures.append(str(error))
+print(json.dumps(failures))
+""",
+        2,
+    )
+    assert results[0] == results[1]
+    assert len(results[0]) == 2
+    assert "layer 13: 1 valid assignments dropped" in results[0][0]
+    assert "did not report all dispatch metrics" in results[0][1]
+
+
 def summary(records: dict) -> dict:
     return {
         key: {
