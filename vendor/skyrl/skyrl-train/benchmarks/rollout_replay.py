@@ -13,10 +13,10 @@ from cloud.iris.hf_model_cache import stage_artifact_model
 from cloud.iris.launch_config import load_launch_config
 from skyrl_train.distributed.megatron import model_utils
 from skyrl_train.training_batch import TrainingOutputBatch
+from skyrl_train.utils.utils import initialize_ray
 from skyrl_train.workers.megatron.megatron_model_wrapper import MegatronModelWrapper
 from skyrl_train.workers.megatron.megatron_worker import MegatronPolicyWorkerBase
 from skyrl_train.workers.worker import PPORayActorGroup
-from tests.gpu.utils import ray_init_for_tests
 
 
 class RecordingModelWrapper(MegatronModelWrapper):
@@ -25,7 +25,17 @@ class RecordingModelWrapper(MegatronModelWrapper):
     def _token_logprobs(self, logits, sequences, attention_mask, packed_seq_params):
         output = super()._token_logprobs(logits, sequences, attention_mask, packed_seq_params)
         self.observations.append(
-            {"kind": "logprob", "values": output.detach().cpu(), "sequences": sequences.detach().cpu()}
+            {
+                "kind": "logprob",
+                "values": output.detach().cpu(),
+                "sequences": sequences.detach().cpu(),
+                "attention_mask": attention_mask.detach().cpu(),
+                "logits_shape": list(logits.shape),
+                "logits_stride": list(logits.stride()),
+                "logits_sha256": (
+                    hashlib.sha256(logits.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()).hexdigest()
+                ),
+            }
         )
         return output
 
@@ -100,7 +110,7 @@ def main():
     cfg.trainer.logger = "console"
     batch.metadata["global_step"] = 0
     OmegaConf.save(cfg, args.output / "replay-config.yaml")
-    ray_init_for_tests()
+    initialize_ray(cfg)
     try:
         policy = PPORayActorGroup(
             cfg,

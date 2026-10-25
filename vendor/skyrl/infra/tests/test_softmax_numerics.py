@@ -24,6 +24,8 @@ def test_token_softmax_confident_values_and_gradients() -> None:
             assert_softmax_numerics(logits, targets, logprobs, entropy)
         scoring = stable_softmax.token_logprobs(logits.requires_grad_(), targets, 0, 33, None, inference_only=True)
         assert not scoring.requires_grad
+        expected_lp = decimal_reference(logits, targets)[0]
+        torch.testing.assert_close(scoring.double(), expected_lp, rtol=5e-6, atol=0)
 
 
 def _distributed_softmax(rank: int, rendezvous: str) -> None:
