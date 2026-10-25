@@ -115,7 +115,7 @@ def build_config(
             original.model,
             moe_ragged_chunks=16 // expert_axis_size,
             # Recompute the identical attention branch in backward to fit v4 HBM.
-            attn_res_remat_attention=True,
+            attn_res_remat_attention=False,
         ),
         data=dataclasses.replace(original.data, tokenizer=tokenizer),
         # EP8/chunks2 and EP16/chunks1 retain the same sixteen capacity pools

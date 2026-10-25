@@ -18,6 +18,8 @@ from jax.sharding import PartitionSpec as P
 from jaxtyping import Array, Float, Int
 from levanter.grug.attention import AttentionMask, align_kv_heads
 
+from experiments.grug.belay_tpu.inkling_pallas import pallas_attention_local
+
 BLOCK = 128
 
 
@@ -104,8 +106,14 @@ def _backward(residual, dout):
 saved_attention_local.defvjp(_forward, _backward)
 
 
-def inkling_attention(q, k, v, mask: AttentionMask, band):
+def inkling_attention(q, k, v, mask: AttentionMask, band, *, implementation: str):
     """Shard batch/heads before calling the Ckpt 1 causal attention kernel."""
+    if implementation == "pallas":
+        kernel = pallas_attention_local
+    elif implementation == "xla":
+        kernel = saved_attention_local
+    else:
+        raise ValueError(f"Unknown saved-probability attention implementation: {implementation}")
     if not isinstance(mask, AttentionMask) or not mask.is_causal or mask.sliding_window is not None:
         raise ValueError("Ckpt 1 kernel requires causal self-attention without a sliding window")
     if q.shape[1] % BLOCK or q.shape[1] != k.shape[1] or q.shape[-1] != v.shape[-1]:
@@ -134,7 +142,7 @@ def inkling_attention(q, k, v, mask: AttentionMask, band):
         arrays = (x.transpose(0, 2, 1, 3).reshape(b * h, s, d) for x in (ql, kl, vl))
         qi = jnp.broadcast_to(qi[:, None, :], (b, h, s)).reshape(b * h, s)
         ki = jnp.broadcast_to(ki[:, None, :], (b, h, s)).reshape(b * h, s)
-        result = saved_attention_local(*arrays, bl.reshape(b * h, s, -1), qi, ki)
+        result = kernel(*arrays, bl.reshape(b * h, s, -1), qi, ki)
         return result.reshape(b, h, s, d).transpose(0, 2, 1, 3)
 
     return local(q, k, v, band, qids, kids)

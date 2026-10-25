@@ -52,7 +52,7 @@ def _scores(qr, kr, br, qir, kir, sr, *, extent, width):
     query_block, key_block = pl.program_id(1), pl.program_id(2)
     band_block = key_block - query_block + extent // TILE
     bias = jnp.where((band_block >= 0) & (band_block < width // TILE), br[...], 0)
-    score = _scores_math(qr[...], kr[...], bias, qir[...], kir[...])
+    score = _scores_math(qr[...], kr[...], bias, qir[0, :], kir[0, :])
     causal = query_block * TILE + jnp.arange(TILE)[:, None] >= key_block * TILE + jnp.arange(TILE)[None, :]
     sr[...] = jnp.where(causal, score, jnp.asarray(-1e9, score.dtype))
 
@@ -110,7 +110,9 @@ def _forward(q, k, v, band, qids, kids):
         raise ValueError("Inkling Pallas supports FP32 and BF16 activations")
     extent = width - TILE
     grid = (groups, length // TILE, length // TILE)
-    inputs = (q, k, band, qids, kids)
+    # A singleton sublane dimension lets each program read one group while
+    # satisfying TPU's 8-by-128 trailing tile contract.
+    inputs = (q, k, band, qids[:, None, :], kids[:, None, :])
     score_shape = _shape((groups, length, length), q.dtype)
     tile = _shape((TILE, dim), q.dtype)
     ids = _shape((TILE,), jnp.int32)
@@ -124,8 +126,8 @@ def _forward(q, k, v, band, qids, kids):
             pl.BlockSpec(
                 (None, TILE, TILE), lambda g, i, j: (g, i, jnp.clip(j - i + extent // TILE, 0, width // TILE - 1))
             ),
-            pl.BlockSpec((None, TILE), lambda g, i, j: (g, i)),
-            pl.BlockSpec((None, TILE), lambda g, i, j: (g, j)),
+            pl.BlockSpec((None, 1, TILE), lambda g, i, j: (g, 0, i)),
+            pl.BlockSpec((None, 1, TILE), lambda g, i, j: (g, 0, j)),
         ),
         out_specs=pl.BlockSpec((None, TILE, TILE), lambda g, i, j: (g, i, j)),
         compiler_params=pltpu.CompilerParams(dimension_semantics=("parallel", "parallel", "parallel")),
