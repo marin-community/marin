@@ -201,54 +201,51 @@ def kl_rows_from_passes(
         raise ValueError("reference and candidate passes hold different supports")
     rows: list[SequenceKLRow] = []
     for row, sequence in enumerate(sequences):
-        padded_start = candidate_gathered.shape[1] - len(sequence.token_ids)
-        for position in sequence.scored_positions():
-            logits_position = padded_start + position - 1
-            token_id = int(sequence.token_ids[position])
-            support = torch.from_numpy(reference_topk_logprobs[row, logits_position].astype(np.float64))
-            scored = torch.from_numpy(candidate_gathered[row, logits_position, :top_k].astype(np.float64))
-            reference_tail = float(reference_tail_logmass[row, logits_position])
-            candidate_tail = float(candidate_tail_logmass[row, logits_position])
-            kl = float(
-                binned_kl(
-                    support,
-                    torch.tensor(reference_tail, dtype=torch.float64),
-                    scored,
-                    torch.tensor(candidate_tail, dtype=torch.float64),
-                )
-            )
-            if not np.isfinite(kl):
-                raise ValueError(f"{sequence.sample_id}@{position}: KL is not finite")
+        positions = np.asarray(sequence.scored_positions(), dtype=np.int64)
+        if not len(positions):
+            continue
+        logits_positions = candidate_gathered.shape[1] - len(sequence.token_ids) + positions - 1
+        token_ids = np.asarray(sequence.token_ids, dtype=np.int64)[positions]
+        support_ids = reference_topk_ids[row, logits_positions]
+        support_logprobs = reference_topk_logprobs[row, logits_positions].astype(np.float64)
+        reference_tail = reference_tail_logmass[row, logits_positions].astype(np.float64)
+        candidate_tail = candidate_tail_logmass[row, logits_positions].astype(np.float64)
+        kls = binned_kl(
+            torch.from_numpy(support_logprobs),
+            torch.from_numpy(reference_tail),
+            torch.from_numpy(candidate_gathered[row, logits_positions, :top_k].astype(np.float64)),
+            torch.from_numpy(candidate_tail),
+        ).numpy()
+        bad = np.flatnonzero(~np.isfinite(kls))
+        if len(bad):
+            raise ValueError(f"{sequence.sample_id}@{int(positions[bad[0]])}: KL is not finite")
+        in_support = support_ids == token_ids[:, None]
+        reference_logprobs = np.where(
+            in_support.any(-1), support_logprobs[np.arange(len(positions)), in_support.argmax(-1)], -np.inf
+        )
+        candidate_logprobs = candidate_gathered[row, logits_positions, top_k]
+        probe_hash = sequence.probe_hash  # a sha256 over the whole sequence: once per sequence
+        for index, position in enumerate(positions.tolist()):
             rows.append(
                 SequenceKLRow(
                     sequence_id=sequence.sample_id,
                     position=position,
-                    token_id=token_id,
-                    kl=kl,
-                    reference_logprob=reference_logprob_at(
-                        reference_topk_ids[row, logits_position],
-                        reference_topk_logprobs[row, logits_position],
-                        token_id,
-                    ),
-                    candidate_logprob=float(candidate_gathered[row, logits_position, top_k]),
+                    token_id=int(token_ids[index]),
+                    kl=float(kls[index]),
+                    reference_logprob=float(reference_logprobs[index]),
+                    candidate_logprob=float(candidate_logprobs[index]),
                     candidate_step=candidate_step,
                     reference_id=reference_id,
-                    probe_hash=sequence.probe_hash,
+                    probe_hash=probe_hash,
                     top_k=top_k,
-                    reference_tail_mass=reference_tail,
-                    candidate_tail_mass=candidate_tail,
+                    reference_tail_mass=float(reference_tail[index]),
+                    candidate_tail_mass=float(candidate_tail[index]),
                     form=KLForm.FORWARD,
                     token_type_tag=ProbeBucket(sequence.token_type_tags[position]),
                     position_tag=sequence.position_tags[position],
                 )
             )
     return rows
-
-
-def reference_logprob_at(ids: np.ndarray, logprobs: np.ndarray, token_id: int) -> float:
-    """The stored support's logprob at ``token_id``; -inf outside the top-K."""
-    matches = np.nonzero(np.asarray(ids) == token_id)[0]
-    return float(logprobs[matches[0]]) if len(matches) else -np.inf
 
 
 def exact_rows_from_passes(
