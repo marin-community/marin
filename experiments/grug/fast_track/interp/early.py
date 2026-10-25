@@ -65,6 +65,8 @@ HEAD_ROWS = 12
 EXCERPT = 128
 INDUCTION_BATCHES = 2
 CONSUME_BATCHES = 12
+# Rows per patched forward of the consume phase (the patched gates' sources outgrow one GPU at 8 d1280 rows).
+CONSUME_ROWS = 2
 # Probe sites: the residual mix entering layers 0..PROBE_IN_LAYERS-1, the final readout mix and the block outputs of
 # layers 0..PROBE_BLOCK_LAYERS-1 (every layer at d512; the first eight inputs and seven blocks at d1280).
 PROBE_IN_LAYERS = min(L, 8)
@@ -689,21 +691,27 @@ def run_heads(model, mesh, data, head_mean, sub_mean, vocab, block_means) -> dic
 
     names, f_loss, s_loss, l3_mass = [], [], [], []
     with set_mesh(mesh):
-        value = jnp.broadcast_to(block_means[:, None, None, :], (L + 1, BATCH, common.SEQ_LEN, forward.HIDDEN)).astype(
+        rows = CONSUME_ROWS  # patched forwards run on row pairs (memory)
+        value = jnp.broadcast_to(block_means[:, None, None, :], (L + 1, rows, common.SEQ_LEN, forward.HIDDEN)).astype(
             jnp.bfloat16
         )
         ones = forward.no_patch(value).mult
+        chunks = [
+            common.TokenBatch(b.source, b.tokens[r : r + rows], b.segment_ids[r : r + rows], b.loss_weight[r : r + rows])
+            for b in ind
+            for r in range(0, b.tokens.shape[0], rows)
+        ]
 
         def run_config(name, abl, mult):
             fs = ss = 0.0
             ms = np.zeros(H)
-            for b in ind:
+            for b in chunks:
                 tokens, seg, _ = common.device_batch(b, mesh)
                 loss, mass = ind_run(model, tokens, seg, abl, ones if mult is None else mult, value)
                 loss = np.asarray(loss)
-                fs += float(loss[:, first].mean()) / len(ind)
-                ss += float(loss[:, second].mean()) / len(ind)
-                ms += np.asarray(mass) / len(ind)
+                fs += float(loss[:, first].mean()) / len(chunks)
+                ss += float(loss[:, second].mean()) / len(chunks)
+                ms += np.asarray(mass) / len(chunks)
             names.append(name)
             f_loss.append(fs)
             s_loss.append(ss)
@@ -788,9 +796,10 @@ def block_means_of(model, mesh, data, num_batches: int) -> jax.Array:
 def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
     tokens_all, seg_all, w_all, _ = data
     configs = consume_configs()
-    b, s = BATCH, common.SEQ_LEN
+    b, s = CONSUME_ROWS, common.SEQ_LEN
     t = b * s
     late = (3, 4, 5)
+    num_batches = CONSUME_BATCHES * BATCH // b
 
     @jax.jit
     def clean(model, tokens, seg, w):
@@ -838,7 +847,7 @@ def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
             )
         return tr["loss"], overlap, [u[0] for u in units], [u[1] for u in units]
 
-    n_rows = CONSUME_BATCHES * b
+    n_rows = num_batches * b
     loss = np.zeros((len(configs), n_rows, s), np.float16)
     overlap = np.zeros((len(configs), 3))
     frozen_names = [c[0] for c in configs if c[5]]
@@ -852,10 +861,9 @@ def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
     t0 = time.time()
     with set_mesh(mesh):
         means_b = jnp.broadcast_to(block_means[:, None, None, :], (L + 1, b, s, forward.HIDDEN)).astype(jnp.bfloat16)
-        for bi, batch in enumerate(batches_of(tokens_all, seg_all, w_all)):
-            if bi >= CONSUME_BATCHES:
-                break
+        for bi in range(num_batches):
             rows = slice(bi * b, (bi + 1) * b)
+            batch = common.TokenBatch("eval", tokens_all[rows], seg_all[rows], w_all[rows])
             tokens, seg, w = common.device_batch(batch, mesh)
             l0, gw, sel, blocks, ew = clean(model, tokens, seg, w)
             gate_w_sum = gate_w_sum + np.asarray(gw, np.float64)
@@ -875,7 +883,7 @@ def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
             for ci, (name, gates, srcs, sides, mode, frozen) in enumerate(configs):
                 if name == "clean":
                     loss[ci, rows] = np.asarray(l0)
-                    overlap[ci] += 1.0 / CONSUME_BATCHES
+                    overlap[ci] += 1.0 / num_batches
                     continue
                 mult = ones
                 for g in gates:
@@ -885,7 +893,7 @@ def run_consume(model, mesh, data, block_means) -> dict[str, np.ndarray]:
                 value = means_b if mode == "mean" else resampled
                 lp, ov, u, sh = patched(model, tokens, seg, mult, value, sel, frozen)
                 loss[ci, rows] = np.asarray(lp)
-                overlap[ci] += np.asarray(ov) / CONSUME_BATCHES
+                overlap[ci] += np.asarray(ov) / num_batches
                 if frozen:
                     fi = frozen_names.index(name)
                     du = np.stack([np.asarray(x, np.float64) for x in u]) - np.stack(u0)
