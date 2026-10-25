@@ -85,28 +85,28 @@ def sample_rows(expert_sorted: jax.Array, valid: jax.Array, key: jax.Array, per:
     return jnp.where(ok, order[jnp.clip(idx, 0, n - 1)], -1)
 
 
-def empty_state() -> dict:
+def empty_state(nl: int) -> dict:
     return dict(
-        cnt=jnp.zeros((L, E)),
-        routed=jnp.zeros((L, E)),
-        cofire=jnp.zeros((L, E, I, I)),
-        asum=jnp.zeros((L, E, I)),
-        a2sum=jnp.zeros((L, E, I)),
-        hist=jnp.zeros((L, E, I + 1)),
-        lat_sum=jnp.zeros((L, E, R)),
-        lat_m2=jnp.zeros((L, E, R, R)),
-        dropped=jnp.zeros((L,)),
-        s_cofire=jnp.zeros((L, I, I)),
-        s_asum=jnp.zeros((L, I)),
-        s_a2sum=jnp.zeros((L, I)),
-        s_hist=jnp.zeros((L, I + 1)),
-        s_in_sum=jnp.zeros((L, D)),
-        s_in_m2=jnp.zeros((L, D, D)),
+        cnt=jnp.zeros((nl, E)),
+        routed=jnp.zeros((nl, E)),
+        cofire=jnp.zeros((nl, E, I, I)),
+        asum=jnp.zeros((nl, E, I)),
+        a2sum=jnp.zeros((nl, E, I)),
+        hist=jnp.zeros((nl, E, I + 1)),
+        lat_sum=jnp.zeros((nl, E, R)),
+        lat_m2=jnp.zeros((nl, E, R, R)),
+        dropped=jnp.zeros((nl,)),
+        s_cofire=jnp.zeros((nl, I, I)),
+        s_asum=jnp.zeros((nl, I)),
+        s_a2sum=jnp.zeros((nl, I)),
+        s_hist=jnp.zeros((nl, I + 1)),
+        s_in_sum=jnp.zeros((nl, D)),
+        s_in_m2=jnp.zeros((nl, D, D)),
         tokens=jnp.zeros(()),
     )
 
 
-def make_step():
+def make_step(layers: tuple[int, ...]):
     @jax.jit
     def step(state, model, tokens, seg, weight, key):
         model = forward.replicate(model)
@@ -114,7 +114,8 @@ def make_step():
         valid_tok = reshard(weight.reshape(-1), P(None)) > 0
         new = dict(state)
         samples = []
-        for li, lay in enumerate(tr["layers"]):
+        for li, layer in enumerate(layers):
+            lay = tr["layers"][layer]
             experts, toks = lay["expert_sorted"], lay["token_sorted"]
             pre, act = lay["expert_pre"], lay["expert_act"]
             valid = valid_tok[toks]
@@ -155,7 +156,7 @@ def make_step():
             new["s_in_sum"] = new["s_in_sum"].at[li].add(jnp.sum(x_in, axis=0))
             new["s_in_m2"] = new["s_in_m2"].at[li].add(jnp.einsum("td,tf->df", x_in, x_in))
 
-            pick = sample_rows(experts, valid, jax.random.fold_in(key, li), SAMPLE_PER_BATCH)  # [E, per]
+            pick = sample_rows(experts, valid, jax.random.fold_in(key, layer), SAMPLE_PER_BATCH)  # [E, per]
             safe = jnp.maximum(pick, 0)
             samples.append(
                 dict(bits=(pre[safe] > 0) & (pick >= 0)[..., None], token=jnp.where(pick >= 0, toks[safe], -1))
@@ -252,20 +253,25 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", required=True)
     parser.add_argument("--train-sequences", type=int, default=768)
+    parser.add_argument("--save-cofire", action="store_true", help="also write the full per-layer matrices")
+    parser.add_argument("--layers", default="", help="comma-separated layer subset (default all); outputs get a suffix")
     args = parser.parse_args()
+    layers = tuple(int(x) for x in args.layers.split(",")) if args.layers else tuple(range(L))
+    suffix = f"_L{'-'.join(map(str, layers))}" if args.layers else ""
+    nl = len(layers)
     t0 = time.time()
     cfg = common.model_config(args.tag)
     forward.check_config(cfg)
     mesh = common.one_gpu_mesh()
     params = common.load_params(cfg, mesh, common.CHECKPOINTS[args.tag])
-    sample_bits = np.zeros((L, E, SAMPLE, I), bool)
-    sample_tok = np.full((L, E, SAMPLE), -1, np.int64)
-    filled = np.zeros((L, E), np.int64)
+    sample_bits = np.zeros((nl, E, SAMPLE, I), bool)
+    sample_tok = np.full((nl, E, SAMPLE), -1, np.int64)
+    filled = np.zeros((nl, E), np.int64)
     seq_tokens, seq_segs, seq_valid = [], [], []
     with set_mesh(mesh):
         model = common.compute_model(params)
-        state = empty_state()
-        step = make_step()
+        state = empty_state(nl)
+        step = make_step(layers)
         key = jax.random.PRNGKey(STATS_SEED)
         offset = 0
         for n, batch in enumerate(common.train_batches(BATCH, args.train_sequences, seed=STATS_SEED)):
@@ -292,12 +298,14 @@ def main() -> None:
         census = []
         s_census = []
         m = forward.replicate(model)
-        for li, lay in enumerate(m.layers()):
+        all_layers = m.layers()
+        for li, layer in enumerate(layers):
+            lay = all_layers[layer]
             census.append(
                 {
                     k: np.asarray(v)
                     for k, v in layer_census(
-                        state["cofire"][li], state["cnt"][li], w_eff[li], state["lat_sum"][li], state["lat_m2"][li]
+                        state["cofire"][li], state["cnt"][li], w_eff[layer], state["lat_sum"][li], state["lat_m2"][li]
                     ).items()
                 }
             )
@@ -327,28 +335,29 @@ def main() -> None:
         cos_bins=COS_BINS,
         fine_bins=FINE_BINS,
         sample_filled=filled,
+        layers=np.asarray(layers),
     )
-    common.save_npz(args.tag, "excl_stats", **summary)
-    for li in range(L):
+    common.save_npz(args.tag, f"excl_stats{suffix}", **summary)
+    for li, layer in enumerate(layers if args.save_cofire else ()):
         common.save_npz(
             args.tag,
-            f"excl_cofire_L{li}",
+            f"excl_cofire_L{layer}",
             cofire=host["cofire"][li],
             cnt=host["cnt"][li],
             lat_sum=host["lat_sum"][li],
             lat_m2=host["lat_m2"][li],
-            w_eff=w_eff[li],
+            w_eff=w_eff[layer],
         )
     common.save_npz(
         args.tag,
-        "excl_sample",
+        f"excl_sample{suffix}",
         bits=np.packbits(sample_bits, axis=-1),
         token_index=sample_tok,
         filled=filled,
     )
     common.save_npz(
         args.tag,
-        "excl_tokens",
+        f"excl_tokens{suffix}",
         tokens=np.concatenate(seq_tokens),
         segment_ids=np.concatenate(seq_segs),
         valid=np.concatenate(seq_valid),
