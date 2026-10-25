@@ -3,9 +3,10 @@
 
 """How predictions are made, per next-token category (``categories.CATEGORIES``):
 
-- direct logit attribution: the final hidden state is the final AttnRes gate's mix of ``[embed, L0, ..., L5]`` and each
-  layer block is ``sum_h head_h + sconv(shared) + sconv(routed)``, so with the final RMSNorm's per-token scale held
-  fixed the (pre-cap) logits split exactly into terms (``TERMS``); each term's logit for the target, centred over the
+- direct logit attribution: the final hidden state is the final AttnRes gate's mix of ``[embed, L0, ..., L(L-1)]``
+  (layers inside the running partial share its weight) and each layer block is
+  ``sum_h head_h + sconv(shared) + sconv(routed)``, so with the final RMSNorm's per-token scale held fixed the (pre-cap)
+  logits split exactly into terms (``TERMS``); each term's logit for the target, centred over the
   vocabulary;
 - lenses at every sublayer boundary: the final gate's query over the sources available so far (``gate`` lens), and a
   ridge-regression affine translator from that mix to the final hidden state (``tuned`` lens);
@@ -60,7 +61,9 @@ def _stage_sources(tr) -> list[list]:
 
 
 def _labels_logp(model, hidden):
-    logits = forward.soft_cap(jnp.einsum("bsd,dv->bsv", hidden, model.output_proj, preferred_element_type=jnp.float32))
+    logits = jnp.einsum("bsd,dv->bsv", hidden, model.output_proj, preferred_element_type=jnp.float32)
+    if model.config.logit_soft_cap is not None:
+        logits = forward.soft_cap(logits, model.config.logit_soft_cap)
     return jax.nn.log_softmax(logits, axis=-1)
 
 
@@ -107,7 +110,7 @@ def make_fns():
         w = weight.reshape(-1, 1)
         xtx, xty = [], []
         for srcs in _stage_sources(tr):
-            _, mixed = forward._gate(srcs, final_q, eps, plain_sum=model.config.attn_res_plain_sum)
+            _, _, mixed = forward._history_gate(srcs, final_q, eps, plain_sum=model.config.attn_res_plain_sum)
             x = jnp.concatenate(
                 [forward.rms_norm(mixed.astype(jnp.float32), eps).reshape(-1, forward.HIDDEN), jnp.ones_like(w)], axis=1
             )
@@ -163,7 +166,7 @@ def make_fns():
         gate_loss, gate_agree, tuned_loss, tuned_agree, gate_kl = [], [], [], [], []
         final_logp = _labels_logp(model_r, tr["hidden"])
         for k, srcs in enumerate(_stage_sources(tr)):
-            _, mixed = forward._gate(srcs, final_q, eps, plain_sum=model_r.config.attn_res_plain_sum)
+            _, _, mixed = forward._history_gate(srcs, final_q, eps, plain_sum=model_r.config.attn_res_plain_sum)
             for kind, hidden in (
                 ("gate", model_r.final_norm(mixed)),
                 (
