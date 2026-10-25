@@ -35,6 +35,7 @@ from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
     verified_tokenizer,
 )
 from experiments.grug.belay_tpu.belay_ckpt1_tpu_preflight import emit
+from experiments.grug.belay_tpu.expert_collectives import all_to_all_reduce_scatter, butterfly_reduce_scatter
 from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_syrk
 from experiments.grug.belay_tpu.moe_saved_output import saved_output_routed_experts
 from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
@@ -146,6 +147,7 @@ def main():
     parser.add_argument("--logging-only", action="store_true")
     parser.add_argument("--local-experts", action="store_true", help="Gather expert weights and keep tokens local")
     parser.add_argument("--saved-relu2", action="store_true", help="Fuse expert ReLU2 and save preactivations")
+    parser.add_argument("--expert-reduction", choices=("native", "butterfly", "all-to-all"), default="native")
     parser.add_argument(
         "--update-steps", type=int, default=2, help="Consecutive diagnostic updates under the original schedule"
     )
@@ -166,6 +168,12 @@ def main():
         "--saved-output", action="store_true", help="Compute routing gradients from saved expert returns"
     )
     args = parser.parse_args()
+    if args.expert_reduction != "native" and not args.local_experts:
+        parser.error("Expert-gradient reduction diagnostics require --local-experts")
+    if args.expert_reduction == "butterfly":
+        local_experts.reduce_expert_gradients = butterfly_reduce_scatter
+    elif args.expert_reduction == "all-to-all":
+        local_experts.reduce_expert_gradients = all_to_all_reduce_scatter
     if args.update_steps < 2:
         parser.error("Checkpoint continuation requires at least two consecutive updates")
     if args.profile_steps < 0:
@@ -214,6 +222,7 @@ def main():
             "diagnostic/original_schedule_steps": 8821,
             "diagnostic/source_qb_control": args.source_qb,
             "diagnostic/routing_ops": args.routing_ops,
+            "diagnostic/expert_reduction": args.expert_reduction,
             "diagnostic/saved_output": args.saved_output,
             "diagnostic/local_experts": args.local_experts,
             "diagnostic/saved_relu2": args.saved_relu2,

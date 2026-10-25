@@ -32,6 +32,9 @@ def main():
             "saved-relu2-kernel",
             "saved-relu2",
             "local-relu2",
+            "expert-collectives",
+            "local-butterfly",
+            "local-all-to-all",
         ),
         default=_DEFAULT_PHASES,
     )
@@ -39,7 +42,17 @@ def main():
     if (
         any(
             name in args.phases
-            for name in ("source", "qb", "routing", "saved-output", "local-experts", "saved-relu2", "local-relu2")
+            for name in (
+                "source",
+                "qb",
+                "routing",
+                "saved-output",
+                "local-experts",
+                "saved-relu2",
+                "local-relu2",
+                "local-butterfly",
+                "local-all-to-all",
+            )
         )
         and not args.reference_step1
     ):
@@ -53,6 +66,15 @@ def main():
         "saved-output": ("belay_ckpt1_tpu_update_check", [*reference, "--saved-output"]),
         "local-experts": ("belay_ckpt1_tpu_update_check", [*reference, "--local-experts", "--routing-ops"]),
         "saved-relu2-kernel": ("saved_moe_check", ["--fused-relu2"]),
+        "expert-collectives": ("expert_collective_check", []),
+        "local-butterfly": (
+            "belay_ckpt1_tpu_update_check",
+            [*reference, "--local-experts", "--expert-reduction", "butterfly"],
+        ),
+        "local-all-to-all": (
+            "belay_ckpt1_tpu_update_check",
+            [*reference, "--local-experts", "--expert-reduction", "all-to-all"],
+        ),
         "saved-relu2": ("belay_ckpt1_tpu_update_check", [*reference, "--saved-relu2"]),
         "local-relu2": (
             "belay_ckpt1_tpu_update_check",
@@ -95,7 +117,7 @@ def main():
         print(json.dumps(record), flush=True)
         with (output / "diagnostic-phases.jsonl").open("a") as file:
             file.write(json.dumps(record) + "\n")
-        if name == "saved-relu2-kernel" and result.returncode != 0:
+        if name in ("saved-relu2-kernel", "expert-collectives") and result.returncode != 0:
             break
     raise SystemExit(1 if failed else 0)
 

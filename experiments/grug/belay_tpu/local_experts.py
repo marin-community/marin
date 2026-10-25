@@ -40,10 +40,14 @@ def _gather_weights_fwd(weights):
     return gather_expert_weights(weights), None
 
 
+def reduce_expert_gradients(gradient):
+    return jax.lax.psum_scatter(gradient, "expert", scatter_dimension=0, tiled=True)
+
+
 def _gather_weights_bwd(_, gradient):
     # Accumulate contributions from token shards in FP32 before returning to the
     # compute-weight dtype. Master parameters and optimizer state remain FP32.
-    reduced = jax.lax.psum_scatter(gradient.astype(jnp.float32), "expert", scatter_dimension=0, tiled=True)
+    reduced = reduce_expert_gradients(gradient.astype(jnp.float32))
     return (reduced.astype(gradient.dtype),)
 
 
