@@ -21,11 +21,12 @@ import numpy as np
 from haliax.partitioning import set_mesh
 from jax.experimental import multihost_utils
 from levanter.checkpoint import load_checkpoint, save_checkpoint
+from levanter.grug._moe import ep_ragged_all_to_all
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.trainer import _initialize_global_tracker
 from levanter.utils.jax_utils import parameter_count
 
-from experiments.grug.belay_tpu import qb_balancing, train
+from experiments.grug.belay_tpu import model, qb_balancing, routing_tpu, train
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
     DATA_ROOT,
     build_config,
@@ -150,9 +151,15 @@ def main():
     parser.add_argument(
         "--source-qb", action="store_true", help="Use the unchanged source histogram as a cross-run control"
     )
+    parser.add_argument("--routing-ops", action="store_true", help="Use the selected Base16 routing lookup and sorts")
     args = parser.parse_args()
     if args.source_qb:
         qb_balancing.bincount_upper_quantile = source_bincount_upper_quantile
+    if args.routing_ops:
+        model._selected_router_logits = routing_tpu.unrolled_router_logits
+        ep_ragged_all_to_all._accepted_assignments = routing_tpu.accepted_assignments_cutoff
+        ep_ragged_all_to_all._restore_assignment_scalars = routing_tpu.restore_assignment_scalars_sort
+        ep_ragged_all_to_all._permute_assignment_weights = routing_tpu.permute_assignment_weights_sort
     if not args.logging_only and os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
         raise RuntimeError("Optimizer checks require JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
     if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -181,6 +188,7 @@ def main():
             "diagnostic_only": True,
             "diagnostic/original_schedule_steps": 8821,
             "diagnostic/source_qb_control": args.source_qb,
+            "diagnostic/routing_ops": args.routing_ops,
             "diagnostic/reference_step1": args.reference_step1,
         }
     )

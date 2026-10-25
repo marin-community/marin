@@ -1198,6 +1198,10 @@ class GrugModelConfig:
         return Transformer.init(cfg, key=key)
 
 
+def _selected_router_logits(logits: jax.Array, selected: jax.Array) -> jax.Array:
+    return jnp.take_along_axis(logits, selected, axis=-1)
+
+
 def _proj(cfg: "GrugModelConfig", x: jax.Array, w: jax.Array, out_sharding: P | None = None) -> jax.Array:
     """``x[..., k] @ w[k, n]`` under ``cfg.fp8_recipe``."""
     if cfg.fp8_recipe in _DENSE_FP8_SIM:
@@ -2653,7 +2657,7 @@ class MoEMLP(eqx.Module):
                 out_specs=P(_BATCH_AXES, None),
             )(table, flat_ids)
         # Sigmoid combine weights on unbiased logits for selected experts.
-        unbiased_topk = jnp.take_along_axis(router_logits, selected_experts, axis=-1)
+        unbiased_topk = _selected_router_logits(router_logits, selected_experts)
         renorm_sum = self.cfg.routing_renorm_sum * (self.cfg.moe_null_renorm_scale if null_layer else 1.0)
         if self.cfg.router_combine == RouterCombine.SOFTMAX_RENORM:
             combine_weights_f = renorm_sum * jax.nn.softmax(unbiased_topk, axis=-1)
@@ -2702,7 +2706,7 @@ class MoEMLP(eqx.Module):
                 combine_weights_f = combine_weights_f * (renorm_sum / (denom + 1e-9))
             active_k = jnp.mean(jnp.sum(keep.astype(jnp.float32), axis=-1))
         if router_soft_select.SOFT_SELECT is not None:
-            biased_sel = jnp.take_along_axis(router_logits + self.router_bias, selected_experts, axis=-1)
+            biased_sel = _selected_router_logits(router_logits + self.router_bias, selected_experts)
             combine_weights_f = router_soft_select.soft_combine(combine_weights_f, biased_sel)
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()

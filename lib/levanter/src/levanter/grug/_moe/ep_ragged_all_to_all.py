@@ -796,6 +796,14 @@ def _routed_experts_overlapped_bwd(layout, overlap_fn, residuals, cotangents):
     return (*routed, d_tokens, d_params)
 
 
+def _restore_assignment_scalars(values, sorted_indices):
+    return values[jnp.argsort(sorted_indices)]
+
+
+def _permute_assignment_weights(weights, sorted_indices):
+    return weights[sorted_indices]
+
+
 def _routed_experts_backward(
     layout, weights, routing, chunk_residuals, out_cotangent, side_vjp=None, side_cotangent=None
 ):
@@ -818,7 +826,7 @@ def _routed_experts_backward(
                 weights=weights_f32,
             )
         else:
-            sorted_weights = weights_f32.reshape(-1)[routing.sorted_indices]
+            sorted_weights = _permute_assignment_weights(weights_f32.reshape(-1), routing.sorted_indices)
             token_cotangent = out_cotangent[routing.sorted_indices // layout.topk].astype(jnp.float32)
             returned_cotangent = (token_cotangent * sorted_weights[:, None]).astype(out_cotangent.dtype)
 
@@ -886,7 +894,9 @@ def _routed_experts_backward(
             moe_w2_cotangents.append(w2_cotangent)
 
     with jax.named_scope("combine"):
-        assignment_output_dot = output_dot[:, 0][positions].reshape(weights.shape)
+        assignment_output_dot = _restore_assignment_scalars(output_dot[:, 0], routing.sorted_indices).reshape(
+            weights.shape
+        )
         # d/dw of w * <dout, y> is <dout, y> = <dy, y> / w. Dropped and padding assignments carry
         # no weight and get a zero gradient without the division.
         divisible = routing.accepted & (weights_f32 != 0)

@@ -18,15 +18,18 @@ def main():
     parser.add_argument("--run-prefix", required=True)
     parser.add_argument("--reference-step1")
     parser.add_argument("--first-port", type=int, required=True)
-    parser.add_argument("--phases", nargs="+", choices=(*_DEFAULT_PHASES, "saved-ce"), default=_DEFAULT_PHASES)
+    parser.add_argument(
+        "--phases", nargs="+", choices=(*_DEFAULT_PHASES, "saved-ce", "routing"), default=_DEFAULT_PHASES
+    )
     args = parser.parse_args()
-    if any(name in args.phases for name in ("source", "qb")) and not args.reference_step1:
+    if any(name in args.phases for name in ("source", "qb", "routing")) and not args.reference_step1:
         parser.error("--reference-step1 is required for source and QB full-update comparisons")
     module_prefix = "experiments.grug.belay_tpu."
     reference = ["--reference-step1", args.reference_step1]
     phases = {
         "source": ("belay_ckpt1_tpu_update_check", [*reference, "--source-qb"]),
         "qb": ("belay_ckpt1_tpu_update_check", reference),
+        "routing": ("belay_ckpt1_tpu_update_check", [*reference, "--routing-ops"]),
         "transport": ("transport_kernel_check", []),
         "kda-tile": ("kda_tile_check", []),
         "saved-moe": ("saved_moe_check", []),
