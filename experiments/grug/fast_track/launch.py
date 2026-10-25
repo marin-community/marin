@@ -144,6 +144,9 @@ class MatchMode(StrEnum):
 
 # Data. In-region 16k BPE-ladder cache (train split), document-shuffled so sequential reads interleave domains.
 V16384_CACHE_DIR = "s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_shuf/train"
+# The same tokens with whole 4096-token sequences permuted (fp8quality's seq_shuffle_cache.py), so a long document's
+# sequences are no longer neighbors and the block shuffle gives near-iid batches (the s7n ladder's train data).
+V16384_SEQSHUF_CACHE_DIR = "s3://marin-us-east-02a/marin/datakit/hero_tok/v16384_seqshuf/train"
 V16384_TOKENIZER = "hero-bpe-v16384"
 V16384_VOCAB = 16384
 # Paloma caches rebuilt from the in-region detokenized raw (dodges the failed 2026.06.28 stubs).
@@ -822,6 +825,12 @@ def _layer_skip_rule(
     help="Nodes for the run (default: the rung's; H100 rungs use one 8-GPU node).",
 )
 @click.option(
+    "--train-cache",
+    default=V16384_CACHE_DIR,
+    show_default=True,
+    help=f"Flat train cache. {V16384_SEQSHUF_CACHE_DIR} holds the same tokens in sequence-shuffled order.",
+)
+@click.option(
     "--expert-axis-size",
     type=click.IntRange(min=1),
     default=None,
@@ -904,6 +913,7 @@ def main(
     stop_after_steps: int | None,
     nodes: int | None,
     expert_axis_size: int | None,
+    train_cache: str,
     model_set: tuple[str, ...],
     opt_set: tuple[str, ...],
     priority: str,
@@ -949,6 +959,7 @@ def main(
         stop_after_steps=stop_after_steps,
         nodes=nodes,
         expert_axis_size=expert_axis_size,
+        train_cache_dir=train_cache,
     )
 
 
