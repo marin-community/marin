@@ -56,6 +56,7 @@ from iris.cluster.types import (
     EnvironmentSpec,
     is_job_finished,
 )
+from iris.rpc import job_pb2
 from rigging.config_discovery import find_project_root
 from rigging.connect import capability_path, proxy_path
 from rigging.timing import Duration
@@ -403,6 +404,12 @@ def _mint_and_print_capability_url(
     help="Override the task container image. On the GPU path this bypasses the isolated "
     "uv-tool vLLM and serves from the image's own `vllm` on PATH.",
 )
+@click.option(
+    "--priority-band",
+    type=click.Choice(["inherit", "production", "interactive", "batch"]),
+    default="inherit",
+    help="Iris priority band for the serve job.",
+)
 @click.option("--wait/--no-wait", default=True, help="Wait for readiness and mint a capability URL before blocking.")
 @click.option(
     "--wait-timeout",
@@ -446,6 +453,7 @@ def main(
     vllm_source: str,
     extras: tuple[str, ...],
     task_image: str | None,
+    priority_band: str,
     wait: bool,
     wait_timeout: float,
 ) -> None:
@@ -611,6 +619,7 @@ def main(
                 max_retries_failure=0,
                 max_retries_preemption=max_retries_preemption,
                 task_image=None if brokered else task_image,
+                priority_band=job_pb2.PriorityBand.Value(f"PRIORITY_BAND_{priority_band.upper()}"),
             )
             proxy_url = client.resolve_endpoint(endpoint)
             click.echo("")
