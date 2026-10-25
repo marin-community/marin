@@ -86,6 +86,14 @@ def _optimizer_checkpoint_metadata(sharding_type: str) -> dict:
     return metadata
 
 
+def _init_lazy_optimizer_state(optimizer) -> None:
+    """Create any optimizer state Megatron allocates lazily; its (de)serializers expect it."""
+    optimizers = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
+    for child in optimizers:
+        if child.optimizer is not None and child.init_state_fn is not None:
+            child.init_state_fn(child.optimizer, child.config)
+
+
 def _saved_optimizer_sharding_type(common_state: dict) -> str:
     optimizer_state = common_state["optimizer"]
     if _PARAM_STATE_SHARDING_TYPE_KEY in optimizer_state:
@@ -352,10 +360,7 @@ class MegatronStrategy(DistributedStrategy):
         if optimizer:
             # An empty training selection can reach checkpointing before the first
             # update. Megatron's serializer still requires the lazy optimizer state.
-            optimizers = optimizer.chained_optimizers if isinstance(optimizer, ChainedOptimizer) else [optimizer]
-            for child in optimizers:
-                if child.optimizer is not None and child.init_state_fn is not None:
-                    child.init_state_fn(child.optimizer, child.config)
+            _init_lazy_optimizer_state(optimizer)
             sharding_type = self.megatron_config.optimizer_checkpoint_sharding_type
             if optimizer_state == OptimizerStateMode.FULL:
                 sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
@@ -476,6 +481,9 @@ class MegatronStrategy(DistributedStrategy):
                 # gradients resident that second copy is what OOMs a policy that trains fine.
                 # The empty buffers come back after the optimizer state is restored below.
                 offload_megatron_grads_to_cpu(model)
+                # dp_reshardable reads each main parameter's moments to shape the load; a
+                # CPU-offloaded (hybrid) optimizer creates them lazily, so a fresh one has none.
+                _init_lazy_optimizer_state(optimizer)
                 sharded_state_dict["optimizer"] = optimizer.sharded_state_dict(
                     model_sharded_state_dict,
                     is_loading=True,
