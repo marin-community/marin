@@ -209,7 +209,8 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, 
     }
 
 
-def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, timeout_seconds: int, priority: str) -> str:
+def submit(job_name: str, entrypoint: Entrypoint, timeout_seconds: int, priority: str) -> str:
+    """One finite 4 x H100x8 RNO2a job with no retries; shared by the LR0 and SFT launchers."""
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     # StoragePath reads the AWS-named pair; bucket-routed filesystems read the CW names.
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
@@ -217,7 +218,7 @@ def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, time
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(
-                entrypoint=Entrypoint.from_callable(lr0_worker, run_root, run_id, receipt_bytes),
+                entrypoint=entrypoint,
                 name=job_name,
                 resources=convert_resources(RESOURCES),
                 environment=environment,
@@ -409,7 +410,8 @@ def main() -> None:
         },
     }
     Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
-    job_id = submit(args.job_name, run_root, args.job_name, receipt_bytes, args.timeout_seconds, args.priority)
+    entrypoint = Entrypoint.from_callable(lr0_worker, run_root, args.job_name, receipt_bytes)
+    job_id = submit(args.job_name, entrypoint, args.timeout_seconds, args.priority)
     launch.update(state="submitted", iris_job_id=job_id)
     Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
     print(json.dumps({"job": job_id, "status": "submitted"}))

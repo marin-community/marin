@@ -1,0 +1,597 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
+"""Bind and submit the #310 identity SFT to its 16-update milestone: one finite 4 x H100x8 RNO2a job, no retries.
+
+``sft_worker`` runs on every replica. It builds the source-derived recipe with the measured router policy, replaces
+the factory's data with the frozen mixture (``mixture-seed310-v1``, data config checked by hash) and calls
+``run_identity_sft``. That function relies on a passing LR0 run for the precision gate and re-runs only the cheap
+binds:
+
+- source bind: the six pinned metadata hashes, every tensor header, and the tensor names and shapes of the LR0
+  source receipt (whose 502 tensor hashes the full LR0 source audit wrote) -> ``audits/source-bind.json``
+- derived recipe == the reviewed runtime receipt; loaded model config == the receipt
+- full master-step-0 audit against the LR0 source receipt -> ``audits/master-step-0.json``
+- router-dot witness on the compute view: f32 operands and output
+- router biases equal the loaded source before and after training (they are frozen)
+
+Then the dataset audit reads the same iterator the loop consumes (64 updates, the frozen 512 sequences) before any
+update; each of the 16 updates checks its consumed batch against the frozen order immediately before its
+``train_step``. After update 16 the native checkpoint is written and committed first (the resume source for 64), then
+the BF16 + FP32-router-bias HF export and its save audit. Process 0 writes ``sft-result.json`` last. The milestone-16
+spending gate is evaluated afterwards on the export, not here.
+
+``main`` prints the job plan; with ``--run`` it submits. ``--run`` needs the passing LR0 run root (its ``gate.json``
+with no failures, four ``gated`` rank receipts and ``lr0-result.json``), the capacity record and the spending gate
+file; it writes ``--launch-receipt`` before the submit and again with the Iris job id after it.
+"""
+
+import argparse
+import datetime
+import hashlib
+import json
+import subprocess
+import time
+from collections.abc import Callable, Iterator
+from dataclasses import asdict, dataclass, replace
+from pathlib import Path
+
+import draccus
+import haliax as hax
+import jax.numpy as jnp
+import jax.random as jrandom
+import numpy as np
+from iris.cluster.types import Entrypoint
+from levanter.compat.hf_export import run_on_export_writer, write_export_json
+from levanter.compute_dtype import cast_model_for_compute
+from levanter.data.text.datasets import LmDataConfig
+from levanter.main.train_lm import TrainLmConfig, preserve_hf_runtime_settings
+from levanter.models.lm_model import LmExample
+from levanter.models.snowball import GrugMoeHfConfig
+from levanter.tracker import NoopConfig
+from levanter.trainer import Trainer, initialize
+from levanter.trainer_state import TrainerState
+from rigging.filesystem.buckets import filesystem_for
+from rigging.filesystem.factory import url_to_fs
+from rigging.filesystem.storage_path import StoragePath, prefix_join
+
+from experiments.interp.snowball_identity.levanter_positions import router_dot_dtypes, router_dot_is_fp32
+from experiments.post_training.identity_context_distill.dataset_audit import (
+    ACCOUNTING_MODULE_SHA256,
+    FREEZE_SHA256,
+    INVENTORY_SHA256,
+    audit_training_iterator,
+    checked_update,
+    load_dataset_audit_inputs,
+)
+from experiments.post_training.identity_context_distill.lr0_probe import (
+    MAX_TIMEOUT_SECONDS,
+    PRIORITY_BANDS,
+    REPLICAS,
+    RESOURCES,
+    SEED,
+    SOURCE_FILE_HASHES,
+    T310,
+    approved_receipt,
+    check_pod_storage,
+    mesh_layout,
+    submit,
+)
+from experiments.post_training.identity_context_distill.precision_audit import audit_initialized_masters
+from experiments.post_training.identity_context_distill.precision_probe import router_values
+from experiments.post_training.identity_context_distill.precision_source_audit import (
+    INDEX,
+    SOURCE_FILES,
+    check_source_metadata,
+    checkpoint_records,
+)
+from experiments.post_training.identity_context_distill.runtime_recipe import (
+    check_precision_runtime_receipt,
+    configure_precision_runtime,
+)
+from experiments.post_training.identity_context_distill.save_audit import audit_trained_export
+from experiments.post_training.identity_context_distill.sft import (
+    BASE_MODEL,
+    check_export_metadata,
+    check_restored_progress,
+    check_runtime_recipe,
+    identity_sft_config,
+    source_export_overrides,
+)
+
+MIXTURE_ROOT = f"{T310}/mixture-seed310-v1"
+DATA_CONFIG_SHA256 = "91a6423d0f7b708cf0c9846bf04d90fed46b6242705b6089038594ba6aa044df"
+CACHE_CATALOG_SHA256 = "cfe8af5fbd4324db5b465dcd02be9416eb4fe61cd5d5419cc3227a682eb580a4"
+INVENTORY_PATH = f"{T310}/mixture-seed310-v1-supplement-v1/native-token-inventory.jsonl"
+"""The native token inventory of the 767 frozen rows that the dataset audit counts against."""
+ACCOUNTING_TEST = "tests/training/test_chat_token_accounting.py"
+SPENDING_GATE_SHA256 = "d854803cee2f53f77ffa45b7850cb060ad1c6cfd1fb6c128a1674c3c37b518ad"
+"""milestone16-spending-gate-v1.json: evaluated on the step-16 export after the job, not inside it."""
+STOP_AFTER_UPDATES = 16
+AUDITED_UPDATES = 64
+"""The dataset audit pre-reads the frozen 512 sequences: 64 updates of 8."""
+SOURCE_SHARDS = 39
+ROUTER_BIAS_DTYPES = {f"model.layers.{layer}.mlp.router.bias": "float32" for layer in range(26)}
+
+
+@dataclass(frozen=True)
+class SftAudits:
+    """The trainer-side audits, each called on every rank and raising on every rank on failure."""
+
+    audit_iterator: Callable[[Iterator[LmExample], TrainLmConfig], tuple[Iterator[LmExample], dict]]
+    """Pre-reads the first 64 batches of the loop's own iterator, checks them against the frozen mixture, and
+    returns an iterator over the same batch objects followed by the rest, plus its report."""
+    check_batch: Callable[[LmExample, int], dict]
+    """Checks one consumed batch against the frozen order for that update; returns its per-update receipt."""
+    save_audit: Callable[[TrainerState, str], None]
+    """Checks the written HF export against the in-memory masters and the frozen source router biases."""
+
+
+def frozen_data_config(data_config_bytes: bytes) -> LmDataConfig:
+    if hashlib.sha256(data_config_bytes).hexdigest() != DATA_CONFIG_SHA256:
+        raise ValueError("Data config differs from the frozen mixture's data-config.json")
+    data = draccus.decode(LmDataConfig, json.loads(data_config_bytes))
+    for name, component in data.components.items():
+        if component.pack is not False or component.format.pack is not False:
+            raise ValueError(f"Frozen component {name} must be unpacked")
+        if component.format.slice_strategy != "raise" or not component.format.mask_user_turns:
+            raise ValueError(f"Frozen component {name} must raise on overflow and mask user turns")
+    return data
+
+
+def sft_config(
+    run_root: str, run_id: str, config_bytes: bytes, generation_bytes: bytes, data_config_bytes: bytes
+) -> TrainLmConfig:
+    """The factory recipe at ``hosts=4`` and 16 updates, with its data replaced by the frozen mixture."""
+    data = frozen_data_config(data_config_bytes)
+    identity = data.components["identity"]
+    base = identity_sft_config(
+        dataset_uri=identity.source.train_urls[0],
+        cache_uri=data.cache_dir,
+        output_uri=run_root,
+        run_id=run_id,
+        seed=SEED,
+        source_config=json.loads(config_bytes),
+        source_generation_config=json.loads(generation_bytes),
+        hosts=REPLICAS,
+        stop_after_updates=STOP_AFTER_UPDATES,
+    )
+    return replace(base, data=data)
+
+
+def source_bind(lr0_source_receipt: dict, source_objects: dict) -> dict:
+    """Writer only: every model object (the six metadata files and every index shard) has the size and ETag listed
+    around the LR0 audit; the pinned metadata and headers hold; the tensor names and shapes are the ones the LR0
+    audit hashed. Other files under the source root (README, evals) are not model inputs and are not compared."""
+    if source_objects["source_index_sha256"] != SOURCE_FILE_HASHES[INDEX]:
+        raise ValueError("Source object list was taken against a different index")
+    check_source_metadata(BASE_MODEL, SOURCE_FILE_HASHES)
+    records = checkpoint_records(BASE_MODEL)
+    expected = {name: tuple(entry["shape"]) for name, entry in lr0_source_receipt["tensors"].items()}
+    if {name: tuple(record.shape) for name, record in records.items()} != expected:
+        raise ValueError("Source tensor names or shapes differ from the LR0 source receipt")
+    shards = {record.file_path.rsplit("/", 1)[-1] for record in records.values()}
+    if len(shards) != SOURCE_SHARDS:
+        raise ValueError(f"Source index names {len(shards)} shards, not {SOURCE_SHARDS}")
+    model_objects = set(SOURCE_FILES) | shards
+    if set(source_objects["objects"]) != model_objects:
+        raise ValueError("Source object list does not cover exactly the metadata files and index shards")
+    fs, root = url_to_fs(BASE_MODEL)
+    changed = []
+    for name, listed in sorted(source_objects["objects"].items()):
+        info = fs.info(f"{root.rstrip('/')}/{name}")
+        if (info["size"], info.get("ETag")) != (listed["bytes"], listed["etag"]):
+            changed.append(name)
+    if changed:
+        raise ValueError(f"Source objects differ from the LR0 object list: {changed}")
+    return {"metadata_sha256": SOURCE_FILE_HASHES, "objects": len(model_objects), "tensor_count": len(records)}
+
+
+def train_checked_updates(
+    trainer: Trainer,
+    state: TrainerState,
+    batches: Iterator[LmExample],
+    check_batch: Callable[[LmExample, int], dict],
+    count: int,
+) -> tuple[TrainerState, list[dict]]:
+    """Run ``count`` updates, checking each consumed batch immediately before its update."""
+    first = int(state.step)
+    updates = []
+    for update in range(first, first + count):
+        batch = next(batches)
+        receipt = check_batch(batch, update)
+        info = trainer.train_step(state, batch)
+        state = info.state
+        if int(state.step) != update + 1 or not np.isfinite(info.loss):
+            raise ValueError(f"Update {update} did not complete with a finite loss")
+        updates.append({**receipt, "update": update, "loss": float(info.loss)})
+    return state, updates
+
+
+def run_identity_sft(
+    config: TrainLmConfig,
+    *,
+    runtime_receipt: dict,
+    lr0_source: dict,
+    source_objects: dict,
+    run_root: str,
+    audits: SftAudits,
+) -> dict:
+    """Load the pinned source, bind the cheap checks, run 16 checked updates, checkpoint, export and audit.
+
+    Call on every JAX rank. Relies on a passing LR0 run of the same pin for the precision gate.
+    """
+    if config.trainer.num_train_steps != STOP_AFTER_UPDATES or config.trainer.load_checkpoint_path is not None:
+        raise ValueError("The milestone run is a fresh 16-update run from the pinned source")
+    export_path = f"{config.hf_save_path}/step-{STOP_AFTER_UPDATES - 1}"
+    if (StoragePath(export_path) / "config.json").exists():
+        raise FileExistsError("SFT export path already holds a model; refusing to reuse it")
+    config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
+    generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
+    rounding_path = runtime_receipt["routing_reference"]["path"]
+    check_precision_runtime_receipt(
+        config,
+        runtime_receipt,
+        config_bytes=config_bytes,
+        generation_bytes=generation_bytes,
+        rounding_bytes=StoragePath(rounding_path).read_bytes(),
+    )
+    source = json.loads(config_bytes)
+    generation = json.loads(generation_bytes)
+    lr0_source_bytes = StoragePath(lr0_source["path"]).read_bytes()
+    if sha256(lr0_source_bytes) != lr0_source["sha256"]:
+        raise ValueError("LR0 source receipt differs from the one the launch cited")
+    lr0_source_receipt = json.loads(lr0_source_bytes)
+    object_list_bytes = StoragePath(source_objects["path"]).read_bytes()
+    if sha256(object_list_bytes) != source_objects["sha256"]:
+        raise ValueError("Source object list differs from the one the launch cited")
+    object_list = json.loads(object_list_bytes)
+    initialize(config)
+    started = time.monotonic()
+
+    def loss(model, example, *, key=None):
+        return model.compute_next_token_loss(example, key=key, logsumexp_weight=config.z_loss_weight)
+
+    optimizer = config.optimizer.build(config.trainer.num_train_steps)
+    with Trainer(config.trainer, optimizer, loss, add_default_hooks=False) as trainer:
+        check_runtime_recipe(config, source_config=source, source_generation_config=generation)
+        run_on_export_writer(
+            lambda: write_export_json(
+                StoragePath(run_root) / "audits/source-bind.json", source_bind(lr0_source_receipt, object_list)
+            )
+        )
+        tokenizer = config.data.the_tokenizer
+        converter = config.model.hf_checkpoint_converter().replaced(reference_checkpoint=BASE_MODEL, tokenizer=tokenizer)
+        # The HF metadata is architecture-authoritative; runtime precision is restored AFTER reload.
+        reloaded = converter.config_from_hf_config(GrugMoeHfConfig(**source))
+        reloaded = preserve_hf_runtime_settings(reloaded, config.model, config.trainer.compute_dtype_overrides)
+        config = replace(config, model=reloaded)
+        check_runtime_recipe(config, source_config=source, source_generation_config=generation)
+        model = converter.load_pretrained(
+            config.model.model_type, config=reloaded, axis_mapping=trainer.parameter_axis_mapping, dtype=None
+        )
+        loaded_model_config = asdict(model.config)
+        if loaded_model_config != runtime_receipt["runtime_model_config"]:
+            raise ValueError("HF loader discarded or changed the approved runtime model config")
+        source_biases = router_values(model)
+        state = trainer.initial_state(
+            jrandom.PRNGKey(config.trainer.seed), model=model, is_trainable=config.adapter.trainable_filter(model)
+        )
+        del model
+        check_restored_progress(config, state, completed_updates=0)
+        audit_initialized_masters(
+            state.model.to_state_dict(), lr0_source["path"], f"{run_root}/audits/master-step-0.json"
+        )
+        for name, value in router_values(state.model).items():
+            np.testing.assert_array_equal(value, source_biases[name])
+        overrides = config.trainer.compute_dtype_overrides
+        with hax.partitioning.set_mesh(trainer.device_mesh), hax.axis_mapping(trainer.compute_axis_mapping):
+            view = cast_model_for_compute(state.model, trainer.mp, overrides)
+            dot_dtypes = router_dot_dtypes(view, trainer.mp.compute_dtype)
+        del view
+        if not router_dot_is_fp32(dot_dtypes):
+            raise ValueError(f"Router dot is not FP32 on the compute view: {dot_dtypes}")
+
+        pos = config.model.max_Pos.resize(config.train_seq_len)
+        train_dataset = config.data.train_set(pos, config.trainer.batch_schedule, key=jrandom.PRNGKey(config.data_seed))
+        batches, dataset_report = audits.audit_iterator(trainer.data_loader(train_dataset).iter_from_step(0), config)
+        train_started = time.monotonic()
+        state, updates = train_checked_updates(trainer, state, batches, audits.check_batch, STOP_AFTER_UPDATES)
+        train_seconds = time.monotonic() - train_started
+        check_restored_progress(config, state, completed_updates=STOP_AFTER_UPDATES)
+        for name, value in router_values(state.model).items():
+            np.testing.assert_array_equal(value, source_biases[name])
+
+        # The native checkpoint is the resume source for 64 updates: commit it before the export.
+        label = STOP_AFTER_UPDATES - 1
+        checkpointer = config.trainer.checkpointer.create(trainer.run_id)
+        checkpointer.on_step(tree=state.saveable_state, step=label, force=True)
+        checkpointer.wait_until_finished()
+        checkpoint_path = f"{config.trainer.checkpointer.expanded_path(trainer.run_id)}/step-{label}"
+
+        save_started = time.monotonic()
+        converter.with_config_overrides(source_export_overrides(source)).save_pretrained(
+            state.model,
+            export_path,
+            dtype=jnp.bfloat16,
+            dtype_overrides=ROUTER_BIAS_DTYPES,
+            generation_config=generation,
+            upload_to_hf=False,
+        )
+        save_seconds = time.monotonic() - save_started
+        run_on_export_writer(
+            lambda: check_export_metadata(source, json.loads((StoragePath(export_path) / "config.json").read_bytes()))
+        )
+        audits.save_audit(state, export_path)
+        return {
+            "completed_updates": int(state.step),
+            "next_data_offset": config.trainer.batch_schedule.global_data_offset_by_step(int(state.step)),
+            "updates": updates,
+            "dataset_audit": dataset_report,
+            "native_checkpoint": checkpoint_path,
+            "hf_path": export_path,
+            "router_dot_dtypes": dot_dtypes,
+            "compute_dtype_overrides": overrides,
+            "learning_rate": config.optimizer.learning_rate,
+            "train_seconds": train_seconds,
+            "save_seconds": save_seconds,
+            "worker_seconds": time.monotonic() - started,
+            "runtime_recipe_receipt": runtime_receipt,
+            "lr0_source_receipt": lr0_source,
+            "source_object_list": source_objects,
+        }
+
+
+def sft_worker(
+    run_root: str,
+    run_id: str,
+    receipt_bytes: bytes,
+    data_config_bytes: bytes,
+    lr0_source: dict,
+    source_objects: dict,
+    audits: SftAudits,
+) -> None:
+    """Run on every replica; the byte arguments are the reviewed receipt's and the frozen data config's bytes."""
+    check_pod_storage()
+    runtime_receipt = approved_receipt(receipt_bytes)
+    reference = runtime_receipt["routing_reference"]
+    config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
+    generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
+    base = sft_config(run_root, run_id, config_bytes, generation_bytes, data_config_bytes)
+    config, observed = configure_precision_runtime(
+        base,
+        config_bytes=config_bytes,
+        generation_bytes=generation_bytes,
+        rounding_bytes=StoragePath(reference["path"]).read_bytes(),
+        rounding_path=reference["path"],
+        rounding_sha256=reference["sha256"],
+    )
+    if observed != runtime_receipt:
+        raise ValueError("Derived runtime recipe differs from the reviewed receipt")
+    if config.data != base.data:
+        raise ValueError("The precision runtime changed the frozen data config")
+    config = replace(config, trainer=replace(config.trainer, tracker=NoopConfig()))
+    result = run_identity_sft(
+        config,
+        runtime_receipt=runtime_receipt,
+        lr0_source=lr0_source,
+        source_objects=source_objects,
+        run_root=run_root,
+        audits=audits,
+    )
+    # Collective: every rank calls it; process 0 writes.
+    run_on_export_writer(lambda: write_export_json(StoragePath(run_root) / "sft-result.json", result))
+
+
+def bound_sft_worker(
+    run_root: str, run_id: str, receipt_bytes: bytes, data_config_bytes: bytes, lr0_source: dict, source_objects: dict
+) -> None:
+    """The job entrypoint: ``sft_worker`` with the frozen dataset audit and the trained-export audit bound."""
+    check_pod_storage()
+    frozen = load_dataset_audit_inputs(MIXTURE_ROOT, INVENTORY_PATH)
+    audits = SftAudits(
+        audit_iterator=lambda batches, config: audit_training_iterator(
+            batches,
+            config=config,
+            completed_updates=0,
+            frozen=frozen,
+            receipt_path=f"{run_root}/audits/dataset-step-0.json",
+        ),
+        check_batch=lambda batch, update: checked_update(batch, update, frozen),
+        save_audit=lambda state, export_path: audit_trained_export(
+            state,
+            export_path,
+            source_root=BASE_MODEL,
+            source_receipt_path=lr0_source["path"],
+            source_receipt_sha256=lr0_source["sha256"],
+            expected_hashes=SOURCE_FILE_HASHES,
+        ),
+    )
+    sft_worker(run_root, run_id, receipt_bytes, data_config_bytes, lr0_source, source_objects, audits)
+
+
+def read_remote(path: str) -> bytes:
+    fs, local = filesystem_for(path)
+    return fs.cat_file(local)
+
+
+def sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def lr0_pass(lr0_root: str) -> dict:
+    """The passing LR0 run this SFT relies on; raises unless every reading-rule receipt says pass."""
+    gate_path = prefix_join(lr0_root, "precision-gate/gate.json")
+    gate_bytes = read_remote(gate_path)
+    gate = json.loads(gate_bytes)
+    if gate.get("failures") != []:
+        raise ValueError(f"LR0 gate did not pass: {gate.get('failures')}")
+    for rank in range(REPLICAS):
+        receipt = json.loads(read_remote(prefix_join(lr0_root, f"precision-gate/ranks/{rank}.json")))
+        if receipt.get("stage") != "gated" or receipt.get("failures") != 0:
+            raise ValueError(f"LR0 rank {rank} did not pass the gate: {receipt}")
+    result_bytes = read_remote(prefix_join(lr0_root, "lr0-result.json"))
+    if json.loads(result_bytes).get("completed_updates") != 1:
+        raise ValueError("LR0 result does not record one completed update")
+    source_path = prefix_join(lr0_root, "audits/source-tensor-hashes.json")
+    source_bytes = read_remote(source_path)
+    if len(json.loads(source_bytes)["tensors"]) != 502:
+        raise ValueError("LR0 source receipt does not hold 502 tensors")
+    return {
+        "run_root": lr0_root,
+        "gate": {"path": gate_path, "sha256": sha256(gate_bytes)},
+        "result": {"path": prefix_join(lr0_root, "lr0-result.json"), "sha256": sha256(result_bytes)},
+        "source_receipt": {"path": source_path, "sha256": sha256(source_bytes)},
+    }
+
+
+def source_object_list(path: str) -> dict:
+    data = read_remote(path)
+    value = json.loads(data)
+    if value["source_root"].rstrip("/") != BASE_MODEL.rstrip("/"):
+        raise ValueError("Source object list is for a different source root")
+    if value["source_index_sha256"] != SOURCE_FILE_HASHES[INDEX]:
+        raise ValueError("Source object list was taken against a different index")
+    return {"path": path, "sha256": sha256(data), "objects": len(value["objects"])}
+
+
+def frozen_mixture() -> tuple[bytes, dict]:
+    """The frozen data config bytes and the hashes of the three mixture files the launch cites."""
+    files = {
+        "freeze.json": FREEZE_SHA256,
+        "data-config.json": DATA_CONFIG_SHA256,
+        "cache-catalog.json": CACHE_CATALOG_SHA256,
+    }
+    contents = {name: read_remote(f"{MIXTURE_ROOT}/{name}") for name in files}
+    for name, expected in files.items():
+        if sha256(contents[name]) != expected:
+            raise ValueError(f"Mixture {name} differs from the frozen hash")
+    return contents["data-config.json"], {"root": MIXTURE_ROOT, "sha256": files}
+
+
+def plan(job_name: str, run_root: str, timeout_seconds: int, priority: str, config: TrainLmConfig) -> dict:
+    head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
+    dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True)
+    return {
+        "job": job_name,
+        "commit": head.stdout.strip(),
+        "clean": not dirty.stdout,
+        "run_root": run_root,
+        "stop_after_updates": STOP_AFTER_UPDATES,
+        "optimizer": {
+            "learning_rate": config.optimizer.learning_rate,
+            "warmup": config.optimizer.warmup,
+            "weight_decay": config.optimizer.weight_decay,
+            "max_grad_norm": config.optimizer.max_grad_norm,
+        },
+        "batch": {
+            "train_batch_size": config.trainer.train_batch_size,
+            "per_device_parallelism": config.trainer.per_device_parallelism,
+            "seq_len": config.train_seq_len,
+        },
+        "mesh": mesh_layout(config.trainer.mesh),
+        "region": RESOURCES.target_cluster,
+        "replicas": REPLICAS,
+        "gpus": 8 * REPLICAS,
+        "resources": {"cpu": RESOURCES.cpu, "ram": RESOURCES.ram, "disk": RESOURCES.disk},
+        "priority": priority,
+        "ports": ["jax"],
+        "secret_behavior": "isolate: CW_KEY_ID/SECRET, also as AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY",
+        "retries_failure": 0,
+        "retries_preemption": 0,
+        "timeout_seconds": timeout_seconds,
+        "h100_hour_ceiling": 8 * REPLICAS * timeout_seconds / 3600,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--job-name", required=True)
+    parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
+    parser.add_argument("--runtime-receipt", required=True, help="local runtime-recipe-f37aec3.json")
+    parser.add_argument("--timeout-seconds", type=int, required=True)
+    parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")
+    parser.add_argument("--expect-commit", help="the reviewed worker pin; required with --run, must equal HEAD")
+    parser.add_argument("--priority", choices=sorted(PRIORITY_BANDS), default="interactive")
+    parser.add_argument("--lr0-run-root", help="the passing LR0 run root; required with --run")
+    parser.add_argument("--source-object-list", help="S3 source object list (names, sizes, ETags); required with --run")
+    parser.add_argument("--spending-gate", help="local milestone16-spending-gate-v1.json; required with --run")
+    parser.add_argument("--capacity-record", help="the launch owner's capacity guard JSON; required with --run")
+    parser.add_argument("--launch-receipt", help="local JSON receipt to write; required with --run")
+    parser.add_argument("--run", action="store_true", help="submit; without it only print the plan")
+    args = parser.parse_args()
+    run_root = args.run_root.rstrip("/")
+    if not run_root.startswith("s3://marin-rno2a/"):
+        raise SystemExit("run root must be on s3://marin-rno2a/")
+    if args.timeout_seconds <= 0:
+        raise SystemExit("timeout must be a positive number of seconds")
+    if args.timeout_seconds > MAX_TIMEOUT_SECONDS and not args.allow_long_timeout:
+        raise SystemExit(f"timeout above {MAX_TIMEOUT_SECONDS} s needs --allow-long-timeout")
+    receipt_bytes = Path(args.runtime_receipt).read_bytes()
+    approved_receipt(receipt_bytes)
+    config_bytes = read_remote(f"{BASE_MODEL}config.json")
+    generation_bytes = read_remote(f"{BASE_MODEL}generation_config.json")
+    if sha256(config_bytes) != SOURCE_FILE_HASHES["config.json"]:
+        raise SystemExit("source config.json differs from the pinned hash")
+    if sha256(generation_bytes) != SOURCE_FILE_HASHES["generation_config.json"]:
+        raise SystemExit("source generation_config.json differs from the pinned hash")
+    data_config_bytes, mixture = frozen_mixture()
+    config = sft_config(run_root, args.job_name, config_bytes, generation_bytes, data_config_bytes)
+    lr0 = lr0_pass(args.lr0_run_root.rstrip("/")) if args.lr0_run_root else None
+    source_objects = source_object_list(args.source_object_list) if args.source_object_list else None
+    job_plan = {
+        **plan(args.job_name, run_root, args.timeout_seconds, args.priority, config),
+        "mixture": mixture,
+        "spending_gate_sha256": SPENDING_GATE_SHA256,
+        "dataset_audit": {
+            "inventory": {"path": INVENTORY_PATH, "sha256": INVENTORY_SHA256},
+            "accounting_module_sha256": ACCOUNTING_MODULE_SHA256,
+            "accounting_test_sha256": sha256(Path(ACCOUNTING_TEST).read_bytes()),
+        },
+        "lr0_pass": lr0,
+        "source_object_list": source_objects,
+    }
+    print(json.dumps(job_plan, indent=2))
+    if not args.run:
+        return
+    if not job_plan["clean"]:
+        raise SystemExit("worktree is not clean")
+    if source_objects is None:
+        raise SystemExit("--run needs --source-object-list: the cheap source bind compares against it")
+    if lr0 is None:
+        raise SystemExit("--run needs --lr0-run-root: the SFT relies on a passing LR0 run of the same pin")
+    if not (args.capacity_record and args.launch_receipt and args.expect_commit and args.spending_gate):
+        raise SystemExit("--run needs --capacity-record, --launch-receipt, --expect-commit and --spending-gate")
+    if job_plan["commit"] != args.expect_commit:
+        raise SystemExit(f"HEAD {job_plan['commit']} is not the reviewed pin {args.expect_commit}")
+    if sha256(Path(args.spending_gate).read_bytes()) != SPENDING_GATE_SHA256:
+        raise SystemExit("spending gate file differs from the pre-registered hash")
+    fs, root = filesystem_for(run_root)
+    if fs.exists(root):
+        raise SystemExit(f"run root already exists: {run_root}")
+    capacity = Path(args.capacity_record).read_bytes()
+    launch = {
+        **job_plan,
+        "state": "pre-submit",
+        "submit_utc": datetime.datetime.now(datetime.UTC).isoformat(),
+        "spending_gate": {"path": args.spending_gate, "sha256": SPENDING_GATE_SHA256},
+        "capacity_record": {"path": args.capacity_record, "sha256": sha256(capacity), "content": json.loads(capacity)},
+    }
+    Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
+    entrypoint = Entrypoint.from_callable(
+        bound_sft_worker,
+        run_root,
+        args.job_name,
+        receipt_bytes,
+        data_config_bytes,
+        lr0["source_receipt"],
+        source_objects,
+    )
+    job_id = submit(args.job_name, entrypoint, args.timeout_seconds, args.priority)
+    launch.update(state="submitted", iris_job_id=job_id)
+    Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
+    print(json.dumps({"job": job_id, "status": "submitted"}))
+
+
+if __name__ == "__main__":
+    main()
