@@ -338,10 +338,11 @@ def expert_census(atlas: dict, vocab: list[str]) -> dict:
 
 
 def heads_section(hz: dict) -> dict:
-    """Per L0-L2 head: distance profile, self / previous / doc-start / same-token / delimiter / in-word masses (both
-    weightings), a label, and the induction table."""
+    """Per head of every layer with head statistics (``early.HEAD_LAYERS``; L0-L2 in the d512 data): distance
+    profile, self / previous / doc-start / same-token / delimiter / in-word masses (both weightings), a label, and
+    the induction table."""
     out = {"heads": [], "edges": [0, 1, 2, 5, 17, 65, 257, 1025, 4097]}
-    for i in early.EARLY:
+    for i in [li for li in range(early.L) if f"stats/L{li}/n" in hz]:
         p = f"stats/L{i}/"
         n = hz[p + "n"]
         for h in range(early.H):
