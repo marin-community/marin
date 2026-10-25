@@ -161,6 +161,8 @@ def test_rows_parquet_round_trip(tmp_path):
     assert count == 1
     restored = read_rows_parquet(path)
     assert restored == rows
+    # StrEnum members compare equal to their strings; the reader must still restore the enums.
+    assert isinstance(restored[0].token_type_tag, ProbeBucket) and isinstance(restored[0].form, KLForm)
 
 
 def test_exact_rows_pair_the_two_passes_by_coordinate():

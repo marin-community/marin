@@ -328,6 +328,15 @@ def write_rows_parquet(rows: list[SequenceKLRow], output_path: str | Path) -> in
 
 
 def read_rows_parquet(input_path: str | Path) -> list[SequenceKLRow]:
-    """The rows of one pass's parquet file."""
+    """The rows of one pass's parquet file, with the form and bucket back as their enums."""
     table = pq.read_table(str(input_path))
-    return [SequenceKLRow(**record) for record in table.to_pylist()]
+    return [
+        SequenceKLRow(
+            **{
+                **record,
+                "form": KLForm(record["form"]),
+                "token_type_tag": ProbeBucket(record["token_type_tag"]),
+            }
+        )
+        for record in table.to_pylist()
+    ]
