@@ -1,0 +1,63 @@
+name: "Marin - Locked Dependency Security"
+
+on:
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '**/uv.lock'
+      - 'uv.lock'
+      - 'scripts/ci/check_locked_security.py'
+      - 'tests/ci/test_check_locked_security.py'
+      - '.github/workflows/marin-locked-security.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.5"
+          python-version: "3.12"
+      - name: Test the audit
+        run: >-
+          uv run --no-project --with pytest --with packaging python -m pytest
+          -c /dev/null -p no:cacheprovider --noconftest tests/ci/test_check_locked_security.py
+      - name: Check every tracked lock
+        run: uv run --no-project scripts/ci/check_locked_security.py --output locked-security.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: locked-security
+          path: locked-security.json
+          if-no-files-found: warn
+
+  report-failure:
+    needs: [audit]
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+      actions: read
+      contents: read
+    steps:
+      - uses: marin-community/marin-style/actions/report-failure@d855d6304ad0532c131ef2e208db84ed7acf4721
+        with:
+          lane: locked-security
+          issue-title-prefix: "[nightly-locked-security]"
+          trigger-token: ${{ secrets.LOOM_TRIGGER_GH_TOKEN }}
+          slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          triage-notes: >-
+            Inspect the locked-security JSON artifact and audit logs. Distinguish
+            vulnerable or blocked packages from a lock parse or offline graph
+            failure. Update the affected project's constraints and lock; do not
+            remove the check or classify unresolved coverage as clean.
