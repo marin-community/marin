@@ -21,7 +21,7 @@ from levanter.tracker import NoopConfig
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
-from experiments.post_training.identity_context_distill import sft_launch
+from experiments.post_training.identity_context_distill import lr0_probe, sft_launch
 from experiments.post_training.identity_context_distill.test_lr0_probe import fixture
 from experiments.post_training.identity_context_distill.test_runtime_recipe import inputs
 
@@ -549,7 +549,7 @@ def test_sft_refuses_other_reviewed_arm_receipts(receipt_sha):
         sft_launch.sft_runtime_receipt(b"not read for an excluded receipt", receipt_sha)
 
 
-@pytest.mark.parametrize("attention", ["torch_order", None])
+@pytest.mark.parametrize("attention", ["torch_order", "gpu_fa4_cute"])
 def test_sft_refuses_other_arm_settings_even_with_an_allowed_digest(monkeypatch, attention):
     receipt_bytes = fixture(
         monkeypatch,
@@ -562,3 +562,25 @@ def test_sft_refuses_other_arm_settings_even_with_an_allowed_digest(monkeypatch,
     monkeypatch.setattr(sft_launch, "RUNTIME_RECEIPT_SHA256S", {digest})
     with pytest.raises(ValueError, match=r"must match arm \(a\)"):
         sft_launch.sft_runtime_receipt(receipt_bytes, digest)
+
+
+def test_lr0_submit_keeps_route_policy_and_precision_through_shared_helper(monkeypatch):
+    calls = {}
+    entrypoint = object()
+
+    def build(*args):
+        calls["entrypoint"] = args
+        return entrypoint
+
+    def submit(*args):
+        calls["submit"] = args
+        return "job-id"
+
+    monkeypatch.setattr(lr0_probe.Entrypoint, "from_callable", build)
+    monkeypatch.setattr(lr0_probe, "submit_entrypoint", submit)
+    result = lr0_probe.submit(
+        "job", RUN_ROOT, "run", b"receipt", "digest", "report_g1b_l0", 7200, "production", "default"
+    )
+    assert result == "job-id"
+    assert calls["entrypoint"] == (lr0_probe.lr0_worker, RUN_ROOT, "run", b"receipt", "digest", "report_g1b_l0")
+    assert calls["submit"] == ("job", entrypoint, 7200, "production", "default")
