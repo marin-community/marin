@@ -7,6 +7,10 @@ from `aef63f29`. The portable copy loss is shared with [PR #10230](https://githu
 Historical July quality results in [issue #10229](https://github.com/marin-community/marin/issues/10229)
 retain their July identity.
 
+[CPLM Plus](PLUS.md) adds predecessor keys and case-class emissions to this
+head. Its archived ladder includes completed d512, d768 and d1024 endpoints,
+and an interrupted d1280 rung, with configuration identities and loss curves.
+
 The frozen recipe uses 6 layers, 512 experts/top-8, ungated ReLU² experts,
 KDA/MLA/Inkling attention, AttnRes, bigram embeddings, vocabulary 128256 and
 sequence length 8192. Copy query/key matrices and gate/sink vectors add 525312

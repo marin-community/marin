@@ -1,0 +1,101 @@
+{
+  "retrieved": "2026-10-25",
+  "runs": [
+    {
+      "model": "belay",
+      "width": 1024,
+      "layers": 12,
+      "batch_size": 64,
+      "sequence_length": 8192,
+      "seed": 0,
+      "completed_updates": 18975,
+      "validation_nll": 2.5608022212982178,
+      "paloma_macro_bpb": 1.021640062332153,
+      "uncheatable_macro_bpb": 0.7720497846603394
+    },
+    {
+      "model": "belay",
+      "width": 512,
+      "layers": 6,
+      "batch_size": 16,
+      "sequence_length": 8192,
+      "seed": 0,
+      "completed_updates": 10790,
+      "validation_nll": 3.080686330795288,
+      "paloma_macro_bpb": 1.202184557914734,
+      "uncheatable_macro_bpb": 0.977077305316925
+    },
+    {
+      "model": "belay",
+      "width": 768,
+      "layers": 8,
+      "batch_size": 16,
+      "sequence_length": 8192,
+      "seed": 0,
+      "completed_updates": 29799,
+      "validation_nll": 2.7866005897521973,
+      "paloma_macro_bpb": 1.1001803874969482,
+      "uncheatable_macro_bpb": 0.859477162361145
+    },
+    {
+      "model": "cplm",
+      "width": 512,
+      "layers": 6,
+      "batch_size": 16,
+      "sequence_length": 8192,
+      "seed": 0,
+      "completed_updates": 10699,
+      "validation_nll": 3.031177282333374,
+      "paloma_macro_bpb": 1.1844074726104736,
+      "uncheatable_macro_bpb": 0.9608570337295532
+    },
+    {
+      "model": "cplm",
+      "width": 768,
+      "layers": 8,
+      "batch_size": 16,
+      "sequence_length": 8192,
+      "seed": 0,
+      "completed_updates": 29452,
+      "validation_nll": 2.7678475379943848,
+      "paloma_macro_bpb": 1.0933046340942385,
+      "uncheatable_macro_bpb": 0.853945791721344
+    },
+    {
+      "model": "plus",
+      "width": 1024,
+      "layers": 12,
+      "batch_size": 64,
+      "sequence_length": 8192,
+      "seed": 0,
+      "completed_updates": 18779,
+      "validation_nll": 2.5435054302215576,
+      "paloma_macro_bpb": 1.0146007537841797,
+      "uncheatable_macro_bpb": 0.7670517563819885
+    },
+    {
+      "model": "plus",
+      "width": 512,
+      "layers": 6,
+      "batch_size": 16,
+      "sequence_length": 8192,
+      "seed": 0,
+      "completed_updates": 10676,
+      "validation_nll": 3.0185160636901855,
+      "paloma_macro_bpb": 1.1816487312316897,
+      "uncheatable_macro_bpb": 0.9535524249076844
+    },
+    {
+      "model": "plus",
+      "width": 768,
+      "layers": 8,
+      "batch_size": 16,
+      "sequence_length": 8192,
+      "seed": 0,
+      "completed_updates": 29343,
+      "validation_nll": 2.7604029178619385,
+      "paloma_macro_bpb": 1.0913058519363403,
+      "uncheatable_macro_bpb": 0.8501596450805664
+    }
+  ]
+}
