@@ -88,11 +88,12 @@ def test_unmatched_arms_are_refused():
 
 
 def test_bf16_byte_unchanged():
-    tensors = {f"t{i}": {"export_sha256": str(i), "frozen_bias": False} for i in range(476)}
-    tensors["bias"] = {"export_sha256": "x", "frozen_bias": True}
-    moved = {**tensors, "t3": {"export_sha256": "moved", "frozen_bias": False}}
-    assert m16_gate.bf16_byte_unchanged({"tensors": tensors}, {"tensors": tensors})
-    assert not m16_gate.bf16_byte_unchanged({"tensors": moved}, {"tensors": tensors})
+    names = [f"model.layers.{i}.w" for i in range(476)] + ["model.layers.0.mlp.router.bias"]
+    reference = {"tensors": {n: {"sha256": n, "dtype": "bfloat16"} for n in names}}
+    same = {"tensors": {n: {"export_sha256": n, "frozen_bias": n.endswith("bias")} for n in names}}
+    moved = {"tensors": {**same["tensors"], names[3]: {"export_sha256": "moved", "frozen_bias": False}}}
+    assert m16_gate.bf16_byte_unchanged(same, reference)
+    assert not m16_gate.bf16_byte_unchanged(moved, reference)
 
 
 def test_candidate_binding_refuses_partial_runs(monkeypatch):

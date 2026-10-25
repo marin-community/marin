@@ -229,12 +229,21 @@ def score_arm(
 
 
 def bf16_byte_unchanged(candidate_audit: dict, reference_audit: dict) -> bool:
-    """True when every saved BF16 tensor's bytes equal the reference export's (router biases excluded)."""
-    candidate = {k: v for k, v in candidate_audit["tensors"].items() if not v["frozen_bias"]}
-    reference = {k: v for k, v in reference_audit["tensors"].items() if not v["frozen_bias"]}
+    """True when all 476 saved BF16 tensors equal the base export byte for byte (router biases excluded).
+
+    ``candidate_audit`` is the trained export's ``trained-precision-audit.json`` (``export_sha256``);
+    ``reference_audit`` is the LR0 pass export's ``precision-audit.json`` (``sha256``). Both hash the
+    full tensor payload with SHA-256.
+    """
+
+    def bf16(tensors: dict, key: str) -> dict[str, str]:
+        return {name: v[key] for name, v in tensors.items() if not name.endswith(".mlp.router.bias")}
+
+    candidate = bf16(candidate_audit["tensors"], "export_sha256")
+    reference = bf16(reference_audit["tensors"], "sha256")
     if len(candidate) != 476 or candidate.keys() != reference.keys():
         raise ValueError("Expected the same 476 BF16 tensors in both audits")
-    return all(candidate[k]["export_sha256"] == reference[k]["export_sha256"] for k in candidate)
+    return candidate == reference
 
 
 def decide(gate: dict, base: dict, candidate: dict, byte_unchanged: bool | None) -> dict:
