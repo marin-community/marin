@@ -22,10 +22,17 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 from jax.sharding import Mesh, NamedSharding, PartitionSpec, reshard
-from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows
-from experiments.interp.snowball_identity.precision_gate import any_rank_failed, rank_zero_count
+from experiments.interp.snowball_identity.multihost import (
+    broadcast_host_scalar,
+    gather_global,
+    gather_host_rows,
+    gather_host_scalar,
+)
+from experiments.interp.snowball_identity.precision_gate import any_rank_failed, device_memory_report, rank_zero_count
 from experiments.post_training.identity_context_distill.precision_probe import adam_gradient_witness
 
+MEMORY = [[1_292_672_000, 53_853_598_464, 63_766_003_712], [2**31 + 1, 2**33 + 5, 63_766_003_712]]
+BIG = 2**40 + 3
 rank = jax.process_index()
 mesh = Mesh(np.array(jax.devices()), ("data",))
 with jax.set_mesh(mesh):
@@ -43,10 +50,21 @@ with jax.set_mesh(mesh):
         "scores": gather_global(replicated).tolist(),
         "sharded": gather_global(mu).tolist(),
         "rows": gather_host_rows(np.array([[rank, 10 + rank]])).tolist(),
+        # Device memory sizes above 2**31 (an H100 limit is 63,766,003,712 bytes) cross the shared gather exactly.
+        "memory": device_memory_report(gather_host_rows(np.array([MEMORY[rank]], dtype=np.int64))),
+        "big_scalar": gather_host_scalar(np.int64(BIG + rank)).tolist(),
+        "big_float": gather_host_scalar(np.float64(0.1 + rank)).tolist(),
+        "big_broadcast": int(broadcast_host_scalar(np.int64(BIG + 7 * rank))),
     }))
 """
 
 
+BIG = 2**40 + 3
+LIMIT = 63_766_003_712
+MEMORY_REPORT = [
+    dict(process=0, local_device=0, bytes_in_use=1_292_672_000, peak_bytes_in_use=53_853_598_464, bytes_limit=LIMIT),
+    dict(process=1, local_device=0, bytes_in_use=2**31 + 1, peak_bytes_in_use=2**33 + 5, bytes_limit=LIMIT),
+]
 SHARDED = [float(i - 7) for i in range(8)]
 SCORES = [2 * v for v in SHARDED]
 
@@ -73,4 +91,13 @@ def test_gate_and_witness_collectives_under_a_two_process_global_mesh():
     results = sorted((json.loads(out.decode().strip().splitlines()[-1]) for out, _ in outputs), key=lambda r: r["rank"])
     for rank, result in enumerate(results):
         expected = {"rank": rank, "one_failed": True, "none_failed": False, "count": 3, "witness": 7.0}
-        assert result == {**expected, "scores": SCORES, "sharded": SHARDED, "rows": [[[0, 10]], [[1, 11]]]}
+        assert result == {
+            **expected,
+            "scores": SCORES,
+            "sharded": SHARDED,
+            "rows": [[[0, 10]], [[1, 11]]],
+            "memory": MEMORY_REPORT,
+            "big_scalar": [BIG, BIG + 1],
+            "big_float": [0.1, 1.1],
+            "big_broadcast": BIG,
+        }

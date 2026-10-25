@@ -150,6 +150,21 @@ def device_memory_report(gathered: np.ndarray) -> list[dict]:
     ]
 
 
+def memory_failures(memory: list[dict]) -> list[str]:
+    """The gate's memory rows must be readable: no negative value (a missing stat, or a gather that wrapped, as on
+    lr0-r6) and one ``bytes_limit`` across all devices."""
+    failures = [
+        f"process {row['process']} device {row['local_device']}: {field} {row[field]} < 0"
+        for row in memory
+        for field in MEMORY_FIELDS
+        if row[field] < 0
+    ]
+    limits = sorted({row["bytes_limit"] for row in memory})
+    if len(limits) > 1:
+        failures.append(f"bytes_limit differs across devices: {limits}")
+    return failures
+
+
 def dispatch_failures(dispatch: dict) -> list[str]:
     """The gate forward must be dropless, as vLLM is: any dropped valid assignment is a failure."""
     return [
@@ -208,6 +223,7 @@ def evaluate(
         + [f"routes: {f}" for f in route_gate(cross, rounding, overrides, router_dot_is_fp32(dot_dtypes))]
         + [f"routes-{gated.replace('_', '-')}: {f}" for f in proxy[gated]["failures"]]
         + [f"dispatch: {f}" for f in dispatch_failures(moe["dispatch"])]
+        + [f"memory: {f}" for f in memory_failures(memory)]
     )
     return {
         "inputs": vars(inputs),

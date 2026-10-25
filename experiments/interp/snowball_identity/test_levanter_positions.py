@@ -298,6 +298,12 @@ def gate_fixture(mesh, model, policy, tmp_path, monkeypatch):
     floor_receipt, torch_top6, capture = write_floor(
         tmp_path, monkeypatch, {sid: r["routes"] for sid, r in ours.items()}
     )
+    # CPU devices report no memory stats (-1), which the gate refuses; give each device H100-sized rows.
+    monkeypatch.setattr(
+        precision_gate,
+        "local_device_memory",
+        lambda: np.array([[2**34, 2**35, 63_766_003_712]] * jax.local_device_count(), dtype=np.int64),
+    )
     inputs = precision_gate.PrecisionGateInputs(
         positions=pinned,
         vllm=str(tmp_path / "vllm.json"),

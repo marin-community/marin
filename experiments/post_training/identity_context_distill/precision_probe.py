@@ -16,7 +16,6 @@ import jax.numpy as jnp
 import numpy as np
 from jax.experimental import multihost_utils
 from levanter.compat.hf_export import run_on_export_writer, write_export_json
-from levanter.data.text.examples import GrugLmExample
 from levanter.data.text.formats import ChatLmDatasetFormat
 from levanter.main.train_lm import TrainLmConfig, preserve_hf_runtime_settings
 from levanter.models.lm_model import LmExample
@@ -46,7 +45,8 @@ def synthetic_lr0_batch(tokenizer: MarinTokenizer) -> LmExample:
     """Render eight explicitly synthetic native chats; never use as training data.
 
     Uses ChatProcessor's IDs/masks and ChatDataset's one-token causal mask shift.
-    Rows are not packed or truncated; padding carries no loss.
+    Rows are not packed or truncated; padding carries no loss. The arrays are host numpy, identical on every
+    process; ``place_like_data_loader`` lays them out for ``train_step``.
     """
     rows = [
         {
@@ -61,23 +61,38 @@ def synthetic_lr0_batch(tokenizer: MarinTokenizer) -> LmExample:
     processed = ChatLmDatasetFormat(pack=False, slice_strategy="raise", mask_user_turns=True).build_preprocessor(
         tokenizer
     )(rows)
-    examples = []
+    tokens_rows, weight_rows = [], []
     for row in processed:
         tokens = np.asarray(row["input_ids"], dtype=np.int32)
         mask = np.asarray(row["assistant_masks"], dtype=np.int32)
         if len(tokens) > SEQUENCE_LENGTH or tokens.shape != mask.shape or not np.any(mask):
             raise ValueError("Synthetic chat must fit native context with nonempty matching masks")
         padding = SEQUENCE_LENGTH - len(tokens)
-        padded = np.pad(tokens, (0, padding), constant_values=128001)
+        tokens_rows.append(np.pad(tokens, (0, padding), constant_values=128001))
         shifted = np.roll(np.pad(mask, (0, padding)), -1).astype(np.float32)
-        examples.append(GrugLmExample.causal(jnp.asarray(padded), loss_weight=jnp.asarray(shifted)))
-    if len(examples) != GLOBAL_BATCH_SIZE:
+        # GrugLmExample.causal's loss mask: the last position predicts nothing.
+        shifted[-1] = 0.0
+        weight_rows.append(shifted)
+    if len(tokens_rows) != GLOBAL_BATCH_SIZE:
         raise ValueError("Synthetic ChatProcessor did not return eight rows")
     axes = (hax.Axis("batch", GLOBAL_BATCH_SIZE), hax.Axis("position", SEQUENCE_LENGTH))
-    return LmExample(
-        hax.named(jnp.stack([row.tokens for row in examples]), axes),
-        hax.named(jnp.stack([row.loss_weight for row in examples]), axes),
-    )
+    return LmExample(hax.named(np.stack(tokens_rows), axes), hax.named(np.stack(weight_rows), axes))
+
+
+def place_like_data_loader(batch: LmExample, trainer: Trainer) -> LmExample:
+    """Lay a host batch out as ``trainer.data_loader`` does: one global array per leaf, built from host data with the
+    loader's sharding (``sharding_for_axis`` under the trainer's mesh and compute mapping). Every process must pass
+    the same host batch. ``train_step`` under explicit mesh axes needs this; a host or replicated batch fails the
+    fused loss's ``shard_map`` (lr0-r6)."""
+
+    def place(leaf):
+        if not isinstance(leaf, hax.NamedArray):
+            return leaf
+        host = np.asarray(leaf.array)
+        sharding = hax.partitioning.sharding_for_axis(leaf.axes, trainer.compute_axis_mapping, trainer.device_mesh)
+        return hax.NamedArray(jax.make_array_from_callback(host.shape, sharding, lambda index: host[index]), leaf.axes)
+
+    return jax.tree.map(place, batch, is_leaf=lambda leaf: isinstance(leaf, hax.NamedArray))
 
 
 def adam_gradient_witness(state: TrainerState) -> float:
@@ -215,8 +230,9 @@ def run_precision_probe(
         batch = synthetic_lr0_batch(tokenizer)
         if batch.tokens.axes != (hax.Axis("batch", GLOBAL_BATCH_SIZE), hax.Axis("position", SEQUENCE_LENGTH)):
             raise ValueError("Synthetic probe batch must be native 8 x 8192, unpacked")
-        if batch.loss_weight.axes != batch.tokens.axes or float(hax.sum(batch.loss_weight).scalar()) <= 0:
+        if batch.loss_weight.axes != batch.tokens.axes or float(np.sum(batch.loss_weight.array)) <= 0:
             raise ValueError("Synthetic probe needs a matching, nonempty loss mask")
+        batch = place_like_data_loader(batch, trainer)
         converter = probe_config.model.hf_checkpoint_converter().replaced(
             reference_checkpoint=BASE_MODEL, tokenizer=tokenizer
         )

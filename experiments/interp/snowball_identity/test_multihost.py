@@ -11,7 +11,7 @@ import jax
 import numpy as np
 import pytest
 
-from experiments.interp.snowball_identity import multihost
+from experiments.interp.snowball_identity import multihost, precision_gate
 
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 RANK_FILES = [
@@ -60,3 +60,18 @@ def test_no_device_get_or_untiled_gather_left(path):
     assert "broadcast_one_to_all" not in source
     for call in re.findall(r"process_allgather\((.*)\)", source):
         assert "tiled=True" in call, call
+
+
+def test_gate_memory_rows_fail_closed_when_unreadable():
+    limit = 63_766_003_712
+    good = {"process": 0, "local_device": 0, "bytes_in_use": 1, "peak_bytes_in_use": 2**35, "bytes_limit": limit}
+    assert precision_gate.memory_failures([good, {**good, "local_device": 1}]) == []
+    # lr0-r6's process 0 device 0, wrapped to int32 by the gather.
+    wrapped = {**good, "bytes_in_use": 1_292_672_000, "peak_bytes_in_use": -1_980_976_384, "bytes_limit": -658_505_728}
+    assert precision_gate.memory_failures([wrapped]) == [
+        "process 0 device 0: peak_bytes_in_use -1980976384 < 0",
+        "process 0 device 0: bytes_limit -658505728 < 0",
+    ]
+    assert precision_gate.memory_failures([good, {**good, "local_device": 1, "bytes_limit": limit - 1}]) == [
+        f"bytes_limit differs across devices: {[limit - 1, limit]}"
+    ]
