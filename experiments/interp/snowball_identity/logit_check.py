@@ -17,6 +17,10 @@ Contrastive candidate scores (the sum of the candidate tokens' log-probs) are co
 when given, harness vs the scorer, with each side's win count per condition. Per row-condition it also counts
 where harness and vLLM agree on whether a correct candidate wins (``rows_won_agree``) and on the top-scoring
 candidate (``rows_top_candidate_agree``), and lists every row where either differs.
+
+``parity_gate`` applies the task #310 pre-registered thresholds (precision-preflight-preregistration-v1.md, sha256
+b0590550...) to a ``compare`` report, fail-closed: a NaN, a missing group, a missing token or a coverage count that
+differs from the pinned baseline is a failure. ``--gate`` exits 1 on any failure.
 """
 
 import argparse
@@ -34,6 +38,16 @@ from experiments.interp.snowball_identity.sequences import LONG_TOKENS, Sequence
 MIN_PROB = 1e-3
 NEAR_TIE = 0.1
 WINDOW = 2048
+
+GATE_GROUPS = {"check": 307, "contrastive": 27228, "long": 2999, "long_past_window": 952}
+"""Groups every gate applies to, with the positions the pinned baseline covers."""
+GATE_ROW_CONDITIONS = 64
+GATE_P99_LOGPROB = 0.70
+GATE_MAX_LOGPROB = 3.5
+GATE_TOP1 = 0.975
+"""Exact agreement plus near ties, over positions."""
+GATE_P99_SCORE = 1.5
+GATE_MAX_SCORE = 2.5
 
 
 def read(path: str) -> bytes:
@@ -178,20 +192,67 @@ def compare(positions_path: str, vllm_path: str, scorer_path: str | None, identi
     }
 
 
+def candidate_spans(identity_path: str, tokenizer_source: str = SNOWBALL_V01) -> dict:
+    """The ``compare`` argument: each contrastive sequence's candidate span and correct indices. Only the tokenizer
+    files of ``tokenizer_source`` are read; ``compare`` checks the token ids against the stored vLLM ones."""
+    sequences = build_sequences(load_tokenizer(tokenizer_source), identity_path)
+    return {s.id: (s.score, s.meta["correct"]) for s in sequences if s.score}
+
+
+def parity_gate(report: dict) -> list[str]:
+    """Every pre-registered failure in a ``compare`` report; an empty list is a pass. Top-candidate identity is not
+    gated (it is reported in ``row_disagreements``)."""
+
+    def within(value, limit: float) -> bool:
+        return isinstance(value, (int, float)) and value <= limit  # NaN fails
+
+    failures = []
+    for group, expected in GATE_GROUPS.items():
+        stats = report.get("positions", {}).get(group)
+        if stats is None:
+            failures.append(f"{group}: missing")
+            continue
+        if stats["positions"] != expected:
+            failures.append(f"{group}: {stats['positions']} positions, baseline {expected}")
+        if stats["missing_from_harness_top50"]:
+            failures.append(f"{group}: {stats['missing_from_harness_top50']} vLLM top-20 tokens not measured")
+        top1 = (stats["top1_agree"] + stats["top1_near_tie"]) / max(stats["positions"], 1)
+        if not top1 >= GATE_TOP1:
+            failures.append(f"{group}: top-1 agreement {top1:.4f} < {GATE_TOP1}")
+        if not within(stats["p99_abs_logprob_diff"], GATE_P99_LOGPROB):
+            failures.append(f"{group}: p99 abs log-prob diff {stats['p99_abs_logprob_diff']} > {GATE_P99_LOGPROB}")
+        if not within(stats["max_abs_logprob_diff"], GATE_MAX_LOGPROB):
+            failures.append(f"{group}: max abs log-prob diff {stats['max_abs_logprob_diff']} > {GATE_MAX_LOGPROB}")
+    contrastive = report.get("contrastive", {})
+    if contrastive.get("row_conditions") != GATE_ROW_CONDITIONS:
+        rows = contrastive.get("row_conditions")
+        failures.append(f"contrastive: {rows} row-conditions, baseline {GATE_ROW_CONDITIONS}")
+    if contrastive.get("rows_won_agree") != GATE_ROW_CONDITIONS:
+        agree = contrastive.get("rows_won_agree")
+        failures.append(f"won/lost agrees on {agree} of {GATE_ROW_CONDITIONS} row-conditions")
+    if not within(contrastive.get("p99_abs_score_diff_vs_vllm"), GATE_P99_SCORE):
+        failures.append(f"candidate score p99 {contrastive.get('p99_abs_score_diff_vs_vllm')} > {GATE_P99_SCORE}")
+    if not within(contrastive.get("max_abs_score_diff_vs_vllm"), GATE_MAX_SCORE):
+        failures.append(f"candidate score max {contrastive.get('max_abs_score_diff_vs_vllm')} > {GATE_MAX_SCORE}")
+    return failures
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--positions", required=True, help="harness positions.pt")
     parser.add_argument("--vllm", required=True, help="vllm_reference.py JSON")
     parser.add_argument("--identity", required=True, help="identity.jsonl used to build the sequences")
     parser.add_argument("--scorer", help="task #301 contrastive.jsonl for the same checkpoint")
+    parser.add_argument("--tokenizer", default=SNOWBALL_V01, help="checkpoint whose tokenizer files to read")
+    parser.add_argument("--gate", action="store_true", help="add the #310 gate result; exit 1 if it fails")
     args = parser.parse_args()
 
-    spans = {
-        s.id: (s.score, s.meta["correct"])
-        for s in build_sequences(load_tokenizer(SNOWBALL_V01), args.identity)
-        if s.score
-    }
-    print(json.dumps(compare(args.positions, args.vllm, args.scorer, spans), indent=1))
+    report = compare(args.positions, args.vllm, args.scorer, candidate_spans(args.identity, args.tokenizer))
+    if args.gate:
+        report["gate_failures"] = parity_gate(report)
+    print(json.dumps(report, indent=1))
+    if args.gate and report["gate_failures"]:
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":
