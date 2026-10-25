@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import dataclasses
-import hashlib
-import json
 
 import haliax as hax
 import jax
@@ -169,10 +167,3 @@ def test_router_top6_matches_the_scored_forward_routes():
     np.testing.assert_array_equal(routes, np.asarray(stats.routes))
     np.testing.assert_array_equal(ids[..., : config.num_experts_per_token], routes)
     assert (np.diff(values, axis=-1) <= 0).all()
-
-
-def test_pinned_receipt_checks_the_sha():
-    data = json.dumps({"schema_version": 4}).encode()
-    assert diag.pinned_receipt(data, hashlib.sha256(data).hexdigest()) == {"schema_version": 4}
-    with pytest.raises(ValueError, match="pinned"):
-        diag.pinned_receipt(data, "0" * 64)

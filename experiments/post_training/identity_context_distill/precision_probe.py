@@ -27,7 +27,8 @@ from levanter.trainer import Trainer, initialize
 from levanter.trainer_state import TrainerState
 from rigging.filesystem.storage_path import StoragePath
 
-from experiments.interp.snowball_identity.multihost import gather_global
+from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows
+from experiments.interp.snowball_identity.precision_gate import device_memory_report, local_device_memory
 from experiments.post_training.identity_context_distill.runtime_recipe import check_precision_runtime_receipt
 from experiments.post_training.identity_context_distill.sft import (
     BASE_MODEL,
@@ -101,12 +102,16 @@ def gated_zero_lr_step(
     batch: LmExample,
     pre_update_gate: Callable[[Trainer, TrainerState], None],
     master_audit: Callable[[TrainerState, int], None],
-) -> tuple[TrainerState, float, float]:
+    post_update_receipt: Callable[[list[dict]], None],
+) -> tuple[TrainerState, float, float, list[dict]]:
     """Run the raising parity gate before the sole update; do not catch gate failures.
 
     The caller must construct the optimizer at zero LR. Every Adam first-moment
     leaf must be finite, with a nonzero global maximum. Master audits run at both
     steps; the callback must use the supplied step to write distinct receipts.
+    After the update every rank gathers every device's memory (in use, peak, limit:
+    the backward and optimizer fit) and passes it to ``post_update_receipt``; it is
+    also returned.
     """
     if int(state.step) != 0:
         raise ValueError("LR0 precision probe must start fresh at update zero")
@@ -115,9 +120,11 @@ def gated_zero_lr_step(
     info = trainer.train_step(state, batch)
     if int(info.state.step) != 1 or not math.isfinite(info.loss):
         raise ValueError("Expected exactly one finite LR0 update")
+    memory = device_memory_report(gather_host_rows(local_device_memory()))
+    post_update_receipt(memory)
     witness = adam_gradient_witness(info.state)
     master_audit(info.state, 1)
-    return info.state, info.loss, witness
+    return info.state, info.loss, witness, memory
 
 
 def _router_values(model) -> dict[str, np.ndarray]:
@@ -145,6 +152,7 @@ def run_precision_probe(
     source_audit: Callable[[str], None],
     master_audit: Callable[[TrainerState, int], None],
     pre_update_gate: Callable[[Trainer, TrainerState], None],
+    post_update_receipt: Callable[[list[dict]], None],
     export_audit: Callable[[str, str], None],
 ) -> dict:
     """Bind source load, one gated LR0 update, standard HF save, and raising readback audits.
@@ -244,7 +252,9 @@ def run_precision_probe(
         check_restored_progress(probe_config, state, completed_updates=0)
         for name, value in _router_values(state.model).items():
             np.testing.assert_array_equal(value, source_biases[name])
-        state, measured_loss, witness = gated_zero_lr_step(trainer, state, batch, pre_update_gate, master_audit)
+        state, measured_loss, witness, memory = gated_zero_lr_step(
+            trainer, state, batch, pre_update_gate, master_audit, post_update_receipt
+        )
         check_restored_progress(probe_config, state, completed_updates=1)
         for name, value in _router_values(state.model).items():
             np.testing.assert_array_equal(value, source_biases[name])
@@ -290,6 +300,7 @@ def run_precision_probe(
             "learning_rate": 0.0,
             "loss": measured_loss,
             "adam_first_moment_witness": witness,
+            "device_memory": {"after_update": memory},
             "hf_path": export_path,
             "save_seconds": save_seconds,
             "worker_seconds": time.monotonic() - started,

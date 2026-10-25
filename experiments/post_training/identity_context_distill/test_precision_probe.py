@@ -16,6 +16,7 @@ from levanter.tokenizers import MarinTokenizer
 from levanter.trainer import Trainer, TrainerConfig
 from levanter.utils.mesh import MeshConfig
 
+from experiments.interp.snowball_identity.precision_gate import MEMORY_FIELDS
 from experiments.post_training.identity_context_distill.precision_probe import (
     adam_gradient_witness,
     gated_zero_lr_step,
@@ -81,6 +82,11 @@ def test_lr0_gate_precedes_real_backward_and_update():
         assert int(state.step) == 0
         calls.append("gate")
 
+    def memory_receipt(rows):
+        calls.append("memory")
+        assert len(rows) == jax.device_count()
+        assert all(set(row) == {"process", "local_device", *MEMORY_FIELDS} for row in rows)
+
     with Trainer(config, optimizer, loss, add_default_hooks=False) as trainer:
         state = trainer.initial_state(jax.random.PRNGKey(42), model=model)
 
@@ -89,17 +95,20 @@ def test_lr0_gate_precedes_real_backward_and_update():
             raise ValueError("parity failed")
 
         with pytest.raises(ValueError, match="parity failed"):
-            gated_zero_lr_step(trainer, state, batch, failed_gate, masters)
+            gated_zero_lr_step(trainer, state, batch, failed_gate, masters, memory_receipt)
         assert int(state.step) == 0
         assert calls == ["masters-0"]
         calls.clear()
-        updated, measured_loss, witness = gated_zero_lr_step(trainer, state, batch, passed_gate, masters)
-        assert calls == ["masters-0", "gate", "masters-1"]
+        updated, measured_loss, witness, memory = gated_zero_lr_step(
+            trainer, state, batch, passed_gate, masters, memory_receipt
+        )
+        assert calls == ["masters-0", "gate", "memory", "masters-1"]
+        assert len(memory) == jax.device_count()
         assert measured_loss > 0 and witness > 0
         assert int(updated.step) == 1
         np.testing.assert_array_equal(updated.model.weight, initial_weight)
         with pytest.raises(ValueError, match="start fresh"):
-            gated_zero_lr_step(trainer, updated, batch, passed_gate, masters)
+            gated_zero_lr_step(trainer, updated, batch, passed_gate, masters, memory_receipt)
 
         moment_paths = [
             (path, leaf)
@@ -127,4 +136,4 @@ def test_lr0_gate_precedes_real_backward_and_update():
             model=TinyModel(jnp.asarray(0.1234567, dtype=jnp.float32), jnp.asarray(2.0, dtype=jnp.float32)),
         )
         with pytest.raises(ValueError, match="post-update master drift"):
-            gated_zero_lr_step(trainer, fresh, batch, passed_gate, reject_post_update)
+            gated_zero_lr_step(trainer, fresh, batch, passed_gate, reject_post_update, memory_receipt)

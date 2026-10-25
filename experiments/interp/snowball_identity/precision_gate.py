@@ -13,8 +13,10 @@ the others waiting:
 2. ``scored``: every rank runs the compute-view forward and the router-dot witness (collective), then an
    all-gather of every rank's per-device memory.
 3. ``gated``: process 0 alone saves ``positions.pt``, compares it with the stored vLLM reference and the torch
-   reference job's routes, applies ``logit_check.parity_gate``, ``routing.route_gate`` and the dropless check, and
-   writes ``gate.json``, all inside one ``try``; then the failure count is broadcast and every rank raises
+   reference job's routes, applies ``logit_check.parity_gate``, ``routing.route_gate`` (row-1 exceptions and
+   coverage), G1's route proxy check against the pinned torch floor (``route_proxy_check.check``: per-layer rate bound
+   and near-tie margins; ordered agreement reported only) and the dropless check, and writes ``gate.json``, all
+   inside one ``try``; then the failure count is broadcast and every rank raises
    ``PrecisionGateFailed`` unless it is zero. A process-0 exception, including a failed write, is a failure.
 
 ``gate.json`` also records the MoE settings the forward ran with (capacity factor, expert axis, FP32 combine), the
@@ -25,6 +27,7 @@ Each rank writes ``ranks/<process>.json`` after every stage (best effort). A cra
 caught, so a watchdog ends the process with status 4 after ``deadline_seconds``.
 """
 
+import io
 import json
 import logging
 import os
@@ -36,8 +39,8 @@ from dataclasses import dataclass
 import haliax as hax
 import jax
 import numpy as np
+import torch
 from levanter.compute_dtype import cast_model_for_compute
-from rigging.filesystem.buckets import filesystem_for
 from rigging.filesystem.storage_path import prefix_join
 
 from experiments.interp.snowball_identity.levanter_positions import (
@@ -54,8 +57,15 @@ from experiments.interp.snowball_identity.logit_check import (
     read,
     reference_ids,
     stored_sequences,
+    write_json,
 )
 from experiments.interp.snowball_identity.multihost import broadcast_host_scalar, gather_host_rows, gather_host_scalar
+from experiments.interp.snowball_identity.route_proxy_check import (
+    FLOOR_RECEIPT_SHA256,
+    TORCH_TOP6_SHA256,
+    check,
+    load_pinned,
+)
 from experiments.interp.snowball_identity.routing import MATMUL_ENV, compare_routes_cross_stack, route_gate
 
 logger = logging.getLogger(__name__)
@@ -79,6 +89,10 @@ class PrecisionGateInputs:
     """Checkpoint root whose tokenizer files give the spans (the regional source)."""
     torch_routing: str
     """The torch reference job's result directory, holding ``routing.json`` and ``routes.pt``."""
+    floor_receipt: str
+    """The torch floor job's ``receipt.json`` (G1's floor rates and torch's own margins), pinned by sha256."""
+    torch_top6: str
+    """The torch floor job's ``batch1/top6.pt`` (torch batch-1 top-6 ids and biased logits), pinned by sha256."""
     output: str
     """Where to write ``positions.pt``, ``gate.json`` and ``ranks/<process>.json``."""
     batch: int = 8
@@ -86,12 +100,6 @@ class PrecisionGateInputs:
     pad_multiple: int = 64
     deadline_seconds: float = 1800
     """Hard limit for the whole gate on each rank."""
-
-
-def write_json(path: str, value: dict) -> None:
-    fs, local = filesystem_for(path)
-    fs.makedirs(local.rsplit("/", 1)[0], exist_ok=True)
-    fs.pipe_file(local, json.dumps(value, indent=1, default=str).encode())
 
 
 MEMORY_FIELDS = ("bytes_in_use", "peak_bytes_in_use", "bytes_limit")
@@ -126,6 +134,16 @@ def dispatch_failures(dispatch: dict) -> list[str]:
     ]
 
 
+def g1_routes(positions_path: str, inputs: PrecisionGateInputs) -> dict:
+    """G1's per-layer route proxy check (``route_proxy_check.check``) of a written ``positions.pt`` against the pinned
+    torch floor."""
+    return check(
+        torch.load(io.BytesIO(read(positions_path)), map_location="cpu"),
+        torch.load(io.BytesIO(load_pinned(inputs.torch_top6, TORCH_TOP6_SHA256)), map_location="cpu"),
+        json.loads(load_pinned(inputs.floor_receipt, FLOOR_RECEIPT_SHA256)),
+    )
+
+
 def evaluate(
     inputs: PrecisionGateInputs,
     overrides: dict | None,
@@ -139,9 +157,11 @@ def evaluate(
     parity = compare(positions_path, inputs.vllm, None, candidate_spans(inputs.identity, inputs.tokenizer_source))
     rounding = json.loads(read(prefix_join(inputs.torch_routing, "routing.json")))
     cross = compare_routes_cross_stack(positions_path, prefix_join(inputs.torch_routing, "routes.pt"))
+    g1 = g1_routes(positions_path, inputs)
     failures = (
         [f"parity: {f}" for f in parity_gate(parity)]
         + [f"routes: {f}" for f in route_gate(cross, rounding, overrides, router_dot_is_fp32(dot_dtypes))]
+        + [f"routes-G1: {f}" for f in g1["failures"]]
         + [f"dispatch: {f}" for f in dispatch_failures(moe["dispatch"])]
     )
     return {
@@ -156,6 +176,7 @@ def evaluate(
         "failures": failures,
         "parity": parity,
         "routes": cross,
+        "g1": g1,
     }
 
 

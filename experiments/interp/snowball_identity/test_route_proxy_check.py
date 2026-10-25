@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 import torch
 
+from experiments.interp.snowball_identity import precision_gate
 from experiments.interp.snowball_identity import route_proxy_check as g1
 
 T310_LOCAL = Path(os.environ.get("T310_LOCAL", Path.home() / "Dropbox/marin-notes/snowball-identity/t310"))
@@ -77,3 +78,24 @@ def test_r2_dropless_arm():
     assert [r["layer"] for r in layers if r["rate_ok"]] == [4, 9, 13, 14, 15, 17, 18, 20, 23, 24]
     assert report["layers_passing"] == 7
     assert report["totals"]["set_agree"] / report["totals"]["positions"] == pytest.approx(0.8933, abs=1e-4)
+
+
+@pytest.mark.skipif(
+    not (R2_DROPLESS.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists()), reason="local t310 copies"
+)
+def test_gate_g1_on_the_r2_dropless_arm():
+    """The pre-update gate's G1 wiring (pinned floor paths, positions.pt as written) gives the same 10 / 7 of 26."""
+    inputs = precision_gate.PrecisionGateInputs(
+        positions="unused",
+        vllm="unused",
+        identity="unused",
+        tokenizer_source="unused",
+        torch_routing="unused",
+        floor_receipt=str(FLOOR_RECEIPT),
+        torch_top6=str(TORCH_TOP6),
+        output="unused",
+    )
+    report = precision_gate.g1_routes(str(R2_DROPLESS), inputs)
+    assert sum(r["rate_ok"] for r in report["layers"]) == 10
+    assert report["layers_passing"] == 7
+    assert len(report["failures"]) > 0

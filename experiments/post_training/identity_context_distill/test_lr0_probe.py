@@ -5,6 +5,9 @@
 
 import hashlib
 import json
+import os
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from levanter.tracker import NoopConfig
@@ -14,11 +17,29 @@ from experiments.post_training.identity_context_distill.runtime_recipe import co
 from experiments.post_training.identity_context_distill.test_runtime_recipe import inputs
 
 RUN_ROOT = "s3://marin-rno2a/fixture/run"
+T310_LOCAL = Path(os.environ.get("T310_LOCAL", Path.home() / "Dropbox/marin-notes/snowball-identity/t310"))
+REVIEWED_RECEIPTS = {
+    "runtime-recipe-4188e87c-combine-off.json": (
+        "dcddbf4d59d0863a773e11a97002567dbea622fab52506d9c716fa4b4a30b7d2",
+        False,
+    ),
+    "runtime-recipe-4188e87c-combine-on.json": (
+        "d123ddbdbeed0c3cc843cd247e23d74cb2b21e7538056150da8139843c81fddd",
+        True,
+    ),
+}
+RECEIPT_INPUTS = T310_LOCAL / "receipt-inputs"
+"""Local copies of the pinned source ``config.json`` / ``generation_config.json`` and the routing ``routing.json``."""
 
 
-def fixture(monkeypatch):
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def fixture(monkeypatch, router_combine_fp32: bool = False):
     """Fixture source/routing bytes behind a fake StoragePath, and the receipt they derive, as approved bytes."""
     config, args = inputs()
+    config = replace(config, model=replace(config.model, router_combine_fp32=router_combine_fp32))
     _, receipt = configure_precision_runtime(config, **args)
     receipt_bytes = json.dumps(receipt).encode()
     files = {
@@ -39,11 +60,10 @@ def fixture(monkeypatch):
 
     monkeypatch.setattr(lr0_probe, "StoragePath", Path)
     monkeypatch.setattr(lr0_probe, "check_pod_storage", lambda: None)
-    monkeypatch.setattr(lr0_probe, "RUNTIME_RECEIPT_SHA256", hashlib.sha256(receipt_bytes).hexdigest())
     return receipt_bytes
 
 
-def run_worker(monkeypatch, receipt_bytes):
+def run_worker(monkeypatch, receipt_bytes, receipt_sha256=None):
     calls: dict = {"writer": 0}
 
     def writer(action):
@@ -59,7 +79,7 @@ def run_worker(monkeypatch, receipt_bytes):
         lr0_probe, "write_export_json", lambda path, value: calls.setdefault("result", (path.path, value))
     )
     monkeypatch.setattr(lr0_probe, "run_precision_probe", probe)
-    lr0_probe.lr0_worker(RUN_ROOT, "t310-lr0", receipt_bytes)
+    lr0_probe.lr0_worker(RUN_ROOT, "t310-lr0", receipt_bytes, receipt_sha256 or sha(receipt_bytes))
     return calls
 
 
@@ -69,6 +89,7 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
     calls = run_worker(monkeypatch, receipt_bytes)
     config, kwargs = calls["config"], calls["kwargs"]
     assert config.model.router_dot_fp32 is True
+    assert (config.model.moe_capacity_factor, config.model.router_combine_fp32) == (4.0, False)
     assert config.trainer.compute_dtype_overrides == {"router_bias": "float32"}
     assert isinstance(config.trainer.tracker, NoopConfig)
     assert config.hf_save_path == f"{RUN_ROOT}/hf"
@@ -108,17 +129,79 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
     with pytest.raises(ValueError, match="master audit step"):
         kwargs["master_audit"](State, 2)
 
+    # After the update, each rank writes its own devices' memory into its gate rank receipt.
+    receipts = {}
+    monkeypatch.setattr(lr0_probe, "write_json", lambda path, value: receipts.__setitem__(path, value))
+    rows = [{"process": process, "local_device": 0, "peak_bytes_in_use": 7} for process in (0, 1)]
+    kwargs["post_update_receipt"](rows)
+    assert receipts == {
+        f"{RUN_ROOT}/precision-gate/ranks/0.json": {
+            "process": 0,
+            "stage": "updated",
+            "device_memory_after_update": rows[:1],
+        }
+    }
+
+
+def test_worker_takes_the_combine_from_the_bound_receipt(monkeypatch):
+    receipt_bytes = fixture(monkeypatch, router_combine_fp32=True)
+    config = run_worker(monkeypatch, receipt_bytes)["config"]
+    assert (config.model.moe_capacity_factor, config.model.router_combine_fp32) == (4.0, True)
+
+
+def test_base_config_refuses_a_receipt_without_the_moe_settings():
+    _, args = inputs()
+    for name in ("moe_capacity_factor", "router_combine_fp32"):
+        receipt = {"runtime_model_config": {"moe_capacity_factor": 4.0, "router_combine_fp32": True}}
+        del receipt["runtime_model_config"][name]
+        with pytest.raises(ValueError, match=name):
+            lr0_probe.base_config(RUN_ROOT, "t310-lr0", args["config_bytes"], args["generation_bytes"], receipt)
+
+
+def test_approved_receipt_checks_the_passed_sha():
+    data = json.dumps({"schema_version": 4}).encode()
+    assert lr0_probe.approved_receipt(data, sha(data)) == {"schema_version": 4}
+    with pytest.raises(ValueError, match="differs from the reviewed receipt"):
+        lr0_probe.approved_receipt(data, "0" * 64)
+
+
+@pytest.mark.skipif(
+    not all((T310_LOCAL / name).exists() for name in REVIEWED_RECEIPTS) or not RECEIPT_INPUTS.exists(),
+    reason="local t310 copies",
+)
+@pytest.mark.parametrize("name", sorted(REVIEWED_RECEIPTS))
+def test_both_reviewed_receipts_rederive_exactly(name):
+    """Each reviewed schema-4 receipt passes ``approved_receipt`` and the worker's derivation reproduces it."""
+    receipt_sha256, combine = REVIEWED_RECEIPTS[name]
+    receipt = lr0_probe.approved_receipt((T310_LOCAL / name).read_bytes(), receipt_sha256)
+    config_bytes = (RECEIPT_INPUTS / "config.json").read_bytes()
+    generation_bytes = (RECEIPT_INPUTS / "generation_config.json").read_bytes()
+    rounding_bytes = (RECEIPT_INPUTS / "routing.json").read_bytes()
+    assert sha(config_bytes) == lr0_probe.SOURCE_FILE_HASHES["config.json"]
+    assert sha(generation_bytes) == lr0_probe.SOURCE_FILE_HASHES["generation_config.json"]
+    reference = receipt["routing_reference"]
+    assert sha(rounding_bytes) == reference["sha256"]
+    base = lr0_probe.base_config(RUN_ROOT, "t310-lr0", config_bytes, generation_bytes, receipt)
+    config, observed = configure_precision_runtime(
+        base,
+        config_bytes=config_bytes,
+        generation_bytes=generation_bytes,
+        rounding_bytes=rounding_bytes,
+        rounding_path=reference["path"],
+        rounding_sha256=reference["sha256"],
+    )
+    assert observed == receipt
+    assert (config.model.moe_capacity_factor, config.model.router_combine_fp32) == (4.0, combine)
+
 
 def test_worker_refuses_unreviewed_or_mismatched_receipts(monkeypatch):
     receipt_bytes = fixture(monkeypatch)
-    with pytest.raises(ValueError, match="reviewed derived receipt"):
-        run_worker(monkeypatch, receipt_bytes + b" ")
+    with pytest.raises(ValueError, match="Runtime receipt sha256"):
+        run_worker(monkeypatch, receipt_bytes + b" ", sha(receipt_bytes))
     changed = json.loads(receipt_bytes)
     changed["trigger"]["bias_only"] = True
-    changed_bytes = json.dumps(changed).encode()
-    monkeypatch.setattr(lr0_probe, "RUNTIME_RECEIPT_SHA256", hashlib.sha256(changed_bytes).hexdigest())
-    with pytest.raises(ValueError, match="differs from the reviewed receipt"):
-        run_worker(monkeypatch, changed_bytes)
+    with pytest.raises(ValueError, match="Derived runtime recipe differs"):
+        run_worker(monkeypatch, json.dumps(changed).encode())
 
 
 def test_gate_inputs_are_the_frozen_regional_inputs():
@@ -127,14 +210,17 @@ def test_gate_inputs_are_the_frozen_regional_inputs():
     assert gate.output == f"{RUN_ROOT}/precision-gate"
     assert gate.torch_routing == routing.rsplit("/", 1)[0]
     assert all(path.startswith("s3://marin-rno2a/") for path in (gate.positions, gate.vllm, gate.identity))
+    assert gate.floor_receipt == f"{lr0_probe.T310}/diag-torch-floor-r1/receipt.json"
+    assert gate.torch_top6 == f"{lr0_probe.T310}/diag-torch-floor-r1/batch1/top6.pt"
     assert (gate.batch, gate.pad_multiple, gate.deadline_seconds) == (8, 64, 1800)
 
 
 def test_plan_has_no_retries_and_a_bounded_ceiling():
     config, _ = inputs()
     job_plan = lr0_probe.plan(
-        "job", RUN_ROOT, 7200, "s3://marin-rno2a/x/routing.json", "interactive", config.trainer.mesh
+        "job", RUN_ROOT, 7200, "s3://marin-rno2a/x/routing.json", "interactive", config.trainer.mesh, "ab" * 32
     )
+    assert job_plan["runtime_receipt_sha256"] == "ab" * 32
     assert (job_plan["replicas"], job_plan["gpus"], job_plan["region"]) == (4, 32, "cw-rno2a")
     assert job_plan["resources"] == {"cpu": 64, "ram": "768GB", "disk": "1TB"}
     assert job_plan["priority"] == "interactive"

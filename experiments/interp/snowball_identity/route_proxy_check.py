@@ -22,12 +22,12 @@ import argparse
 import hashlib
 import io
 import json
+from collections import defaultdict
 
+import numpy as np
 import torch
 
-from experiments.interp.snowball_identity.logit_check import read
-from experiments.interp.snowball_identity.precision_gate import write_json
-from experiments.interp.snowball_identity.torch_route_floor import agreement, routes_and_margins
+from experiments.interp.snowball_identity.logit_check import WINDOW, read, write_json
 
 K_RATE = 2.0
 MARGIN_FACTOR = 1.5
@@ -36,6 +36,82 @@ MIN_FOR_P99 = 30
 FLOOR_RECEIPT_SHA256 = "34a1eb661bef3e2b3b3940125fcb7a1b5ddd3c66652ae730975443ac24838212"
 TORCH_TOP6_SHA256 = "ddad3a88f883ad6e3ffd75d99a94edef54cdd51edea55575af478547b42b7ba5"
 TORCH_SIDE = "torch_batch1"
+K = 4
+"""Experts per token: the selected set is the top ``K``; the 4th/5th margin decides its last member."""
+MARGIN_QUANTILES = (0.5, 0.9, 0.99)
+MARGIN_BELOW = (0.01, 0.05, 0.1, 0.25, 0.5)
+
+
+def spans(sequence_id: str, length: int) -> dict[str, slice]:
+    group = sequence_id.split("|")[0]
+    found = {group: slice(None)}
+    if group == "long" and length > WINDOW:
+        found["long_past_window"] = slice(WINDOW, None)
+    return found
+
+
+def margin_summary(margins: np.ndarray) -> dict:
+    if margins.size == 0:
+        return {"count": 0}
+    return {
+        "count": int(margins.size),
+        "max": float(margins.max()),
+        **{f"p{round(q * 100)}": float(np.quantile(margins, q)) for q in MARGIN_QUANTILES},
+        **{f"below_{limit}": int((margins < limit).sum()) for limit in MARGIN_BELOW},
+    }
+
+
+def agreement(ours: dict[str, np.ndarray], theirs: dict[str, np.ndarray], margins: dict[str, dict]) -> dict:
+    """Routes [T, L, K] per sequence on both sides: per layer and group, positions, set and ordered agreement (as
+    ``routing.compare_routes_cross_stack`` counts them); per layer, each side's 4th/5th margin [T, L] (``margins``
+    maps a side name to ``{sequence id: margin}``) at the set-disagreeing position-layers."""
+    if set(ours) != set(theirs):
+        raise ValueError("the two sides cover different sequence ids")
+    counts: dict = defaultdict(lambda: {"positions": 0, "set_agree": 0, "ordered_agree": 0})
+    at_disagreements: dict = defaultdict(list)
+    for sequence_id in sorted(ours):
+        a, b = ours[sequence_id].astype(np.int64), theirs[sequence_id].astype(np.int64)
+        if a.shape != b.shape:
+            raise ValueError(f"{sequence_id}: route shapes differ, {a.shape} vs {b.shape}")
+        ordered = (a == b).all(-1)
+        same_set = (np.sort(a, -1) == np.sort(b, -1)).all(-1)
+        for name, rows in spans(sequence_id, a.shape[0]).items():
+            for layer in range(a.shape[1]):
+                count = counts[(layer, name)]
+                count["positions"] += int(ordered[rows, layer].size)
+                count["set_agree"] += int(same_set[rows, layer].sum())
+                count["ordered_agree"] += int(ordered[rows, layer].sum())
+        for side, by_sequence in margins.items():
+            margin = by_sequence[sequence_id]
+            for layer in range(a.shape[1]):
+                at_disagreements[(side, layer)].append(margin[~same_set[:, layer], layer])
+    groups = sorted({name for _, name in counts})
+    main = [g for g in groups if g != "long_past_window"]
+    layers = []
+    for layer in sorted({layer for layer, _ in counts}):
+        total = {
+            name: sum(counts[(layer, g)][name] for g in main) for name in ("positions", "set_agree", "ordered_agree")
+        }
+        layers.append(
+            {
+                "layer": layer,
+                "set_rate": total["set_agree"] / total["positions"],
+                "ordered_rate": total["ordered_agree"] / total["positions"],
+                **total,
+                "groups": {g: counts[(layer, g)] for g in groups},
+                "margin_at_set_disagreements": {
+                    side: margin_summary(np.concatenate(at_disagreements[(side, layer)])) for side in margins
+                },
+            }
+        )
+    totals = {name: sum(row[name] for row in layers) for name in ("positions", "set_agree", "ordered_agree")}
+    return {"layers": layers, "totals": totals}
+
+
+def routes_and_margins(top6: dict) -> tuple[dict, dict]:
+    routes = {sid: r["ids"].numpy()[..., :K] for sid, r in top6.items()}
+    margins = {sid: (r["biased"][..., K - 1] - r["biased"][..., K]).numpy() for sid, r in top6.items()}
+    return routes, margins
 
 
 def check(levanter: dict, torch_top6: dict, floor: dict) -> dict:

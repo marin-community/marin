@@ -57,6 +57,12 @@ def read(path: str) -> bytes:
     return fs.cat_file(local)
 
 
+def write_json(path: str, value: dict) -> None:
+    fs, local = filesystem_for(path)
+    fs.makedirs(local.rsplit("/", 1)[0], exist_ok=True)
+    fs.pipe_file(local, json.dumps(value, indent=1, default=str).encode())
+
+
 def stored_sequences(positions_path: str) -> list[Sequence]:
     """The sequences of a stored ``positions.pt``, with its exact token ids, in stored order.
 

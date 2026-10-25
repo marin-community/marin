@@ -90,8 +90,8 @@ def test_route_gate_matches_exceptions_to_their_triggers():
     assert route_gate(cross(), rounding(combined=1), None, router_dot_fp32=False)
 
 
-def test_route_gate_fails_on_any_cross_stack_difference_or_gap():
-    assert route_gate(cross(set_agree=9, ordered_agree=9), rounding(), None, False)
-    assert route_gate(cross(ordered_agree=9), rounding(), None, False)
+def test_route_gate_fails_on_a_coverage_gap_and_leaves_route_differences_to_g1():
+    assert route_gate(cross(set_agree=9, ordered_agree=9), rounding(), None, False) == []
+    assert route_gate(cross(ordered_agree=9), rounding(), None, False) == []
     assert route_gate(cross(positions=9, set_agree=9, ordered_agree=9), rounding(), None, False)
     assert route_gate(cross(0, 0, 0), rounding(positions=0), None, False)

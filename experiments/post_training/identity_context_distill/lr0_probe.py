@@ -9,10 +9,16 @@ calls ``precision_probe.run_precision_probe`` with the reviewed callbacks:
 - source audit: ``precision_source_audit.audit_precision_source`` (502 tensors) -> ``audits/source-tensor-hashes.json``
 - master audit: ``precision_audit.audit_initialized_masters`` at steps 0 and 1 -> ``audits/master-step-<n>.json``
 - pre-update gate: ``precision_gate.make_pre_update_gate`` -> ``precision-gate/``
+- post-update memory: every rank's devices after the update -> ``lr0-result.json`` ``device_memory.after_update``
+  and stage ``updated`` of ``precision-gate/ranks/<process>.json``
 - export audit: ``precision_audit.audit_precision_export`` -> ``hf/lr0-step-0/precision-audit.json``
 
 Process 0 writes ``lr0-result.json`` only after the probe returns. Any failure raises and fails the job; a gate
 deadline exits with status 4. The probe never reads a dataset: LR0 uses its own synthetic batch.
+
+The runtime receipt is bound by ``--runtime-receipt-sha256``: the launcher and every worker check the receipt's
+bytes against it, and the worker re-derives the recipe (capacity factor and FP32 combine from the receipt) and
+requires it to equal the receipt.
 
 ``main`` prints the job plan; with ``--run`` it submits. The launch owner runs the capacity guard first and passes its
 record (four wholly idle cw-rno2a H100x8 nodes, with its observation time) as ``--capacity-record``. ``--run`` writes
@@ -29,12 +35,14 @@ import argparse
 import datetime
 import hashlib
 import json
+import logging
 import os
 import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import fsspec
+import jax
 import s3fs
 from fray.iris_backend import convert_constraints, convert_resources, resolve_coscheduling
 from fray.types import ResourceConfig
@@ -53,8 +61,8 @@ from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 
 from experiments.interp.snowball_identity.levanter_positions import save_positions
-from experiments.interp.snowball_identity.logit_check import read, stored_sequences
-from experiments.interp.snowball_identity.precision_gate import PrecisionGateInputs, make_pre_update_gate, write_json
+from experiments.interp.snowball_identity.logit_check import read, stored_sequences, write_json
+from experiments.interp.snowball_identity.precision_gate import PrecisionGateInputs, make_pre_update_gate
 from experiments.interp.snowball_identity.prompts import load_tokenizer
 from experiments.post_training.identity_context_distill import precision_source_audit
 from experiments.post_training.identity_context_distill.precision_audit import (
@@ -66,9 +74,12 @@ from experiments.post_training.identity_context_distill.precision_source_audit i
 from experiments.post_training.identity_context_distill.runtime_recipe import configure_precision_runtime
 from experiments.post_training.identity_context_distill.sft import BASE_MODEL, identity_sft_config
 
+logger = logging.getLogger(__name__)
+
 T310 = "s3://marin-rno2a/marin/experiments/snowball-identity/t310"
 INPUTS = f"{T310}/inputs-20261024-0252"
-RUNTIME_RECEIPT_SHA256 = "33b9a1682121332fe0b5d9d8e90c2ab409eff6a83fd98d40715523efac144191"
+FLOOR = f"{T310}/diag-torch-floor-r1"
+"""The torch floor job: G1's ``receipt.json`` and ``batch1/top6.pt``, each checked against its pinned sha256."""
 SOURCE_FILE_HASHES = {
     "config.json": "c7e1e7ac08e7b8b712d2728596765d2a5f954a7372ba1090cf87709e5fa9fbd5",
     "generation_config.json": "fef404c3c02c0c5120a18a55820caac75222b507f27e1aef0e4cd482ba887d73",
@@ -100,9 +111,11 @@ def check_pod_storage() -> None:
         raise RuntimeError(f"Pod storage settings missing: {missing}")
 
 
-def approved_receipt(receipt_bytes: bytes) -> dict:
-    if hashlib.sha256(receipt_bytes).hexdigest() != RUNTIME_RECEIPT_SHA256:
-        raise ValueError("Runtime receipt differs from the reviewed derived receipt")
+def approved_receipt(receipt_bytes: bytes, sha256: str) -> dict:
+    """The reviewed runtime receipt: its bytes must hash to the sha256 the launch owner passed."""
+    actual = hashlib.sha256(receipt_bytes).hexdigest()
+    if actual != sha256:
+        raise ValueError(f"Runtime receipt sha256 {actual} differs from the reviewed receipt {sha256}")
     return json.loads(receipt_bytes)
 
 
@@ -113,6 +126,8 @@ def gate_inputs(run_root: str, routing_path: str) -> PrecisionGateInputs:
         identity=f"{INPUTS}/identity-4569cb3a.jsonl",
         tokenizer_source=BASE_MODEL,
         torch_routing=routing_path.rsplit("/", 1)[0],
+        floor_receipt=f"{FLOOR}/receipt.json",
+        torch_top6=f"{FLOOR}/batch1/top6.pt",
         output=f"{run_root}/precision-gate",
         batch=8,
         pad_multiple=64,
@@ -120,7 +135,15 @@ def gate_inputs(run_root: str, routing_path: str) -> PrecisionGateInputs:
     )
 
 
-def base_config(run_root: str, run_id: str, config_bytes: bytes, generation_bytes: bytes) -> TrainLmConfig:
+def base_config(
+    run_root: str, run_id: str, config_bytes: bytes, generation_bytes: bytes, receipt: dict
+) -> TrainLmConfig:
+    """The source-derived recipe with the receipt's MoE runtime settings (capacity factor, FP32 combine); a receipt
+    lacking either is refused."""
+    runtime = receipt["runtime_model_config"]
+    missing = [name for name in ("moe_capacity_factor", "router_combine_fp32") if name not in runtime]
+    if missing:
+        raise ValueError(f"Runtime receipt lacks {missing}")
     unused = f"{run_root}/no-dataset-lr0-uses-a-synthetic-batch"
     return identity_sft_config(
         dataset_uri=unused,
@@ -131,8 +154,8 @@ def base_config(run_root: str, run_id: str, config_bytes: bytes, generation_byte
         source_config=json.loads(config_bytes),
         source_generation_config=json.loads(generation_bytes),
         hosts=REPLICAS,
-        moe_capacity_factor=4.0,  # dropless: the expert-axis size
-        router_combine_fp32=False,  # LR0 ran with the BF16 combine
+        moe_capacity_factor=runtime["moe_capacity_factor"],
+        router_combine_fp32=runtime["router_combine_fp32"],
     )
 
 
@@ -146,14 +169,14 @@ def mesh_layout(mesh: MeshConfig) -> dict:
     }
 
 
-def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes) -> None:
+def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes, receipt_sha256: str) -> None:
     """Run on every replica; ``receipt_bytes`` are the reviewed runtime receipt's exact bytes."""
     check_pod_storage()
-    runtime_receipt = approved_receipt(receipt_bytes)
+    runtime_receipt = approved_receipt(receipt_bytes, receipt_sha256)
     reference = runtime_receipt["routing_reference"]
     config_bytes = (StoragePath(BASE_MODEL) / "config.json").read_bytes()
     generation_bytes = (StoragePath(BASE_MODEL) / "generation_config.json").read_bytes()
-    base = base_config(run_root, run_id, config_bytes, generation_bytes)
+    base = base_config(run_root, run_id, config_bytes, generation_bytes, runtime_receipt)
     config, observed = configure_precision_runtime(
         base,
         config_bytes=config_bytes,
@@ -173,20 +196,43 @@ def lr0_worker(run_root: str, run_id: str, receipt_bytes: bytes) -> None:
         receipt = f"{run_root}/audits/master-step-{completed_updates}.json"
         audit_initialized_masters(state.model.to_state_dict(), source_receipt, receipt)
 
+    gate = gate_inputs(run_root, reference["path"])
+
+    def post_update_receipt(memory: list[dict]) -> None:
+        """Every rank, after the update: its devices' memory in its rank receipt, stage ``updated`` (best effort)."""
+        rank = jax.process_index()
+        rows = [row for row in memory if row["process"] == rank]
+        try:
+            write_json(
+                prefix_join(gate.output, f"ranks/{rank}.json"),
+                {"process": rank, "stage": "updated", "device_memory_after_update": rows},
+            )
+        except Exception:
+            logger.exception("rank receipt updated not written")
+
     result = run_precision_probe(
         config,
         expected_source_receipt=runtime_receipt["source_metadata"],
         expected_runtime_receipt=runtime_receipt,
         source_audit=lambda root: audit_precision_source(root, SOURCE_FILE_HASHES, source_receipt),
         master_audit=master_audit,
-        pre_update_gate=make_pre_update_gate(gate_inputs(run_root, reference["path"])),
+        pre_update_gate=make_pre_update_gate(gate),
+        post_update_receipt=post_update_receipt,
         export_audit=lambda source, export: audit_precision_export(source, export, SOURCE_FILE_HASHES),
     )
     # Collective: every rank calls it; process 0 writes.
     run_on_export_writer(lambda: write_export_json(StoragePath(run_root) / "lr0-result.json", result))
 
 
-def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, priority: str, mesh: MeshConfig) -> dict:
+def plan(
+    job_name: str,
+    run_root: str,
+    timeout_seconds: int,
+    routing_path: str,
+    priority: str,
+    mesh: MeshConfig,
+    receipt_sha256: str,
+) -> dict:
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
     return {
@@ -196,7 +242,7 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, 
         "run_root": run_root,
         "gate": vars(gate_inputs(run_root, routing_path)),
         "mesh": mesh_layout(mesh),
-        "runtime_receipt_sha256": RUNTIME_RECEIPT_SHA256,
+        "runtime_receipt_sha256": receipt_sha256,
         "region": RESOURCES.target_cluster,
         "replicas": REPLICAS,
         "gpus": 8 * REPLICAS,
@@ -211,7 +257,15 @@ def plan(job_name: str, run_root: str, timeout_seconds: int, routing_path: str, 
     }
 
 
-def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, timeout_seconds: int, priority: str) -> str:
+def submit(
+    job_name: str,
+    run_root: str,
+    run_id: str,
+    receipt_bytes: bytes,
+    receipt_sha256: str,
+    timeout_seconds: int,
+    priority: str,
+) -> str:
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     # StoragePath reads the AWS-named pair; bucket-routed filesystems read the CW names.
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
@@ -219,7 +273,7 @@ def submit(job_name: str, run_root: str, run_id: str, receipt_bytes: bytes, time
     with connect_controller(cluster_name="marin") as info:
         with IrisClient.remote(info.url, workspace=Path.cwd(), credentials=info.credentials) as client:
             job = client.submit(
-                entrypoint=Entrypoint.from_callable(lr0_worker, run_root, run_id, receipt_bytes),
+                entrypoint=Entrypoint.from_callable(lr0_worker, run_root, run_id, receipt_bytes, receipt_sha256),
                 name=job_name,
                 resources=convert_resources(RESOURCES),
                 environment=environment,
@@ -331,7 +385,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--job-name", required=True)
     parser.add_argument("--run-root", required=True, help="fresh s3://marin-rno2a/ prefix; must not exist")
-    parser.add_argument("--runtime-receipt", required=True, help="local runtime-recipe-f37aec3.json")
+    parser.add_argument("--runtime-receipt", required=True, help="local reviewed runtime receipt JSON")
+    parser.add_argument("--runtime-receipt-sha256", required=True, help="the reviewed receipt's sha256")
     parser.add_argument("--timeout-seconds", type=int, required=True)
     parser.add_argument("--allow-long-timeout", action="store_true", help=f"permit more than {MAX_TIMEOUT_SECONDS} s")
     parser.add_argument("--expect-commit", help="the reviewed worker pin; required with --run, must equal HEAD")
@@ -351,7 +406,7 @@ def main() -> None:
     if args.timeout_seconds > MAX_TIMEOUT_SECONDS and not args.allow_long_timeout:
         raise SystemExit(f"timeout above {MAX_TIMEOUT_SECONDS} s needs --allow-long-timeout")
     receipt_bytes = Path(args.runtime_receipt).read_bytes()
-    receipt = approved_receipt(receipt_bytes)
+    receipt = approved_receipt(receipt_bytes, args.runtime_receipt_sha256)
     # The recorded layout comes from the factory itself, built from the pinned source metadata. The submit host
     # reads through the bucket-routed filesystem: plain StoragePath needs the pod's S3 settings.
     source_fs, source = filesystem_for(BASE_MODEL)
@@ -361,9 +416,17 @@ def main() -> None:
         raise SystemExit("source config.json differs from the pinned hash")
     if hashlib.sha256(generation_bytes).hexdigest() != SOURCE_FILE_HASHES["generation_config.json"]:
         raise SystemExit("source generation_config.json differs from the pinned hash")
-    config = base_config(run_root, args.job_name, config_bytes, generation_bytes)
+    config = base_config(run_root, args.job_name, config_bytes, generation_bytes, receipt)
     routing = receipt["routing_reference"]["path"]
-    job_plan = plan(args.job_name, run_root, args.timeout_seconds, routing, args.priority, config.trainer.mesh)
+    job_plan = plan(
+        args.job_name,
+        run_root,
+        args.timeout_seconds,
+        routing,
+        args.priority,
+        config.trainer.mesh,
+        args.runtime_receipt_sha256,
+    )
     print(json.dumps(job_plan, indent=2))
     if args.io_smoke:
         if args.run or not args.smoke_receipt or not args.expect_commit:
@@ -411,7 +474,15 @@ def main() -> None:
         },
     }
     Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
-    job_id = submit(args.job_name, run_root, args.job_name, receipt_bytes, args.timeout_seconds, args.priority)
+    job_id = submit(
+        args.job_name,
+        run_root,
+        args.job_name,
+        receipt_bytes,
+        args.runtime_receipt_sha256,
+        args.timeout_seconds,
+        args.priority,
+    )
     launch.update(state="submitted", iris_job_id=job_id)
     Path(args.launch_receipt).write_text(json.dumps(launch, indent=2) + "\n")
     print(json.dumps({"job": job_id, "status": "submitted"}))

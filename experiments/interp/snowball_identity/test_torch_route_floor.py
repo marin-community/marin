@@ -12,6 +12,7 @@ import torch
 from experiments.interp.snowball_identity import moe_drop_diagnostic as diag
 from experiments.interp.snowball_identity import torch_route_floor as floor
 from experiments.interp.snowball_identity.harness import SnowballHarness, import_grug
+from experiments.interp.snowball_identity.logit_check import WINDOW
 from experiments.interp.snowball_identity.sequences import Sequence
 
 
@@ -97,7 +98,7 @@ def test_agreement_counts_and_margins_at_disagreements():
 
 
 def test_long_past_window_is_a_subset_not_counted_twice():
-    length = floor.WINDOW + 3
+    length = WINDOW + 3
     ours = {"long|x": np.zeros((length, 1, 4), dtype=np.int64)}
     found = floor.agreement(ours, {"long|x": ours["long|x"].copy()}, {})
     layer = found["layers"][0]

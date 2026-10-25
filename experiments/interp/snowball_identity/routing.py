@@ -31,9 +31,10 @@ The two pre-registered #310 routing rows (precision-preflight-preregistration-v1
 - row 1, ``bias_exception_required``: any ``bf16_bias`` expert-set change requires keeping the 26 router biases in
   FP32 in the compute view (``compute_dtype_overrides={"router_bias": "float32"}``); ``dot_exception_required``: any
   ``bf16_logits`` (dot-only) expert-set change requires the amendment-v2 FP32 router dot (and the FP32 bias);
-- row 2, ``route_gate``: fail-closed check of the cross-stack report (``compare_routes_cross_stack``). Any differing
-  Levanter vs torch route, ordered or set, fails and is held for diagnosis, as do incomplete coverage, an exception
-  that does not match row 1 and a combined-only change. Exact ties are counted and reported, never exempted.
+- row 2, ``route_gate``: fail-closed check of the cross-stack report (``compare_routes_cross_stack``): incomplete
+  coverage, an exception that does not match row 1 and a combined-only change fail. Route differences are bounded by
+  amendment G1 instead (``route_proxy_check``: per-layer rate bound and near-tie margins against the torch floor);
+  set and ordered agreement are reported here, not gated. Exact ties are counted and reported, never exempted.
 """
 
 import argparse
@@ -316,7 +317,8 @@ def dot_exception_required(rounding: dict) -> bool:
 
 
 def route_gate(cross: dict, rounding: dict, compute_dtype_overrides: dict | None, router_dot_fp32: bool) -> list[str]:
-    """Row 2: every failure of a cross-stack report scored with ``compute_dtype_overrides``; empty is a pass.
+    """Row 2: every failure of a cross-stack report scored with ``compute_dtype_overrides``; empty is a pass. Route
+    differences are G1's (``route_proxy_check``), not this row's.
 
     ``rounding`` is the torch ``router_rounding`` report from the same job that wrote the compared ``routes.pt``;
     ``router_dot_fp32`` is the measured witness (``levanter_positions.router_dot_dtypes`` of the scored view). The
@@ -337,10 +339,6 @@ def route_gate(cross: dict, rounding: dict, compute_dtype_overrides: dict | None
     covered, expected = cross["totals"], totals["bf16_bias"]["positions"]
     if covered["positions"] != expected or expected == 0:
         failures.append(f"cross-stack covers {covered['positions']} position-layers, torch {expected}")
-    if covered["set_agree"] != covered["positions"]:
-        failures.append(f"{covered['positions'] - covered['set_agree']} position-layers select different experts")
-    if covered["ordered_agree"] != covered["positions"]:
-        failures.append(f"{covered['positions'] - covered['ordered_agree']} position-layers differ in expert order")
     return failures
 
 

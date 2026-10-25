@@ -38,7 +38,6 @@ a running maximum over the process).
 
 import argparse
 import gc
-import hashlib
 import importlib
 import io
 import json
@@ -82,6 +81,7 @@ from rigging.filesystem.storage_path import StoragePath, prefix_join
 from rigging.secrets import SecretBehavior
 from rigging.timing import Duration
 
+from experiments.interp.snowball_identity import route_proxy_check
 from experiments.interp.snowball_identity.harness import import_grug
 from experiments.interp.snowball_identity.levanter_positions import (
     PAD_ID,
@@ -89,17 +89,17 @@ from experiments.interp.snowball_identity.levanter_positions import (
     router_dot_dtypes,
     save_positions,
 )
-from experiments.interp.snowball_identity.logit_check import read, stored_sequences
+from experiments.interp.snowball_identity.logit_check import read, stored_sequences, write_json
 from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows
 from experiments.interp.snowball_identity.precision_gate import (
     device_memory_report,
     evaluate,
     local_device_memory,
-    write_json,
 )
 from experiments.interp.snowball_identity.sequences import Sequence
 from experiments.post_training.identity_context_distill.lr0_probe import (
     PRIORITY_BANDS,
+    approved_receipt,
     base_config,
     check_pod_storage,
     gate_inputs,
@@ -503,9 +503,6 @@ def device_memory() -> list[dict]:
 
 def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequences, check, torch_ref, floor) -> dict:
     """``floor``: the torch floor's pinned ``top6`` (batch 1) and ``receipt``, for G1 and the item-5 margins."""
-    # A local import: route_proxy_check imports torch_route_floor, which imports this module's constants.
-    from experiments.interp.snowball_identity import route_proxy_check  # noqa: PLC0415
-
     started = time.time()
     memory_before = device_memory()
     out = prefix_join(root, name)
@@ -610,16 +607,9 @@ def torch_routes_match_gate_reference(torch_ref: dict) -> dict:
     return result
 
 
-def pinned_receipt(receipt_bytes: bytes, sha256: str) -> dict:
-    if hashlib.sha256(receipt_bytes).hexdigest() != sha256:
-        raise ValueError(f"runtime receipt sha256 {hashlib.sha256(receipt_bytes).hexdigest()}, pinned {sha256}")
-    return json.loads(receipt_bytes)
-
-
 def arm_config(name: str, receipt: dict, root: str, config_bytes: bytes, generation_bytes: bytes):
     """The arm's runtime recipe, derived as the LR0 probe derives it, which must equal the arm's reviewed receipt."""
-    base = base_config(root, f"diag-{name}", config_bytes, generation_bytes)
-    base = replace(base, model=replace(base.model, router_combine_fp32=ARMS[name]["router_combine_fp32"]))
+    base = base_config(root, f"diag-{name}", config_bytes, generation_bytes, receipt)
     reference = receipt["routing_reference"]
     config, observed = configure_precision_runtime(
         base,
@@ -638,8 +628,6 @@ def arm_config(name: str, receipt: dict, root: str, config_bytes: bytes, generat
 
 
 def load_floor() -> dict:
-    from experiments.interp.snowball_identity import route_proxy_check  # noqa: PLC0415
-
     top6 = route_proxy_check.load_pinned(f"{FLOOR}/batch1/top6.pt", route_proxy_check.TORCH_TOP6_SHA256)
     receipt = route_proxy_check.load_pinned(f"{FLOOR}/receipt.json", route_proxy_check.FLOOR_RECEIPT_SHA256)
     return {"top6": torch.load(io.BytesIO(top6), map_location="cpu"), "receipt": json.loads(receipt)}
@@ -670,7 +658,7 @@ def diagnostic_worker(root: str, receipts: dict[str, bytes]) -> None:
     }
     write_json(prefix_join(root, "receipt.json"), result)
     for name, arm in ARMS.items():
-        receipt = pinned_receipt(receipts[name], arm["receipt_sha256"])
+        receipt = approved_receipt(receipts[name], arm["receipt_sha256"])
         config = arm_config(name, receipt, root, config_bytes, generation_bytes)
         load_started = time.time()
         view, mesh, trainer_config = load_view(config, receipt, source)
@@ -720,13 +708,11 @@ def main() -> None:
 
 
 def launch_job(args) -> None:
-    from experiments.interp.snowball_identity import route_proxy_check  # noqa: PLC0415
-
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     dirty = subprocess.run(["git", "status", "--porcelain"], capture_output=True, text=True, check=True).stdout
     receipts = {name: Path(getattr(args, f"receipt_{name.replace('-', '_')}")).read_bytes() for name in ARMS}
     for name, arm in ARMS.items():
-        pinned_receipt(receipts[name], arm["receipt_sha256"])
+        approved_receipt(receipts[name], arm["receipt_sha256"])
     if not args.root.startswith(f"{T310}/diag-"):
         raise ValueError(f"root must be a fresh {T310}/diag-* prefix")
     resources = ResourceConfig.with_gpu("H100", count=8, cpu=64, ram="768GB", disk="1TB", target_cluster="cw-rno2a")
