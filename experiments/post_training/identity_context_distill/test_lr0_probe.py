@@ -85,8 +85,9 @@ def fixture(
     return receipt_bytes
 
 
-def run_worker(monkeypatch, receipt_bytes, receipt_sha256=None):
+def run_worker(monkeypatch, receipt_bytes, receipt_sha256=None, route_policy="G1a"):
     calls: dict = {"writer": 0}
+    monkeypatch.setattr(lr0_probe, "make_pre_update_gate", lambda inputs: calls.setdefault("gate", inputs))
 
     def writer(action):
         calls["writer"] += 1
@@ -101,7 +102,7 @@ def run_worker(monkeypatch, receipt_bytes, receipt_sha256=None):
         lr0_probe, "write_export_json", lambda path, value: calls.setdefault("result", (path.path, value))
     )
     monkeypatch.setattr(lr0_probe, "run_precision_probe", probe)
-    lr0_probe.lr0_worker(RUN_ROOT, "t310-lr0", receipt_bytes, receipt_sha256 or sha(receipt_bytes))
+    lr0_probe.lr0_worker(RUN_ROOT, "t310-lr0", receipt_bytes, receipt_sha256 or sha(receipt_bytes), route_policy)
     return calls
 
 
@@ -122,6 +123,8 @@ def test_worker_binds_the_measured_recipe_and_reviewed_callbacks(monkeypatch):
     assert lr0_probe.mesh_layout(config.trainer.mesh)["expected_num_slices"] == 4
     assert kwargs["expected_runtime_receipt"] == receipt
     assert kwargs["expected_source_receipt"] == receipt["source_metadata"]
+    # The launch's route policy reaches the gate.
+    assert calls["gate"].route_policy == "G1a" and kwargs["pre_update_gate"] is calls["gate"]
     # The result write is collective: the worker calls it on every rank, not behind a rank-0 guard.
     assert calls["writer"] == 1
     assert calls["result"] == (f"{RUN_ROOT}/lr0-result.json", {"completed_updates": 1})
@@ -240,13 +243,16 @@ def test_worker_refuses_unreviewed_or_mismatched_receipts(monkeypatch):
 
 def test_gate_inputs_are_the_frozen_regional_inputs():
     routing = "s3://marin-rno2a/marin/experiments/snowball-identity/t310/torch-ref-queue-r1/results/r1/routing.json"
-    gate = lr0_probe.gate_inputs(RUN_ROOT, routing)
+    gate = lr0_probe.gate_inputs(RUN_ROOT, routing, "G1")
     assert gate.output == f"{RUN_ROOT}/precision-gate"
     assert gate.torch_routing == routing.rsplit("/", 1)[0]
     assert all(path.startswith("s3://marin-rno2a/") for path in (gate.positions, gate.vllm, gate.identity))
     assert gate.floor_receipt == f"{lr0_probe.T310}/diag-torch-floor-r1/receipt.json"
     assert gate.torch_top6 == f"{lr0_probe.T310}/diag-torch-floor-r1/batch1/top6.pt"
     assert (gate.batch, gate.pad_multiple, gate.deadline_seconds) == (8, 64, 1800)
+    assert (gate.route_policy, gate.vllm_capture) == ("G1", f"{lr0_probe.T310}/vllm-route-capture-r1")
+    with pytest.raises(ValueError, match="route_policy must be one of"):
+        lr0_probe.gate_inputs(RUN_ROOT, routing, "G2")
 
 
 def test_plan_has_no_retries_and_a_bounded_ceiling():
@@ -260,10 +266,12 @@ def test_plan_has_no_retries_and_a_bounded_ceiling():
         config.trainer.mesh,
         "ab" * 32,
         "no_excess_precision",
+        "G1a",
     )
     assert job_plan["runtime_receipt_sha256"] == "ab" * 32
     assert job_plan["xla_precision"] == "no_excess_precision"
     assert job_plan["env_vars"] == {"XLA_FLAGS": "--xla_allow_excess_precision=false"}
+    assert job_plan["route_policy"] == job_plan["gate"]["route_policy"] == "G1a"
     assert (job_plan["replicas"], job_plan["gpus"], job_plan["region"]) == (4, 32, "cw-rno2a")
     assert job_plan["resources"] == {"cpu": 64, "ram": "768GB", "disk": "1TB"}
     assert job_plan["priority"] == "interactive"

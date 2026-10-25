@@ -18,6 +18,9 @@ R2_DROPLESS = T310_LOCAL / "diag-moe-drops-r2/ep4-dropless/positions.pt"
 R2_DROPLESS_SHA256 = "2b88315b33c4c7f6e735cc42b7958271cc4feaadba6ab1baa8be97a784b4e04e"
 FLOOR_RECEIPT = T310_LOCAL / "diag-torch-floor-r1/receipt.json"
 TORCH_TOP6 = T310_LOCAL / "diag-torch-floor-r1/batch1/top6.pt"
+FIX_R1_COMBINE_ON = T310_LOCAL / "diag-moe-fix-r1/dropless-fp32-combine/positions.pt"
+FIX_R1_COMBINE_ON_SHA256 = "e857f361510c75fa3e969da2206d1c9851e70abb44a1a3bbe3139042c8a77bc7"
+VLLM_CAPTURE = T310_LOCAL / "marten-task310-vllm-routes-r1/capture"
 
 
 def synthetic(flips: int, margin: float):
@@ -81,11 +84,20 @@ def test_r2_dropless_arm():
 
 
 @pytest.mark.skipif(
-    not (R2_DROPLESS.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists()), reason="local t310 copies"
+    not (R2_DROPLESS.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists() and VLLM_CAPTURE.exists()),
+    reason="local t310 copies",
 )
-def test_gate_g1_on_the_r2_dropless_arm():
-    """The pre-update gate's G1 wiring (pinned floor paths, positions.pt as written) gives the same 10 / 7 of 26."""
-    inputs = precision_gate.PrecisionGateInputs(
+def test_gate_route_proxy_on_the_r2_dropless_arm():
+    """The pre-update gate's route proxy (pinned floor and capture paths, positions.pt as written) gives G1's 10 / 7
+    of 26."""
+    report = precision_gate.route_proxy(str(R2_DROPLESS), gate_inputs_for("G1"))
+    assert sum(r["rate_ok"] for r in report["G1"]["layers"]) == 10
+    assert report["G1"]["layers_passing"] == 7
+    assert report["policy"] == "G1"
+
+
+def gate_inputs_for(route_policy: str) -> precision_gate.PrecisionGateInputs:
+    return precision_gate.PrecisionGateInputs(
         positions="unused",
         vllm="unused",
         identity="unused",
@@ -93,17 +105,10 @@ def test_gate_g1_on_the_r2_dropless_arm():
         torch_routing="unused",
         floor_receipt=str(FLOOR_RECEIPT),
         torch_top6=str(TORCH_TOP6),
+        route_policy=route_policy,
+        vllm_capture=str(VLLM_CAPTURE),
         output="unused",
     )
-    report = precision_gate.g1_routes(str(R2_DROPLESS), inputs)
-    assert sum(r["rate_ok"] for r in report["layers"]) == 10
-    assert report["layers_passing"] == 7
-    assert len(report["failures"]) > 0
-
-
-FIX_R1_COMBINE_ON = T310_LOCAL / "diag-moe-fix-r1/dropless-fp32-combine/positions.pt"
-FIX_R1_COMBINE_ON_SHA256 = "e857f361510c75fa3e969da2206d1c9851e70abb44a1a3bbe3139042c8a77bc7"
-VLLM_CAPTURE = T310_LOCAL / "marten-task310-vllm-routes-r1/capture"
 
 
 def synthetic_vllm(flips: int, margin: float, vllm_flips: int = 8):
@@ -177,3 +182,33 @@ def test_g1a_on_the_fix_r1_combine_on_arm():
     assert [r["layer"] for r in layers if not r["p50_ok"]] == [1, 6, 8, 16, 21, 25]
     assert report["overall"]["F_vllm"] == pytest.approx(0.9120, abs=1e-4)
     assert report["overall"]["D_vllm"] == pytest.approx(0.9445, abs=1e-4)
+
+
+@pytest.mark.skipif(
+    not (FIX_R1_COMBINE_ON.exists() and VLLM_CAPTURE.exists() and FLOOR_RECEIPT.exists() and TORCH_TOP6.exists()),
+    reason="local t310 copies",
+)
+def test_gate_route_policy_selects_the_gated_check_on_the_fix_r1_arm(monkeypatch):
+    """The gate on the fix-r1 combine-on positions: G1 10/26 (22 failures) and G1a 15/26 (rate 19, p50 20, p99 25,
+    diagnostic 24), both reported; only the named policy's failures reach the gate."""
+    assert hashlib.sha256(FIX_R1_COMBINE_ON.read_bytes()).hexdigest() == FIX_R1_COMBINE_ON_SHA256
+    report = precision_gate.route_proxy(str(FIX_R1_COMBINE_ON), gate_inputs_for("G1a"))
+    assert (report["G1"]["layers_passing"], len(report["G1"]["failures"])) == (10, 22)
+    assert report["G1a"]["layers_passing"] == 15
+    assert report["G1a"]["lines_passing"] == {"rate": 19, "p50": 20, "p99": 25, "diagnostic": 24}
+    read = precision_gate.read
+    for policy in ("G1", "G1a"):
+        monkeypatch.setattr(precision_gate, "compare", lambda *args: {})
+        monkeypatch.setattr(precision_gate, "candidate_spans", lambda *args: {})
+        monkeypatch.setattr(
+            precision_gate, "read", lambda path, read=read: b"{}" if path.endswith("routing.json") else read(path)
+        )
+        monkeypatch.setattr(precision_gate, "compare_routes_cross_stack", lambda *args: {})
+        monkeypatch.setattr(precision_gate, "parity_gate", lambda parity: [])
+        monkeypatch.setattr(precision_gate, "route_gate", lambda *args: [])
+        moe = {"dispatch": {"dropped": [0], "sender_dropped": [0], "receiver_dropped": [0]}}
+        gate = precision_gate.evaluate(gate_inputs_for(policy), None, str(FIX_R1_COMBINE_ON), [], moe, [])
+        routes = [f for f in gate["failures"] if f.startswith("routes-")]
+        assert gate["route_policy"] == policy
+        assert routes == [f"routes-{policy}: {f}" for f in report[policy]["failures"]]
+        assert set(gate["route_proxy"]) == {"policy", "G1", "G1a"}

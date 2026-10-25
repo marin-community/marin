@@ -14,8 +14,10 @@ the others waiting:
    all-gather of every rank's per-device memory.
 3. ``gated``: process 0 alone saves ``positions.pt``, compares it with the stored vLLM reference and the torch
    reference job's routes, applies ``logit_check.parity_gate``, ``routing.route_gate`` (row-1 exceptions and
-   coverage), G1's route proxy check against the pinned torch floor (``route_proxy_check.check``: per-layer rate bound
-   and near-tie margins; ordered agreement reported only) and the dropless check, and writes ``gate.json``, all
+   coverage), the route proxy check named by ``inputs.route_policy`` (``G1``: ``route_proxy_check.check`` against
+   the pinned torch floor; ``G1a``: ``route_proxy_check.check_vllm_floor`` against the pinned vLLM route capture;
+   per-layer rate bound and near-tie margins; both are computed and reported, only the named one gates) and the
+   dropless check, and writes ``gate.json``, all
    inside one ``try``; then the failure count is broadcast and every rank raises
    ``PrecisionGateFailed`` unless it is zero. A process-0 exception, including a failed write, is a failure.
 
@@ -63,7 +65,11 @@ from experiments.interp.snowball_identity.multihost import broadcast_host_scalar
 from experiments.interp.snowball_identity.route_proxy_check import (
     FLOOR_RECEIPT_SHA256,
     TORCH_TOP6_SHA256,
+    VLLM_PASS1_SHA256,
+    VLLM_PASS2_SHA256,
+    VLLM_RECEIPT_SHA256,
     check,
+    check_vllm_floor,
     load_pinned,
 )
 from experiments.interp.snowball_identity.routing import MATMUL_ENV, compare_routes_cross_stack, route_gate
@@ -71,6 +77,8 @@ from experiments.interp.snowball_identity.routing import MATMUL_ENV, compare_rou
 logger = logging.getLogger(__name__)
 
 DEADLINE_EXIT = 4
+ROUTE_POLICIES = ("G1", "G1a")
+"""The routes row's floor: G1 (torch floor, amendment a685d499) or G1a (served-stack floor, 27f282c2)."""
 
 
 class PrecisionGateFailed(RuntimeError):
@@ -93,6 +101,11 @@ class PrecisionGateInputs:
     """The torch floor job's ``receipt.json`` (G1's floor rates and torch's own margins), pinned by sha256."""
     torch_top6: str
     """The torch floor job's ``batch1/top6.pt`` (torch batch-1 top-6 ids and biased logits), pinned by sha256."""
+    route_policy: str
+    """``G1`` or ``G1a`` (``ROUTE_POLICIES``): which route proxy check the gate applies; both are reported. No
+    default."""
+    vllm_capture: str
+    """The vLLM route capture directory (``receipt.json``, ``pass-1/`` and ``pass-2/routes.pt``), pinned by sha256."""
     output: str
     """Where to write ``positions.pt``, ``gate.json`` and ``ranks/<process>.json``."""
     batch: int = 8
@@ -100,6 +113,10 @@ class PrecisionGateInputs:
     pad_multiple: int = 64
     deadline_seconds: float = 1800
     """Hard limit for the whole gate on each rank."""
+
+    def __post_init__(self):
+        if self.route_policy not in ROUTE_POLICIES:
+            raise ValueError(f"route_policy must be one of {ROUTE_POLICIES}, got {self.route_policy!r}")
 
 
 MEMORY_FIELDS = ("bytes_in_use", "peak_bytes_in_use", "bytes_limit")
@@ -134,14 +151,22 @@ def dispatch_failures(dispatch: dict) -> list[str]:
     ]
 
 
-def g1_routes(positions_path: str, inputs: PrecisionGateInputs) -> dict:
-    """G1's per-layer route proxy check (``route_proxy_check.check``) of a written ``positions.pt`` against the pinned
-    torch floor."""
-    return check(
+def route_proxy(positions_path: str, inputs: PrecisionGateInputs) -> dict:
+    """Both per-layer route proxy checks of a written ``positions.pt``: G1 against the pinned torch floor and G1a
+    against the pinned vLLM route capture. The gate applies only ``inputs.route_policy``; the other is reported."""
+    torch_inputs = (
         torch.load(io.BytesIO(read(positions_path)), map_location="cpu"),
         torch.load(io.BytesIO(load_pinned(inputs.torch_top6, TORCH_TOP6_SHA256)), map_location="cpu"),
         json.loads(load_pinned(inputs.floor_receipt, FLOOR_RECEIPT_SHA256)),
     )
+    load_pinned(prefix_join(inputs.vllm_capture, "receipt.json"), VLLM_RECEIPT_SHA256)
+    passes = [
+        torch.load(
+            io.BytesIO(load_pinned(prefix_join(inputs.vllm_capture, f"pass-{n}/routes.pt"), sha)), map_location="cpu"
+        )
+        for n, sha in ((1, VLLM_PASS1_SHA256), (2, VLLM_PASS2_SHA256))
+    ]
+    return {"policy": inputs.route_policy, "G1": check(*torch_inputs), "G1a": check_vllm_floor(*torch_inputs, *passes)}
 
 
 def evaluate(
@@ -157,11 +182,11 @@ def evaluate(
     parity = compare(positions_path, inputs.vllm, None, candidate_spans(inputs.identity, inputs.tokenizer_source))
     rounding = json.loads(read(prefix_join(inputs.torch_routing, "routing.json")))
     cross = compare_routes_cross_stack(positions_path, prefix_join(inputs.torch_routing, "routes.pt"))
-    g1 = g1_routes(positions_path, inputs)
+    proxy = route_proxy(positions_path, inputs)
     failures = (
         [f"parity: {f}" for f in parity_gate(parity)]
         + [f"routes: {f}" for f in route_gate(cross, rounding, overrides, router_dot_is_fp32(dot_dtypes))]
-        + [f"routes-G1: {f}" for f in g1["failures"]]
+        + [f"routes-{inputs.route_policy}: {f}" for f in proxy[inputs.route_policy]["failures"]]
         + [f"dispatch: {f}" for f in dispatch_failures(moe["dispatch"])]
     )
     return {
@@ -176,7 +201,8 @@ def evaluate(
         "failures": failures,
         "parity": parity,
         "routes": cross,
-        "g1": g1,
+        "route_policy": inputs.route_policy,
+        "route_proxy": proxy,
     }
 
 
