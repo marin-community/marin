@@ -45,7 +45,8 @@ labels and escalate empty final answers through 128, 512, and 2048 output tokens
 These stages finish before the run is recorded as successful. Missing cohort evidence
 produces `artifact_failed`; Evalchemy preserves checkpoints for interrupted judge requests.
 Changing SOTOPIA baselines does not invalidate FinanceBench or OlympiadBench results.
-The launch snapshot includes the finalization configuration, judge YAML, and baseline manifest.
+The launch snapshot includes the finalization configuration and judge YAML.
+Harbor saves the resolved baseline cohort with the correction evidence in its job result.
 `record.json` records that configuration in `eval.postprocessing`. The generic evaluation CLI
 accepts `--policy-finalization-config finalization.yaml`; `launch-campaign.sh` supplies the
 absolute path to this YAML by default.

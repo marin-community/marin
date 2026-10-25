@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Bind policy #10197 grading and cohort correction to evaluation completion."""
+"""Bind policy #10197 judging to evaluation completion."""
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from marin.inference.types import InferenceBackendState
 
 POLICY = "marin-10197"
 MIN_SCORED_FRACTION = 0.9
+POLICY_JUDGED_BENCHMARKS = frozenset({"financebench", "olympiadbench"})
 
 
 @dataclass(frozen=True)
@@ -135,7 +136,7 @@ def policy_executor(
     priority: int,
 ) -> tuple[EvalExecutor, EvalRef]:
     """Bind each policy benchmark to its own grading configuration."""
-    if reference.name in {"financebench", "olympiadbench"}:
+    if reference.name in POLICY_JUDGED_BENCHMARKS:
         assert judge_accelerator is not None
         if not isinstance(source, EvalchemyExecutor):
             raise TypeError("policy answer-equivalence grading requires Evalchemy")
