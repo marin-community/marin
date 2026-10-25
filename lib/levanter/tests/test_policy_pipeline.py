@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from jax.sharding import AxisType, Mesh, NamedSharding, PartitionSpec as P
 from levanter.grad_accum import microbatched
-from levanter.policy import ClippedPolicyConfig, KlGradient, clipped_policy_loss
+from levanter.policy import ClippedPolicyConfig, clipped_policy_loss
 from levanter.policy_model import PolicyBatch
 from levanter.policy_pipeline import (
     pipeline_batch,
@@ -71,7 +71,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
             jnp.full((rows, 2), -2.0),
             jnp.full((rows, 2), -2.1) if with_reference else None,
         )
-        config = ClippedPolicyConfig(0.2, 0.2, 0.001 if with_reference else 0.0, KlGradient.DETACHED)
+        config = ClippedPolicyConfig(0.2, 0.2, 0.001 if with_reference else 0.0)
         policy = jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32")
         if not with_reference:
             with pytest.raises(ValueError, match="reference_log_probs are required"):
@@ -79,7 +79,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
                     selected,
                     frozen,
                     batch,
-                    config=ClippedPolicyConfig(0.2, 0.2, 0.001, KlGradient.DIFFERENTIABLE),
+                    config=ClippedPolicyConfig(0.2, 0.2, 0.001),
                     mp_policy=policy,
                 )
 
@@ -121,7 +121,7 @@ def test_pipeline_objective_preserves_response_alignment_masks_and_full_batch_we
 def test_hoisted_bf16_weights_preserve_per_microbatch_fp32_gradient_accumulation():
     rows = 2 * jax.device_count()
     policy = jmp.get_policy("params=float32,compute=bfloat16,output=float32")
-    config = ClippedPolicyConfig(0.2, 0.2, 0.0, KlGradient.DETACHED)
+    config = ClippedPolicyConfig(0.2, 0.2, 0.0)
     stage = Stage(jax.random.normal(jax.random.PRNGKey(9), (8, 8)) * 0.2, jnp.arange(8) * 0.001)
     selected = (eqx.tree_at(lambda value: value.bias, stage, None),)
     frozen = (eqx.tree_at(lambda value: value.weight, stage, None),)
@@ -291,7 +291,7 @@ def test_pipeline_gradient_mean_matches_spmd_accumulation(compute_dtype):
     Batch, Response = hax.Axis("batch", rows), hax.Axis("response", 2)
     count = 3
     policy = jmp.get_policy(f"params=float32,compute={compute_dtype},output=float32")
-    config = ClippedPolicyConfig(0.2, 0.2, 0.1, KlGradient.DIFFERENTIABLE)
+    config = ClippedPolicyConfig(0.2, 0.2, 0.1)
     stages = tuple(
         Stage(jax.random.normal(jax.random.PRNGKey(i + 30), (8, 8)) * 0.1, jnp.arange(8) * 0.001) for i in range(2)
     )
