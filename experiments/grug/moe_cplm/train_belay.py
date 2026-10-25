@@ -129,7 +129,11 @@ def build_config(
         num_layers=layers, latent_out_full_layers=[layers - 2, layers - 1], initializer_std=0.5 / math.sqrt(width)
     )
     for name in (
-        "intermediate_dim", "shared_expert_intermediate_dim", "latent_dim", "mla_num_heads", "num_heads",
+        "intermediate_dim",
+        "shared_expert_intermediate_dim",
+        "latent_dim",
+        "mla_num_heads",
+        "num_heads",
         "global_local_heads",
     ):
         assert model_values[name] * width % 512 == 0
@@ -137,9 +141,7 @@ def build_config(
     model_config = draccus.decode(model.GrugModelConfig, model_values)
     optimizer = source["optimizer"]
     optimizer["type"] = "grug_fast_track_muonh_v1"
-    heuristic = MoeHeuristic().build_optimizer_config(
-        num_train_steps=steps, batch_size=16, hidden_dim=width, seq_len=8192
-    )
+    heuristic = MoeHeuristic().build_optimizer_config(num_train_steps=steps, batch_size=16, hidden_dim=width, seq_len=8192)
     for name in ("learning_rate", "adam_lr", "epsilon", "beta2"):
         optimizer[name] = getattr(heuristic, name)
     outer = source["trainer"]
