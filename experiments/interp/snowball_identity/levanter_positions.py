@@ -53,9 +53,14 @@ PAD_ID = 128001
 """Snowball v0.1's native EOS/PAD token; right padding only, and padded positions are discarded."""
 
 
-def _scores(model, tokens: jax.Array, routes: bool = False) -> tuple:
-    """Per row of a [batch, S] token grid: next-token log-probs of the following token [B, S-1] and the top-k
-    [B, S-1, k], for positions 1..S-1; with ``routes``, also every layer's selected experts [L, B, S, K]."""
+def _scores(model, tokens: jax.Array, targets: jax.Array, routes: bool = False) -> tuple:
+    """For every position of a [batch, S] token grid: the log-prob of ``targets`` (the next token) [B, S] and the
+    top-k [B, S, k]; with ``routes``, also every layer's selected experts [L, B, S, K]. Position ``S - 1`` has no next
+    token and is dropped by the caller.
+
+    The whole batch is scored at once: batch and position stay sharded as the model left them (on a multi-host mesh
+    they span hosts), and only the vocab axis is reduced. No single row or shifted slice of a sharded axis is taken,
+    and the full logits are never replicated; only the small reduced outputs are."""
     Batch, Pos = Axis("batch", tokens.shape[0]), model.Pos.resize(tokens.shape[1])
     selected = None
     if routes:
@@ -63,16 +68,14 @@ def _scores(model, tokens: jax.Array, routes: bool = False) -> tuple:
     else:
         hidden = model.activations(hax.named(tokens, (Batch, Pos)))
     logits = jnp.einsum("bsd,dv->bsv", hidden.array, model.get_lm_head().array, preferred_element_type=jnp.float32)
-    actuals, top_ids, top_lps = [], [], []
-    for row in range(tokens.shape[0]):
-        # The head shards vocab over the model axis; gather and top-k need one row whole.
-        logprobs = jax.nn.log_softmax(reshard(logits[row], P(None, None))[:-1], axis=-1)
-        actuals.append(jnp.take_along_axis(logprobs, tokens[row, 1:, None], axis=-1)[:, 0])
-        top_lp, top_id = jax.lax.top_k(logprobs, TOP_K)
-        top_lps.append(top_lp)
-        top_ids.append(top_id)
+    # The head shards vocab over the model axis; log-softmax and top-k need vocab whole, batch and position may stay.
+    batch_spec, position_spec = jax.typeof(logits).sharding.spec[:2]
+    logprobs = jax.nn.log_softmax(reshard(logits, P(batch_spec, position_spec, None)), axis=-1)
+    targets = reshard(targets, P(batch_spec, position_spec))
+    actual = jnp.take_along_axis(logprobs, targets[..., None], axis=-1)[..., 0]
+    top_lp, top_id = jax.lax.top_k(logprobs, TOP_K)
     # Replicated, so every process can read the outputs of a multi-host mesh.
-    outputs = (jnp.stack(actuals), jnp.stack(top_ids), jnp.stack(top_lps))
+    outputs = (actual, top_id, top_lp)
     if selected is not None:
         outputs += (selected,)
     return tuple(reshard(x, P()) for x in outputs) + ((None,) if selected is None else ())
@@ -85,7 +88,7 @@ def positions_records(
 
     With ``routes``, each record also holds ``routes`` [T, L, K] (int16): the experts the forward selected for
     token ``i`` at each layer, from the model's own route observer (not recomputed)."""
-    scores = jax.jit(_scores, static_argnums=2)
+    scores = jax.jit(_scores, static_argnums=3)
     order = sorted(range(len(sequences)), key=lambda i: len(sequences[i].tokens))
     records: dict[int, dict] = {}
     started = time.time()
@@ -97,7 +100,10 @@ def positions_records(
         grid = np.full((batch, length), pad_id, dtype=np.int32)
         for row, row_tokens in enumerate(rows):
             grid[row, : len(row_tokens)] = row_tokens
-        *outputs, routes_out = scores(model, jnp.asarray(grid), routes)
+        # The next token of each position, shifted on the host; the last position's target is padding (dropped).
+        targets = np.full_like(grid, pad_id)
+        targets[:, :-1] = grid[:, 1:]
+        *outputs, routes_out = scores(model, jnp.asarray(grid), jnp.asarray(targets), routes)
         actual, top_ids, top_lp = (gather_global(x) for x in outputs)
         selected = None if routes_out is None else gather_global(routes_out)
         for row, index in enumerate(indices):
