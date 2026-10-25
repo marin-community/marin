@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Case studies: how the d512 model predicts "ics" after " crit" ("critics") and "'t" after " wasn" ("wasn't"), with
+"""Case studies: how the study model predicts "ics" after " crit" ("critics") and "'t" after " wasn" ("wasn't"), with
 the word-piece pairs " produ" -> "cer" and " Ex" -> "ception" as contrasts (pairs the halting gate stops on).
 
 Queries are the trigger positions in every Paloma set and unseen training-cache sequences, in ``CATEGORIES``: " crit"
@@ -65,11 +65,11 @@ PAIRS = ((" crit", "ics"), (" produ", "cer"), (" Ex", "ception"), (" wasn", "'t"
 CASES = {"crit": ((0, 1), (0, 1, 2)), "wasn": ((5,), (5, 7)), "wasn_curly": ((6,), (6,))}
 COUNT_TRIGGERS = (" crit", " critic", " wasn", " produ", " Ex")
 # Rows kept per source (train, Paloma) and group.
-ROW_CAPS = {"crit": 400, "wasn": 350, "produ": 80, "ex": 80}
+ROW_CAPS = {"crit": 200, "wasn": 150, "produ": 40, "ex": 40}  # halved from d512 (d1280 cost)
 WINDOW = 512
 G = docs_analyse.G
 R = docs_analyse.R
-INTERVENE_CAPS = {0: 10**6, 1: 10**6, 2: 160, 3: 120, 4: 120, 5: 500, 6: 300, 7: 160}
+INTERVENE_CAPS = {0: 250, 1: 150, 2: 80, 3: 60, 4: 60, 5: 200, 6: 120, 7: 80}
 SUFF_K = (0, 1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 64, 128, 256, 1024, 4096, NU)
 NEC_K = (1, 2, 4, 8, 16, 32, 64, 256, 1024)
 GLOBAL_K = (1, 2, 4, 8, 16, 32, 64, 128)
@@ -575,14 +575,17 @@ def main() -> None:
         configs.append((f"L{li}.routed:mean", sub(li, forward.SUB_ROUTED, "mean")))
         configs.append((f"L{li}.shared:mean", sub(li, forward.SUB_SHARED, "mean")))
         configs.append((f"L{li}.attn:mean", sub(li, forward.SUB_ATTN, "mean")))
-        for h in range(H):
+        # Per-head ablations on the MLA layers only (140 KDA heads would dominate the d1280 cost).
+        for h in range(H) if li in forward.MLA_LAYERS else ():
             configs.append(
                 (f"L{li}.h{h}:mean", base._replace(head_mult=base.head_mult.at[li, h].set(0.0), head_mean=head_mean))
             )
     for li in forward.MLA_LAYERS:
         configs.append((f"L{li}.ve:zero", base._replace(sub_mult=base.sub_mult.at[li, forward.SUB_VE].set(0.0))))
-    late = base.sub_mult.at[4].set(0.0).at[5].set(0.0)
-    configs.append(("L4-L5:mean", base._replace(sub_mult=late, sub_mean=sub_mean)))
+    # The last two layers (d512's L4-L5) and the last third of the layers.
+    for first in (L - 2, L - L // 3):
+        late = base.sub_mult.at[first:].set(0.0)
+        configs.append((f"L{first}-L{L - 1}:mean", base._replace(sub_mult=late, sub_mean=sub_mean)))
     abl_names, abl_logp = [], []
     for name, abl in configs:
         vals = []

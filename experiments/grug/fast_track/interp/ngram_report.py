@@ -13,7 +13,8 @@
 - Hypothesis test: share of bigrams with an eligible unit by information gain and token kind, by H(next | b) x
   H(next | a, b), and clear units against matched bigrams without any candidate unit.
 
-Usage: ``python -m experiments.grug.fast_track.interp.ngram_report <data root> <out.json>``.
+Usage: ``python -m experiments.grug.fast_track.interp.ngram_report <data root> <out.json> [tags...]``
+(the first tag is the main one; at another tag's dimensions run it through ``at_size``).
 """
 
 import itertools
@@ -22,7 +23,7 @@ import sys
 
 import numpy as np
 
-from experiments.grug.fast_track.interp import ngram, ngram_validate
+from experiments.grug.fast_track.interp import forward, ngram, ngram_validate
 
 V = ngram.V
 MIN_COUNT = 20
@@ -110,7 +111,10 @@ def census(r: dict, v: dict, n_eligible: int) -> dict:
     weight = (n_eligible - top.sum()) / rnd.sum()
     masks = {"clear": v["clear"], **{f"nec>={t}": v["nec"] >= t for t in (0.1, 0.5, 1)}}
     est = {
-        k: [float((m & top & (layer == li)).sum() + weight * (m & rnd & (layer == li)).sum()) for li in range(6)]
+        k: [
+            float((m & top & (layer == li)).sum() + weight * (m & rnd & (layer == li)).sum())
+            for li in range(forward.NUM_LAYERS)
+        ]
         for k, m in masks.items()
     }
     return dict(est=est, n_elig=n_eligible, w=float(weight))
@@ -150,7 +154,7 @@ def unit_rates(m: dict, cnt: dict, kinds: np.ndarray) -> dict:
         hb=list(HB_BINS),
         hab=list(HAB_BINS),
         n_elig=int(ok.sum()),
-        elig_by_layer=np.bincount(m["unit_index"][ok, 0], minlength=6).tolist(),
+        elig_by_layer=np.bincount(m["unit_index"][ok, 0], minlength=forward.NUM_LAYERS).tolist(),
     )
 
 
@@ -270,14 +274,17 @@ def tag_report(root: str, tag: str) -> dict:
 
 
 def main() -> None:
-    root, out = sys.argv[1], sys.argv[2]
-    tn, l171 = (tag_report(root, t) for t in TAGS)
+    root, out, *tags = sys.argv[1:]
+    tags = tags or list(TAGS)
+    reports = {t: tag_report(root, t) for t in tags}
+    main_tag = reports[tags[0]]
     report = dict(
-        rows=tn["rows"],
-        census=tn["census"],
-        pop=tn["pop"],
-        hyp=dict(tn=tn["rates"], l171=l171["rates"], matched=tn["matched"]),
-        l171=dict(census=l171["census"], pop=l171["pop"], matched=l171["matched"]),
+        rows=main_tag["rows"],
+        census=main_tag["census"],
+        pop=main_tag["pop"],
+        hyp={t: r["rates"] for t, r in reports.items()},
+        matched=main_tag["matched"],
+        others={t: dict(census=r["census"], pop=r["pop"], matched=r["matched"]) for t, r in list(reports.items())[1:]},
     )
     with open(out, "w") as f:
         json.dump(report, f)

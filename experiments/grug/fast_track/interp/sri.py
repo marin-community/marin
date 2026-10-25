@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Case study: how the d512 model predicts " L" (Lanka) after " S" "ri", with " Hong" -> " Kong" and " Los" ->
+"""Case study: how the study model predicts " L" (Lanka) after " S" "ri", with " Hong" -> " Kong" and " Los" ->
 " Angeles" as comparison bigrams.
 
 Positions ("queries") are the trigger token ("ri", " Hong", " Los") in unseen training-cache sequences and every
@@ -14,7 +14,8 @@ a repeat, "S ri" followed by something else, and "ri" after any other token. At 
   further split into every hidden unit at each of the MLP SConv's lags (activation x combine weight x the unit's
   direction through ``w_down``, ``w_latent_up``, the SConv tap and the final gain), summed per category on the device;
 - gate and tuned lenses (``attrib.npz``) of the target's log-prob and rank at every sublayer boundary;
-- for up to ``F`` focus neurons per case (``L5.E304.n0`` and each case's top-DLA neurons): the router logit, biased and
+- for up to ``F`` focus neurons per case (each case's top-DLA neurons; for Sri the top one is ``n0``, d512's
+  ``L5.E304.n0``): the router logit, biased and
   unbiased rank, selection, combine weight and its rank, whether the QB bias alone selected it, the margin to the
   top-k boundary, the pre-activation and activation, the neuron's DLA;
 - for the first two focus neurons, the router logit and the pre-activation decomposed (with the MLP input's RMSNorm
@@ -61,8 +62,13 @@ NUM_STAGES = 2 * L + 1
 CONTEXT_LEFT = 24
 TRUNC_LENGTHS = (2, 3, 4, 8, 16, 64, 256, 1024)
 SWAP_PREFIXES = (" M", " T", " A", " P", " s", "F")
-N0 = (5, 304, 0)
-SRI_ROWS, HONG_ROWS, LOS_ROWS, RANDOM_ROWS = 1200, 120, 120, 64
+# The last layer (whose value embeddings carried the d512 copy path) and the first MLA layer (d512's L3 induction head).
+LAST = L - 1
+FIRST_MLA = forward.MLA_LAYERS[0]
+LAST_MLA = forward.MLA_LAYERS[-1]
+# Pass 1's placeholder focus (the Sri focus ``n0`` is pass 1's top Sri unit by DLA).
+PLACEHOLDER = (LAST, 0, 0)
+SRI_ROWS, HONG_ROWS, LOS_ROWS, RANDOM_ROWS = 600, 120, 120, 64
 RANDOM_EVERY = 400
 ABLATE_TOP = 10
 
@@ -304,9 +310,9 @@ def _stacked(model) -> dict:
     )
 
 
-def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir, rsdir):
+def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir, rsdir, n0_unit=PLACEHOLDER):
     """Everything measured at the queries of one batch (see the module docstring). ``focus`` is ``[Q, F, 3]``
-    ``(layer, expert, unit)``."""
+    ``(layer, expert, unit)``; ``n0_unit`` (static) the unit whose expert traffic is counted by token."""
     eps = model.config.layer_norm_eps
     m = forward.replicate(model)
     tr = forward.replicate(forward.trace_forward(m, tokens, seg, forward.no_ablation()))
@@ -518,12 +524,12 @@ def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir,
     out["dec_mult_err"] = jnp.max(jnp.stack(m_err))
     out["slot_expert"] = jnp.stack([cp["slot_expert"] for cp in comps], axis=1)  # [Q, L, J, K]
 
-    # L5 E304 traffic and n0 by current token (all valid tokens of the batch).
-    lay5 = tr["layers"][N0[0]]
+    # n0's expert traffic and n0 by current token (all valid tokens of the batch).
+    lay5 = tr["layers"][n0_unit[0]]
     tok_flat = tokens.reshape(-1)
-    rows304 = lay5["expert_sorted"] == N0[1]
+    rows304 = lay5["expert_sorted"] == n0_unit[1]
     t304 = tok_flat[lay5["token_sorted"]]
-    a304 = lay5["expert_act"][:, N0[2]].astype(jnp.float32)
+    a304 = lay5["expert_act"][:, n0_unit[2]].astype(jnp.float32)
     r304 = rows304.astype(jnp.float32)
     acc["e304_count"] = jnp.zeros((forward.VOCAB,)).at[t304].add(r304)
     acc["n0_fire"] = jnp.zeros((forward.VOCAB,)).at[t304].add(r304 * (a304 > 0))
@@ -532,7 +538,7 @@ def analyse(model, tokens, seg, qflat, qmask, qy, qyi, qcat, focus, tuned, rdir,
     return out, acc
 
 
-analyse_jit = jax.jit(analyse)
+analyse_jit = jax.jit(analyse, static_argnames=("n0_unit",))
 
 
 @jax.jit
@@ -651,7 +657,7 @@ def main() -> None:
         model = common.compute_model(params)
         rdir, rsdir = neuron_directions(model, targets)
 
-        def run_pass(focus_by_case: np.ndarray, which=None) -> tuple[dict, dict]:
+        def run_pass(focus_by_case: np.ndarray, which=None, n0_unit=PLACEHOLDER) -> tuple[dict, dict]:
             per_q: dict[str, list] = {}
             acc: dict = {}
             for bi, (b, table, _) in enumerate(batches):
@@ -672,6 +678,7 @@ def main() -> None:
                     tuned,
                     rdir,
                     rsdir,
+                    n0_unit=n0_unit,
                 )
                 keep = qa["qmask"]
                 for k, v in out.items():
@@ -683,8 +690,8 @@ def main() -> None:
                     logger.info("pass batch %d/%d (%.0fs)", bi, len(batches), time.time() - t0)
             return {k: np.concatenate(v) for k, v in per_q.items()}, {k: np.asarray(v) for k, v in acc.items()}
 
-        # Pass 1: neuron DLA sums with L5.E304.n0 as the focus everywhere.
-        default_focus = np.tile(np.asarray(N0, np.int32)[None, None], (len(CASES), F, 1))
+        # Pass 1: neuron DLA sums with a placeholder focus everywhere.
+        default_focus = np.tile(np.asarray(PLACEHOLDER, np.int32)[None, None], (len(CASES), F, 1))
         _, acc1 = run_pass(default_focus)
         logger.info("pass 1 done (%.0fs)", time.time() - t0)
         n_cat = np.bincount(np.concatenate([t[:, 2][t[:, 0] >= 0] for _, t, _ in batches]), minlength=C).astype(
@@ -699,7 +706,7 @@ def main() -> None:
             order = np.argsort(-score.reshape(-1))[:50]
             top = np.stack(np.unravel_index(order, score.shape), axis=1)
             top_by_case[ci] = top
-            chosen = [N0] if ci == 0 else []
+            chosen = []
             for t in top:
                 if len(chosen) >= F:
                     break
@@ -707,9 +714,10 @@ def main() -> None:
                     chosen.append(tuple(int(x) for x in t))
             focus_by_case[ci] = np.asarray(chosen, np.int32)
             logger.info("case %s focus %s", CASES[ci].name, chosen)
+        n0 = tuple(int(x) for x in focus_by_case[0, 0])
 
         # Pass 2: per-query everything with the case focus neurons.
-        per_q, acc2 = run_pass(focus_by_case)
+        per_q, acc2 = run_pass(focus_by_case, n0_unit=n0)
         logger.info("pass 2 done (%.0fs)", time.time() - t0)
         meta = np.concatenate([t[t[:, 0] >= 0] for _, t, _ in batches])
         src, ctx, nxt = [], [], []
@@ -757,8 +765,8 @@ def main() -> None:
 
         configs = [("none", "all", base)]
         for mode in ("zero", "mean"):
-            configs.append((f"n0:{mode}", "sri+rand", units([N0], mode)))
-            configs.append((f"E304:{mode}", "sri+rand", expert(5, 304, mode)))
+            configs.append((f"n0:{mode}", "sri+rand", units([n0], mode)))
+            configs.append((f"n0expert:{mode}", "sri+rand", expert(n0[0], n0[1], mode)))
         names_case = {0: "sri", 1: "hong", 2: "los"}
         for ci, top in top_by_case.items():
             grp = names_case[ci] + ("+rand" if ci == 0 else "")
@@ -768,45 +776,49 @@ def main() -> None:
             for n in (5, 10, 25, 50):
                 configs.append((f"{names_case[ci]}:top{n}:zero", grp, units(top_t[:n], "zero")))
                 configs.append((f"{names_case[ci]}:top{n}:mean", grp, units(top_t[:n], "mean")))
-            no_n0 = [t for t in top_t if t != N0]
+            no_n0 = [t for t in top_t if t != n0]
             configs.append((f"{names_case[ci]}:top10-no-n0:zero", grp, units(no_n0[:10], "zero")))
             top_e = top_t[0][:2]
             configs.append((f"{names_case[ci]}:E{top_e[1]}@L{top_e[0]}:zero", grp, expert(top_e[0], top_e[1], "zero")))
         for li in range(L):
             configs.append((f"L{li}.routed:mean", "all", sub(li, forward.SUB_ROUTED, "mean")))
             configs.append((f"L{li}.attn:mean", "sri+rand", sub(li, forward.SUB_ATTN, "mean")))
-        configs.append(("L5.shared:mean", "sri+rand", sub(5, forward.SUB_SHARED, "mean")))
-        configs.append(("L5.ve:zero", "all", base._replace(sub_mult=base.sub_mult.at[5, forward.SUB_VE].set(0.0))))
-        # The two routes together: the n0 / E304 unit path and the L5 copy path (VE, whole attention, L3 induction).
-        no_ve = base.sub_mult.at[5, forward.SUB_VE].set(0.0)
-        configs.append(("n0+L5.ve:zero", "sri+rand", units([N0], "zero")._replace(sub_mult=no_ve)))
-        configs.append(("E304+L5.ve:zero", "sri+rand", expert(5, 304, "zero")._replace(sub_mult=no_ve)))
-        no_attn = base.sub_mult.at[5, forward.SUB_ATTN].set(0.0)
+        configs.append((f"L{LAST}.shared:mean", "sri+rand", sub(LAST, forward.SUB_SHARED, "mean")))
+        no_ve_all = base.sub_mult
+        for li in forward.MLA_LAYERS:
+            no_ve_all = no_ve_all.at[li, forward.SUB_VE].set(0.0)
+            configs.append(
+                (f"L{li}.ve:zero", "all", base._replace(sub_mult=base.sub_mult.at[li, forward.SUB_VE].set(0.0)))
+            )
+            configs.append(
+                (
+                    f"L{li}.ve:mean",
+                    "all",
+                    base._replace(sub_mult=base.sub_mult.at[li, forward.SUB_VE].set(0.0), ve_mean=jnp.asarray(ve_mean)),
+                )
+            )
+        configs.append(("allMLA.ve:zero", "all", base._replace(sub_mult=no_ve_all)))
+        # The two routes together: the n0 unit path and the copy path (last-layer VE or all VE, whole attention,
+        # first-MLA-layer induction).
+        no_ve = base.sub_mult.at[LAST_MLA, forward.SUB_VE].set(0.0)
+        configs.append((f"n0+L{LAST_MLA}.ve:zero", "sri+rand", units([n0], "zero")._replace(sub_mult=no_ve)))
+        configs.append(("n0+allMLA.ve:zero", "sri+rand", units([n0], "zero")._replace(sub_mult=no_ve_all)))
         configs.append(
-            ("n0:zero+L5.attn:mean", "sri+rand", units([N0], "zero")._replace(sub_mult=no_attn, sub_mean=sub_mean))
+            (f"n0expert+L{LAST_MLA}.ve:zero", "sri+rand", expert(n0[0], n0[1], "zero")._replace(sub_mult=no_ve))
         )
+        no_attn = base.sub_mult.at[LAST, forward.SUB_ATTN].set(0.0)
+        configs.append(
+            (f"n0:zero+L{LAST}.attn:mean", "sri+rand", units([n0], "zero")._replace(sub_mult=no_attn, sub_mean=sub_mean))
+        )
+        first_attn = base.sub_mult.at[FIRST_MLA, forward.SUB_ATTN].set(0.0)
         configs.append(
             (
-                "n0:zero+L3.h0:mean",
+                f"n0:zero+L{FIRST_MLA}.attn:mean",
                 "sri+rand",
-                units([N0], "zero")._replace(head_mult=base.head_mult.at[3, 0].set(0.0), head_mean=head_mean),
+                units([n0], "zero")._replace(sub_mult=first_attn, sub_mean=sub_mean),
             )
         )
-        configs.append(
-            (
-                "L5.ve:mean",
-                "all",
-                base._replace(sub_mult=base.sub_mult.at[5, forward.SUB_VE].set(0.0), ve_mean=jnp.asarray(ve_mean)),
-            )
-        )
-        configs.append(
-            (
-                "L3.ve:mean",
-                "all",
-                base._replace(sub_mult=base.sub_mult.at[3, forward.SUB_VE].set(0.0), ve_mean=jnp.asarray(ve_mean)),
-            )
-        )
-        for li in (0, 1, 2, 3, 4, 5):
+        for li in forward.MLA_LAYERS:
             for h in range(H):
                 configs.append((f"L{li}.h{h}:mean", "sri+rand", head(li, h)))
         abl_names, abl_logp = [], []
@@ -860,6 +872,7 @@ def main() -> None:
                     tuned,
                     rdir,
                     rsdir,
+                    n0_unit=n0,
                 )
                 kept = pick[qa["qmask"]]
                 vals.setdefault("query", []).append(all_q_index[bi] + np.flatnonzero(kept))
@@ -910,6 +923,7 @@ def main() -> None:
                 tuned,
                 rdir,
                 rsdir,
+                n0_unit=n0,
             )
             trunc_out.setdefault("trunc/query", []).append(qid[valid])
             trunc_out.setdefault("trunc/length_index", []).append(ttable[valid, 2])
@@ -933,7 +947,8 @@ def main() -> None:
     results["trunc_lengths"] = np.asarray(TRUNC_LENGTHS)
     results["categories"] = np.asarray(CATEGORIES)
     results["terms"] = np.asarray(TERMS)
-    results["unit_mean"] = unit_mean[N0[0], N0[1]]
+    results["unit_mean"] = unit_mean[n0[0], n0[1]]
+    results["n0"] = np.asarray(n0)
     results["ids_json"] = np.asarray(json.dumps(dataclasses.asdict(ids)))
     common.save_npz(args.tag, "sri", **results)
     logger.info("done in %.0fs", time.time() - t0)

@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""What the first three layers (KDA layers 0, 1, 2) of the Ckpt 1 d512 model do.
+"""What the first three layers (KDA layers 0, 1, 2, ahead of the first MLA layer L3) of the Ckpt 1 study model do.
 
 One evaluation set (``PALOMA_ROWS`` sequences of every Paloma subset plus ``TRAIN_ROWS`` unseen training sequences,
 rows ``% 3 == 0`` held out for the probes) and four phases, each writing ``early_<phase>.npz``:
@@ -65,7 +65,17 @@ HEAD_ROWS = 12
 EXCERPT = 128
 INDUCTION_BATCHES = 2
 CONSUME_BATCHES = 12
-SITE_NAMES = (*[f"in{i}" for i in range(L)], "final", *[f"blk{i}" for i in range(L)])
+# Probe sites: the residual mix entering layers 0..PROBE_IN_LAYERS-1, the final readout mix and the block outputs of
+# layers 0..PROBE_BLOCK_LAYERS-1 (every layer at d512; the first eight inputs and seven blocks at d1280).
+PROBE_IN_LAYERS = min(L, 8)
+PROBE_BLOCK_LAYERS = min(L, 7)
+SITE_NAMES = (*[f"in{i}" for i in range(PROBE_IN_LAYERS)], "final", *[f"blk{i}" for i in range(PROBE_BLOCK_LAYERS)])
+# Layers whose KDA heads get the token-mixing taxonomy (the KDA layers before the second MLA layer).
+HEAD_LAYERS = tuple(i for i in forward.KDA_LAYERS if i < 7)
+# Joint head ablations of the induction test: the heads of this layer with at least this previous-token mass, and the
+# two heads of that layer whose single ablations raise the second-copy loss most.
+PREV_HEAD_LAYER, PREV_HEAD_MASS = 0, 0.3
+INDUCTION_PAIR_LAYER = 2
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -458,8 +468,8 @@ def run_probe(model, mesh, data, head_mean, sub_mean, vocab) -> dict[str, np.nda
     @jax.jit
     def sites(model, tokens, seg, abl):
         tr = forward.trace_forward(model, tokens, seg, abl)
-        mixes = [lay["attn_gate_in"] for lay in tr["layers"]] + [tr["mixed"]]
-        blocks = tr["blocks"][1:]
+        mixes = [lay["attn_gate_in"] for lay in tr["layers"][:PROBE_IN_LAYERS]] + [tr["mixed"]]
+        blocks = tr["blocks"][1 : PROBE_BLOCK_LAYERS + 1]
         sel = jnp.stack([lay["selected"] for lay in tr["layers"]])
         return [m.astype(jnp.bfloat16) for m in mixes + blocks], tr["entropy"], sel
 
@@ -602,7 +612,7 @@ def run_heads(model, mesh, data, head_mean, sub_mean, vocab, block_means) -> dic
             tokens, seg, w = forward.replicate((tokens, seg, w))
             r = 0  # one row per picked batch keeps the S x S matrices cheap
             row = bi * BATCH + r
-            for i in EARLY:
+            for i in HEAD_LAYERS:
                 lay = {k: layers[i][k][r] for k in ("q", "k", "v", "log_decay", "beta")}
                 st, ex, exv = head_stats(
                     lay,
@@ -637,8 +647,6 @@ def run_heads(model, mesh, data, head_mean, sub_mean, vocab, block_means) -> dic
         configs.append((f"L{i}.routed", m(subs=[(i, forward.SUB_ROUTED)]), None))
         configs += [(f"L{i}.h{h}", m(heads_=[(i, h)]), None) for h in range(H)]
     configs.append(("L012.attn", m(subs=[(i, forward.SUB_ATTN) for i in EARLY]), None))
-    configs.append(("L2.h1+h2", m(heads_=[(2, 1), (2, 2)]), None))
-    configs.append(("L0.h0+h2", m(heads_=[(0, 0), (0, 2)]), None))
 
     def patch_mult(gates, srcs, sides):
         mult = jnp.ones((forward.NUM_GATES, L + 1, 2), jnp.float32)
@@ -668,7 +676,8 @@ def run_heads(model, mesh, data, head_mean, sub_mean, vocab, block_means) -> dic
             jnp.bfloat16
         )
         ones = forward.no_patch(value).mult
-        for name, abl, mult in configs:
+
+        def run_config(name, abl, mult):
             fs = ss = 0.0
             ms = np.zeros(H)
             for b in ind:
@@ -683,6 +692,20 @@ def run_heads(model, mesh, data, head_mean, sub_mean, vocab, block_means) -> dic
             s_loss.append(ss)
             l3_mass.append(ms)
             logger.info("induction %s: first %.3f second %.3f L3 mass %s", name, fs, ss, np.round(ms, 3))
+
+        for name, abl, mult in configs:
+            run_config(name, abl, mult)
+        # Joint head ablations chosen from the data (the d512 study's L0.h0+h2 and L2.h1+h2).
+        li = PREV_HEAD_LAYER
+        prev = acc[f"L{li}/prev_mass"] / np.maximum(acc[f"L{li}/n"], 1)
+        prev_heads = [h for h in range(H) if prev[h] >= PREV_HEAD_MASS]
+        if prev_heads:
+            label = "+".join(f"h{h}" for h in prev_heads)
+            run_config(f"L{li}.prev:{label}", m(heads_=[(li, h) for h in prev_heads]), None)
+        li = INDUCTION_PAIR_LAYER
+        single = np.asarray([s_loss[names.index(f"L{li}.h{h}")] for h in range(H)])
+        pair = [int(h) for h in np.argsort(-single)[:2]]
+        run_config(f"L{li}.top2:h{pair[0]}+h{pair[1]}", m(heads_=[(li, h) for h in pair]), None)
     results["ind_names"] = np.asarray(names)
     results["ind_first"] = np.asarray(f_loss)
     results["ind_second"] = np.asarray(s_loss)
