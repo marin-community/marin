@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Regional, bounded-memory source and LR0 export audits; invoke only on the worker."""
 
 import hashlib

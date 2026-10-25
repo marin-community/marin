@@ -1,3 +1,6 @@
+# Copyright The Levanter Authors
+# SPDX-License-Identifier: Apache-2.0
+
 import dataclasses
 
 import equinox as eqx

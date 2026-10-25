@@ -1,3 +1,6 @@
+# Copyright The Marin Authors
+# SPDX-License-Identifier: Apache-2.0
+
 """Finite LR0 trainer lifecycle binding; parity and export audits are mandatory inputs."""
 
 import hashlib
