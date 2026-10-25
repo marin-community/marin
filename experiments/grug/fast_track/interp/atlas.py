@@ -264,7 +264,7 @@ def main() -> None:
             if n % 200 == 0:
                 logger.info("batch %d/%d (%s) %.0fs", n, len(batches), batch.source, time.time() - t0)
         host = {k: np.asarray(v) for k, v in state.items()}
-        host.update(stats.neuron_logit_lens(model))
+        host.update(stats.neuron_logit_lens(model, tuple(range(forward.NUM_LAYERS))))
         host["token_embed"] = np.asarray(params.token_embed, np.float16)
         host["router_bias"] = np.stack([np.asarray(layer.mlp.router_bias, np.float32) for layer in params.layers()])
     for key in ("act_sq", "high_mass", "tok_mass", "high_pos", "high_dom"):
