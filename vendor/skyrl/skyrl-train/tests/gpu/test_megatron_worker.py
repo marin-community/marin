@@ -33,6 +33,7 @@ from skyrl_train.objective.losses import POLICY_CLIP_METRIC_KEYS
 from tests.gpu.grug_gpu_gates import require_hoppers
 from tests.softmax_reference import assert_softmax_numerics, numerical_rows
 
+
 MODEL_NAME = "Qwen/Qwen3-0.6B"
 # TODO (erictang000): we would prefer to use this smaller MoE model for testing, but seeing incorrect logprobs when using EP > 1
 # this might be a model specific mbridge issue - see if this persists when we transition to Megatron-Bridge
@@ -675,22 +676,24 @@ async def test_megatron_offload_memory_and_correctness(ray_init_fixture, worker_
     actor_group.offload_to_cpu(offload_optimizer=True, offload_model=False)
     after_offload_optimizer = get_rank_0_memory(actor_group, "After optimizer offload")
 
-    assert (
-        after_offload_optimizer < after_training
-    ), f"Memory after offload optimizer should be less than after training: {after_offload_optimizer} bytes, after training: {after_training} bytes"
+    assert after_offload_optimizer < after_training, (
+        f"Memory after offload optimizer should be less than after training: {after_offload_optimizer} bytes, after training: {after_training} bytes"
+    )
 
     actor_group.offload_to_cpu(offload_optimizer=False, offload_model=True)
     after_offload = get_rank_0_memory(actor_group, "After model offload")
 
-    assert (
-        after_offload < after_offload_optimizer
-    ), f"Memory after offload model should be less than after offload optimizer: {after_offload} bytes, after offload optimizer: {after_offload_optimizer} bytes"
+    assert after_offload < after_offload_optimizer, (
+        f"Memory after offload model should be less than after offload optimizer: {after_offload} bytes, after offload optimizer: {after_offload_optimizer} bytes"
+    )
 
     # check that allocated memory is similar to initial offload memory
     delta = abs(initial_offload_mem - after_offload)
     assert (
         delta < 4e8  # 400MB (should be close to 0 diff)
-    ), f"Memory after training step + offload is not similar to initial offloaded memory: {delta} bytes. Initial offload mem: {initial_offload_mem}, after offload mem: {after_offload} bytes"
+    ), (
+        f"Memory after training step + offload is not similar to initial offloaded memory: {delta} bytes. Initial offload mem: {initial_offload_mem}, after offload mem: {after_offload} bytes"
+    )
 
     # also check that allocated memory goes down after offloading
     delta_forward = after_training - after_offload
@@ -699,15 +702,15 @@ async def test_megatron_offload_memory_and_correctness(ray_init_fixture, worker_
     # Backload model to GPU
     actor_group.backload_to_gpu(backload_optimizer=True, backload_model=False)
     after_backload_optimizer = get_rank_0_memory(actor_group, "After backload optimizer")
-    assert (
-        after_backload_optimizer > after_offload
-    ), f"Memory after backload optimizer should be greater than after offload: {after_backload_optimizer} bytes, after offload: {after_offload} bytes"
+    assert after_backload_optimizer > after_offload, (
+        f"Memory after backload optimizer should be greater than after offload: {after_backload_optimizer} bytes, after offload: {after_offload} bytes"
+    )
 
     actor_group.backload_to_gpu(backload_optimizer=False, backload_model=True)
     after_backload = get_rank_0_memory(actor_group, "After backload model")
-    assert (
-        after_backload > after_backload_optimizer
-    ), f"Memory after backload model should be greater than after backload optimizer: {after_backload} bytes, after backload optimizer: {after_backload_optimizer} bytes"
+    assert after_backload > after_backload_optimizer, (
+        f"Memory after backload model should be greater than after backload optimizer: {after_backload} bytes, after backload optimizer: {after_backload_optimizer} bytes"
+    )
 
     get_rank_0_memory(actor_group, "After backload")
 
