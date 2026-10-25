@@ -24,6 +24,7 @@ from sklearn.model_selection import GroupKFold
 
 from harbor.models.trial.result import TrialResult
 from harbor_config.errors import ErrorCategory, error_category
+from harbor_config.models.job.config import SotopiaCohort
 
 SUMMARY = re.compile(r"/([^/]+)/attempts/(\d+)/agent/sotopia-summary\.json$")
 DIMENSIONS = (
@@ -372,13 +373,12 @@ class SotopiaCorrection:
 
 
 def correct_sotopia(
-    trials: list[TrialResult], *, model: str, cohort: dict | None = None
+    trials: list[TrialResult], *, model: str, cohort: SotopiaCohort | None = None
 ) -> SotopiaCorrection:
     """Return corrected scores and the full inputs needed to reproduce the fit."""
-    cohort = cohort if cohort is not None else json.loads(DEFAULT_COHORT.read_text())
-    sources = [SotopiaCell(**row) for row in cohort["models"] if row["model"] != model]
-    if len(sources) != len({source.model for source in sources}):
-        raise ValueError("SOTOPIA cohort contains duplicate models")
+    cohort_document = cohort.model_dump() if cohort is not None else json.loads(DEFAULT_COHORT.read_text())
+    cohort = cohort or SotopiaCohort.model_validate(cohort_document)
+    sources = [SotopiaCell(row.model, row.results_path) for row in cohort.models if row.model != model]
     episodes = [episode for source in sources for episode in read_episodes(source)]
     candidate = []
     for trial in trials:
@@ -426,10 +426,10 @@ def correct_sotopia(
     fit = length_controlled_scores(episodes)
     selected = next(score for score in fit.scores if score.model == model)
     return SotopiaCorrection(
-        cohort=cohort,
+        cohort=cohort_document,
         baseline_sources=sources,
         cohort_sha256=hashlib.sha256(
-            json.dumps(cohort, sort_keys=True).encode()
+            json.dumps(cohort_document, sort_keys=True).encode()
         ).hexdigest(),
         source_episodes=episodes,
         source_episodes_sha256=hashlib.sha256(
