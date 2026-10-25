@@ -31,6 +31,8 @@ from experiments.grug.fast_track.interp import categories, common, forward
 logger = logging.getLogger(__name__)
 
 BATCH = 8
+# Evaluation batch: the per-stage lens log-softmaxes over the vocabulary stay live together (d1280: 2 fits).
+EVAL_BATCH = 2
 NC = len(categories.CATEGORIES)
 L, H = forward.NUM_LAYERS, forward.NUM_HEADS
 # Stages of the lenses: the embedding, then after each attention sublayer and each layer block.
@@ -276,7 +278,7 @@ def main() -> None:
     parser.add_argument("--fit-sequences", type=int, default=128, help="train sequences for means and the tuned lens")
     parser.add_argument("--eval-train-sequences", type=int, default=64)
     parser.add_argument("--eval-paloma-sequences", type=int, default=8, help="per Paloma set")
-    parser.add_argument("--ablation-batches", type=int, default=12)
+    parser.add_argument("--ablation-batches", type=int, default=32)
     args = parser.parse_args()
     checkpoint = args.checkpoint or common.CHECKPOINTS[args.tag]
     cfg = common.model_config(args.tag)
@@ -291,8 +293,8 @@ def main() -> None:
     freq_rank = np.empty(forward.VOCAB, np.int64)
     freq_rank[np.argsort(-counts, kind="stable")] = np.arange(forward.VOCAB)
     evals = [
-        *common.paloma_batches(BATCH, max_sequences=args.eval_paloma_sequences),
-        *common.train_batches(BATCH, args.eval_train_sequences, seed=2),
+        *common.paloma_batches(EVAL_BATCH, max_sequences=args.eval_paloma_sequences),
+        *common.train_batches(EVAL_BATCH, args.eval_train_sequences, seed=2),
     ]
     cats_all = [
         categories.category_masks(b.tokens, b.segment_ids, b.loss_weight, b.source, feats, freq_rank) for b in evals
