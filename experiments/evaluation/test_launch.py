@@ -1,7 +1,7 @@
 # Copyright The Marin Authors
 # SPDX-License-Identifier: Apache-2.0
 
-"""Durable identities across command-line evaluation relaunches."""
+"""Command-line evaluation launch and relaunch behavior."""
 
 import json
 import os
@@ -27,19 +27,13 @@ from experiments.evaluation.models import models
 
 
 @pytest.fixture
-def submitted_environments():
-    return []
-
-
-@pytest.fixture
-def submitted_batches(monkeypatch, submitted_environments):
+def submitted_batches(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "local-test-key")
     monkeypatch.setenv("DAYTONA_API_KEY", "local-test-key")
     batches: list[EvaluationBatch] = []
 
     class Client:
-        def submit(self, *, entrypoint, environment, **_kwargs):
-            submitted_environments.append(environment)
+        def submit(self, *, entrypoint, **_kwargs):
             _, args, _ = entrypoint.resolve()
             batches.append(args[0])
             return SimpleNamespace(job_id="/test/eval")
