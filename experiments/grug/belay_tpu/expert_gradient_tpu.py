@@ -59,10 +59,13 @@ def expert_weight_gradient(lhs, rhs, groups, *, partitions=2, tile_rows=512, out
             def initialize():
                 accumulator[...] = jnp.zeros((k, n), jnp.float32)
 
-            row = jnp.arange(tm) + tiles[part, valid_slot] * tm
-            mask = (row >= offsets[part, group]) & (row < offsets[part, group + 1])
-            x = jnp.where(mask[:, None], left[...], 0)
-            dy = jnp.where(mask[:, None], right[...], 0)
+            def masked_rows(value, width):
+                row = lax.broadcasted_iota(jnp.int32, (tm, width), 0) + tiles[part, valid_slot] * tm
+                mask = (row >= offsets[part, group]) & (row < offsets[part, group + 1])
+                return jnp.where(mask, value, 0)
+
+            x = masked_rows(left[...], k)
+            dy = masked_rows(right[...], n)
             accumulator[...] += lax.dot_general(
                 x,
                 dy,
