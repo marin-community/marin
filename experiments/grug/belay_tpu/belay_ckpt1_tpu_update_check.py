@@ -25,7 +25,7 @@ from levanter.grug.sharding import compact_grug_mesh
 from levanter.trainer import _initialize_global_tracker
 from levanter.utils.jax_utils import parameter_count
 
-from experiments.grug.belay_tpu import train
+from experiments.grug.belay_tpu import qb_balancing, train
 from experiments.grug.belay_tpu.belay_ckpt1_tpu import (
     DATA_ROOT,
     build_config,
@@ -38,6 +38,7 @@ from experiments.grug.belay_tpu.grugmuon_stacked import _newtonschulz_batched_sy
 from experiments.grug.belay_tpu.packed_kda_check import check_packed_kda
 from experiments.grug.belay_tpu.remat_check import check_attention_remat
 from experiments.grug.fast_track.grugmuon_stacked import _zeropower_via_newtonschulz_local
+from experiments.grug.fast_track.qb_balancing import bincount_upper_quantile as source_bincount_upper_quantile
 
 
 def check_muon_gram_port():
@@ -67,10 +68,48 @@ def equal_leaves(left, right):
     return jnp.all(jnp.stack([jnp.all(x == y) for x, y in zip(left, right, strict=True)]))
 
 
+@jax.jit
+def leaf_differences(left, right):
+    counts, maxima, means = [], [], []
+    for x, y in zip(left, right, strict=True):
+        x, y = jnp.asarray(x), jnp.asarray(y)
+        delta = jnp.abs(x.astype(jnp.float32) - y.astype(jnp.float32))
+        counts.append(jnp.count_nonzero(x != y))
+        maxima.append(jnp.max(delta, initial=0))
+        means.append(jnp.sum(delta) / max(delta.size, 1))
+    return jnp.stack(counts), jnp.stack(maxima), jnp.stack(means)
+
+
 def require_equal(left, right, label):
     left_leaves, left_tree = jax.tree.flatten(left)
     right_leaves, right_tree = jax.tree.flatten(right)
-    if left_tree != right_tree or not bool(equal_leaves(left_leaves, right_leaves)):
+    if left_tree != right_tree:
+        raise AssertionError(f"Checkpoint tree mismatch: {label}")
+    if not bool(equal_leaves(left_leaves, right_leaves)):
+        counts, maxima, means = (np.asarray(x) for x in leaf_differences(left_leaves, right_leaves))
+        paths = [jax.tree_util.keystr(path) for path, _ in jax.tree_util.tree_flatten_with_path(left)[0]]
+        differences = [
+            {
+                "path": paths[i],
+                "shape": list(left_leaves[i].shape),
+                "dtype": str(left_leaves[i].dtype),
+                "unequal_elements": int(counts[i]),
+                "max_absolute_error": float(maxima[i]),
+                "mean_absolute_error": float(means[i]),
+            }
+            for i in np.flatnonzero(counts)
+        ]
+        differences.sort(key=lambda row: row["max_absolute_error"], reverse=True)
+        (Path(os.environ["IRIS_OUTPUT_DIR"]) / f"state-mismatch-rank{jax.process_index()}.json").write_text(
+            json.dumps({"label": label, "leaves": differences}, indent=2) + "\n"
+        )
+        emit(
+            "state_mismatch",
+            label=label,
+            rank=jax.process_index(),
+            mismatched_leaves=len(differences),
+            largest_leaves=differences[:12],
+        )
         raise AssertionError(f"Checkpoint continuation mismatch: {label}")
     emit("exact_match", label=label, rank=jax.process_index())
 
@@ -102,7 +141,12 @@ def main():
     parser.add_argument(
         "--reference-step1", help="Require the first update to exactly match this frozen step-1 checkpoint"
     )
+    parser.add_argument(
+        "--source-qb", action="store_true", help="Use the unchanged source histogram as a cross-run control"
+    )
     args = parser.parse_args()
+    if args.source_qb:
+        qb_balancing.bincount_upper_quantile = source_bincount_upper_quantile
     if not args.logging_only and os.environ.get("JAX_PLATFORMS") != "tpu,cpu":
         raise RuntimeError("Optimizer checks require JAX_PLATFORMS=tpu,cpu; CPU is needed for data shuffling")
     if os.environ.get("GRUG_SKIP_OPTIMIZER"):
@@ -126,7 +170,14 @@ def main():
     require_tpu_rounding()
     trainer.initialize()
     tracker.log_configuration(config)
-    tracker.log_summary({"diagnostic_only": True, "diagnostic/original_schedule_steps": 8821})
+    tracker.log_summary(
+        {
+            "diagnostic_only": True,
+            "diagnostic/original_schedule_steps": 8821,
+            "diagnostic/source_qb_control": args.source_qb,
+            "diagnostic/reference_step1": args.reference_step1,
+        }
+    )
     chips = {"v4-32": 16, "v4-64": 32}[tpu]
     if jax.device_count() != chips or jax.default_backend() != "tpu":
         raise AssertionError("Unexpected TPU topology")
@@ -213,10 +264,6 @@ def main():
             return jax.tree.unflatten(tree, next_leaves), metrics
 
         state1, _ = advance(state, batch0, 0)
-        if args.reference_step1:
-            reference1 = load_checkpoint(state1, args.reference_step1, mesh=mesh, allow_partial=False)
-            require_equal(state1, reference1, "first update against frozen reference checkpoint")
-            del reference1
         save_checkpoint(
             state1,
             step=1,
@@ -226,6 +273,10 @@ def main():
             metadata={"diagnostic_only": True, "original_schedule_steps": 8821},
         )
         multihost_utils.sync_global_devices("belay_update_check_checkpoint_committed")
+        if args.reference_step1:
+            reference1 = load_checkpoint(state1, args.reference_step1, mesh=mesh, allow_partial=False)
+            require_equal(state1, reference1, "first update against frozen reference checkpoint")
+            del reference1
         restored1 = load_checkpoint(state1, checkpoint_path, mesh=mesh, allow_partial=False)
         require_equal(state1, restored1, "all model, optimizer, step and pending-router state after restore")
         batch1 = next(iterator)

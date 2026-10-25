@@ -181,6 +181,31 @@ class _RaggedDotExpertMlp:
 
 
 @dataclasses.dataclass(frozen=True)
+class _SavedRaggedDotExpertMlp:
+    """Keep the forward pullback's residuals instead of recomputing the up projection."""
+
+    activation_fn: Callable[[jax.Array], jax.Array]
+
+    def forward(self, x_dispatch, moe_w13_local, moe_w2_local, physical_group_sizes, active_group_sizes):
+        reference = _RaggedDotExpertMlp(self.activation_fn)
+        out, pullback = jax.vjp(
+            lambda x, w13, w2: reference._apply(x, w13, w2, physical_group_sizes, active_group_sizes),
+            x_dispatch,
+            moe_w13_local,
+            moe_w2_local,
+        )
+        return out, (out, pullback)
+
+    backward_parts = _whole_backward_parts
+
+    def backward(self, residuals, cotangent):
+        out, pullback = residuals
+        dx, dw13, dw2 = pullback(cotangent)
+        output_dot_cotangent = jnp.sum(out.astype(jnp.float32) * cotangent.astype(jnp.float32), axis=-1)
+        return dx, dw13, dw2, output_dot_cotangent
+
+
+@dataclasses.dataclass(frozen=True)
 class _FusedRelu2ExpertMlp:
     """Ungated ReLU^2 experts on ``relu2_ragged_mlp``'s fused-epilogue grouped GEMMs (Pallas Triton on GPU,
     the same math on ``jax.lax.ragged_dot`` elsewhere).
