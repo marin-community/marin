@@ -1,0 +1,134 @@
+"""Regional source checkpoint audit, independent of the SFT factory."""
+
+import hashlib
+import json
+import math
+from pathlib import PurePosixPath
+
+import jax.numpy as jnp
+import numpy as np
+from levanter.compat.fsspec_safetensor import TensorRecord
+from levanter.compat.hf_export import write_export_json
+from rigging.filesystem.storage_path import StoragePath
+
+INDEX = "model.safetensors.index.json"
+SOURCE_FILES = (
+    "config.json",
+    "generation_config.json",
+    INDEX,
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "chat_template.jinja",
+)
+ROUTER_KEYS = frozenset(f"model.layers.{layer}.mlp.router.bias" for layer in range(26))
+DTYPES = {"F32": np.dtype("float32"), "BF16": np.dtype(jnp.bfloat16)}
+CHUNK_BYTES = 4 * 1024**2
+MAX_HEADER_BYTES = 16 * 1024**2
+
+
+def checkpoint_records(root: str) -> dict[str, TensorRecord]:
+    """Read headers and validate index coverage, tensor sizes and nonoverlapping bounds."""
+    base = StoragePath(root)
+    index = json.loads((base / INDEX).read_bytes())
+    weight_map = index["weight_map"]
+    if not weight_map:
+        raise ValueError("Empty tensor index")
+    records = {}
+    total = 0
+    for shard in sorted(set(weight_map.values())):
+        if PurePosixPath(shard).name != shard or not shard.endswith(".safetensors"):
+            raise ValueError("Index shard must be a plain safetensors filename")
+        path = base / shard
+        size = path.size()
+        with path.open("rb") as stream:
+            prefix = stream.read(8)
+            if len(prefix) != 8:
+                raise ValueError(f"Truncated safetensors prefix: {shard}")
+            length = int.from_bytes(prefix, "little")
+            if not 0 < length <= MAX_HEADER_BYTES or 8 + length > size:
+                raise ValueError(f"Invalid safetensors header length: {shard}")
+            header = json.loads(stream.read(length))
+        intervals = []
+        for name, spec in header.items():
+            if name == "__metadata__":
+                continue
+            if name in records or weight_map.get(name) != shard:
+                raise ValueError(f"Shard/index disagreement: {name}")
+            if spec["dtype"] not in DTYPES:
+                raise ValueError(f"Unexpected precision dtype: {name}")
+            dtype = DTYPES[spec["dtype"]]
+            shape = tuple(spec["shape"])
+            if any(type(dimension) is not int or dimension <= 0 for dimension in shape):
+                raise ValueError(f"Invalid tensor shape: {name}")
+            start, end = spec["data_offsets"]
+            if type(start) is not int or type(end) is not int or start < 0:
+                raise ValueError(f"Invalid tensor offsets: {name}")
+            if end - start != math.prod(shape) * dtype.itemsize or 8 + length + end > size:
+                raise ValueError(f"Tensor bounds/size mismatch: {name}")
+            records[name] = TensorRecord(name, dtype, shape, str(path), 8 + length + start, 8 + length + end)
+            intervals.append((start, end))
+            total += end - start
+        cursor = 0
+        for start, end in sorted(intervals):
+            if start != cursor:
+                raise ValueError(f"Overlapping or unindexed payload in {shard}")
+            cursor = end
+        if 8 + length + cursor != size:
+            raise ValueError(f"Trailing unindexed payload in {shard}")
+    if records.keys() != weight_map.keys():
+        raise ValueError("Index references missing tensors")
+    if index.get("metadata", {}).get("total_size") != total:
+        raise ValueError("Index total_size differs from tensor payload")
+    return records
+
+
+def check_precision_layout(records: dict[str, TensorRecord]) -> None:
+    """Require the frozen 502-key dtype layout; exact names are pinned by the source index."""
+    found = {name for name in records if name.endswith(".mlp.router.bias")}
+    if len(records) != 502 or found != ROUTER_KEYS:
+        raise ValueError("Expected 502 tensors including exactly 26 router biases")
+    for name, record in records.items():
+        expected = DTYPES["F32"] if name in ROUTER_KEYS else DTYPES["BF16"]
+        if record.dtype != expected:
+            raise ValueError(f"Wrong storage dtype: {name}")
+        if name in ROUTER_KEYS and record.shape != (256,):
+            raise ValueError(f"Wrong router bias shape: {name}")
+
+
+def check_source_metadata(root: str, expected_hashes: dict[str, str]) -> None:
+    """Check pinned regional metadata bytes and every tensor header before loading."""
+    if set(expected_hashes) != set(SOURCE_FILES):
+        raise ValueError("Source audit requires all six frozen metadata hashes")
+    for filename in SOURCE_FILES:
+        contents = (StoragePath(root) / filename).read_bytes()
+        if hashlib.sha256(contents).hexdigest() != expected_hashes[filename]:
+            raise ValueError(f"Pinned source metadata changed: {filename}")
+    check_precision_layout(checkpoint_records(root))
+
+
+def audit_precision_source(root: str, expected_hashes: dict[str, str], receipt_path: str) -> None:
+    """Stream all source values before load, recording native and lossless FP32 hashes."""
+    check_source_metadata(root, expected_hashes)
+    tensors = {}
+    for name, record in sorted(checkpoint_records(root).items()):
+        native, master = hashlib.sha256(), hashlib.sha256()
+        remaining = record.byte_end - record.byte_start
+        with StoragePath(record.file_path).open("rb", cache_type="none") as stream:
+            stream.seek(record.byte_start)
+            while remaining:
+                count = min(CHUNK_BYTES, remaining)
+                chunk = stream.read(count)
+                if len(chunk) != count:
+                    raise ValueError(f"Truncated source tensor: {name}")
+                values = np.frombuffer(chunk, dtype=record.dtype)
+                if not np.isfinite(values).all():
+                    raise ValueError(f"Nonfinite source tensor: {name}")
+                native.update(chunk)
+                master.update(values.astype(np.float32).tobytes())
+                remaining -= count
+        tensors[name] = {
+            "native_sha256": native.hexdigest(),
+            "master_sha256": master.hexdigest(),
+            "shape": list(record.shape),
+        }
+    write_export_json(StoragePath(receipt_path), {"source_metadata_sha256": expected_hashes, "tensors": tensors})
