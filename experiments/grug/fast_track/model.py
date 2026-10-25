@@ -183,6 +183,10 @@ class ThreshWeight(StrEnum):
     """``relu(logit + b_e)``: zero at the threshold, so the selection itself gets a gradient (ReMoE-style)."""
     SIGMOID = "sigmoid"
     """``sigmoid(logit)``, gated by the threshold."""
+    RELU_STD = "relu_std"
+    """``relu((logit + b_e) / sigma)``, with ``sigma`` the layer's stop-gradient router-logit std this step: zero at the
+    threshold like ``RELU``, but the router cannot grow the routed output by growing its logits (with ``RELU`` the
+    d512 logit range grew to +-600 and the weight sum to ~80 by step 700)."""
 
 
 class ThreshAux(StrEnum):
@@ -1272,6 +1276,9 @@ class MoEMLP(eqx.Module):
         selected = jnp.where(keep, candidates, num_experts)
         if cfg.thresh_weight == ThreshWeight.RELU:
             raw = jax.nn.relu(jnp.take_along_axis(biased_logits, candidates, axis=-1))
+        elif cfg.thresh_weight == ThreshWeight.RELU_STD:
+            sigma = jax.lax.stop_gradient(jnp.std(router_logits))
+            raw = jax.nn.relu(jnp.take_along_axis(biased_logits, candidates, axis=-1)) / sigma
         else:
             raw = jax.nn.sigmoid(jnp.take_along_axis(router_logits, candidates, axis=-1))
         weights = jnp.where(keep, cfg.thresh_weight_scale * raw, 0.0)
