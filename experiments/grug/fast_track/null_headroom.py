@@ -60,7 +60,7 @@ def model_config(top_k: int, renorm_sum: float) -> M.GrugModelConfig:
         if flag == "--model-set":
             key, _, val = value.partition("=")
             settings[key] = val
-    rung = launch._resolved_rung("d512", None, None)
+    rung = launch._h100_ladder_rung("d512")
     cfg = dataclasses.replace(launch._h100_ladder_model(rung), vocab_size=launch.V16384_VOCAB)
     cfg = launch._apply_settings(launch._kma_model(cfg), settings)
     return dataclasses.replace(cfg, num_experts_per_token=top_k, routing_renorm_sum=renorm_sum)
