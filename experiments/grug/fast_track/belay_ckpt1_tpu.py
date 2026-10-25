@@ -174,12 +174,31 @@ def main() -> None:
     parser.add_argument("--tpu", choices=("v4-32", "v4-64"), default="v4-32")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--config-output", type=Path, required=True)
+    parser.add_argument("--profile-start-step", type=int)
+    parser.add_argument("--profile-steps", type=int, default=10)
     # Training deliberately uses the upstream complete schedule, not a shortened
     # optimizer schedule hidden inside a smoke configuration.
     parser.add_argument("--run", action="store_true")
     args = parser.parse_args()
     tokenizer = verified_tokenizer(args.tokenizer)
     config = build_config(args.run_id, args.output_path, tokenizer, args.tpu, args.seed)
+    if args.profile_start_step is not None:
+        if args.profile_start_step < 0 or args.profile_steps <= 0:
+            parser.error("Profiling requires a nonnegative start step and a positive number of steps")
+        trainer = config.trainer.trainer
+        trainer = dataclasses.replace(
+            trainer,
+            log_dir=args.config_output.parent / "logs",
+            profiler=dataclasses.replace(
+                trainer.profiler, enabled=True, start_step=args.profile_start_step, num_steps=args.profile_steps
+            ),
+        )
+        config = dataclasses.replace(
+            config,
+            trainer=dataclasses.replace(
+                config.trainer, trainer=trainer, hlo_dump_path=f"{args.output_path}/train-step.mlir"
+            ),
+        )
     validate_recipe(config)
     args.config_output.parent.mkdir(parents=True, exist_ok=True)
     with args.config_output.open("w") as file:
