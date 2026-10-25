@@ -29,6 +29,7 @@ from skyrl_train.utils.tracking import Tracking
 from skyrl_train.training_batch import TrainingInputBatch, TrainingOutputBatch
 from skyrl_train.rollouts.buffer import RolloutGroup
 from skyrl_train.rollouts.context import TrainingContext, TrainingContextState
+from skyrl_train.rollouts.sandbox_health import rollout_health_metrics
 from skyrl_train.trajectory_selection import trajectory_selector_from_config
 from skyrl_train.trajectory_runners.base import (
     TrajectoryBatch,
@@ -1388,6 +1389,8 @@ class RayPPOTrainer:
             self._update_step_performance_metrics(
                 training_input, core_seconds=core_seconds, cycle_started=cycle_started
             )
+            # After the step-end callbacks, so an evaluation wave's readings land in its own step.
+            self.all_metrics.update(await rollout_health_metrics(self.trajectory_runner, self.eval_trajectory_runner))
 
             if self._control.should_log:
                 log_payload = {
