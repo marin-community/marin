@@ -8,6 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from experiments.grug.belay_tpu.gather_layout import packed_gather
 from experiments.grug.belay_tpu.local_movement import combine_expert_order
 from experiments.grug.belay_tpu.routing_tpu import (
     accepted_assignments_cutoff,
@@ -110,3 +111,13 @@ def test_expert_order_combine_matches_weighted_sum_and_derivatives(topk, dtype, 
         np.testing.assert_allclose(
             np.asarray(got, np.float32), np.asarray(want, np.float32), rtol=tolerance, atol=tolerance
         )
+
+
+@pytest.mark.parametrize("barrier", [False, True])
+def test_packed_gather_preserves_bf16_bits_with_repeated_rows(barrier):
+    bits = np.random.default_rng(419).integers(0, 65536, size=(17, 256), dtype=np.uint16)
+    rows = jax.lax.bitcast_convert_type(jnp.asarray(bits), jnp.bfloat16)
+    indices = jnp.asarray([0, 16, 0, 7, 2], jnp.int32)
+    result = packed_gather(rows, indices, barrier=barrier)
+    actual = np.asarray(jax.lax.bitcast_convert_type(result, jnp.uint16))
+    np.testing.assert_array_equal(actual, bits[np.asarray(indices)])

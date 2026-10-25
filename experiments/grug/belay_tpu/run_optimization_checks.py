@@ -35,6 +35,7 @@ def main():
             "local-relu2",
             "expert-collectives",
             "expert-gradient",
+            "gather-layout",
             "local-movement-kernel",
             "local-movement",
             "local-gradient",
@@ -82,6 +83,7 @@ def main():
         "saved-relu2-kernel": ("saved_moe_check", ["--fused-relu2"]),
         "expert-collectives": ("expert_collective_check", []),
         "expert-gradient": ("expert_gradient_check", []),
+        "gather-layout": ("gather_layout_check", []),
         "local-movement-kernel": ("local_movement_check", []),
         "local-movement": (
             "belay_ckpt1_tpu_update_check",
@@ -142,7 +144,8 @@ def main():
         with (output / "diagnostic-phases.jsonl").open("a") as file:
             file.write(json.dumps(record) + "\n")
         if (
-            name in ("saved-relu2-kernel", "expert-collectives", "local-movement-kernel", "expert-gradient")
+            name
+            in ("saved-relu2-kernel", "expert-collectives", "local-movement-kernel", "expert-gradient", "gather-layout")
             and result.returncode != 0
         ):
             break
