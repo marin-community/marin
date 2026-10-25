@@ -1,0 +1,97 @@
+{
+  "phase": "paired rejection frontier, fresh confirmation",
+  "frozen_at": "2026-10-24T05:05:53.502091+00:00",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "trial_ids": [
+    7,
+    8,
+    9
+  ],
+  "active_experts": [
+    8,
+    1
+  ],
+  "horizons": [
+    256,
+    512
+  ],
+  "checkpoint_step": 1024,
+  "checkpoints": {
+    "0": {
+      "uri": "s3://marin-rno2a/experiments/benfeuer/tied-drafter/endpoints/tied-drafter-endpoint-main-s0-v4-20261024/initial-full-state.eqx",
+      "bytes": 23381003228,
+      "step": 1024,
+      "etag": "\"970fae9f2593eb09f7cd38d078034af1-354\""
+    },
+    "1": {
+      "uri": "s3://marin-rno2a/experiments/benfeuer/tied-drafter/endpoints/tied-drafter-endpoint-main-s1-v4-20261024/initial-full-state.eqx",
+      "bytes": 23381003228,
+      "step": 1024,
+      "etag": "\"d7ef2785c3caf85d6ed16bdd12a8a12f-354\""
+    },
+    "2": {
+      "uri": "s3://marin-rno2a/experiments/benfeuer/tied-drafter/endpoints/tied-drafter-endpoint-main-s2-v4-20261024/initial-full-state.eqx",
+      "bytes": 23381003228,
+      "step": 1024,
+      "etag": "\"3b06872074914b4de1a9a7d3e7a9422a-354\""
+    }
+  },
+  "microbatches": 2,
+  "minimum_loss_gain": 1e-06,
+  "training_batch_start": 120000,
+  "training_window_stride": 2048,
+  "check_batch_start": 160000,
+  "fresh_batch_start": 161000,
+  "monitor_batches": 4,
+  "wandb_project": "tied-drafter-endpoints",
+  "implementation_sha256": {
+    "experiments/grug/tied_drafter_endpoints.py": "5a34c61e1c2c17e550d6bbec61c869ce69ba62ff49f1d282b87780ea42489ffc",
+    "experiments/grug/tied_drafter/runtime.py": "b357ce1c2b2e20cc3e5b97bbd82177e11db5eaf79b0ecf278383baaa5034bb44",
+    "experiments/grug/fast_track/model.py": "5f39c7bad449de5874a46190d43f87d4063121411d3a3547a20112903477455b",
+    "experiments/grug/fast_track/train.py": "b106ff0b529e15a4779431491d6b162f603d431547cbd06f6fcec6836d333f21",
+    "experiments/grug/fast_track/optimizer.py": "c98dc6b6572fc86d39ca70c5ae8681bbc799313d045461fe65beedcaff9624cc",
+    "experiments/grug/fast_track/grugmuon_stacked.py": "3fbec01adbdd1b86190e6f9095b6a3aa522c9b630991d64161dd9c6d3effd798",
+    "lib/levanter/src/levanter/grug/_moe/scatter.py": "aa5e0b2c2b8551df0c94b60837452cbeed5a6d0c33537b6866117f51ba1adc6d",
+    "experiments/grug/noise_belay/candidate11_control_probe.py": "cee9b0c5dbf27ffb5505bf6da789191d517d9087a1bfd235bd1d2ef2b7a2870e",
+    "experiments/grug/noise_belay/candidate11_data.py": "2e2549568b534e448f2199345ac8eeb244650972fac98026daf3aa63bdf40c55",
+    "experiments/grug/tied-large-first-batch.json": "ce8a47efdf887def3b5a445e84d3724767b49bec6d35817c8d18d35dac7f81af",
+    "experiments/grug/tied_drafter_frontier.py": "e205887babc7e758083bece5935e63dc6e23921caab8bc7e45e989b83d0ad35a",
+    "experiments/grug/tied_drafter_latency.py": "02305abdd1087cc48b38c3f99136a257d66b816241f160e7bb5d24beac32c0db",
+    "experiments/grug/tied_drafter/calibration.py": "7985c32df4209ca2c2647901f5aa778a184be338a6b592b0e89604a7ba7a8604",
+    "experiments/grug/tied_drafter/coordinates.py": "c1fad16cc8e0acd3fffcf5c6b021b900331a6b2c64d4cb65bd63184fa500765f",
+    "experiments/grug/tied_drafter/audit.py": "e5c44f0bf9cf936ab66f879690a7ea440d0762ae3581f310324933e7bfeacbdc",
+    "experiments/grug/noise_belay/candidate11.py": "5e7c79cd7282ed74dd946f90051fe02d58be671639c006d0b1bc059669a8918d",
+    "experiments/grug/noise_belay/candidate11-reference.json": "c0fa7cb60f8aabac0ce746b92c5a4d21f16a828f60ce53d0dd4fbd1a24fee2f5",
+    "experiments/grug/tied_drafter_activation/model.py": "4d43bdf337d3dc0a9cdb43622cc546b796d7046de484f967d4101db6f4a3864d",
+    "experiments/grug/tied_drafter_approximations.py": "bef062d274a6b850099e51f150d0272f3464238cca17e17f1975b90c4957b4fa",
+    "experiments/grug/tied_replica_sanity.py": "98099b29a6a363a3505bde69ee5d4a0396fe9051d466db242de036a4f898bd6a",
+    "experiments/grug/tied_replica_sizes.py": "6a4df0d9c983a61e1ebc387f6ad2fdc67c87bffd72a64c63b82e7d72ee3f6a8b"
+  },
+  "acceptance": "Full eight-expert check loss decrease > max(1e-6, twice the range of three repeated starting-check evaluations). No confidence or speed gate. Full prefix first-choice result; no fallback rescue counted as acceptance.",
+  "clock_policy": "Every independent branch restores checkpoint optimizer step1024 and complete Muon/Adam, EMA and pending quantile state. Optimizer advances to1024+horizon. Training data indices are new window offsets and deliberately do not set the optimizer clock. Schedule remains2698.",
+  "state_policy": "Same complete state coordinates for all expert counts; native evaluation applies pending quantile values. Independent on-device copies, exact input equality and retained-source isolation after donated updates. Native output bitwise determinism is not assumed.",
+  "comparison": "Matched native and selected draft trajectories run on the same allocation. Nested horizons share a trajectory. Any extra expert/horizon combinations are diagnostic only and cannot replace the preselected confirmation cells.",
+  "measurement": "Check batch excluded from training; four fresh monitor batches excluded from selection. All are unused windows of the same pretraining stream. This is an independent-checkpoint screen, not continuing accepted-block training.",
+  "failure_policy": "Nonfinite draft training loss stops that trajectory and marks all unreached horizons rejected, separately labeled. Nonfinite endpoint check rejects that prefix. Nonfinite native loss/evaluation aborts the run for diagnosis. Exceptions are not converted to rejections.",
+  "screen_rule": "Fresh confirmation pools all36 unique seed/window pairs per preselected cell. At most three rejections is <=10%; four or more exceeds10%. Do not replace a failed candidate after viewing confirmation outcomes.",
+  "expansion_rule": "After the complete screen: test one active expert on the same windows if two experts pass at any horizon. Extend the longest passing configuration and its next-faster tested neighbor to1024/1536 updates if512 remains feasible; always include an eight-expert native reference. The maximum1536 ends at optimizer step2560, inside schedule2698. Do not assume rejection is monotonic in horizon or expert count. If no boundary is found, report tested architectural/schedule limits.",
+  "confirmation_rule": "Freeze selection after screening/expansion, before fresh confirmation results. Confirm the fastest passing setting by median measured update time per proposed update and the nearest observed failing neighbor, if present. Use twelve new windows per seed, trial ids4..15 (36 trials total per setting). Four rejections exceeds10%; up to three is <=10%. Report acceptance, fresh loss vs start/native and complete work costs. No claim of population rejection guarantees.",
+  "cost": "Report synchronized updates, baseline/candidate checks, calibration, monitoring, state copies, data, restore and compilation separately; include whole-job GPU allocation. Full generation is charged even for rejected prefixes. Earlier prefix checks are diagnostic overhead for a hypothetical single-horizon policy.",
+  "authorization": "User requested longer blocks/faster drafters after completed current batch; RNO2A interactive, no cumulative budget gating, at most256 H100 concurrently.",
+  "launch_decision": "frontier-confirmation-selection-v1.json",
+  "confirmation_cells": [
+    {
+      "active_experts": 1,
+      "horizon": 512
+    },
+    {
+      "active_experts": 1,
+      "horizon": 256
+    }
+  ],
+  "partition_of": "frontier-confirmation-v1.json"
+}

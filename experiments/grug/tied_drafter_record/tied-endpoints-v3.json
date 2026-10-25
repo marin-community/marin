@@ -1,0 +1,63 @@
+{
+  "frozen_at": "2026-10-24T01:29:42.929391+00:00",
+  "experiment": "Endpoint acceptance with six active experts and complete native optimizer state",
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "warmup_updates": 1024,
+  "episodes": 12,
+  "draft_active_experts": 6,
+  "hero_active_experts": 8,
+  "prefixes": [
+    8,
+    16,
+    32,
+    64
+  ],
+  "fallback_order": [
+    64,
+    32,
+    16,
+    8
+  ],
+  "microbatches": 2,
+  "minimum_loss_gain": 1e-06,
+  "acceptance": "Full eight-expert token-weighted check loss reduction > max(1e-6, twice initial repeated-forward range); no confidence or speed gate. Refresh check each episode.",
+  "monitor_batches": 4,
+  "anchor_batch_start": 80000,
+  "check_batch_start": 70000,
+  "fresh_batch_start": 90000,
+  "recovery_batch_start": 95000,
+  "recovery_steps": [
+    0,
+    1,
+    4,
+    16,
+    64,
+    128
+  ],
+  "checkpoint_policy": "initial_and_final",
+  "wandb_project": "tied-drafter-endpoints",
+  "implementation_sha256": {
+    "experiments/grug/tied_drafter_endpoints.py": "6247906daee1a58a794af06190c834feb12cd90ea2b2f3213da4f0f26ff08b5d",
+    "experiments/grug/tied_drafter/runtime.py": "b357ce1c2b2e20cc3e5b97bbd82177e11db5eaf79b0ecf278383baaa5034bb44",
+    "experiments/grug/fast_track/model.py": "5f39c7bad449de5874a46190d43f87d4063121411d3a3547a20112903477455b",
+    "experiments/grug/fast_track/train.py": "b106ff0b529e15a4779431491d6b162f603d431547cbd06f6fcec6836d333f21",
+    "experiments/grug/fast_track/optimizer.py": "c98dc6b6572fc86d39ca70c5ae8681bbc799313d045461fe65beedcaff9624cc",
+    "experiments/grug/fast_track/grugmuon_stacked.py": "3fbec01adbdd1b86190e6f9095b6a3aa522c9b630991d64161dd9c6d3effd798",
+    "lib/levanter/src/levanter/grug/_moe/scatter.py": "aa5e0b2c2b8551df0c94b60837452cbeed5a6d0c33537b6866117f51ba1adc6d",
+    "experiments/grug/noise_belay/candidate11_control_probe.py": "cee9b0c5dbf27ffb5505bf6da789191d517d9087a1bfd235bd1d2ef2b7a2870e",
+    "experiments/grug/noise_belay/candidate11_data.py": "2e2549568b534e448f2199345ac8eeb244650972fac98026daf3aa63bdf40c55",
+    "experiments/grug/tied-large-first-batch.json": "ce8a47efdf887def3b5a445e84d3724767b49bec6d35817c8d18d35dac7f81af"
+  },
+  "state_policy": "Restore accepted prefix complete Muon/Adam moments, step, EMA and pending quantile betas into eight-expert interpretation; use pending betas for endpoint loss; rollback all state if rejected.",
+  "clock_policy": "Data and optimizer clock advance by accepted prefix plus one native update; discarded proposal work remains charged. Native stochastic routes disabled in this recipe; any step-derived RNG follows restored step.",
+  "baseline": "Paired native continuation from identical full state, identical data through accepted cursor; same two-microbatch accumulation and schedule2698.",
+  "measurement": "Fixed monitor batches and independent per-episode fresh batches excluded from selection; report paired loss differences over episodes and native-only recovery. These are unused windows of the pretraining stream, not a separate benchmark corpus.",
+  "cost": "Measure synchronized update, acceptance, on-device state-copy and diagnostic costs separately; record total allocated GPU-time.",
+  "scope": "Three initialization seeds, original 1.03B Belay; larger model replication remains a possible later extension, not required for this initial trajectory study.",
+  "snapshot_policy": "Preserve independently copied device buffers; full state stays sharded on eight GPUs. No host staging of proposal prefixes.",
+  "revision": "v3: add within-process complete snapshot and native-update equality diagnostic, and W&B recovery logging. Same learning algorithm as v2."
+}

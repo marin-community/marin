@@ -1,0 +1,27 @@
+{
+  "frozen_at": "2026-10-23T22:32:36.459605+00:00",
+  "status": "frozen before submission",
+  "variants": [
+    "identity",
+    "k4_gain0.75",
+    "k1_gain0.75",
+    "fp4_expert_inputs",
+    "k4_fp4_inputs",
+    "fp4_expert_weights",
+    "k4_fp4_weights"
+  ],
+  "batch_indices": [
+    54000,
+    54001,
+    54002,
+    54003
+  ],
+  "source_sha256": {
+    "tied_drafter_latency.py": "3e779f90f2c777210c1d83271352439ddf6c7352adc064f61106b4c1e12b0be5",
+    "tied_drafter_approximations.py": "bef062d274a6b850099e51f150d0272f3464238cca17e17f1975b90c4957b4fa",
+    "tied_drafter_activation/model.py": "f8c90323b68ace2569e0964002b1adb7acde25cbcf3ebce736ad058a0ca7261c"
+  },
+  "scope": "Fresh confirmation of one-expert and FP4-input candidates, plus predeclared FP4 expert-weight error pilot. No weight adaptation.",
+  "fp4_weights": "Quantize/dequantize routed expert matrices once before timing; stores decoded FP32 weights and computes BF16 GEMMs. Tests weight-error tolerance only; neither packed weight residency nor native FP4 GEMM speed is measured.",
+  "selection": "One expert gives the fastest routed candidate; FP4 input fidelity remained high in calibration. Other activation/normalization/branch-removal candidates were dominated by routed expert-count reduction."
+}

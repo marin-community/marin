@@ -1,0 +1,73 @@
+{
+  "frozen_at": "2026-10-24T05:05:53.468004+00:00",
+  "rule_sha256": "031c2754048043873539174a07fd697604552deb9c9e8f3e90a8b713777748a6",
+  "sources": [
+    {
+      "path": "measurements/frontier-screen-summary.json",
+      "sha256": "eb229ee336e18e7544ce4fa96eeb468e0de482dd62ad5b0b8e6b9a5249ee0279"
+    },
+    {
+      "path": "measurements/frontier-k1-summary.json",
+      "sha256": "4afae70178d7f67cb19042283db80770cfbeb8f1fc4cbfe44db60eb021ae62fb"
+    },
+    {
+      "path": "measurements/frontier-long-summary.json",
+      "sha256": "dd7ccb6968da6eca4a70caccfdf4c1f70199027ffc107937f7907348d2a0230d"
+    }
+  ],
+  "passing_candidate": {
+    "active_experts": 1,
+    "horizon": 512,
+    "trials": 12,
+    "rejected": 1,
+    "rejection_rate": 0.08333333333333333,
+    "passes_observed_10_percent_rule": true,
+    "rejections_by_seed": {
+      "0": 0,
+      "1": 0,
+      "2": 1
+    },
+    "rejected_with_passing_shorter_prefix": 0,
+    "nonfinite_fresh": 0,
+    "mean_fresh_gain": 0.01184077656671434,
+    "mean_fresh_gain_vs_native": -0.10476533824809546,
+    "median_seconds_per_executed_update": 0.17774392403225647,
+    "median_update_time_ratio": 0.7637893256177708,
+    "median_single_horizon_cost_ratio": 0.7664456220602198
+  },
+  "failing_neighbor": {
+    "active_experts": 1,
+    "horizon": 256,
+    "trials": 12,
+    "rejected": 12,
+    "rejection_rate": 1.0,
+    "passes_observed_10_percent_rule": false,
+    "rejections_by_seed": {
+      "0": 4,
+      "1": 4,
+      "2": 4
+    },
+    "rejected_with_passing_shorter_prefix": 0,
+    "nonfinite_fresh": 0,
+    "mean_fresh_gain": -0.029772257473875168,
+    "mean_fresh_gain_vs_native": -0.09656122413647002,
+    "median_seconds_per_executed_update": 0.17756664995602023,
+    "median_update_time_ratio": 0.7645099907526884,
+    "median_single_horizon_cost_ratio": 0.7697294035333575
+  },
+  "confirmation_trial_ids": [
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "scope": "Observed screen ranking; fresh confirmation pending. This is not a production-speed ranking."
+}

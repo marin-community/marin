@@ -1,0 +1,26 @@
+{
+  "frozen_at": "2026-10-24T00:24:33.587374+00:00",
+  "variants": [
+    "identity",
+    "fp8_dispatch",
+    "fp4_expert_inputs",
+    "fp4_expert_weights",
+    "k6_gain1",
+    "gate_half",
+    "k6_gain0.75"
+  ],
+  "batch_indices": [
+    57000,
+    57001,
+    57002,
+    57003
+  ],
+  "source_sha256": {
+    "tied_drafter_latency.py": "02305abdd1087cc48b38c3f99136a257d66b816241f160e7bb5d24beac32c0db",
+    "tied_drafter_activation/model.py": "4d43bdf337d3dc0a9cdb43622cc546b796d7046de484f967d4101db6f4a3864d",
+    "tied_drafter_approximations.py": "bef062d274a6b850099e51f150d0272f3464238cca17e17f1975b90c4957b4fa"
+  },
+  "model_config_sha256": "4eacc7dab8c491dcb0c62bd4be78068f5f797cfe0f1a42477b73d7bda5bbf76b",
+  "comparison": "Run the same frozen six configurations on the original small checkpoint and the trained 12-block/1024-expert checkpoint; same fresh evaluation batches and eight-H100 mesh. No hyperparameter tuning on these scores.",
+  "selection_file_sha256": "6a97279307fd760fdb3107f2607a7197903947458d54d4518b21094ba17b7ddd"
+}
