@@ -4,6 +4,7 @@
 """Compare saved and recomputed expert pullbacks without optimizer updates."""
 
 import functools
+from itertools import pairwise
 
 import jax
 import jax.numpy as jnp
@@ -11,6 +12,7 @@ import numpy as np
 import pytest
 from levanter.grug._moe.ep_ragged_all_to_all import _RaggedDotExpertMlp, _SavedRaggedDotExpertMlp
 
+from experiments.grug.belay_tpu.expert_gradient_tpu import expert_weight_gradient
 from experiments.grug.belay_tpu.saved_relu2_adapter import SavedRelu2ExpertMlp
 
 
@@ -64,3 +66,20 @@ def test_fused_saved_expert_masks_padding_and_returns_router_gradient(dtype, act
         got, want = np.asarray(got, np.float32), np.asarray(want, np.float32)
         assert np.isfinite(got).all()
         np.testing.assert_allclose(got, want, rtol=0, atol=tolerance * max(float(np.abs(want).max()), 1e-6))
+
+
+@pytest.mark.parametrize("dtype", [jnp.float32, jnp.bfloat16])
+@pytest.mark.parametrize("sizes", [(1, 0, 31, 96), (0, 0, 64, 64), (128, 0, 0, 0)])
+def test_partitioned_expert_weight_gradients_match_independent_products(dtype, sizes):
+    rng = np.random.default_rng(417)
+    x = jnp.asarray(rng.normal(scale=0.1, size=(128, 128)), dtype)
+    dy = jnp.asarray(rng.normal(scale=0.1, size=(128, 128)), dtype)
+    groups = jnp.asarray(sizes, jnp.int32)
+    with jax.default_matmul_precision("highest"):
+        actual = expert_weight_gradient(x, dy, groups, tile_rows=128, interpret=True)
+    host_x, host_dy = np.asarray(x, np.float64), np.asarray(dy, np.float64)
+    boundaries = np.cumsum([0, *sizes])
+    expected = np.stack([host_x[lo:hi].T @ host_dy[lo:hi] for lo, hi in pairwise(boundaries)])
+    tolerance = 1e-4 if dtype == jnp.float32 else 2e-2
+    assert np.isfinite(actual).all()
+    np.testing.assert_allclose(actual, expected, rtol=tolerance, atol=tolerance)
