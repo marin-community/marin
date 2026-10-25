@@ -29,7 +29,7 @@ import torch
 from rigging.filesystem.buckets import filesystem_for
 
 from experiments.interp.snowball_identity.prompts import SNOWBALL_V01, load_tokenizer
-from experiments.interp.snowball_identity.sequences import LONG_TOKENS, build_sequences
+from experiments.interp.snowball_identity.sequences import LONG_TOKENS, Sequence, build_sequences
 
 MIN_PROB = 1e-3
 NEAR_TIE = 0.1
@@ -39,6 +39,18 @@ WINDOW = 2048
 def read(path: str) -> bytes:
     fs, local = filesystem_for(path)
     return fs.cat_file(local)
+
+
+def stored_sequences(positions_path: str) -> list[Sequence]:
+    """The sequences of a stored ``positions.pt``, with its exact token ids, in stored order.
+
+    The group is the id's prefix (``check``, ``contrastive``, ``long``). Use these, not a fresh ``build_sequences``,
+    as model inputs when comparing against the pinned #298 reference."""
+    stored = torch.load(io.BytesIO(read(positions_path)), map_location="cpu")
+    return [
+        Sequence(sequence_id, sequence_id.split("|")[0], tuple(record["tokens"]))
+        for sequence_id, record in stored.items()
+    ]
 
 
 def quantile(values: list[float], q: float) -> float:

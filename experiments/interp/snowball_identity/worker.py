@@ -46,9 +46,9 @@ Spec format (JSON). ``id`` is optional; ``submit`` makes one from the time.
 ``{"command": "edit_memit", "layers": [L, ...], "module": ..., "key_prompts": PATH, "preserve_prompts": PATH, ...}``
     A multi-layer MEMIT / AlphaEdit edit, rank up to the number of keys per layer (``memit.edit_memit``). The
     model is unchanged after the spec.
-``{"command": "router_rounding", "identity": PATH}``
-    Per layer, top-k routes of the fixed #298 sequences with the native FP32 router bias vs the BF16-rounded bias
-    on the same router input (``routing.router_rounding``).
+``{"command": "router_rounding", "positions": PATH}``
+    Per layer, top-k routes of the pinned #298 sequences (the stored token ids of ``positions.pt``) with the native
+    FP32 router vs BF16-rounded bias and logits on the same router input (``routing.router_rounding``).
 
 Prompt rows use ``prompts.py``'s format: ``{"id", "messages" | "text", "chat_template_kwargs"?, "prefill"?,
 "targets"?}``.
