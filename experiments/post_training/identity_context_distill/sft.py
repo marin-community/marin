@@ -131,6 +131,23 @@ def check_source_metadata_receipt(expected: dict, config_bytes: bytes, generatio
         raise ValueError("Regional source metadata differs from the approved receipt")
 
 
+def check_runtime_model(model: SnowballConfig, source_config: dict) -> None:
+    """Allow only the runtime router-dot exception to differ from the source model.
+
+    This checks architecture, not authorization of the precision exception. The
+    pre-update routing gate must separately verify the measured trigger.
+    """
+    expected = source_model_config(source_config)
+    actual = replace(
+        model,
+        reference_checkpoint=BASE_MODEL,
+        tokenizer=BASE_MODEL,
+        router_dot_fp32=expected.router_dot_fp32,
+    )
+    if actual != expected:
+        raise ValueError("Runtime model architecture differs from the native source")
+
+
 def check_runtime_recipe(config: TrainLmConfig, *, source_config: dict, source_generation_config: dict) -> None:
     """Check the recipe after distributed JAX initialization, before loading weights."""
     trainer = config.trainer
@@ -140,8 +157,9 @@ def check_runtime_recipe(config: TrainLmConfig, *, source_config: dict, source_g
     assert trainer.compute_axis_mapping["position"] == "context"
     assert isinstance(config.model, SnowballConfig)
     assert config.train_seq_len == SEQUENCE_LENGTH
-    expected_model = source_model_config(source_config)
-    assert replace(config.model, reference_checkpoint=BASE_MODEL, tokenizer=BASE_MODEL) == expected_model
+    check_runtime_model(config.model, source_config)
+    if config.model.router_dot_fp32:
+        assert trainer.compute_dtype_overrides == {"router_bias": "float32"}
     assert config.use_hf_model_config is True
     assert config.hf_generation_eos_token_ids == source_generation_eos(source_config, source_generation_config)
     assert trainer.frozen_parameter_storage == FrozenParameterStorage.NATIVE

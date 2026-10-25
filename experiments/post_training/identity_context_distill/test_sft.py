@@ -23,6 +23,7 @@ from experiments.post_training.identity_context_distill.sft import (
     BASE_MODEL,
     check_export_metadata,
     check_restored_progress,
+    check_runtime_model,
     check_source_metadata_receipt,
     identity_sft_config,
     source_export_overrides,
@@ -227,11 +228,13 @@ def test_continuation_keeps_schedule_and_explicit_native_restore(tmp_path):
 def test_global_microbatch_unequal_token_masks_matches_unsharded_reference():
     run_on_cpu_devices(
         """
+        from dataclasses import replace
         import equinox as eqx
         import haliax as hax
         import jax
         import jax.numpy as jnp
         import numpy as np
+        import pytest
         from levanter.grad_accum import microbatched
         from levanter.models.loss import maybe_fused_next_token_loss
         from experiments.post_training.identity_context_distill.sft import identity_sft_config, check_runtime_recipe
@@ -241,6 +244,11 @@ def test_global_microbatch_unequal_token_masks_matches_unsharded_reference():
                                      **source_arguments())
         trainer = config.trainer
         check_runtime_recipe(config, **source_arguments())
+        enabled = replace(config, model=replace(config.model, router_dot_fp32=True))
+        with pytest.raises(AssertionError):
+            check_runtime_recipe(enabled, **source_arguments())
+        enabled = replace(enabled, trainer=replace(trainer, compute_dtype_overrides={"router_bias": "float32"}))
+        check_runtime_recipe(enabled, **source_arguments())
         assert trainer.microbatch_size == trainer.train_batch_size == 8
         mesh = trainer.device_mesh
         mapping = trainer.compute_axis_mapping
@@ -286,6 +294,20 @@ def test_global_microbatch_unequal_token_masks_matches_unsharded_reference():
         """,
         device_count=32,
     )
+
+
+@pytest.mark.parametrize("router_dot_fp32", [False, True])
+def test_runtime_router_dot_exception_preserves_source_architecture(router_dot_fp32):
+    sources = source_arguments()
+    source = sources["source_config"]
+    before = json.dumps(source, sort_keys=True)
+    model = dataclasses.replace(source_model_config(source), router_dot_fp32=router_dot_fp32)
+    check_runtime_model(model, source)
+    for changes in ({"qk_mult": 1.7}, {"max_seq_len": 8192}, {"num_experts": 128}):
+        with pytest.raises(ValueError, match="architecture differs"):
+            check_runtime_model(dataclasses.replace(model, **changes), source)
+    assert json.dumps(source, sort_keys=True) == before
+    assert source_model_config(source).router_dot_fp32 is False
 
 
 def test_source_derived_context_scaling_and_export_round_trip():
