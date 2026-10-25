@@ -790,7 +790,11 @@ def _apply_qb_betas(model: Transformer, qb_betas: jax.Array) -> Transformer:
         # Dense blocks have no router (QB routing dropped), so there is no router_bias to set.
         return model
     new_bias = -qb_betas
-    new_bias = new_bias - jnp.mean(new_bias, axis=-1, keepdims=True)
+    # Center the real experts' biases only: the null columns (``moe_null_layers``) hold an absolute null bias
+    # (``null_controller=qb``) or zero.
+    num_experts = model.config.num_experts
+    real = new_bias[:, :num_experts]
+    new_bias = new_bias.at[:, :num_experts].set(real - jnp.mean(real, axis=-1, keepdims=True))
     # qb_betas are in layer order; each stack takes the rows of its own layers.
     # A stack with fewer experts than the widest layer (final_num_experts) takes only its own columns.
     per_stack = [

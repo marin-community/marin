@@ -196,7 +196,13 @@ _ROUTED_COMBINE = "routed_combine"
 _SAVED_ROUTED = "saved_routed"
 # Per-layer moe_compress / moe_shadow_width loss and metrics, stacked over layers like the router stats.
 _COMPRESS_LOSS = "compress_loss"
-_DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA)
+# ``null_controller=qb`` per-layer per-token ``[T]`` stats: the total combine weight of the selected real experts
+# and their count (stop-gradient; token dumps), and the ``null_aux`` term's real weight (differentiable, read by the
+# loss; router-only gradient).
+NULL_REAL_WEIGHT = "null_real_weight"
+NULL_REAL_SLOTS = "null_real_slots"
+NULL_AUX_TERM = "null_aux_term"
+_DIFFERENTIABLE_STATS = (_COMPRESS_LOSS, _LM_HEAD_EXTRA, NULL_AUX_TERM)
 _COMPRESS_PREFIX = "compress/"
 # Per-layer branch-output max |x| and RMS (``layer_output_stats``), stacked over layers like the router stats.
 _OUTSTAT_PREFIX = "outstat/"
@@ -469,6 +475,28 @@ class RouterCombine(StrEnum):
     SQRT_SOFTPLUS_RAW = "sqrt_softplus_raw"
     """``sqrt(softplus(logit))`` times a constant (``routing_renorm_sum / (K sqrt(log 2))``, so the sum matches at
     init), no renormalization: a token's total expert weight can vary."""
+
+
+class NullController(StrEnum):
+    """How ``moe_null_layers`` set the null experts' selection bias."""
+
+    COLUMN_QB = "column_qb"
+    """Per-column: bias 0 (free) or, with ``moe_null_target_frac``, QB balances every null column; null slots are
+    dispatched to real experts at weight 0."""
+    QB = "qb"
+    """One shared null bias per layer, solved each step from the routing margins (``null_qb_bias``) so that the
+    batch's mean real slots per token is ``null_target_real_experts`` (applied next step). Null slots carry the
+    invalid expert id (never dispatched) and the ragged EP buffers are sized for the real-slot target."""
+
+
+class NullAux(StrEnum):
+    """Per-token weighting ``w_t`` of the null aux ``null_aux_weight * sum_layers mean_t[w_t * R_t]`` over the
+    ``moe_null_layers``, ``R_t`` the token's total combine weight on its selected real experts (gradient to the
+    router matrix only); ``w_t`` is stop-gradient and normalized to mean 1 over the batch's loss tokens."""
+
+    NONE = "none"
+    PTARGET = "ptarget"
+    """``exp(-loss_t)``, the model's probability of the target: confident tokens are pushed hardest to nulls."""
 
 
 class ValueEmbeds(StrEnum):
@@ -797,6 +825,16 @@ class GrugModelConfig:
     """QB treatment of the null experts on ``moe_null_layers``. None: free (bias 0, the router picks the split);
     a float ``f``: QB sends ``f`` of the slots to them on average (``2K f`` null and ``2K (1 - f)`` real slots per
     token), so the router decides which tokens use fewer real experts, not how many on average."""
+    null_controller: NullController = NullController.COLUMN_QB
+    null_target_real_experts: float | None = None
+    """``null_controller=qb``: the target mean real (non-null) slots per token on each ``moe_null_layers`` layer
+    (of ``2 * num_experts_per_token``)."""
+    null_aux: NullAux = NullAux.NONE
+    null_aux_weight: float = 0.0
+    """``lambda`` of the ``null_aux`` term (per null layer)."""
+    no_shared_expert_layers: tuple[int, ...] = ()
+    """Layers that skip the shared experts (their routed experts only). The shared-expert parameters still exist
+    in every layer of a stack (stacks need one shape) but these layers never read them (zero gradients)."""
     # LatentMoE (arXiv 2601.18089); latent RMSNorm per issue #6822.
     latent_dim: int | None = 256
     latent_out_dim: int | None = None
@@ -957,6 +995,10 @@ class GrugModelConfig:
     extra_mlp_frac: float = 0.25
     attn_res_kv_source_layers: int | None = None
     """How many leading layers' outputs ``attn_res_kv_layers`` may read (None: ``num_layers // 2``)."""
+    attn_res_kv_strict: bool = False
+    """On ``attn_res_kv_layers``, everything a token contributes to later tokens reads the KV mix, not only the K/V
+    projections: KDA's decay, beta and write / erase gates (the state update) and MLA's value-embedding gate. Only
+    the query side (q and its SConv, the Inkling bias, the output gates) keeps the attention gate's mix."""
     attn_res_partial_scale: bool = False
     """Learned scalars ``(a_attn, a_mlp)`` per layer, init 1: each sublayer adds ``a * out`` to its block's partial,
     so a block (and the MLP gate's in-layer partial) weights its attention and MLP outputs."""
@@ -1228,6 +1270,32 @@ class GrugModelConfig:
                 raise ValueError(
                     f"moe_null_target_frac needs moe_null_layers and to be in (0, 1), got {self.moe_null_target_frac}"
                 )
+        if self.attn_res_kv_strict and not self.attn_res_kv_layers:
+            raise ValueError("attn_res_kv_strict needs attn_res_kv_layers")
+        if self.no_shared_expert_layers:
+            if self.scan_layers or not self.attn_res or self.moe_dispatch == MoeDispatch.HERO_LEVANTER:
+                raise ValueError("no_shared_expert_layers needs the unrolled AttnRes loop and the fast_track dispatch")
+            if bad := [i for i in self.no_shared_expert_layers if not 0 <= i < self.num_layers]:
+                raise ValueError(f"no_shared_expert_layers {bad} out of range for {self.num_layers} layers")
+        if self.null_controller == NullController.QB:
+            if not self.moe_null_layers or self.moe_null_target_frac is not None:
+                raise ValueError("null_controller=qb needs moe_null_layers and no moe_null_target_frac")
+            target = self.null_target_real_experts
+            if target is None or not 0 < target <= 2 * self.num_experts_per_token:
+                raise ValueError("null_controller=qb needs null_target_real_experts in (0, 2 * num_experts_per_token]")
+            if self.moe_null_renorm_scale != 1.0 or self.moe_null_learned_gain or self.moe_drop_renorm:
+                raise ValueError("null_controller=qb supports neither the null renorm scale / gain nor moe_drop_renorm")
+            if self.moe_implementation != "ragged_all_to_all" or not self.moe_ungated_relu2:
+                raise ValueError("null_controller=qb needs the ragged_all_to_all ungated ReLU^2 experts")
+        elif self.null_target_real_experts is not None:
+            raise ValueError("null_target_real_experts needs null_controller=qb")
+        if (self.null_aux != NullAux.NONE) != (self.null_aux_weight > 0):
+            raise ValueError("null_aux and a positive null_aux_weight go together")
+        if self.null_aux != NullAux.NONE:
+            if self.null_controller != NullController.QB or self.router_combine != RouterCombine.SIGMOID_RENORM:
+                raise ValueError("null_aux needs null_controller=qb and router_combine=sigmoid_renorm")
+            if self.moe_k_layers or self.moe_k_static is not None or self.moe_dynamic_layers:
+                raise ValueError("null_aux does not support per-token or per-layer routed-count masks")
         if self.moe_null_layers:
             if self.scan_layers:
                 raise ValueError("moe_null_layers needs the unrolled layer loop (scan_layers=false)")
@@ -1658,7 +1726,8 @@ class CausalSelfAttention(eqx.Module):
             ve = _embedding_gather(reshard(table, P(None, None)) if self.cfg.value_embed_fsdp else table, token_ids)
             ve = rearrange(ve, "... (n d) -> ... n d", d=head_dim)
             lam = self.ve_lambda.astype(x.dtype)
-            ve_weight = _value_embed_weight(self.cfg.value_embeds, x, self.ve_gate, lam)
+            ve_in = kv_input if self.cfg.attn_res_kv_strict and kv_input is not None else x
+            ve_weight = _value_embed_weight(self.cfg.value_embeds, ve_in, self.ve_gate, lam)
             v = lam[0] * v + ve_weight * reshard(ve, _partition_spec_of(v) or P(_BATCH_AXES, None, None, None))
         return q, k, v, (None), (None)
 
@@ -2189,7 +2258,8 @@ class KimiDeltaAttention(eqx.Module):
         token_ids: Int[Array, "B S"] | None = None,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
         """``kv_input`` (``kv_stream_dim``) is the normed KV side stream that the ``k`` / ``v`` projections
-        (and their SConvs) read instead of ``x``; the erase / write gates, beta and decay stay on ``x``.
+        (and their SConvs) read instead of ``x``; the erase / write gates, beta and decay stay on ``x`` unless
+        ``attn_res_kv_strict``.
         ``proj_inputs`` optionally replaces the input of the ``q`` / ``k`` / ``v`` projections;
         ``no_decay`` / ``no_beta`` (static, per layer) replace g with 0 / beta with 1; ``kv_share`` /
         ``value_residual`` as in ``CausalSelfAttention``. Also returns logging stats (``kda_dd_rope`` rates;
@@ -2197,6 +2267,8 @@ class KimiDeltaAttention(eqx.Module):
         cfg = self.cfg
         head_dim = cfg.inferred_head_dim
         b, s, _ = x.shape
+        # attn_res_kv_strict: the state update (decay, beta, write / erase gates) reads the KV mix too.
+        state_in = kv_input if cfg.attn_res_kv_strict and kv_input is not None else x
 
         proj_inputs = proj_inputs or {}
         # Every projection of x as one block-scaled GEMM: x is quantized once and the GEMM is 4-6x wider. Only under
@@ -2225,12 +2297,14 @@ class KimiDeltaAttention(eqx.Module):
         v = project(self.w_v, self.sconv_v, 2, "v")
         if self.w_write is not None:
             write = (
-                fused["write"] if fused else _proj(cfg, proj_inputs.get("v", x), self.w_write, site=Mxfp8Site.ATTENTION)
+                fused["write"]
+                if fused
+                else _proj(cfg, proj_inputs.get("v", state_in), self.w_write, site=Mxfp8Site.ATTENTION)
             )
             v = v * rearrange(
                 2.0 * jax.nn.sigmoid(write.astype(jnp.float32)), "... (n d) -> ... n d", d=head_dim
             ).astype(v.dtype)
-        a_low = jnp.einsum("bsd,dr->bsr", x, self.w_a_down)
+        a_low = jnp.einsum("bsd,dr->bsr", state_in, self.w_a_down)
         a = jnp.einsum("bsr,re->bse", a_low, self.w_a_up)
         a = rearrange(a, "... (n d) -> ... n d", d=self.dt_bias.shape[-1])
         scale = jnp.exp(self.a_log.astype(jnp.float32))[:, None]
@@ -2240,7 +2314,7 @@ class KimiDeltaAttention(eqx.Module):
         else:
             g = -KDA_MIN_LOG_DECAY * jax.nn.sigmoid(scale * (a.astype(jnp.float32) + self.dt_bias.astype(jnp.float32)))
         assert self.w_beta is not None
-        beta_logits = jnp.einsum("bsd,dn->bsn", x, self.w_beta)
+        beta_logits = jnp.einsum("bsd,dn->bsn", state_in, self.w_beta)
         beta = jax.nn.sigmoid(beta_logits.astype(jnp.float32))
         if no_decay:
             g = jnp.zeros_like(g)
@@ -2260,7 +2334,11 @@ class KimiDeltaAttention(eqx.Module):
             extras["gate_bias"] = reshard(self.dt_bias.astype(jnp.float32), head_spec)
             extra_specs["gate_p"] = extra_specs["gate_bias"] = head_spec
         if self.w_erase is not None:
-            z = fused["erase"] if fused else _proj(cfg, proj_inputs.get("k", x), self.w_erase, site=Mxfp8Site.ATTENTION)
+            z = (
+                fused["erase"]
+                if fused
+                else _proj(cfg, proj_inputs.get("k", state_in), self.w_erase, site=Mxfp8Site.ATTENTION)
+            )
             z = rearrange(z, "... (n d) -> ... n d", d=head_dim)
             erase_logits = z.astype(jnp.float32)
             if cfg.kda_onchip_erase_gate:
@@ -2889,6 +2967,31 @@ class MoEMLP(eqx.Module):
         if router_soft_select.SOFT_SELECT is not None:
             biased_sel = jnp.take_along_axis(router_logits + self.router_bias, selected_experts, axis=-1)
             combine_weights_f = router_soft_select.soft_combine(combine_weights_f, biased_sel)
+        qb_null = null_layer and self.cfg.null_controller == NullController.QB
+        null_stats: dict[str, jax.Array] = {}
+        if self.cfg.null_controller == NullController.QB:
+            # Every layer emits the same per-token stats (the layer loop stacks them); a real-only layer has K real
+            # slots and its whole renormalized weight on them.
+            is_null = selected_experts >= num_real
+            real_weight = jnp.sum(jnp.where(is_null, 0.0, combine_weights_f), axis=-1)
+            real_slots = jnp.sum(~is_null, axis=-1).astype(jnp.float32)
+            active_k = jnp.mean(real_slots)
+            null_stats[NULL_REAL_WEIGHT] = reshard(jax.lax.stop_gradient(real_weight), P(_BATCH_AXES))
+            null_stats[NULL_REAL_SLOTS] = reshard(real_slots, P(_BATCH_AXES))
+            null_stats[f"{_OUTSTAT_PREFIX}null_real_weight"] = jax.lax.stop_gradient(jnp.mean(real_weight))
+            null_stats[f"{_OUTSTAT_PREFIX}null_real_slots_std"] = jnp.std(real_slots)
+            null_stats[f"{_OUTSTAT_PREFIX}null_bias"] = jax.lax.stop_gradient(self.router_bias[num_real]).astype(
+                jnp.float32
+            )
+            if self.cfg.null_aux != NullAux.NONE:
+                aux_term = jnp.zeros_like(real_weight)
+                if qb_null:
+                    # The same real weight on logits whose gradient reaches only the router matrix.
+                    aux_logits = _router_only_grad(router_logits, x_flat, self.router)
+                    aux_weights = jax.nn.sigmoid(jnp.take_along_axis(aux_logits, selected_experts, axis=-1))
+                    aux_weights = aux_weights * (renorm_sum / (jnp.sum(aux_weights, axis=-1, keepdims=True) + 1e-9))
+                    aux_term = jnp.sum(jnp.where(is_null, 0.0, aux_weights), axis=-1)
+                null_stats[NULL_AUX_TERM] = reshard(aux_term, P(_BATCH_AXES))
         combine_weights = combine_weights_f.astype(x.dtype)
         mesh = get_abstract_mesh()
         # Per-token assignments for the routing dump (``Transformer.routing_assignments``); unused (and so
@@ -2914,6 +3017,15 @@ class MoEMLP(eqx.Module):
         # them into fixed bins over the live global range and reading the (1-K/E) quantile.
         if null_layer:
             bank_stats = [self._null_qb_stats(router_logits - bank_alpha[0], selected_experts, mesh)]
+            if qb_null:
+                assert self.cfg.null_target_real_experts is not None
+                solved = null_qb_bias(
+                    biased_logits[:, :num_real], router_logits[:, num_real:], k, self.cfg.null_target_real_experts, mesh
+                )
+                null_stats[f"{_OUTSTAT_PREFIX}null_qb_bias"] = solved
+                # The null columns hold -b: next step's router bias adds b to every null logit.
+                real_beta, lo, hi = bank_stats[0]
+                bank_stats = [(real_beta.at[num_real:].set(-solved), lo, hi)]
         else:
             bank_stats = [
                 qb_beta_hist(
@@ -2930,6 +3042,8 @@ class MoEMLP(eqx.Module):
         if self.cfg.num_null_experts and not null_layer:
             # A real-only layer leaves its (unread) null columns' bias at zero.
             beta = jnp.concatenate([beta, jnp.zeros((self.cfg.num_null_experts,), beta.dtype)])
+            if self.cfg.null_controller == NullController.QB:
+                null_stats[f"{_OUTSTAT_PREFIX}null_qb_bias"] = jnp.zeros((), jnp.float32)
         margin_min = functools.reduce(jnp.minimum, [lo for _, lo, _ in bank_stats])
         margin_max = functools.reduce(jnp.maximum, [hi for _, _, hi in bank_stats])
         router_stats["qb_beta"] = beta
@@ -2955,7 +3069,18 @@ class MoEMLP(eqx.Module):
             routed_input = self._matryoshka_latent(routed_input, x_flat, router_stats)
         bank_mlps = [self.expert_mlp]
         real_selected, real_weights, null_out = selected_experts, combine_weights, None
-        if null_layer:
+        capacity_topk = None
+        if qb_null:
+            # A null slot carries the out-of-range expert id that every MoE backend treats as an invalid
+            # assignment (never dispatched, never counted against capacity) and combine weight zero; its share of
+            # the renormalized weight is not given back to the real slots.
+            null_slot = selected_experts >= num_real
+            real_selected = jnp.where(null_slot, num_real, selected_experts)
+            real_weights = jnp.where(null_slot, jnp.zeros_like(combine_weights), combine_weights)
+            if self.expert_mlp.implementation == "ragged_all_to_all":
+                assert self.cfg.null_target_real_experts is not None
+                capacity_topk = math.ceil(self.cfg.null_target_real_experts)
+        elif null_layer:
             real_selected, real_weights, null_out = self._split_null_slots(
                 routed_input, selected_experts, combine_weights
             )
@@ -2982,6 +3107,7 @@ class MoEMLP(eqx.Module):
                     bank_selected,
                     real_weights[:, col : col + bank_k],
                     overlap if bank_index == 1 else None,
+                    capacity_topk,
                 )
             if bank_overlap_out:
                 overlap_out = bank_overlap_out[0]
@@ -3042,7 +3168,50 @@ class MoEMLP(eqx.Module):
 
         routed = rearrange(routed_flat, "(b s) d -> b s d", b=b, s=s)
         routed = reshard(routed, _batch_spec())
-        return routed, {**router_stats, **assignments, _ROUTED_INPUT: routed_input}
+        return routed, {**router_stats, **null_stats, **assignments, _ROUTED_INPUT: routed_input}
+
+
+def null_qb_bias(
+    real_biased: Float[Array, "T E"],
+    null_logits: Float[Array, "T N"],
+    k: int,
+    target_real: float,
+    mesh: jax.sharding.AbstractMesh,
+) -> jax.Array:
+    """The shared null bias ``b`` at which the batch's mean real slots per token in the top-``k`` is ``target_real``.
+
+    With real biased logits sorted ``R_1 >= R_2 >= ...`` and null logits ``Z_1 >= Z_2 >= ...``, the ``i``-th real
+    expert is selected iff fewer than ``k - i + 1`` nulls beat it, i.e. ``R_i - Z_{k+1-i} > b``. So a token's real
+    slots are ``sum_i 1[m_i > b]`` over its ``k`` margins ``m_i = R_i - Z_{k+1-i}``, and ``b`` is the upper quantile at
+    rank ``T * target_real`` of the batch's ``T k`` margins: QB's sharded histogram quantile on one pooled column."""
+    top_real, _ = _small_top_k(real_biased, k)
+    top_null, _ = _small_top_k(null_logits, k)
+    margins = top_real - top_null[:, ::-1]
+    pooled = reshard(margins.reshape(-1, 1), P(_BATCH_AXES, None))
+    bias, _, _ = qb_beta_hist(
+        pooled, mesh, target_share=target_real / k, num_experts=1, n_bins=_QB_HIST_BINS, batch_axes=_BATCH_AXES
+    )
+    return bias[0]
+
+
+@jax.custom_vjp
+def _router_only_grad(logits: jax.Array, x: jax.Array, w: jax.Array) -> jax.Array:
+    """``logits`` (``x @ w``) unchanged, with a backward that sends their cotangent only to ``w`` (``x^T d``): a
+    loss term on these logits trains the router matrix and nothing upstream of it."""
+    return logits
+
+
+def _router_only_grad_fwd(logits: jax.Array, x: jax.Array, w: jax.Array):
+    return logits, (x, w)
+
+
+def _router_only_grad_bwd(residuals, d: jax.Array):
+    x, w = residuals
+    dw = jnp.einsum("td,te->de", x, d.astype(x.dtype), out_sharding=_partition_spec_of(w) or P(None, None))
+    return jnp.zeros_like(d), jnp.zeros_like(x), dw.astype(w.dtype)
+
+
+_router_only_grad.defvjp(_router_only_grad_fwd, _router_only_grad_bwd)
 
 
 def _shared_experts_tail(
@@ -3727,8 +3896,10 @@ class Block(eqx.Module):
         saved_routed: Float[Array, "T L"] | None = None,
         moe_k_keep: Int[Array, "B S"] | None = None,
         moe_dynamic_layer: bool = False,
+        skip_shared: bool = False,
     ) -> tuple[Float[Array, "B S D"], dict[str, jax.Array]]:
-        """``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
+        """``skip_shared`` (a ``no_shared_expert_layers`` layer) runs the routed experts only.
+        ``sum_stream`` feeds ``sum_parts`` (``router`` / ``latent`` / ``shared``) instead of ``h``;
         ``hash_token_ids`` / ``noise_key`` / ``router_tok_rows`` / ``router_seed_bias`` go to the router
         (``moe_hash_layers``, ``moe_gumbel_tau``, ``router_token_bias_rank``, ``router_bias_seed``)."""
         normed = self._mlp_input(_laurel(h, None, None))
@@ -3743,7 +3914,7 @@ class Block(eqx.Module):
         stats: dict[str, jax.Array] = {}
         if isinstance(self.mlp, DenseMLP):
             out = self.mlp(mlp_in, moe_output_reshard=False)
-        elif self.shared is not None:
+        elif self.shared is not None and not skip_shared:
             out, stats = moe_and_shared_fused(
                 self.mlp,
                 self.shared,
@@ -3774,6 +3945,9 @@ class Block(eqx.Module):
                 moe_k_keep=moe_k_keep,
                 moe_dynamic_layer=moe_dynamic_layer,
             )
+            if self.shared is not None and self.shared[0].w_gate is None:
+                # The layer loop stacks every layer's stats: a zero-width stand-in for the shared pre-activations.
+                stats = {**stats, _SHARED_PRE: jnp.zeros((out.shape[0] * out.shape[1], 0), out.dtype)}
         if self.sconv_mlp is not None:
             out = self.sconv_mlp(out, _sconv_segment_ids(mask))
         return out, stats
@@ -3957,11 +4131,13 @@ def _run_expert_bank(
     selected: jax.Array,
     combine_weights: jax.Array,
     overlap: MoeOverlapWork | None = None,
+    capacity_topk: int | None = None,
 ):
     """Dispatch one expert bank: ungated ReLU^2 through the EP backends' ungated path (or the tied gate on the
     dropless local backends), gated experts through ``MoEExpertMlp``. Returns ``(out, overflow)``, plus the
     ``overlap`` output when given. ``moe_drop_renorm`` also asks the backend for the per-slot keep mask
-    (``MoeDispatchCounts.assignment_keep``)."""
+    (``MoeDispatchCounts.assignment_keep``). ``capacity_topk`` sizes the ragged EP buffers for that many valid
+    slots per token (``null_controller=qb``)."""
     if em.w_gate is None:
         ungated = em.implementation in MOE_IMPLEMENTATIONS and cfg.moe_ungated_kernel
         return moe_mlp(
@@ -3988,7 +4164,10 @@ def _run_expert_bank(
             ragged_expert_chunks=cfg.moe_ragged_chunks,
             expert_serial_pair=cfg.moe_serial_pair,
             ragged_overlap_weight_grads=cfg.moe_overlap_weight_grads,
+            ragged_capacity_topk=capacity_topk,
         )
+    if capacity_topk is not None:
+        raise ValueError("capacity_topk needs the ungated ReLU^2 experts")
     if cfg.fp8_recipe == Fp8Recipe.MXFP8_SIM:
         raise ValueError("fp8_recipe=mxfp8_sim simulates ungated ReLU^2 expert banks only")
     return em(
@@ -4677,6 +4856,7 @@ def _attn_res_sublayers(
     route = _route_kwargs(cfg, physical, token_ids, noise_key, logit_bias)
     route["moe_k_keep"] = _moe_k_keep(cfg, physical, mask, attn_out)
     route["moe_dynamic_layer"] = physical in cfg.moe_dynamic_layers
+    route["skip_shared"] = physical in cfg.no_shared_expert_layers
     mlp_out, router_stats = layer.mlp_branch(h, mask, **shared_kwargs, **route)
     mem_out, mem_stats = _memory_branch(h, logit_bias)
     if mem_out is not None:
@@ -6025,9 +6205,9 @@ class Transformer(eqx.Module):
                     if k == _COMPRESS_LOSS or k.startswith((_COMPRESS_PREFIX, _OUTSTAT_PREFIX))
                 }
             )
-            for key in (HEAD_PROBE_STAT, HEAD_QCOS_STAT):
+            for key in (HEAD_PROBE_STAT, HEAD_QCOS_STAT, NULL_REAL_WEIGHT, NULL_REAL_SLOTS, NULL_AUX_TERM):
                 if key in stacked_router_stats:
-                    router_metrics[key] = stacked_router_stats[key]  # [L, B, S, H, F] / [L, 2, H, H]
+                    router_metrics[key] = stacked_router_stats[key]  # [L, B, S, H, F] / [L, 2, H, H] / [L, T]
             if return_routing:
                 router_metrics[ROUTING_SELECTED_KEY] = stacked_router_stats[_ROUTING_SELECTED]
                 router_metrics[ROUTING_WEIGHTS_KEY] = stacked_router_stats[_ROUTING_WEIGHTS]
@@ -6764,6 +6944,30 @@ class Transformer(eqx.Module):
             "final_entropy": final.entropy,
         }
 
+    def _null_aux(
+        self,
+        per_token: Float[Array, "B S"],
+        weight: Float[Array, "B S"],
+        count: jax.Array,
+        aux_term: Float[Array, "L T"],
+    ) -> tuple[jax.Array, dict[str, jax.Array]]:
+        """``null_aux_weight * sum_layers mean_t[w_t * R_t]`` (``NullAux``) from this step's per-token training loss
+        (stop-gradient; the cross-entropy plus its z-loss term) and the layers' per-token real weight ``R``
+        (``aux_term``, zero on the real-only layers)."""
+        cfg = self.config
+        loss_t = jax.lax.stop_gradient(per_token).astype(jnp.float32)
+        w = weight * jnp.exp(-loss_t)
+        w = jax.lax.stop_gradient(w / (jnp.sum(w) / count))
+        r = aux_term.reshape(aux_term.shape[0], *per_token.shape)
+        per_layer = jnp.sum(w[None] * r, axis=(1, 2)) / count
+        aux = cfg.null_aux_weight * jnp.sum(per_layer)
+        metrics = {
+            "train/null/aux_loss": jax.lax.stop_gradient(aux),
+            "train/null/aux_w_max": jnp.max(w),
+            "train/null/aux_w_rms": jnp.sqrt(jnp.sum(jnp.square(w)) / count),
+        }
+        return aux, metrics
+
     def next_token_loss(
         self,
         token_ids: Int[Array, "B S"],
@@ -6807,10 +7011,16 @@ class Transformer(eqx.Module):
         compress_stats = {
             k: router_metrics.pop(k) for k in list(router_metrics) if k.startswith((_COMPRESS_PREFIX, _OUTSTAT_PREFIX))
         }
+        null_aux_term = router_metrics.pop(NULL_AUX_TERM, None)
+        router_metrics.pop(NULL_REAL_WEIGHT, None)
+        router_metrics.pop(NULL_REAL_SLOTS, None)
+        null_aux = null_aux_term is not None and train_terms
+        if null_aux and reduction != "mean":
+            raise ValueError("the null aux term needs the mean loss reduction")
         labels = jnp.pad(token_ids[:, 1:], ((0, 0), (0, 1))).astype(jnp.int32)
         loss_weight = loss_weight.astype(loss_dtype)
 
-        def lm_loss(h: jax.Array) -> jax.Array:
+        def lm_loss(h: jax.Array, reduction: str = reduction) -> jax.Array:
             head_in, lm_head = self._lm_head_operands(h, token_ids)
             ce = functools.partial(
                 fused_linear_softmax_cross_entropy_loss,
@@ -6825,7 +7035,18 @@ class Transformer(eqx.Module):
             )
             return ce(weight=loss_weight, reduction=reduction)
 
-        cross_entropy_loss = lm_loss(hidden)
+        null_metrics: dict[str, jax.Array] = {}
+        null_aux_loss = None
+        if null_aux:
+            assert null_aux_term is not None
+            # The null aux reads the per-token loss, so take it unreduced and form the same mean here.
+            per_token = lm_loss(hidden, "none")
+            weight_f = loss_weight.astype(jnp.float32)
+            count = jnp.maximum(jnp.sum(weight_f), 1.0)
+            cross_entropy_loss = jnp.sum(per_token) / count
+            null_aux_loss, null_metrics = self._null_aux(per_token, weight_f, count, null_aux_term)
+        else:
+            cross_entropy_loss = lm_loss(hidden)
         replay_loss = None
         if head_replay is not None:
             # Replay a stored (final hidden, label) batch through the lm_head only: the head's gradient is
@@ -6847,6 +7068,8 @@ class Transformer(eqx.Module):
             )
         # Router z-loss is logged for monitoring only; it is not added to the training loss.
         loss = cross_entropy_loss
+        if null_aux_loss is not None:
+            loss = loss + null_aux_loss.astype(loss.dtype)
         mid_metrics: dict[str, jax.Array] = {}
         if skip_probe_logits is not None and train_terms:
             head_in, lm_head = self._lm_head_operands(hidden, token_ids)
@@ -6942,6 +7165,7 @@ class Transformer(eqx.Module):
             summarized_metrics.update(final_gate_metrics)
             summarized_metrics.update(entropy_metrics)
             summarized_metrics.update(mid_metrics)
+            summarized_metrics.update(null_metrics)
             if NEWTON_GRAM_KEY in router_metrics:
                 summarized_metrics[NEWTON_GRAM_KEY] = router_metrics[NEWTON_GRAM_KEY]
             if self.config.num_null_experts:
@@ -7172,6 +7396,16 @@ def forward_flops_per_token(model: "Transformer") -> float:
             model, lambda x: isinstance(x, jax.Array | jax.ShapeDtypeStruct) and jnp.issubdtype(x.dtype, jnp.inexact)
         )
     )[0]
+    # no_shared_expert_layers never read their stack's shared-expert slices.
+    stack_names = ("stacked_blocks", "kda_blocks", "stacked_blocks_rest", "kda_blocks_rest")
+    stack_names += ("stacked_blocks_tail", "kda_blocks_tail")
+    stack_layers = dict(
+        zip(
+            [n for n in stack_names if getattr(model, n) is not None],
+            model.stack_layer_indices(),
+            strict=True,
+        )
+    )
     for path, leaf in leaves:
         names = [k.name for k in path if isinstance(k, jax.tree_util.GetAttrKey)]
         stacked = "stacked" in names
@@ -7181,6 +7415,9 @@ def forward_flops_per_token(model: "Transformer") -> float:
         size = float(math.prod(leaf.shape))
         if "expert_mlp" in names:
             size *= cfg.num_experts_per_token / cfg.num_experts
+        if "shared" in names and cfg.no_shared_expert_layers:
+            layers = stack_layers[names[0]]
+            size *= sum(i not in cfg.no_shared_expert_layers for i in layers) / len(layers)
         matmul += 2 * size
         if names[-2:] == ["attn", "w_q"]:
             q_widths[names[0]] = leaf.shape[-1]
