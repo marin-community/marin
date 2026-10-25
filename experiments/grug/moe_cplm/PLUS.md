@@ -83,8 +83,7 @@ aggregate `eval/loss`, distinct from the macro BPB table above.
 [Endpoint data](ladder/results.json) contains the completed-run aggregate
 metrics. The raw per-execution histories, full configuration manifest and
 checkpoint locations are retained in the research workspace, outside this
-public contribution. With access to that archive, re-render using
-`python -m experiments.grug.moe_cplm.plot_ladder --evidence /path/to/archive`.
+public contribution.
 
 The small rungs used the
 [frozen native source](https://github.com/WhenWen/marin/tree/0c079e8fbb1d80bf051e5d56a4d5e7a44b780aa7)
