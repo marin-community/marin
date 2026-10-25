@@ -312,6 +312,15 @@ def test_decision_rule_and_preference():
     assert not diag.decision(["max"], {"failures": []}, ok, diag.direct_levanter_vs_vllm(ok))["meets_rule"]
     no_routes = _g1a((0.98, 0.98), ["L1"])
     assert not diag.decision([], {"failures": ["L3"]}, no_routes, diag.direct_levanter_vs_vllm(no_routes))["meets_rule"]
+    # G1 rows in the gate's failures are G1's line, not the log-prob gate's; parity and routes rows stay.
+    g1_rows = ["routes-G1: L3: disagreement rate", "routes-G1a: L4: margin"]
+    assert diag.logprob_gate_failures(g1_rows) == []
+    only_g1 = diag.decision(g1_rows, {"failures": ["L3"]}, ok, diag.direct_levanter_vs_vllm(ok))
+    assert only_g1["lines"]["logprob_gate"] is True and only_g1["meets_rule"] is True
+    for row in ("parity: max", "routes: unmeasured", "dispatch: layer 0"):
+        assert diag.logprob_gate_failures([*g1_rows, row]) == [row]
+        failed = diag.decision([*g1_rows, row], {"failures": []}, ok, diag.direct_levanter_vs_vllm(ok))
+        assert failed["lines"]["logprob_gate"] is False and failed["meets_rule"] is False
     low = _g1a((0.98, 0.9699))
     assert not diag.decision([], {"failures": []}, low, diag.direct_levanter_vs_vllm(low))["meets_rule"]
 

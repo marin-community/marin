@@ -555,11 +555,20 @@ def direct_levanter_vs_vllm(g1a: dict) -> dict:
     }
 
 
-def decision(gate_failures: list, g1: dict, g1a: dict, direct: dict) -> dict:
-    """The coordinator's rule for one arm: the log-prob gate passes, G1 or G1a passes, and the L0 rule value is at
-    least ``L0_VLLM_FLOOR``. A check passes when it lists no failures."""
+ROUTE_PROXY_PREFIXES = ("routes-G1:", "routes-G1a:")
+"""``evaluate``'s failure rows from the G1 / G1a route checks, which the rule reads as their own lines."""
+
+
+def logprob_gate_failures(gate_failures: list[str]) -> list[str]:
+    """The gate's failures without the G1 / G1a rows: parity, the cross-stack routes row and dispatch stay."""
+    return [f for f in gate_failures if not f.startswith(ROUTE_PROXY_PREFIXES)]
+
+
+def decision(gate_failures: list[str], g1: dict, g1a: dict, direct: dict) -> dict:
+    """The coordinator's rule for one arm: the log-prob gate passes (``gate_failures`` less the G1 / G1a rows), G1
+    or G1a passes, and the L0 rule value is at least ``L0_VLLM_FLOOR``. A check passes when it lists no failures."""
     lines = {
-        "logprob_gate": not gate_failures,
+        "logprob_gate": not logprob_gate_failures(gate_failures),
         "g1": not g1["failures"],
         "g1a": not g1a["failures"],
         "l0_levanter_vs_vllm": direct["l0_ok"],
@@ -627,6 +636,7 @@ def run_arm(name: str, view, mesh, trainer_config, overrides, root: str, sequenc
             replace(INPUTS, output=out), overrides, positions_path, dot_dtypes, moe | {"dispatch": dispatch}, memory
         )
         direct = direct_levanter_vs_vllm(g1a)
+        report["logprob_gate_failures"] = logprob_gate_failures(report["failures"])
         report["recipe"] = recipe_record(view)
         report["direct_levanter_vs_vllm"] = direct
         report["decision"] = decision(report["failures"], g1, g1a, direct)
