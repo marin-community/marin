@@ -88,7 +88,13 @@ from experiments.interp.snowball_identity.levanter_positions import (
     router_dot_dtypes,
     save_positions,
 )
-from experiments.interp.snowball_identity.logit_check import read, reference_ids, stored_sequences, write_json
+from experiments.interp.snowball_identity.logit_check import (
+    read,
+    reference_ids,
+    require_fresh_root,
+    stored_sequences,
+    write_json,
+)
 from experiments.interp.snowball_identity.multihost import gather_global, gather_host_rows
 from experiments.interp.snowball_identity.precision_gate import (
     device_memory_report,
@@ -796,8 +802,7 @@ def launch_job(args) -> None:
         return
     if dirty or args.expect_commit != head:
         raise ValueError("--run needs a clean tree at --expect-commit")
-    if StoragePath(args.root).exists():
-        raise FileExistsError(f"{args.root} exists")
+    require_fresh_root(args.root)
     key, secret = os.environ["CW_KEY_ID"], os.environ["CW_KEY_SECRET"]
     secrets = {"CW_KEY_ID": key, "CW_KEY_SECRET": secret, "AWS_ACCESS_KEY_ID": key, "AWS_SECRET_ACCESS_KEY": secret}
     environment = EnvironmentSpec(extras=["gpu"], secrets=secrets, secret_behavior=SecretBehavior.ISOLATE)

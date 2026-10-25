@@ -3,6 +3,7 @@
 
 import dataclasses
 import hashlib
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -16,6 +17,7 @@ from haliax import Axis
 from levanter.grug.sharding import compact_grug_mesh
 from levanter.models.snowball import SnowballLMHeadModel
 
+from experiments.interp.snowball_identity import logit_check, torch_route_floor
 from experiments.interp.snowball_identity import moe_drop_diagnostic as diag
 from experiments.interp.snowball_identity.harness import import_grug
 from experiments.interp.snowball_identity.levanter_positions import PAD_ID
@@ -218,3 +220,10 @@ def test_launch_refuses_a_receipt_without_the_arm_flags(tmp_path):
         diag.launch_job(_launch_args(tmp_path, {"router_combine_fp32": True, "fp32_activations": False}))
     with pytest.raises(ValueError, match="differs from the reviewed receipt"):
         diag.launch_job(_launch_args(tmp_path, {"router_combine_fp32": True, "fp32_activations": True}, "0" * 64))
+
+
+def test_launchers_use_the_routed_root_check():
+    """The diagnostic and floor launchers check their root with the routed helper, not ``StoragePath.exists``."""
+    for module in (diag, torch_route_floor):
+        assert module.require_fresh_root is logit_check.require_fresh_root
+        assert "StoragePath(args.root).exists" not in inspect.getsource(module)
