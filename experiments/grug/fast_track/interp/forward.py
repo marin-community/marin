@@ -240,6 +240,10 @@ def no_patch(value: jax.Array) -> GatePatch:
 # ``gate(layer, expert_sorted, routed_input_sorted, pre) -> [T * K, I]`` keep multipliers of the routed units in the
 # dispatch's expert-sorted order (the unit-skipping studies compute them from the pre-activations or the inputs).
 RoutedGate = Callable[[int, jax.Array, jax.Array, jax.Array], jax.Array]
+# ``act_map(layer, expert_sorted, counts, act) -> [T * K, I]`` replaces the routed units' post-activations (in the
+# dispatch's expert-sorted order, ``counts`` per expert) before the down projection (the manifold study's low-rank and
+# top-k patches).
+RoutedActMap = Callable[[int, jax.Array, jax.Array, jax.Array], jax.Array]
 
 
 def _plus(x: jax.Array, tap: jax.Array | None) -> jax.Array:
@@ -518,6 +522,7 @@ def _moe_branch(
     edit: UnitEdit | None = None,
     x_router: jax.Array | None = None,
     routed_gate: RoutedGate | None = None,
+    act_map: RoutedActMap | None = None,
 ):
     """The routed MoE plus the shared expert, as ``moe_and_shared_fused`` (dropless). ``x_router`` (default ``x``)
     feeds the router; ``x`` the routed and shared experts."""
@@ -559,6 +564,8 @@ def _moe_branch(
     act = keep * jnp.square(jax.nn.relu(pre)) + (1.0 - keep) * abl.neuron_mean[layer][expert_sorted]
     if edit.routed_tap is not None:
         act = act + edit.routed_tap[layer]
+    if act_map is not None:
+        act = act_map(layer, expert_sorted, counts, act)
     y = _local_ragged_dot(act.astype(x.dtype), em.w_down, counts).astype(jnp.float32)  # [TK, R]
     per_slot = jnp.zeros((t, TOP_K, LATENT), jnp.float32).at[token_sorted, slot_sorted].set(y)
     routed_latent = jnp.einsum("tk,tko->to", used, per_slot) + routing.latent_delta[layer]
@@ -625,6 +632,7 @@ def trace_forward(
     local_grad: bool = False,
     patch: GatePatch | None = None,
     routed_gate: RoutedGate | None = None,
+    act_map: RoutedActMap | None = None,
 ) -> dict:
     """The forward of ``model`` (compute dtype) on ``[B, S]`` tokens, returning every intermediate: ``layers[i]`` holds
     layer ``i``'s gate weights, attention internals, MoE internals and branch outputs, and the top level the final
@@ -634,7 +642,7 @@ def trace_forward(
     attention keys/values/decays and the lagged SConv taps are cut, so the gradient of a sum of per-position losses
     with respect to a position's intermediates is that position's own loss's gradient (less the attention-to-self
     path). ``patch`` path-patches the AttnRes gate inputs (``GatePatch``); ``routed_gate`` multiplies the routed units'
-    keep (``RoutedGate``)."""
+    keep (``RoutedGate``); ``act_map`` replaces their post-activations (``RoutedActMap``)."""
     cfg = model.config
     eps = cfg.layer_norm_eps
     plain = cfg.attn_res_plain_sum
@@ -731,7 +739,17 @@ def trace_forward(
             )
             mlp_in, mlp_in_router = layer._mlp_input(h2), layer._mlp_input(h2r)
         routed, shared_out = _moe_branch(
-            layer, mlp_in, seg, i, abl, routing, out, edit, x_router=mlp_in_router, routed_gate=routed_gate
+            layer,
+            mlp_in,
+            seg,
+            i,
+            abl,
+            routing,
+            out,
+            edit,
+            x_router=mlp_in_router,
+            routed_gate=routed_gate,
+            act_map=act_map,
         )
         routed_sc = layer.sconv_mlp(routed, seg)
         shared_sc = layer.sconv_mlp(shared_out, seg)
