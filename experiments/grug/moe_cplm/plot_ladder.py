@@ -15,7 +15,9 @@ import numpy as np
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence", type=Path, default=Path(__file__).with_name("ladder"))
+    parser.add_argument(
+        "--evidence", type=Path, required=True, help="Archived runs.json and per-execution CSV.gz directory"
+    )
     args = parser.parse_args()
     manifest = json.loads((args.evidence / "runs.json").read_text())
     rows = []
@@ -57,7 +59,10 @@ def main():
     fig.legend(handles=handles, loc="upper center", ncol=3, frameon=False)
     fig.tight_layout(rect=(0, 0, 1, 0.94))
     for extension in ("png", "svg"):
-        fig.savefig(args.evidence / f"loss-curves.{extension}", dpi=220, facecolor="white")
+        path = args.evidence / f"loss-curves.{extension}"
+        fig.savefig(path, dpi=220, facecolor="white")
+        if extension == "svg":
+            path.write_text("\n".join(line.rstrip() for line in path.read_text().splitlines()) + "\n")
 
 
 if __name__ == "__main__":

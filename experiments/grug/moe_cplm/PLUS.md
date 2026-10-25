@@ -80,11 +80,11 @@ separately, retaining overlapping steps after checkpoint rollback and gaps
 between attempts. The d1280 panels are partial. Validation NLL is the recorded
 aggregate `eval/loss`, distinct from the macro BPB table above.
 
-[Run manifest](ladder/runs.json) records run URLs, schedule endpoints, restored
-steps, checkpoint roots, configuration hashes, domain metrics and original
-source revisions. [Raw curves](ladder/) retain every retrieved
-training/evaluation row and its execution ID. Re-render with
-`python -m experiments.grug.moe_cplm.plot_ladder`.
+[Endpoint data](ladder/results.json) contains the completed-run aggregate
+metrics. The raw per-execution histories, full configuration manifest and
+checkpoint locations are retained in the research workspace, outside this
+public contribution. With access to that archive, re-render using
+`python -m experiments.grug.moe_cplm.plot_ladder --evidence /path/to/archive`.
 
 The small rungs used the
 [frozen native source](https://github.com/WhenWen/marin/tree/0c079e8fbb1d80bf051e5d56a4d5e7a44b780aa7)
